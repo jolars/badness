@@ -1,0 +1,15 @@
+[package]
+name = "knuth"
+version = "0.0.1"
+edition = "2024"
+
+# Dependency versions are kept in lockstep with the sibling project `ravel`
+# (../ravel) so the eventual shared-crate extraction stays a mechanical lift.
+# Deps are added phase by phase (salsa, lsp-server, clap, … land with their
+# phases) to keep `cargo machete` clean.
+[dependencies]
+rowan = "0.16.1"
+smol_str = "0.3.2"
+
+[dev-dependencies]
+insta = "1.47.2"

@@ -1,0 +1,44 @@
+version: "3"
+
+tasks:
+  default:
+    deps: [build]
+
+  build:
+    desc: Dev build
+    cmds:
+      - cargo build
+
+  test:
+    desc: Run all tests
+    cmds:
+      - cargo test
+
+  fmt:
+    desc: Format the code
+    cmds:
+      - cargo fmt
+
+  fmt-check:
+    desc: Check formatting (CI)
+    cmds:
+      - cargo fmt -- --check
+
+  lint:
+    desc: Clippy with warnings as errors
+    cmds:
+      - cargo clippy --all-targets --all-features -- -D warnings
+
+  snapshots:
+    desc: Regenerate / accept insta snapshots
+    cmds:
+      - INSTA_UPDATE=always cargo test
+
+  check:
+    desc: Everything CI runs
+    deps: [fmt-check, lint, test]
+
+  bench:
+    desc: Benchmarks (placeholder until Phase 7)
+    cmds:
+      - echo "no benchmarks yet"

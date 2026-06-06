@@ -1,0 +1,15 @@
+---
+source: tests/lexer_snapshots.rs
+expression: "dump(r\"$x^2_i = \\alpha$\")"
+---
+DOLLAR "$"
+WORD "x"
+CARET "^"
+WORD "2"
+UNDERSCORE "_"
+WORD "i"
+WHITESPACE " "
+WORD "="
+WHITESPACE " "
+CONTROL_WORD "\\alpha"
+DOLLAR "$"

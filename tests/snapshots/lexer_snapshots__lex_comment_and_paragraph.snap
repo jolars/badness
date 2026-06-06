@@ -1,0 +1,10 @@
+---
+source: tests/lexer_snapshots.rs
+expression: "dump(\"a % note\\n\\nb\")"
+---
+WORD "a"
+WHITESPACE " "
+COMMENT "% note"
+NEWLINE "\n"
+NEWLINE "\n"
+WORD "b"

@@ -1,0 +1,11 @@
+---
+source: tests/lexer_snapshots.rs
+expression: "dump(r\"\\section{Hello}[opt]\")"
+---
+CONTROL_WORD "\\section"
+L_BRACE "{"
+WORD "Hello"
+R_BRACE "}"
+L_BRACKET "["
+WORD "opt"
+R_BRACKET "]"

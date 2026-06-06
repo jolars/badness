@@ -1,0 +1,23 @@
+---
+source: tests/lexer_snapshots.rs
+expression: "dump(\"\\\\begin{eq}\\n  a &= b \\\\\\\\\\n\\\\end{eq}\")"
+---
+CONTROL_WORD "\\begin"
+L_BRACE "{"
+WORD "eq"
+R_BRACE "}"
+NEWLINE "\n"
+WHITESPACE "  "
+WORD "a"
+WHITESPACE " "
+AMPERSAND "&"
+WORD "="
+WHITESPACE " "
+WORD "b"
+WHITESPACE " "
+CONTROL_SYMBOL "\\\\"
+NEWLINE "\n"
+CONTROL_WORD "\\end"
+L_BRACE "{"
+WORD "eq"
+R_BRACE "}"

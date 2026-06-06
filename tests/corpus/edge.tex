@@ -1,0 +1,11 @@
+% edge cases for the lossless lexer
+\makeatletter
+\def\foo@bar{x}
+\makeatother
+
+Nested {groups {within {groups}}} and escaped: \\ \{ \} \$ \% \& \_ \^{} \~{}.
+
+Optional args: \cmd[a, b]{c}. Unicode: café — naïve ∑∫ψ 𝕏.
+
+Tabs:	indented with a literal tab.
+No trailing newline below this line.

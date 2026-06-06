@@ -7,9 +7,6 @@
 
 use crate::syntax::SyntaxKind;
 
-// `Start`/`Finish` are unused by the Phase 0 flat parser (which emits only
-// `Tok`); the Phase 1 grammar wraps tokens in nodes and exercises them.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum Event {
     /// Open a node of the given kind.

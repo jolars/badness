@@ -1,0 +1,26 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{itemize}\\n\\\\item x\\n\\\\end{itemize}\")"
+---
+ROOT@0..37
+  PARAGRAPH@0..37
+    ENVIRONMENT@0..37
+      BEGIN@0..15
+        CONTROL_WORD@0..6 "\\begin"
+        NAME_GROUP@6..15
+          L_BRACE@6..7 "{"
+          WORD@7..14 "itemize"
+          R_BRACE@14..15 "}"
+      PARAGRAPH@15..23
+        NEWLINE@15..16 "\n"
+        COMMAND@16..21
+          CONTROL_WORD@16..21 "\\item"
+        WHITESPACE@21..22 " "
+        WORD@22..23 "x"
+      NEWLINE@23..24 "\n"
+      END@24..37
+        CONTROL_WORD@24..28 "\\end"
+        NAME_GROUP@28..37
+          L_BRACE@28..29 "{"
+          WORD@29..36 "itemize"
+          R_BRACE@36..37 "}"

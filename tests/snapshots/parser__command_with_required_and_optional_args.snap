@@ -1,0 +1,16 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\cmd[opt]{req}\")"
+---
+ROOT@0..14
+  PARAGRAPH@0..14
+    COMMAND@0..14
+      CONTROL_WORD@0..4 "\\cmd"
+      OPTIONAL@4..9
+        L_BRACKET@4..5 "["
+        WORD@5..8 "opt"
+        R_BRACKET@8..9 "]"
+      GROUP@9..14
+        L_BRACE@9..10 "{"
+        WORD@10..13 "req"
+        R_BRACE@13..14 "}"

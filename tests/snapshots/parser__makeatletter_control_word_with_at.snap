@@ -1,0 +1,12 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\makeatletter\\foo@bar\\makeatother\")"
+---
+ROOT@0..33
+  PARAGRAPH@0..33
+    COMMAND@0..13
+      CONTROL_WORD@0..13 "\\makeatletter"
+    COMMAND@13..21
+      CONTROL_WORD@13..21 "\\foo@bar"
+    COMMAND@21..33
+      CONTROL_WORD@21..33 "\\makeatother"

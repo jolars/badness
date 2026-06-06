@@ -1,0 +1,11 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"text \\verb|$x$| more\")"
+---
+ROOT@0..20
+  PARAGRAPH@0..20
+    WORD@0..4 "text"
+    WHITESPACE@4..5 " "
+    VERB@5..15 "\\verb|$x$|"
+    WHITESPACE@15..16 " "
+    WORD@16..20 "more"

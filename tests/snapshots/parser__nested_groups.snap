@@ -1,0 +1,17 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"{a {b} c}\")"
+---
+ROOT@0..9
+  PARAGRAPH@0..9
+    GROUP@0..9
+      L_BRACE@0..1 "{"
+      WORD@1..2 "a"
+      WHITESPACE@2..3 " "
+      GROUP@3..6
+        L_BRACE@3..4 "{"
+        WORD@4..5 "b"
+        R_BRACE@5..6 "}"
+      WHITESPACE@6..7 " "
+      WORD@7..8 "c"
+      R_BRACE@8..9 "}"

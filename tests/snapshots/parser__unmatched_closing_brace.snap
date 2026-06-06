@@ -1,0 +1,12 @@
+---
+source: tests/parser.rs
+expression: "tree(\"a } b\")"
+---
+ROOT@0..5
+  PARAGRAPH@0..5
+    WORD@0..1 "a"
+    WHITESPACE@1..2 " "
+    R_BRACE@2..3 "}"
+    WHITESPACE@3..4 " "
+    WORD@4..5 "b"
+error @2..3: unmatched `}`

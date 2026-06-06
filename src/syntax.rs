@@ -30,6 +30,8 @@ pub enum SyntaxKind {
     WHITESPACE,     // spaces / tabs
     NEWLINE,        // `\n`, `\r\n`, or `\r`
     WORD,           // a run of ordinary text characters
+    VERB,           // `\verb|…|` / `\verb*|…|` inline verbatim (a single token)
+    VERBATIM_BODY,  // the raw body of a verbatim-like environment (a single token)
     ERROR,          // lexer fallback; the lexer is total, so this is unused today
 
     // --- Nodes (composites, produced by the Phase 1 parser) ---

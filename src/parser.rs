@@ -7,6 +7,7 @@
 
 pub mod core;
 pub(crate) mod events;
+pub(crate) mod grammar;
 pub mod lexer;
 pub(crate) mod tree_builder;
 

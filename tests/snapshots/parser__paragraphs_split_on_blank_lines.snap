@@ -1,0 +1,19 @@
+---
+source: tests/parser.rs
+expression: "tree(\"First line,\\nsame paragraph.\\n\\nSecond paragraph.\")"
+---
+ROOT@0..46
+  PARAGRAPH@0..27
+    WORD@0..5 "First"
+    WHITESPACE@5..6 " "
+    WORD@6..11 "line,"
+    NEWLINE@11..12 "\n"
+    WORD@12..16 "same"
+    WHITESPACE@16..17 " "
+    WORD@17..27 "paragraph."
+  NEWLINE@27..28 "\n"
+  NEWLINE@28..29 "\n"
+  PARAGRAPH@29..46
+    WORD@29..35 "Second"
+    WHITESPACE@35..36 " "
+    WORD@36..46 "paragraph."

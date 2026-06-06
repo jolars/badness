@@ -1,14 +1,12 @@
 //! The parser entry point and its output type.
 //!
-//! Phase 0 produces a *flat* tree — every token is a direct child of `ROOT` —
-//! which is enough to exercise the lex → events → green-tree pipeline and to
-//! enforce the losslessness invariant end to end. The real grammar arrives in
-//! Phase 1; it will emit `Start`/`Finish` events around the same token stream
-//! without changing this entry point's signature.
+//! `parse` runs the pipeline: [`lex`] → [`grammar::parse`] (the recursive
+//! descent, which emits events + errors) → [`build_tree`] (the green tree).
+//! Syntax errors ride a side channel and never abort the parse.
 
 use rowan::GreenNode;
 
-use crate::parser::events::Event;
+use crate::parser::grammar;
 use crate::parser::lexer::lex;
 use crate::parser::tree_builder::build_tree;
 use crate::syntax::SyntaxNode;
@@ -40,13 +38,9 @@ pub struct SyntaxError {
 /// Parse LaTeX source into a lossless CST.
 pub fn parse(input: &str) -> Parse {
     let tokens = lex(input);
-    // Phase 0: flat tree. Every token becomes a direct child of ROOT.
-    let events: Vec<Event> = (0..tokens.len()).map(Event::Tok).collect();
+    let (events, errors) = grammar::parse(&tokens);
     let green = build_tree(&tokens, &events);
-    Parse {
-        green,
-        errors: Vec::new(),
-    }
+    Parse { green, errors }
 }
 
 /// Parse `input` and render the CST back to source. By the losslessness
@@ -66,11 +60,18 @@ mod tests {
     }
 
     #[test]
-    fn flat_tree_children_are_all_tokens() {
+    fn command_wraps_its_argument_group() {
+        use crate::syntax::SyntaxKind;
         let parse = parse(r"\a{b}");
-        let root = parse.syntax();
-        // No nested nodes yet: every child of ROOT is a token in Phase 0.
-        assert!(root.children().next().is_none());
-        assert!(root.children_with_tokens().all(|e| e.as_token().is_some()));
+        let command = parse
+            .syntax()
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::COMMAND)
+            .expect("a COMMAND node");
+        assert!(
+            command.children().any(|n| n.kind() == SyntaxKind::GROUP),
+            "the argument should be a nested GROUP node"
+        );
+        assert!(parse.errors.is_empty());
     }
 }

@@ -1,0 +1,23 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$x^2$ and \\[ y_i \\]\")"
+---
+ROOT@0..19
+  PARAGRAPH@0..19
+    INLINE_MATH@0..5
+      DOLLAR@0..1 "$"
+      WORD@1..2 "x"
+      CARET@2..3 "^"
+      WORD@3..4 "2"
+      DOLLAR@4..5 "$"
+    WHITESPACE@5..6 " "
+    WORD@6..9 "and"
+    WHITESPACE@9..10 " "
+    DISPLAY_MATH@10..19
+      CONTROL_SYMBOL@10..12 "\\["
+      WHITESPACE@12..13 " "
+      WORD@13..14 "y"
+      UNDERSCORE@14..15 "_"
+      WORD@15..16 "i"
+      WHITESPACE@16..17 " "
+      CONTROL_SYMBOL@17..19 "\\]"

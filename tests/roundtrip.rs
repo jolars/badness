@@ -1,11 +1,11 @@
 //! The losslessness invariant: `reconstruct(text) == text`, byte-for-byte.
-//! This is knuth's foundational parser test (Tenet 4 / Core decision in
+//! This is badness's foundational parser test (Tenet 4 / Core decision in
 //! `AGENTS.md`).
 
 use std::fs;
 use std::path::Path;
 
-use knuth::parser::reconstruct;
+use badness::parser::reconstruct;
 
 fn assert_lossless(text: &str) {
     assert_eq!(reconstruct(text), text);

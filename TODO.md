@@ -1,4 +1,4 @@
-# knuth — Roadmap
+# badness — Roadmap
 
 A LaTeX formatter, linter, and language server on a lossless rowan CST, mirroring
 **ravel** (`../ravel`, the same tool for R). See `AGENTS.md` for load-bearing design
@@ -8,7 +8,7 @@ Single-crate package (not a workspace). Parser and formatter are **intentionally
 interleaved**: the formatter is the primary tool for stress-testing the parser.
 
 Strategy: **copy ravel's language-agnostic skeleton to bootstrap, extract a shared
-crate later** once knuth's formatter works and boundaries are proven. Files marked
+crate later** once badness's formatter works and boundaries are proven. Files marked
 **[copy]** are lifted ~wholesale from ravel; **[rewrite]** are LaTeX-specific;
 **[diverge]** intentionally differs from ravel.
 
@@ -47,7 +47,7 @@ task snapshots      # regenerate insta snapshots (INSTA_UPDATE=always cargo test
 **Decision point for next session** — pick one:
 1. **Phase 2 (formatter MVP)** — the originally-planned next step; the formatter
    is the best tool to shake out remaining parser bugs. Start: `formatter/ir.rs`
-   + `printer.rs` [copy from ravel], then `knuth fmt` identity → real rules.
+   + `printer.rs` [copy from ravel], then `badness fmt` identity → real rules.
 2. **Differential parse oracle** — stand up texlab/tree-sitter-latex cross-checks
    over a corpus to harden the grammar before building on it.
    (Recommendation last session: lean toward #1.)
@@ -119,14 +119,14 @@ Phase 1 follow-ups list below.
 
 - [ ] `cli.rs` + `build.rs` (man/completions/markdown via clap_mangen/_complete/
       clap-markdown). **[copy]**
-- [ ] `knuth fmt`: parse → re-emit; first milestone is identity (round-trip).
+- [ ] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
 - [ ] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]** (extract first)
 - [ ] LaTeX format rules: whitespace normalization, groups, environments, paragraph
       reflow. **[rewrite]**
 - [ ] Protected regions never touched (`verbatim`, `lstlisting`, `\verb`, comments).
 - [ ] **Invariants:** idempotence `fmt(fmt(x)) == fmt(x)`; stability `parse(fmt(x)) ≅
       parse(x)`.
-- [ ] Differential formatter oracle: fixed point `latexindent(knuth(x)) == knuth(x)`,
+- [ ] Differential formatter oracle: fixed point `latexindent(badness(x)) == badness(x)`,
       `#[ignore]`d, triaged into adopt/record (ravel's `air_compat` analog).
 - [ ] Use formatter ambiguities to drive parser fixes.
 
@@ -152,7 +152,7 @@ Phase 1 follow-ups list below.
 ## Phase 5 — Linter
 
 - [ ] Diagnostics framework over CST + semantics (reuse parse error channel).
-- [ ] `linter/suppression` (`% knuth-ignore` style) + annotate-snippets render. **[copy shape]**
+- [ ] `linter/suppression` (`% badness-ignore` style) + annotate-snippets render. **[copy shape]**
 - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated commands,
       stylistic checks.
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors" (Tenet 5).
@@ -170,7 +170,7 @@ Phase 1 follow-ups list below.
 ## Phase 7 — Performance & hardening
 
 - [ ] Extract shared crate(s) from the **[copy]** files (IR engine first), depended
-      on by both knuth and ravel.
+      on by both badness and ravel.
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] Fuzzing (losslessness must hold on arbitrary input).
 - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
@@ -185,4 +185,4 @@ Phase 1 follow-ups list below.
 - [ ] Formatter opinionatedness: which choices are configurable vs. fixed.
 - [ ] CWL data sourcing/licensing for the built-in signature DB.
 - [ ] Whether ravel should also migrate tower-lsp-server → lsp-server (separate
-      decision; out of scope for knuth, but the rationale in `AGENTS.md` applies).
+      decision; out of scope for badness, but the rationale in `AGENTS.md` applies).

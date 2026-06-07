@@ -2,7 +2,7 @@
 //! Phase 0 scaffolding). Regenerate with `INSTA_UPDATE=always cargo test` or
 //! `task snapshots`.
 
-use knuth::parser::lex;
+use badness::parser::lex;
 
 fn dump(input: &str) -> String {
     lex(input)

@@ -1,23 +1,23 @@
 # AGENTS.md
 
-Guidance for AI agents (and humans) working in **knuth**, a formatter, linter, and
+Guidance for AI agents (and humans) working in **badness**, a formatter, linter, and
 language server for LaTeX.
 
-knuth is a sibling of **ravel** (`../ravel`), the same kind of tool for R. ravel is
+badness is a sibling of **ravel** (`../ravel`), the same kind of tool for R. ravel is
 a mature single-crate implementation of this exact architecture (rowan CST +
 event-stream parser + salsa + Wadler formatter IR + tower-lsp-server). **When in
-doubt, read ravel** — knuth deliberately mirrors its shape, and bootstraps by
+doubt, read ravel** — badness deliberately mirrors its shape, and bootstraps by
 copying its language-agnostic parts (see *Relationship to ravel* below).
 
 ## What this project is
 
-knuth parses LaTeX into a **lossless concrete syntax tree (CST)** and builds three
-tools on top of it: a **formatter** (`knuth fmt`), a **linter** (diagnostics), and a
+badness parses LaTeX into a **lossless concrete syntax tree (CST)** and builds three
+tools on top of it: a **formatter** (`badness fmt`), a **linter** (diagnostics), and a
 **language server** (LSP). The architecture follows **rust-analyzer**: a generic,
 error-tolerant, hand-written parser producing a lossless tree, semantics layered on
 top as a separate concern, and incremental recomputation via salsa.
 
-**Single-crate Cargo package** (`knuth`, edition 2024), *not* a workspace — same as
+**Single-crate Cargo package** (`badness`, edition 2024), *not* a workspace — same as
 ravel. Module folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`,
 `text/`, plus `syntax.rs` and `incremental.rs`.
 
@@ -110,7 +110,7 @@ should surface a parser modeling gap. Lean on this loop.
 
 **Differential oracles** (steal ravel's `air_compat` pattern): use **`latexindent`**
 as a free differential *formatter* oracle (measure the fixed point
-`latexindent(knuth(x)) == knuth(x)`, treat divergences as triage, not gates) and
+`latexindent(badness(x)) == badness(x)`, treat divergences as triage, not gates) and
 **texlab's parser / tree-sitter-latex** as a differential *parse* oracle over a
 corpus. Both are external reference implementations we measure against, never match.
 
@@ -119,7 +119,7 @@ corpus. Both are external reference implementations we measure against, never ma
 - **rowan** (`0.16`) — lossless CST. **salsa** (`0.26`) — incremental queries.
 - **smol_str** for interned token text; **insta** for snapshot tests.
 - **LSP:** `lsp-server` + `lsp-types` (rust-analyzer's own stack), **not**
-  `tower-lsp-server`. This is the one place knuth deliberately diverges from ravel.
+  `tower-lsp-server`. This is the one place badness deliberately diverges from ravel.
   Reason: salsa cancellation is a synchronous unwind (`salsa::Cancelled`) under a
   single-writer/snapshot-readers model — it composes cleanly with `lsp-server`'s
   sync main loop + threadpool (exactly how ra does it) and fights tower-lsp's async
@@ -134,9 +134,9 @@ corpus. Both are external reference implementations we measure against, never ma
 
 ## Relationship to ravel (copy now, extract later)
 
-Decision: **bootstrap knuth by copying ravel's language-agnostic skeleton, then
-extract a shared crate once knuth's formatter works and the boundaries are proven.**
-Premature extraction is the bigger risk while knuth is empty.
+Decision: **bootstrap badness by copying ravel's language-agnostic skeleton, then
+extract a shared crate once badness's formatter works and the boundaries are proven.**
+Premature extraction is the bigger risk while badness is empty.
 
 **Copy ~wholesale (language-agnostic) — mark each as an EXTRACTION CANDIDATE:**
 - `formatter/ir.rs` + `formatter/printer.rs` (the Wadler engine — extract first)
@@ -149,7 +149,7 @@ Premature extraction is the bigger risk while knuth is empty.
 `parser/expr.rs` + `structural.rs`, `syntax.rs` kinds, `ast/`, `semantic/` scoping,
 and the signature DB (analog of `rindex/`).
 
-**Diverge from ravel on purpose:** `lsp.rs` — knuth uses `lsp-server` (see LSP
+**Diverge from ravel on purpose:** `lsp.rs` — badness uses `lsp-server` (see LSP
 note); do *not* copy ravel's tower-lsp-server loop.
 
 When you touch a copied file, keep it close to ravel's version so the eventual

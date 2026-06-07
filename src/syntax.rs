@@ -1,5 +1,5 @@
 //! `SyntaxKind` — the kinds of CST tokens and nodes — and the rowan `Language`
-//! binding for knuth's LaTeX surface CST.
+//! binding for badness's LaTeX surface CST.
 
 use rowan::Language;
 
@@ -7,7 +7,7 @@ use rowan::Language;
 /// parser) in the CST.
 ///
 /// Token kinds come first, node kinds after; `ROOT` is kept **last** so
-/// [`KnuthLang::kind_from_raw`] can bounds-check the raw discriminant with a
+/// [`BadnessLang::kind_from_raw`] can bounds-check the raw discriminant with a
 /// single comparison. Do not add variants after `ROOT`.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,11 +57,11 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
     }
 }
 
-/// The rowan language marker for knuth's CST.
+/// The rowan language marker for badness's CST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum KnuthLang {}
+pub enum BadnessLang {}
 
-impl Language for KnuthLang {
+impl Language for BadnessLang {
     type Kind = SyntaxKind;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
@@ -80,6 +80,6 @@ impl Language for KnuthLang {
     }
 }
 
-pub type SyntaxNode = rowan::SyntaxNode<KnuthLang>;
-pub type SyntaxToken = rowan::SyntaxToken<KnuthLang>;
-pub type SyntaxElement = rowan::SyntaxElement<KnuthLang>;
+pub type SyntaxNode = rowan::SyntaxNode<BadnessLang>;
+pub type SyntaxToken = rowan::SyntaxToken<BadnessLang>;
+pub type SyntaxElement = rowan::SyntaxElement<BadnessLang>;

@@ -18,16 +18,21 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Session handoff (resume here)
 
-**Where we are:** Phase 0 ✅ and Phase 1 ✅ (incl. all Phase 1 follow-ups except
-the two deferred items noted below). The parser is a lossless, error-tolerant
-recursive-descent grammar over a rowan CST.
+**Where we are:** Phase 0 ✅, Phase 1 ✅, and the **Phase 2 formatter MVP** ✅
+(identity milestone). The parser is a lossless, error-tolerant recursive-descent
+grammar over a rowan CST; `badness fmt` now parses → lowers to a Wadler IR →
+prints, reproducing input byte-for-byte. Real format rules are the next step.
 
 **Build & verify** (everything is green as of this commit):
 ```sh
-cargo test          # 35 tests: unit + lexer/parser snapshots + round-trip
+cargo test          # 46 tests: parser/lexer + printer engine + formatter invariants
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt -- --check
 task snapshots      # regenerate insta snapshots (INSTA_UPDATE=always cargo test)
+
+# CLI smoke checks:
+printf '\\section{Hi}\n' | cargo run -- fmt          # stdin → identical stdout
+cargo run -- fmt --check tests/corpus/*.tex          # exit 0, nothing changed
 ```
 
 **Code map:**
@@ -40,21 +45,29 @@ task snapshots      # regenerate insta snapshots (INSTA_UPDATE=always cargo test
   `delim_math`, `verbatim_body`.
 - `src/parser/events.rs` + `tree_builder.rs` — events → green tree.
 - `src/parser/core.rs` — `parse()` / `reconstruct()` / `Parse { green, errors }`.
+- `src/formatter.rs` + `formatter/` — the formatter. **[copy]** engine: `ir.rs`,
+  `printer.rs`, `style.rs`, `context.rs` (lifted ~wholesale from ravel, each
+  marked `EXTRACTION CANDIDATE`). **[rewrite]** `core.rs` — `format`/
+  `format_with_style` + the LaTeX `lower_node` (currently identity: every token
+  → `Ir::verbatim`). `check.rs` — `--check` over explicit paths (ravel's, minus
+  `file_discovery`).
+- `src/main.rs` — clap CLI: `badness fmt [paths] [--check] [--line-width]
+  [--indent-width]`; stdin→stdout when no paths.
 - `src/text/line_index.rs` — byte ↔ line/col (UTF-16) for later LSP.
-- `tests/parser.rs` — tree snapshots + recovery assertions (every case also
-  asserts losslessness).
+- `tests/parser.rs` — tree snapshots + recovery assertions (asserts losslessness).
+- `tests/format.rs` — `format(x) == x` (identity) + idempotence + parse-stability
+  over the unit cases and corpus, plus an error-refusal case and a snapshot.
 
-**Decision point for next session** — pick one:
-1. **Phase 2 (formatter MVP)** — the originally-planned next step; the formatter
-   is the best tool to shake out remaining parser bugs. Start: `formatter/ir.rs`
-   + `printer.rs` [copy from ravel], then `badness fmt` identity → real rules.
-2. **Differential parse oracle** — stand up texlab/tree-sitter-latex cross-checks
-   over a corpus to harden the grammar before building on it.
-   (Recommendation last session: lean toward #1.)
+**Next step** — real LaTeX format rules, replacing the identity `lower_node` one
+construct at a time (whitespace normalization, groups, environments, paragraph
+reflow). Each rule is a small diff off the identity baseline; use formatter
+ambiguities to drive parser fixes (AGENTS.md). The differential parse oracle
+(texlab/tree-sitter-latex) remains available as an alternative hardening track.
 
 **Known deferred (not blockers, all lossless today):** arg-taking verbatim envs
 (`lstlisting`/`minted`/`Verbatim`); block-vs-inline paragraph refinement (a lone
-block env is wrapped in a `PARAGRAPH`); structured math (Phase 3). See the
+block env is wrapped in a `PARAGRAPH`); structured math (Phase 3); `build.rs`
+man/completions and directory-walking file discovery for `fmt`. See the
 Phase 1 follow-ups list below.
 
 ---
@@ -117,15 +130,17 @@ Phase 1 follow-ups list below.
 
 ## Phase 2 — CLI + formatter MVP (interleaved with Phase 1)
 
-- [ ] `cli.rs` + `build.rs` (man/completions/markdown via clap_mangen/_complete/
-      clap-markdown). **[copy]**
-- [ ] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
-- [ ] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]** (extract first)
+- [~] `cli.rs` + `build.rs` (man/completions/markdown via clap_mangen/_complete/
+      clap-markdown). **[copy]** — clap `fmt` subcommand lives in `src/main.rs`;
+      `build.rs` man/completions still deferred.
+- [x] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
+- [x] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]** (extract first)
 - [ ] LaTeX format rules: whitespace normalization, groups, environments, paragraph
-      reflow. **[rewrite]**
-- [ ] Protected regions never touched (`verbatim`, `lstlisting`, `\verb`, comments).
-- [ ] **Invariants:** idempotence `fmt(fmt(x)) == fmt(x)`; stability `parse(fmt(x)) ≅
-      parse(x)`.
+      reflow. **[rewrite]** — *next step; replaces the identity `lower_node`.*
+- [~] Protected regions never touched (`verbatim`, `lstlisting`, `\verb`, comments).
+      — trivially held under identity; re-verify once rules touch surrounding text.
+- [x] **Invariants:** idempotence `fmt(fmt(x)) == fmt(x)`; stability `parse(fmt(x)) ≅
+      parse(x)` — asserted in `tests/format.rs` (identity baseline).
 - [ ] Differential formatter oracle: fixed point `latexindent(badness(x)) == badness(x)`,
       `#[ignore]`d, triaged into adopt/record (ravel's `air_compat` analog).
 - [ ] Use formatter ambiguities to drive parser fixes.

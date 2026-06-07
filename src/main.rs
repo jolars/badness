@@ -1,34 +1,163 @@
-//! Phase 0 CLI stub: round-trips its input through the CST and prints it back,
-//! asserting losslessness. A real `clap`-based CLI (`badness fmt`, …) arrives in
-//! Phase 2.
+//! The `badness` command-line interface.
+//!
+//! Phase 2 MVP: a `fmt` subcommand that formats `.tex` files in place (or
+//! stdin → stdout), plus `--check` to report whether files are already
+//! formatted. The formatter itself is an identity lowering for now (see
+//! `formatter::core`), so formatting is byte-for-byte stable.
+//!
+//! Deferred (later Phase 2): `build.rs` man pages / shell completions /
+//! markdown via `clap_mangen` / `clap_complete` / `clap-markdown`, and
+//! directory-walking file discovery.
 
-use std::io::Read;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
-    let input = match std::env::args().nth(1) {
-        Some(path) => match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(err) => {
-                eprintln!("badness: cannot read {path}: {err}");
-                return ExitCode::FAILURE;
-            }
-        },
-        None => {
-            let mut buf = String::new();
-            if let Err(err) = std::io::stdin().read_to_string(&mut buf) {
-                eprintln!("badness: cannot read stdin: {err}");
-                return ExitCode::FAILURE;
-            }
-            buf
-        }
-    };
+use badness::formatter::{FormatStyle, check_paths_with_style, format_with_style};
+use clap::{Parser, Subcommand};
 
-    let out = badness::parser::reconstruct(&input);
-    if out != input {
-        eprintln!("badness: internal error — losslessness invariant violated");
+#[derive(Parser)]
+#[command(
+    name = "badness",
+    version,
+    about = "A formatter, linter, and language server for LaTeX"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Format LaTeX source.
+    ///
+    /// With paths, formats each file in place. With no paths, reads stdin and
+    /// writes the formatted result to stdout.
+    Fmt {
+        /// Files to format. Omit to read from stdin.
+        paths: Vec<PathBuf>,
+        /// Report which files would change without writing them. Exits non-zero
+        /// if any file is not already formatted.
+        #[arg(long)]
+        check: bool,
+        /// Maximum line width before the formatter breaks a line.
+        #[arg(long)]
+        line_width: Option<usize>,
+        /// Number of spaces per indent step.
+        #[arg(long)]
+        indent_width: Option<usize>,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Fmt {
+            paths,
+            check,
+            line_width,
+            indent_width,
+        } => {
+            let mut style = FormatStyle::default();
+            if let Some(w) = line_width {
+                style.line_width = w;
+            }
+            if let Some(w) = indent_width {
+                style.indent_width = w;
+            }
+            run_fmt(&paths, check, style)
+        }
+    }
+}
+
+fn run_fmt(paths: &[PathBuf], check: bool, style: FormatStyle) -> ExitCode {
+    if check {
+        return run_check(paths, style);
+    }
+    if paths.is_empty() {
+        run_fmt_stdin(style)
+    } else {
+        run_fmt_paths(paths, style)
+    }
+}
+
+/// `--check`: report unformatted files, exit code 1 if any.
+fn run_check(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
+    match check_paths_with_style(paths, style) {
+        Ok(result) => {
+            if result.changed_files.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                for path in &result.changed_files {
+                    eprintln!("would reformat {}", path.display());
+                }
+                eprintln!(
+                    "{} of {} file(s) would be reformatted",
+                    result.changed_files.len(),
+                    result.checked_files
+                );
+                ExitCode::FAILURE
+            }
+        }
+        Err(err) => {
+            eprintln!("badness: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// No paths: read stdin, format, write to stdout.
+fn run_fmt_stdin(style: FormatStyle) -> ExitCode {
+    let mut input = String::new();
+    if let Err(err) = std::io::stdin().read_to_string(&mut input) {
+        eprintln!("badness: cannot read stdin: {err}");
         return ExitCode::FAILURE;
     }
-    print!("{out}");
-    ExitCode::SUCCESS
+    match format_with_style(&input, style) {
+        Ok(formatted) => {
+            if let Err(err) = std::io::stdout().write_all(formatted.as_bytes()) {
+                eprintln!("badness: cannot write stdout: {err}");
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("badness: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Format each path in place, writing only files whose content changes.
+fn run_fmt_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
+    let mut failed = false;
+    for path in paths {
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("badness: cannot read {}: {err}", path.display());
+                failed = true;
+                continue;
+            }
+        };
+        match format_with_style(&content, style) {
+            Ok(formatted) => {
+                if formatted != content
+                    && let Err(err) = std::fs::write(path, formatted)
+                {
+                    eprintln!("badness: cannot write {}: {err}", path.display());
+                    failed = true;
+                }
+            }
+            Err(err) => {
+                eprintln!("badness: cannot format {}: {err}", path.display());
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }

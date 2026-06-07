@@ -8,6 +8,7 @@ edition = "2024"
 # Deps are added phase by phase (salsa, lsp-server, clap, … land with their
 # phases) to keep `cargo machete` clean.
 [dependencies]
+clap = { version = "4.5.51", features = ["derive"] }
 rowan = "0.16.1"
 smol_str = "0.3.2"
 

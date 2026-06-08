@@ -1,16 +1,23 @@
 //! The formatter entry points and the CST → [`Ir`] lowering.
 //!
-//! The first opinionated rule is **whitespace normalization**: trailing
-//! whitespace is trimmed, runs of 2+ blank lines collapse to a single blank
-//! line, and the document ends with exactly one newline. Everything else is
-//! still emitted verbatim — paragraph structure, intra-line spacing, and
-//! protected regions (`\verb`, verbatim bodies, comments) are preserved.
+//! Implemented rules:
+//! - **Whitespace normalization**: trailing whitespace is trimmed, runs of 2+
+//!   blank lines collapse to a single blank line, and the document ends with
+//!   exactly one newline.
+//! - **Environment indentation**: the body of `\begin{…} … \end{…}` is indented
+//!   one step, nesting recursively, with `\begin`/`\end` flush. All indentation
+//!   is computed by the printer, never preserved from input — so reformatting
+//!   re-indents idempotently.
+//!
+//! Everything else is emitted verbatim: paragraph structure, intra-line spacing,
+//! and protected regions (`\verb`, verbatim bodies, comments) are preserved.
 //!
 //! The mechanism flows entirely through the Wadler [`Ir`]: each maximal run of
 //! `WHITESPACE`/`NEWLINE` trivia is replaced by a single break primitive
 //! ([`Ir::hard_line`] for one newline, [`Ir::empty_line`] for a blank line),
 //! whose printer (`super::printer`) defers indentation and so drops trailing
-//! whitespace for free.
+//! whitespace for free, and [`Ir::indent`] raises the indent inside environment
+//! bodies.
 //!
 //! The lowering (`lower_node`) is the LaTeX-specific part that replaces ravel's
 //! R `ir_expr_node` dispatch; the surrounding `format`/`format_with_style`
@@ -112,15 +119,25 @@ fn format_root(root: &SyntaxNode, ctx: FormatContext) -> String {
     Printer::new(ctx.style()).print(&ir)
 }
 
-/// Lower a CST node to IR. Child nodes recurse; non-trivia tokens (and the
-/// protected `\verb`/verbatim/comment tokens) are emitted verbatim; maximal runs
-/// of `WHITESPACE`/`NEWLINE` trivia are collapsed into a single break primitive
-/// by [`classify_trivia`]. Comments deliberately *break* a trivia run (they are
-/// content, never collapsed away), so the run on either side is classified
-/// independently.
+/// Lower a CST node to IR. Most nodes lower generically (see
+/// [`lower_element_stream`]); an [`SyntaxKind::ENVIRONMENT`] is special-cased to
+/// indent its body (see [`lower_environment`]).
 fn lower_node(node: &SyntaxNode) -> Ir {
+    if node.kind() == SyntaxKind::ENVIRONMENT && !has_verbatim_body(node) {
+        return lower_environment(node);
+    }
+    Ir::concat(lower_element_stream(node.children_with_tokens()))
+}
+
+/// Lower a stream of elements: child nodes recurse, non-trivia tokens (and the
+/// protected `\verb`/verbatim/comment tokens) are emitted verbatim, and maximal
+/// runs of `WHITESPACE`/`NEWLINE` trivia are collapsed into a single break
+/// primitive by [`classify_trivia`]. Comments deliberately *break* a trivia run
+/// (they are content, never collapsed away), so the run on either side is
+/// classified independently.
+fn lower_element_stream(elements: impl Iterator<Item = SyntaxElement>) -> Vec<Ir> {
     let mut out = Vec::new();
-    let mut iter = node.children_with_tokens().peekable();
+    let mut iter = elements.peekable();
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child)),
@@ -131,7 +148,59 @@ fn lower_node(node: &SyntaxNode) -> Ir {
             SyntaxElement::Token(token) => out.push(Ir::verbatim(token.text())),
         }
     }
-    Ir::concat(out)
+    out
+}
+
+/// Lower an `\begin{…} … \end{…}` environment, indenting its body one step. A
+/// clean-parse environment is `[BEGIN, body…, END]`: the framing nodes are
+/// lowered directly, and the body between them is wrapped in [`Ir::indent`] with
+/// a leading [`Ir::hard_line`] (so it starts on its own indented line) and a
+/// trailing `hard_line` at the *outer* indent (so `\end` sits flush with
+/// `\begin`). All indentation is owned by the printer, so the body's own leading
+/// and trailing breaks are trimmed before wrapping — this is what makes
+/// re-indentation idempotent.
+///
+/// Verbatim-like environments never reach here (their opaque `VERBATIM_BODY`
+/// token would be corrupted by reflow); [`lower_node`] routes them to the
+/// generic path, which emits the body verbatim.
+fn lower_environment(node: &SyntaxNode) -> Ir {
+    let mut begin = Ir::Nil;
+    let mut end = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                begin = lower_node(child);
+            }
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
+                end = lower_node(child);
+            }
+            _ => body_elements.push(element),
+        }
+    }
+
+    let body = Ir::concat(lower_element_stream(body_elements.into_iter()));
+    let body = trim_trailing_break(trim_leading_break(body));
+
+    if matches!(body, Ir::Nil) {
+        // Empty body: keep `\begin` and `\end` on their own lines.
+        Ir::concat([begin, Ir::hard_line(), end])
+    } else {
+        Ir::concat([
+            begin,
+            Ir::indent(Ir::concat([Ir::hard_line(), body])),
+            Ir::hard_line(),
+            end,
+        ])
+    }
+}
+
+/// True if `node` directly contains a `VERBATIM_BODY` token — i.e. it is a
+/// verbatim-like environment whose body must be emitted byte-for-byte.
+fn has_verbatim_body(node: &SyntaxNode) -> bool {
+    node.children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == SyntaxKind::VERBATIM_BODY)
 }
 
 /// Whitespace and newlines are the only trivia the formatter rewrites. Comments
@@ -176,21 +245,74 @@ fn absorb(tok: &SyntaxToken, newlines: &mut usize, trailing_ws: &mut String) {
 }
 
 /// Map a trivia run to a single IR primitive: no newline → the inline whitespace
-/// kept verbatim; one newline → a [`Ir::hard_line`]; two or more → a single
-/// [`Ir::empty_line`] (one blank line). Preserved indentation, if any, follows
-/// the break verbatim.
+/// (a genuine inter-word space) kept verbatim; one newline → a [`Ir::hard_line`];
+/// two or more → a single [`Ir::empty_line`] (one blank line). Whitespace that
+/// followed the last newline is *indentation*, which the printer owns and
+/// recreates, so it is dropped here — keeping it would double-indent on reformat.
 fn classify_trivia(newlines: usize, trailing_ws: String) -> Ir {
     match newlines {
         0 => Ir::verbatim(trailing_ws),
-        1 => break_with_indent(Ir::hard_line(), trailing_ws),
-        _ => break_with_indent(Ir::empty_line(), trailing_ws),
+        1 => Ir::hard_line(),
+        _ => Ir::empty_line(),
     }
 }
 
-fn break_with_indent(brk: Ir, trailing_ws: String) -> Ir {
-    if trailing_ws.is_empty() {
-        brk
-    } else {
-        Ir::concat([brk, Ir::verbatim(trailing_ws)])
+/// A break the indenter supplies itself and so trims from a body edge: a forced
+/// line break, an inline whitespace chunk (indentation), or [`Ir::Nil`]. A
+/// `VERBATIM_BODY` (force-break verbatim, or non-blank text) is never trimmable,
+/// so protected content survives.
+fn is_trimmable_break(ir: &Ir) -> bool {
+    match ir {
+        Ir::HardLine | Ir::EmptyLine | Ir::Nil => true,
+        Ir::Verbatim { text, force_break } => {
+            !force_break && text.chars().all(|c| c == ' ' || c == '\t')
+        }
+        _ => false,
+    }
+}
+
+/// Drop leading break/indentation IR from `ir`, recursing into a leading
+/// `Concat` (the body's first break is often buried inside the first paragraph).
+fn trim_leading_break(ir: Ir) -> Ir {
+    if is_trimmable_break(&ir) {
+        return Ir::Nil;
+    }
+    match ir {
+        Ir::Concat(items) => {
+            let mut v: Vec<Ir> = items.iter().cloned().collect();
+            while !v.is_empty() {
+                let head = trim_leading_break(v.remove(0));
+                if matches!(head, Ir::Nil) {
+                    continue;
+                }
+                v.insert(0, head);
+                break;
+            }
+            Ir::concat(v)
+        }
+        other => other,
+    }
+}
+
+/// Drop trailing break/indentation IR from `ir`, recursing into a trailing
+/// `Concat` (mirror of [`trim_leading_break`]).
+fn trim_trailing_break(ir: Ir) -> Ir {
+    if is_trimmable_break(&ir) {
+        return Ir::Nil;
+    }
+    match ir {
+        Ir::Concat(items) => {
+            let mut v: Vec<Ir> = items.iter().cloned().collect();
+            while let Some(last) = v.pop() {
+                let tail = trim_trailing_break(last);
+                if matches!(tail, Ir::Nil) {
+                    continue;
+                }
+                v.push(tail);
+                break;
+            }
+            Ir::concat(v)
+        }
+        other => other,
     }
 }

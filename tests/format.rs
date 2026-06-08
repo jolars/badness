@@ -132,12 +132,19 @@ fn format_invariants_corpus() {
 /// Fixture cases under `tests/fixtures/formatter/<name>/`, each an
 /// `input.tex` + hand-verified `expected.tex` pair.
 const FIXTURES: &[&str] = &[
+    // Whitespace normalization.
     "whitespace_trailing_and_blank_lines",
     "trailing_whitespace_only",
     "collapse_blank_lines",
     "protected_comment_trailing_space",
     "protected_verbatim",
     "final_newline_added",
+    // Environment indentation.
+    "environment_indents_body",
+    "nested_environments",
+    "environment_reindents",
+    "environment_blank_lines_in_body",
+    "verbatim_in_environment",
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

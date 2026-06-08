@@ -19,14 +19,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 ## Session handoff (resume here)
 
 **Where we are:** Phase 0 ✅, Phase 1 ✅, the **Phase 2 formatter MVP** ✅, and the
-**first real format rule** ✅ — **whitespace normalization**. The parser is a
-lossless, error-tolerant recursive-descent grammar over a rowan CST; `badness fmt`
-parses → lowers to a Wadler IR → prints. The lowering is no longer identity: runs of
-`WHITESPACE`/`NEWLINE` trivia collapse to a single break (trailing whitespace
-trimmed, 2+ blank lines → one, exactly one final newline), while paragraph
-structure, intra-line spacing, and protected regions (`\verb`, verbatim bodies,
-comments) are preserved. Groups/environment indentation and reflow are the next
-rules.
+first two real format rules ✅ — **whitespace normalization** and **environment
+indentation**. The parser is a lossless, error-tolerant recursive-descent grammar
+over a rowan CST; `badness fmt` parses → lowers to a Wadler IR → prints. The
+lowering: runs of `WHITESPACE`/`NEWLINE` trivia collapse to a single break
+(trailing whitespace trimmed, 2+ blank lines → one, exactly one final newline);
+the body of every `\begin{…} … \end{…}` is indented one step (nesting
+recursively, `\begin`/`\end` flush). All indentation is computed by the printer
+(`Ir::indent`), never preserved from input, so re-indentation is idempotent.
+Paragraph structure, intra-line spacing, and protected regions (`\verb`, verbatim
+bodies, comments) are preserved. Group/argument indentation and paragraph reflow
+are the next rules.
 
 **Build & verify** (everything is green as of this commit):
 ```sh
@@ -37,9 +40,11 @@ task snapshots      # regenerate insta snapshots (INSTA_UPDATE=always cargo test
 
 # CLI smoke checks:
 printf '\\section{Hi}   \n\n\n\ntext.  ' | cargo run -- fmt   # → \section{Hi}\n\ntext.\n
-printf '\\section{Hi}\n' | cargo run -- fmt                   # already clean → unchanged
-cargo run -- fmt --check tests/corpus/*.tex                   # edge.tex now reports (no final
-                                                             # newline — intentional fixture)
+printf '\\begin{itemize}\n\\item a\n\\end{itemize}\n' | cargo run -- fmt  # body indented 2 sp
+cargo run -- fmt --check tests/corpus/*.tex                   # basic/math/edge now report
+                                                             # (indentation + edge's final
+                                                             # newline) — corpus is a parser
+                                                             # fixture set, not pre-formatted
 ```
 
 **Code map:**
@@ -55,12 +60,15 @@ cargo run -- fmt --check tests/corpus/*.tex                   # edge.tex now rep
 - `src/formatter.rs` + `formatter/` — the formatter. **[copy]** engine: `ir.rs`,
   `printer.rs`, `style.rs`, `context.rs` (lifted ~wholesale from ravel, each
   marked `EXTRACTION CANDIDATE`). **[rewrite]** `core.rs` — `format`/
-  `format_with_style` + the LaTeX `lower_node`: child nodes recurse, non-trivia
-  tokens emit verbatim, and runs of `WHITESPACE`/`NEWLINE` collapse to one break
+  `format_with_style` + the LaTeX lowering: `lower_node` dispatches `ENVIRONMENT`
+  to `lower_environment` (body wrapped in `Ir::indent`, leading/trailing breaks
+  trimmed via `trim_leading_break`/`trim_trailing_break`, verbatim envs kept on the
+  generic path via `has_verbatim_body`); everything else goes through
+  `lower_element_stream` where runs of `WHITESPACE`/`NEWLINE` collapse to one break
   (`classify_trivia`: 0 newlines → inline ws kept; 1 → `hard_line`; 2+ →
-  `empty_line`; trailing-after-last-newline ws preserved as indentation). A final
-  unconditional fixup trims the trailing edge to exactly one newline. `check.rs` —
-  `--check` over explicit paths (ravel's, minus `file_discovery`).
+  `empty_line`; indentation dropped — the printer owns it). A final unconditional
+  fixup trims the trailing edge to exactly one newline. `check.rs` — `--check` over
+  explicit paths (ravel's, minus `file_discovery`).
 - `src/main.rs` — clap CLI: `badness fmt [paths] [--check] [--line-width]
   [--indent-width]`; stdin→stdout when no paths.
 - `src/text/line_index.rs` — byte ↔ line/col (UTF-16) for later LSP.
@@ -71,21 +79,33 @@ cargo run -- fmt --check tests/corpus/*.tex                   # edge.tex now rep
   case and a snapshot.
 
 **Next step** — continue replacing identity behavior one construct at a time:
-**environment-body / group indentation** (the latexindent flagship), then
-paragraph reflow. Deferred whitespace follow-ups: collapsing *internal* multiple
-spaces, and leading-indentation reflow (kept verbatim for now). Each rule is a
-small diff; use formatter ambiguities to drive parser fixes (AGENTS.md). The
-differential oracles — `latexindent` (formatter) and texlab/tree-sitter-latex
-(parse) — remain available as hardening tracks.
+**group/argument indentation** (multi-line `{…}` / `[…]` bodies), then paragraph
+reflow. Deferred whitespace follow-ups: collapsing *internal* multiple spaces.
+Each rule is a small diff; use formatter ambiguities to drive parser fixes
+(AGENTS.md). The differential oracles — `latexindent` (formatter) and
+texlab/tree-sitter-latex (parse) — remain available as hardening tracks.
 
-**Decision recorded (whitespace rule):** the final-newline fixup is now
-*unconditional* — for any non-empty document the formatter trims the trailing edge
-(ASCII ws/newlines only, so trailing Unicode content survives) and appends exactly
-one `\n`; empty input stays empty. Two parser-adjacent ambiguities to watch (no
-parser change needed now): (1) indentation after a newline lives in the *same*
-trivia run as the newline — the run classifier, not the parser, splits them; (2) a
-`COMMENT` breaks a trivia run, so blank-line collapsing around comments is a future
-paragraph/semantic concern, not a formatter hack.
+**Decisions recorded:**
+- *(whitespace)* the final-newline fixup is *unconditional* — for any non-empty
+  document the formatter trims the trailing edge (ASCII ws/newlines only, so
+  trailing Unicode content survives) and appends exactly one `\n`; empty input
+  stays empty.
+- *(indentation)* all indentation is computed by the printer; leading whitespace in
+  the input is dropped (not preserved), which is what makes re-indentation
+  idempotent. Environment indentation is **uniform** — `document` and math
+  environments (`align`, `equation`) indent like any other; a `document`/per-name
+  opt-out belongs in a future config, not a special case (Tenet 1).
+- *(known gap)* argument-taking environments (`\begin{tabular}{cc}`) put the trailing
+  arg group on its own indented body line — correct handling needs the signature DB
+  (already tracked under Phase 4 / Phase 1 follow-ups). Verbatim nested in an
+  environment: `\begin{verbatim}` indents but the body and `\end` stay column-0
+  (body is byte-preserved). Both are lossless and idempotent today.
+
+Parser-adjacent ambiguities to watch (no parser change needed now): (1) indentation
+after a newline lives in the *same* trivia run as the newline — the run classifier,
+not the parser, splits them; (2) a `COMMENT` breaks a trivia run, so blank-line
+collapsing around comments is a future paragraph/semantic concern, not a formatter
+hack.
 
 **Known deferred (not blockers, all lossless today):** arg-taking verbatim envs
 (`lstlisting`/`minted`/`Verbatim`); block-vs-inline paragraph refinement (a lone
@@ -159,8 +179,10 @@ Phase 1 follow-ups list below.
 - [x] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
 - [x] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]** (extract first)
 - [~] LaTeX format rules: **whitespace normalization done** (trailing-ws trim,
-      blank-line collapse, single final newline); groups, environments, paragraph
-      reflow still to come. **[rewrite]** — replaced the identity `lower_node`.
+      blank-line collapse, single final newline) and **environment indentation done**
+      (printer-owned, idempotent re-indent, verbatim-protected); group/argument
+      indentation and paragraph reflow still to come. **[rewrite]** — replaced the
+      identity `lower_node`.
 - [x] Protected regions never touched (`verbatim`, `\verb`, comments) — verified by
       the `protected_verbatim` / `protected_comment_trailing_space` fixtures now that
       rules touch surrounding text. (`lstlisting`/arg-taking verbatims still deferred.)

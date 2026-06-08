@@ -18,10 +18,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Session handoff (resume here)
 
-**Where we are:** Phase 0 ✅, Phase 1 ✅, and the **Phase 2 formatter MVP** ✅
-(identity milestone). The parser is a lossless, error-tolerant recursive-descent
-grammar over a rowan CST; `badness fmt` now parses → lowers to a Wadler IR →
-prints, reproducing input byte-for-byte. Real format rules are the next step.
+**Where we are:** Phase 0 ✅, Phase 1 ✅, the **Phase 2 formatter MVP** ✅, and the
+**first real format rule** ✅ — **whitespace normalization**. The parser is a
+lossless, error-tolerant recursive-descent grammar over a rowan CST; `badness fmt`
+parses → lowers to a Wadler IR → prints. The lowering is no longer identity: runs of
+`WHITESPACE`/`NEWLINE` trivia collapse to a single break (trailing whitespace
+trimmed, 2+ blank lines → one, exactly one final newline), while paragraph
+structure, intra-line spacing, and protected regions (`\verb`, verbatim bodies,
+comments) are preserved. Groups/environment indentation and reflow are the next
+rules.
 
 **Build & verify** (everything is green as of this commit):
 ```sh
@@ -31,8 +36,10 @@ cargo fmt -- --check
 task snapshots      # regenerate insta snapshots (INSTA_UPDATE=always cargo test)
 
 # CLI smoke checks:
-printf '\\section{Hi}\n' | cargo run -- fmt          # stdin → identical stdout
-cargo run -- fmt --check tests/corpus/*.tex          # exit 0, nothing changed
+printf '\\section{Hi}   \n\n\n\ntext.  ' | cargo run -- fmt   # → \section{Hi}\n\ntext.\n
+printf '\\section{Hi}\n' | cargo run -- fmt                   # already clean → unchanged
+cargo run -- fmt --check tests/corpus/*.tex                   # edge.tex now reports (no final
+                                                             # newline — intentional fixture)
 ```
 
 **Code map:**
@@ -48,21 +55,37 @@ cargo run -- fmt --check tests/corpus/*.tex          # exit 0, nothing changed
 - `src/formatter.rs` + `formatter/` — the formatter. **[copy]** engine: `ir.rs`,
   `printer.rs`, `style.rs`, `context.rs` (lifted ~wholesale from ravel, each
   marked `EXTRACTION CANDIDATE`). **[rewrite]** `core.rs` — `format`/
-  `format_with_style` + the LaTeX `lower_node` (currently identity: every token
-  → `Ir::verbatim`). `check.rs` — `--check` over explicit paths (ravel's, minus
-  `file_discovery`).
+  `format_with_style` + the LaTeX `lower_node`: child nodes recurse, non-trivia
+  tokens emit verbatim, and runs of `WHITESPACE`/`NEWLINE` collapse to one break
+  (`classify_trivia`: 0 newlines → inline ws kept; 1 → `hard_line`; 2+ →
+  `empty_line`; trailing-after-last-newline ws preserved as indentation). A final
+  unconditional fixup trims the trailing edge to exactly one newline. `check.rs` —
+  `--check` over explicit paths (ravel's, minus `file_discovery`).
 - `src/main.rs` — clap CLI: `badness fmt [paths] [--check] [--line-width]
   [--indent-width]`; stdin→stdout when no paths.
 - `src/text/line_index.rs` — byte ↔ line/col (UTF-16) for later LSP.
 - `tests/parser.rs` — tree snapshots + recovery assertions (asserts losslessness).
-- `tests/format.rs` — `format(x) == x` (identity) + idempotence + parse-stability
-  over the unit cases and corpus, plus an error-refusal case and a snapshot.
+- `tests/format.rs` — fixture pairs (`tests/fixtures/formatter/<name>/{input,
+  expected}.tex`) + idempotence, parse-stability (trivia-elided), and
+  losslessness-of-output over the unit cases and corpus, plus an error-refusal
+  case and a snapshot.
 
-**Next step** — real LaTeX format rules, replacing the identity `lower_node` one
-construct at a time (whitespace normalization, groups, environments, paragraph
-reflow). Each rule is a small diff off the identity baseline; use formatter
-ambiguities to drive parser fixes (AGENTS.md). The differential parse oracle
-(texlab/tree-sitter-latex) remains available as an alternative hardening track.
+**Next step** — continue replacing identity behavior one construct at a time:
+**environment-body / group indentation** (the latexindent flagship), then
+paragraph reflow. Deferred whitespace follow-ups: collapsing *internal* multiple
+spaces, and leading-indentation reflow (kept verbatim for now). Each rule is a
+small diff; use formatter ambiguities to drive parser fixes (AGENTS.md). The
+differential oracles — `latexindent` (formatter) and texlab/tree-sitter-latex
+(parse) — remain available as hardening tracks.
+
+**Decision recorded (whitespace rule):** the final-newline fixup is now
+*unconditional* — for any non-empty document the formatter trims the trailing edge
+(ASCII ws/newlines only, so trailing Unicode content survives) and appends exactly
+one `\n`; empty input stays empty. Two parser-adjacent ambiguities to watch (no
+parser change needed now): (1) indentation after a newline lives in the *same*
+trivia run as the newline — the run classifier, not the parser, splits them; (2) a
+`COMMENT` breaks a trivia run, so blank-line collapsing around comments is a future
+paragraph/semantic concern, not a formatter hack.
 
 **Known deferred (not blockers, all lossless today):** arg-taking verbatim envs
 (`lstlisting`/`minted`/`Verbatim`); block-vs-inline paragraph refinement (a lone
@@ -135,12 +158,15 @@ Phase 1 follow-ups list below.
       `build.rs` man/completions still deferred.
 - [x] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
 - [x] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]** (extract first)
-- [ ] LaTeX format rules: whitespace normalization, groups, environments, paragraph
-      reflow. **[rewrite]** — *next step; replaces the identity `lower_node`.*
-- [~] Protected regions never touched (`verbatim`, `lstlisting`, `\verb`, comments).
-      — trivially held under identity; re-verify once rules touch surrounding text.
+- [~] LaTeX format rules: **whitespace normalization done** (trailing-ws trim,
+      blank-line collapse, single final newline); groups, environments, paragraph
+      reflow still to come. **[rewrite]** — replaced the identity `lower_node`.
+- [x] Protected regions never touched (`verbatim`, `\verb`, comments) — verified by
+      the `protected_verbatim` / `protected_comment_trailing_space` fixtures now that
+      rules touch surrounding text. (`lstlisting`/arg-taking verbatims still deferred.)
 - [x] **Invariants:** idempotence `fmt(fmt(x)) == fmt(x)`; stability `parse(fmt(x)) ≅
-      parse(x)` — asserted in `tests/format.rs` (identity baseline).
+      parse(x)` (trivia-elided); losslessness of formatted output — asserted per
+      fixture and over the unit/corpus cases in `tests/format.rs`.
 - [ ] Differential formatter oracle: fixed point `latexindent(badness(x)) == badness(x)`,
       `#[ignore]`d, triaged into adopt/record (ravel's `air_compat` analog).
 - [ ] Use formatter ambiguities to drive parser fixes.

@@ -4,5 +4,5 @@ expression: "format(input).expect(\"formats\")"
 ---
 \section{Intro}
 
-Some text with $x^2$ and a % trailing comment
+Some text with trailing space
 more text.

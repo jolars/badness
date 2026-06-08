@@ -1,0 +1,102 @@
+% Shared definitions for the badness brand artifacts.
+%
+% \input by the per-artifact .tex files (logo.tex, wordmark.tex, og.tex).
+% Anything \providecommand'd here is overridable by the caller — define
+% your override BEFORE \input{_common.tex}.
+
+\usepackage{tikz}
+\usepackage{xcolor}
+
+% --- Font dispatch ----------------------------------------------------------
+%
+% \bnFont selects the sans-serif family. Set it in your artifact file
+% before \input{_common.tex}. Available values:
+%
+%   plex       IBM Plex Sans         — modern technical (default)
+%   tgheros    TeX Gyre Heros        — Helvetica-clone, neutral
+%   source     Source Sans Pro       — humanist, friendly
+%   roboto     Roboto                — Google flat-ui geometric
+%   fira       Fira Sans             — Mozilla, slightly quirky
+%   inter      Inter                 — UI workhorse, very tight
+%   montserrat Montserrat            — wide geometric, posterish
+%   lato       Lato                  — warm humanist
+%   cmbright   Computer Modern Bright — light, scholarly
+%   lm         Latin Modern Sans     — LaTeX default, neutral
+%
+\providecommand{\bnFont}{lm}
+
+\makeatletter
+\def\bn@font@plex      {\RequirePackage{plex-sans}}
+\def\bn@font@tgheros   {\RequirePackage{tgheros}}
+\def\bn@font@source    {\RequirePackage[default]{sourcesanspro}}
+\def\bn@font@roboto    {\RequirePackage[sfdefault]{roboto}}
+\def\bn@font@fira      {\RequirePackage[sfdefault]{FiraSans}}
+\def\bn@font@inter     {\RequirePackage{inter}}
+\def\bn@font@montserrat{\RequirePackage[defaultfam,tabular,lining]{montserrat}}
+\def\bn@font@lato      {\RequirePackage[default]{lato}}
+\def\bn@font@cmbright  {\RequirePackage{cmbright}}
+\def\bn@font@lm        {\RequirePackage{lmodern}}
+\@nameuse{bn@font@\bnFont}
+\makeatother
+\renewcommand{\familydefault}{\sfdefault}
+
+% --- Palette ----------------------------------------------------------------
+%
+% Five role-named slots. \bnDarkMode=1 swaps to a dark variant.
+% Override any individual color by \definecolor'ing it AFTER \input{_common.tex}.
+
+\providecommand{\bnDarkMode}{0}
+
+\ifnum\bnDarkMode=1
+  % Dark variant
+  \definecolor{bnInk}    {HTML}{F2EFE9} % "ink" reads light on dark
+  \definecolor{bnBad}    {HTML}{F08A57} % brighter orange so it pops on dark
+  \definecolor{bnPaper}  {HTML}{1B1B1B} % near-black canvas
+  \definecolor{bnMargin} {HTML}{3D3833} % subtle margin guide
+  \definecolor{bnMuted}  {HTML}{A39A8C} % secondary text
+\else
+  % Light variant (default)
+  \definecolor{bnInk}    {HTML}{1B1B1B}
+  \definecolor{bnBad}    {HTML}{D9633F}
+  \definecolor{bnPaper}  {HTML}{FAFAF7}
+  \definecolor{bnMargin} {HTML}{B5B0A5}
+  \definecolor{bnMuted}  {HTML}{6F665A}
+\fi
+
+% --- Logo geometry (all in cm; tweak freely) --------------------------------
+
+\providecommand{\bnBarCount}{4}     % number of horizontal bars
+\providecommand{\bnBarWidth}{4.0}   % length of an in-margin bar
+\providecommand{\bnBarHeight}{0.55} % bar thickness
+\providecommand{\bnBarGap}{0.32}    % vertical gap between bars
+\providecommand{\bnJutWhich}{3}     % 1..bnBarCount — which bar overflows
+\providecommand{\bnJutExtra}{1.15}  % how far it sticks out
+\providecommand{\bnRound}{0.07}     % corner rounding
+\providecommand{\bnShowMargin}{0}   % 1 = draw the dashed margin guide, 0 = hide
+
+% --- The mark itself --------------------------------------------------------
+%
+% Draws into the current tikzpicture, anchored so the bottom-left of the
+% non-jutting bars is at (0,0). The jutting bar extends to the right.
+
+\newcommand{\bnDrawMark}{%
+  \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}%
+  \pgfmathsetmacro{\bnTotalH}{\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap}%
+  \ifnum\bnShowMargin=1
+    % The right-margin guide: a dashed vertical line at the in-margin width,
+    % running the full height of the bar stack with a touch of overshoot.
+    \draw[bnMargin, dashed, line width=0.4pt, dash pattern=on 2pt off 2pt]
+    (\bnBarWidth, -0.12) -- (\bnBarWidth, \bnTotalH+0.12);
+  \fi
+  \foreach \i in {0,...,\bnLast}{%
+      \pgfmathsetmacro{\bny}{(\bnLast-\i)*(\bnBarHeight+\bnBarGap)}%
+      \pgfmathtruncatemacro{\bnNum}{\i+1}%
+      \ifnum\bnNum=\bnJutWhich
+        \fill[bnBad, rounded corners=\bnRound cm]
+        (0,\bny) rectangle (\bnBarWidth+\bnJutExtra, \bny+\bnBarHeight);
+      \else
+        \fill[bnInk, rounded corners=\bnRound cm]
+        (0,\bny) rectangle (\bnBarWidth, \bny+\bnBarHeight);
+      \fi
+    }%
+}

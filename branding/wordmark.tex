@@ -1,0 +1,41 @@
+% Horizontal lockup: mark on the left, "badness" wordmark on the right.
+% Useful for README headers, doc-site nav bars, GitHub social previews.
+\documentclass[border=12pt, tikz]{standalone}
+
+% ============================================================================
+% KNOBS — edit freely
+% ============================================================================
+
+% --- Mark geometry ---
+\providecommand{\bnBarWidth}{2.4}
+\providecommand{\bnJutExtra}{0.72}
+\providecommand{\bnBarHeight}{0.42}
+\providecommand{\bnBarGap}{0.24}
+\providecommand{\bnJutWhich}{3}
+
+% --- Wordmark layout ---
+\providecommand{\bnWordmarkSize}{46}   % font size of "badness" (pt)
+\providecommand{\bnWordmarkGap}{0.55}  % cm of space between mark and word
+
+% --- Theme ---
+\providecommand{\bnDarkMode}{0}
+\providecommand{\bnFont}{fira}
+
+
+\input{_common.tex}
+
+% ============================================================================
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm]
+  \bnDrawMark
+
+  % Compute mark bounds.
+  \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}
+  \pgfmathsetmacro{\bnMarkH}{\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap}
+  \pgfmathsetmacro{\bnMarkRight}{\bnBarWidth+\bnJutExtra}
+
+  \node[anchor=west, inner sep=0pt, text=bnInk,
+    font=\fontsize{\bnWordmarkSize pt}{\bnWordmarkSize pt}\bfseries\selectfont]
+  at (\bnMarkRight + \bnWordmarkGap, 0.5*\bnMarkH) {Badness};
+\end{tikzpicture}
+\end{document}

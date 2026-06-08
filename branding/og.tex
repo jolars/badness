@@ -1,0 +1,76 @@
+% OpenGraph card: 1200 x 630 pt (the de-facto social-preview size).
+%
+% Page units are pt-as-pixels, so the resulting PDF is exactly 1200x630 pt;
+% it scales cleanly to any integer multiple at higher dpi.
+\documentclass[border=0pt, tikz]{standalone}
+
+% ============================================================================
+% KNOBS — edit freely
+% ============================================================================
+
+% --- Mark geometry ---
+\providecommand{\bnBarWidth}{4.5}
+\providecommand{\bnJutExtra}{1.3}
+\providecommand{\bnBarHeight}{0.85}
+\providecommand{\bnBarGap}{0.45}
+\providecommand{\bnJutWhich}{3}
+
+% --- Canvas layout (everything in pt; 1200x630 is the canvas) ---
+\providecommand{\bnMarkX}{120}        % left edge of mark
+% Mark Y is auto-derived: centred to the text cluster (midpoint of title
+% and subtitle when subtitle is shown, title only when hidden).
+% Nudge up (+) or down (-) for optical adjustment.
+\providecommand{\bnMarkYNudge}{0}
+
+\providecommand{\bnTextX}{370}        % left edge of text column
+\providecommand{\bnTitleY}{370}       % vertical mid of title node
+\providecommand{\bnSubtitleY}{272}    % vertical mid of subtitle node
+
+\providecommand{\bnTitleSize}{120}    % title font size (pt)
+\providecommand{\bnSubtitleSize}{28}  % subtitle font size (pt)
+
+% --- Text content ---
+\providecommand{\bnTitle}{Badness}
+\providecommand{\bnShowSubtitle}{1}   % 0 = title only, 1 = title + subtitle
+\providecommand{\bnSubtitle}{A \LaTeX{} formatter, linter \& language server}
+
+% --- Theme ---
+\providecommand{\bnDarkMode}{0}
+\providecommand{\bnFont}{plex}
+
+\input{_common.tex}
+
+% ============================================================================
+\begin{document}
+\begin{tikzpicture}[x=1pt, y=1pt]
+  \useasboundingbox (0,0) rectangle (1200, 630);
+
+  \fill[bnPaper] (0,0) rectangle (1200, 630);
+
+  % Derive mark Y so its vertical centre lands on the text cluster's centre.
+  % Mark height in pt = (BarCount*BarHeight + (BarCount-1)*BarGap) * 28.4527559
+  \pgfmathsetmacro{\bnMarkHpt}{%
+    (\bnBarCount*\bnBarHeight + (\bnBarCount-1)*\bnBarGap)*28.4527559}
+  \ifnum\bnShowSubtitle=1
+    \pgfmathsetmacro{\bnTextMid}{(\bnTitleY+\bnSubtitleY)/2}
+  \else
+    \pgfmathsetmacro{\bnTextMid}{\bnTitleY}
+  \fi
+  \pgfmathsetmacro{\bnMarkY}{\bnTextMid - \bnMarkHpt/2 + \bnMarkYNudge}
+
+  % Mark: scope switches units to cm so the mark draws at its natural size.
+  \begin{scope}[shift={(\bnMarkX, \bnMarkY)}, x=1cm, y=1cm]
+    \bnDrawMark
+  \end{scope}
+
+  \node[anchor=west, inner sep=0pt, text=bnInk,
+    font=\fontsize{\bnTitleSize pt}{\bnTitleSize pt}\bfseries\selectfont]
+  at (\bnTextX, \bnTitleY) {\bnTitle};
+
+  \ifnum\bnShowSubtitle=1
+    \node[anchor=west, inner sep=0pt, text=bnMuted,
+      font=\fontsize{\bnSubtitleSize pt}{\bnSubtitleSize pt}\selectfont]
+    at (\bnTextX+4, \bnSubtitleY) {\bnSubtitle};
+  \fi
+\end{tikzpicture}
+\end{document}

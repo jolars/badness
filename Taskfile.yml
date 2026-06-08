@@ -42,3 +42,53 @@ tasks:
     desc: Benchmarks (placeholder until Phase 7)
     cmds:
       - echo "no benchmarks yet"
+
+  brand:
+    desc: Build all brand artifacts (logo, wordmark, OG card) — PDF + PNG
+    deps: [brand:logo, brand:wordmark, brand:og]
+
+  brand:logo:
+    desc: Build logo.pdf + logo.png
+    dir: branding
+    cmds:
+      - pdflatex -interaction=nonstopmode -halt-on-error logo.tex >/dev/null
+      - magick -density 600 logo.pdf -background none -strip logo.png
+    sources:
+      - logo.tex
+      - _common.tex
+    generates:
+      - logo.pdf
+      - logo.png
+
+  brand:wordmark:
+    desc: Build wordmark.pdf + wordmark.png
+    dir: branding
+    cmds:
+      - pdflatex -interaction=nonstopmode -halt-on-error wordmark.tex >/dev/null
+      - magick -density 600 wordmark.pdf -background none -strip wordmark.png
+    sources:
+      - wordmark.tex
+      - _common.tex
+    generates:
+      - wordmark.pdf
+      - wordmark.png
+
+  brand:og:
+    desc: Build og.pdf + og.png (1200x630)
+    dir: branding
+    cmds:
+      - pdflatex -interaction=nonstopmode -halt-on-error og.tex >/dev/null
+      # 1200pt @ 72dpi base, scale 2x to 144dpi for crisp social preview.
+      - magick -density 144 og.pdf -strip og.png
+    sources:
+      - og.tex
+      - _common.tex
+    generates:
+      - og.pdf
+      - og.png
+
+  brand:clean:
+    desc: Remove built brand artifacts and LaTeX scratch files
+    dir: branding
+    cmds:
+      - rm -f *.pdf *.png *.aux *.log *.out

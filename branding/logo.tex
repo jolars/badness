@@ -1,0 +1,47 @@
+% Square icon: just the four-bar mark on a transparent canvas.
+% Suitable for favicons, README headers, app icons.
+\documentclass[border=0pt, tikz]{standalone}
+
+% ============================================================================
+% KNOBS — edit freely
+% ============================================================================
+
+% --- Canvas ---
+\providecommand{\bnCanvasSize}{6.5}  % side of the square canvas (cm)
+\providecommand{\bnFillBg}{0}        % 0 = transparent, 1 = filled with bnPaper
+
+% --- Mark geometry (override defaults from _common.tex) ---
+\providecommand{\bnBarWidth}{3.6}
+\providecommand{\bnJutExtra}{1.05}
+\providecommand{\bnBarHeight}{0.55}
+\providecommand{\bnBarGap}{0.32}
+\providecommand{\bnJutWhich}{3}
+
+% --- Theme ---
+\providecommand{\bnDarkMode}{0}      % font/palette toggle, see _common.tex
+\providecommand{\bnFont}{plex}       % see _common.tex for the menu
+
+\input{_common.tex}
+
+% ============================================================================
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm]
+  % Lock a square bounding box.
+  \useasboundingbox (0,0) rectangle (\bnCanvasSize, \bnCanvasSize);
+
+  \ifnum\bnFillBg=1
+    \fill[bnPaper] (0,0) rectangle (\bnCanvasSize, \bnCanvasSize);
+  \fi
+
+  % Centre the mark in the canvas.
+  \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}
+  \pgfmathsetmacro{\bnMarkW}{\bnBarWidth+\bnJutExtra}
+  \pgfmathsetmacro{\bnMarkH}{\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap}
+  \pgfmathsetmacro{\bnShiftX}{(\bnCanvasSize-\bnMarkW)/2}
+  \pgfmathsetmacro{\bnShiftY}{(\bnCanvasSize-\bnMarkH)/2}
+
+  \begin{scope}[shift={(\bnShiftX, \bnShiftY)}]
+    \bnDrawMark
+  \end{scope}
+\end{tikzpicture}
+\end{document}

@@ -115,21 +115,27 @@ Phase 1 follow-ups list below.
 
 ---
 
-## Phase 0 — Foundations
+## Phase 0 — Foundations ✅
 
-- [ ] Module layout mirroring ravel: `parser/`, `formatter/`, `linter/`,
-      `semantic/`, `project/`, `text/`, `syntax.rs`, `incremental.rs`, `cli.rs`.
-- [ ] Align `Cargo.toml` deps with ravel: rowan 0.16, salsa 0.26, smol_str, insta,
-      annotate-snippets, clap (+ build-deps), **lsp-server + lsp-types** *(not
-      tower-lsp-server)*.
-- [ ] `syntax.rs`: `SyntaxKind` (token + node kinds) + rowan `Language` impl. **[rewrite]**
-- [ ] `text/line_index.rs`: byte ↔ (line, col) / UTF-16. **[copy]** (swap `Position` type)
-- [ ] `parser/events.rs` (`Start`/`Tok(idx)`/`Finish`) + `tree_builder.rs`. **[copy]**
-- [ ] Lossless lexer skeleton; trivia (whitespace, comments, blank lines) preserved
+Bootstrap milestone — complete. The two umbrella items below are scoped to what
+bootstrap actually required; the rest of ravel's module/dep list is created by the
+phase that first needs it (`incremental.rs` + salsa → Phase 4, `lsp.rs` +
+lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
+
+- [x] Module layout bootstrapped: `parser/`, `formatter/`, `text/`, `syntax.rs`.
+      (`linter/`, `semantic/`, `project/`, `incremental.rs` come with their phases;
+      the CLI currently lives in `main.rs`, not a separate `cli.rs`.)
+- [x] Core `Cargo.toml` deps in place: rowan 0.16, smol_str, insta, clap. (salsa,
+      annotate-snippets, **lsp-server + lsp-types** *(not tower-lsp-server)*, and the
+      clap build-deps land with the phases that need them.)
+- [x] `syntax.rs`: `SyntaxKind` (token + node kinds) + rowan `Language` impl. **[rewrite]**
+- [x] `text/line_index.rs`: byte ↔ (line, col) / UTF-16. **[copy]** (swap `Position` type)
+- [x] `parser/events.rs` (`Start`/`Tok(idx)`/`Finish`) + `tree_builder.rs`. **[copy]**
+- [x] Lossless lexer skeleton; trivia (whitespace, comments, blank lines) preserved
       but separable. **[rewrite]**
-- [ ] Round-trip harness: `reconstruct(text) == text`, byte-for-byte.
-- [ ] `insta` snapshot scaffolding + initial `.tex` corpus.
-- [ ] `Taskfile.yml` mirroring ravel's targets (build, test, fmt, lint, bench).
+- [x] Round-trip harness: `reconstruct(text) == text`, byte-for-byte.
+- [x] `insta` snapshot scaffolding + initial `.tex` corpus.
+- [x] `Taskfile.yml` mirroring ravel's targets (build, test, fmt, lint, bench).
 
 ## Phase 1 — Core parser
 
@@ -193,14 +199,8 @@ Phase 1 follow-ups list below.
       `#[ignore]`d, triaged into adopt/record (ravel's `air_compat` analog).
 - [ ] Use formatter ambiguities to drive parser fixes.
 
-## Phase 3 — Math
 
-- [ ] Structured math model over the generic math tree.
-- [ ] Precedence-climbing for `^` / `_` binding and primes (the one Pratt site).
-- [ ] `\left … \right` delimiter matching.
-- [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&` columns, `\\` rows.
-
-## Phase 4 — Salsa + semantic layer
+## Phase 3 — Salsa + semantic layer
 
 - [ ] `incremental.rs`: `#[salsa::input] SourceFile { text }`, `parsed_document`
       query storing `GreenNode` (`no_eq, unsafe(non_update_types)`). **[copy]**
@@ -212,7 +212,41 @@ Phase 1 follow-ups list below.
 - [ ] Project graph: `\input` / `\include` / `\import` resolution.
 - [ ] Label/reference model (`\label` / `\ref` / `\cref`).
 
-## Phase 5 — Linter
+## Phase 4 — Minimal LSP (editor integration)
+
+**Goal: get badness into an editor as soon as salsa lands** — a thin server doing
+just formatting + diagnostics, deferring the rich features to Phase 6. Depends on
+Phase 4 (rides the `parsed_document` query); precedes the linter because its
+diagnostics are the parser's existing byte-range errors, no lints required.
+
+- [ ] Add `lsp-server` + `lsp-types` deps (rust-analyzer's stack, **not**
+      tower-lsp-server — see AGENTS.md LSP note). **[diverge from ravel]**
+- [ ] `lsp.rs`: sync main loop, single-writer edits, snapshot readers on a
+      threadpool. **[diverge from ravel]**
+- [ ] Lifecycle: `initialize` (advertise `documentFormattingProvider` +
+      diagnostics) / `initialized` / `shutdown` / `exit`.
+- [ ] Document sync: `didOpen` / `didChange` (full sync to start) / `didClose`
+      writing the salsa `SourceFile` input.
+- [ ] `textDocument/formatting`: full-document, backed by the existing formatter
+      (`format_with_style`); honor client tab-size/insert-spaces options.
+- [ ] `publishDiagnostics`: map the parser's byte-range errors to LSP ranges via
+      `text/line_index.rs` (already UTF-16-aware).
+- [ ] Cancellation via salsa (`Cancelled` unwind) on document change.
+- [ ] Smoke test: drive it over stdio (e.g. an `initialize`→`didOpen`→`formatting`
+      transcript) and document editor wiring in the README.
+
+*Deferred to Phase 6:* range formatting, symbols, folding, hover, completion,
+definition/rename.
+
+## Phase 5 — Math
+
+- [ ] Structured math model over the generic math tree.
+- [ ] Precedence-climbing for `^` / `_` binding and primes (the one Pratt site).
+- [ ] `\left … \right` delimiter matching.
+- [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&` columns, `\\` rows.
+
+
+## Phase 6 — Linter
 
 - [ ] Diagnostics framework over CST + semantics (reuse parse error channel).
 - [ ] `linter/suppression` (`% badness-ignore` style) + annotate-snippets render. **[copy shape]**
@@ -220,17 +254,18 @@ Phase 1 follow-ups list below.
       stylistic checks.
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors" (Tenet 5).
 
-## Phase 6 — LSP
+## Phase 7 — Full LSP
 
-- [ ] `lsp.rs` on **lsp-server + lsp-types**: sync main loop, single-writer edits,
-      snapshot readers on a threadpool. **[diverge from ravel]**
-- [ ] Cancellation via salsa (`Cancelled` unwind) on document change.
-- [ ] Publish diagnostics; full + range formatting.
+Builds on the minimal server (Phase 4.5); adds the semantics-backed features.
+
+- [ ] Range formatting (`textDocument/rangeFormatting`).
+- [ ] Linter diagnostics (Phase 5) published alongside parse errors.
 - [ ] Document symbols, folding ranges.
 - [ ] Hover + completion from the signature DB.
 - [ ] Go-to-definition / rename for labels and refs.
+- [ ] Incremental (`didChange`) document sync, replacing full sync.
 
-## Phase 7 — Performance & hardening
+## Phase 8 — Performance & hardening
 
 - [ ] Extract shared crate(s) from the **[copy]** files (IR engine first), depended
       on by both badness and ravel.

@@ -3,6 +3,7 @@
 //! the roadmap.
 
 pub mod formatter;
+pub mod incremental;
 pub mod parser;
 pub mod syntax;
 pub mod text;

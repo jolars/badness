@@ -202,7 +202,7 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
 
 ## Phase 3 — Salsa + semantic layer
 
-- [ ] `incremental.rs`: `#[salsa::input] SourceFile { text }`, `parsed_document`
+- [x] `incremental.rs`: `#[salsa::input] SourceFile { text }`, `parsed_document`
       query storing `GreenNode` (`no_eq, unsafe(non_update_types)`). **[copy]**
 - [ ] `semantic_model` tracked query; linter/LSP reuse it (no re-parse from text).
 - [ ] Signature DB (analog of ravel `rindex/`): built-in command/environment table +

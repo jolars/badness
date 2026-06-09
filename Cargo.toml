@@ -10,6 +10,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.51", features = ["derive"] }
 rowan = "0.16.1"
+salsa = "0.26.0"
 smol_str = "0.3.2"
 
 [dev-dependencies]

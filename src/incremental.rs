@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use salsa::Setter;
 
 use crate::parser::parse;
+use crate::project::{IncludeEdgeKey, collect_include_edge_keys};
 use crate::syntax::SyntaxNode;
 
 #[salsa::input]
@@ -39,6 +40,11 @@ pub struct SourceFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QueryKind {
     ParsedDocument,
+    /// A file's range-free inclusion edges ([`include_edges`]).
+    IncludeEdges,
+    /// The cross-file inclusion graph ([`crate::project::project_graph`]); a
+    /// project-level query, not keyed on a single file.
+    ProjectGraph,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,6 +112,22 @@ pub fn parse_diagnostics(db: &dyn IncrementalDb, file: SourceFile) -> &[ParseDia
 /// Materialize the cached parse for `file` as a fresh `SyntaxNode` cursor.
 pub fn parsed_tree_root(db: &dyn IncrementalDb, file: SourceFile) -> SyntaxNode {
     SyntaxNode::new_root(parsed_document(db, file).green.clone())
+}
+
+/// The file's inclusion edges, range-free
+/// ([`crate::project::collect_include_edge_keys`]), as a tracked query. Resolves
+/// relative targets against the file's own directory (`path.parent()`); the path
+/// is an input field set once, so this re-runs only on a text edit and backdates
+/// when the edges are unchanged — the firewall that keeps a body edit from
+/// rebuilding the cross-file [`crate::project::project_graph`].
+#[salsa::tracked(returns(ref))]
+pub fn include_edges(db: &dyn IncrementalDb, file: SourceFile) -> Vec<IncludeEdgeKey> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::IncludeEdges,
+        file: Some(file),
+    });
+    let root = parsed_tree_root(db, file);
+    collect_include_edge_keys(&root, file.path(db).parent())
 }
 
 #[salsa::db]
@@ -234,6 +256,11 @@ impl IncrementalDatabase {
     /// A fresh `SyntaxNode` over the cached parse tree.
     pub fn parsed_tree(&self, file: SourceFile) -> SyntaxNode {
         parsed_tree_root(self, file)
+    }
+
+    /// The file's range-free inclusion edges.
+    pub fn include_edges(&self, file: SourceFile) -> &[IncludeEdgeKey] {
+        include_edges(self, file)
     }
 
     pub fn clear_query_log(&self) {

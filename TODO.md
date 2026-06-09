@@ -209,8 +209,32 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
       CWL-style data. **[rewrite]**
 - [ ] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures only,
       no execution).
-- [ ] Project graph: `\input` / `\include` / `\import` resolution.
+- [x] Project graph: `\input` / `\include` / `\import` resolution. **[rewrite]**
+      Purely-syntactic include extraction (`project/include.rs`) — `\input`,
+      `\include`, `\import`/`\subimport`, `\subfile`; literal brace-group targets
+      with `.tex` defaulting + base-dir joining, non-literal/missing → `Dynamic`.
+      Salsa firewall `include_edges` (range-free, backdates) feeds the interned
+      `Project` → `project_graph` query building `IncludeGraph` (resolved edges,
+      reverse map, unresolved, reachability, cycle detection). Tested in
+      `src/project/` (extraction + pure graph) and `tests/project.rs` (firewall).
 - [ ] Label/reference model (`\label` / `\ref` / `\cref`).
+
+**Phase 3 decisions / follow-ups (project graph):**
+- *(ordering)* Include extraction is **purely syntactic** (reads the generic CST,
+  no `semantic_model`/signature DB), so it landed ahead of those items — consistent
+  with AGENTS.md decision #2 (meaning never leaks into the syntactic layer).
+- *(out of scope)* `\includegraphics`, `\graphicspath`, `\bibliography`/
+  `\addbibresource`, `\usepackage`/`\RequirePackage`, `\documentclass` — non-`.tex`
+  assets / packages, not source includes.
+- *(known limitations, all conservative)* bare plain-TeX `\input foo` (no braces) →
+  `Dynamic` (the greedy arg grammar only attaches `{…}`/`[…]`); `\include`'s
+  main-document-relative base dir and `\includeonly` filtering deferred (we resolve
+  `\include` like `\input`, but keep it a distinct `IncludeKind`); cycle **diagnostics**
+  deferred to the linter (the graph only *exposes* `cycles()`).
+- *(no consumer yet)* `project_graph` passes `root: None`, so reachability is left to
+  a future caller of `IncludeGraph::build` that designates the main document. No
+  `ast.rs` yet (local CST helpers); no `visible_symbols` analog — graph lands
+  "harness + graph only," like `incremental.rs` did.
 
 ## Phase 4 — Minimal LSP (editor integration)
 

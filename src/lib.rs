@@ -5,5 +5,6 @@
 pub mod formatter;
 pub mod incremental;
 pub mod parser;
+pub mod project;
 pub mod syntax;
 pub mod text;

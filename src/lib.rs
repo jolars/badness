@@ -2,9 +2,11 @@
 //! lossless rowan CST. See `AGENTS.md` for the architecture and `TODO.md` for
 //! the roadmap.
 
+pub mod ast;
 pub mod formatter;
 pub mod incremental;
 pub mod parser;
 pub mod project;
+pub mod semantic;
 pub mod syntax;
 pub mod text;

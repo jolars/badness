@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 use rowan::TextRange;
 
+use crate::ast::{command_name, nth_group_text};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 /// Which inclusion command produced an edge. Kept distinct even where resolution
@@ -168,43 +169,6 @@ fn default_tex_extension(path: PathBuf) -> PathBuf {
     } else {
         path
     }
-}
-
-/// The control-word name of a `COMMAND` node (the leading `\` stripped), or
-/// `None` for a control symbol. The grammar bumps the control word as the
-/// command's first token (`grammar.rs`, `fn command`).
-fn command_name(command: &SyntaxNode) -> Option<String> {
-    command
-        .children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .find(|token| token.kind() == SyntaxKind::CONTROL_WORD)
-        .map(|token| token.text().trim_start_matches('\\').to_string())
-}
-
-/// The literal text inside the `n`-th `GROUP` argument of `command`, with the
-/// enclosing braces dropped. Concatenates the group's inner token text so paths
-/// split across `WORD`/`.`/`/`/`UNDERSCORE` tokens (e.g. `chapters/my_file`)
-/// reassemble. Returns `None` when there is no `n`-th group, or when it holds
-/// non-token content (a nested command — not a flat literal).
-fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
-    let group = command
-        .children()
-        .filter(|child| child.kind() == SyntaxKind::GROUP)
-        .nth(n)?;
-
-    let mut text = String::new();
-    for element in group.children_with_tokens() {
-        match element {
-            rowan::NodeOrToken::Token(token) => match token.kind() {
-                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                _ => text.push_str(token.text()),
-            },
-            // A nested node (e.g. a COMMAND) means the argument isn't a flat
-            // literal path; treat the whole target as dynamic.
-            rowan::NodeOrToken::Node(_) => return None,
-        }
-    }
-    Some(text)
 }
 
 #[cfg(test)]

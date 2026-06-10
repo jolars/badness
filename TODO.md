@@ -204,7 +204,14 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
 
 - [x] `incremental.rs`: `#[salsa::input] SourceFile { text }`, `parsed_document`
       query storing `GreenNode` (`no_eq, unsafe(non_update_types)`). **[copy]**
-- [ ] `semantic_model` tracked query; linter/LSP reuse it (no re-parse from text).
+- [x] `semantic_model` tracked query; linter/LSP reuse it (no re-parse from text).
+      **[rewrite]** Per-file label/reference def-use model (`src/semantic/`): one CST
+      walk collects `\label` defs + the reference-command family (`\ref`/`\pageref`/
+      `\eqref`/`\autoref`/`\nameref`/`\cref`/`\Cref`/`\vref`/`\Vref`/`\cpageref`),
+      then a flat name-match resolve marks defs `referenced` / refs `resolved`. The
+      query is `returns(ref)` **without** `no_eq` (`SemanticModel: Eq`), so it
+      backdates on a model-preserving edit. Tested in `src/semantic.rs` (builder) and
+      `tests/semantic.rs` (memoization + value stability).
 - [ ] Signature DB (analog of ravel `rindex/`): built-in command/environment table +
       CWL-style data. **[rewrite]**
 - [ ] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures only,
@@ -217,7 +224,30 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
       `Project` → `project_graph` query building `IncludeGraph` (resolved edges,
       reverse map, unresolved, reachability, cycle detection). Tested in
       `src/project/` (extraction + pure graph) and `tests/project.rs` (firewall).
-- [ ] Label/reference model (`\label` / `\ref` / `\cref`).
+- [x] Label/reference model (`\label` / `\ref` / `\cref`). Landed as the first tenant
+      of `semantic_model` (above).
+
+**Phase 3 decisions / follow-ups (semantic model / label-ref):**
+- *(flat, not scoped)* LaTeX labels are one document/project-**global** namespace, so
+  the model is a flat `Vec<LabelDef>` + `Vec<LabelRef>` resolved by name — **no scope
+  tree** (contrast ravel's `semantic/scope.rs`, which lexically scopes R bindings). We
+  mirror ravel's *shape* (Vec + newtype ids + build/resolve) but adapt the semantics.
+- *(ast.rs extracted)* `command_name` / `nth_group_text` moved from
+  `project/include.rs` into `src/ast.rs` (generic, purely-syntactic CST accessors) now
+  that the semantic builder is their second consumer — the extraction TODO flagged
+  below. Both `project/` and `semantic/` build on them.
+- *(known limitations)* `\label{\foo}` (nested-macro key) → no def (conservative, like
+  an unresolvable include); `\cref{a,b,c}` splits into per-key refs that share the
+  command range (per-key sub-ranges deferred to go-to-def in Phase 7).
+- *(per-file only / no consumer yet)* resolution is within one file —
+  `unreferenced_labels`/`unresolved_refs` are *facts*, not lints: a label referenced
+  from an `\input`-ed file looks unreferenced here. Cross-file resolution (a
+  `file_labels` firewall → project-level `resolved_labels`, ravel's `visible_symbols`
+  analog) and the duplicate-label / undefined-ref diagnostics are deferred; the
+  signature DB and `\newcommand` scanning the model will later consume are deferred
+  too. The model lands "harness + model only," like `incremental.rs` and the project
+  graph did — and its `Eq`-backdating becomes *observable* once that cross-file
+  resolver consumes it.
 
 **Phase 3 decisions / follow-ups (project graph):**
 - *(ordering)* Include extraction is **purely syntactic** (reads the generic CST,
@@ -232,9 +262,10 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
   `\include` like `\input`, but keep it a distinct `IncludeKind`); cycle **diagnostics**
   deferred to the linter (the graph only *exposes* `cycles()`).
 - *(no consumer yet)* `project_graph` passes `root: None`, so reachability is left to
-  a future caller of `IncludeGraph::build` that designates the main document. No
-  `ast.rs` yet (local CST helpers); no `visible_symbols` analog — graph lands
-  "harness + graph only," like `incremental.rs` did.
+  a future caller of `IncludeGraph::build` that designates the main document. (The
+  "no `ast.rs` yet" note here is now resolved — see the semantic-model follow-ups
+  above.) No `visible_symbols` analog — graph lands "harness + graph only," like
+  `incremental.rs` did.
 
 ## Phase 4 — Minimal LSP (editor integration)
 

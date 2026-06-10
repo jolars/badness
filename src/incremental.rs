@@ -23,6 +23,7 @@ use salsa::Setter;
 
 use crate::parser::parse;
 use crate::project::{IncludeEdgeKey, collect_include_edge_keys};
+use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
 
 #[salsa::input]
@@ -40,6 +41,8 @@ pub struct SourceFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QueryKind {
     ParsedDocument,
+    /// A file's per-file label/reference model ([`semantic_model`]).
+    SemanticModel,
     /// A file's range-free inclusion edges ([`include_edges`]).
     IncludeEdges,
     /// The cross-file inclusion graph ([`crate::project::project_graph`]); a
@@ -112,6 +115,25 @@ pub fn parse_diagnostics(db: &dyn IncrementalDb, file: SourceFile) -> &[ParseDia
 /// Materialize the cached parse for `file` as a fresh `SyntaxNode` cursor.
 pub fn parsed_tree_root(db: &dyn IncrementalDb, file: SourceFile) -> SyntaxNode {
     SyntaxNode::new_root(parsed_document(db, file).green.clone())
+}
+
+/// The per-file label/reference model, built on the cached parse tree.
+///
+/// Unlike [`parsed_document`], this query is **not** `no_eq`: [`SemanticModel`]
+/// *is* `Eq`, so salsa compares outputs and **backdates** when an edit leaves
+/// the model unchanged (e.g. a prose edit that touches no `\label`/`\ref`),
+/// keeping any downstream query from re-running. (`parsed_document` must be
+/// `no_eq` only because its `GreenNode` is neither `Eq` nor `salsa::Update`, so
+/// salsa cannot compare parses and falls back to text-input change detection.)
+/// This is the same firewall [`include_edges`] uses; the future cross-file label
+/// resolver is its first consumer.
+#[salsa::tracked(returns(ref))]
+pub fn semantic_model(db: &dyn IncrementalDb, file: SourceFile) -> SemanticModel {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::SemanticModel,
+        file: Some(file),
+    });
+    SemanticModel::build(&parsed_tree_root(db, file))
 }
 
 /// The file's inclusion edges, range-free
@@ -261,6 +283,11 @@ impl IncrementalDatabase {
     /// The file's range-free inclusion edges.
     pub fn include_edges(&self, file: SourceFile) -> &[IncludeEdgeKey] {
         include_edges(self, file)
+    }
+
+    /// The file's per-file label/reference model.
+    pub fn semantic_model(&self, file: SourceFile) -> &SemanticModel {
+        semantic_model(self, file)
     }
 
     pub fn clear_query_log(&self) {

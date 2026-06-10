@@ -15,3 +15,6 @@ smol_str = "0.3.2"
 
 [dev-dependencies]
 insta = "1.47.2"
+# Differential parse oracle (tests/parse_oracle.rs, tests/parse_compat.rs).
+texlab-parser = { git = "https://github.com/latex-lsp/texlab", package = "parser", rev = "adc91ff8a3b56ba4b72c489db33f32cfbb8b2c5c" }
+texlab-syntax = { git = "https://github.com/latex-lsp/texlab", package = "syntax", rev = "adc91ff8a3b56ba4b72c489db33f32cfbb8b2c5c" }

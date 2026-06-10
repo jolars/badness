@@ -164,8 +164,17 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
       (`debug_assert` in `bump`; `pos` only advances there).
 - [x] **Enforce losslessness** — asserted per-case in `tests/parser.rs` and over
       the corpus in `tests/roundtrip.rs`.
-- [ ] Differential parse oracle: cross-check against texlab / tree-sitter-latex over
-      a corpus (ravel's `air_parser_harness` analog).
+- [x] Differential parse oracle: cross-check against **texlab** over a corpus
+      (ravel's `air_parser_harness` analog). Two layers, both in `tests/`:
+      `parse_oracle.rs` — hard acceptance gate (badness-clean ⟹ texlab no `ERROR`);
+      `parse_compat.rs` (`task parse-compat`, `#[ignore]`d) — soft structural-
+      concordance gauge that projects both rowan CSTs onto one coarse skeleton
+      (`tests/parse_skeleton/`) and writes `PARSE_COMPAT.md`. Picked texlab over
+      tree-sitter-latex: the latter has no working pure-cargo packaging (crates.io
+      `0.1.0` omits `scanner.c`; git lacks the generated `parser.c`).
+      *Open follow-ups: tree-sitter-latex as a second oracle; a larger / external
+      corpus (env-var `BADNESS_PARSE_CORPUS`); growing the projector's name-extraction
+      as the corpus exercises more node kinds.*
 
 **Phase 1 follow-ups:**
 - [x] `PARAGRAPH` node grouping over blank-line-delimited runs.

@@ -34,6 +34,11 @@ tasks:
     cmds:
       - INSTA_UPDATE=always cargo test
 
+  parse-compat:
+    desc: Soft differential parse-concordance report vs texlab (writes PARSE_COMPAT.md)
+    cmds:
+      - cargo test --test parse_compat -- --ignored --nocapture
+
   check:
     desc: Everything CI runs
     deps: [fmt-check, lint, test]

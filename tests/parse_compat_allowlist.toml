@@ -1,0 +1,12 @@
+# Recorded intentional parse-concordance deviations vs texlab.
+#
+# Keys are corpus file names (e.g. `math.tex`); values are a one-line reason.
+# Used by the soft `tests/parse_compat.rs` gauge to bucket a divergence as a
+# deliberate, documented choice rather than an open triage item.
+#
+# badness models generic TeX surface syntax; texlab resolves semantics. Divergence
+# is expected — record here only deviations we have consciously decided to keep.
+# See AGENTS.md ("measure against, never match").
+
+[deviations]
+# example.tex = "reason badness's skeleton intentionally differs from texlab's here"

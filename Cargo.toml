@@ -2,6 +2,10 @@
 name = "badness"
 version = "0.0.1"
 edition = "2024"
+description = "An LSP, formatter, and linter for LaTeX"
+license = "MIT"
+repository = "https://github.com/jolars/badness"
+authors = ["Johan Larsson <johan@jolars.co>"]
 
 # Dependency versions are kept in lockstep with the sibling project `ravel`
 # (../ravel) so the eventual shared-crate extraction stays a mechanical lift.

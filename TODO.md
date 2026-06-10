@@ -18,9 +18,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Session handoff (resume here)
 
-**Where we are:** Phase 0 ✅, Phase 1 ✅, the **Phase 2 formatter MVP** ✅, and the
+**Where we are:** Phase 0 ✅, Phase 1 ✅, the **Phase 2 formatter MVP** ✅, the
 first three real format rules ✅ — **whitespace normalization**, **environment
-indentation**, and **group/argument indentation**. The parser is a lossless,
+indentation**, and **group/argument indentation** — Phase 3 (salsa + semantic +
+project graph) ✅, and now the **Phase 4 Minimal LSP MVP** ✅ (`src/lsp.rs`, a
+`badness lsp` subcommand, `tests/lsp.rs`): a single-threaded, salsa-backed
+`lsp-server` doing full-document formatting + pushed parser diagnostics. The parser
+is a lossless,
 error-tolerant recursive-descent grammar over a rowan CST; `badness fmt` parses →
 lowers to a Wadler IR → prints. The lowering: runs of `WHITESPACE`/`NEWLINE`
 trivia collapse to a single break (trailing whitespace trimmed, 2+ blank lines →
@@ -80,14 +84,19 @@ cargo run -- fmt --check tests/corpus/*.tex                   # basic/math/edge 
   losslessness-of-output over the unit cases and corpus, plus an error-refusal
   case and a snapshot.
 
-**Next step** — continue replacing identity behavior one construct at a time:
-**paragraph reflow** (wrap text runs to the line width with the Wadler
-`Group`/`Line` fit machinery — the first rule to make a *flat-vs-break* decision
-rather than just respecting input breaks). Deferred whitespace follow-ups:
-collapsing *internal* multiple spaces. Each rule is a small diff; use formatter
-ambiguities to drive parser fixes (AGENTS.md). The differential oracles —
-`latexindent` (formatter) and texlab/tree-sitter-latex (parse) — remain available
-as hardening tracks.
+**Next step** — candidates, pick by priority:
+- *Formatter:* **paragraph reflow** (wrap text runs to the line width with the Wadler
+  `Group`/`Line` fit machinery — the first *flat-vs-break* rule; note this is the most
+  opinionated formatter decision and needs a policy choice: greedy fill vs. semantic
+  line breaks vs. preserve), or the smaller **internal multiple-space collapse**.
+- *LSP follow-up:* a `format_node(tree)` entry so formatting reuses the cached salsa
+  tree (today `textDocument/formatting` reparses via `format_with_style`); README
+  editor-wiring docs.
+- *Hardening:* the `latexindent` differential formatter oracle.
+
+Each rule is a small diff; use formatter ambiguities to drive parser fixes
+(AGENTS.md). The differential oracles — `latexindent` (formatter) and
+texlab/tree-sitter-latex (parse) — remain available as hardening tracks.
 
 **Decisions recorded:**
 - *(whitespace)* the final-newline fixup is *unconditional* — for any non-empty
@@ -288,30 +297,54 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
   above.) No `visible_symbols` analog — graph lands "harness + graph only," like
   `incremental.rs` did.
 
-## Phase 4 — Minimal LSP (editor integration)
+## Phase 4 — Minimal LSP (editor integration) ✅
 
 **Goal: get badness into an editor as soon as salsa lands** — a thin server doing
-just formatting + diagnostics, deferring the rich features to Phase 6. Depends on
-Phase 4 (rides the `parsed_document` query); precedes the linter because its
+just formatting + diagnostics, deferring the rich features to Phase 7. Rides the
+`parse_diagnostics`/`parsed_document` salsa query; precedes the linter because its
 diagnostics are the parser's existing byte-range errors, no lints required.
 
-- [ ] Add `lsp-server` + `lsp-types` deps (rust-analyzer's stack, **not**
-      tower-lsp-server — see AGENTS.md LSP note). **[diverge from ravel]**
-- [ ] `lsp.rs`: sync main loop, single-writer edits, snapshot readers on a
-      threadpool. **[diverge from ravel]**
-- [ ] Lifecycle: `initialize` (advertise `documentFormattingProvider` +
-      diagnostics) / `initialized` / `shutdown` / `exit`.
-- [ ] Document sync: `didOpen` / `didChange` (full sync to start) / `didClose`
-      writing the salsa `SourceFile` input.
-- [ ] `textDocument/formatting`: full-document, backed by the existing formatter
-      (`format_with_style`); honor client tab-size/insert-spaces options.
-- [ ] `publishDiagnostics`: map the parser's byte-range errors to LSP ranges via
-      `text/line_index.rs` (already UTF-16-aware).
-- [ ] Cancellation via salsa (`Cancelled` unwind) on document change.
-- [ ] Smoke test: drive it over stdio (e.g. an `initialize`→`didOpen`→`formatting`
-      transcript) and document editor wiring in the README.
+Landed as `src/lsp.rs` (~250 lines, `pub mod lsp`), plus a `badness lsp` CLI
+subcommand and a `tests/lsp.rs` stdio smoke test. **Single-threaded, salsa-backed**
+(per the recorded decisions below).
 
-*Deferred to Phase 6:* range formatting, symbols, folding, hover, completion,
+- [x] Add `lsp-server` + `lsp-types` (+ `serde_json`) deps (rust-analyzer's stack,
+      **not** tower-lsp-server — see AGENTS.md LSP note). **[diverge from ravel]**
+      `lsp-server 0.7`, `lsp-types 0.97`, `serde_json 1`.
+- [x] `lsp.rs`: **single-threaded** sync main loop owning one `IncrementalDatabase`
+      by value (`serve(Connection)` split out from `run()` so tests drive it over
+      `Connection::memory()`). **[diverge from ravel]** *(The ra-style
+      writer/threadpool + `salsa::Cancelled` model is deferred to Phase 7 — a
+      whole-file reparse is sub-ms, AGENTS.md #6.)*
+- [x] Lifecycle: `initialize` (advertises `documentFormattingProvider` + FULL sync)
+      / `initialized` / `shutdown` / `exit` (via `Connection::handle_shutdown`).
+- [x] Document sync: `didOpen` / `didChange` (full sync) / `didClose` → `upsert_file`
+      into salsa, keyed by the **URI string** (`PathBuf::from(uri.as_str())`).
+- [x] `textDocument/formatting`: full-document single replacing `TextEdit`, backed by
+      `format_with_style`; honors client `tab_size` → `indent_width`; replies `null`
+      on no-op / unknown doc / format refusal (parse errors).
+- [x] `publishDiagnostics`: maps the parser's byte-range errors to LSP ranges via
+      `text/line_index.rs` (`utf16_position`, already UTF-16-aware); `didClose`
+      publishes an empty list to clear squiggles.
+- [x] Smoke test (`tests/lsp.rs`): drives `initialize`→`initialized`→`didOpen`
+      (parse error → diagnostics)→`didChange` (valid → diagnostics clear)→`formatting`
+      (edit == formatter output)→`shutdown`→`exit` over `Connection::memory()`.
+
+**Phase 4 decisions / deferred:**
+- *(single-threaded + salsa-backed)* chosen over the threadpool model; salsa still
+  backs the **diagnostics** path. Formatting calls `format_with_style(&str)`, which
+  reparses internally — badness has no public `format_node(tree)` entry yet (ravel
+  does), so the cached green tree is not reused on the format path. Adding a
+  `format_tree`/`format_node` entry is a clean, optional follow-up.
+- *(URI as salsa key)* sidesteps URI↔filesystem-path conversion (`lsp-types`' `Uri`
+  has no `to_file_path`). Text always comes from `didOpen`/`didChange`, never disk;
+  real path resolution (for cross-file `\input` features) is a Phase 7 concern.
+- *(deferred to Phase 7)* writer/threadpool + `salsa::Cancelled` cancellation,
+  incremental `didChange` sync, client-config `line_width`, a `didClose`
+  salsa-eviction API, range formatting, symbols, folding, hover, completion,
+  definition/rename. README editor-wiring docs still to write.
+
+*Deferred to Phase 7:* range formatting, symbols, folding, hover, completion,
 definition/rename.
 
 ## Phase 5 — Math

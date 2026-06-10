@@ -47,6 +47,8 @@ enum Command {
         #[arg(long)]
         indent_width: Option<usize>,
     },
+    /// Run the language server over stdio.
+    Lsp,
 }
 
 fn main() -> ExitCode {
@@ -66,6 +68,18 @@ fn main() -> ExitCode {
                 style.indent_width = w;
             }
             run_fmt(&paths, check, style)
+        }
+        Command::Lsp => run_lsp(),
+    }
+}
+
+/// Run the language server, mapping a startup failure to a non-zero exit.
+fn run_lsp() -> ExitCode {
+    match badness::lsp::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("badness: language server error: {err}");
+            ExitCode::FAILURE
         }
     }
 }

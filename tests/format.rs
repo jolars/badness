@@ -145,6 +145,12 @@ const FIXTURES: &[&str] = &[
     "environment_reindents",
     "environment_blank_lines_in_body",
     "verbatim_in_environment",
+    // Group / argument indentation.
+    "group_indents_body",
+    "optional_indents_body",
+    "nested_groups",
+    "group_single_line_stays_inline",
+    "group_reindents",
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

@@ -19,17 +19,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 ## Session handoff (resume here)
 
 **Where we are:** Phase 0 ✅, Phase 1 ✅, the **Phase 2 formatter MVP** ✅, and the
-first two real format rules ✅ — **whitespace normalization** and **environment
-indentation**. The parser is a lossless, error-tolerant recursive-descent grammar
-over a rowan CST; `badness fmt` parses → lowers to a Wadler IR → prints. The
-lowering: runs of `WHITESPACE`/`NEWLINE` trivia collapse to a single break
-(trailing whitespace trimmed, 2+ blank lines → one, exactly one final newline);
-the body of every `\begin{…} … \end{…}` is indented one step (nesting
-recursively, `\begin`/`\end` flush). All indentation is computed by the printer
-(`Ir::indent`), never preserved from input, so re-indentation is idempotent.
-Paragraph structure, intra-line spacing, and protected regions (`\verb`, verbatim
-bodies, comments) are preserved. Group/argument indentation and paragraph reflow
-are the next rules.
+first three real format rules ✅ — **whitespace normalization**, **environment
+indentation**, and **group/argument indentation**. The parser is a lossless,
+error-tolerant recursive-descent grammar over a rowan CST; `badness fmt` parses →
+lowers to a Wadler IR → prints. The lowering: runs of `WHITESPACE`/`NEWLINE`
+trivia collapse to a single break (trailing whitespace trimmed, 2+ blank lines →
+one, exactly one final newline); the body of every `\begin{…} … \end{…}` is
+indented one step (nesting recursively, `\begin`/`\end` flush); and the body of a
+*multi-line* `{…}` (`GROUP`) or `[…]` (`OPTIONAL`) is indented the same way
+(delimiters flush, single-line groups left inline, existing breaks respected — no
+reflow yet). All indentation is computed by the printer (`Ir::indent`), never
+preserved from input, so re-indentation is idempotent. Paragraph structure,
+intra-line spacing, and protected regions (`\verb`, verbatim bodies, comments) are
+preserved. Paragraph reflow is the next rule.
 
 **Build & verify** (everything is green as of this commit):
 ```sh
@@ -79,11 +81,13 @@ cargo run -- fmt --check tests/corpus/*.tex                   # basic/math/edge 
   case and a snapshot.
 
 **Next step** — continue replacing identity behavior one construct at a time:
-**group/argument indentation** (multi-line `{…}` / `[…]` bodies), then paragraph
-reflow. Deferred whitespace follow-ups: collapsing *internal* multiple spaces.
-Each rule is a small diff; use formatter ambiguities to drive parser fixes
-(AGENTS.md). The differential oracles — `latexindent` (formatter) and
-texlab/tree-sitter-latex (parse) — remain available as hardening tracks.
+**paragraph reflow** (wrap text runs to the line width with the Wadler
+`Group`/`Line` fit machinery — the first rule to make a *flat-vs-break* decision
+rather than just respecting input breaks). Deferred whitespace follow-ups:
+collapsing *internal* multiple spaces. Each rule is a small diff; use formatter
+ambiguities to drive parser fixes (AGENTS.md). The differential oracles —
+`latexindent` (formatter) and texlab/tree-sitter-latex (parse) — remain available
+as hardening tracks.
 
 **Decisions recorded:**
 - *(whitespace)* the final-newline fixup is *unconditional* — for any non-empty
@@ -95,6 +99,13 @@ texlab/tree-sitter-latex (parse) — remain available as hardening tracks.
   idempotent. Environment indentation is **uniform** — `document` and math
   environments (`align`, `equation`) indent like any other; a `document`/per-name
   opt-out belongs in a future config, not a special case (Tenet 1).
+- *(group indentation)* a `GROUP`/`OPTIONAL` is indented iff it has a **direct**
+  `NEWLINE` token child (`spans_multiple_lines`), so single-line `{Hi}` stays inline
+  and a newline inside a *nested* group is attributed to that child — which keeps
+  re-indentation idempotent (a reformatted multi-line group still owns its newline).
+  Existing line breaks are respected (`hard_line`, like environments); no reflow yet.
+  An empty multi-line group collapses to bare delimiters (`{\n}` → `{}`). The OPTIONAL
+  opener is captured only once, since a stray `[` inside `[…]` is body, not a delimiter.
 - *(known gap)* argument-taking environments (`\begin{tabular}{cc}`) put the trailing
   arg group on its own indented body line — correct handling needs the signature DB
   (already tracked under Phase 4 / Phase 1 follow-ups). Verbatim nested in an
@@ -194,9 +205,10 @@ lsp-server/lsp-types → Phase 4.5, `linter/` + annotate-snippets → Phase 5).
 - [x] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
 - [x] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]** (extract first)
 - [~] LaTeX format rules: **whitespace normalization done** (trailing-ws trim,
-      blank-line collapse, single final newline) and **environment indentation done**
-      (printer-owned, idempotent re-indent, verbatim-protected); group/argument
-      indentation and paragraph reflow still to come. **[rewrite]** — replaced the
+      blank-line collapse, single final newline), **environment indentation done**
+      (printer-owned, idempotent re-indent, verbatim-protected), and **group/argument
+      indentation done** (multi-line `{…}`/`[…]` bodies indented one step, single-line
+      groups left inline); paragraph reflow still to come. **[rewrite]** — replaced the
       identity `lower_node`.
 - [x] Protected regions never touched (`verbatim`, `\verb`, comments) — verified by
       the `protected_verbatim` / `protected_comment_trailing_space` fixtures now that

@@ -8,6 +8,10 @@
 //!   one step, nesting recursively, with `\begin`/`\end` flush. All indentation
 //!   is computed by the printer, never preserved from input — so reformatting
 //!   re-indents idempotently.
+//! - **Group/argument indentation**: the body of a *multi-line* brace group
+//!   `{…}` or optional-argument group `[…]` is indented one step, the same way
+//!   (delimiters flush, body indented). Single-line groups are left inline;
+//!   existing line breaks are respected (no reflow yet).
 //!
 //! Everything else is emitted verbatim: paragraph structure, intra-line spacing,
 //! and protected regions (`\verb`, verbatim bodies, comments) are preserved.
@@ -123,8 +127,15 @@ fn format_root(root: &SyntaxNode, ctx: FormatContext) -> String {
 /// [`lower_element_stream`]); an [`SyntaxKind::ENVIRONMENT`] is special-cased to
 /// indent its body (see [`lower_environment`]).
 fn lower_node(node: &SyntaxNode) -> Ir {
-    if node.kind() == SyntaxKind::ENVIRONMENT && !has_verbatim_body(node) {
-        return lower_environment(node);
+    match node.kind() {
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => return lower_environment(node),
+        SyntaxKind::GROUP if spans_multiple_lines(node) => {
+            return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE);
+        }
+        SyntaxKind::OPTIONAL if spans_multiple_lines(node) => {
+            return lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET);
+        }
+        _ => {}
     }
     Ir::concat(lower_element_stream(node.children_with_tokens()))
 }
@@ -193,6 +204,59 @@ fn lower_environment(node: &SyntaxNode) -> Ir {
             end,
         ])
     }
+}
+
+/// Lower a delimited group — a brace group `{…}` (`open`/`close` =
+/// `L_BRACE`/`R_BRACE`) or an optional-argument group `[…]`
+/// (`L_BRACKET`/`R_BRACKET`) — indenting its body one step, exactly like
+/// [`lower_environment`] but with token delimiters instead of `BEGIN`/`END`
+/// nodes. Only called for multi-line groups (see [`spans_multiple_lines`]);
+/// single-line groups stay inline on the generic path.
+///
+/// Inside a group the parser emits body tokens directly (no `PARAGRAPH`
+/// wrapping), so the only `open` token is the first child and the only `close`
+/// token is the last — but an `OPTIONAL` body may contain a stray `[` (TeX does
+/// not nest `[`), so the opener is captured only once (`open_ir` still `Nil`).
+fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind) -> Ir {
+    let mut open_ir = Ir::Nil;
+    let mut close_ir = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Token(t) if t.kind() == open && matches!(open_ir, Ir::Nil) => {
+                open_ir = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == close => {
+                close_ir = Ir::verbatim(t.text());
+            }
+            _ => body_elements.push(element),
+        }
+    }
+
+    let body = Ir::concat(lower_element_stream(body_elements.into_iter()));
+    let body = trim_trailing_break(trim_leading_break(body));
+
+    if matches!(body, Ir::Nil) {
+        // Empty multi-line body collapses to the bare delimiters, e.g. `{\n}` → `{}`.
+        Ir::concat([open_ir, close_ir])
+    } else {
+        Ir::concat([
+            open_ir,
+            Ir::indent(Ir::concat([Ir::hard_line(), body])),
+            Ir::hard_line(),
+            close_ir,
+        ])
+    }
+}
+
+/// True if `node` directly contains a `NEWLINE` token — i.e. the group itself
+/// spans multiple physical lines. Newlines inside a *nested* group/environment
+/// belong to that child node, not to `node`, so this attributes line-spanning to
+/// the group that physically owns the break — which keeps re-indentation stable.
+fn spans_multiple_lines(node: &SyntaxNode) -> bool {
+    node.children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == SyntaxKind::NEWLINE)
 }
 
 /// True if `node` directly contains a `VERBATIM_BODY` token — i.e. it is a

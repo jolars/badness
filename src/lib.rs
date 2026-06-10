@@ -5,6 +5,7 @@
 pub mod ast;
 pub mod formatter;
 pub mod incremental;
+pub mod linter;
 pub mod lsp;
 pub mod parser;
 pub mod project;

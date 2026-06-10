@@ -10,10 +10,12 @@
 //! directory-walking file discovery.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use badness::formatter::{FormatStyle, check_paths_with_style, format_with_style};
+use badness::linter::{Diagnostic, OutputMode, render_findings};
+use badness::parser::parse;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -47,6 +49,14 @@ enum Command {
         #[arg(long)]
         indent_width: Option<usize>,
     },
+    /// Lint LaTeX source, reporting parse diagnostics.
+    ///
+    /// With paths, lints each file. With no paths, reads stdin. Exits non-zero
+    /// if any diagnostics are reported.
+    Lint {
+        /// Files to lint. Omit to read from stdin.
+        paths: Vec<PathBuf>,
+    },
     /// Run the language server over stdio.
     Lsp,
 }
@@ -69,6 +79,7 @@ fn main() -> ExitCode {
             }
             run_fmt(&paths, check, style)
         }
+        Command::Lint { paths } => run_lint(&paths),
         Command::Lsp => run_lsp(),
     }
 }
@@ -81,6 +92,65 @@ fn run_lsp() -> ExitCode {
             eprintln!("badness: language server error: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Lint each path (or stdin), rendering parse diagnostics. Exits non-zero if
+/// any diagnostics are reported or any file fails to read.
+fn run_lint(paths: &[PathBuf]) -> ExitCode {
+    // Hold each file's text in memory keyed by the label we report it under, so
+    // the renderer can fetch source for snippets without re-reading from disk
+    // (and so stdin, which has no path, still gets a source).
+    let mut sources: Vec<(PathBuf, String)> = Vec::new();
+    let mut failed = false;
+
+    if paths.is_empty() {
+        let mut input = String::new();
+        if let Err(err) = std::io::stdin().read_to_string(&mut input) {
+            eprintln!("badness: cannot read stdin: {err}");
+            return ExitCode::FAILURE;
+        }
+        sources.push((PathBuf::from("<stdin>"), input));
+    } else {
+        for path in paths {
+            match std::fs::read_to_string(path) {
+                Ok(content) => sources.push((path.clone(), content)),
+                Err(err) => {
+                    eprintln!("badness: cannot read {}: {err}", path.display());
+                    failed = true;
+                }
+            }
+        }
+    }
+
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    for (path, content) in &sources {
+        let parsed = parse(content);
+        diagnostics.extend(
+            parsed
+                .errors
+                .iter()
+                .map(|err| Diagnostic::from_parse(path.clone(), err)),
+        );
+    }
+
+    if !diagnostics.is_empty() {
+        let source_for = |path: &Path| {
+            sources
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, text)| text.clone())
+        };
+        eprint!(
+            "{}",
+            render_findings(&diagnostics, OutputMode::Pretty, &source_for)
+        );
+    }
+
+    if failed || !diagnostics.is_empty() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 

@@ -363,9 +363,10 @@ definition/rename.
 
 ## Phase 5 --- Linter
 
-- [ ] Diagnostics framework over CST + semantics (reuse parse error channel).
+- [x] Diagnostics framework over CST + semantics (reuse parse error channel).
+      `badness lint` surfaces parse diagnostics; `linter/{diagnostic,render}`.
 - [ ] `linter/suppression` (`% badness-ignore` style) + annotate-snippets
-      render. **[copy shape]**
+      render. **[copy shape]** — annotate-snippets render done; suppression TODO.
 - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
       commands, stylistic checks.
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"

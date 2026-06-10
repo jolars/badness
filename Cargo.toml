@@ -12,6 +12,7 @@ authors = ["Johan Larsson <johan@jolars.co>"]
 # Deps are added phase by phase (salsa, lsp-server, clap, … land with their
 # phases) to keep `cargo machete` clean.
 [dependencies]
+annotate-snippets = "0.11.5"
 clap = { version = "4.5.51", features = ["derive"] }
 lsp-server = "0.7"
 lsp-types = "0.97"

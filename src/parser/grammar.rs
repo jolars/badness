@@ -377,6 +377,19 @@ impl<'t> Parser<'t> {
                     self.error(format!("unclosed `{label}`"));
                     break;
                 }
+                // `}` and `\end` are recovery anchors: `$`-math cannot span a
+                // group or environment boundary, so a `}` here closes the
+                // enclosing group (a math subgroup would have entered via `{`)
+                // and a `\end` belongs to an enclosing environment. Leave the
+                // token for the caller and report the unclosed math.
+                Some(SyntaxKind::R_BRACE) => {
+                    self.error(format!("unclosed `{label}`"));
+                    break;
+                }
+                Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
+                    self.error(format!("unclosed `{label}`"));
+                    break;
+                }
                 Some(SyntaxKind::DOLLAR) => {
                     if display && self.nth_kind(1) != Some(SyntaxKind::DOLLAR) {
                         // A lone `$` inside `$$`: malformed; emit and continue.
@@ -413,6 +426,13 @@ impl<'t> Parser<'t> {
                 }
                 Some(SyntaxKind::CONTROL_SYMBOL) if self.text() == closer => {
                     self.bump();
+                    break;
+                }
+                // A `}` closes an enclosing group: it cannot belong to this
+                // math (a subgroup would have entered via `{`). Leave it for
+                // the caller and report the unclosed math.
+                Some(SyntaxKind::R_BRACE) => {
+                    self.error(format!("unclosed `{opener}`"));
                     break;
                 }
                 Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {

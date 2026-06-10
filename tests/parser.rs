@@ -124,6 +124,17 @@ fn stray_end_at_top_level() {
 }
 
 #[test]
+fn unclosed_dollar_math_in_group_does_not_escape() {
+    // `$`-math cannot span the enclosing group's `}`: the brace closes the
+    // group, the math reports a single "unclosed `$`", and nothing downstream
+    // is corrupted (no spurious "unmatched `}`" / "unclosed environment").
+    let parsed = parse("\\begin{a}\\code{$ x}\\end{a}");
+    assert_eq!(parsed.syntax().to_string(), "\\begin{a}\\code{$ x}\\end{a}");
+    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["unclosed `$`"], "only the open math is reported");
+}
+
+#[test]
 fn nested_mismatch_unwinds_to_two_errors() {
     // `b` is closed by the mismatch, `a` matches: exactly one "unclosed" error.
     let parsed = parse(r"\begin{a}\begin{b}\end{a}");

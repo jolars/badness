@@ -48,6 +48,7 @@ pub enum SyntaxKind {
     MATH,         // a math body
     PARAGRAPH,    // text delimited by blank lines
     TEXT,         // a run of text and trivia
+    LINE_BREAK,   // `\\`, with a tightly-bound `*` and/or `[len]` (`\\*[2ex]`)
     ROOT,         // the document root  (keep LAST)
 }
 

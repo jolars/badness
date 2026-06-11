@@ -139,7 +139,11 @@ line-filler. Reflow keys on the `PARAGRAPH` node: adjacent non-whitespace elemen
 glue into one unbreakable atom (so `word~word` ties and `\emph{x}` never split),
 inter-word whitespace/single newline is a break opportunity, and an explicit `\\`,
 a `%` comment, or a nested block (forced-break IR) ends the current line and starts
-a fresh fill. `Preserve` is exactly the pre-reflow generic path;
+a fresh fill. The `\\` line break is grouped by the *parser* into a `LINE_BREAK`
+node (with its tightly-bound `*` / `[len]`, recognized only when directly abutting,
+no trivia crossed) --- a formatter ambiguity (`\\[2ex]` orphaning the `[2ex]`)
+driven back into the parser per tenet 3, so the formatter keeps `\\[2ex]`/`\\*`
+intact instead of stranding the modifier on the next line. `Preserve` is exactly the pre-reflow generic path;
 `Sentence`/`Semantic` fall back to it for now. Width uses `chars().count()` (matches
 the existing printer; not Unicode display width --- a follow-up). Idempotence quirk
 fixed in passing: a trailing `\`-at-EOL is lexed as a control symbol that absorbs

@@ -256,8 +256,10 @@ impl<'t> Parser<'t> {
                         self.error(format!("unmatched `{sym}`"));
                         self.bump();
                     }
-                    // A bare control symbol (`\\`, `\,`, `\%`, …). Surface model:
-                    // emit as a token; control symbols don't take arguments.
+                    // `\\` line break, with its tightly-bound `*` / `[len]`.
+                    "\\\\" => self.line_break(),
+                    // Any other bare control symbol (`\,`, `\%`, `\;`, …). Surface
+                    // model: emit as a token; these take no arguments.
                     _ => self.bump(),
                 }
             }
@@ -281,6 +283,31 @@ impl<'t> Parser<'t> {
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
         self.attach_arguments();
+        self.close();
+    }
+
+    /// The `\\` line break and its tightly-bound modifiers: an optional `*`
+    /// (no-page-break variant) and an optional `[length]` (`\\`, `\\*`,
+    /// `\\[2ex]`, `\\*[2ex]`). These bind to the `\\` only when they *directly*
+    /// abut it — no intervening trivia is crossed — so a lone `\\` at end of line
+    /// stays bare and the modifiers are never pulled across a break. Grouping
+    /// them into one `LINE_BREAK` node (rather than leaving loose tokens) is what
+    /// lets the formatter treat `\\[2ex]` as one unit instead of stranding the
+    /// `[2ex]` on the next line.
+    ///
+    /// Unlike `command`, this attaches *no* `{…}` arguments (`\\` takes none) and
+    /// does not skip trivia. The `*` is recognized only as its own `WORD` token
+    /// (the lexer glues `*` into following letters, so `\\*foo` keeps the star on
+    /// the word — a vanishingly rare form we deliberately leave alone).
+    fn line_break(&mut self) {
+        self.open(SyntaxKind::LINE_BREAK);
+        self.bump(); // \\
+        if self.kind() == Some(SyntaxKind::WORD) && self.text() == "*" {
+            self.bump(); // *
+        }
+        if self.kind() == Some(SyntaxKind::L_BRACKET) {
+            self.optional(); // [length]
+        }
         self.close();
     }
 

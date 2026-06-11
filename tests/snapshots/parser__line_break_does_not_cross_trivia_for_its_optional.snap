@@ -1,0 +1,16 @@
+---
+source: tests/parser.rs
+expression: "tree(\"row \\\\\\\\\\n[x] next\")"
+---
+ROOT@0..15
+  PARAGRAPH@0..15
+    WORD@0..3 "row"
+    WHITESPACE@3..4 " "
+    LINE_BREAK@4..6
+      CONTROL_SYMBOL@4..6 "\\\\"
+    NEWLINE@6..7 "\n"
+    L_BRACKET@7..8 "["
+    WORD@8..9 "x"
+    R_BRACKET@9..10 "]"
+    WHITESPACE@10..11 " "
+    WORD@11..15 "next"

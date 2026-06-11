@@ -136,7 +136,10 @@ corpus. Both are external reference implementations we measure against, never ma
   formatter's mode taxonomy. badness mechanizes it through the `Doc` IR (`Fill`),
   *not* panache's separate streaming line-filler — the printer stays the single
   layout authority. `Reflow` and `Preserve` are implemented; `Sentence`/`Semantic`
-  currently fall back to `Preserve`.
+  currently fall back to `Preserve`. The `\\` line break (with a tightly-bound
+  `*` / `[len]`) is grouped by the *parser* into a `LINE_BREAK` node — a formatter
+  ambiguity (the orphaned `[2ex]`) driven back into the parser per tenet 3, so the
+  formatter sees `\\[2ex]` as one unit instead of splitting it.
 - **CLI:** `clap` + `build.rs` generating man pages / completions / markdown
   (`clap_mangen`, `clap_complete`, `clap-markdown`) — copy ravel's scaffolding.
 - **Diagnostics rendering:** `annotate-snippets`.

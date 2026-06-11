@@ -175,6 +175,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_wrap_to_width", WrapMode::Reflow, 40),
     ("reflow_tie_no_break", WrapMode::Reflow, 12),
     ("reflow_forced_break", WrapMode::Reflow, 80),
+    ("reflow_forced_break_with_optarg", WrapMode::Reflow, 80),
     ("reflow_comment_ends_line", WrapMode::Reflow, 80),
     ("reflow_in_environment", WrapMode::Reflow, 20),
 ];

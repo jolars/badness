@@ -98,6 +98,21 @@ fn makeatletter_control_word_with_at() {
     insta::assert_snapshot!(tree(r"\makeatletter\foo@bar\makeatother"));
 }
 
+#[test]
+fn line_break_groups_star_and_optional_length() {
+    // `\\`, `\\*`, `\\[2ex]`, and `\\*[2ex]` each parse to one `LINE_BREAK` node
+    // with the `*` / `[len]` bound in; a plain `\\` (here at the end) stays bare.
+    insta::assert_snapshot!(tree(r"a \\ b \\* c \\[2ex] d \\*[2ex] e \\"));
+}
+
+#[test]
+fn line_break_does_not_cross_trivia_for_its_optional() {
+    // A `\\` followed by whitespace then `[x]` does NOT absorb the bracket — the
+    // modifiers bind only when they directly abut, so a `\\` ending a line stays
+    // bare and nothing is pulled across the break.
+    insta::assert_snapshot!(tree("row \\\\\n[x] next"));
+}
+
 // --- error recovery ------------------------------------------------------
 
 #[test]

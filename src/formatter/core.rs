@@ -157,11 +157,13 @@ fn lower_node(node: &SyntaxNode, wrap: WrapMode) -> Ir {
 /// lines — is a break opportunity. The run lowers to an [`Ir::fill`], which the
 /// printer wraps word-by-word.
 ///
-/// Three things end a line rather than flow into the fill: an explicit `\\`, a
-/// `%` comment (which must terminate its line), and a nested *block* (an
-/// environment or multi-line group whose IR carries a forced break). Each emits
-/// the run-so-far as a fill, then the line breaks; a fresh run continues after.
-/// The paragraph's lines are joined by [`Ir::hard_line`].
+/// Three things end a line rather than flow into the fill: an explicit `\\` line
+/// break (a [`SyntaxKind::LINE_BREAK`] node — the parser groups `\\` with its
+/// `*` / `[len]` so the whole unit stays on one line), a `%` comment (which must
+/// terminate its line), and a nested *block* (an environment or multi-line group
+/// whose IR carries a forced break). Each emits the run-so-far as a fill, then
+/// the line breaks; a fresh run continues after. The paragraph's lines are joined
+/// by [`Ir::hard_line`].
 fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
     // Glued pieces of the atom in progress.
     let mut atom: Vec<Ir> = Vec::new();
@@ -195,13 +197,6 @@ fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
                 atom.push(Ir::verbatim(token.text()));
                 end_line(&mut atom, &mut run, &mut lines);
             }
-            // An explicit `\\` stays on the current line, then forces a break.
-            SyntaxElement::Token(token)
-                if token.kind() == SyntaxKind::CONTROL_SYMBOL && token.text() == "\\\\" =>
-            {
-                atom.push(Ir::verbatim(token.text()));
-                end_line(&mut atom, &mut run, &mut lines);
-            }
             // A token that carries its own newline — a `\`-at-end-of-line control
             // symbol, kept verbatim for losslessness — ends the line: emit the
             // part before the break as a flat atom and let the line break supply
@@ -217,6 +212,12 @@ fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
             // Any other token (WORD, `~`, `&`, `#`, `^`, `_`, brackets, `\verb`,
             // a bare control symbol) glues onto the current atom.
             SyntaxElement::Token(token) => atom.push(Ir::verbatim(token.text())),
+            // An explicit `\\` line break (with its `*` / `[len]`, grouped by the
+            // parser into one node) rides the end of the current line, then breaks.
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
+                atom.push(lower_node(&child, wrap));
+                end_line(&mut atom, &mut run, &mut lines);
+            }
             SyntaxElement::Node(child) => {
                 let ir = lower_node(&child, wrap);
                 if ir.contains_forced_break() {

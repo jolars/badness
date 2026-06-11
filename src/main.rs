@@ -1,6 +1,6 @@
 //! The `badness` command-line interface.
 //!
-//! Phase 2 MVP: a `fmt` subcommand that formats `.tex` files in place (or
+//! Phase 2 MVP: a `format` subcommand that formats `.tex` files in place (or
 //! stdin → stdout), plus `--check` to report whether files are already
 //! formatted. The formatter itself is an identity lowering for now (see
 //! `formatter::core`), so formatting is byte-for-byte stable.
@@ -35,7 +35,7 @@ enum Command {
     ///
     /// With paths, formats each file in place. With no paths, reads stdin and
     /// writes the formatted result to stdout.
-    Fmt {
+    Format {
         /// Files to format. Omit to read from stdin.
         paths: Vec<PathBuf>,
         /// Report which files would change without writing them. Exits non-zero
@@ -64,7 +64,7 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Fmt {
+        Command::Format {
             paths,
             check,
             line_width,
@@ -77,7 +77,7 @@ fn main() -> ExitCode {
             if let Some(w) = indent_width {
                 style.indent_width = w;
             }
-            run_fmt(&paths, check, style)
+            run_format(&paths, check, style)
         }
         Command::Lint { paths } => run_lint(&paths),
         Command::Lsp => run_lsp(),
@@ -154,14 +154,14 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
     }
 }
 
-fn run_fmt(paths: &[PathBuf], check: bool, style: FormatStyle) -> ExitCode {
+fn run_format(paths: &[PathBuf], check: bool, style: FormatStyle) -> ExitCode {
     if check {
         return run_check(paths, style);
     }
     if paths.is_empty() {
-        run_fmt_stdin(style)
+        run_format_stdin(style)
     } else {
-        run_fmt_paths(paths, style)
+        run_format_paths(paths, style)
     }
 }
 
@@ -191,7 +191,7 @@ fn run_check(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
 }
 
 /// No paths: read stdin, format, write to stdout.
-fn run_fmt_stdin(style: FormatStyle) -> ExitCode {
+fn run_format_stdin(style: FormatStyle) -> ExitCode {
     let mut input = String::new();
     if let Err(err) = std::io::stdin().read_to_string(&mut input) {
         eprintln!("badness: cannot read stdin: {err}");
@@ -213,7 +213,7 @@ fn run_fmt_stdin(style: FormatStyle) -> ExitCode {
 }
 
 /// Format each path in place, writing only files whose content changes.
-fn run_fmt_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
+fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
     let mut failed = false;
     for path in paths {
         let content = match std::fs::read_to_string(path) {

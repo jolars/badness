@@ -1,4 +1,4 @@
-//! `badness fmt --check`: format each file and report which ones would change,
+//! `badness format --check`: format each file and report which ones would change,
 //! without writing anything.
 //!
 //! Adapted from ravel's `src/formatter/check.rs`, minus the `file_discovery`

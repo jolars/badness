@@ -25,7 +25,7 @@ indentation**, and **group/argument indentation** --- Phase 3 (salsa + semantic
 `badness lsp` subcommand, `tests/lsp.rs`): a single-threaded, salsa-backed
 `lsp-server` doing full-document formatting + pushed parser diagnostics. The
 parser is a lossless, error-tolerant recursive-descent grammar over a rowan CST;
-`badness fmt` parses → lowers to a Wadler IR → prints. The lowering: runs of
+`badness format` parses → lowers to a Wadler IR → prints. The lowering: runs of
 `WHITESPACE`/`NEWLINE` trivia collapse to a single break (trailing whitespace
 trimmed, 2+ blank lines → one, exactly one final newline); the body of every
 `\begin{…} … \end{…}` is indented one step (nesting recursively, `\begin`/`\end`
@@ -46,9 +46,9 @@ cargo fmt -- --check
 task snapshots      # regenerate insta snapshots (INSTA_UPDATE=always cargo test)
 
 # CLI smoke checks:
-printf '\\section{Hi}   \n\n\n\ntext.  ' | cargo run -- fmt   # → \section{Hi}\n\ntext.\n
-printf '\\begin{itemize}\n\\item a\n\\end{itemize}\n' | cargo run -- fmt  # body indented 2 sp
-cargo run -- fmt --check tests/corpus/*.tex                   # basic/math/edge now report
+printf '\\section{Hi}   \n\n\n\ntext.  ' | cargo run -- format   # → \section{Hi}\n\ntext.\n
+printf '\\begin{itemize}\n\\item a\n\\end{itemize}\n' | cargo run -- format  # body indented 2 sp
+cargo run -- format --check tests/corpus/*.tex                   # basic/math/edge now report
                                                              # (indentation + edge's final
                                                              # newline) — corpus is a parser
                                                              # fixture set, not pre-formatted
@@ -76,7 +76,7 @@ break (`classify_trivia`: 0 newlines → inline ws kept; 1 → `hard_line`; 2+ �
 unconditional fixup trims the trailing edge to exactly one newline. `check.rs`
 --- `--check` over explicit paths (ravel's, minus `file_discovery`). -
 `src/main.rs` --- clap CLI:
-`badness fmt [paths] [--check] [--line-width]   [--indent-width]`; stdin→stdout
+`badness format [paths] [--check] [--line-width]   [--indent-width]`; stdin→stdout
 when no paths. - `src/text/line_index.rs` --- byte ↔ line/col (UTF-16) for later
 LSP. - `tests/parser.rs` --- tree snapshots + recovery assertions (asserts
 losslessness). - `tests/format.rs` --- fixture pairs
@@ -130,7 +130,7 @@ concern, not a formatter hack.
 **Known deferred (not blockers, all lossless today):** arg-taking verbatim envs
 (`lstlisting`/`minted`/`Verbatim`); block-vs-inline paragraph refinement (a lone
 block env is wrapped in a `PARAGRAPH`); structured math (Phase 3); `build.rs`
-man/completions and directory-walking file discovery for `fmt`. See the Phase 1
+man/completions and directory-walking file discovery for `format`. See the Phase 1
 follow-ups list below.
 
 --------------------------------------------------------------------------------
@@ -213,9 +213,9 @@ later avoid that.
 ## Phase 2 --- CLI + formatter MVP (interleaved with Phase 1)
 
 - [~] `cli.rs` + `build.rs` (man/completions/markdown via
-  clap_mangen/\_complete/ clap-markdown). **[copy]** --- clap `fmt` subcommand
+  clap_mangen/\_complete/ clap-markdown). **[copy]** --- clap `format` subcommand
   lives in `src/main.rs`; `build.rs` man/completions still deferred.
-- [x] `badness fmt`: parse → re-emit; first milestone is identity (round-trip).
+- [x] `badness format`: parse → re-emit; first milestone is identity (round-trip).
 - [x] `formatter/ir.rs` + `printer.rs`: Wadler IR + layout engine. **[copy]**
       (extract first)
 - [~] LaTeX format rules: **whitespace normalization done** (trailing-ws trim,

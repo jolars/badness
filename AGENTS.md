@@ -12,7 +12,7 @@ copying its language-agnostic parts (see *Relationship to ravel* below).
 ## What this project is
 
 badness parses LaTeX into a **lossless concrete syntax tree (CST)** and builds three
-tools on top of it: a **formatter** (`badness fmt`), a **linter** (diagnostics), and a
+tools on top of it: a **formatter** (`badness format`), a **linter** (diagnostics), and a
 **language server** (LSP). The architecture follows **rust-analyzer**: a generic,
 error-tolerant, hand-written parser producing a lossless tree, semantics layered on
 top as a separate concern, and incremental recomputation via salsa.

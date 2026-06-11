@@ -29,7 +29,9 @@
 
 use std::iter::Peekable;
 
+use crate::ast::environment_name;
 use crate::parser::parse;
+use crate::semantic::signature;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::context::FormatContext;
@@ -181,7 +183,7 @@ fn lower_environment(node: &SyntaxNode) -> Ir {
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                begin = lower_node(child);
+                begin = lower_begin(child);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
                 end = lower_node(child);
@@ -204,6 +206,64 @@ fn lower_environment(node: &SyntaxNode) -> Ir {
             end,
         ])
     }
+}
+
+/// Lower a `\begin{name}` node, keeping the environment's *declared* argument
+/// groups on the `\begin` header line instead of letting a source line break push
+/// them onto their own (indented) line — the gap that needs the signature DB
+/// (TODO.md, "argument-taking environments"). For example
+/// `\begin{tabular}\n{cc}` renders as a single `\begin{tabular}{cc}` header.
+///
+/// The DB supplies the environment's arity: the first `arity` argument groups are
+/// glued to `\begin{name}` (intervening breaks and inline whitespace dropped),
+/// and anything past the declared arity — which the greedy parser may have
+/// over-attached — lowers generically, preserving today's behavior. Environments
+/// the DB doesn't know, or that take no arguments, also take the generic path, so
+/// nothing regresses. A `\begin` header carrying a comment is left to the generic
+/// path too: gluing across a `%` comment would let it swallow the next line.
+fn lower_begin(begin: &SyntaxNode) -> Ir {
+    let arity = environment_name(begin)
+        .and_then(|name| signature::builtin().environment(&name))
+        .map(|sig| sig.args.len())
+        .unwrap_or(0);
+    let has_comment = begin
+        .children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .any(|token| token.kind() == SyntaxKind::COMMENT);
+    if arity == 0 || has_comment {
+        return lower_node(begin);
+    }
+
+    let mut head: Vec<Ir> = Vec::new();
+    let mut tail: Vec<SyntaxElement> = Vec::new();
+    let mut args_seen = 0;
+    let mut in_tail = false;
+    for element in begin.children_with_tokens() {
+        if in_tail {
+            tail.push(element);
+            continue;
+        }
+        match &element {
+            SyntaxElement::Node(child)
+                if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                head.push(lower_node(child));
+                args_seen += 1;
+                if args_seen == arity {
+                    in_tail = true;
+                }
+            }
+            // The `\begin` control word and the `{name}` group stay on the line.
+            SyntaxElement::Node(child) => head.push(lower_node(child)),
+            // Drop header breaks/whitespace: the arguments glue to `\begin{name}`.
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
+            SyntaxElement::Token(token) => head.push(Ir::verbatim(token.text())),
+        }
+    }
+    if !tail.is_empty() {
+        head.extend(lower_element_stream(tail.into_iter()));
+    }
+    Ir::concat(head)
 }
 
 /// Lower a delimited group — a brace group `{…}` (`open`/`close` =

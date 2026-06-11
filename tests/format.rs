@@ -95,6 +95,13 @@ const CLEAN_CASES: &[&str] = &[
     "[opt] {req} & # ~ ^_",
     "no final newline",
     "para one\n\npara two\n",
+    // Signature-DB-aware environment headers: a declared argument glued onto the
+    // `\begin` line, an already-inline one, an optional argument, and an unknown
+    // environment (generic path). Invariants must hold for all.
+    "\\begin{tabular}\n{cc}\nx & y\n\\end{tabular}\n",
+    "\\begin{tabular}{cc}\nx & y\n\\end{tabular}\n",
+    "\\begin{minipage}[t]{4cm}\ntext\n\\end{minipage}\n",
+    "\\begin{myenv}\n{cc}\nbody\n\\end{myenv}\n",
 ];
 
 #[test]
@@ -145,6 +152,7 @@ const FIXTURES: &[&str] = &[
     "environment_reindents",
     "environment_blank_lines_in_body",
     "environment_begin_arguments",
+    "environment_argument_glued",
     "verbatim_in_environment",
     // Group / argument indentation.
     "group_indents_body",

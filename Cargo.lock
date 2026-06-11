@@ -101,6 +101,7 @@ dependencies = [
  "parser",
  "rowan",
  "salsa",
+ "serde",
  "serde_json",
  "smol_str",
  "syntax",

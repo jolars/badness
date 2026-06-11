@@ -46,6 +46,28 @@ pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
     Some(text)
 }
 
+/// The environment name of a `BEGIN` or `END` node — the literal text of its
+/// `NAME_GROUP` child, braces dropped. Returns `None` when the node has no
+/// `NAME_GROUP` (a malformed `\begin`) or it holds non-token content. The grammar
+/// emits the name as a `NAME_GROUP` (`grammar.rs`, `fn name_group`).
+pub fn environment_name(begin_or_end: &SyntaxNode) -> Option<String> {
+    let group = begin_or_end
+        .children()
+        .find(|child| child.kind() == SyntaxKind::NAME_GROUP)?;
+
+    let mut text = String::new();
+    for element in group.children_with_tokens() {
+        match element {
+            rowan::NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
+                _ => text.push_str(token.text()),
+            },
+            rowan::NodeOrToken::Node(_) => return None,
+        }
+    }
+    Some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

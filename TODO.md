@@ -251,13 +251,17 @@ later avoid that.
       it backdates on a model-preserving edit. Tested in `src/semantic.rs`
       (builder) and `tests/semantic.rs` (memoization + value stability).
 - [x] Signature DB (analog of ravel `rindex/`): built-in command/environment
-      table + CWL-style data. **[rewrite]** — `semantic/signature.rs`: a
-      `LazyLock<SignatureDb>` merging a curated CWL seed (`data/builtin.cwl`,
-      real CWL syntax, `include_str!`-ed) for argument shapes with overlay tables
-      for sectioning level / verbatim-ness / math-ness. First consumer: the
-      formatter glues an environment's declared argument groups onto the `\begin`
-      header line (closes the `\begin{tabular}{cc}` gap below). External-corpus
-      ingestion stays deferred; the CWL parser already accepts it.
+      table. **[rewrite]** — `semantic/signature.rs`: a `LazyLock<SignatureDb>`
+      deserialized from one curated JSON file (`data/signatures.json`,
+      `include_str!`-ed, serde) that co-locates *all* metadata per name —
+      argument shapes plus sectioning level / verbatim-ness / math-ness. This is
+      the hand-maintained high-precision tier (the analog of ravel's
+      `PackageIndex` schema). Lower-precision sources layer underneath later
+      (ravel's `installed > base > bundled`): the TeXstudio/Kile **CWL corpus**
+      (ingested *into* this schema by a converter — CWL is an import format, never
+      the source of truth) and per-file `\newcommand` scanning. First consumer:
+      the formatter glues an environment's declared argument groups onto the
+      `\begin` header line (closes the `\begin{tabular}{cc}` gap below).
 - [ ] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures
       only, no execution).
 - [x] Project graph: `\input` / `\include` / `\import` resolution. **[rewrite]**
@@ -424,11 +428,11 @@ Builds on the minimal server (Phase 4.5); adds the semantics-backed features.
 - [ ] Trivia-attachment policy (leading vs. trailing) --- pick one, document it.
 - [ ] How much of `\newcommand` / `xparse` to model for the signature DB.
 - [ ] Formatter opinionatedness: which choices are configurable vs. fixed.
-- [~] CWL data sourcing/licensing for the built-in signature DB. Decided
-      (seed-now / corpus-later): ship a small hand-authored `data/builtin.cwl`
-      seed in real CWL syntax — no external files, so no licensing question — and
-      keep the parser able to ingest the full TeXstudio/Kile corpus later, when
-      ecosystem-wide breadth (e.g. LSP completion) needs it. Licensing must be
+- [~] CWL data sourcing/licensing for the built-in signature DB. Decided: the
+      built-in DB is a hand-maintained `data/signatures.json` (our own granular
+      schema), *not* CWL — so no external files and no licensing question now. The
+      CWL corpus stays a future *ingest* source, converted into this schema when
+      ecosystem-wide breadth (e.g. LSP completion) needs it; licensing is
       revisited only if/when that corpus is vendored.
 - [ ] Whether ravel should also migrate tower-lsp-server → lsp-server (separate
       decision; out of scope for badness, but the rationale in `AGENTS.md`

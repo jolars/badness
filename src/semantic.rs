@@ -16,8 +16,10 @@
 
 pub mod builder;
 pub mod label;
+pub mod signature;
 
 pub use label::{LabelDef, LabelId, LabelRef, RefCommand, RefId};
+pub use signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb};
 
 use crate::syntax::SyntaxNode;
 

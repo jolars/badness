@@ -31,7 +31,7 @@ use std::iter::Peekable;
 
 use crate::ast::environment_name;
 use crate::parser::parse;
-use crate::semantic::signature;
+use crate::semantic::{Signatures, scan_definitions};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::context::FormatContext;
@@ -121,33 +121,52 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
 }
 
 fn format_root(root: &SyntaxNode, ctx: FormatContext) -> String {
-    let ir = lower_node(root, ctx.style().wrap);
+    // Scan the document's own `\newcommand`/`\newenvironment`/xparse definitions
+    // once, so the lowering resolves a locally-defined environment's arity (not
+    // just the built-in DB's). Held by value for the whole lowering.
+    let user = scan_definitions(root);
+    let cx = LowerCtx {
+        wrap: ctx.style().wrap,
+        signatures: Signatures::new(&user),
+    };
+    let ir = lower_node(root, cx);
     Printer::new(ctx.style()).print(&ir)
+}
+
+/// The state threaded through every lowering call: the active [`WrapMode`] plus the
+/// per-document [`Signatures`] overlay (scanned definitions over the built-in DB)
+/// that [`lower_begin`] consults for environment arity. `Copy`, so it passes by
+/// value like the bare `wrap` mode it replaced.
+#[derive(Clone, Copy)]
+struct LowerCtx<'a> {
+    wrap: WrapMode,
+    signatures: Signatures<'a>,
 }
 
 /// Lower a CST node to IR. Most nodes lower generically (see
 /// [`lower_element_stream`]); an [`SyntaxKind::ENVIRONMENT`] is special-cased to
 /// indent its body (see [`lower_environment`]), and under [`WrapMode::Reflow`] a
 /// [`SyntaxKind::PARAGRAPH`] is wrapped to the line width (see
-/// [`lower_paragraph_reflow`]). The `wrap` mode is threaded through so it reaches
-/// every nested paragraph (including environment and group bodies).
-fn lower_node(node: &SyntaxNode, wrap: WrapMode) -> Ir {
+/// [`lower_paragraph_reflow`]). The [`LowerCtx`] (wrap mode + signature overlay) is
+/// threaded through so it reaches every nested paragraph (including environment and
+/// group bodies).
+fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     match node.kind() {
-        SyntaxKind::PARAGRAPH if wrap == WrapMode::Reflow => {
-            return lower_paragraph_reflow(node, wrap);
+        SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Reflow => {
+            return lower_paragraph_reflow(node, cx);
         }
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
-            return lower_environment(node, wrap);
+            return lower_environment(node, cx);
         }
         SyntaxKind::GROUP if spans_multiple_lines(node) => {
-            return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, wrap);
+            return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
         }
         SyntaxKind::OPTIONAL if spans_multiple_lines(node) => {
-            return lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, wrap);
+            return lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
         }
         _ => {}
     }
-    Ir::concat(lower_element_stream(node.children_with_tokens(), wrap))
+    Ir::concat(lower_element_stream(node.children_with_tokens(), cx))
 }
 
 /// Lower a [`SyntaxKind::PARAGRAPH`] under [`WrapMode::Reflow`]: greedily wrap its
@@ -164,7 +183,7 @@ fn lower_node(node: &SyntaxNode, wrap: WrapMode) -> Ir {
 /// whose IR carries a forced break). Each emits the run-so-far as a fill, then
 /// the line breaks; a fresh run continues after. The paragraph's lines are joined
 /// by [`Ir::hard_line`].
-fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
+fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     // Glued pieces of the atom in progress.
     let mut atom: Vec<Ir> = Vec::new();
     // Atoms of the current fill run (the current logical line).
@@ -215,11 +234,11 @@ fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
             // An explicit `\\` line break (with its `*` / `[len]`, grouped by the
             // parser into one node) rides the end of the current line, then breaks.
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
-                atom.push(lower_node(&child, wrap));
+                atom.push(lower_node(&child, cx));
                 end_line(&mut atom, &mut run, &mut lines);
             }
             SyntaxElement::Node(child) => {
-                let ir = lower_node(&child, wrap);
+                let ir = lower_node(&child, cx);
                 if ir.contains_forced_break() {
                     // A block amid prose: end the current line, then place the
                     // block on its own line(s); a fresh run continues after.
@@ -247,12 +266,15 @@ fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
 /// primitive by [`classify_trivia`]. Comments deliberately *break* a trivia run
 /// (they are content, never collapsed away), so the run on either side is
 /// classified independently.
-fn lower_element_stream(elements: impl Iterator<Item = SyntaxElement>, wrap: WrapMode) -> Vec<Ir> {
+fn lower_element_stream(
+    elements: impl Iterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+) -> Vec<Ir> {
     let mut out = Vec::new();
     let mut iter = elements.peekable();
     while let Some(element) = iter.next() {
         match element {
-            SyntaxElement::Node(child) => out.push(lower_node(&child, wrap)),
+            SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
                 out.push(classify_trivia(newlines, trailing_ws));
@@ -275,23 +297,23 @@ fn lower_element_stream(elements: impl Iterator<Item = SyntaxElement>, wrap: Wra
 /// Verbatim-like environments never reach here (their opaque `VERBATIM_BODY`
 /// token would be corrupted by reflow); [`lower_node`] routes them to the
 /// generic path, which emits the body verbatim.
-fn lower_environment(node: &SyntaxNode, wrap: WrapMode) -> Ir {
+fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                begin = lower_begin(child, wrap);
+                begin = lower_begin(child, cx);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
-                end = lower_node(child, wrap);
+                end = lower_node(child, cx);
             }
             _ => body_elements.push(element),
         }
     }
 
-    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), wrap));
+    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), cx));
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {
@@ -309,20 +331,22 @@ fn lower_environment(node: &SyntaxNode, wrap: WrapMode) -> Ir {
 
 /// Lower a `\begin{name}` node, keeping the environment's *declared* argument
 /// groups on the `\begin` header line instead of letting a source line break push
-/// them onto their own (indented) line — the gap that needs the signature DB
-/// (TODO.md, "argument-taking environments"). For example
-/// `\begin{tabular}\n{cc}` renders as a single `\begin{tabular}{cc}` header.
+/// them onto their own (indented) line. For example `\begin{tabular}\n{cc}` renders
+/// as a single `\begin{tabular}{cc}` header.
 ///
-/// The DB supplies the environment's arity: the first `arity` argument groups are
-/// glued to `\begin{name}` (intervening breaks and inline whitespace dropped),
-/// and anything past the declared arity — which the greedy parser may have
-/// over-attached — lowers generically, preserving today's behavior. Environments
-/// the DB doesn't know, or that take no arguments, also take the generic path, so
-/// nothing regresses. A `\begin` header carrying a comment is left to the generic
-/// path too: gluing across a `%` comment would let it swallow the next line.
-fn lower_begin(begin: &SyntaxNode, wrap: WrapMode) -> Ir {
+/// The arity comes from the [`Signatures`] overlay (`cx.signatures`): a document's
+/// own `\newenvironment{thm}[1]…` is honored just like a built-in `tabular`, with
+/// the scanned definition shadowing a built-in of the same name. The first `arity`
+/// argument groups are glued to `\begin{name}` (intervening breaks and inline
+/// whitespace dropped), and anything past the declared arity — which the greedy
+/// parser may have over-attached — lowers generically, preserving today's behavior.
+/// Environments neither the document nor the DB knows, or that take no arguments,
+/// also take the generic path, so nothing regresses. A `\begin` header carrying a
+/// comment is left to the generic path too: gluing across a `%` comment would let
+/// it swallow the next line.
+fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let arity = environment_name(begin)
-        .and_then(|name| signature::builtin().environment(&name))
+        .and_then(|name| cx.signatures.environment(&name))
         .map(|sig| sig.args.len())
         .unwrap_or(0);
     let has_comment = begin
@@ -330,7 +354,7 @@ fn lower_begin(begin: &SyntaxNode, wrap: WrapMode) -> Ir {
         .filter_map(|element| element.into_token())
         .any(|token| token.kind() == SyntaxKind::COMMENT);
     if arity == 0 || has_comment {
-        return lower_node(begin, wrap);
+        return lower_node(begin, cx);
     }
 
     let mut head: Vec<Ir> = Vec::new();
@@ -346,21 +370,21 @@ fn lower_begin(begin: &SyntaxNode, wrap: WrapMode) -> Ir {
             SyntaxElement::Node(child)
                 if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
-                head.push(lower_node(child, wrap));
+                head.push(lower_node(child, cx));
                 args_seen += 1;
                 if args_seen == arity {
                     in_tail = true;
                 }
             }
             // The `\begin` control word and the `{name}` group stay on the line.
-            SyntaxElement::Node(child) => head.push(lower_node(child, wrap)),
+            SyntaxElement::Node(child) => head.push(lower_node(child, cx)),
             // Drop header breaks/whitespace: the arguments glue to `\begin{name}`.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
             SyntaxElement::Token(token) => head.push(Ir::verbatim(token.text())),
         }
     }
     if !tail.is_empty() {
-        head.extend(lower_element_stream(tail.into_iter(), wrap));
+        head.extend(lower_element_stream(tail.into_iter(), cx));
     }
     Ir::concat(head)
 }
@@ -376,7 +400,7 @@ fn lower_begin(begin: &SyntaxNode, wrap: WrapMode) -> Ir {
 /// wrapping), so the only `open` token is the first child and the only `close`
 /// token is the last — but an `OPTIONAL` body may contain a stray `[` (TeX does
 /// not nest `[`), so the opener is captured only once (`open_ir` still `Nil`).
-fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, wrap: WrapMode) -> Ir {
+fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: LowerCtx<'_>) -> Ir {
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
@@ -392,7 +416,7 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, wrap:
         }
     }
 
-    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), wrap));
+    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), cx));
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {

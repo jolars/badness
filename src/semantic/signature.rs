@@ -6,9 +6,12 @@
 //!
 //! The data is fully static, so — like ravel's `BASE_R`/`BUNDLED` statics, and
 //! unlike its harvested `LibraryIndex` salsa input — it lives in a process-wide
-//! [`LazyLock`], consulted directly. A salsa input only becomes necessary once
-//! per-file `\newcommand`/`xparse` signatures must merge in (a separate, later
-//! item); the greedy parser's argument attachment is unaffected until then.
+//! [`LazyLock`], consulted directly. Per-file `\newcommand`/`\newenvironment`/xparse
+//! signatures are scanned by [`super::define`] into a separate, per-document
+//! [`SignatureDb`] and overlaid via [`Signatures`] (scanned-first, built-in
+//! fallback); the greedy parser's argument attachment is unaffected either way. A
+//! salsa input only becomes necessary once that overlay must be cached across
+//! queries (a later item, when an LSP consumer appears).
 //!
 //! ## Source of truth: one granular JSON file
 //!
@@ -98,6 +101,52 @@ impl SignatureDb {
     /// The signature of environment `name`, if known.
     pub fn environment(&self, name: &str) -> Option<&EnvironmentSig> {
         self.environments.get(name)
+    }
+
+    /// Record a command signature, replacing any existing entry for `name`. Used
+    /// by the per-file definition scan ([`super::define`]) to populate a fresh DB;
+    /// the built-in DB is built from JSON and never mutated. A redefinition wins,
+    /// mirroring TeX's last-`\newcommand`-wins behavior.
+    pub fn insert_command(&mut self, name: impl Into<SmolStr>, sig: CommandSig) {
+        self.commands.insert(name.into(), sig);
+    }
+
+    /// Record an environment signature, replacing any existing entry for `name`.
+    pub fn insert_environment(&mut self, name: impl Into<SmolStr>, sig: EnvironmentSig) {
+        self.environments.insert(name.into(), sig);
+    }
+}
+
+/// A two-tier signature lookup: a per-document [`SignatureDb`] of scanned
+/// `\newcommand`/`\newenvironment`/xparse definitions consulted first, falling back
+/// to the process-wide [`builtin`] DB. Cheap to copy (it borrows the scanned DB),
+/// so it threads through the formatter's lowering like a context handle.
+///
+/// Scanned-first matches TeX scoping intuition: a locally (re)defined command
+/// shadows a built-in of the same name. (We do not yet model *where* a definition
+/// becomes visible — a whole-file union — which is sound for the formatter's arity
+/// needs; lexical/conditional visibility is out of scope, per AGENTS.md #1.)
+#[derive(Debug, Clone, Copy)]
+pub struct Signatures<'a> {
+    user: &'a SignatureDb,
+}
+
+impl<'a> Signatures<'a> {
+    /// Resolve against `user` first, then the built-in DB.
+    pub fn new(user: &'a SignatureDb) -> Self {
+        Self { user }
+    }
+
+    /// The signature of command `name`: scanned definition if any, else built-in.
+    pub fn command(&self, name: &str) -> Option<&'a CommandSig> {
+        self.user.command(name).or_else(|| builtin().command(name))
+    }
+
+    /// The signature of environment `name`: scanned definition if any, else built-in.
+    pub fn environment(&self, name: &str) -> Option<&'a EnvironmentSig> {
+        self.user
+            .environment(name)
+            .or_else(|| builtin().environment(name))
     }
 }
 

@@ -15,11 +15,14 @@
 //! [`incremental`](crate::incremental) and the project graph landed.
 
 pub mod builder;
+pub mod define;
 pub mod label;
 pub mod signature;
+pub mod xparse;
 
+pub use define::scan_definitions;
 pub use label::{LabelDef, LabelId, LabelRef, RefCommand, RefId};
-pub use signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb};
+pub use signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb, Signatures};
 
 use crate::syntax::SyntaxNode;
 

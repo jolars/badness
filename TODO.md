@@ -81,8 +81,15 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       `\include`/`\import`/`\subfile`, salsa firewall + reachability/cycles).
 
   Open follow-ups:
-  - [ ] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures
-        only, no execution) feeding the semantic DB.
+  - [x] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures
+        only, no execution) feeding the semantic DB. `semantic/define.rs` scans the
+        braced-name forms into a per-document `SignatureDb`; `semantic/xparse.rs`
+        parses the full xparse arg-spec grammar; `Signatures` overlays scanned over
+        built-in (scanned-first), and the formatter's `\begin` arity glue consumes
+        it. Remaining: the unbraced form `\newcommand\foo…` (parses with `\foo` as a
+        sibling, so skipped — needs scanner-side sibling heuristics, not parser
+        changes); a salsa `document_signatures` query once an LSP consumer (hover/
+        completion) wants the scanned command sigs.
   - [ ] Cross-file label resolution (`file_labels` firewall → project-level
         `resolved_labels`) + duplicate-label / undefined-ref diagnostics.
         Today's `unreferenced_labels`/`unresolved_refs` are per-file *facts*,

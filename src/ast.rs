@@ -46,6 +46,48 @@ pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
     Some(text)
 }
 
+/// The `n`-th `GROUP` argument node of `command`, if present. The thin node-level
+/// counterpart to [`nth_group_text`], for callers that must inspect a group's
+/// structure (a nested `\name` command, or raw source) rather than flatten it to a
+/// literal.
+pub fn nth_group(command: &SyntaxNode, n: usize) -> Option<SyntaxNode> {
+    command
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::GROUP)
+        .nth(n)
+}
+
+/// The control-word name (leading `\` stripped) of a single `COMMAND` wrapped in
+/// `group`, as in a `\newcommand{\foo}` / `\NewDocumentCommand{\foo}` name group.
+/// Returns `None` unless the group's only non-trivia child is exactly one control
+/// word — anything else (plain text, multiple tokens, a control symbol) is not a
+/// definable command name we extract.
+pub fn group_command_name(group: &SyntaxNode) -> Option<String> {
+    let command = group
+        .children()
+        .find(|child| child.kind() == SyntaxKind::COMMAND)?;
+    command_name(&command)
+}
+
+/// The raw inner source of `group` with its outer `L_BRACE`/`R_BRACE` dropped, but
+/// *all* interior text preserved — nested `{…}` braces included. Unlike
+/// [`nth_group_text`], which bails on nested nodes, this reconstructs the verbatim
+/// content needed for an xparse argument spec like `{m O{0} m}` (whose `{0}` default
+/// parses as a nested `GROUP`). Trivia (whitespace/newlines) is kept verbatim; the
+/// caller tokenizes the result.
+pub fn group_inner_source(group: &SyntaxNode) -> String {
+    let mut text = String::new();
+    for element in group.descendants_with_tokens() {
+        if let rowan::NodeOrToken::Token(token) = element {
+            text.push_str(token.text());
+        }
+    }
+    // Drop the outer braces the group carries as its first/last tokens (tolerating
+    // a malformed group missing one).
+    let inner = text.strip_prefix('{').unwrap_or(&text);
+    inner.strip_suffix('}').unwrap_or(inner).to_string()
+}
+
 /// The environment name of a `BEGIN` or `END` node — the literal text of its
 /// `NAME_GROUP` child, braces dropped. Returns `None` when the node has no
 /// `NAME_GROUP` (a malformed `\begin`) or it holds non-token content. The grammar
@@ -104,5 +146,29 @@ mod tests {
     #[test]
     fn nth_group_text_none_when_group_absent() {
         assert_eq!(nth_group_text(&command("\\input\n"), 0), None);
+    }
+
+    #[test]
+    fn group_command_name_reads_braced_control_word() {
+        let cmd = command("\\newcommand{\\foo}{x}\n");
+        let name = nth_group(&cmd, 0).and_then(|g| group_command_name(&g));
+        assert_eq!(name.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn group_command_name_none_for_plain_text() {
+        let cmd = command("\\newenvironment{thm}{a}{b}\n");
+        let name = nth_group(&cmd, 0).and_then(|g| group_command_name(&g));
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn group_inner_source_keeps_nested_braces() {
+        // The xparse spec group `{m O{d} m}` parses the `{d}` default as a nested
+        // GROUP; `nth_group_text` would reject it, but the raw source survives.
+        let cmd = command("\\NewDocumentCommand{\\foo}{m O{d} m}{x}\n");
+        let spec = nth_group(&cmd, 1).map(|g| group_inner_source(&g));
+        assert_eq!(spec.as_deref(), Some("m O{d} m"));
+        assert_eq!(nth_group_text(&cmd, 1), None);
     }
 }

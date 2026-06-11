@@ -163,6 +163,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // Arity from a *scanned* definition (not the built-in DB): the document's own
+    // `\newenvironment`/`\NewDocumentEnvironment` arg is glued onto the `\begin`.
+    ("environment_user_defined_glued", WrapMode::Preserve, 80),
+    ("environment_xparse_glued", WrapMode::Preserve, 80),
     ("verbatim_in_environment", WrapMode::Preserve, 80),
     // Group / argument indentation.
     ("group_indents_body", WrapMode::Preserve, 80),
@@ -249,6 +253,31 @@ fn preserve_keeps_author_breaks_while_reflow_joins() {
         format(input).expect("reflow formats"),
         "one two three four\n",
         "default reflow must join the lines"
+    );
+}
+
+/// The `\begin` argument glue is driven by the scanned signature, not the name: the
+/// *same* `\begin{thm}\n{x}` glues only when the document defines `thm`'s arity.
+/// Without the definition `thm` is unknown to both the document and the built-in DB,
+/// so it stays on the generic path and the argument is pushed to its own line.
+#[test]
+fn user_definition_drives_begin_argument_glue() {
+    let style = FormatStyle {
+        wrap: WrapMode::Preserve,
+        ..FormatStyle::default()
+    };
+    let undefined = "\\begin{thm}\n{x}\nbody\n\\end{thm}\n";
+    assert_eq!(
+        format_with_style(undefined, style).expect("formats"),
+        "\\begin{thm}\n{x}\n  body\n\\end{thm}\n",
+        "an undefined environment must not glue its argument"
+    );
+
+    let defined = format!("\\newenvironment{{thm}}[1]{{a}}{{b}}\n{undefined}");
+    assert_eq!(
+        format_with_style(&defined, style).expect("formats"),
+        "\\newenvironment{thm}[1]{a}{b}\n\\begin{thm}{x}\n  body\n\\end{thm}\n",
+        "defining thm's arity must glue the argument onto \\begin"
     );
 }
 

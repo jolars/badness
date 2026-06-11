@@ -16,6 +16,7 @@
     pkgs.hyperfine
     pkgs.cargo-show-asm
     pkgs.wasm-pack
+    pkgs.mdbook
   ];
 
   languages = {

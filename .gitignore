@@ -342,3 +342,7 @@ TSWLatexianTemp*
 # Uncomment the next line to have this generated file ignored.
 #*Notes.bib
 /test.tex
+
+# mdBook docs
+/docs/book/
+/docs/doc-utils/target/

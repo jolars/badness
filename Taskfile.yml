@@ -53,6 +53,28 @@ tasks:
     cmds:
       - echo "no benchmarks yet"
 
+  docs:
+    desc: Build the documentation book
+    deps: [docs:build]
+
+  docs:build:
+    desc: Build the mdBook docs into docs/book
+    dir: docs
+    cmds:
+      - mdbook build
+
+  docs:serve:
+    desc: Serve the docs locally with live reload
+    dir: docs
+    cmds:
+      - mdbook serve --open
+
+  docs:clean:
+    desc: Remove built docs
+    dir: docs
+    cmds:
+      - mdbook clean
+
   brand:
     desc: Build all brand artifacts (logo, wordmark, OG card) — PDF + PNG
     deps: [brand:logo, brand:wordmark, brand:og]

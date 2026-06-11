@@ -1,0 +1,18 @@
+[book]
+title = "badness Documentation"
+authors = ["Johan Larsson"]
+description = "A formatter, linter, and language server for LaTeX"
+language = "en"
+
+[output.html]
+smart-punctuation = true
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/jolars/badness"
+edit-url-template = "https://github.com/jolars/badness/edit/main/docs/{path}"
+
+[preprocessor]
+
+[preprocessor.doc-utils]
+command = "cargo run --quiet --manifest-path doc-utils/Cargo.toml"
+optional = true

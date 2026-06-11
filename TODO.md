@@ -103,12 +103,12 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       `publishDiagnostics`; stdio smoke test.
 
 - [ ] **Phase 5 --- Math.**
-      - [ ] Structured math model over the generic math tree.
-      - [ ] Precedence-climbing for `^`/`_` binding and primes (the one Pratt
-            site).
-      - [ ] `\left … \right` delimiter matching.
-      - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
-            columns, `\\` rows.
+  - [ ] Structured math model over the generic math tree.
+  - [ ] Precedence-climbing for `^`/`_` binding and primes (the one Pratt
+        site).
+  - [ ] `\left … \right` delimiter matching.
+  - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
+        columns, `\\` rows.
 
 - [] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
      surface parse diagnostics; annotate-snippets render done.

@@ -9,6 +9,11 @@ tasks:
     cmds:
       - cargo build
 
+  build-release:
+    desc: Build release version
+    cmds:
+      - cargo build --release
+
   test:
     desc: Run all tests
     cmds:

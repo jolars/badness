@@ -1,8 +1,8 @@
 # Changelog
 
 badness is at version `{{ badness-version }}` and pre-release; the surface
-described in these docs is still growing. Notable changes will be recorded here as
-releases are cut.
+described in these docs is still growing. Notable changes will be recorded here
+as releases are cut.
 
 ## Unreleased
 

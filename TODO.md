@@ -110,13 +110,14 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
             columns, `\\` rows.
 
-- \[\~\] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
-  surface parse diagnostics; annotate-snippets render done.
-  - [ ] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
-  - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
-        commands, stylistic checks.
-  - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
-        (Tenet 5).
+- [] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
+     surface parse diagnostics; annotate-snippets render done.
+
+     - [ ] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
+     - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
+             commands, stylistic checks.
+     - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
+             (Tenet 5).
 
 - [ ] **Phase 7 --- Full LSP.** Range formatting; linter diagnostics published
       alongside parse errors; document symbols + folding; hover + completion

@@ -1,8 +1,8 @@
 # Formatting
 
-`badness format` lays out LaTeX source deterministically. Output is decided solely
-by the formatter's rules and its layout engine—there are no per-construct special
-cases to memorize.
+`badness format` lays out LaTeX source deterministically. Output is decided
+solely by the formatter's rules and its layout engine—there are no per-construct
+special cases to memorize.
 
 ## In place, stdin, or check
 
@@ -14,14 +14,14 @@ badness format --check paper.tex  # report, don't write; non-zero if unformatted
 
 ## Style options
 
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--line-width <N>` | `80` | Maximum line width before the formatter breaks a line. |
-| `--indent-width <N>` | `2` | Spaces per indent step. |
-| `--wrap <mode>` | `reflow` | How line breaks inside a paragraph are laid out. See [Wrap Modes](../reference/wrap-modes.md). |
+  | Flag                 | Default  | Meaning                                                                                        |
+  | -------------------- | -------- | ---------------------------------------------------------------------------------------------- |
+  | `--line-width <N>`   | `80`     | Maximum line width before the formatter breaks a line.                                         |
+  | `--indent-width <N>` | `2`      | Spaces per indent step.                                                                        |
+  | `--wrap <mode>`      | `reflow` | How line breaks inside a paragraph are laid out. See [Wrap Modes](../reference/wrap-modes.md). |
 
-> A configuration file is not yet read; style is set through these flags. This is
-> expected to change as badness matures.
+> A configuration file is not yet read; style is set through these flags. This
+> is expected to change as badness matures.
 
 ## Guarantees
 
@@ -33,5 +33,5 @@ oracles:
 - **Protected regions** — verbatim-like content (`verbatim`, `lstlisting`,
   `\verb`, comments) is never altered.
 
-If the formatter ever produces output that violates one of these, that is a bug to
-report, not behavior to work around.
+If the formatter ever produces output that violates one of these, that is a bug
+to report, not behavior to work around.

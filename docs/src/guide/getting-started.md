@@ -1,8 +1,8 @@
 # Getting Started
 
 badness has three subcommands: `format`, `lint`, and `lsp`. This page walks
-through the first two from the command line. For editor integration, see
-[Editor Setup](editor-setup.md).
+through the first two from the command line. For editor integration, see [Editor
+Setup](editor-setup.md).
 
 ## Formatting a file
 
@@ -58,5 +58,5 @@ The formatter takes a few style options on the command line:
 badness format --line-width 100 --indent-width 4 --wrap preserve paper.tex
 ```
 
-See the [CLI Reference](../reference/cli.md) for every flag and the
-[Wrap Modes](../reference/wrap-modes.md) page for what `--wrap` controls.
+See the [CLI Reference](../reference/cli.md) for every flag and the [Wrap
+Modes](../reference/wrap-modes.md) page for what `--wrap` controls.

@@ -80,17 +80,20 @@ tasks:
     deps: [brand:logo, brand:wordmark, brand:og]
 
   brand:logo:
-    desc: Build logo.pdf + logo.png
+    desc: Build logo.pdf + logo.png + logo.svg
     dir: branding
     cmds:
       - pdflatex -interaction=nonstopmode -halt-on-error logo.tex >/dev/null
       - magick -density 600 logo.pdf -background none -strip logo.png
+      # Vector logo for the README and as the docs favicon/header.
+      - dvisvgm --pdf logo.pdf -o logo.svg >/dev/null
     sources:
       - logo.tex
       - _common.tex
     generates:
       - logo.pdf
       - logo.png
+      - logo.svg
 
   brand:wordmark:
     desc: Build wordmark.pdf + wordmark.png
@@ -123,4 +126,4 @@ tasks:
     desc: Remove built brand artifacts and LaTeX scratch files
     dir: branding
     cmds:
-      - rm -f *.pdf *.png *.aux *.log *.out
+      - rm -f *.pdf *.png *.svg *.aux *.log *.out

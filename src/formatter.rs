@@ -15,4 +15,4 @@ pub mod style;
 
 pub use check::{CheckError, CheckResult, check_paths, check_paths_with_style};
 pub use core::{FormatError, format, format_with_style};
-pub use style::FormatStyle;
+pub use style::{FormatStyle, WrapMode};

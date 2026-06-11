@@ -31,11 +31,17 @@ trimmed, 2+ blank lines → one, exactly one final newline); the body of every
 `\begin{…} … \end{…}` is indented one step (nesting recursively, `\begin`/`\end`
 flush); and the body of a *multi-line* `{…}` (`GROUP`) or `[…]` (`OPTIONAL`) is
 indented the same way (delimiters flush, single-line groups left inline,
-existing breaks respected --- no reflow yet). All indentation is computed by the
-printer (`Ir::indent`), never preserved from input, so re-indentation is
-idempotent. Paragraph structure, intra-line spacing, and protected regions
-(`\verb`, verbatim bodies, comments) are preserved. Paragraph reflow is the next
-rule.
+existing breaks respected). All indentation is computed by the printer
+(`Ir::indent`), never preserved from input, so re-indentation is idempotent.
+Protected regions (`\verb`, verbatim bodies, comments) are preserved.
+**Paragraph reflow now landed** (default): a `WrapMode` (`Reflow`/`Sentence`/
+`Semantic`/`Preserve`, modeled on **panache**) selects the intra-paragraph
+line-break policy; `Reflow` greedily word-wraps to the line width through a new
+Wadler `Ir::Fill` node (per-gap break decisions; the printer stays the layout
+authority), `Preserve` keeps authored breaks (the pre-reflow behavior), and
+`Sentence`/`Semantic` are scaffolded but fall back to `Preserve`. A `--wrap` CLI
+flag selects the mode. The next opinionated step is the `Sentence`/`Semantic`
+bodies (port panache's sentence rules / sembr).
 
 **Build & verify** (everything is green as of this commit):
 
@@ -76,23 +82,24 @@ break (`classify_trivia`: 0 newlines → inline ws kept; 1 → `hard_line`; 2+ �
 unconditional fixup trims the trailing edge to exactly one newline. `check.rs`
 --- `--check` over explicit paths (ravel's, minus `file_discovery`). -
 `src/main.rs` --- clap CLI:
-`badness format [paths] [--check] [--line-width]   [--indent-width]`; stdin→stdout
-when no paths. - `src/text/line_index.rs` --- byte ↔ line/col (UTF-16) for later
+`badness format [paths] [--check] [--line-width]   [--indent-width] [--wrap]`;
+stdin→stdout when no paths. `--wrap` (clap `ValueEnum` `WrapArg`, mapped to the
+clap-free `WrapMode`) selects the paragraph line-break policy. - `src/text/line_index.rs` --- byte ↔ line/col (UTF-16) for later
 LSP. - `tests/parser.rs` --- tree snapshots + recovery assertions (asserts
 losslessness). - `tests/format.rs` --- fixture pairs
 (`tests/fixtures/formatter/<name>/{input,   expected}.tex`) + idempotence,
 parse-stability (trivia-elided), and losslessness-of-output over the unit cases
 and corpus, plus an error-refusal case and a snapshot.
 
-**Next step** --- candidates, pick by priority: - *Formatter:* **paragraph
-reflow** (wrap text runs to the line width with the Wadler `Group`/`Line` fit
-machinery --- the first *flat-vs-break* rule; note this is the most opinionated
-formatter decision and needs a policy choice: greedy fill vs. semantic line
-breaks vs. preserve), or the smaller **internal multiple-space collapse**. -
-*LSP follow-up:* a `format_node(tree)` entry so formatting reuses the cached
-salsa tree (today `textDocument/formatting` reparses via `format_with_style`);
-README editor-wiring docs. - *Hardening:* the `latexindent` differential
-formatter oracle.
+**Next step** --- candidates, pick by priority: - *Formatter:* the
+**`Sentence`/`Semantic` wrap modes** (port panache's sentence-boundary rules and
+sembr semantic line breaks; both currently fall back to `Preserve`), or **reflow
+inside argument groups** (today reflow is `PARAGRAPH`-only; `{…}`/`[…]` bodies
+still keep authored breaks). - *LSP follow-up:* a `format_node(tree)` entry so
+formatting reuses the cached salsa tree (today `textDocument/formatting` reparses
+via `format_with_style`); exposing `--wrap` over LSP / a config file; README
+editor-wiring docs. - *Hardening:* the `latexindent` differential formatter
+oracle (now more useful with reflow landed).
 
 Each rule is a small diff; use formatter ambiguities to drive parser fixes
 (AGENTS.md). The differential oracles --- `latexindent` (formatter) and
@@ -122,7 +129,22 @@ break between them), so a `{cc}` on its own line reflows up to the header.
 Environments the DB doesn't know take the generic path unchanged. Verbatim nested
 in an environment: `\begin{verbatim}`
 indents but the body and `\end` stay column-0 (body is byte-preserved). Both are
-lossless and idempotent today.
+lossless and idempotent today. - *(paragraph reflow)* the line-break policy is a
+`WrapMode` (`Reflow` default / `Sentence` / `Semantic` / `Preserve`), modeled on
+**panache**'s mode taxonomy but mechanized through the Wadler `Doc` IR: a new
+`Ir::Fill` node does *per-gap* greedy break decisions (Prettier's `fill`: a
+separator stays a space iff `atom + sep + next-atom` fits flat), so the printer
+remains the single layout authority --- *not* panache's separate streaming
+line-filler. Reflow keys on the `PARAGRAPH` node: adjacent non-whitespace elements
+glue into one unbreakable atom (so `word~word` ties and `\emph{x}` never split),
+inter-word whitespace/single newline is a break opportunity, and an explicit `\\`,
+a `%` comment, or a nested block (forced-break IR) ends the current line and starts
+a fresh fill. `Preserve` is exactly the pre-reflow generic path;
+`Sentence`/`Semantic` fall back to it for now. Width uses `chars().count()` (matches
+the existing printer; not Unicode display width --- a follow-up). Idempotence quirk
+fixed in passing: a trailing `\`-at-EOL is lexed as a control symbol that absorbs
+the newline; reflow emits the pre-newline part as a flat atom and lets the line
+break supply the newline, so it reparses identically.
 
 Parser-adjacent ambiguities to watch (no parser change needed now): (1)
 indentation after a newline lives in the *same* trivia run as the newline ---
@@ -223,9 +245,11 @@ later avoid that.
       (extract first)
 - [~] LaTeX format rules: **whitespace normalization done** (trailing-ws trim,
   blank-line collapse, single final newline), **environment indentation done**
-  (printer-owned, idempotent re-indent, verbatim-protected), and
-  **group/argument indentation done** (multi-line `{…}`/`[…]` bodies indented
-  one step, single-line groups left inline); paragraph reflow still to come.
+  (printer-owned, idempotent re-indent, verbatim-protected), **group/argument
+  indentation done** (multi-line `{…}`/`[…]` bodies indented one step, single-line
+  groups left inline), and **paragraph reflow done** (default `WrapMode::Reflow`:
+  greedy word-wrap to the line width via a new `Ir::Fill` engine node; `Preserve`
+  keeps authored breaks; `Sentence`/`Semantic` scaffolded, fall back to `Preserve`).
   **[rewrite]** --- replaced the identity `lower_node`.
 - [x] Protected regions never touched (`verbatim`, `\verb`, comments) ---
       verified by the `protected_verbatim` / `protected_comment_trailing_space`

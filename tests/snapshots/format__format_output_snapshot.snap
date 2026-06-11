@@ -4,5 +4,4 @@ expression: "format(input).expect(\"formats\")"
 ---
 \section{Intro}
 
-Some text with trailing space
-more text.
+Some text with trailing space more text.

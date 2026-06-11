@@ -37,7 +37,7 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::context::FormatContext;
 use super::ir::Ir;
 use super::printer::Printer;
-use super::style::FormatStyle;
+use super::style::{FormatStyle, WrapMode};
 
 /// Why a document could not be formatted. The formatter only operates on a clean
 /// parse: anything the parser flagged, or any `ERROR` token, is refused rather
@@ -121,25 +121,123 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
 }
 
 fn format_root(root: &SyntaxNode, ctx: FormatContext) -> String {
-    let ir = lower_node(root);
+    let ir = lower_node(root, ctx.style().wrap);
     Printer::new(ctx.style()).print(&ir)
 }
 
 /// Lower a CST node to IR. Most nodes lower generically (see
 /// [`lower_element_stream`]); an [`SyntaxKind::ENVIRONMENT`] is special-cased to
-/// indent its body (see [`lower_environment`]).
-fn lower_node(node: &SyntaxNode) -> Ir {
+/// indent its body (see [`lower_environment`]), and under [`WrapMode::Reflow`] a
+/// [`SyntaxKind::PARAGRAPH`] is wrapped to the line width (see
+/// [`lower_paragraph_reflow`]). The `wrap` mode is threaded through so it reaches
+/// every nested paragraph (including environment and group bodies).
+fn lower_node(node: &SyntaxNode, wrap: WrapMode) -> Ir {
     match node.kind() {
-        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => return lower_environment(node),
+        SyntaxKind::PARAGRAPH if wrap == WrapMode::Reflow => {
+            return lower_paragraph_reflow(node, wrap);
+        }
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
+            return lower_environment(node, wrap);
+        }
         SyntaxKind::GROUP if spans_multiple_lines(node) => {
-            return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE);
+            return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, wrap);
         }
         SyntaxKind::OPTIONAL if spans_multiple_lines(node) => {
-            return lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET);
+            return lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, wrap);
         }
         _ => {}
     }
-    Ir::concat(lower_element_stream(node.children_with_tokens()))
+    Ir::concat(lower_element_stream(node.children_with_tokens(), wrap))
+}
+
+/// Lower a [`SyntaxKind::PARAGRAPH`] under [`WrapMode::Reflow`]: greedily wrap its
+/// prose to the line width. Maximal runs of *adjacent* non-whitespace elements
+/// glue into one unbreakable *atom* (so `Hello,` and `\emph{x}` never split);
+/// inter-word whitespace — or a lone newline, since a paragraph holds no blank
+/// lines — is a break opportunity. The run lowers to an [`Ir::fill`], which the
+/// printer wraps word-by-word.
+///
+/// Three things end a line rather than flow into the fill: an explicit `\\`, a
+/// `%` comment (which must terminate its line), and a nested *block* (an
+/// environment or multi-line group whose IR carries a forced break). Each emits
+/// the run-so-far as a fill, then the line breaks; a fresh run continues after.
+/// The paragraph's lines are joined by [`Ir::hard_line`].
+fn lower_paragraph_reflow(node: &SyntaxNode, wrap: WrapMode) -> Ir {
+    // Glued pieces of the atom in progress.
+    let mut atom: Vec<Ir> = Vec::new();
+    // Atoms of the current fill run (the current logical line).
+    let mut run: Vec<Ir> = Vec::new();
+    // Completed lines (fills and blocks), later joined by hard_line.
+    let mut lines: Vec<Ir> = Vec::new();
+
+    /// Commit the atom in progress (if any) as one atom of the current run.
+    fn flush_atom(atom: &mut Vec<Ir>, run: &mut Vec<Ir>) {
+        if !atom.is_empty() {
+            run.push(Ir::concat(atom.drain(..)));
+        }
+    }
+    /// End the current logical line: flush the atom and turn the run into a fill.
+    fn end_line(atom: &mut Vec<Ir>, run: &mut Vec<Ir>, lines: &mut Vec<Ir>) {
+        flush_atom(atom, run);
+        lines.push(Ir::fill(run.drain(..)));
+    }
+
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            // Whitespace / newline run: an atom boundary (a break opportunity).
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let _ = consume_trivia_run(&token, &mut iter);
+                flush_atom(&mut atom, &mut run);
+            }
+            // A comment rides the end of the current line, then forces a break.
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
+                atom.push(Ir::verbatim(token.text()));
+                end_line(&mut atom, &mut run, &mut lines);
+            }
+            // An explicit `\\` stays on the current line, then forces a break.
+            SyntaxElement::Token(token)
+                if token.kind() == SyntaxKind::CONTROL_SYMBOL && token.text() == "\\\\" =>
+            {
+                atom.push(Ir::verbatim(token.text()));
+                end_line(&mut atom, &mut run, &mut lines);
+            }
+            // A token that carries its own newline — a `\`-at-end-of-line control
+            // symbol, kept verbatim for losslessness — ends the line: emit the
+            // part before the break as a flat atom and let the line break supply
+            // the newline, so the result reparses to the same token (idempotent)
+            // instead of leaving an unbreakable multi-line atom inside the fill.
+            SyntaxElement::Token(token) if token.text().contains('\n') => {
+                let before = token.text().split_once('\n').map(|(b, _)| b).unwrap_or("");
+                if !before.is_empty() {
+                    atom.push(Ir::verbatim(before));
+                }
+                end_line(&mut atom, &mut run, &mut lines);
+            }
+            // Any other token (WORD, `~`, `&`, `#`, `^`, `_`, brackets, `\verb`,
+            // a bare control symbol) glues onto the current atom.
+            SyntaxElement::Token(token) => atom.push(Ir::verbatim(token.text())),
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(&child, wrap);
+                if ir.contains_forced_break() {
+                    // A block amid prose: end the current line, then place the
+                    // block on its own line(s); a fresh run continues after.
+                    flush_atom(&mut atom, &mut run);
+                    if !run.is_empty() {
+                        lines.push(Ir::fill(run.drain(..)));
+                    }
+                    lines.push(ir);
+                } else {
+                    atom.push(ir);
+                }
+            }
+        }
+    }
+    flush_atom(&mut atom, &mut run);
+    if !run.is_empty() {
+        lines.push(Ir::fill(run.drain(..)));
+    }
+    Ir::join(Ir::hard_line(), lines)
 }
 
 /// Lower a stream of elements: child nodes recurse, non-trivia tokens (and the
@@ -148,12 +246,12 @@ fn lower_node(node: &SyntaxNode) -> Ir {
 /// primitive by [`classify_trivia`]. Comments deliberately *break* a trivia run
 /// (they are content, never collapsed away), so the run on either side is
 /// classified independently.
-fn lower_element_stream(elements: impl Iterator<Item = SyntaxElement>) -> Vec<Ir> {
+fn lower_element_stream(elements: impl Iterator<Item = SyntaxElement>, wrap: WrapMode) -> Vec<Ir> {
     let mut out = Vec::new();
     let mut iter = elements.peekable();
     while let Some(element) = iter.next() {
         match element {
-            SyntaxElement::Node(child) => out.push(lower_node(&child)),
+            SyntaxElement::Node(child) => out.push(lower_node(&child, wrap)),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
                 out.push(classify_trivia(newlines, trailing_ws));
@@ -176,23 +274,23 @@ fn lower_element_stream(elements: impl Iterator<Item = SyntaxElement>) -> Vec<Ir
 /// Verbatim-like environments never reach here (their opaque `VERBATIM_BODY`
 /// token would be corrupted by reflow); [`lower_node`] routes them to the
 /// generic path, which emits the body verbatim.
-fn lower_environment(node: &SyntaxNode) -> Ir {
+fn lower_environment(node: &SyntaxNode, wrap: WrapMode) -> Ir {
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                begin = lower_begin(child);
+                begin = lower_begin(child, wrap);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
-                end = lower_node(child);
+                end = lower_node(child, wrap);
             }
             _ => body_elements.push(element),
         }
     }
 
-    let body = Ir::concat(lower_element_stream(body_elements.into_iter()));
+    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), wrap));
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {
@@ -221,7 +319,7 @@ fn lower_environment(node: &SyntaxNode) -> Ir {
 /// the DB doesn't know, or that take no arguments, also take the generic path, so
 /// nothing regresses. A `\begin` header carrying a comment is left to the generic
 /// path too: gluing across a `%` comment would let it swallow the next line.
-fn lower_begin(begin: &SyntaxNode) -> Ir {
+fn lower_begin(begin: &SyntaxNode, wrap: WrapMode) -> Ir {
     let arity = environment_name(begin)
         .and_then(|name| signature::builtin().environment(&name))
         .map(|sig| sig.args.len())
@@ -231,7 +329,7 @@ fn lower_begin(begin: &SyntaxNode) -> Ir {
         .filter_map(|element| element.into_token())
         .any(|token| token.kind() == SyntaxKind::COMMENT);
     if arity == 0 || has_comment {
-        return lower_node(begin);
+        return lower_node(begin, wrap);
     }
 
     let mut head: Vec<Ir> = Vec::new();
@@ -247,21 +345,21 @@ fn lower_begin(begin: &SyntaxNode) -> Ir {
             SyntaxElement::Node(child)
                 if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
-                head.push(lower_node(child));
+                head.push(lower_node(child, wrap));
                 args_seen += 1;
                 if args_seen == arity {
                     in_tail = true;
                 }
             }
             // The `\begin` control word and the `{name}` group stay on the line.
-            SyntaxElement::Node(child) => head.push(lower_node(child)),
+            SyntaxElement::Node(child) => head.push(lower_node(child, wrap)),
             // Drop header breaks/whitespace: the arguments glue to `\begin{name}`.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
             SyntaxElement::Token(token) => head.push(Ir::verbatim(token.text())),
         }
     }
     if !tail.is_empty() {
-        head.extend(lower_element_stream(tail.into_iter()));
+        head.extend(lower_element_stream(tail.into_iter(), wrap));
     }
     Ir::concat(head)
 }
@@ -277,7 +375,7 @@ fn lower_begin(begin: &SyntaxNode) -> Ir {
 /// wrapping), so the only `open` token is the first child and the only `close`
 /// token is the last — but an `OPTIONAL` body may contain a stray `[` (TeX does
 /// not nest `[`), so the opener is captured only once (`open_ir` still `Nil`).
-fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind) -> Ir {
+fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, wrap: WrapMode) -> Ir {
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
@@ -293,7 +391,7 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind) -> Ir
         }
     }
 
-    let body = Ir::concat(lower_element_stream(body_elements.into_iter()));
+    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), wrap));
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {

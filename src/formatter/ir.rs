@@ -84,6 +84,17 @@ pub(crate) enum Ir {
     /// else wrap in braces" — the IR port of the legacy `fits_with_newlines`
     /// check.
     ConditionalGroupAllLines(Rc<[Ir]>),
+    /// A Wadler/Prettier *fill*: an alternating list `[atom, sep, atom, sep, …,
+    /// atom]` (even indices content, odd indices separators, each separator an
+    /// [`Ir::Line`]). Unlike a [`Ir::Group`], the printer decides each separator
+    /// *independently* — it stays flat (a space) when the surrounding pair fits
+    /// and breaks otherwise — so a run of words greedily fills each line. This is
+    /// the primitive paragraph reflow lowers to. Build via [`Ir::fill`].
+    ///
+    /// `Group`/`ConditionalGroup` cannot express this: a group is all-or-nothing
+    /// (every `Line` flat or every `Line` broken), and a conditional group picks
+    /// among whole-layout candidates — neither wraps word-by-word.
+    Fill(Rc<[Ir]>),
     /// Nothing.
     Nil,
 }
@@ -183,6 +194,31 @@ impl Ir {
         Ir::ConditionalGroupAllLines(cands.into())
     }
 
+    /// Build an [`Ir::Fill`] from a sequence of content `atoms`, interleaving an
+    /// [`Ir::Line`] separator between consecutive atoms (so the printer may break
+    /// at any gap). `Nil` atoms are dropped. Zero atoms → [`Ir::Nil`]; one atom →
+    /// that atom (no fill needed).
+    pub(crate) fn fill(atoms: impl IntoIterator<Item = Ir>) -> Ir {
+        let atoms: Vec<Ir> = atoms
+            .into_iter()
+            .filter(|i| !matches!(i, Ir::Nil))
+            .collect();
+        match atoms.len() {
+            0 => Ir::Nil,
+            1 => atoms.into_iter().next().unwrap(),
+            _ => {
+                let mut parts = Vec::with_capacity(atoms.len() * 2 - 1);
+                for (i, atom) in atoms.into_iter().enumerate() {
+                    if i > 0 {
+                        parts.push(Ir::Line);
+                    }
+                    parts.push(atom);
+                }
+                Ir::Fill(parts.into())
+            }
+        }
+    }
+
     pub(crate) fn indent(inner: Ir) -> Ir {
         Ir::Indent(Rc::new(inner))
     }
@@ -227,6 +263,7 @@ impl Ir {
         match self {
             Ir::Group { .. } | Ir::ConditionalGroup(_) | Ir::ConditionalGroupAllLines(_) => true,
             Ir::Concat(items) => items.iter().any(Ir::contains_group),
+            Ir::Fill(parts) => parts.iter().any(Ir::contains_group),
             Ir::Indent(inner) => inner.contains_group(),
             Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
             Ir::Text(_)
@@ -262,6 +299,9 @@ impl Ir {
             Ir::HardLine | Ir::EmptyLine => true,
             Ir::Verbatim { force_break, .. } => *force_break,
             Ir::Concat(items) => items.iter().any(Ir::contains_forced_break),
+            // A fill's separators are soft `Line`s; only its atoms could carry a
+            // forced break (none do under reflow lowering, but stay correct).
+            Ir::Fill(parts) => parts.iter().any(Ir::contains_forced_break),
             Ir::Indent(inner) => inner.contains_forced_break(),
             Ir::Group { inner, expand, .. } => *expand || inner.contains_forced_break(),
             // The flat-most candidate decides: if even it forces a break, the

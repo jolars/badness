@@ -127,7 +127,16 @@ corpus. Both are external reference implementations we measure against, never ma
   `tower_lsp_server::ls_types::Position` for `lsp_types::Position`.
 - **Formatter engine:** a Wadler/Prettier-style `Doc` IR
   (`Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent`, flat/break fit) — copy
-  ravel's `formatter/ir.rs` + `printer.rs` nearly wholesale.
+  ravel's `formatter/ir.rs` + `printer.rs` nearly wholesale. **Addition over ravel:**
+  an `Ir::Fill` node (Wadler/Prettier *fill*: per-gap greedy break decisions) for
+  paragraph reflow — ravel formats R and has no prose-wrapping, so this primitive is
+  badness-specific. Keep the rest of the engine close to ravel's.
+- **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
+  `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling **panache**
+  formatter's mode taxonomy. badness mechanizes it through the `Doc` IR (`Fill`),
+  *not* panache's separate streaming line-filler — the printer stays the single
+  layout authority. `Reflow` and `Preserve` are implemented; `Sentence`/`Semantic`
+  currently fall back to `Preserve`.
 - **CLI:** `clap` + `build.rs` generating man pages / completions / markdown
   (`clap_mangen`, `clap_complete`, `clap-markdown`) — copy ravel's scaffolding.
 - **Diagnostics rendering:** `annotate-snippets`.

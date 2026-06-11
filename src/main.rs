@@ -13,10 +13,35 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use badness::formatter::{FormatStyle, check_paths_with_style, format_with_style};
+use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
 use badness::linter::{Diagnostic, OutputMode, render_findings};
 use badness::parser::parse;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// CLI surface for [`WrapMode`]. Kept here (not in the formatter) so the
+/// formatter API stays clap-free, mirroring ravel's `cli.rs` convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum WrapArg {
+    /// Greedy fill: wrap words to the line width (default).
+    Reflow,
+    /// One sentence per line. (Not yet implemented — behaves like `preserve`.)
+    Sentence,
+    /// Semantic line breaks (sembr.org). (Not yet implemented — like `preserve`.)
+    Semantic,
+    /// Leave authored line breaks untouched.
+    Preserve,
+}
+
+impl From<WrapArg> for WrapMode {
+    fn from(arg: WrapArg) -> Self {
+        match arg {
+            WrapArg::Reflow => WrapMode::Reflow,
+            WrapArg::Sentence => WrapMode::Sentence,
+            WrapArg::Semantic => WrapMode::Semantic,
+            WrapArg::Preserve => WrapMode::Preserve,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -48,6 +73,9 @@ enum Command {
         /// Number of spaces per indent step.
         #[arg(long)]
         indent_width: Option<usize>,
+        /// How to lay out line breaks inside a paragraph.
+        #[arg(long, value_enum)]
+        wrap: Option<WrapArg>,
     },
     /// Lint LaTeX source, reporting parse diagnostics.
     ///
@@ -69,6 +97,7 @@ fn main() -> ExitCode {
             check,
             line_width,
             indent_width,
+            wrap,
         } => {
             let mut style = FormatStyle::default();
             if let Some(w) = line_width {
@@ -76,6 +105,9 @@ fn main() -> ExitCode {
             }
             if let Some(w) = indent_width {
                 style.indent_width = w;
+            }
+            if let Some(w) = wrap {
+                style.wrap = w.into();
             }
             run_format(&paths, check, style)
         }

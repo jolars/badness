@@ -19,6 +19,24 @@ enum Mode {
     Break,
 }
 
+/// A unit of pending work on the printer's layout stack. Most IR nodes are a
+/// plain [`Cmd::Node`]; [`Ir::Fill`] is processed incrementally as a
+/// [`Cmd::Fill`] carrying the not-yet-laid-out remainder of its alternating
+/// `[atom, sep, …]` list, so each gap is decided one at a time (see
+/// [`Printer::step_fill`]).
+enum Cmd<'a> {
+    Node {
+        indent: usize,
+        mode: Mode,
+        node: &'a Ir,
+    },
+    Fill {
+        indent: usize,
+        mode: Mode,
+        parts: &'a [Ir],
+    },
+}
+
 pub(crate) struct Printer {
     line_width: usize,
     indent_unit: usize,
@@ -41,6 +59,18 @@ impl Writer {
             pending_indent: 0,
             needs_indent: false,
         }
+    }
+
+    /// The column the next visible character would land at, accounting for an
+    /// indent that has been queued (`needs_indent`) but not yet flushed — so a
+    /// fill decision made right after a newline measures from the indent, not 0.
+    fn current_col(&self) -> usize {
+        self.col
+            + if self.needs_indent {
+                self.pending_indent
+            } else {
+                0
+            }
     }
 
     fn flush_indent(&mut self) {
@@ -129,19 +159,49 @@ impl Printer {
     fn run_with_mode(&self, ir: &Ir, base_indent: usize, init_col: usize, mode: Mode) -> String {
         let mut w = Writer::new();
         w.col = init_col;
-        let mut stack: Vec<(usize, Mode, &Ir)> = vec![(base_indent, mode, ir)];
-        while let Some((indent, mode, node)) = stack.pop() {
+        let mut stack: Vec<Cmd<'_>> = vec![Cmd::Node {
+            indent: base_indent,
+            mode,
+            node: ir,
+        }];
+        while let Some(cmd) = stack.pop() {
+            let (indent, mode, node) = match cmd {
+                Cmd::Node { indent, mode, node } => (indent, mode, node),
+                // A fill continuation: lay out the next word/separator pair (see
+                // `step_fill`), pushing the remainder back for the next iteration.
+                Cmd::Fill {
+                    indent,
+                    mode,
+                    parts,
+                } => {
+                    self.step_fill(&w, indent, mode, parts, &mut stack);
+                    continue;
+                }
+            };
             match node {
                 Ir::Nil => {}
                 Ir::Text(s) => w.write_text(s),
                 Ir::Verbatim { text, .. } => w.write_verbatim(text),
                 Ir::Concat(items) => {
                     for item in items.iter().rev() {
-                        stack.push((indent, mode, item));
+                        stack.push(Cmd::Node {
+                            indent,
+                            mode,
+                            node: item,
+                        });
                     }
                 }
+                Ir::Fill(parts) => stack.push(Cmd::Fill {
+                    indent,
+                    mode,
+                    parts: &parts[..],
+                }),
                 Ir::Indent(inner) => {
-                    stack.push((indent + self.indent_unit, mode, inner));
+                    stack.push(Cmd::Node {
+                        indent: indent + self.indent_unit,
+                        mode,
+                        node: inner,
+                    });
                 }
                 Ir::Line => match mode {
                     Mode::Flat => w.write_text(" "),
@@ -156,7 +216,11 @@ impl Printer {
                 Ir::EmptyLine => w.empty_line(indent),
                 Ir::IfBreak { flat, broken } => {
                     let chosen = if mode == Mode::Break { broken } else { flat };
-                    stack.push((indent, mode, chosen));
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode,
+                        node: chosen,
+                    });
                 }
                 Ir::Group {
                     inner,
@@ -180,19 +244,149 @@ impl Printer {
                     } else {
                         Mode::Break
                     };
-                    stack.push((indent, m, inner));
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode: m,
+                        node: inner,
+                    });
                 }
                 Ir::ConditionalGroup(cands) => {
                     let (m, chosen) = self.pick_candidate(w.col, cands);
-                    stack.push((indent, m, chosen));
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode: m,
+                        node: chosen,
+                    });
                 }
                 Ir::ConditionalGroupAllLines(cands) => {
                     let (m, chosen) = self.pick_candidate_all_lines(w.col, indent, cands);
-                    stack.push((indent, m, chosen));
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode: m,
+                        node: chosen,
+                    });
                 }
             }
         }
         w.out
+    }
+
+    /// One step of laying out an [`Ir::Fill`] — the Wadler/Prettier greedy fill.
+    /// `parts` is the alternating `[atom, sep, atom, …]` remainder. In `Flat`
+    /// mode every separator is a space (the whole fill on one line); in `Break`
+    /// mode each gap is decided independently: the first atom is printed, then
+    /// the separator stays flat (a space) iff the *pair* `atom + sep + next-atom`
+    /// fits flat from the current column, else it breaks. A lone atom that does
+    /// not fit is printed anyway (no break can rescue an unbreakable word). The
+    /// remaining fill is pushed back so the next iteration decides the next gap.
+    fn step_fill<'a>(
+        &self,
+        w: &Writer,
+        indent: usize,
+        mode: Mode,
+        parts: &'a [Ir],
+        stack: &mut Vec<Cmd<'a>>,
+    ) {
+        if parts.is_empty() {
+            return;
+        }
+        if mode == Mode::Flat {
+            for part in parts.iter().rev() {
+                stack.push(Cmd::Node {
+                    indent,
+                    mode: Mode::Flat,
+                    node: part,
+                });
+            }
+            return;
+        }
+
+        let col = w.current_col();
+        let content = &parts[0];
+        let w0 = self.flat_width(content);
+        let content_fits = matches!(w0, Some(width) if col + width <= self.line_width);
+
+        if parts.len() == 1 {
+            stack.push(Cmd::Node {
+                indent,
+                mode: if content_fits {
+                    Mode::Flat
+                } else {
+                    Mode::Break
+                },
+                node: content,
+            });
+            return;
+        }
+
+        let sep = &parts[1];
+        // Pair fit: the current atom, its separator, and the next atom, all flat.
+        // Alternating fills always end on an atom, so `parts[2]` exists here.
+        let pair_fits = match (w0, self.flat_width(sep), self.flat_width(&parts[2])) {
+            (Some(a), Some(s), Some(b)) => col + a + s + b <= self.line_width,
+            _ => false,
+        };
+        // Push the remainder first (popped last), then the separator, then the
+        // content (popped first), so they print in order.
+        stack.push(Cmd::Fill {
+            indent,
+            mode: Mode::Break,
+            parts: &parts[2..],
+        });
+        stack.push(Cmd::Node {
+            indent,
+            mode: if pair_fits { Mode::Flat } else { Mode::Break },
+            node: sep,
+        });
+        stack.push(Cmd::Node {
+            indent,
+            mode: if content_fits {
+                Mode::Flat
+            } else {
+                Mode::Break
+            },
+            node: content,
+        });
+    }
+
+    /// The flat-rendered width of `node`, or `None` if it cannot be laid flat
+    /// (it carries a forced line break: a `HardLine`/`EmptyLine` or a multi-line
+    /// `Verbatim`). A single-line force-break `Verbatim` (a comment) *can* share
+    /// a line with what precedes it — it only forces a break *after* — so it
+    /// counts as its text width here. Used by the fill layout's pair-fit test.
+    fn flat_width(&self, node: &Ir) -> Option<usize> {
+        let mut total = 0usize;
+        let mut stack: Vec<&Ir> = vec![node];
+        while let Some(node) = stack.pop() {
+            match node {
+                Ir::Nil | Ir::SoftLine => {}
+                Ir::Text(s) => total += s.chars().count(),
+                Ir::Verbatim { text, .. } => {
+                    if text.contains('\n') {
+                        return None;
+                    }
+                    total += text.chars().count();
+                }
+                Ir::HardLine | Ir::EmptyLine => return None,
+                Ir::Line => total += 1,
+                Ir::Concat(items) => stack.extend(items.iter()),
+                Ir::Fill(parts) => stack.extend(parts.iter()),
+                Ir::Indent(inner) => stack.push(inner),
+                Ir::IfBreak { flat, .. } => stack.push(flat),
+                Ir::Group { inner, expand, .. } => {
+                    if *expand {
+                        return None;
+                    }
+                    stack.push(inner);
+                }
+                Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
+                    if let Some(first) = cands.first() {
+                        stack.push(first);
+                    }
+                }
+            }
+        }
+        Some(total)
     }
 
     /// Pick the layout for an [`Ir::ConditionalGroup`] at the current column:
@@ -341,6 +535,13 @@ impl Printer {
                         stack.push(first);
                     }
                 }
+                // A fill measured flat is its atoms separated by single-space
+                // `Line`s; push the parts and let the arms above account them.
+                Ir::Fill(parts) => {
+                    for item in parts.iter().rev() {
+                        stack.push(item);
+                    }
+                }
             }
         }
         true
@@ -354,7 +555,7 @@ impl Printer {
     /// inner plus what follows would overflow — not just the inner in isolation.
     /// This is the Wadler/Prettier "fits the rest of the line" rule and the cure
     /// for break decisions that were previously purely local.
-    fn group_fits(&self, start_col: usize, inner: &Ir, rest: &[(usize, Mode, &Ir)]) -> bool {
+    fn group_fits(&self, start_col: usize, inner: &Ir, rest: &[Cmd]) -> bool {
         // Phase 1: `inner`, laid flat. A forced break (or an already-expanded
         // nested group) means it cannot be flat, so the group must break.
         let mut col = start_col;
@@ -404,6 +605,11 @@ impl Printer {
                         stack.push(first);
                     }
                 }
+                Ir::Fill(parts) => {
+                    for item in parts.iter().rev() {
+                        stack.push(item);
+                    }
+                }
             }
         }
         // Phase 2: the rest of the line, each command in its decided mode, until
@@ -417,9 +623,22 @@ impl Printer {
     /// measured flat (optimistic), an expanded one in break mode so its first
     /// soft break ends the line. Returns whether everything up to that break
     /// fits within the line width.
-    fn rest_fits(&self, start_col: usize, rest: &[(usize, Mode, &Ir)]) -> bool {
+    fn rest_fits(&self, start_col: usize, rest: &[Cmd]) -> bool {
         let mut col = start_col;
-        let mut work: Vec<(Mode, &Ir)> = rest.iter().map(|(_, m, n)| (*m, *n)).collect();
+        // Seed the work stack from the printer stack (`rest` is bottom→top; `pop`
+        // takes the top, i.e. the next thing to print). A `Cmd::Fill`'s parts are
+        // pushed reversed so they `pop` back in fill order.
+        let mut work: Vec<(Mode, &Ir)> = Vec::new();
+        for cmd in rest {
+            match cmd {
+                Cmd::Node { mode, node, .. } => work.push((*mode, node)),
+                Cmd::Fill { mode, parts, .. } => {
+                    for part in parts.iter().rev() {
+                        work.push((*mode, part));
+                    }
+                }
+            }
+        }
         while let Some((mode, node)) = work.pop() {
             match node {
                 Ir::Nil | Ir::SoftLine if mode == Mode::Flat => {}
@@ -466,6 +685,11 @@ impl Printer {
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     if let Some(first) = cands.first() {
                         work.push((Mode::Flat, first));
+                    }
+                }
+                Ir::Fill(parts) => {
+                    for item in parts.iter().rev() {
+                        work.push((mode, item));
                     }
                 }
             }
@@ -550,6 +774,11 @@ impl Printer {
                     };
                     stack.push((m, inner));
                 }
+                Ir::Fill(parts) => {
+                    for item in parts.iter().rev() {
+                        stack.push((mode, item));
+                    }
+                }
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     let (m, chosen) = self.pick_candidate(col, cands);
                     stack.push((m, chosen));
@@ -601,6 +830,7 @@ mod tests {
         let style = FormatStyle {
             line_width: 5,
             indent_width: 2,
+            ..FormatStyle::default()
         };
         let printer = Printer::new(style);
         assert_eq!(
@@ -657,6 +887,7 @@ mod tests {
         let style = FormatStyle {
             line_width: 10,
             indent_width: 2,
+            ..FormatStyle::default()
         };
         let printer = Printer::new(style);
         let ir = Ir::conditional_group([nested_breakable_group(20)]);
@@ -671,6 +902,7 @@ mod tests {
         let style = FormatStyle {
             line_width: 5,
             indent_width: 2,
+            ..FormatStyle::default()
         };
         let printer = Printer::new(style);
         // Candidate: `verylong` then a Line. In Flat: `verylong ` overflows;
@@ -688,6 +920,7 @@ mod tests {
         let style = FormatStyle {
             line_width: 6,
             indent_width: 2,
+            ..FormatStyle::default()
         };
         let printer = Printer::new(style);
         // c0 doesn't fit; c1 fits; c2 (fallback) never reached.
@@ -703,6 +936,7 @@ mod tests {
         let style = FormatStyle {
             line_width: 4,
             indent_width: 2,
+            ..FormatStyle::default()
         };
         let printer = Printer::new(style);
         // Neither earlier candidate fits; the last is rendered broken (its
@@ -712,5 +946,45 @@ mod tests {
         let c2 = Ir::concat([Ir::text("ab"), Ir::line(), Ir::text("cd")]);
         let ir = Ir::conditional_group([c0, c1, c2]);
         assert_eq!(printer.print(&ir), "ab\ncd");
+    }
+
+    #[test]
+    fn fill_keeps_everything_on_one_line_when_it_fits() {
+        let printer = Printer::new(FormatStyle::default());
+        let ir = Ir::fill([Ir::text("a"), Ir::text("b"), Ir::text("c")]);
+        assert_eq!(printer.print(&ir), "a b c");
+    }
+
+    #[test]
+    fn fill_wraps_words_greedily_at_the_width() {
+        let style = FormatStyle {
+            line_width: 10,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        // "aaa bbb" (7) fits; adding " ccc" would reach 11 > 10, so break; then
+        // "ccc ddd" (7) fits. The break is decided per gap, not all-or-nothing.
+        let ir = Ir::fill([
+            Ir::text("aaa"),
+            Ir::text("bbb"),
+            Ir::text("ccc"),
+            Ir::text("ddd"),
+        ]);
+        assert_eq!(printer.print(&ir), "aaa bbb\nccc ddd");
+    }
+
+    #[test]
+    fn fill_continuation_lines_take_the_current_indent() {
+        let style = FormatStyle {
+            line_width: 6,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        // Inside an indent: "aa bb" (5) fits on the first line (which carries no
+        // leading indent here), then "cc" wraps to a fresh line at indent 2.
+        let ir = Ir::indent(Ir::fill([Ir::text("aa"), Ir::text("bb"), Ir::text("cc")]));
+        assert_eq!(printer.print(&ir), "aa bb\n  cc");
     }
 }

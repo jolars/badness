@@ -162,6 +162,7 @@ fn lsp_formatting_and_diagnostics_transcript() {
         FormatStyle {
             line_width: 80,
             indent_width: 2,
+            ..FormatStyle::default()
         },
     )
     .unwrap();

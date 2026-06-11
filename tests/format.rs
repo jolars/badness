@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use badness::formatter::format;
+use badness::formatter::{FormatStyle, WrapMode, format, format_with_style};
 use badness::parser::{parse, reconstruct};
 use badness::syntax::{SyntaxKind, SyntaxNode};
 use rowan::NodeOrToken;
@@ -137,29 +137,46 @@ fn format_invariants_corpus() {
 }
 
 /// Fixture cases under `tests/fixtures/formatter/<name>/`, each an
-/// `input.tex` + hand-verified `expected.tex` pair.
-const FIXTURES: &[&str] = &[
+/// `input.tex` + hand-verified `expected.tex` pair, with the `(wrap, line_width)`
+/// each was authored under.
+///
+/// The whitespace / indentation fixtures isolate rules that predate paragraph
+/// reflow, so they run under [`WrapMode::Preserve`] — their `expected.tex` is the
+/// pre-reflow output and must stay byte-identical. The `reflow_*` fixtures
+/// exercise the new rule, each at a width chosen to make the wrapping legible.
+const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Whitespace normalization.
-    "whitespace_trailing_and_blank_lines",
-    "trailing_whitespace_only",
-    "collapse_blank_lines",
-    "protected_comment_trailing_space",
-    "protected_verbatim",
-    "final_newline_added",
+    (
+        "whitespace_trailing_and_blank_lines",
+        WrapMode::Preserve,
+        80,
+    ),
+    ("trailing_whitespace_only", WrapMode::Preserve, 80),
+    ("collapse_blank_lines", WrapMode::Preserve, 80),
+    ("protected_comment_trailing_space", WrapMode::Preserve, 80),
+    ("protected_verbatim", WrapMode::Preserve, 80),
+    ("final_newline_added", WrapMode::Preserve, 80),
     // Environment indentation.
-    "environment_indents_body",
-    "nested_environments",
-    "environment_reindents",
-    "environment_blank_lines_in_body",
-    "environment_begin_arguments",
-    "environment_argument_glued",
-    "verbatim_in_environment",
+    ("environment_indents_body", WrapMode::Preserve, 80),
+    ("nested_environments", WrapMode::Preserve, 80),
+    ("environment_reindents", WrapMode::Preserve, 80),
+    ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
+    ("environment_begin_arguments", WrapMode::Preserve, 80),
+    ("environment_argument_glued", WrapMode::Preserve, 80),
+    ("verbatim_in_environment", WrapMode::Preserve, 80),
     // Group / argument indentation.
-    "group_indents_body",
-    "optional_indents_body",
-    "nested_groups",
-    "group_single_line_stays_inline",
-    "group_reindents",
+    ("group_indents_body", WrapMode::Preserve, 80),
+    ("optional_indents_body", WrapMode::Preserve, 80),
+    ("nested_groups", WrapMode::Preserve, 80),
+    ("group_single_line_stays_inline", WrapMode::Preserve, 80),
+    ("group_reindents", WrapMode::Preserve, 80),
+    // Paragraph reflow (the new rule).
+    ("reflow_join_short", WrapMode::Reflow, 80),
+    ("reflow_wrap_to_width", WrapMode::Reflow, 40),
+    ("reflow_tie_no_break", WrapMode::Reflow, 12),
+    ("reflow_forced_break", WrapMode::Reflow, 80),
+    ("reflow_comment_ends_line", WrapMode::Reflow, 80),
+    ("reflow_in_environment", WrapMode::Reflow, 20),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {
@@ -171,7 +188,12 @@ fn fixture_path(name: &str, file: &str) -> PathBuf {
 
 #[test]
 fn formatter_fixtures_match_expected() {
-    for name in FIXTURES {
+    for &(name, wrap, line_width) in FIXTURES {
+        let style = FormatStyle {
+            wrap,
+            line_width,
+            ..FormatStyle::default()
+        };
         let input = fs::read_to_string(fixture_path(name, "input.tex"))
             .unwrap_or_else(|e| panic!("read {name}/input.tex: {e}"));
         let expected = fs::read_to_string(fixture_path(name, "expected.tex"))
@@ -183,12 +205,14 @@ fn formatter_fixtures_match_expected() {
             "fixture {name} input must parse without diagnostics"
         );
 
-        let formatted = format(&input).unwrap_or_else(|e| panic!("format {name}: {e}"));
+        let formatted =
+            format_with_style(&input, style).unwrap_or_else(|e| panic!("format {name}: {e}"));
         assert_eq!(formatted, expected, "fixture {name} output mismatch");
 
-        // The formatted output is idempotent, clean, and lossless.
+        // The formatted output is idempotent (under the same style), clean, and
+        // lossless.
         assert_eq!(
-            format(&formatted).expect("reformat"),
+            format_with_style(&formatted, style).expect("reformat"),
             formatted,
             "fixture {name} is not idempotent"
         );
@@ -202,6 +226,29 @@ fn formatter_fixtures_match_expected() {
             "fixture {name} formatted output must round-trip"
         );
     }
+}
+
+/// `WrapMode::Preserve` leaves authored intra-paragraph line breaks untouched —
+/// the pre-reflow behavior — while the default `Reflow` joins them. This pins the
+/// distinction and guards the fallback path the (not-yet-implemented) `Sentence`
+/// and `Semantic` modes also take.
+#[test]
+fn preserve_keeps_author_breaks_while_reflow_joins() {
+    let input = "one two\nthree four\n";
+    let preserve = FormatStyle {
+        wrap: WrapMode::Preserve,
+        ..FormatStyle::default()
+    };
+    assert_eq!(
+        format_with_style(input, preserve).expect("preserve formats"),
+        "one two\nthree four\n",
+        "preserve must keep authored line breaks"
+    );
+    assert_eq!(
+        format(input).expect("reflow formats"),
+        "one two three four\n",
+        "default reflow must join the lines"
+    );
 }
 
 #[test]
@@ -220,7 +267,8 @@ fn format_rejects_unparseable_input() {
 fn format_output_snapshot() {
     // A deliberately messy document — trailing whitespace, runs of blank lines,
     // and no final newline — snapshotted so future rule changes surface as a
-    // visible diff.
+    // visible diff. Under the default `Reflow`, the two short prose lines also
+    // join into one.
     let input = "\\section{Intro}   \n\n\n\nSome text with trailing space   \nmore text.";
     insta::assert_snapshot!(format(input).expect("formats"));
 }

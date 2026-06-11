@@ -11,10 +11,10 @@ use std::time::Duration;
 use badness::formatter::{FormatStyle, format_with_style};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    FormattingOptions, InitializeParams, InitializeResult, InitializedParams,
-    PublishDiagnosticsParams, TextDocumentContentChangeEvent, TextDocumentIdentifier,
-    TextDocumentItem, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentFormattingParams, FormattingOptions, InitializeParams, InitializeResult,
+    InitializedParams, Position, PublishDiagnosticsParams, Range, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextEdit, Uri, VersionedTextDocumentIdentifier,
 };
 
 fn recv(client: &Connection) -> Message {
@@ -61,17 +61,24 @@ fn send_notification(client: &Connection, method: &str, params: serde_json::Valu
         .unwrap();
 }
 
-#[test]
-fn lsp_formatting_and_diagnostics_transcript() {
+/// Spawn an in-process server, perform the `initialize`/`initialized` handshake
+/// (passing `init_options` as `initializationOptions`), and return the client end
+/// plus the server thread handle.
+fn start_server(
+    init_options: Option<serde_json::Value>,
+) -> (Connection, std::thread::JoinHandle<()>) {
     let (server, client) = Connection::memory();
     let server_thread = std::thread::spawn(move || badness::lsp::serve(server).unwrap());
 
-    // initialize → expect the formatting capability advertised.
+    let params = InitializeParams {
+        initialization_options: init_options,
+        ..Default::default()
+    };
     send_request(
         &client,
         1,
         "initialize",
-        serde_json::to_value(InitializeParams::default()).unwrap(),
+        serde_json::to_value(params).unwrap(),
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(1));
@@ -86,24 +93,42 @@ fn lsp_formatting_and_diagnostics_transcript() {
         "initialized",
         serde_json::to_value(InitializedParams {}).unwrap(),
     );
+    (client, server_thread)
+}
 
-    let uri: Uri = "file:///test.tex".parse().unwrap();
-
-    // didOpen a document with an unclosed environment → diagnostics.
-    let broken = "\\begin{itemize}\n\\item a\n";
+fn did_open(client: &Connection, uri: &Uri, version: i32, text: &str) {
     send_notification(
-        &client,
+        client,
         "textDocument/didOpen",
         serde_json::to_value(DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri: uri.clone(),
                 language_id: "latex".to_owned(),
-                version: 1,
-                text: broken.to_owned(),
+                version,
+                text: text.to_owned(),
             },
         })
         .unwrap(),
     );
+}
+
+fn shutdown(client: &Connection, server_thread: std::thread::JoinHandle<()>) {
+    send_request(client, 99, "shutdown", serde_json::Value::Null);
+    let resp = recv_response(client);
+    assert_eq!(resp.id, RequestId::from(99));
+    send_notification(client, "exit", serde_json::Value::Null);
+    server_thread.join().expect("server thread panicked");
+}
+
+#[test]
+fn lsp_formatting_and_diagnostics_transcript() {
+    let (client, server_thread) = start_server(None);
+
+    let uri: Uri = "file:///test.tex".parse().unwrap();
+
+    // didOpen a document with an unclosed environment → diagnostics.
+    let broken = "\\begin{itemize}\n\\item a\n";
+    did_open(&client, &uri, 1, broken);
     let diags = recv_diagnostics(&client);
     assert_eq!(diags.uri, uri);
     assert!(
@@ -168,11 +193,159 @@ fn lsp_formatting_and_diagnostics_transcript() {
     .unwrap();
     assert_eq!(edits[0].new_text, expected);
 
-    // shutdown → exit.
-    send_request(&client, 3, "shutdown", serde_json::Value::Null);
-    let resp = recv_response(&client);
-    assert_eq!(resp.id, RequestId::from(3));
-    send_notification(&client, "exit", serde_json::Value::Null);
+    shutdown(&client, server_thread);
+}
 
-    server_thread.join().expect("server thread panicked");
+#[test]
+fn incremental_did_change_splices_buffer() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///inc.tex".parse().unwrap();
+
+    // Open a clean doc → diagnostics clear.
+    did_open(&client, &uri, 1, "\\section{Hi}\nworld\n");
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    // Ranged change: replace "world" (line 1, cols 0..5) with an unclosed
+    // environment. It must surface as a diagnostic — proving the splice landed in
+    // the buffer the parser sees, not the original clean text.
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: Some(Range {
+                    start: Position::new(1, 0),
+                    end: Position::new(1, 5),
+                }),
+                range_length: None,
+                text: "\\begin{itemize}".to_owned(),
+            }],
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(
+        !diags.diagnostics.is_empty(),
+        "the spliced unclosed environment must produce a diagnostic"
+    );
+
+    // Format the spliced buffer: the edit must equal formatting "\\section{Hi}\n"
+    // + the spliced line. We assert the server formats the *spliced* text, not the
+    // original — i.e. the new text contains the inserted command.
+    send_request(
+        &client,
+        2,
+        "textDocument/formatting",
+        serde_json::to_value(DocumentFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    // The buffer now has a parse error (unclosed group), so the formatter refuses:
+    // a `null` result. This still proves the splice took effect (the original
+    // clean buffer would have formatted).
+    assert!(
+        resp.result.is_none() || resp.result == Some(serde_json::Value::Null),
+        "formatter must refuse the now-broken spliced buffer, got {:?}",
+        resp.result
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn line_width_from_initialization_options() {
+    // A narrow line width must reflow a long paragraph the default-80 width would
+    // leave on one line.
+    let (client, server_thread) = start_server(Some(serde_json::json!({ "lineWidth": 20 })));
+    let uri: Uri = "file:///wrap.tex".parse().unwrap();
+
+    let para = "alpha beta gamma delta epsilon zeta eta theta\n";
+    did_open(&client, &uri, 1, para);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    send_request(
+        &client,
+        2,
+        "textDocument/formatting",
+        serde_json::to_value(DocumentFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            // No tab_size override, so the editor settings drive the style.
+            options: FormattingOptions {
+                tab_size: 0,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(edits.len(), 1, "the narrow width must reflow the paragraph");
+    let expected = format_with_style(
+        para,
+        FormatStyle {
+            line_width: 20,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(edits[0].new_text, expected);
+    // Sanity: the configured width actually changed the output vs. the default.
+    let default_out = format_with_style(para, FormatStyle::default()).unwrap();
+    assert_ne!(
+        expected, default_out,
+        "the test paragraph must format differently at width 20 vs 80"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn did_close_clears_and_allows_reopen() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///close.tex".parse().unwrap();
+
+    did_open(&client, &uri, 1, "\\begin{itemize}\n");
+    let diags = recv_diagnostics(&client);
+    assert!(!diags.diagnostics.is_empty(), "unclosed env → diagnostic");
+
+    // Close → diagnostics cleared.
+    send_notification(
+        &client,
+        "textDocument/didClose",
+        serde_json::to_value(DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "close must clear diagnostics");
+
+    // Reopen the same URI with a clean doc → a fresh input, clean diagnostics.
+    did_open(&client, &uri, 1, "\\section{Hi}\n");
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    assert!(
+        diags.diagnostics.is_empty(),
+        "reopened clean doc must parse cleanly, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
 }

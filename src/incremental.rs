@@ -260,6 +260,24 @@ impl IncrementalDatabase {
             .copied()
     }
 
+    /// Stop tracking `path`, returning the `SourceFile` it was mapped to (if
+    /// any). Best-effort eviction for the language server's `didClose`: salsa has
+    /// no true input delete, so the input cell and its query memos linger in
+    /// storage as unreachable garbage; dropping the map entry is what releases the
+    /// strong handle and lets a later `didOpen` mint a *fresh* input rather than
+    /// reusing the closed one.
+    ///
+    /// Caveat: a closed file that another open document `\input`s is no longer
+    /// resolvable by path until it is reopened. That is acceptable today — there
+    /// is no cross-file label resolver yet (see TODO.md), and [`include_edges`]
+    /// re-resolves targets from disk.
+    pub fn remove_file(&mut self, path: &Path) -> Option<SourceFile> {
+        self.files
+            .lock()
+            .expect("file cache mutex poisoned")
+            .remove(path)
+    }
+
     /// The text currently tracked for `file`.
     pub fn file_text(&self, file: SourceFile) -> &str {
         file.text(self)
@@ -302,6 +320,46 @@ impl IncrementalDatabase {
             .lock()
             .expect("query log mutex poisoned")
             .clone()
+    }
+
+    /// Mint a read-only [`Analysis`] snapshot: a short-lived db clone wrapped so
+    /// callers can only *read*. Drop it promptly — an outstanding clone blocks
+    /// the next write (salsa is single-writer; see the [`Clone`] impl).
+    pub fn snapshot(&self) -> Analysis {
+        Analysis(self.clone())
+    }
+}
+
+/// A read-only handle onto the incremental database, à la rust-analyzer's
+/// `Analysis` (vs. its writer `AnalysisHost`). Wraps a short-lived clone of the
+/// worker thread's [`IncrementalDatabase`] and exposes *only* read queries, so a
+/// read job cannot call `upsert_file` / salsa setters — the single-writer
+/// invariant is encoded in the type system rather than left to convention.
+///
+/// Handed to the language server's read jobs (formatting, the parse-diagnostics
+/// read-phase); the `&mut`-capable [`IncrementalDatabase`] stays private to the
+/// worker thread.
+pub struct Analysis(IncrementalDatabase);
+
+impl Analysis {
+    /// The `SourceFile` input currently tracked for `path`, if any.
+    pub fn lookup_file(&self, path: &Path) -> Option<SourceFile> {
+        self.0.lookup_file(path)
+    }
+
+    /// The text currently tracked for `file`.
+    pub fn file_text(&self, file: SourceFile) -> &str {
+        self.0.file_text(file)
+    }
+
+    /// Parse diagnostics for `file` (empty when it parses cleanly).
+    pub fn parse_diagnostics(&self, file: SourceFile) -> &[ParseDiagnosticData] {
+        self.0.parse_diagnostics(file)
+    }
+
+    /// A fresh `SyntaxNode` over the cached parse tree.
+    pub fn parsed_tree(&self, file: SourceFile) -> SyntaxNode {
+        self.0.parsed_tree(file)
     }
 }
 

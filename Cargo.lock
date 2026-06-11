@@ -95,7 +95,9 @@ version = "0.0.1"
 dependencies = [
  "annotate-snippets",
  "clap",
+ "crossbeam-channel",
  "insta",
+ "log",
  "lsp-server",
  "lsp-types",
  "parser",

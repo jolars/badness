@@ -108,8 +108,20 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
         (caller owns the `ParseErrors` guard); `format_with_style` is now its
         parse-then-format wrapper. The LSP `format_document` checks
         `parse_diagnostics`, then formats `db.parsed_tree(file)` — no reparse.
-  - [ ] Writer/threadpool + `salsa::Cancelled` cancellation; incremental
+  - [x] Writer/threadpool + `salsa::Cancelled` cancellation; incremental
         `didChange` sync; client-config `line_width`; `didClose` salsa eviction.
+        `src/lsp.rs` now mirrors ravel's shape: a main loop owning the
+        open-document buffers + `EditorSettings`, a sole-writer worker thread
+        owning the salsa db, and a `src/lsp/task_pool.rs` read pool. Diagnostics
+        run as a read-phase *analyze* on the pool (single-in-flight via `decide`,
+        superseded on a fresher same-URI edit via `trigger_cancellation`); format
+        reads snapshot off-thread under `salsa::Cancelled::catch`, falling back to
+        `format_with_style` on a racing write. Sync is now `INCREMENTAL` (ranged
+        changes spliced via the new `LineIndex::offset_at`); `line_width`/
+        `indent_width` come from `initializationOptions`/`didChangeConfiguration`;
+        `didClose` evicts via `IncrementalDatabase::remove_file`. (The
+        `decide`/supersede scheduler is faithful but operationally idle until an
+        expensive async read lands — sub-ms parses have little to preempt.)
 
 - [ ] **Phase 5 --- Math.**
   - [ ] Structured math model over the generic math tree.

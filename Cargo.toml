@@ -14,6 +14,8 @@ authors = ["Johan Larsson <johan@jolars.co>"]
 [dependencies]
 annotate-snippets = "0.11.5"
 clap = { version = "4.5.51", features = ["derive"] }
+crossbeam-channel = "0.5"
+log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.7"
 lsp-types = "0.97"
 rowan = "0.16.1"

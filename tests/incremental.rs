@@ -72,6 +72,41 @@ fn cached_tree_is_lossless() {
 }
 
 #[test]
+fn remove_file_stops_tracking() {
+    let mut db = IncrementalDatabase::default();
+    let path = std::path::Path::new("/tmp/doc.tex");
+
+    let file = db.upsert_file(path, "x\n".to_string());
+    assert!(db.lookup_file(path) == Some(file));
+
+    // Eviction returns the dropped handle and makes the path untracked.
+    assert!(db.remove_file(path) == Some(file));
+    assert!(db.lookup_file(path).is_none());
+    assert!(db.remove_file(path).is_none());
+
+    // Re-opening the same path mints a *fresh* input, not the evicted one.
+    let reopened = db.upsert_file(path, "x\n".to_string());
+    assert!(reopened != file);
+    assert!(db.lookup_file(path) == Some(reopened));
+}
+
+#[test]
+fn snapshot_reads_cached_parse() {
+    let mut db = IncrementalDatabase::default();
+    let path = std::path::Path::new("/tmp/snap.tex");
+    let file = db.upsert_file(path, "\\emph{hi}\n".to_string());
+    let _ = db.parsed_tree(file);
+
+    // A read-only snapshot sees the same cached parse off the writer.
+    let snap = db.snapshot();
+    let snap_file = snap.lookup_file(path).expect("tracked file");
+    assert!(snap_file == file);
+    assert_eq!(snap.file_text(file), "\\emph{hi}\n");
+    assert!(snap.parse_diagnostics(file).is_empty());
+    assert_eq!(snap.parsed_tree(file).to_string(), "\\emph{hi}\n");
+}
+
+#[test]
 fn clone_shares_storage() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("\\emph{hi}\n");

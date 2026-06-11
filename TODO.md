@@ -399,7 +399,15 @@ definition/rename. README editor-wiring docs still to write.
 *Deferred to Phase 7:* range formatting, symbols, folding, hover, completion,
 definition/rename.
 
-## Phase 5 --- Linter
+## Phase 5 --- Math
+
+- [ ] Structured math model over the generic math tree.
+- [ ] Precedence-climbing for `^` / `_` binding and primes (the one Pratt site).
+- [ ] `\left … \right` delimiter matching.
+- [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&` columns, `\\`
+      rows.
+
+## Phase 6 --- Linter
 
 - [x] Diagnostics framework over CST + semantics (reuse parse error channel).
       `badness lint` surfaces parse diagnostics; `linter/{diagnostic,render}`.
@@ -410,13 +418,6 @@ definition/rename.
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
       (Tenet 5).
 
-## Phase 6 --- Math
-
-- [ ] Structured math model over the generic math tree.
-- [ ] Precedence-climbing for `^` / `_` binding and primes (the one Pratt site).
-- [ ] `\left … \right` delimiter matching.
-- [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&` columns, `\\`
-      rows.
 
 ## Phase 7 --- Full LSP
 

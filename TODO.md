@@ -114,10 +114,13 @@ re-indentation idempotent (a reformatted multi-line group still owns its
 newline). Existing line breaks are respected (`hard_line`, like environments);
 no reflow yet. An empty multi-line group collapses to bare delimiters (`{\n}` →
 `{}`). The OPTIONAL opener is captured only once, since a stray `[` inside `[…]`
-is body, not a delimiter. - *(known gap)* argument-taking environments
-(`\begin{tabular}{cc}`) put the trailing arg group on its own indented body line
---- correct handling needs the signature DB (already tracked under Phase 4 /
-Phase 1 follow-ups). Verbatim nested in an environment: `\begin{verbatim}`
+is body, not a delimiter. - *(resolved)* argument-taking environments
+(`\begin{tabular}{cc}`) now keep the declared argument groups on the `\begin`
+header line: `lower_begin` queries the signature DB for the environment's arity
+and glues that many trailing groups onto `\begin{name}` (dropping any source line
+break between them), so a `{cc}` on its own line reflows up to the header.
+Environments the DB doesn't know take the generic path unchanged. Verbatim nested
+in an environment: `\begin{verbatim}`
 indents but the body and `\end` stay column-0 (body is byte-preserved). Both are
 lossless and idempotent today.
 
@@ -232,9 +235,6 @@ later avoid that.
       `parse(fmt(x)) ≅       parse(x)` (trivia-elided); losslessness of
       formatted output --- asserted per fixture and over the unit/corpus cases
       in `tests/format.rs`.
-- [ ] Differential formatter oracle: fixed point
-      `latexindent(badness(x)) == badness(x)`, `#[ignore]`d, triaged into
-      adopt/record (ravel's `air_compat` analog).
 - [ ] Use formatter ambiguities to drive parser fixes.
 
 ## Phase 3 --- Salsa + semantic layer
@@ -250,8 +250,14 @@ later avoid that.
       The query is `returns(ref)` **without** `no_eq` (`SemanticModel: Eq`), so
       it backdates on a model-preserving edit. Tested in `src/semantic.rs`
       (builder) and `tests/semantic.rs` (memoization + value stability).
-- [ ] Signature DB (analog of ravel `rindex/`): built-in command/environment
-      table + CWL-style data. **[rewrite]**
+- [x] Signature DB (analog of ravel `rindex/`): built-in command/environment
+      table + CWL-style data. **[rewrite]** — `semantic/signature.rs`: a
+      `LazyLock<SignatureDb>` merging a curated CWL seed (`data/builtin.cwl`,
+      real CWL syntax, `include_str!`-ed) for argument shapes with overlay tables
+      for sectioning level / verbatim-ness / math-ness. First consumer: the
+      formatter glues an environment's declared argument groups onto the `\begin`
+      header line (closes the `\begin{tabular}{cc}` gap below). External-corpus
+      ingestion stays deferred; the CWL parser already accepts it.
 - [ ] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures
       only, no execution).
 - [x] Project graph: `\input` / `\include` / `\import` resolution. **[rewrite]**
@@ -400,6 +406,17 @@ Builds on the minimal server (Phase 4.5); adds the semantics-backed features.
 - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
 - [ ] `wasm32` build for a web playground.
 
+## Phase 9 --- BibTeX / BibLaTeX parsing, linting, formatting, and LSP support.
+
+- [ ] BibTeX / BibLaTeX parser (probably a separate `bib.rs` module, maybe a
+      separate crate if it's big enough).
+- [ ] Formatter rules for BibTeX / BibLaTeX entries.
+- [ ] Linter rules for BibTeX / BibLaTeX entries (e.g missing required fields, invalid field values).
+- [ ] LSP support for BibTeX / BibLaTeX files (e.g `textDocument/formatting`, diagnostics, hover, etc).
+- [ ] Salsa incremental parsing and semantic model for BibTeX / BibLaTeX files,
+      integrated with the main LaTeX project graph (e.g. to resolve `\bibliography`
+      references).
+
 --------------------------------------------------------------------------------
 
 ## Open questions / decisions to revisit
@@ -407,7 +424,12 @@ Builds on the minimal server (Phase 4.5); adds the semantics-backed features.
 - [ ] Trivia-attachment policy (leading vs. trailing) --- pick one, document it.
 - [ ] How much of `\newcommand` / `xparse` to model for the signature DB.
 - [ ] Formatter opinionatedness: which choices are configurable vs. fixed.
-- [ ] CWL data sourcing/licensing for the built-in signature DB.
+- [~] CWL data sourcing/licensing for the built-in signature DB. Decided
+      (seed-now / corpus-later): ship a small hand-authored `data/builtin.cwl`
+      seed in real CWL syntax — no external files, so no licensing question — and
+      keep the parser able to ingest the full TeXstudio/Kile corpus later, when
+      ecosystem-wide breadth (e.g. LSP completion) needs it. Licensing must be
+      revisited only if/when that corpus is vendored.
 - [ ] Whether ravel should also migrate tower-lsp-server → lsp-server (separate
       decision; out of scope for badness, but the rationale in `AGENTS.md`
       applies).

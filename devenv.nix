@@ -46,9 +46,9 @@
         enable = true;
       };
 
-      panache = {
-        enable = true;
-      };
+      # panache = {
+      #   enable = true;
+      # };
     };
   };
 }

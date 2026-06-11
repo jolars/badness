@@ -44,35 +44,36 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
 ## Phases
 
 - [x] **Phase 0 --- Foundations.** Module layout, core deps, `syntax.rs`,
-      `text/line_index.rs`, `parser/events.rs` + `tree_builder.rs`, lossless
-      lexer, round-trip harness, insta scaffolding, `Taskfile.yml`.
+  `text/line_index.rs`, `parser/events.rs` + `tree_builder.rs`, lossless
+  lexer, round-trip harness, insta scaffolding, `Taskfile.yml`.
 
 - [x] **Phase 1 --- Core parser.** Event-stream recursive descent → green tree;
-      side-channel diagnostics; paragraphs, control sequences, groups, comments,
-      environments (with mismatch recovery), greedy argument grouping, math
-      (`$…$`, `$$…$$`, `\[…\]`, `\(…\)`), `\verb`/verbatim lexer modes,
-      `\makeatletter` letter-mode; recovery anchors + progress guarantee;
-      losslessness asserted; texlab differential parse oracle.
-      Open follow-ups:
-      - [ ] Argument-taking verbatim envs (`lstlisting`/`minted`/`Verbatim`) ---
-            needs the signature DB to know where the raw body starts.
-      - [ ] Structured math model (scripts/delimiters) --- currently flat tokens
-            (Phase 5).
-      - [ ] Block-vs-inline refinement: a lone block env is wrapped in a
-            `PARAGRAPH`; the signature DB can later avoid that.
+  side-channel diagnostics; paragraphs, control sequences, groups, comments,
+  environments (with mismatch recovery), greedy argument grouping, math
+  (`$…$`, `$$…$$`, `\[…\]`, `\(…\)`), `\verb`/verbatim lexer modes,
+  `\makeatletter` letter-mode; recovery anchors + progress guarantee;
+  losslessness asserted; texlab differential parse oracle.
+  Open follow-ups:
+  - [ ] Argument-taking verbatim envs (`lstlisting`/`minted`/`Verbatim`) ---
+    needs the signature DB to know where the raw body starts.
+  - [ ] Structured math model (scripts/delimiters) --- currently flat tokens
+    (Phase 5).
+  - [ ] Block-vs-inline refinement: a lone block env is wrapped in a
+    `PARAGRAPH`; the signature DB can later avoid that.
 
 - [x] **Phase 2 --- CLI + formatter MVP.** `badness format` (parse → Wadler IR →
-      print); **\[copy\]** IR + printer engine; whitespace normalization,
-      environment + group/argument indentation (printer-owned, idempotent),
-      paragraph reflow (`WrapMode`, `Ir::Fill`); protected regions untouched;
-      invariants (idempotence, parse-stability, losslessness) asserted.
+  print); **\[copy\]** IR + printer engine; whitespace normalization,
+  environment + group/argument indentation (printer-owned, idempotent),
+  paragraph reflow (`WrapMode`, `Ir::Fill`); protected regions untouched;
+  invariants (idempotence, parse-stability, losslessness) asserted.
 
-      Open follow-ups:
-      - \[\~\] `build.rs` man/completions/markdown
-        (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
-        subcommand lives in `main.rs`; `build.rs` still deferred.
-      - [ ] Directory-walking file discovery for `format` (today: explicit
-            paths).
+  Open follow-ups:
+
+  - [~] `build.rs` man/completions/markdown
+    (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
+    subcommand lives in `main.rs`; `build.rs` still deferred.
+  - [ ] Directory-walking file discovery for `format` (today: explicit
+        paths).
 
 - [x] **Phase 3 --- Salsa + semantic layer.** `incremental.rs` salsa harness;
       `semantic_model` (flat label/ref def-use model, `Eq`-backdating); built-in
@@ -113,11 +114,11 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
 - [] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
      surface parse diagnostics; annotate-snippets render done.
 
-     - [ ] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
-     - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
-             commands, stylistic checks.
-     - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
-             (Tenet 5).
+  - [ ] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
+  - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
+          commands, stylistic checks.
+  - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
+          (Tenet 5).
 
 - [ ] **Phase 7 --- Full LSP.** Range formatting; linter diagnostics published
       alongside parse errors; document symbols + folding; hover + completion
@@ -125,13 +126,13 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       incremental `didChange` sync.
 
 - [ ] **Phase 8 --- Performance & hardening.**
-      - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine
-            first), depended on by both badness and ravel.
-      - [ ] Intra-file incremental reparse (reuse green subtrees on contained
-            edits).
-      - [ ] Fuzzing (losslessness must hold on arbitrary input).
-      - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
-      - [ ] `wasm32` build for a web playground.
+  - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine
+        first), depended on by both badness and ravel.
+  - [ ] Intra-file incremental reparse (reuse green subtrees on contained
+        edits).
+  - [ ] Fuzzing (losslessness must hold on arbitrary input).
+  - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
+  - [ ] `wasm32` build for a web playground.
 
 - [ ] **Phase 9 --- BibTeX / BibLaTeX.** Parser (likely a `bib.rs` module, maybe
       its own crate); formatter + linter rules; LSP support; salsa incremental

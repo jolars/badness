@@ -1,0 +1,9 @@
+flavor = "gfm"
+
+extend-exclude = [
+  "TODO.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".claude/**/*",
+  "PARSE_COMPAT.md",
+]

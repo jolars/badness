@@ -86,11 +86,20 @@ pub fn format_with_style(input: &str, style: FormatStyle) -> Result<String, Form
         });
     }
 
-    let root = parsed.syntax();
-    validate_supported_tokens(&root)?;
+    format_node(&parsed.syntax(), style)
+}
+
+/// Format an already-parsed CST `root` under `style`. This is the
+/// reparse-free entry: the language server hands it the salsa-cached tree
+/// (`db.parsed_tree`) instead of re-running the parser. The caller owns the
+/// `ParseErrors` guard — this entry assumes the parse was clean and only
+/// enforces the `ERROR`-token invariant ([`validate_supported_tokens`]).
+/// [`format_with_style`] is the parse-then-format convenience wrapper.
+pub fn format_node(root: &SyntaxNode, style: FormatStyle) -> Result<String, FormatError> {
+    validate_supported_tokens(root)?;
 
     let ctx = FormatContext::new(style);
-    let mut formatted = format_root(&root, ctx);
+    let mut formatted = format_root(root, ctx);
     // Normalize the document's trailing edge: drop any trailing blank lines and
     // per-line trailing whitespace at EOF, then guarantee exactly one final
     // newline. Empty output stays empty. Only ASCII whitespace/newlines are

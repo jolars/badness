@@ -16,9 +16,9 @@
 //!   (AGENTS.md decision #6), so the ra-style writer/threadpool split and
 //!   `salsa::Cancelled` cancellation are deferred to Phase 7.
 //! - **Salsa-backed.** Edits land via [`IncrementalDatabase::upsert_file`] and
-//!   diagnostics ride the cached `parse_diagnostics` query, honoring the
-//!   "salsa-first" tenet. (Formatting still calls [`format_with_style`], which
-//!   reparses internally — there is no `format_node(tree)` entry yet.)
+//!   both diagnostics and formatting ride the cached parse: diagnostics from the
+//!   `parse_diagnostics` query, formatting from the cached tree via
+//!   [`format_node`] (`db.parsed_tree`), so a format request never reparses.
 //! - **URI as the salsa key.** We key the salsa file cache by the document's URI
 //!   string (`PathBuf::from(uri.as_str())`), sidestepping URI↔filesystem-path
 //!   conversion. Document text always comes from `didOpen`/`didChange`, never from
@@ -38,7 +38,7 @@ use lsp_types::{
     Range, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Uri,
 };
 
-use crate::formatter::{FormatStyle, format_with_style};
+use crate::formatter::{FormatStyle, format_node};
 use crate::incremental::IncrementalDatabase;
 use crate::text::LineIndex;
 
@@ -169,6 +169,11 @@ fn format_document(
 ) -> Option<serde_json::Value> {
     let path = PathBuf::from(params.text_document.uri.as_str());
     let file = db.lookup_file(&path)?;
+    // Only format a clean parse, matching `format_with_style`'s `ParseErrors`
+    // guard: a buffer the parser flagged is left untouched.
+    if !db.parse_diagnostics(file).is_empty() {
+        return None;
+    }
     let text = db.file_text(file).to_owned();
 
     let mut style = FormatStyle::default();
@@ -176,7 +181,9 @@ fn format_document(
         style.indent_width = params.options.tab_size as usize;
     }
 
-    let formatted = format_with_style(&text, style).ok()?;
+    // Reuse the salsa-cached tree instead of reparsing.
+    let root = db.parsed_tree(file);
+    let formatted = format_node(&root, style).ok()?;
     if formatted == text {
         return None;
     }

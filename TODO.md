@@ -103,8 +103,11 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       smoke test.
 
   Open follow-ups:
-  - [ ] `format_node(tree)` entry so formatting reuses the cached salsa tree
-        (today `formatting` reparses via `format_with_style`).
+  - [x] `format_node(tree)` entry so formatting reuses the cached salsa tree.
+        `formatter::format_node(&root, style)` formats an already-parsed CST
+        (caller owns the `ParseErrors` guard); `format_with_style` is now its
+        parse-then-format wrapper. The LSP `format_document` checks
+        `parse_diagnostics`, then formats `db.parsed_tree(file)` — no reparse.
   - [ ] Writer/threadpool + `salsa::Cancelled` cancellation; incremental
         `didChange` sync; client-config `line_width`; `didClose` salsa eviction.
 

@@ -144,6 +144,7 @@ const FIXTURES: &[&str] = &[
     "nested_environments",
     "environment_reindents",
     "environment_blank_lines_in_body",
+    "environment_begin_arguments",
     "verbatim_in_environment",
     // Group / argument indentation.
     "group_indents_body",

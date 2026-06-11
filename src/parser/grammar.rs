@@ -280,6 +280,15 @@ impl<'t> Parser<'t> {
     fn command(&mut self) {
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
+        self.attach_arguments();
+        self.close();
+    }
+
+    /// Greedily attach trailing `{…}` / `[…]` argument groups to the currently
+    /// open node, allowing intervening trivia but stopping at a paragraph break.
+    /// Shared by `\foo` commands and `\begin{env}` (see `AGENTS.md`, Core
+    /// decision #8). Arity is unknown without the semantic layer.
+    fn attach_arguments(&mut self) {
         loop {
             let (next, paragraph_break) = self.peek_meaningful();
             if paragraph_break {
@@ -297,7 +306,6 @@ impl<'t> Parser<'t> {
                 _ => break,
             }
         }
-        self.close();
     }
 
     /// A brace group `{ … }`.
@@ -458,6 +466,7 @@ impl<'t> Parser<'t> {
         self.open(SyntaxKind::BEGIN);
         self.bump(); // \begin
         let name = self.name_group();
+        self.attach_arguments(); // `\begin{tabular}{ll}`, `[options]`, etc.
         self.close(); // BEGIN
 
         if name.as_deref().is_some_and(is_verbatim_environment) {

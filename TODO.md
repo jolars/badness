@@ -4,12 +4,11 @@ A LaTeX formatter, linter, and language server on a lossless rowan CST,
 mirroring **ravel** (`../ravel`, the same tool for R). See `AGENTS.md` for
 load-bearing design decisions, invariants, and the copy-from-ravel strategy.
 
-Single-crate package (not a workspace). Parser and formatter are
-**intentionally interleaved**: the formatter is the primary tool for
-stress-testing the parser.
+Single-crate package (not a workspace). Parser and formatter are **intentionally
+interleaved**: the formatter is the primary tool for stress-testing the parser.
 
-Files marked **[copy]** are lifted \~wholesale from ravel; **[rewrite]** are
-LaTeX-specific; **[diverge]** intentionally differs from ravel.
+Files marked **\[copy\]** are lifted \~wholesale from ravel; **\[rewrite\]** are
+LaTeX-specific; **\[diverge\]** intentionally differs from ravel.
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
@@ -54,85 +53,66 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       (`$…$`, `$$…$$`, `\[…\]`, `\(…\)`), `\verb`/verbatim lexer modes,
       `\makeatletter` letter-mode; recovery anchors + progress guarantee;
       losslessness asserted; texlab differential parse oracle.
-
-  Open follow-ups:
-  - [ ] Argument-taking verbatim envs (`lstlisting`/`minted`/`Verbatim`) ---
-        needs the signature DB to know where the raw body starts.
-  - [ ] Structured math model (scripts/delimiters) --- currently flat tokens
-        (Phase 5).
-  - [ ] Block-vs-inline refinement: a lone block env is wrapped in a `PARAGRAPH`;
-        the signature DB can later avoid that.
+      Open follow-ups:
+      - [ ] Argument-taking verbatim envs (`lstlisting`/`minted`/`Verbatim`) ---
+            needs the signature DB to know where the raw body starts.
+      - [ ] Structured math model (scripts/delimiters) --- currently flat tokens
+            (Phase 5).
+      - [ ] Block-vs-inline refinement: a lone block env is wrapped in a
+            `PARAGRAPH`; the signature DB can later avoid that.
 
 - [x] **Phase 2 --- CLI + formatter MVP.** `badness format` (parse → Wadler IR →
-      print); **[copy]** IR + printer engine; whitespace normalization,
+      print); **\[copy\]** IR + printer engine; whitespace normalization,
       environment + group/argument indentation (printer-owned, idempotent),
       paragraph reflow (`WrapMode`, `Ir::Fill`); protected regions untouched;
       invariants (idempotence, parse-stability, losslessness) asserted.
 
-  Open follow-ups:
-  - [~] `build.rs` man/completions/markdown (clap_mangen/\_complete/clap-markdown).
-        **[copy]** --- the `format` subcommand lives in `main.rs`; `build.rs`
-        still deferred.
-  - [ ] Directory-walking file discovery for `format` (today: explicit paths).
+      Open follow-ups:
+      - \[\~\] `build.rs` man/completions/markdown
+        (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
+        subcommand lives in `main.rs`; `build.rs` still deferred.
+      - [ ] Directory-walking file discovery for `format` (today: explicit
+            paths).
 
 - [x] **Phase 3 --- Salsa + semantic layer.** `incremental.rs` salsa harness;
       `semantic_model` (flat label/ref def-use model, `Eq`-backdating); built-in
       signature DB (`data/signatures.json`); project include graph (`\input`/
       `\include`/`\import`/`\subfile`, salsa firewall + reachability/cycles).
-
-  Open follow-ups:
-  - [x] `\newcommand`/`\newenvironment`/`xparse` signature scanning (signatures
-        only, no execution) feeding the semantic DB. `semantic/define.rs` scans the
-        braced-name forms into a per-document `SignatureDb`; `semantic/xparse.rs`
-        parses the full xparse arg-spec grammar; `Signatures` overlays scanned over
-        built-in (scanned-first), and the formatter's `\begin` arity glue consumes
-        it. Remaining: the unbraced form `\newcommand\foo…` (parses with `\foo` as a
-        sibling, so skipped — needs scanner-side sibling heuristics, not parser
-        changes); a salsa `document_signatures` query once an LSP consumer (hover/
-        completion) wants the scanned command sigs.
-  - [ ] Cross-file label resolution (`file_labels` firewall → project-level
-        `resolved_labels`) + duplicate-label / undefined-ref diagnostics.
-        Today's `unreferenced_labels`/`unresolved_refs` are per-file *facts*,
-        not lints.
-  - [ ] CWL corpus ingest (an import format converted *into* the signature
-        schema) once ecosystem breadth (e.g. LSP completion) needs it.
+      Open follow-ups:
+      - [x] `\newcommand`/`\newenvironment`/`xparse` signature scanning
+            (signatures only, no execution) feeding the semantic DB.
+            `semantic/define.rs` scans the braced-name forms into a per-document
+            `SignatureDb`; `semantic/xparse.rs` parses the full xparse arg-spec
+            grammar; `Signatures` overlays scanned over built-in
+            (scanned-first), and the formatter's `\begin` arity glue consumes
+            it. Remaining: the unbraced form `\newcommand\foo…` (parses with
+            `\foo` as a sibling, so skipped — needs scanner-side sibling
+            heuristics, not parser changes); a salsa `document_signatures` query
+            once an LSP consumer (hover/ completion) wants the scanned command
+            sigs.
+      - [ ] Cross-file label resolution (`file_labels` firewall → project-level
+            `resolved_labels`) + duplicate-label / undefined-ref diagnostics.
+            Today's `unreferenced_labels`/`unresolved_refs` are per-file
+            *facts*, not lints.
+      - [ ] CWL corpus ingest (an import format converted *into* the signature
+            schema) once ecosystem breadth (e.g. LSP completion) needs it.
 
 - [x] **Phase 4 --- Minimal LSP.** `src/lsp.rs` + `badness lsp` subcommand:
-      single-threaded, salsa-backed `lsp-server` loop **[diverge]**; lifecycle,
-      full-document sync, `textDocument/formatting`, `publishDiagnostics`; stdio
-      smoke test.
-
-  Open follow-ups:
-  - [x] `format_node(tree)` entry so formatting reuses the cached salsa tree.
-        `formatter::format_node(&root, style)` formats an already-parsed CST
-        (caller owns the `ParseErrors` guard); `format_with_style` is now its
-        parse-then-format wrapper. The LSP `format_document` checks
-        `parse_diagnostics`, then formats `db.parsed_tree(file)` — no reparse.
-  - [x] Writer/threadpool + `salsa::Cancelled` cancellation; incremental
-        `didChange` sync; client-config `line_width`; `didClose` salsa eviction.
-        `src/lsp.rs` now mirrors ravel's shape: a main loop owning the
-        open-document buffers + `EditorSettings`, a sole-writer worker thread
-        owning the salsa db, and a `src/lsp/task_pool.rs` read pool. Diagnostics
-        run as a read-phase *analyze* on the pool (single-in-flight via `decide`,
-        superseded on a fresher same-URI edit via `trigger_cancellation`); format
-        reads snapshot off-thread under `salsa::Cancelled::catch`, falling back to
-        `format_with_style` on a racing write. Sync is now `INCREMENTAL` (ranged
-        changes spliced via the new `LineIndex::offset_at`); `line_width`/
-        `indent_width` come from `initializationOptions`/`didChangeConfiguration`;
-        `didClose` evicts via `IncrementalDatabase::remove_file`. (The
-        `decide`/supersede scheduler is faithful but operationally idle until an
-        expensive async read lands — sub-ms parses have little to preempt.)
+      single-threaded, salsa-backed `lsp-server` loop **\[diverge\]**;
+      lifecycle, full-document sync, `textDocument/formatting`,
+      `publishDiagnostics`; stdio smoke test.
 
 - [ ] **Phase 5 --- Math.**
-  - [ ] Structured math model over the generic math tree.
-  - [ ] Precedence-climbing for `^`/`_` binding and primes (the one Pratt site).
-  - [ ] `\left … \right` delimiter matching.
-  - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&` columns,
-        `\\` rows.
+      - [ ] Structured math model over the generic math tree.
+      - [ ] Precedence-climbing for `^`/`_` binding and primes (the one Pratt
+            site).
+      - [ ] `\left … \right` delimiter matching.
+      - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
+            columns, `\\` rows.
 
-- [~] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
-      surface parse diagnostics; annotate-snippets render done.
-  - [ ] `linter/suppression` (`% badness-ignore` style). **[copy shape]**
+- \[\~\] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
+  surface parse diagnostics; annotate-snippets render done.
+  - [ ] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
   - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
         commands, stylistic checks.
   - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
@@ -144,12 +124,13 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       incremental `didChange` sync.
 
 - [ ] **Phase 8 --- Performance & hardening.**
-  - [ ] Extract shared crate(s) from the **[copy]** files (IR engine first),
-        depended on by both badness and ravel.
-  - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
-  - [ ] Fuzzing (losslessness must hold on arbitrary input).
-  - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
-  - [ ] `wasm32` build for a web playground.
+      - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine
+            first), depended on by both badness and ravel.
+      - [ ] Intra-file incremental reparse (reuse green subtrees on contained
+            edits).
+      - [ ] Fuzzing (losslessness must hold on arbitrary input).
+      - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
+      - [ ] `wasm32` build for a web playground.
 
 - [ ] **Phase 9 --- BibTeX / BibLaTeX.** Parser (likely a `bib.rs` module, maybe
       its own crate); formatter + linter rules; LSP support; salsa incremental
@@ -164,4 +145,5 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
 - [ ] How much of `\newcommand` / `xparse` to model for the signature DB.
 - [ ] Formatter opinionatedness: which choices are configurable vs. fixed.
 - [ ] Whether ravel should also migrate tower-lsp-server → lsp-server (separate
-      decision; out of scope for badness, but the `AGENTS.md` rationale applies).
+      decision; out of scope for badness, but the `AGENTS.md` rationale
+      applies).

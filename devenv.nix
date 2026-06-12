@@ -17,6 +17,7 @@
     pkgs.cargo-show-asm
     pkgs.wasm-pack
     pkgs.mdbook
+    pkgs.maturin
   ];
 
   languages = {
@@ -30,6 +31,30 @@
 
     texlive = {
       enable = true;
+    };
+
+    javascript = {
+      enable = true;
+
+      pnpm = {
+        enable = true;
+
+        install = {
+          enable = true;
+        };
+      };
+    };
+
+    typescript = {
+      enable = true;
+    };
+
+    python = {
+      enable = true;
+
+      package = pkgs.python3.withPackages (ps: [
+        ps.markdown
+      ]);
     };
   };
 

@@ -1,6 +1,6 @@
 {
   "name": "badness",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "An LSP, formatter, and linter for LaTeX",
   "keywords": [
     "latex",
@@ -28,13 +28,13 @@
     "node": ">=20"
   },
   "optionalDependencies": {
-    "@badness/linux-x64-gnu": "0.0.1",
-    "@badness/linux-arm64-gnu": "0.0.1",
-    "@badness/linux-x64-musl": "0.0.1",
-    "@badness/linux-arm64-musl": "0.0.1",
-    "@badness/darwin-x64": "0.0.1",
-    "@badness/darwin-arm64": "0.0.1",
-    "@badness/win32-x64": "0.0.1",
-    "@badness/win32-arm64": "0.0.1"
+    "@badness/linux-x64-gnu": "0.1.0",
+    "@badness/linux-arm64-gnu": "0.1.0",
+    "@badness/linux-x64-musl": "0.1.0",
+    "@badness/linux-arm64-musl": "0.1.0",
+    "@badness/darwin-x64": "0.1.0",
+    "@badness/darwin-arm64": "0.1.0",
+    "@badness/win32-x64": "0.1.0",
+    "@badness/win32-arm64": "0.1.0"
   }
 }

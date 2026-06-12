@@ -1,0 +1,173 @@
+{
+  "name": "badness",
+  "displayName": "Badness",
+  "description": "Language server, formatter, and linter for LaTeX",
+  "version": "0.1.0",
+  "publisher": "jolars",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jolars/badness.git"
+  },
+  "homepage": "https://jolars.github.io/badness/",
+  "bugs": {
+    "url": "https://github.com/jolars/badness/issues"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Formatters",
+    "Linters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "latex",
+    "tex",
+    "formatter",
+    "linter",
+    "language-server"
+  ],
+  "activationEvents": [
+    "onLanguage:latex",
+    "onLanguage:tex",
+    "onLanguage:bibtex",
+    "workspaceContains:**/*.tex"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Badness",
+      "properties": {
+        "badness.executableStrategy": {
+          "type": "string",
+          "enum": [
+            "bundled",
+            "environment",
+            "path"
+          ],
+          "enumDescriptions": [
+            "Use the binary bundled inside the extension; fall back to downloading from GitHub if none is bundled or `badness.version`/`badness.releaseTag` is set explicitly (default).",
+            "Look for `badness` on the system PATH.",
+            "Use the binary at `badness.executablePath`."
+          ],
+          "default": "bundled",
+          "markdownDescription": "Strategy used to locate the `badness` executable for the language server."
+        },
+        "badness.executablePath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "markdownDescription": "Path to the `badness` executable. Only used when `badness.executableStrategy` is set to `path`."
+        },
+        "badness.version": {
+          "type": "string",
+          "default": "latest",
+          "description": "Badness version to install (for example: latest or 0.2.0)."
+        },
+        "badness.releaseTag": {
+          "type": "string",
+          "default": "latest",
+          "description": "Advanced override for exact GitHub release tag (for example: v0.2.0). If explicitly set, this takes precedence over badness.version."
+        },
+        "badness.githubRepo": {
+          "type": "string",
+          "default": "jolars/badness",
+          "description": "GitHub repository used for Badness binary downloads (<owner>/<repo>)."
+        },
+        "badness.serverArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional command-line arguments passed after `badness lsp`."
+        },
+        "badness.serverEnv": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Environment variables merged into the Badness language server process."
+        },
+        "badness.extraPath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra PATH entries prepended for the Badness language server process."
+        },
+        "badness.logLevel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "off",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ],
+          "default": null,
+          "markdownDescription": "Log level for the Badness language server. Maps to the `RUST_LOG` environment variable. Leave unset to use the server's default. If `badness.serverEnv.RUST_LOG` is also set, it takes precedence."
+        },
+        "badness.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication between VS Code and the Badness language server."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[latex]": {
+        "editor.defaultFormatter": "jolars.badness"
+      }
+    },
+    "commands": [
+      {
+        "command": "badness.restart",
+        "title": "Restart Server",
+        "category": "Badness"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run clean && npm run check-types && npm run bundle:prod",
+    "compile": "npm run clean && npm run check-types && npm run bundle",
+    "clean": "rm -rf dist",
+    "check-types": "tsc --noEmit -p .",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --format=cjs --sourcemap --external:vscode --outfile=dist/extension.js",
+    "bundle:prod": "esbuild src/extension.ts --bundle --platform=node --target=node20 --format=cjs --minify --external:vscode --outfile=dist/extension.js",
+    "watch": "npm-run-all -p watch:esbuild watch:tsc",
+    "watch:esbuild": "esbuild src/extension.ts --bundle --platform=node --target=node20 --format=cjs --sourcemap --watch --external:vscode --outfile=dist/extension.js",
+    "watch:tsc": "tsc --noEmit -w -p .",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "tar": "^7.5.16",
+    "vscode-languageclient": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^25.9.2",
+    "@types/vscode": "^1.91.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3"
+  }
+}

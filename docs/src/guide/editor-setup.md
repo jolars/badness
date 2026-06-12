@@ -25,9 +25,18 @@ vim.lsp.enable("badness")
 
 ## VS Code
 
-There is no dedicated extension yet. Any generic LSP bridge that lets you
-register a stdio server command (`badness lsp`) for the `latex` language will
-work.
+Install the [Badness
+extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
+from the VS Code Marketplace or the [Open VSX
+extension](https://open-vsx.org/extension/jolars/badness). It bundles a
+platform-specific `badness` binary and starts the language server automatically
+when you open a `.tex` file, so no separate CLI install is required.
+
+The extension is configured through `badness.*` settings. By default it uses the
+bundled binary (`badness.executableStrategy: "bundled"`); set the strategy to
+`environment` to use a `badness` on your `PATH`, or `path` with
+`badness.executablePath` to point at a specific binary. See the extension's
+README for the full list of settings.
 
 ## Other editors
 

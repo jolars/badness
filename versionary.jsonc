@@ -7,6 +7,7 @@
   "release-reference-comments": "best-effort",
   "packages": {
     ".": {
+      "exclude-paths": ["editors"],
       "extra-files": [
         {
           "type": "json",
@@ -19,6 +20,11 @@
           "jsonpath": "$.optionalDependencies.*"
         }
       ]
+    },
+    "editors/code": {
+      "release-type": "node",
+      "package-name": "badness-code",
+      "follows": ["."]
     }
   }
 }

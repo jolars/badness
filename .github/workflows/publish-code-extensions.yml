@@ -1,0 +1,127 @@
+name: Publish Code Extensions
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: "If set, download binaries from this GitHub release tag instead of same-run workflow artifacts"
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: "Release tag to download binaries from"
+        type: string
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.release-tag || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-platform:
+    name: Publish ${{ matrix.vsce_target }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # Publish targets one at a time: all targets share a single Open VSX
+      # version record, so concurrent publishes of the same release race on the
+      # server and lose with a 405. Serializing trades ~5 min for reliability.
+      max-parallel: 1
+      matrix:
+        include:
+          - vsce_target: win32-x64
+            rust_target: x86_64-pc-windows-msvc
+            binary: badness.exe
+          - vsce_target: win32-arm64
+            rust_target: aarch64-pc-windows-msvc
+            binary: badness.exe
+          - vsce_target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            binary: badness
+          - vsce_target: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            binary: badness
+          - vsce_target: alpine-x64
+            rust_target: x86_64-unknown-linux-musl
+            binary: badness
+          - vsce_target: alpine-arm64
+            rust_target: aarch64-unknown-linux-musl
+            binary: badness
+          - vsce_target: darwin-x64
+            rust_target: x86_64-apple-darwin
+            binary: badness
+          - vsce_target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            binary: badness
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editors/code/package-lock.json
+
+      - name: Install dependencies
+        working-directory: editors/code
+        run: npm ci
+
+      # Same-run artifacts produced by build-release-assets (packages.yml). Each
+      # artifact is named badness-<rust_target> and contains the platform
+      # archive (.tar.gz on Unix, .zip on Windows), not a raw binary.
+      - name: Download binary archive (workflow artifact)
+        if: ${{ inputs.release-tag == '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: badness-${{ matrix.rust_target }}
+          path: archive
+
+      - name: Download binary archive (release asset)
+        if: ${{ inputs.release-tag != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p archive
+          cd archive
+          if [[ "${{ matrix.binary }}" == *.exe ]]; then
+            gh release download "${{ inputs.release-tag }}" -p "badness-${{ matrix.rust_target }}.zip" --repo "${{ github.repository }}"
+          else
+            gh release download "${{ inputs.release-tag }}" -p "badness-${{ matrix.rust_target }}.tar.gz" --repo "${{ github.repository }}"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract binary into server directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p editors/code/server
+          if [[ "${{ matrix.binary }}" == *.exe ]]; then
+            unzip -j "archive/badness-${{ matrix.rust_target }}.zip" "${{ matrix.binary }}" -d editors/code/server
+          else
+            tar -xzf "archive/badness-${{ matrix.rust_target }}.tar.gz" -C editors/code/server "./${{ matrix.binary }}"
+          fi
+
+      - name: Mark binary executable
+        run: chmod +x editors/code/server/${{ matrix.binary }}
+
+      - name: Package VSIX
+        working-directory: editors/code
+        run: npx vsce package --target ${{ matrix.vsce_target }} -o badness-${{ matrix.vsce_target }}.vsix
+
+      - name: Publish to Open VSX Registry
+        uses: HaaLeo/publish-vscode-extension@v2
+        with:
+          pat: ${{ secrets.OVSX_PAT }}
+          extensionFile: editors/code/badness-${{ matrix.vsce_target }}.vsix
+
+      - name: Publish to Visual Studio Marketplace
+        uses: HaaLeo/publish-vscode-extension@v2
+        with:
+          pat: ${{ secrets.VSCE_PAT }}
+          registryUrl: https://marketplace.visualstudio.com
+          extensionFile: editors/code/badness-${{ matrix.vsce_target }}.vsix

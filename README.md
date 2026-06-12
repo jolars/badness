@@ -4,6 +4,10 @@
 Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/build-and-test.yml)
 [![Lint](https://github.com/jolars/badness/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/lint.yml)
 [![Documentation](https://github.com/jolars/badness/actions/workflows/docs.yml/badge.svg?branch=main)](https://jolars.github.io/badness/)
+[![Open
+VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-vsx.org/extension/jolars/badness)
+[![VS
+Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix)](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Badness** is a formatter, linter, and language server for LaTeX, built on a
@@ -33,6 +37,16 @@ git clone https://github.com/jolars/badness
 cd badness
 cargo install --path .
 ```
+
+### VS Code extension
+
+If you use VS Code or a compatible editor (such as Positron or Cursor), install
+the [Badness
+extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
+from the VS Code Marketplace or the [Open VSX
+extension](https://open-vsx.org/extension/jolars/badness). It bundles the
+`badness` binary and starts the language server automatically when you open a
+`.tex` file.
 
 ## Usage
 

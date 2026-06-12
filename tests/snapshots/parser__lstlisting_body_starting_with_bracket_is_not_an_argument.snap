@@ -1,0 +1,20 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{lstlisting}\\n[1,2,3]\\n\\\\end{lstlisting}\")"
+---
+ROOT@0..43
+  PARAGRAPH@0..43
+    ENVIRONMENT@0..43
+      BEGIN@0..18
+        CONTROL_WORD@0..6 "\\begin"
+        NAME_GROUP@6..18
+          L_BRACE@6..7 "{"
+          WORD@7..17 "lstlisting"
+          R_BRACE@17..18 "}"
+      VERBATIM_BODY@18..27 "\n[1,2,3]\n"
+      END@27..43
+        CONTROL_WORD@27..31 "\\end"
+        NAME_GROUP@31..43
+          L_BRACE@31..32 "{"
+          WORD@32..42 "lstlisting"
+          R_BRACE@42..43 "}"

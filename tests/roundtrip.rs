@@ -26,6 +26,10 @@ fn roundtrip_units() {
         "trailing backslash \\",
         "[opt] {req} & # ~ ^_",
         "no final newline",
+        // Argument-taking verbatim environments: the args precede the raw body, and
+        // the body holds characters the generic lexer would otherwise (mis)read.
+        "\\begin{lstlisting}[language=C]\nint a[3] = {1};  % literal\n\\end{lstlisting}",
+        "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}",
     ];
     for case in cases {
         assert_lossless(case);

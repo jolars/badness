@@ -8,9 +8,12 @@
 //! - **`\verb` / `\verb*`** inline verbatim: the delimited argument is consumed
 //!   as a single [`SyntaxKind::VERB`] token (otherwise the delimiters glue into
 //!   ordinary `WORD` runs and become un-splittable downstream).
-//! - **verbatim-like environments** (`verbatim`, `verbatim*`): the body between
-//!   `\begin{verbatim}` and `\end{verbatim}` is one [`SyntaxKind::VERBATIM_BODY`]
-//!   token, so `%`, `$`, `\` inside are never (mis)lexed as comments / math.
+//! - **verbatim-like environments** (`verbatim`, `lstlisting`, `minted`, …): the
+//!   body between `\begin{name}` and `\end{name}` is one
+//!   [`SyntaxKind::VERBATIM_BODY`] token, so `%`, `$`, `\` inside are never
+//!   (mis)lexed as comments / math. For argument-taking ones the `\begin`
+//!   arguments are tokenized first (the built-in signature DB says where the raw
+//!   body starts); see [`lex_verbatim_environment`].
 //! - **`\makeatletter` / `\makeatother`**: toggles `@` into a letter so that
 //!   `\foo@bar` lexes as one control word.
 //!
@@ -19,6 +22,7 @@
 
 use smol_str::SmolStr;
 
+use crate::semantic::signature::{ArgKind, ArgSpec, builtin};
 use crate::syntax::SyntaxKind;
 
 /// A single lexed token: its kind plus the exact source slice it covers.
@@ -28,13 +32,18 @@ pub struct Token {
     pub text: SmolStr,
 }
 
-/// Verbatim-like environments whose body is lexed raw. Restricted to the
-/// classic argument-free environments; argument-taking ones (`lstlisting`,
-/// `minted`, `Verbatim`) need signature-aware handling and are deferred.
-pub(crate) const VERBATIM_ENVIRONMENTS: &[&str] = &["verbatim", "verbatim*"];
-
+/// Is `name` a verbatim-like environment — one whose body the lexer must capture
+/// raw, per `AGENTS.md` Core decision #1? Resolved against the built-in signature
+/// database ([`builtin`]), the single source of truth for which environments carry
+/// a verbatim body and what arguments precede that body. Both the lexer (to find
+/// where the raw body begins) and the structural parser (`grammar.rs`, to route the
+/// environment to its raw-body branch) ask this question, so one lookup keeps them
+/// in lockstep. We read only static argument-shape data; no macro meaning is
+/// resolved, so this stays within decision #1's sanctioned lexer modes.
 pub(crate) fn is_verbatim_environment(name: &str) -> bool {
-    VERBATIM_ENVIRONMENTS.contains(&name)
+    builtin()
+        .environment(name)
+        .is_some_and(|env| env.verbatim_body)
 }
 
 /// Lex `input` into a flat, lossless token stream.
@@ -157,15 +166,20 @@ fn verb_len(after: &str) -> Option<usize> {
 }
 
 /// If `rest` starts with `\begin{name}` for a verbatim-like `name`, emit the
-/// `\begin{name}` tokens and a single raw body token, returning the bytes
-/// consumed (through the body, up to the closing `\end{name}`).
+/// `\begin{name}` tokens, then any environment arguments as ordinary tokens, and
+/// finally a single raw body token, returning the bytes consumed (through the body,
+/// up to the closing `\end{name}`).
+///
+/// Arguments are lexed *before* the body because the raw body begins only after
+/// them: in `\begin{minted}{python}`, `{python}` is a structured argument, not body
+/// text. The built-in signature ([`builtin`]) bounds how many leading groups count
+/// as arguments, so a body that legitimately starts with `[` (an option-free
+/// `lstlisting` whose first code line is `[1,2,3]`) is not mistaken for one.
 fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
     let after_begin = rest.strip_prefix("\\begin{")?;
     let close = after_begin.find('}')?;
     let name = &after_begin[..close];
-    if !is_verbatim_environment(name) {
-        return None;
-    }
+    let env = builtin().environment(name).filter(|e| e.verbatim_body)?;
 
     let prefix_len = "\\begin{".len() + name.len() + "}".len();
     out.push(Token {
@@ -185,7 +199,14 @@ fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
         text: SmolStr::new("}"),
     });
 
-    let body_region = &rest[prefix_len..];
+    // Locate the argument span, then tokenize it normally. It holds no nested
+    // verbatim-begin, so the ordinary token loop is safe and lets the parser build
+    // the usual OPTIONAL/GROUP argument nodes.
+    let args_region = &rest[prefix_len..];
+    let args_len = scan_verbatim_args(args_region, &env.args);
+    lex_into(&args_region[..args_len], out);
+
+    let body_region = &args_region[args_len..];
     let end_marker = format!("\\end{{{name}}}");
     let body_len = body_region.find(&end_marker).unwrap_or(body_region.len());
     if body_len > 0 {
@@ -194,7 +215,87 @@ fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
             text: SmolStr::new(&body_region[..body_len]),
         });
     }
-    Some(prefix_len + body_len)
+    Some(prefix_len + args_len + body_len)
+}
+
+/// Byte length of the argument span that precedes a verbatim body, given the
+/// environment's declared `args`. For each argument in order, consume any inline
+/// whitespace (spaces/tabs, never a line break — an argument never crosses a
+/// newline, so a bracket on the next line is body text) followed by the balanced
+/// group of the expected delimiter when present. A missing optional or required
+/// argument is skipped; a malformed (unbalanced) group is left to the body, so the
+/// scan never runs past the input and losslessness is preserved.
+fn scan_verbatim_args(region: &str, args: &[ArgSpec]) -> usize {
+    let bytes = region.as_bytes();
+    let mut pos = 0;
+    for arg in args {
+        let mut probe = pos;
+        while matches!(bytes.get(probe), Some(b' ' | b'\t')) {
+            probe += 1;
+        }
+        let (open, close) = match arg.kind {
+            ArgKind::Bracket => (b'[', b']'),
+            ArgKind::Brace => (b'{', b'}'),
+        };
+        if bytes.get(probe) != Some(&open) {
+            // Argument absent; the skipped whitespace belongs to the body.
+            continue;
+        }
+        match balanced_group_len(&region[probe..], close) {
+            Some(len) => pos = probe + len,
+            None => break, // unbalanced: treat the remainder as body
+        }
+    }
+    pos
+}
+
+/// Length in bytes of the balanced group starting at `s[0]` (an `[` or `{`), up to
+/// and including its matching closer. Brace and bracket nesting is tracked with a
+/// delimiter stack, so a `]` inside `{…}` (or vice versa) is treated as literal; a
+/// `\`-escaped delimiter is skipped. Returns `None` if the group never closes.
+fn balanced_group_len(s: &str, close: u8) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut stack = vec![close];
+    let mut i = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => {
+                // Skip the escaped byte; a delimiter loses its meaning.
+                i += 2;
+                continue;
+            }
+            b'{' => stack.push(b'}'),
+            b'[' => stack.push(b']'),
+            c @ (b'}' | b']') => {
+                if stack.last() == Some(&c) {
+                    stack.pop();
+                    if stack.is_empty() {
+                        return Some(i + 1);
+                    }
+                }
+                // A non-matching closer is literal text; ignore it.
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Tokenize `region` with the ordinary, context-free token loop, appending to
+/// `out`. Used for the argument span of a verbatim-like environment, which carries
+/// no `\makeatletter` or nested verbatim-begin context.
+fn lex_into(region: &str, out: &mut Vec<Token>) {
+    let mut pos = 0;
+    while pos < region.len() {
+        let (kind, len) = next_token(&region[pos..], false);
+        debug_assert!(len > 0, "lexer made no progress in verbatim args");
+        out.push(Token {
+            kind,
+            text: SmolStr::new(&region[pos..pos + len]),
+        });
+        pos += len;
+    }
 }
 
 /// Number of leading bytes of `s` whose chars all satisfy `pred`.
@@ -262,6 +363,9 @@ mod tests {
             "trailing\\",
             r"\verb|$x$|",
             "\\begin{verbatim}\n$x$ %not a comment\n\\end{verbatim}",
+            "\\begin{lstlisting}[language=C]\nint a[3];  % raw\n\\end{lstlisting}",
+            "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}",
+            "\\begin{lstlisting}\n[1,2,3]\n\\end{lstlisting}",
             r"\makeatletter\a@b\makeatother\a@b",
         ] {
             assert_lossless(input);
@@ -345,5 +449,41 @@ mod tests {
         // Nothing inside the body was lexed as math or a comment.
         assert!(!toks.iter().any(|t| t.kind == SyntaxKind::DOLLAR));
         assert!(!toks.iter().any(|t| t.kind == SyntaxKind::COMMENT));
+    }
+
+    #[test]
+    fn argument_taking_verbatim_separates_args_from_body() {
+        // `minted` declares `[opt]{req}`: both groups are tokenized normally, then
+        // the rest is one raw body token.
+        let toks = lex("\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}");
+        let kinds: Vec<_> = toks.iter().map(|t| t.kind).collect();
+        // The optional and required argument delimiters survive as ordinary tokens…
+        assert!(kinds.contains(&SyntaxKind::L_BRACKET));
+        assert!(kinds.contains(&SyntaxKind::R_BRACKET));
+        assert!(kinds.contains(&SyntaxKind::L_BRACE));
+        // …and the body (with its `$`) is a single opaque token, not math.
+        assert!(
+            toks.iter()
+                .any(|t| t.kind == SyntaxKind::VERBATIM_BODY && t.text.contains("print(\"$x$\")"))
+        );
+        assert!(!toks.iter().any(|t| t.kind == SyntaxKind::DOLLAR));
+    }
+
+    #[test]
+    fn verbatim_body_starting_with_bracket_is_not_an_argument() {
+        // `lstlisting`'s lone optional argument is absent (a newline separates the
+        // `\begin` from the `[`), so `[1,2,3]` stays inside the raw body.
+        let toks = lex("\\begin{lstlisting}\n[1,2,3]\n\\end{lstlisting}");
+        assert!(
+            !toks
+                .iter()
+                .take_while(|t| t.kind != SyntaxKind::VERBATIM_BODY)
+                .any(|t| t.kind == SyntaxKind::L_BRACKET),
+            "the bracket on the body's first line must not be lexed as an argument"
+        );
+        assert!(
+            toks.iter()
+                .any(|t| t.kind == SyntaxKind::VERBATIM_BODY && t.text.contains("[1,2,3]"))
+        );
     }
 }

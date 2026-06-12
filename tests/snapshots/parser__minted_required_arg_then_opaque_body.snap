@@ -1,0 +1,24 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{minted}{python}\\nprint(\\\"%not a comment\\\")\\n\\\\end{minted}\")"
+---
+ROOT@0..59
+  PARAGRAPH@0..59
+    ENVIRONMENT@0..59
+      BEGIN@0..22
+        CONTROL_WORD@0..6 "\\begin"
+        NAME_GROUP@6..14
+          L_BRACE@6..7 "{"
+          WORD@7..13 "minted"
+          R_BRACE@13..14 "}"
+        GROUP@14..22
+          L_BRACE@14..15 "{"
+          WORD@15..21 "python"
+          R_BRACE@21..22 "}"
+      VERBATIM_BODY@22..47 "\nprint(\"%not a comment\")\n"
+      END@47..59
+        CONTROL_WORD@47..51 "\\end"
+        NAME_GROUP@51..59
+          L_BRACE@51..52 "{"
+          WORD@52..58 "minted"
+          R_BRACE@58..59 "}"

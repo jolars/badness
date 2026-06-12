@@ -57,6 +57,17 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    (extracted, never executed). Anything we cannot statically resolve degrades to
    generic nodes (plus a diagnostic where useful), never a crash or corruption.
 
+   **Exception to "meaning never leaks into the parser" (decision #2), recorded
+   deliberately:** for *argument-taking* verbatim environments (`lstlisting`,
+   `minted`, `Verbatim`) the raw body begins only after the `\begin` arguments, so
+   the lexer consults the built-in signature DB (`semantic::signature::builtin`) to
+   read each environment's static arg shape and find where the opaque body starts.
+   This is the single source of truth (`data/signatures.json`), keeps the lexer and
+   `grammar.rs` in lockstep via `is_verbatim_environment`, and reads only static
+   argument-shape data — no macro meaning is resolved — so it stays inside this
+   decision's sanctioned lexer modes. User-defined verbatim environments stay out of
+   scope (their definitions aren't known until after parsing).
+
 2. **Two layers: syntactic vs. semantic.**
    - *Syntactic layer:* the generic CST. Knows nothing about what a command means.
    - *Semantic layer:* a **signature database** (built-in table + CWL-style data,

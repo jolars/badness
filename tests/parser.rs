@@ -94,6 +94,42 @@ fn inline_verb_is_a_single_token() {
 }
 
 #[test]
+fn lstlisting_optional_arg_then_opaque_body() {
+    insta::assert_snapshot!(tree(
+        "\\begin{lstlisting}[language=Python]\nif x: pass  # $not math$\n\\end{lstlisting}"
+    ));
+}
+
+#[test]
+fn minted_required_arg_then_opaque_body() {
+    insta::assert_snapshot!(tree(
+        "\\begin{minted}{python}\nprint(\"%not a comment\")\n\\end{minted}"
+    ));
+}
+
+#[test]
+fn minted_optional_and_required_args() {
+    insta::assert_snapshot!(tree(
+        "\\begin{minted}[frame=single]{python}\ncode\n\\end{minted}"
+    ));
+}
+
+#[test]
+fn verbatim_capital_optional_arg() {
+    insta::assert_snapshot!(tree(
+        "\\begin{Verbatim}[fontsize=\\small]\nraw  text\n\\end{Verbatim}"
+    ));
+}
+
+/// An option-free `lstlisting` whose body's first line *is* a bracketed list: the
+/// signature has one optional arg, but it sits on the next line, so the `[1,2,3]`
+/// belongs to the opaque body, not to an `OPTIONAL` argument node.
+#[test]
+fn lstlisting_body_starting_with_bracket_is_not_an_argument() {
+    insta::assert_snapshot!(tree("\\begin{lstlisting}\n[1,2,3]\n\\end{lstlisting}"));
+}
+
+#[test]
 fn makeatletter_control_word_with_at() {
     insta::assert_snapshot!(tree(r"\makeatletter\foo@bar\makeatother"));
 }

@@ -66,8 +66,9 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
   `\makeatletter` letter-mode; recovery anchors + progress guarantee;
   losslessness asserted; texlab differential parse oracle.
   Open follow-ups:
-  - [ ] Argument-taking verbatim envs (`lstlisting`/`minted`/`Verbatim`) ---
-    needs the signature DB to know where the raw body starts.
+  - [x] Argument-taking verbatim envs (`lstlisting`/`minted`/`Verbatim`) --- the
+    lexer consults the built-in signature DB to skip the `\begin` arguments and
+    find where the raw body starts.
   - [ ] Structured math model (scripts/delimiters) --- currently flat tokens
     (Phase 5).
   - [ ] Block-vs-inline refinement: a lone block env is wrapped in a

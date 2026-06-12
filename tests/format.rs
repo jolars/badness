@@ -102,6 +102,8 @@ const CLEAN_CASES: &[&str] = &[
     "\\begin{tabular}{cc}\nx & y\n\\end{tabular}\n",
     "\\begin{minipage}[t]{4cm}\ntext\n\\end{minipage}\n",
     "\\begin{myenv}\n{cc}\nbody\n\\end{myenv}\n",
+    // Argument-taking verbatim environment: args structured, body opaque.
+    "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")  # raw\n\\end{minted}\n",
 ];
 
 #[test]
@@ -168,6 +170,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_user_defined_glued", WrapMode::Preserve, 80),
     ("environment_xparse_glued", WrapMode::Preserve, 80),
     ("verbatim_in_environment", WrapMode::Preserve, 80),
+    // An argument-taking verbatim environment: the `[options]` are kept verbatim on
+    // the (indented) `\begin` line, while the opaque body is emitted byte-for-byte.
+    ("verbatim_argument_environment", WrapMode::Preserve, 80),
     // Group / argument indentation.
     ("group_indents_body", WrapMode::Preserve, 80),
     ("optional_indents_body", WrapMode::Preserve, 80),

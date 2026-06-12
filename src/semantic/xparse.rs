@@ -57,7 +57,11 @@ pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
                     cursor.skip_group(); // the {default}
                 }
                 if let Some(kind) = delimiter_kind(open.as_deref(), close.as_deref()) {
-                    args.push(ArgSpec { required, kind });
+                    args.push(ArgSpec {
+                        required,
+                        kind,
+                        prose: false,
+                    });
                 }
             }
             't' => {
@@ -84,6 +88,7 @@ fn brace(required: bool) -> ArgSpec {
     ArgSpec {
         required,
         kind: ArgKind::Brace,
+        prose: false,
     }
 }
 
@@ -91,6 +96,7 @@ fn bracket(required: bool) -> ArgSpec {
     ArgSpec {
         required,
         kind: ArgKind::Bracket,
+        prose: false,
     }
 }
 

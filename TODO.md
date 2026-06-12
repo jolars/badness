@@ -24,16 +24,28 @@ semantic layer (label/ref model, signature DB, project include graph); and a
 minimal salsa-backed LSP (`badness lsp`: full-document formatting + pushed
 parser diagnostics).
 
+Prose-argument reflow has landed: under `WrapMode::Reflow`, an argument the
+signature DB marks `prose` (a `\footnote`/`\caption` body, a sectioning title)
+reflows to the line width — joined when short, wrapped when long, via a soft
+`Ir::group` around the paragraph-fill engine (`formatter/core.rs`:
+`lower_command`/`lower_prose_group`). `ArgSpec` grew a per-position `prose` flag
+(object form in `data/signatures.json`); the table is a conservative starter set
+(text-formatting commands, footnotes/captions, sectioning titles) and is
+incrementally tunable. Non-prose groups (`\newcommand` body, `\label`) are left
+exactly as authored.
+
 **Next up --- pick by priority:**
 
 - *Formatter:* `Sentence`/`Semantic` wrap modes (port panache's sentence rules /
-  sembr; both fall back to `Preserve` today), or reflow inside `{…}`/`[…]`
-  argument groups (today reflow is `PARAGRAPH`-only).
-- *LSP:* a `format_node(tree)` entry so formatting reuses the cached salsa tree
-  (today `textDocument/formatting` reparses); `--wrap`/config over LSP; README
-  editor-wiring docs.
+  sembr; both fall back to `Preserve` today) — *demoted, much later*. Or: widen
+  the prose-argument table (CWL ingest could feed it), and consider gluing a
+  prose arg onto its command line when a source break separates them.
+- *LSP:* `--wrap`/config over LSP (today `EditorSettings` carries only
+  `line_width`/`indent_width`; `wrap` is hardcoded `Reflow`); README
+  editor-wiring docs. (The `format_node(tree)` cached-tree reuse is already done
+  — `lsp.rs` `compute_format`.)
 - *Hardening:* the `latexindent` differential formatter oracle (more useful now
-  that reflow has landed).
+  that reflow — including prose args — has landed).
 
 Use formatter ambiguities to drive parser fixes (AGENTS.md tenet 3). The
 differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex

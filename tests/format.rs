@@ -182,6 +182,16 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_forced_break_with_optarg", WrapMode::Reflow, 80),
     ("reflow_comment_ends_line", WrapMode::Reflow, 80),
     ("reflow_in_environment", WrapMode::Reflow, 20),
+    // Prose-argument reflow: a signature-marked prose argument (a `\footnote`
+    // body, a sectioning title) reflows like a paragraph — joined when short,
+    // wrapped when long — while non-prose groups (`\newcommand` body, `\label`)
+    // are left exactly as authored.
+    ("reflow_prose_arg_wraps", WrapMode::Reflow, 40),
+    ("reflow_prose_arg_joins_short", WrapMode::Reflow, 80),
+    ("reflow_prose_arg_optional_omitted", WrapMode::Reflow, 30),
+    ("reflow_non_prose_preserved", WrapMode::Reflow, 40),
+    ("reflow_prose_arg_blank_line", WrapMode::Reflow, 40),
+    ("reflow_prose_arg_nested_in_paragraph", WrapMode::Reflow, 50),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

@@ -11,7 +11,12 @@
 //! - **Group/argument indentation**: the body of a *multi-line* brace group
 //!   `{…}` or optional-argument group `[…]` is indented one step, the same way
 //!   (delimiters flush, body indented). Single-line groups are left inline;
-//!   existing line breaks are respected (no reflow yet).
+//!   existing line breaks are respected.
+//! - **Prose-argument reflow** (under [`WrapMode::Reflow`]): an argument the
+//!   signature DB marks `prose` (a `\footnote`/`\caption` body, a sectioning
+//!   title) is reflowed to the line width like a paragraph — joined when it fits,
+//!   wrapped when it does not (see [`lower_command`] / [`lower_prose_group`]).
+//!   Non-prose groups (`\newcommand` body, `\label`) are left as authored.
 //!
 //! Everything else is emitted verbatim: paragraph structure, intra-line spacing,
 //! and protected regions (`\verb`, verbatim bodies, comments) are preserved.
@@ -29,9 +34,9 @@
 
 use std::iter::Peekable;
 
-use crate::ast::environment_name;
+use crate::ast::{command_name, environment_name};
 use crate::parser::parse;
-use crate::semantic::{Signatures, scan_definitions};
+use crate::semantic::{ArgKind, ArgSpec, Signatures, scan_definitions};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::context::FormatContext;
@@ -167,6 +172,9 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
             return lower_environment(node, cx);
         }
+        SyntaxKind::COMMAND if cx.wrap == WrapMode::Reflow && command_has_prose_arg(node, cx) => {
+            return lower_command(node, cx);
+        }
         SyntaxKind::GROUP if spans_multiple_lines(node) => {
             return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
         }
@@ -193,12 +201,37 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// the line breaks; a fresh run continues after. The paragraph's lines are joined
 /// by [`Ir::hard_line`].
 fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    reflow_elements(node.children_with_tokens(), cx)
+}
+
+/// Greedily reflow a stream of inline elements to the line width, the shared core
+/// of paragraph reflow ([`lower_paragraph_reflow`]) and prose-argument reflow
+/// ([`lower_prose_group`]). Maximal runs of *adjacent* non-whitespace elements glue
+/// into one unbreakable *atom* (so `Hello,` and `\emph{x}` never split); inter-word
+/// whitespace or a lone newline is a break opportunity. A run of atoms lowers to an
+/// [`Ir::fill`], which the printer wraps word-by-word.
+///
+/// Three things end a fill line rather than flow into it: an explicit `\\` line
+/// break (a [`SyntaxKind::LINE_BREAK`] node), a `%` comment (which must terminate
+/// its line), and a nested *block* (an environment or multi-line group whose IR
+/// carries a forced break). Each commits the run-so-far as a fill, then a fresh run
+/// continues after, the lines joined by [`Ir::hard_line`].
+///
+/// Unlike a `PARAGRAPH` (which holds no blank lines by construction), an argument
+/// *group* body may contain blank-line paragraph breaks; a blank-line trivia run
+/// ends the current line and separates the next with an [`Ir::empty_line`].
+fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
     // Glued pieces of the atom in progress.
     let mut atom: Vec<Ir> = Vec::new();
     // Atoms of the current fill run (the current logical line).
     let mut run: Vec<Ir> = Vec::new();
-    // Completed lines (fills and blocks), later joined by hard_line.
+    // Completed lines (fills and blocks), interleaved with `seps` at the end.
     let mut lines: Vec<Ir> = Vec::new();
+    // The separator *preceding* each committed line (`seps[0]` is unused). A blank
+    // line in the source promotes the next separator to an [`Ir::empty_line`].
+    let mut seps: Vec<Ir> = Vec::new();
+    // The separator to record before the next committed line. Default: one break.
+    let mut pending_sep: Ir = Ir::hard_line();
 
     /// Commit the atom in progress (if any) as one atom of the current run.
     fn flush_atom(atom: &mut Vec<Ir>, run: &mut Vec<Ir>) {
@@ -206,24 +239,45 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             run.push(Ir::concat(atom.drain(..)));
         }
     }
-    /// End the current logical line: flush the atom and turn the run into a fill.
-    fn end_line(atom: &mut Vec<Ir>, run: &mut Vec<Ir>, lines: &mut Vec<Ir>) {
+    /// Commit `content` as the next logical line, recording the separator before
+    /// it and resetting `pending_sep` to a single break.
+    fn push_segment(content: Ir, lines: &mut Vec<Ir>, seps: &mut Vec<Ir>, pending_sep: &mut Ir) {
+        seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
+        lines.push(content);
+    }
+    /// End the current logical line: flush the atom and, when non-empty, commit the
+    /// run as a fill segment.
+    fn end_line(
+        atom: &mut Vec<Ir>,
+        run: &mut Vec<Ir>,
+        lines: &mut Vec<Ir>,
+        seps: &mut Vec<Ir>,
+        pending_sep: &mut Ir,
+    ) {
         flush_atom(atom, run);
-        lines.push(Ir::fill(run.drain(..)));
+        if !run.is_empty() {
+            push_segment(Ir::fill(run.drain(..)), lines, seps, pending_sep);
+        }
     }
 
-    let mut iter = node.children_with_tokens().peekable();
+    let mut iter = elements.peekable();
     while let Some(element) = iter.next() {
         match element {
-            // Whitespace / newline run: an atom boundary (a break opportunity).
+            // Whitespace / newline run: an atom boundary. A blank line additionally
+            // ends the line and promotes the next separator to a blank line.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                let _ = consume_trivia_run(&token, &mut iter);
-                flush_atom(&mut atom, &mut run);
+                let (newlines, _) = consume_trivia_run(&token, &mut iter);
+                if newlines >= 2 {
+                    end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                    pending_sep = Ir::empty_line();
+                } else {
+                    flush_atom(&mut atom, &mut run);
+                }
             }
             // A comment rides the end of the current line, then forces a break.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 atom.push(Ir::verbatim(token.text()));
-                end_line(&mut atom, &mut run, &mut lines);
+                end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
             }
             // A token that carries its own newline — a `\`-at-end-of-line control
             // symbol, kept verbatim for losslessness — ends the line: emit the
@@ -235,7 +289,7 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 if !before.is_empty() {
                     atom.push(Ir::verbatim(before));
                 }
-                end_line(&mut atom, &mut run, &mut lines);
+                end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
             }
             // Any other token (WORD, `~`, `&`, `#`, `^`, `_`, brackets, `\verb`,
             // a bare control symbol) glues onto the current atom.
@@ -244,29 +298,32 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             // parser into one node) rides the end of the current line, then breaks.
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
                 atom.push(lower_node(&child, cx));
-                end_line(&mut atom, &mut run, &mut lines);
+                end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
             }
             SyntaxElement::Node(child) => {
                 let ir = lower_node(&child, cx);
                 if ir.contains_forced_break() {
                     // A block amid prose: end the current line, then place the
                     // block on its own line(s); a fresh run continues after.
-                    flush_atom(&mut atom, &mut run);
-                    if !run.is_empty() {
-                        lines.push(Ir::fill(run.drain(..)));
-                    }
-                    lines.push(ir);
+                    end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                    push_segment(ir, &mut lines, &mut seps, &mut pending_sep);
                 } else {
                     atom.push(ir);
                 }
             }
         }
     }
-    flush_atom(&mut atom, &mut run);
-    if !run.is_empty() {
-        lines.push(Ir::fill(run.drain(..)));
+    end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+
+    // Interleave the recorded separators between committed lines.
+    let mut result: Vec<Ir> = Vec::with_capacity(lines.len().saturating_mul(2));
+    for (i, line) in lines.into_iter().enumerate() {
+        if i > 0 {
+            result.push(seps[i].clone());
+        }
+        result.push(line);
     }
-    Ir::join(Ir::hard_line(), lines)
+    Ir::concat(result)
 }
 
 /// Lower a stream of elements: child nodes recurse, non-trivia tokens (and the
@@ -438,6 +495,129 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
             Ir::hard_line(),
             close_ir,
         ])
+    }
+}
+
+/// Whether `command`'s signature marks any argument as reflowable prose. The
+/// cheap guard that gates the [`lower_command`] path in [`lower_node`]: a command
+/// with no prose argument (the overwhelming common case) lowers generically, so
+/// nothing regresses.
+fn command_has_prose_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| sig.args.iter().any(|spec| spec.prose))
+}
+
+/// Lower a `COMMAND` whose signature marks an argument as prose (see
+/// [`command_has_prose_arg`], which gates this path). Each attached `{…}`/`[…]`
+/// group is matched to its signature slot — kind-aware, so an omitted optional does
+/// not misalign positions (`\section{Title}` binds the `{title}` slot, not a
+/// leading `[short]`) — and a group filling a prose slot is reflowed via
+/// [`lower_prose_group`]. Everything else (non-prose slots, groups past the declared
+/// arity that the greedy parser over-attached, trivia) lowers exactly as the generic
+/// path would.
+fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let Some(sig) = command_name(node).and_then(|name| cx.signatures.command(&name)) else {
+        // Defensive: the guard already proved a prose signature exists.
+        return Ir::concat(lower_element_stream(node.children_with_tokens(), cx));
+    };
+
+    let mut out: Vec<Ir> = Vec::new();
+    let mut slot = 0usize;
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Node(child)
+                if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
+                let prose =
+                    match_arg_slot(&sig.args, &mut slot, is_bracket).is_some_and(|spec| spec.prose);
+                if prose {
+                    let (open, close) = if is_bracket {
+                        (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET)
+                    } else {
+                        (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
+                    };
+                    out.push(lower_prose_group(&child, open, close, cx));
+                } else {
+                    out.push(lower_node(&child, cx));
+                }
+            }
+            SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
+                out.push(classify_trivia(newlines, trailing_ws));
+            }
+            SyntaxElement::Token(token) => out.push(Ir::verbatim(token.text())),
+        }
+    }
+    Ir::concat(out)
+}
+
+/// Match the next attached argument group (a brace group, or a bracket group when
+/// `is_bracket`) to a signature slot, advancing `slot` past it. Skips leading
+/// optional (`[…]`) slots the document omitted, so a mandatory prose slot still
+/// binds when an optional before it is absent. Returns the matched [`ArgSpec`], or
+/// `None` when the group has no matching slot (e.g. an unexpected `[…]` the greedy
+/// parser over-attached, or a group past the declared arity), in which case `slot`
+/// is left untouched so later groups still match.
+fn match_arg_slot(args: &[ArgSpec], slot: &mut usize, is_bracket: bool) -> Option<ArgSpec> {
+    while *slot < args.len() {
+        let spec = args[*slot];
+        let spec_bracket = matches!(spec.kind, ArgKind::Bracket);
+        if spec_bracket == is_bracket {
+            *slot += 1;
+            return Some(spec);
+        }
+        if spec_bracket {
+            // A declared optional the document omitted: skip it and keep matching.
+            *slot += 1;
+            continue;
+        }
+        // A required `{…}` slot but the group is a `[…]`: not this slot. Leave the
+        // slot intact for a later brace group and treat this group as non-prose.
+        return None;
+    }
+    None
+}
+
+/// Lower a prose argument group: like [`lower_bracketed`], but the body is reflowed
+/// to the line width ([`reflow_elements`]) and the whole thing is wrapped in a soft
+/// [`Ir::group`] so it stays on one line when it fits (`\footnote{short}`) and
+/// breaks the delimiters onto their own lines, indenting and word-wrapping the body,
+/// when it does not. Empty bodies collapse to the bare delimiters.
+fn lower_prose_group(
+    node: &SyntaxNode,
+    open: SyntaxKind,
+    close: SyntaxKind,
+    cx: LowerCtx<'_>,
+) -> Ir {
+    let mut open_ir = Ir::Nil;
+    let mut close_ir = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Token(t) if t.kind() == open && matches!(open_ir, Ir::Nil) => {
+                open_ir = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == close => {
+                close_ir = Ir::verbatim(t.text());
+            }
+            _ => body_elements.push(element),
+        }
+    }
+
+    let body = reflow_elements(body_elements.into_iter(), cx);
+    if matches!(body, Ir::Nil) {
+        Ir::concat([open_ir, close_ir])
+    } else {
+        Ir::group(Ir::concat([
+            open_ir,
+            Ir::indent(Ir::concat([Ir::soft_line(), body])),
+            Ir::soft_line(),
+            close_ir,
+        ]))
     }
 }
 

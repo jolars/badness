@@ -50,6 +50,13 @@ pub struct ArgSpec {
     /// `true` for a mandatory `{…}` argument, `false` for an optional `[…]` one.
     pub required: bool,
     pub kind: ArgKind,
+    /// `true` when this argument holds running prose the formatter may reflow to
+    /// the line width (e.g. a `\footnote`/`\caption` body, a sectioning title).
+    /// `false` for names, identifiers, code, or option lists (`\label`, the
+    /// `\newcommand` body), which must be left exactly as authored. Default
+    /// `false`, so an unmarked argument never reflows. Only meaningful for the
+    /// formatter; the parser ignores it (AGENTS.md decision #2).
+    pub prose: bool,
 }
 
 /// The signature of a control sequence.
@@ -168,25 +175,55 @@ pub fn builtin() -> &'static SignatureDb {
 // hand-authorable spelling (`"req"`/`"opt"` for arguments; flags defaulting to
 // false; `reflow` derived rather than stored).
 
-/// One argument as written in the JSON: `"req"` (mandatory `{…}`) or `"opt"`
-/// (optional `[…]`).
-#[derive(Deserialize)]
+/// An argument's bracket as written in the JSON: `"req"` (mandatory `{…}`) or
+/// `"opt"` (optional `[…]`).
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
-enum RawArg {
+enum RawArgKind {
     Req,
     Opt,
+}
+
+impl RawArgKind {
+    fn required(self) -> bool {
+        matches!(self, RawArgKind::Req)
+    }
+
+    fn kind(self) -> ArgKind {
+        match self {
+            RawArgKind::Req => ArgKind::Brace,
+            RawArgKind::Opt => ArgKind::Bracket,
+        }
+    }
+}
+
+/// One argument as written in the JSON. Either the compact string shorthand
+/// (`"req"` / `"opt"`, the common case, prose defaulting to `false`) or an object
+/// form `{ "kind": "req", "prose": true }` that additionally marks the argument as
+/// reflowable prose (see [`ArgSpec::prose`]).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawArg {
+    Short(RawArgKind),
+    Full {
+        kind: RawArgKind,
+        #[serde(default)]
+        prose: bool,
+    },
 }
 
 impl From<RawArg> for ArgSpec {
     fn from(raw: RawArg) -> Self {
         match raw {
-            RawArg::Req => ArgSpec {
-                required: true,
-                kind: ArgKind::Brace,
+            RawArg::Short(kind) => ArgSpec {
+                required: kind.required(),
+                kind: kind.kind(),
+                prose: false,
             },
-            RawArg::Opt => ArgSpec {
-                required: false,
-                kind: ArgKind::Bracket,
+            RawArg::Full { kind, prose } => ArgSpec {
+                required: kind.required(),
+                kind: kind.kind(),
+                prose,
             },
         }
     }
@@ -319,6 +356,35 @@ mod tests {
         assert!(builtin().command("verb").unwrap().verbatim);
         assert!(builtin().command("lstinline").unwrap().verbatim);
         assert!(!builtin().command("textbf").unwrap().verbatim);
+    }
+
+    #[test]
+    fn prose_arg_parses_from_both_forms() {
+        // The string shorthand defaults `prose` to false; the object form sets it.
+        let db = parse(
+            r#"{ "commands": {
+                "short": { "args": ["req"] },
+                "full":  { "args": ["opt", { "kind": "req", "prose": true }] }
+            } }"#,
+        )
+        .expect("valid prose schema");
+        let short = &db.command("short").unwrap().args;
+        assert!(!short[0].prose);
+        let full = &db.command("full").unwrap().args;
+        assert_eq!(full[0].kind, ArgKind::Bracket);
+        assert!(!full[0].prose); // object form omitted → default false
+        assert_eq!(full[1].kind, ArgKind::Brace);
+        assert!(full[1].prose);
+    }
+
+    #[test]
+    fn bundled_prose_args_flagged() {
+        // A representative prose-bearing command marks its mandatory body slot,
+        // while a name-bearing command leaves every slot non-prose.
+        let footnote = &builtin().command("footnote").unwrap().args;
+        assert!(footnote.iter().any(|a| a.prose));
+        let label = &builtin().command("label").unwrap().args;
+        assert!(label.iter().all(|a| !a.prose));
     }
 
     #[test]

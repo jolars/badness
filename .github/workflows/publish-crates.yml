@@ -32,4 +32,17 @@ jobs:
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish --no-verify
+        run: |
+          set -euo pipefail
+          name=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          # crates.io requires a descriptive User-Agent; 200 means the exact
+          # version already exists, so skip instead of failing the run.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -A "badness-release-ci (https://github.com/jolars/badness)" \
+            "https://crates.io/api/v1/crates/$name/$version")
+          if [ "$status" = "200" ]; then
+            echo "$name@$version already on crates.io — skipping."
+            exit 0
+          fi
+          cargo publish --no-verify

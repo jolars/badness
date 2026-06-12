@@ -119,9 +119,12 @@ jobs:
       - name: Publish to PyPI
         if: github.event.inputs.repository != 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
       - name: Publish to TestPyPI
         if: github.event.inputs.repository == 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true

@@ -250,11 +250,20 @@ jobs:
       - name: Publish to npm
         working-directory: staging/${{ matrix.npm_name }}
         run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
           if [ "${{ inputs.dry-run }}" = "true" ]; then
             npm publish --provenance --access public --dry-run
-          else
-            npm publish --provenance --access public
+            exit 0
           fi
+          # npm has no --skip-existing; a non-empty version lookup means the
+          # exact version is already published, so skip instead of failing.
+          if [ -n "$(npm view "$pkg@$ver" version 2>/dev/null || true)" ]; then
+            echo "$pkg@$ver already published — skipping."
+            exit 0
+          fi
+          npm publish --provenance --access public
 
   publish-main:
     name: Publish badness
@@ -287,8 +296,17 @@ jobs:
       - name: Publish to npm
         working-directory: staging/badness
         run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
           if [ "${{ inputs.dry-run }}" = "true" ]; then
             npm publish --provenance --access public --dry-run
-          else
-            npm publish --provenance --access public
+            exit 0
           fi
+          # npm has no --skip-existing; a non-empty version lookup means the
+          # exact version is already published, so skip instead of failing.
+          if [ -n "$(npm view "$pkg@$ver" version 2>/dev/null || true)" ]; then
+            echo "$pkg@$ver already published — skipping."
+            exit 0
+          fi
+          npm publish --provenance --access public

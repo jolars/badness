@@ -2,7 +2,7 @@
 //! its literal `{…}` argument text. Purely syntactic: these know nothing about
 //! what any command *means*, so both the syntactic `project/` layer and the
 //! semantic layer build on them without meaning leaking downward (AGENTS.md
-//! decision #2). This is the seed of the `ast/` layer ravel has; it was
+//! decision #2). This is the seed of the `ast/` layer arity has; it was
 //! extracted when its second consumer (the semantic label/reference model)
 //! appeared.
 

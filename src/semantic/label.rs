@@ -1,5 +1,5 @@
 //! Label definitions and reference uses — the data of the per-file
-//! label/reference model. Mirror of ravel's `semantic/binding.rs`: `Vec`-stored
+//! label/reference model. Mirror of arity's `semantic/binding.rs`: `Vec`-stored
 //! records addressed by newtype ids.
 
 use rowan::TextRange;

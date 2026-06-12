@@ -1,6 +1,6 @@
 //! The diagnostic model shared by every lint finding.
 //!
-//! Mirrors ravel's `linter/diagnostic.rs`, but byte ranges are stored as plain
+//! Mirrors arity's `linter/diagnostic.rs`, but byte ranges are stored as plain
 //! `usize` offsets (matching the parser's [`SyntaxError`] and the salsa layer's
 //! `ParseDiagnosticData`) rather than a rowan `TextRange`.
 

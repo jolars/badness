@@ -1,6 +1,6 @@
 //! The badness language server (Phase 4 + the ra-style threading follow-up).
 //!
-//! Deliberately diverges from ravel: badness uses **`lsp-server` + `lsp-types`**
+//! Deliberately diverges from arity: badness uses **`lsp-server` + `lsp-types`**
 //! (rust-analyzer's synchronous stack), *not* tower-lsp-server — see the LSP note
 //! in `AGENTS.md`. salsa's single-writer / snapshot-readers model composes cleanly
 //! with `lsp-server`'s sync main loop.
@@ -8,7 +8,7 @@
 //! Scope: full-document **formatting** and pushed parser **diagnostics**. Rich
 //! features (hover, completion, go-to-def, symbols, range formatting) are deferred.
 //!
-//! ## Architecture (mirrors ravel's `src/lsp.rs`, so the eventual shared-crate
+//! ## Architecture (mirrors arity's `src/lsp.rs`, so the eventual shared-crate
 //! extraction stays a mechanical lift)
 //!
 //! Three roles, message-passing between them:
@@ -122,7 +122,7 @@ struct GlobalState {
 
 /// Formatting settings supplied by the editor, as `initializationOptions` at
 /// startup or via `workspace/didChangeConfiguration`. A fallback beneath the
-/// per-request [`FormattingOptions`]. Mirrors ravel's `EditorSettings`.
+/// per-request [`FormattingOptions`]. Mirrors arity's `EditorSettings`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct EditorSettings {
@@ -422,7 +422,7 @@ fn forward_outbound(connection: &Connection, state: &GlobalState, outbound: Outb
 }
 
 // ---------------------------------------------------------------------------
-// Worker thread (sole database writer) — mirrors ravel's lint thread.
+// Worker thread (sole database writer) — mirrors arity's lint thread.
 // ---------------------------------------------------------------------------
 
 /// Signal from a finished analyze read-phase back to the worker: the analyze for

@@ -1,6 +1,6 @@
 //! Byte-offset → line/column conversion.
 //!
-//! Lifted in spirit from ravel's `text/line_index.rs`, but kept free of any LSP
+//! Lifted in spirit from arity's `text/line_index.rs`, but kept free of any LSP
 //! type dependency for now: it exposes a 1-indexed **code-point** [`LineCol`]
 //! for CLI diagnostics and a 0-indexed **UTF-16** `(line, character)` pair for
 //! LSP positions, which Phase 6 will map onto `lsp_types::Position`. (Marked an

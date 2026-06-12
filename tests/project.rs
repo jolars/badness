@@ -3,7 +3,7 @@
 //! so a body edit doesn't rebuild `project_graph`, that an edge change *does*
 //! rebuild it, and that re-interning an unchanged membership reuses the memo.
 //!
-//! Mirrors ravel's `tests/salsa_incremental.rs`; the unit tests of the pure
+//! Mirrors arity's `tests/salsa_incremental.rs`; the unit tests of the pure
 //! extraction and graph algorithm live in `src/project/`.
 
 use std::collections::HashMap;

@@ -3,11 +3,11 @@
 Guidance for AI agents (and humans) working in **badness**, a formatter, linter, and
 language server for LaTeX.
 
-badness is a sibling of **ravel** (`../ravel`), the same kind of tool for R. ravel is
+badness is a sibling of **arity** (`../arity`), the same kind of tool for R. arity is
 a mature single-crate implementation of this exact architecture (rowan CST +
 event-stream parser + salsa + Wadler formatter IR + tower-lsp-server). **When in
-doubt, read ravel** — badness deliberately mirrors its shape, and bootstraps by
-copying its language-agnostic parts (see *Relationship to ravel* below).
+doubt, read arity** — badness deliberately mirrors its shape, and bootstraps by
+copying its language-agnostic parts (see *Relationship to arity* below).
 
 ## What this project is
 
@@ -18,12 +18,12 @@ error-tolerant, hand-written parser producing a lossless tree, semantics layered
 top as a separate concern, and incremental recomputation via salsa.
 
 **Single-crate Cargo package** (`badness`, edition 2024), *not* a workspace — same as
-ravel. Module folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`,
+arity. Module folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`,
 `text/`, plus `syntax.rs` and `incremental.rs`.
 
 ## Tenets
 
-(Adapted from ravel; these are language-neutral and load-bearing.)
+(Adapted from arity; these are language-neutral and load-bearing.)
 
 1. **Deterministic, rule-based formatting.** Output is decided solely by the
    formatter's rules and the layout engine. Push back against hard-coding special
@@ -61,22 +61,22 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    - *Syntactic layer:* the generic CST. Knows nothing about what a command means.
    - *Semantic layer:* a **signature database** (built-in table + CWL-style data,
      later `\newcommand`/`\newenvironment` scanning) assigning meaning — arity,
-     verbatim-ness, sectioning. This is the structural analog of ravel's `rindex/`
+     verbatim-ness, sectioning. This is the structural analog of arity's `rindex/`
      R-package index. Meaning never leaks into the parser.
 
 3. **Hand-written recursive descent is the spine. Pratt is local to math.**
    Operator precedence in LaTeX essentially only exists in math mode. Use a small
    precedence-climbing routine *only* for sub/superscript binding (`^`, `_`) and
    `\left…\right` matching, and only once we build a structured math model. The
-   text-level parser has no precedence. (Contrast ravel, whose R `parser/expr.rs`
+   text-level parser has no precedence. (Contrast arity, whose R `parser/expr.rs`
    *is* a full Pratt expression grammar — that's the main place the two parsers
    diverge.)
 
-4. **Parser emits an event stream, not a tree directly** (ravel/ra shape):
+4. **Parser emits an event stream, not a tree directly** (arity/ra shape):
    `lexer → flat token stream → parser emits events (Start/Tok(idx)/Finish) →
    tree_builder re-attaches trivia and feeds rowan's GreenNodeBuilder`. Tokens are
    referenced by index; there is **no `Error` event** — diagnostics ride a side
-   channel keyed by byte range (copy ravel's `parser/events.rs` exactly).
+   channel keyed by byte range (copy arity's `parser/events.rs` exactly).
 
 5. **Errors travel alongside the tree, never abort it.** A single syntactic error
    never fails the whole parse. Recovery anchors for LaTeX are clean: `\end{…}`,
@@ -88,7 +88,7 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    a *later optimization* — a whole-file reparse of a typical `.tex` is sub-ms.
 
 7. **Store green nodes in salsa, never red (`SyntaxNode`).** Red trees aren't `Send`
-   and aren't `Eq`/`salsa::Update`. Copy ravel's `incremental.rs`: `#[salsa::input]
+   and aren't `Eq`/`salsa::Update`. Copy arity's `incremental.rs`: `#[salsa::input]
    SourceFile { text }`, a `parsed_document` query returning `rowan::GreenNode` +
    diagnostics under `no_eq, unsafe(non_update_types)` (sound because the tree is a
    pure function of the text), and materialize red cursors on demand.
@@ -108,29 +108,29 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
 The formatter is intentionally used to stress the parser: any formatter ambiguity
 should surface a parser modeling gap. Lean on this loop.
 
-**Differential oracles** (steal ravel's `air_compat` pattern): use **`latexindent`**
+**Differential oracles** (steal arity's `air_compat` pattern): use **`latexindent`**
 as a free differential *formatter* oracle (measure the fixed point
 `latexindent(badness(x)) == badness(x)`, treat divergences as triage, not gates) and
 **texlab's parser / tree-sitter-latex** as a differential *parse* oracle over a
 corpus. Both are external reference implementations we measure against, never match.
 
-## Technology choices (aligned with ravel's Cargo.toml)
+## Technology choices (aligned with arity's Cargo.toml)
 
 - **rowan** (`0.16`) — lossless CST. **salsa** (`0.26`) — incremental queries.
 - **smol_str** for interned token text; **insta** for snapshot tests.
 - **LSP:** `lsp-server` + `lsp-types` (rust-analyzer's own stack), **not**
-  `tower-lsp-server`. This is the one place badness deliberately diverges from ravel.
+  `tower-lsp-server`. This is the one place badness deliberately diverges from arity.
   Reason: salsa cancellation is a synchronous unwind (`salsa::Cancelled`) under a
   single-writer/snapshot-readers model — it composes cleanly with `lsp-server`'s
   sync main loop + threadpool (exactly how ra does it) and fights tower-lsp's async
-  `&self` model. Reuse ravel's `text/line_index.rs` logic but swap its
+  `&self` model. Reuse arity's `text/line_index.rs` logic but swap its
   `tower_lsp_server::ls_types::Position` for `lsp_types::Position`.
 - **Formatter engine:** a Wadler/Prettier-style `Doc` IR
   (`Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent`, flat/break fit) — copy
-  ravel's `formatter/ir.rs` + `printer.rs` nearly wholesale. **Addition over ravel:**
+  arity's `formatter/ir.rs` + `printer.rs` nearly wholesale. **Addition over arity:**
   an `Ir::Fill` node (Wadler/Prettier *fill*: per-gap greedy break decisions) for
-  paragraph reflow — ravel formats R and has no prose-wrapping, so this primitive is
-  badness-specific. Keep the rest of the engine close to ravel's.
+  paragraph reflow — arity formats R and has no prose-wrapping, so this primitive is
+  badness-specific. Keep the rest of the engine close to arity's.
 - **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
   `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling **panache**
   formatter's mode taxonomy. badness mechanizes it through the `Doc` IR (`Fill`),
@@ -141,12 +141,12 @@ corpus. Both are external reference implementations we measure against, never ma
   ambiguity (the orphaned `[2ex]`) driven back into the parser per tenet 3, so the
   formatter sees `\\[2ex]` as one unit instead of splitting it.
 - **CLI:** `clap` + `build.rs` generating man pages / completions / markdown
-  (`clap_mangen`, `clap_complete`, `clap-markdown`) — copy ravel's scaffolding.
+  (`clap_mangen`, `clap_complete`, `clap-markdown`) — copy arity's scaffolding.
 - **Diagnostics rendering:** `annotate-snippets`.
 
-## Relationship to ravel (copy now, extract later)
+## Relationship to arity (copy now, extract later)
 
-Decision: **bootstrap badness by copying ravel's language-agnostic skeleton, then
+Decision: **bootstrap badness by copying arity's language-agnostic skeleton, then
 extract a shared crate once badness's formatter works and the boundaries are proven.**
 Premature extraction is the bigger risk while badness is empty.
 
@@ -161,10 +161,10 @@ Premature extraction is the bigger risk while badness is empty.
 `parser/expr.rs` + `structural.rs`, `syntax.rs` kinds, `ast/`, `semantic/` scoping,
 and the signature DB (analog of `rindex/`).
 
-**Diverge from ravel on purpose:** `lsp.rs` — badness uses `lsp-server` (see LSP
-note); do *not* copy ravel's tower-lsp-server loop.
+**Diverge from arity on purpose:** `lsp.rs` — badness uses `lsp-server` (see LSP
+note); do *not* copy arity's tower-lsp-server loop.
 
-When you touch a copied file, keep it close to ravel's version so the eventual
+When you touch a copied file, keep it close to arity's version so the eventual
 extraction stays a mechanical lift, not a merge.
 
 ## Non-goals (keep these true)
@@ -185,11 +185,11 @@ extraction stays a mechanical lift, not a merge.
 - Performance is first-class: `perf`, `cargo-flamegraph`, `hyperfine`,
   `cargo-show-asm`, `cargo-llvm-cov` are in the dev shell. Benchmark before
   optimizing; never regress losslessness for speed.
-- Task runner: `go-task` (`Taskfile.yml`, mirror ravel's targets).
+- Task runner: `go-task` (`Taskfile.yml`, mirror arity's targets).
 
 ## Working agreements for agents
 
-- Match surrounding (and ravel's) idioms, naming, comment density.
+- Match surrounding (and arity's) idioms, naming, comment density.
 - New parser features need corpus + snapshot tests *and* a losslessness assertion.
 - Keep the syntactic layer free of semantic knowledge.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond

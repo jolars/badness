@@ -19,7 +19,7 @@ use badness::parser::parse;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// CLI surface for [`WrapMode`]. Kept here (not in the formatter) so the
-/// formatter API stays clap-free, mirroring ravel's `cli.rs` convention.
+/// formatter API stays clap-free, mirroring arity's `cli.rs` convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum WrapArg {
     /// Greedy fill: wrap words to the line width (default).

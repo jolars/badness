@@ -1,14 +1,14 @@
 # badness --- Roadmap
 
 A LaTeX formatter, linter, and language server on a lossless rowan CST,
-mirroring **ravel** (`../ravel`, the same tool for R). See `AGENTS.md` for
-load-bearing design decisions, invariants, and the copy-from-ravel strategy.
+mirroring **arity** (`../arity`, the same tool for R). See `AGENTS.md` for
+load-bearing design decisions, invariants, and the copy-from-arity strategy.
 
 Single-crate package (not a workspace). Parser and formatter are **intentionally
 interleaved**: the formatter is the primary tool for stress-testing the parser.
 
-Files marked **\[copy\]** are lifted \~wholesale from ravel; **\[rewrite\]** are
-LaTeX-specific; **\[diverge\]** intentionally differs from ravel.
+Files marked **\[copy\]** are lifted \~wholesale from arity; **\[rewrite\]** are
+LaTeX-specific; **\[diverge\]** intentionally differs from arity.
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
@@ -139,7 +139,7 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
 
 - [ ] **Phase 8 --- Performance & hardening.**
   - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine
-        first), depended on by both badness and ravel.
+        first), depended on by both badness and arity.
   - [ ] Intra-file incremental reparse (reuse green subtrees on contained
         edits).
   - [ ] Fuzzing (losslessness must hold on arbitrary input).
@@ -158,6 +158,6 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
 - [ ] Trivia-attachment policy (leading vs. trailing) --- pick one, document it.
 - [ ] How much of `\newcommand` / `xparse` to model for the signature DB.
 - [ ] Formatter opinionatedness: which choices are configurable vs. fixed.
-- [ ] Whether ravel should also migrate tower-lsp-server → lsp-server (separate
+- [ ] Whether arity should also migrate tower-lsp-server → lsp-server (separate
       decision; out of scope for badness, but the `AGENTS.md` rationale
       applies).

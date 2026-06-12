@@ -1,14 +1,14 @@
 //! Per-run formatter context: bundles the active [`FormatStyle`] with the
 //! indent/width helpers the lowering passes lean on.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from ravel's
-//! `src/formatter/context.rs`. Keep close to ravel's version so the eventual
+//! EXTRACTION CANDIDATE: copied ~wholesale from arity's
+//! `src/formatter/context.rs`. Keep close to arity's version so the eventual
 //! shared-crate extraction stays mechanical.
 
 use super::style::FormatStyle;
 
 // The identity lowering does not yet consult every helper; they are kept so the
-// context stays a faithful copy of ravel's, ready for real format rules.
+// context stays a faithful copy of arity's, ready for real format rules.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FormatContext {

@@ -28,9 +28,9 @@
 //! whitespace for free, and [`Ir::indent`] raises the indent inside environment
 //! bodies.
 //!
-//! The lowering (`lower_node`) is the LaTeX-specific part that replaces ravel's
+//! The lowering (`lower_node`) is the LaTeX-specific part that replaces arity's
 //! R `ir_expr_node` dispatch; the surrounding `format`/`format_with_style`
-//! framework mirrors ravel's `src/formatter/core.rs`.
+//! framework mirrors arity's `src/formatter/core.rs`.
 
 use std::iter::Peekable;
 
@@ -82,7 +82,7 @@ pub fn format(input: &str) -> Result<String, FormatError> {
 
 /// Format `input` under `style`. Returns [`FormatError`] if the input does not
 /// parse cleanly. Note: badness's [`crate::parser::Parse`] carries `errors` +
-/// `syntax()` (ravel uses `diagnostics` + `cst`).
+/// `syntax()` (arity uses `diagnostics` + `cst`).
 pub fn format_with_style(input: &str, style: FormatStyle) -> Result<String, FormatError> {
     let parsed = parse(input);
     if !parsed.errors.is_empty() {

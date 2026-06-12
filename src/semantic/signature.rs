@@ -1,10 +1,10 @@
 //! The built-in **signature database**: command/environment argument shapes plus
 //! the semantic metadata a formatter/linter needs (sectioning level,
-//! verbatim-ness, math-ness). This is the structural analog of ravel's `rindex/`
+//! verbatim-ness, math-ness). This is the structural analog of arity's `rindex/`
 //! — the place where *meaning* is assigned to names, kept strictly out of the
 //! parser (AGENTS.md decision #2).
 //!
-//! The data is fully static, so — like ravel's `BASE_R`/`BUNDLED` statics, and
+//! The data is fully static, so — like arity's `BASE_R`/`BUNDLED` statics, and
 //! unlike its harvested `LibraryIndex` salsa input — it lives in a process-wide
 //! [`LazyLock`], consulted directly. Per-file `\newcommand`/`\newenvironment`/xparse
 //! signatures are scanned by [`super::define`] into a separate, per-document
@@ -19,10 +19,10 @@
 //! [`include_str!`]-ed, [`serde`]-deserialized) holding *all* the metadata in one
 //! typed place — argument shapes *and* sectioning level / verbatim-ness /
 //! math-ness together, keyed by name. This is the high-precision tier we maintain
-//! by hand, the analog of ravel's `PackageIndex` schema.
+//! by hand, the analog of arity's `PackageIndex` schema.
 //!
 //! Lower-precision external sources layer *underneath* this, ingested into the
-//! same schema rather than replacing it (mirroring ravel's `installed > base >
+//! same schema rather than replacing it (mirroring arity's `installed > base >
 //! bundled` precedence): the TeXstudio/Kile **CWL corpus** (arg shapes only, broad
 //! coverage) and, later, per-file `\newcommand`/`xparse` scanning. Both are
 //! deferred; when the CWL corpus is wanted, a converter merges it into this JSON

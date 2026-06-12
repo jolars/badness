@@ -8,9 +8,9 @@
 //!
 //! This is the Phase 3 foundation (TODO.md): the salsa harness only. The
 //! per-file semantic-model query, the cross-file firewall queries, and the
-//! project graph that the sibling project `ravel` layers on top of this same
+//! project graph that the sibling project `arity` layers on top of this same
 //! harness arrive with later Phase 3 items, once their consumers (linter, LSP)
-//! and the `semantic`/`project` modules exist. Keep this file close to ravel's
+//! and the `semantic`/`project` modules exist. Keep this file close to arity's
 //! `incremental.rs` so the eventual shared-crate extraction stays a mechanical
 //! lift.
 
@@ -54,7 +54,7 @@ pub enum QueryKind {
 pub struct QueryLogEntry {
     pub kind: QueryKind,
     /// The per-file query subject, or `None` for project-level queries (none
-    /// exist yet; the field mirrors ravel so later items slot in mechanically).
+    /// exist yet; the field mirrors arity so later items slot in mechanically).
     pub file: Option<SourceFile>,
 }
 

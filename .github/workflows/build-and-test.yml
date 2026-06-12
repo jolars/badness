@@ -70,3 +70,39 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  versionary:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, cargo-audit, cargo-deny]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.versionary.outputs.release_created }}
+      tag_name: ${{ steps.versionary.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - id: versionary
+        uses: jolars/versionary@v0
+        with:
+          github-token: ${{ secrets.RELEASE_TOKEN }}
+
+  build-release-assets:
+    name: Build & Upload Release Assets
+    needs: versionary
+    if: ${{ needs.versionary.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/packages.yml
+    with:
+      upload: "true"
+      tag: ${{ needs.versionary.outputs.tag_name }}
+    permissions:
+      contents: write

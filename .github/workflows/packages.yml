@@ -1,0 +1,180 @@
+name: Build Release Binaries
+
+on:
+  workflow_call:
+    inputs:
+      upload:
+        description: "Upload to release (requires a release to exist)"
+        required: false
+        default: "false"
+        type: string
+      tag:
+        description: "Release tag to upload to (only if upload is true)"
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload to release (requires a release to exist)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tag:
+        description: "Release tag to upload to (only if upload is true)"
+        required: false
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 (glibc) — built with cargo-zigbuild against an old
+          # glibc floor so the binary runs on distros older than the runner.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            glibc: "2.17"
+
+          # Linux ARM64 (glibc)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            glibc: "2.17"
+
+          # Linux x86_64 (musl)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+
+          # Linux ARM64 (musl)
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+
+          # macOS x86_64
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+
+          # macOS ARM64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+          # Windows ARM64
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          prefix-key: "v1-rust"
+
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-unknown-linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # Pin the glibc symbol-version floor (link-time only; the binary still
+      # uses the host's glibc at runtime) so it runs on distros older than the
+      # CI runner.
+      - name: Install Zig
+        if: matrix.glibc
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Install cargo-zigbuild
+        if: matrix.glibc
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Build release binary (zigbuild)
+        if: matrix.glibc
+        run: cargo zigbuild --release --target ${{ matrix.target }}.${{ matrix.glibc }}
+
+      - name: Build release binary
+        if: ${{ !matrix.glibc }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Regression guard: fail if the binary ever requires a glibc newer than
+      # the declared floor.
+      - name: Verify glibc floor
+        if: matrix.glibc
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/badness"
+          max=$(objdump -T "$bin" 2>/dev/null \
+            | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' \
+            | sed 's/GLIBC_//' | sort -V | tail -n1 || true)
+          echo "Highest required glibc symbol: ${max:-none}"
+          if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "${{ matrix.glibc }}" | sort -V | tail -n1)" != "${{ matrix.glibc }}" ]; then
+            echo "::error::badness requires glibc $max, above the ${{ matrix.glibc }} floor"
+            exit 1
+          fi
+
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: strip target/${{ matrix.target }}/release/badness
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/badness dist/
+          cp LICENSE dist/
+          cp README.md dist/
+          tar czf badness-${{ matrix.target }}.tar.gz -C dist .
+          rm -rf dist
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force
+          Copy-Item target/${{ matrix.target }}/release/badness.exe dist/
+          Copy-Item LICENSE dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath badness-${{ matrix.target }}.zip
+          Remove-Item -Recurse -Force dist
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: badness-${{ matrix.target }}
+          path: |
+            badness-${{ matrix.target }}.tar.gz
+            badness-${{ matrix.target }}.zip
+
+      - name: Upload binary to release
+        if: inputs.upload == 'true'
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -f badness-${{ matrix.target }}.tar.gz ]; then
+            gh release upload --clobber "$TAG" badness-${{ matrix.target }}.tar.gz
+          fi
+          if [ -f badness-${{ matrix.target }}.zip ]; then
+            gh release upload --clobber "$TAG" badness-${{ matrix.target }}.zip
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

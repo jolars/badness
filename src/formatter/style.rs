@@ -1,7 +1,7 @@
 //! Formatter configuration.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from ravel's
-//! `src/formatter/style.rs`. Keep close to ravel's version so the eventual
+//! EXTRACTION CANDIDATE: copied ~wholesale from arity's
+//! `src/formatter/style.rs`. Keep close to arity's version so the eventual
 //! shared-crate extraction stays mechanical. The LaTeX-specific [`WrapMode`]
 //! (paragraph line-break policy, modeled on the `panache` formatter) is the one
 //! field that diverges.

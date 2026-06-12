@@ -7,13 +7,13 @@
 //! where each construct rendered directly to a `String` and width was measured
 //! retrospectively.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from ravel's
+//! EXTRACTION CANDIDATE: copied ~wholesale from arity's
 //! `src/formatter/ir.rs` (language-agnostic Wadler engine). Keep close to
-//! ravel's version so the eventual shared-crate extraction stays mechanical.
+//! arity's version so the eventual shared-crate extraction stays mechanical.
 
 // The IR exposes a complete primitive vocabulary. A number of builders are not
 // yet exercised by badness's identity lowering; they are kept so the engine
-// stays a faithful copy of ravel's and is ready for real format rules.
+// stays a faithful copy of arity's and is ready for real format rules.
 #![allow(dead_code)]
 
 use std::rc::Rc;

@@ -3,7 +3,7 @@
 //! This first cut only surfaces **parse diagnostics** (the parser's byte-range
 //! error side channel) to the CLI; it owns no rules of its own yet. Lint rules,
 //! comment suppression (`% badness-ignore` style), and autofix are the next
-//! Phase 5 items (see `TODO.md`). The module is kept close to ravel's
+//! Phase 5 items (see `TODO.md`). The module is kept close to arity's
 //! `src/linter/` shape so the eventual shared-crate extraction stays a
 //! mechanical lift (see `AGENTS.md`). **[copy shape]**
 

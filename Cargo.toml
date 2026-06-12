@@ -2,13 +2,29 @@
 name = "badness"
 version = "0.0.1"
 edition = "2024"
+readme = "README.md"
 description = "An LSP, formatter, and linter for LaTeX"
 license = "MIT"
 repository = "https://github.com/jolars/badness"
+homepage = "https://jolars.github.io/badness/"
 authors = ["Johan Larsson <johan@jolars.co>"]
+keywords = ["latex", "language-server", "formatter", "linter"]
+categories = [
+  "command-line-utilities",
+  "text-processing",
+  "parsing",
+  "parser-implementations",
+]
 
-# Dependency versions are kept in lockstep with the sibling project `ravel`
-# (../ravel) so the eventual shared-crate extraction stays a mechanical lift.
+[lib]
+name = "badness"
+
+[[bin]]
+name = "badness"
+path = "src/main.rs"
+
+# Dependency versions are kept in lockstep with the sibling project `arity`
+# (../arity) so the eventual shared-crate extraction stays a mechanical lift.
 # Deps are added phase by phase (salsa, lsp-server, clap, … land with their
 # phases) to keep `cargo machete` clean.
 [dependencies]

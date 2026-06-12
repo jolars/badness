@@ -2,7 +2,7 @@
 //!
 //! This harness measures how *structurally close* badness's CST is to texlab's over a
 //! corpus, after projecting both onto one coarse skeleton (see `parse_skeleton`). It
-//! is the parse-side analog of ravel's `air_compat.rs`, and is subordinate to the
+//! is the parse-side analog of arity's `air_compat.rs`, and is subordinate to the
 //! same principle: a divergence from texlab is **never a bug by itself**. badness is
 //! a deliberately *generic* TeX-surface parser; texlab is *semantically enriched*.
 //! AGENTS.md is explicit that these references are "measured against, never matched."

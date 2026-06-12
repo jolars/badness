@@ -1,7 +1,7 @@
 //! `badness format --check`: format each file and report which ones would change,
 //! without writing anything.
 //!
-//! Adapted from ravel's `src/formatter/check.rs`, minus the `file_discovery`
+//! Adapted from arity's `src/formatter/check.rs`, minus the `file_discovery`
 //! dependency (badness has none yet): the MVP operates on an explicit list of
 //! file paths. Directory-walking discovery is a later Phase 2 item.
 

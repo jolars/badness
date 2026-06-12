@@ -3,6 +3,7 @@ flavor = "gfm"
 extend-exclude = [
   "TODO.md",
   "AGENTS.md",
+  "CHANGELOG.md",
   "CLAUDE.md",
   ".claude/**/*",
   "PARSE_COMPAT.md",

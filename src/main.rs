@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use badness::file_discovery::{FileDiscoveryError, collect_tex_files};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
 use badness::linter::{Diagnostic, OutputMode, render_findings};
 use badness::parser::parse;
@@ -144,9 +145,20 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
         }
         sources.push((PathBuf::from("<stdin>"), input));
     } else {
-        for path in paths {
-            match std::fs::read_to_string(path) {
-                Ok(content) => sources.push((path.clone(), content)),
+        let files = match collect_tex_files(paths) {
+            Ok(files) => files,
+            Err(err) => {
+                report_discovery_error(&err);
+                return ExitCode::FAILURE;
+            }
+        };
+        if files.is_empty() {
+            eprintln!("badness: no .tex files found under the provided input paths");
+            return ExitCode::FAILURE;
+        }
+        for path in files {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => sources.push((path, content)),
                 Err(err) => {
                     eprintln!("badness: cannot read {}: {err}", path.display());
                     failed = true;
@@ -244,10 +256,41 @@ fn run_format_stdin(style: FormatStyle) -> ExitCode {
     }
 }
 
-/// Format each path in place, writing only files whose content changes.
+/// Print a file-discovery error to stderr, prefixed like the other CLI errors.
+fn report_discovery_error(err: &FileDiscoveryError) {
+    match err {
+        FileDiscoveryError::NonTexFilePath { path } => {
+            eprintln!(
+                "badness: input file {} is not a .tex file; only .tex files are supported",
+                path.display()
+            );
+        }
+        FileDiscoveryError::WalkError { path, message } => {
+            eprintln!(
+                "badness: failed while scanning {}: {message}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Resolve the input paths to `.tex` files in place, writing only files whose
+/// content changes.
 fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
+    let files = match collect_tex_files(paths) {
+        Ok(files) => files,
+        Err(err) => {
+            report_discovery_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
+    if files.is_empty() {
+        eprintln!("badness: no .tex files found under the provided input paths");
+        return ExitCode::FAILURE;
+    }
+
     let mut failed = false;
-    for path in paths {
+    for path in &files {
         let content = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) => {

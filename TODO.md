@@ -84,8 +84,9 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
   - [~] `build.rs` man/completions/markdown
     (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
     subcommand lives in `main.rs`; `build.rs` still deferred.
-  - [ ] Directory-walking file discovery for `format` (today: explicit
-        paths).
+  - [x] Directory-walking file discovery for `format` and `lint`
+        (`file_discovery::collect_tex_files`, `ignore`-crate walk respecting
+        `.gitignore`, `.tex` only). **\[copy\]** from arity.
 
 - [x] **Phase 3 --- Salsa + semantic layer.** `incremental.rs` salsa harness;
       `semantic_model` (flat label/ref def-use model, `Eq`-backdating); built-in

@@ -1,15 +1,16 @@
 //! `badness format --check`: format each file and report which ones would change,
 //! without writing anything.
 //!
-//! Adapted from arity's `src/formatter/check.rs`, minus the `file_discovery`
-//! dependency (badness has none yet): the MVP operates on an explicit list of
-//! file paths. Directory-walking discovery is a later Phase 2 item.
+//! Adapted from arity's `src/formatter/check.rs`: the input paths are resolved to
+//! the concrete `.tex` files via [`collect_tex_files`] (explicit files and/or
+//! recursively-walked directories) before checking.
 
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
 use super::{FormatError, FormatStyle, format_with_style};
+use crate::file_discovery::{FileDiscoveryError, collect_tex_files};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
@@ -20,6 +21,9 @@ pub struct CheckResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckError {
     MissingPaths,
+    NoTexFiles,
+    NonTexFilePath { path: PathBuf },
+    WalkError { path: PathBuf, message: String },
     ReadError { path: PathBuf, source: String },
     FormatError { path: PathBuf, source: FormatError },
 }
@@ -28,7 +32,23 @@ impl fmt::Display for CheckError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingPaths => {
-                write!(f, "--check requires at least one input file path")
+                write!(
+                    f,
+                    "--check requires at least one input path (file or directory)"
+                )
+            }
+            Self::NoTexFiles => {
+                write!(f, "no .tex files found under the provided input paths")
+            }
+            Self::NonTexFilePath { path } => {
+                write!(
+                    f,
+                    "input file {} is not a .tex file; --check only supports .tex files",
+                    path.display()
+                )
+            }
+            Self::WalkError { path, message } => {
+                write!(f, "failed while scanning {}: {message}", path.display())
             }
             Self::ReadError { path, source } => {
                 write!(f, "failed to read {}: {source}", path.display())
@@ -42,6 +62,15 @@ impl fmt::Display for CheckError {
 
 impl std::error::Error for CheckError {}
 
+impl From<FileDiscoveryError> for CheckError {
+    fn from(value: FileDiscoveryError) -> Self {
+        match value {
+            FileDiscoveryError::NonTexFilePath { path } => Self::NonTexFilePath { path },
+            FileDiscoveryError::WalkError { path, message } => Self::WalkError { path, message },
+        }
+    }
+}
+
 pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
     check_paths_with_style(paths, FormatStyle::default())
 }
@@ -54,11 +83,16 @@ pub fn check_paths_with_style(
         return Err(CheckError::MissingPaths);
     }
 
-    let checked_files = paths.len();
+    let files = collect_tex_files(paths)?;
+    if files.is_empty() {
+        return Err(CheckError::NoTexFiles);
+    }
+
+    let checked_files = files.len();
     let mut changed_files = Vec::new();
 
-    for path in paths {
-        let content = fs::read_to_string(path).map_err(|err| CheckError::ReadError {
+    for path in files {
+        let content = fs::read_to_string(&path).map_err(|err| CheckError::ReadError {
             path: path.clone(),
             source: err.to_string(),
         })?;
@@ -69,7 +103,7 @@ pub fn check_paths_with_style(
                 source: err,
             })?;
         if formatted != content {
-            changed_files.push(path.clone());
+            changed_files.push(path);
         }
     }
 

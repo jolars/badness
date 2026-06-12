@@ -1,0 +1,30 @@
+{
+  "name": "@badness/__NAME__",
+  "version": "__VERSION__",
+  "description": "Prebuilt badness binary for __NAME__. Install badness instead.",
+  "homepage": "https://jolars.github.io/badness/",
+  "bugs": "https://github.com/jolars/badness/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jolars/badness.git"
+  },
+  "license": "MIT",
+  "author": "Johan Larsson <johan@jolars.co>",
+  "files": [
+    "__BINARY__",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "__OS__"
+  ],
+  "cpu": [
+    "__CPU__"
+  ],
+  "libc": [
+    "__LIBC__"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

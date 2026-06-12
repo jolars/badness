@@ -4,5 +4,21 @@
   "release-type": "rust",
   "bump-minor-pre-major": true,
   "include-commit-authors": true,
-  "release-reference-comments": "best-effort"
+  "release-reference-comments": "best-effort",
+  "packages": {
+    ".": {
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "npm/badness/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "npm/badness/package.json",
+          "jsonpath": "$.optionalDependencies.*"
+        }
+      ]
+    }
+  }
 }

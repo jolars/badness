@@ -84,6 +84,11 @@ pub struct EnvironmentSig {
     pub verbatim_body: bool,
     /// `true` for math environments (`equation`, `align`, …).
     pub math: bool,
+    /// `true` for alignment environments whose `&` columns the formatter lays out
+    /// into a grid (`align`, `pmatrix`, …). Independent of `math`: every flagged
+    /// environment here is also math, but the formatter consults this flag, not
+    /// `math`, to decide column alignment.
+    pub align: bool,
     /// `true` when the body is ordinary prose the formatter may reflow. Derived as
     /// `!(verbatim_body || math)`. (Reflow itself is a later item; this is the
     /// recorded intent.)
@@ -259,6 +264,8 @@ struct RawEnvironment {
     verbatim_body: bool,
     #[serde(default)]
     math: bool,
+    #[serde(default)]
+    align: bool,
 }
 
 impl From<RawEnvironment> for EnvironmentSig {
@@ -267,6 +274,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             args: raw.args.into_iter().map(ArgSpec::from).collect(),
             verbatim_body: raw.verbatim_body,
             math: raw.math,
+            align: raw.align,
             // A body is reflowable prose unless it is verbatim or math.
             reflow: !(raw.verbatim_body || raw.math),
         }
@@ -406,10 +414,20 @@ mod tests {
         let equation = db.environment("equation").unwrap();
         assert!(equation.math);
         assert!(!equation.reflow);
+        // `equation` is math but not an alignment environment (no `&` columns).
+        assert!(!equation.align);
+        // An alignment environment carries the `align` flag (and is also math).
+        let align = db.environment("align").unwrap();
+        assert!(align.math);
+        assert!(align.align);
+        let pmatrix = db.environment("pmatrix").unwrap();
+        assert!(pmatrix.math);
+        assert!(pmatrix.align);
         // A plain content environment reflows and is neither verbatim nor math.
         let tabular = db.environment("tabular").unwrap();
         assert!(!tabular.verbatim_body);
         assert!(!tabular.math);
+        assert!(!tabular.align);
         assert!(tabular.reflow);
     }
 

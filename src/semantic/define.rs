@@ -209,6 +209,7 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         args,
         verbatim_body: false,
         math: false,
+        align: false,
         reflow: true,
     }
 }

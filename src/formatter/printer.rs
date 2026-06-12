@@ -152,6 +152,21 @@ impl Printer {
         self.run(ir, base, base)
     }
 
+    /// Render `ir` on a single line (every break primitive laid out flat). Used by
+    /// the alignment lowering to measure and emit a table cell's content; callers
+    /// must ensure `ir` carries no unconditional forced break (a `HardLine` would
+    /// still emit a newline in flat mode), which the alignment grid guarantees by
+    /// falling back when any cell `contains_forced_break`. Width is taken as
+    /// effectively infinite so a width-driven `Group`/`ConditionalGroup` inside a
+    /// cell stays flat rather than breaking on the configured line width.
+    pub(crate) fn print_flat(&self, ir: &Ir) -> String {
+        let flat = Printer {
+            line_width: usize::MAX / 2,
+            indent_unit: self.indent_unit,
+        };
+        flat.run_with_mode(ir, 0, 0, Mode::Flat)
+    }
+
     fn run(&self, ir: &Ir, base_indent: usize, init_col: usize) -> String {
         self.run_with_mode(ir, base_indent, init_col, Mode::Break)
     }

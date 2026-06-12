@@ -177,6 +177,16 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_left_right", WrapMode::Preserve, 80),
     ("math_left_right_control_word_delim", WrapMode::Preserve, 80),
     ("math_left_right_nested_scripted", WrapMode::Preserve, 80),
+    // Alignment-aware formatting: an `align`/matrix-family environment lays its `&`
+    // columns into a grid (left-aligned, single space around `&`, last cell never
+    // padded), preserving the row break (with its `[len]`). A cell that cannot sit
+    // on one aligned line (a nested block) falls back to the plain indented body —
+    // while a nested alignment environment is still aligned in its own right.
+    ("align_columns_basic", WrapMode::Preserve, 80),
+    ("align_columns_uneven_rows", WrapMode::Preserve, 80),
+    ("align_columns_linebreak_optional", WrapMode::Preserve, 80),
+    ("pmatrix_columns", WrapMode::Preserve, 80),
+    ("align_nested_block_fallback", WrapMode::Preserve, 80),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

@@ -137,8 +137,16 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
         body), leaving an empty body tight (`\left.\right.`). Math-mode contexts
         only (`$`/`\[`/`\(`); `\left` inside `equation`/`align` arrives with the
         alignment-aware item.
-  - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
-        columns, `\\` rows.
+  - [x] Alignment-aware formatting: an `align`/matrix-family environment
+        (signature-DB `align` flag) lays its top-level `&` columns into a
+        left-aligned grid — single space around `&`, last cell of each row never
+        padded, the `\\` row break (with its `[len]`) preserved. Each cell lowers
+        through the generic stream and renders flat (so inline math/groups
+        normalize as elsewhere). A cell that can't sit on one line (a comment or
+        nested block) falls back to the plain indented body; a nested alignment
+        environment is still aligned in its own right. Follow-ups: join cell
+        continuation lines (currently triggers fallback); column-spec-aware
+        L/C/R alignment for text `tabular`/`array`.
 
 - [] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
      surface parse diagnostics; annotate-snippets render done.

@@ -176,6 +176,9 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Reflow => {
             return lower_paragraph_reflow(node, cx);
         }
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_alignment_env(node, cx) => {
+            return lower_aligned_environment(node, cx);
+        }
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
             return lower_environment(node, cx);
         }
@@ -466,6 +469,230 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         head.extend(lower_element_stream(tail.into_iter(), cx));
     }
     Ir::concat(head)
+}
+
+/// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks
+/// `align` — an `align`/matrix-family environment whose `&` columns the formatter
+/// lays out into a grid (see [`lower_aligned_environment`]).
+fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    node.children()
+        .find(|child| child.kind() == SyntaxKind::BEGIN)
+        .and_then(|begin| environment_name(&begin))
+        .and_then(|name| cx.signatures.environment(&name))
+        .is_some_and(|sig| sig.align)
+}
+
+/// One row of an alignment grid: its rendered, trimmed cell strings and the flat
+/// text of the `\\` that terminated the row (`None` for a final row written
+/// without a trailing line break).
+struct AlignRow {
+    cells: Vec<String>,
+    line_break: Option<String>,
+}
+
+/// Lower an `align`/matrix-family environment, laying out its `&` columns into a
+/// grid so the ampersands line up. The framing (`\begin`/`\end`, the indented
+/// body with leading/trailing `hard_line`) is identical to [`lower_environment`];
+/// only the body differs — it is the rendered grid rather than a generic element
+/// stream.
+///
+/// Falls back to [`lower_environment`] whenever the body is not a clean
+/// single-paragraph grid (see [`build_alignment_grid`]): a blank-line break, or a
+/// cell that cannot collapse to one aligned line (a comment or a nested block).
+/// The fallback is always available, so an unhandled shape degrades to today's
+/// plain indented body, never a panic or corruption.
+fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let mut begin = Ir::Nil;
+    let mut end = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                begin = lower_begin(child, cx);
+            }
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
+                end = lower_node(child, cx);
+            }
+            _ => body_elements.push(element),
+        }
+    }
+
+    let Some(rows) = build_alignment_grid(&body_elements, cx) else {
+        return lower_environment(node, cx);
+    };
+    if rows.is_empty() {
+        // An empty (or `\\`-only) body has no grid; let the generic path render
+        // the bare `\begin`/`\end`.
+        return lower_environment(node, cx);
+    }
+
+    let body = render_alignment_rows(&rows);
+    Ir::concat([
+        begin,
+        Ir::indent(Ir::concat([Ir::hard_line(), body])),
+        Ir::hard_line(),
+        end,
+    ])
+}
+
+/// Split an alignment environment body into a row×column grid of rendered cell
+/// strings, or `None` to signal the caller should fall back to the generic
+/// environment lowering.
+///
+/// Rows are delimited by *top-level* `\\` ([`SyntaxKind::LINE_BREAK`]) nodes and
+/// cells by top-level `&` ([`SyntaxKind::AMPERSAND`]) tokens; a `&` nested inside a
+/// group or sub-environment lives in a child node, never a direct body child, so
+/// it is correctly invisible here. Each cell's elements lower through the generic
+/// [`lower_element_stream`] and render *flat* (so inline math/groups normalize as
+/// they do elsewhere), trimmed of surrounding space.
+///
+/// Returns `None` when [`flatten_alignment_body`] rejects the body (a blank-line
+/// break) or when any cell carries a forced break (a comment or a nested block
+/// that cannot sit on one aligned line).
+fn build_alignment_grid(
+    body_elements: &[SyntaxElement],
+    cx: LowerCtx<'_>,
+) -> Option<Vec<AlignRow>> {
+    let inline = flatten_alignment_body(body_elements)?;
+    let printer = Printer::new(FormatStyle::default());
+
+    /// Render the accumulated cell elements flat and trimmed, pushing the result
+    /// onto `cells`. Returns `None` on a cell that cannot collapse to one line.
+    ///
+    /// Collapsible trivia at the cell's edges is dropped first: the structural
+    /// newline after `\begin`/each `\\` and the indentation before the next cell
+    /// are *boundary* whitespace, not cell content; left in, the leading newline
+    /// would lower to a forced break (an [`Ir::hard_line`]) and spuriously trip the
+    /// fallback. A newline *inside* a cell still lowers to a forced break and so
+    /// (correctly) falls back — a continuation line cannot sit on one aligned row.
+    fn finish_cell(
+        cell: &mut Vec<SyntaxElement>,
+        cells: &mut Vec<String>,
+        printer: &Printer,
+        cx: LowerCtx<'_>,
+    ) -> Option<()> {
+        let is_edge_trivia = |e: &SyntaxElement| {
+            e.as_token()
+                .is_some_and(|t| is_collapsible_trivia(t.kind()))
+        };
+        while cell.first().is_some_and(&is_edge_trivia) {
+            cell.remove(0);
+        }
+        while cell.last().is_some_and(&is_edge_trivia) {
+            cell.pop();
+        }
+        let ir = Ir::concat(lower_element_stream(cell.drain(..), cx));
+        if ir.contains_forced_break() {
+            return None;
+        }
+        cells.push(printer.print_flat(&ir).trim().to_string());
+        Some(())
+    }
+
+    let mut rows: Vec<AlignRow> = Vec::new();
+    let mut cells: Vec<String> = Vec::new();
+    let mut cell: Vec<SyntaxElement> = Vec::new();
+    for element in inline {
+        match element {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::AMPERSAND => {
+                finish_cell(&mut cell, &mut cells, &printer, cx)?;
+            }
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
+                finish_cell(&mut cell, &mut cells, &printer, cx)?;
+                let line_break = printer
+                    .print_flat(&lower_node(&child, cx))
+                    .trim()
+                    .to_string();
+                rows.push(AlignRow {
+                    cells: std::mem::take(&mut cells),
+                    line_break: Some(line_break),
+                });
+            }
+            other => cell.push(other),
+        }
+    }
+    // The final segment (content after the last `\\`). Drop it when it is a single
+    // empty cell — the "body ended in `\\`" case — so the trailing break stays on
+    // the prior row without adding a blank line; otherwise it is a real last row.
+    finish_cell(&mut cell, &mut cells, &printer, cx)?;
+    let final_is_empty = cells.len() == 1 && cells[0].is_empty();
+    if !final_is_empty {
+        rows.push(AlignRow {
+            cells,
+            line_break: None,
+        });
+    }
+
+    Some(rows)
+}
+
+/// Flatten an alignment environment's body into a single stream of inline
+/// elements, descending one level into the lone body `PARAGRAPH` (where the `&`
+/// and `\\` separators live). Inter-paragraph trivia is dropped (it is just the
+/// body's own leading/trailing break, which the indenter re-supplies).
+///
+/// Returns `None` when the body holds more than one paragraph — a blank-line
+/// break, which the single grid does not model — so the caller falls back.
+fn flatten_alignment_body(body_elements: &[SyntaxElement]) -> Option<Vec<SyntaxElement>> {
+    let mut inline: Vec<SyntaxElement> = Vec::new();
+    let mut paragraphs = 0;
+    for element in body_elements {
+        match element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::PARAGRAPH => {
+                paragraphs += 1;
+                if paragraphs > 1 {
+                    return None;
+                }
+                inline.extend(child.children_with_tokens());
+            }
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
+            other => inline.push(other.clone()),
+        }
+    }
+    Some(inline)
+}
+
+/// Render the grid to IR: pad every non-last cell in a row to its column width
+/// (left-align), join cells with `" & "`, append the row's `\\`, and join rows
+/// with [`Ir::hard_line`]. A row is one [`Ir::text`] (no newline; cells are flat),
+/// which the caller indents one step. The row's *last* cell is never padded, so no
+/// line carries trailing whitespace.
+fn render_alignment_rows(rows: &[AlignRow]) -> Ir {
+    // Column width = the max char-count over every cell in that column (including
+    // last cells, so a long final cell still widens the column above it). Char
+    // count matches the printer's own column metric.
+    let mut col_widths: Vec<usize> = Vec::new();
+    for row in rows {
+        for (c, cell) in row.cells.iter().enumerate() {
+            let width = cell.chars().count();
+            if c == col_widths.len() {
+                col_widths.push(width);
+            } else if width > col_widths[c] {
+                col_widths[c] = width;
+            }
+        }
+    }
+
+    let lines = rows.iter().map(|row| {
+        let mut line = String::new();
+        let last = row.cells.len().saturating_sub(1);
+        for (c, cell) in row.cells.iter().enumerate() {
+            if c > 0 {
+                line.push_str(" & ");
+            }
+            line.push_str(cell);
+            if c < last {
+                let pad = col_widths[c].saturating_sub(cell.chars().count());
+                line.push_str(&" ".repeat(pad));
+            }
+        }
+        if let Some(line_break) = &row.line_break {
+            line.push(' ');
+            line.push_str(line_break);
+        }
+        Ir::text(line)
+    });
+    Ir::join(Ir::hard_line(), lines)
 }
 
 /// Lower a delimited group — a brace group `{…}` (`open`/`close` =

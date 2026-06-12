@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0](https://github.com/jolars/badness/compare/v0.1.0...v0.2.0) (2026-06-12)
+
+### Features
+- add vscode and open vsx extensions ([`975f1e4`](https://github.com/jolars/badness/commit/975f1e49428a3026b53382efcf02ef65996b4d47))
+- **npm:** package for npm ([`b3a576f`](https://github.com/jolars/badness/commit/b3a576fa970d2d07de9521a7a3c5f16c13c535d6))
+
 ## [0.1.0](https://github.com/jolars/badness/compare/v0.0.1...v0.1.0) (2026-06-12)
 
 ### Breaking changes

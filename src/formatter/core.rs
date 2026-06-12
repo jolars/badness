@@ -17,6 +17,13 @@
 //!   title) is reflowed to the line width like a paragraph — joined when it fits,
 //!   wrapped when it does not (see [`lower_command`] / [`lower_prose_group`]).
 //!   Non-prose groups (`\newcommand` body, `\label`) are left as authored.
+//! - **Math** (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`): the structured `MATH` body is
+//!   formatted by [`lower_math`] — internal whitespace runs collapse to a single
+//!   space, runs at the delimiters are trimmed, `^`/`_` scripts are kept tight,
+//!   and redundant braces around a single-token script argument are stripped
+//!   where the following token would not glue onto it. A comment inside math
+//!   forces a line break. Commands keep their authored form (their arguments may
+//!   be text).
 //!
 //! Everything else is emitted verbatim: paragraph structure, intra-line spacing,
 //! and protected regions (`\verb`, verbatim bodies, comments) are preserved.
@@ -174,6 +181,12 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
         SyntaxKind::COMMAND if cx.wrap == WrapMode::Reflow && command_has_prose_arg(node, cx) => {
             return lower_command(node, cx);
+        }
+        SyntaxKind::INLINE_MATH | SyntaxKind::DISPLAY_MATH => {
+            return lower_math(node, cx);
+        }
+        SyntaxKind::MATH => {
+            return lower_math_body(node, cx);
         }
         SyntaxKind::GROUP if spans_multiple_lines(node) => {
             return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
@@ -625,6 +638,218 @@ fn lower_prose_group(
 /// spans multiple physical lines. Newlines inside a *nested* group/environment
 /// belong to that child node, not to `node`, so this attributes line-spanning to
 /// the group that physically owns the break — which keeps re-indentation stable.
+/// Lower inline `$…$`/`\(…\)` or display `$$…$$`/`\[…\]` math. The delimiter
+/// tokens are direct children of the math node and are emitted verbatim; the
+/// `MATH` child (the body) is formatted by [`lower_math_body`].
+fn lower_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    Ir::concat(node.children_with_tokens().map(|el| match el {
+        SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => lower_math_body(&n, cx),
+        SyntaxElement::Node(n) => lower_node(&n, cx),
+        SyntaxElement::Token(t) => Ir::verbatim(t.text()),
+    }))
+}
+
+/// Format a math body (a `MATH` node, or a `{…}` group body in math): collapse
+/// internal `WHITESPACE`/`NEWLINE` runs to a single space, drop the runs at the
+/// edges (trimming just inside the delimiters), keep `^`/`_` scripts tight, and
+/// let a `%` comment force a line break (so a trailing comment never swallows the
+/// closing delimiter).
+fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    lower_math_seq(node.children_with_tokens(), cx)
+}
+
+/// The separator owed before the next math atom.
+#[derive(PartialEq)]
+enum MathSep {
+    /// Nothing yet (start of body) or just emitted an atom with no following gap.
+    None,
+    /// A collapsed whitespace/newline run: one space.
+    Space,
+    /// A comment forced a line break: a [`Ir::hard_line`].
+    Break,
+}
+
+/// The shared math-atom sequencer (see [`lower_math_body`]). A trailing `Break`
+/// (owed by a comment at the body's end) is emitted rather than trimmed, so the
+/// caller's closing delimiter lands on its own line; a trailing `Space` is
+/// dropped.
+fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+    let mut out: Vec<Ir> = Vec::new();
+    let mut sep = MathSep::None;
+    let mut started = false;
+    let mut iter = elements.peekable();
+    while let Some(el) = iter.next() {
+        match el {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                consume_trivia_run(&t, &mut iter);
+                if started && sep == MathSep::None {
+                    sep = MathSep::Space;
+                }
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
+                if sep == MathSep::Space {
+                    out.push(Ir::verbatim(" "));
+                }
+                out.push(Ir::verbatim(t.text()));
+                started = true;
+                sep = MathSep::Break;
+            }
+            other => {
+                match sep {
+                    MathSep::Space => out.push(Ir::verbatim(" ")),
+                    MathSep::Break => out.push(Ir::hard_line()),
+                    MathSep::None => {}
+                }
+                out.push(lower_math_element(other, cx));
+                started = true;
+                sep = MathSep::None;
+            }
+        }
+    }
+    if sep == MathSep::Break {
+        out.push(Ir::hard_line());
+    }
+    Ir::concat(out)
+}
+
+/// Lower one math atom (a non-trivia element of a math body).
+fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>) -> Ir {
+    match el {
+        SyntaxElement::Node(n) => match n.kind() {
+            SyntaxKind::SCRIPTED => lower_scripted(&n, cx),
+            SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT => lower_script(&n, cx),
+            SyntaxKind::GROUP => lower_math_group(&n, cx),
+            // A command keeps its authored form: its arguments may be text
+            // (`\text{…}`, `\operatorname{…}`), so Stage A does not reformat
+            // inside commands. Verbatim is lossless on a clean parse.
+            SyntaxKind::COMMAND => Ir::verbatim(n.text().to_string()),
+            // Environments, or anything unexpected: defer to generic lowering.
+            _ => lower_node(&n, cx),
+        },
+        SyntaxElement::Token(t) => Ir::verbatim(t.text()),
+    }
+}
+
+/// Lower a `{…}` math group: keep the braces, format the body in math mode.
+fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let inner = node
+        .children_with_tokens()
+        .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE));
+    Ir::concat([
+        Ir::verbatim("{"),
+        lower_math_seq(inner, cx),
+        Ir::verbatim("}"),
+    ])
+}
+
+/// Lower a `SCRIPTED` atom: the base then its `^`/`_` scripts, all tight (the
+/// trivia the parser kept inside the node for losslessness is dropped here).
+fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    Ir::concat(node.children_with_tokens().filter_map(|el| match el {
+        SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
+        SyntaxElement::Node(n)
+            if matches!(n.kind(), SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT) =>
+        {
+            Some(lower_script(&n, cx))
+        }
+        other => Some(lower_math_element(other, cx)),
+    }))
+}
+
+/// Lower a `SUBSCRIPT`/`SUPERSCRIPT`: the `_`/`^` glued tightly to its argument,
+/// stripping redundant braces around a single-token argument where safe (see
+/// [`strippable_script_arg`]).
+fn lower_script(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    Ir::concat(node.children_with_tokens().filter_map(|el| match el {
+        SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
+        SyntaxElement::Token(t)
+            if matches!(t.kind(), SyntaxKind::CARET | SyntaxKind::UNDERSCORE) =>
+        {
+            Some(Ir::verbatim(t.text()))
+        }
+        SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP && strippable_script_arg(&n) => {
+            Some(lower_stripped_group(&n, cx))
+        }
+        other => Some(lower_math_element(other, cx)),
+    }))
+}
+
+/// Whether a script-argument brace group `{X}` may safely drop its braces: `X`
+/// must be a single TeX token (a one-character word or a lone control word) and
+/// the token following the group must not glue onto `X` once the braces are gone
+/// (so `x^{2}y` stays braced — `2y` would re-lex as one word, and `x^{\alpha}b`
+/// stays braced — `\alphab` would be one control word).
+fn strippable_script_arg(group: &SyntaxNode) -> bool {
+    let mut inner = group.children_with_tokens().filter(|el| {
+        !matches!(
+            el.kind(),
+            SyntaxKind::L_BRACE
+                | SyntaxKind::R_BRACE
+                | SyntaxKind::WHITESPACE
+                | SyntaxKind::NEWLINE
+        )
+    });
+    let Some(only) = inner.next() else {
+        return false; // empty `{}` — never strip (`^` needs an argument)
+    };
+    if inner.next().is_some() {
+        return false; // more than one token between the braces
+    }
+    match only {
+        SyntaxElement::Token(t)
+            if t.kind() == SyntaxKind::WORD && t.text().chars().count() == 1 =>
+        {
+            next_token_safe_after(group, false)
+        }
+        SyntaxElement::Node(n) if is_lone_control_word(&n) => next_token_safe_after(group, true),
+        _ => false,
+    }
+}
+
+/// A `COMMAND` node consisting solely of a control word with no attached
+/// arguments (e.g. `\alpha`) — the form whose braces are droppable in script
+/// position.
+fn is_lone_control_word(node: &SyntaxNode) -> bool {
+    if node.kind() != SyntaxKind::COMMAND {
+        return false;
+    }
+    let mut children = node.children_with_tokens();
+    let first_is_control_word = matches!(
+        children.next(),
+        Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::CONTROL_WORD
+    );
+    first_is_control_word && children.next().is_none()
+}
+
+/// True if the token following `group` in the tree would not glue onto a stripped
+/// single-token argument. `letter_only` (for a control-word argument) forbids only
+/// a following ASCII letter; otherwise any word character forbids the strip.
+fn next_token_safe_after(group: &SyntaxNode, letter_only: bool) -> bool {
+    let next = group.last_token().and_then(|t| t.next_token());
+    match next.as_ref().and_then(|t| t.text().chars().next()) {
+        None => true,
+        Some(c) if letter_only => !c.is_ascii_alphabetic(),
+        Some(c) => !crate::parser::lexer::is_word_char(c),
+    }
+}
+
+/// Lower the single inner token of a strippable script-argument group, without
+/// its braces.
+fn lower_stripped_group(group: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    match group.children_with_tokens().find(|el| {
+        !matches!(
+            el.kind(),
+            SyntaxKind::L_BRACE
+                | SyntaxKind::R_BRACE
+                | SyntaxKind::WHITESPACE
+                | SyntaxKind::NEWLINE
+        )
+    }) {
+        Some(el) => lower_math_element(el, cx),
+        None => Ir::nil(),
+    }
+}
+
 fn spans_multiple_lines(node: &SyntaxNode) -> bool {
     node.children_with_tokens()
         .filter_map(|e| e.into_token())

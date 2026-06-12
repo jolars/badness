@@ -319,7 +319,7 @@ fn is_letter(c: char, at_letter: bool) -> bool {
 
 /// Ordinary text: anything that is not whitespace, a line break, or one of the
 /// characters the lexer treats specially.
-fn is_word_char(c: char) -> bool {
+pub(crate) fn is_word_char(c: char) -> bool {
     !matches!(
         c,
         '\\' | '%'

@@ -77,6 +77,52 @@ fn display_math_dollars() {
 }
 
 #[test]
+fn math_scripts_bind_to_base() {
+    // Sub/superscripts in either order, a bare-group base, a command script
+    // argument, and a nested script inside a `{…}` group. Atoms are separated by
+    // `\,` (a control symbol that takes no arguments, so it does not greedily
+    // swallow the following group the way a control word would).
+    insta::assert_snapshot!(tree(
+        r"$x^{n+1} \, a_i^2 \, x^2_i \, {a+b}^2 \, x^\alpha \, x^{a_b}$"
+    ));
+}
+
+#[test]
+fn math_script_with_no_base() {
+    // A leading `^` has no base atom: the `^` is consumed as a bare token and `2`
+    // as the next atom — no SCRIPTED wrapper (the `^` has nothing to bind to).
+    insta::assert_snapshot!(tree(r"$^2$"));
+}
+
+#[test]
+fn math_script_missing_argument_recovers() {
+    // `^` with no argument before the closing `$`: one recovery error, lossless.
+    let parsed = parse(r"$x^$");
+    assert_eq!(parsed.syntax().to_string(), r"$x^$");
+    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["missing argument after `^`/`_`"]);
+}
+
+#[test]
+fn math_script_missing_argument_at_eof_recovers() {
+    // `^` at end of input inside unclosed math: a missing-argument error and an
+    // unclosed-math error, and nothing is corrupted.
+    let parsed = parse(r"$x^");
+    assert_eq!(parsed.syntax().to_string(), r"$x^");
+    assert!(
+        parsed
+            .errors
+            .iter()
+            .any(|e| e.message == "missing argument after `^`/`_`"),
+        "missing-argument is reported"
+    );
+    assert!(
+        parsed.errors.iter().any(|e| e.message == "unclosed `$`"),
+        "unclosed math is reported"
+    );
+}
+
+#[test]
 fn paragraphs_split_on_blank_lines() {
     insta::assert_snapshot!(tree("First line,\nsame paragraph.\n\nSecond paragraph."));
 }

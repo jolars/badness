@@ -1,0 +1,12 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$^2$\")"
+---
+ROOT@0..4
+  PARAGRAPH@0..4
+    INLINE_MATH@0..4
+      DOLLAR@0..1 "$"
+      MATH@1..3
+        CARET@1..2 "^"
+        WORD@2..3 "2"
+      DOLLAR@3..4 "$"

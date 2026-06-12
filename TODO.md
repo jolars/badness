@@ -118,9 +118,14 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       `publishDiagnostics`; stdio smoke test.
 
 - [ ] **Phase 5 --- Math.**
-  - [ ] Structured math model over the generic math tree.
-  - [ ] Precedence-climbing for `^`/`_` binding and primes (the one Pratt
-        site).
+  - [x] Structured math model over the generic math tree. A math-mode descent
+        wraps each body in a `MATH` node and parses atoms (`math_atom`,
+        `math_group`) instead of the text-mode `element`.
+  - [x] Precedence-climbing for `^`/`_` binding and primes (the one Pratt
+        site). `math_scripted` binds scripts into `SCRIPTED`/`SUBSCRIPT`/
+        `SUPERSCRIPT`; primes ride inside `WORD` tokens (no special handling).
+        The formatter lowers math aggressively (collapse spacing, tight scripts,
+        strip redundant single-token script braces where safe).
   - [ ] `\left … \right` delimiter matching.
   - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
         columns, `\\` rows.

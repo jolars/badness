@@ -7,10 +7,11 @@ ROOT@0..9
     DISPLAY_MATH@0..9
       DOLLAR@0..1 "$"
       DOLLAR@1..2 "$"
-      WORD@2..3 "a"
-      WHITESPACE@3..4 " "
-      WORD@4..5 "+"
-      WHITESPACE@5..6 " "
-      WORD@6..7 "b"
+      MATH@2..7
+        WORD@2..3 "a"
+        WHITESPACE@3..4 " "
+        WORD@4..5 "+"
+        WHITESPACE@5..6 " "
+        WORD@6..7 "b"
       DOLLAR@7..8 "$"
       DOLLAR@8..9 "$"

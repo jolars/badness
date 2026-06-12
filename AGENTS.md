@@ -112,9 +112,16 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
 
 - **Losslessness:** `reconstruct(text) == text`, byte-for-byte. Enforced day one.
 - **Idempotence:** `fmt(fmt(x)) == fmt(x)`.
-- **Stability:** `parse(fmt(x))` is structurally equivalent to `parse(x)`.
 - **Protected regions** (`verbatim`, `lstlisting`, `\verb`, comments) are never
   altered by the formatter.
+
+There is deliberately **no** parse-stability invariant (`parse(fmt(x))`
+structurally equal to `parse(x)`). The formatter is allowed to *normalize*
+structure — e.g. stripping redundant braces around a single-token math script
+(`x^{2}` → `x^2`) changes the CST shape on purpose. Such rewrites must preserve
+*meaning* (a correctness requirement carried by fixtures, the corpus, and the
+`latexindent` differential below), but they are not held to structural equality
+with the input.
 
 The formatter is intentionally used to stress the parser: any formatter ambiguity
 should surface a parser modeling gap. Lean on this loop.

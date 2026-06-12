@@ -45,7 +45,10 @@ pub enum SyntaxKind {
     NAME_GROUP,   // {name} following \begin / \end
     INLINE_MATH,  // $ … $   or   \( … \)
     DISPLAY_MATH, // $$ … $$  or   \[ … \]
-    MATH,         // a math body
+    MATH,         // a math body (the atoms between the delimiters)
+    SCRIPTED,     // a base atom with attached scripts: base (SUBSCRIPT | SUPERSCRIPT)+
+    SUBSCRIPT,    // `_` and its tightly-bound script argument
+    SUPERSCRIPT,  // `^` and its tightly-bound script argument
     PARAGRAPH,    // text delimited by blank lines
     TEXT,         // a run of text and trivia
     LINE_BREAK,   // `\\`, with a tightly-bound `*` and/or `[len]` (`\\*[2ex]`)

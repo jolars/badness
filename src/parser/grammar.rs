@@ -393,7 +393,9 @@ impl<'t> Parser<'t> {
         self.close();
     }
 
-    /// Inline `$ … $` or display `$$ … $$` math.
+    /// Inline `$ … $` or display `$$ … $$` math. The body's atoms are wrapped in
+    /// a `MATH` node (the delimiters stay direct children of the math node); the
+    /// atoms themselves are parsed in math mode (see [`Self::math_element`]).
     fn dollar_math(&mut self) {
         let display = self.nth_kind(1) == Some(SyntaxKind::DOLLAR);
         let (kind, label) = if display {
@@ -406,6 +408,7 @@ impl<'t> Parser<'t> {
         if display {
             self.bump(); // second $
         }
+        self.open(SyntaxKind::MATH);
         loop {
             match self.kind() {
                 None => {
@@ -431,10 +434,8 @@ impl<'t> Parser<'t> {
                         self.bump();
                         continue;
                     }
-                    self.bump(); // closing $
-                    if display {
-                        self.bump(); // second closing $
-                    }
+                    // The closing delimiter belongs to the math node, not its
+                    // body: break and bump it after closing `MATH`.
                     break;
                 }
                 _ => {
@@ -442,17 +443,27 @@ impl<'t> Parser<'t> {
                         self.error(format!("unclosed `{label}`"));
                         break;
                     }
-                    self.element();
+                    self.math_element();
                 }
             }
         }
-        self.close();
+        self.close(); // MATH
+        if self.kind() == Some(SyntaxKind::DOLLAR) {
+            self.bump(); // closing $
+            if display {
+                self.bump(); // second closing $
+            }
+        }
+        self.close(); // INLINE_MATH / DISPLAY_MATH
     }
 
-    /// Delimited math: `\[ … \]` (display) or `\( … \)` (inline).
+    /// Delimited math: `\[ … \]` (display) or `\( … \)` (inline). As with
+    /// [`Self::dollar_math`], the body's atoms are wrapped in a `MATH` node and
+    /// parsed in math mode.
     fn delim_math(&mut self, kind: SyntaxKind, opener: &str, closer: &str) {
         self.open(kind);
         self.bump(); // \[ or \(
+        self.open(SyntaxKind::MATH);
         loop {
             match self.kind() {
                 None => {
@@ -460,7 +471,7 @@ impl<'t> Parser<'t> {
                     break;
                 }
                 Some(SyntaxKind::CONTROL_SYMBOL) if self.text() == closer => {
-                    self.bump();
+                    // The closer belongs to the math node, not its body.
                     break;
                 }
                 // A `}` closes an enclosing group: it cannot belong to this
@@ -479,8 +490,154 @@ impl<'t> Parser<'t> {
                         self.error(format!("unclosed `{opener}`"));
                         break;
                     }
-                    self.element();
+                    self.math_element();
                 }
+            }
+        }
+        self.close(); // MATH
+        if self.kind() == Some(SyntaxKind::CONTROL_SYMBOL) && self.text() == closer {
+            self.bump(); // \] or \)
+        }
+        self.close(); // INLINE_MATH / DISPLAY_MATH
+    }
+
+    /// One element inside a math body. Trivia is emitted inline (for
+    /// losslessness); everything else is an atom, possibly carrying `^`/`_`
+    /// scripts (see [`Self::math_scripted`]). Callers guard the math closers and
+    /// recovery anchors before invoking this, so the cursor is at body content.
+    fn math_element(&mut self) {
+        match self.kind() {
+            Some(SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT) => self.bump(),
+            _ => self.math_scripted(),
+        }
+    }
+
+    /// A base atom with any tightly-bound `^`/`_` scripts — the one sanctioned
+    /// Pratt site (`AGENTS.md`, decision #3). Sub/superscripts are postfix with a
+    /// single-atom right operand, so this is a base atom followed by a postfix
+    /// loop, not full precedence climbing.
+    ///
+    /// We only wrap the base in a `SCRIPTED` node when a script actually
+    /// attaches, so an unscripted atom stays a bare token/node (matching the
+    /// `LINE_BREAK`-only-when-modifiers idiom). Because the base atom's extent is
+    /// not known until parsed (a command greedily attaches its args), we parse it
+    /// first and, if a script follows, retroactively splice a `SCRIPTED` start
+    /// event in front of it — the event-stream analog of rust-analyzer's
+    /// `precede`, done locally without touching the event layer.
+    fn math_scripted(&mut self) {
+        let checkpoint = self.events.len();
+        self.math_atom();
+        if !self.at_script() {
+            return; // bare atom, no wrapper
+        }
+        self.events
+            .insert(checkpoint, Event::Start(SyntaxKind::SCRIPTED));
+        while self.at_script() {
+            self.skip_trivia(); // trivia between base/scripts rides inside SCRIPTED
+            let sub = self.kind() == Some(SyntaxKind::UNDERSCORE);
+            self.open(if sub {
+                SyntaxKind::SUBSCRIPT
+            } else {
+                SyntaxKind::SUPERSCRIPT
+            });
+            self.bump(); // `_` or `^`
+            self.math_script_arg();
+            self.close();
+        }
+        self.close(); // SCRIPTED
+    }
+
+    /// True if a `^`/`_` script operator directly follows, skipping only
+    /// `WHITESPACE`/`NEWLINE` (not a comment, which must end its line — so a
+    /// script never binds across a comment) and not a blank line (a paragraph
+    /// break ends the math).
+    fn at_script(&self) -> bool {
+        let mut i = self.pos;
+        let mut newlines = 0;
+        while let Some(t) = self.tokens.get(i) {
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    if newlines >= 2 {
+                        return false;
+                    }
+                    i += 1;
+                }
+                SyntaxKind::WHITESPACE => i += 1,
+                SyntaxKind::CARET | SyntaxKind::UNDERSCORE => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// A single base atom: a `{…}` group (parsed in math mode), a command with
+    /// its greedily-attached arguments, an environment, a `\\` line break, or one
+    /// ordinary token. Always consumes ≥1 token when the cursor is at content.
+    fn math_atom(&mut self) {
+        match self.kind() {
+            Some(SyntaxKind::L_BRACE) => self.math_group(),
+            Some(SyntaxKind::CONTROL_WORD) => {
+                if self.at_command(BEGIN_CMD) {
+                    self.environment();
+                } else if self.at_command(END_CMD) {
+                    self.stray_end();
+                } else {
+                    self.command();
+                }
+            }
+            // `\\` line break (with its tightly-bound `*`/`[len]`) vs. a bare
+            // control symbol (`\,`, `\;`, `\!`, spacing) — emit the latter as a
+            // single token.
+            Some(SyntaxKind::CONTROL_SYMBOL) if self.text() == "\\\\" => self.line_break(),
+            // Any other single token (WORD, digit, `&`, `~`, `#`, brackets, a
+            // bare control symbol, or a `^`/`_` with no base): one token, so the
+            // loop always makes progress.
+            Some(_) => self.bump(),
+            None => {}
+        }
+    }
+
+    /// One script argument: a single atom (a `{…}` group, a command with its
+    /// args, or one token). A missing argument (the next meaningful token is a
+    /// closer, `\end`, a paragraph break, or EOF) is reported, not consumed —
+    /// the closer must stay for the enclosing math loop.
+    fn math_script_arg(&mut self) {
+        if self.at_paragraph_break() {
+            self.error("missing argument after `^`/`_`");
+            return;
+        }
+        self.skip_trivia();
+        let missing = match self.kind() {
+            None | Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => true,
+            Some(SyntaxKind::CONTROL_SYMBOL) => matches!(self.text(), "\\]" | "\\)"),
+            Some(SyntaxKind::CONTROL_WORD) => self.at_command(END_CMD),
+            _ => false,
+        };
+        if missing {
+            self.error("missing argument after `^`/`_`");
+            return;
+        }
+        self.math_atom();
+    }
+
+    /// A brace group `{ … }` whose body is parsed in math mode (so `x^{a_b}`
+    /// nests). Recovery mirrors [`Self::group`].
+    fn math_group(&mut self) {
+        debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACE));
+        self.open(SyntaxKind::GROUP);
+        self.bump(); // {
+        loop {
+            match self.kind() {
+                None => {
+                    self.error("unclosed `{`");
+                    break;
+                }
+                Some(SyntaxKind::R_BRACE) => {
+                    self.bump();
+                    break;
+                }
+                _ => self.math_element(),
             }
         }
         self.close();

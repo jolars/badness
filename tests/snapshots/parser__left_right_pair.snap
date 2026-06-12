@@ -1,0 +1,23 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$\\left( x + y \\right)$\")"
+---
+ROOT@0..22
+  PARAGRAPH@0..22
+    INLINE_MATH@0..22
+      DOLLAR@0..1 "$"
+      MATH@1..21
+        LEFT_RIGHT@1..21
+          CONTROL_WORD@1..6 "\\left"
+          WORD@6..7 "("
+          MATH@7..14
+            WHITESPACE@7..8 " "
+            WORD@8..9 "x"
+            WHITESPACE@9..10 " "
+            WORD@10..11 "+"
+            WHITESPACE@11..12 " "
+            WORD@12..13 "y"
+            WHITESPACE@13..14 " "
+          CONTROL_WORD@14..20 "\\right"
+          WORD@20..21 ")"
+      DOLLAR@21..22 "$"

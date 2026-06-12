@@ -126,7 +126,17 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
         `SUPERSCRIPT`; primes ride inside `WORD` tokens (no special handling).
         The formatter lowers math aggressively (collapse spacing, tight scripts,
         strip redundant single-token script braces where safe).
-  - [ ] `\left … \right` delimiter matching.
+  - [x] `\left … \right` delimiter matching. A lexer mode isolates the single
+        delimiter token after `\left`/`\right` (word-character delimiters like
+        `(` would otherwise glue into the next word run); the parser builds a
+        `LEFT_RIGHT` node (delimiters as direct children, body wrapped in `MATH`)
+        with count-based nesting (matching TeX), unclosed-`\left`/stray-`\right`/
+        missing-delimiter recovery; the formatter sets a non-empty body off with
+        one space just inside each delimiter (`\left( x + y \right)`; that spacing
+        also stops a control-word delimiter like `\langle` from gluing onto the
+        body), leaving an empty body tight (`\left.\right.`). Math-mode contexts
+        only (`$`/`\[`/`\(`); `\left` inside `equation`/`align` arrives with the
+        alignment-aware item.
   - [ ] Alignment-aware formatting: `align`, `matrix`/`pmatrix`, `&`
         columns, `\\` rows.
 

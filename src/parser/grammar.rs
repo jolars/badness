@@ -20,6 +20,8 @@ use crate::syntax::SyntaxKind;
 
 const BEGIN_CMD: &str = "\\begin";
 const END_CMD: &str = "\\end";
+const LEFT_CMD: &str = "\\left";
+const RIGHT_CMD: &str = "\\right";
 
 /// A content region that groups its children into `PARAGRAPH` nodes separated
 /// by blank lines. Differs only in how the region terminates.
@@ -582,6 +584,10 @@ impl<'t> Parser<'t> {
                     self.environment();
                 } else if self.at_command(END_CMD) {
                     self.stray_end();
+                } else if self.at_command(LEFT_CMD) {
+                    self.left_right();
+                } else if self.at_command(RIGHT_CMD) {
+                    self.stray_right();
                 } else {
                     self.command();
                 }
@@ -641,6 +647,95 @@ impl<'t> Parser<'t> {
             }
         }
         self.close();
+    }
+
+    /// A `\left<delim> … \right<delim>` matched delimiter pair (`AGENTS.md`,
+    /// decision #3: the one precedence-climbing site — here just balanced
+    /// matching by *count*, which is exactly how TeX pairs them, so a mismatched
+    /// `\left( … \right]` still nests correctly). The `\left`/`\right` control
+    /// words and their delimiter tokens are direct children (mirroring how `$` /
+    /// `\[` delimiters stay direct children of the math node); the enclosed atoms
+    /// are wrapped in a `MATH` body. Nested pairs recurse via [`Self::math_atom`].
+    ///
+    /// An unclosed `\left` recovers at the enclosing math/group/environment
+    /// closer (the same anchors the surrounding math loop uses), leaving that
+    /// token for the caller.
+    fn left_right(&mut self) {
+        debug_assert!(self.at_command(LEFT_CMD));
+        self.open(SyntaxKind::LEFT_RIGHT);
+        self.bump(); // \left
+        self.math_delim(LEFT_CMD);
+        self.open(SyntaxKind::MATH);
+        loop {
+            match self.kind() {
+                None => {
+                    self.error("unclosed `\\left`");
+                    break;
+                }
+                Some(SyntaxKind::CONTROL_WORD) if self.at_command(RIGHT_CMD) => break,
+                // Enclosing-scope closers: `\left … \right` cannot span a group,
+                // math, or environment boundary, so hand the token back.
+                Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => {
+                    self.error("unclosed `\\left`");
+                    break;
+                }
+                Some(SyntaxKind::CONTROL_SYMBOL) if matches!(self.text(), "\\]" | "\\)") => {
+                    self.error("unclosed `\\left`");
+                    break;
+                }
+                Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
+                    self.error("unclosed `\\left`");
+                    break;
+                }
+                _ => {
+                    if self.at_paragraph_break() {
+                        self.error("unclosed `\\left`");
+                        break;
+                    }
+                    self.math_element();
+                }
+            }
+        }
+        self.close(); // MATH
+        if self.at_command(RIGHT_CMD) {
+            self.bump(); // \right
+            self.math_delim(RIGHT_CMD);
+        }
+        self.close(); // LEFT_RIGHT
+    }
+
+    /// Consume the single delimiter token following `\left`/`\right`: skip inline
+    /// trivia (it rides as a direct child of the pair for losslessness; the
+    /// formatter drops it), then take one token. The lexer has already isolated a
+    /// word-character delimiter (`(`, `|`, `.`, …) into its own token, so a single
+    /// `bump` suffices. A missing delimiter — the next meaningful token is a
+    /// closer, another `\left`/`\right`, `\end`, a paragraph break, or EOF — is
+    /// reported, not consumed.
+    fn math_delim(&mut self, after: &str) {
+        self.skip_trivia();
+        let missing = match self.kind() {
+            None | Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => true,
+            Some(SyntaxKind::CONTROL_SYMBOL) => matches!(self.text(), "\\]" | "\\)"),
+            Some(SyntaxKind::CONTROL_WORD) => {
+                self.at_command(END_CMD) || self.at_command(LEFT_CMD) || self.at_command(RIGHT_CMD)
+            }
+            _ => false,
+        };
+        if missing {
+            self.error(format!("missing delimiter after `{after}`"));
+            return;
+        }
+        self.bump();
+    }
+
+    /// A `\right` with no open `\left` (the math loop only reaches one here when
+    /// it is unmatched). Report it and consume it with its delimiter so the parse
+    /// stays lossless and makes progress.
+    fn stray_right(&mut self) {
+        debug_assert!(self.at_command(RIGHT_CMD));
+        self.error("`\\right` without matching `\\left`");
+        self.bump(); // \right
+        self.math_delim(RIGHT_CMD);
     }
 
     /// `\begin{name} … \end{name}`, with environment-mismatch recovery.

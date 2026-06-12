@@ -16,6 +16,11 @@
 //!   body starts); see [`lex_verbatim_environment`].
 //! - **`\makeatletter` / `\makeatother`**: toggles `@` into a letter so that
 //!   `\foo@bar` lexes as one control word.
+//! - **`\left` / `\right` delimiters**: the single delimiter that follows is
+//!   isolated as its own token, so a word-character delimiter (`(`, `)`, `|`,
+//!   `/`, `.`, `<`, `>`) does not glue into the following word run and become
+//!   un-splittable downstream (the same problem `\verb` has). Control-symbol /
+//!   control-word / bracket delimiters already lex as single tokens.
 //!
 //! None of these resolve macro meaning; they are surface lexing concerns (in
 //! TeX, catcodes genuinely change in these regions).
@@ -51,16 +56,26 @@ pub fn lex(input: &str) -> Vec<Token> {
     let mut out = Vec::new();
     let mut pos = 0;
     let mut at_letter = false; // `\makeatletter` state
+    // True when the previous meaningful token was `\left`/`\right`, so the next
+    // delimiter must be isolated as a single token (it carries across whitespace,
+    // which TeX skips before the delimiter).
+    let mut pending_delim = false;
     while pos < input.len() {
         let rest = &input[pos..];
 
         // Verbatim-like environment: emit `\begin{name}` then a raw body token.
         if let Some(consumed) = lex_verbatim_environment(rest, &mut out) {
             pos += consumed;
+            pending_delim = false;
             continue;
         }
 
-        let (kind, len) = next_token(rest, at_letter);
+        let (kind, mut len) = next_token(rest, at_letter);
+        // A `\left`/`\right` delimiter that lexes as a word run: keep only its
+        // first character so it does not glue into the following text.
+        if pending_delim && kind == SyntaxKind::WORD {
+            len = rest.chars().next().expect("rest is non-empty").len_utf8();
+        }
         debug_assert!(len > 0, "lexer made no progress at byte {pos}");
         let text = &rest[..len];
         if kind == SyntaxKind::CONTROL_WORD {
@@ -70,6 +85,12 @@ pub fn lex(input: &str) -> Vec<Token> {
                 _ => {}
             }
         }
+        pending_delim = match kind {
+            // Trivia is skipped before the delimiter, so the mode persists.
+            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => pending_delim,
+            SyntaxKind::CONTROL_WORD if text == "\\left" || text == "\\right" => true,
+            _ => false,
+        };
         out.push(Token {
             kind,
             text: SmolStr::new(text),
@@ -367,6 +388,7 @@ mod tests {
             "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}",
             "\\begin{lstlisting}\n[1,2,3]\n\\end{lstlisting}",
             r"\makeatletter\a@b\makeatother\a@b",
+            r"$\left(x+y\right)^2 \left.\frac{a}{b}\right|_0$",
         ] {
             assert_lossless(input);
         }
@@ -425,6 +447,64 @@ mod tests {
         let toks = lex(r"\verb|x");
         assert_eq!(toks[0].kind, SyntaxKind::CONTROL_WORD);
         assert_eq!(toks[0].text, r"\verb");
+    }
+
+    #[test]
+    fn left_right_isolate_word_delimiter() {
+        // `(` would normally glue into `(x+y` as one word; after `\left` it is
+        // its own one-character token, and `\right)`'s `)` likewise.
+        let toks = lex(r"\left(x+y\right)");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert_eq!(
+            seen,
+            [
+                (SyntaxKind::CONTROL_WORD, "\\left"),
+                (SyntaxKind::WORD, "("),
+                (SyntaxKind::WORD, "x+y"),
+                (SyntaxKind::CONTROL_WORD, "\\right"),
+                (SyntaxKind::WORD, ")"),
+            ]
+        );
+    }
+
+    #[test]
+    fn left_delimiter_carries_across_whitespace() {
+        // TeX skips spaces before the delimiter; the mode persists so `(` is
+        // still isolated.
+        let toks = lex(r"\left ( a");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert_eq!(
+            seen,
+            [
+                (SyntaxKind::CONTROL_WORD, "\\left"),
+                (SyntaxKind::WHITESPACE, " "),
+                (SyntaxKind::WORD, "("),
+                (SyntaxKind::WHITESPACE, " "),
+                (SyntaxKind::WORD, "a"),
+            ]
+        );
+    }
+
+    #[test]
+    fn left_non_word_delimiters_are_untouched() {
+        // A control-symbol (`\{`), control-word (`\langle`), or bracket delimiter
+        // already lexes as a single token, so the mode changes nothing.
+        for input in [r"\left\{", r"\left\langle", r"\left["] {
+            assert_lossless(input);
+        }
+        let toks = lex(r"\left\langle x \right\rangle");
+        assert!(toks.iter().any(|t| t.text == "\\langle"));
+        assert!(toks.iter().any(|t| t.text == "\\rangle"));
+    }
+
+    #[test]
+    fn leftarrow_is_not_left() {
+        // The maximal letter run keeps `\leftarrow` one control word, so the
+        // delimiter mode never triggers.
+        let toks = lex(r"\leftarrow(x)");
+        assert_eq!(toks[0].text, "\\leftarrow");
+        // `(x)` glues normally — the mode did not fire.
+        assert_eq!(toks[1].text, "(x)");
     }
 
     #[test]

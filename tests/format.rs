@@ -46,6 +46,9 @@ const CLEAN_CASES: &[&str] = &[
     // all invariants (idempotent, clean, lossless).
     r"$x^{2} + a_i^{n+1} + {a+b}^2$",
     r"\[ x ^ 2 \quad y_\alpha \]",
+    // `\left … \right` matched pairs: nested, scripted, and a control-word
+    // delimiter — the new lowering must stay idempotent, clean, and lossless.
+    r"$\left[ \left( a \right) \right]^2 + \left\langle x \right\rangle$",
     "a % comment\nb",
     r"\begin{itemize}\item one\end{itemize}",
     "unicode: café — naïve ∑∫ 𝕏",
@@ -167,6 +170,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_strip_single_token_braces", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),
+    // `\left … \right` matched pairs: lowered tight to their delimiters (the body
+    // trimmed just inside), with nesting and scripts on the whole pair. A
+    // control-word delimiter (`\langle`) keeps one space so the body cannot glue
+    // onto it (`\left\langlex` would re-lex as one control word).
+    ("math_left_right", WrapMode::Preserve, 80),
+    ("math_left_right_control_word_delim", WrapMode::Preserve, 80),
+    ("math_left_right_nested_scripted", WrapMode::Preserve, 80),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

@@ -1,0 +1,19 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$\\left\\langle x \\right\\rangle$\")"
+---
+ROOT@0..30
+  PARAGRAPH@0..30
+    INLINE_MATH@0..30
+      DOLLAR@0..1 "$"
+      MATH@1..29
+        LEFT_RIGHT@1..29
+          CONTROL_WORD@1..6 "\\left"
+          CONTROL_WORD@6..13 "\\langle"
+          MATH@13..16
+            WHITESPACE@13..14 " "
+            WORD@14..15 "x"
+            WHITESPACE@15..16 " "
+          CONTROL_WORD@16..22 "\\right"
+          CONTROL_WORD@22..29 "\\rangle"
+      DOLLAR@29..30 "$"

@@ -1,0 +1,31 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$\\left[ \\left( a \\right) \\right]^2$\")"
+---
+ROOT@0..35
+  PARAGRAPH@0..35
+    INLINE_MATH@0..35
+      DOLLAR@0..1 "$"
+      MATH@1..34
+        SCRIPTED@1..34
+          LEFT_RIGHT@1..32
+            CONTROL_WORD@1..6 "\\left"
+            L_BRACKET@6..7 "["
+            MATH@7..25
+              WHITESPACE@7..8 " "
+              LEFT_RIGHT@8..24
+                CONTROL_WORD@8..13 "\\left"
+                WORD@13..14 "("
+                MATH@14..17
+                  WHITESPACE@14..15 " "
+                  WORD@15..16 "a"
+                  WHITESPACE@16..17 " "
+                CONTROL_WORD@17..23 "\\right"
+                WORD@23..24 ")"
+              WHITESPACE@24..25 " "
+            CONTROL_WORD@25..31 "\\right"
+            R_BRACKET@31..32 "]"
+          SUPERSCRIPT@32..34
+            CARET@32..33 "^"
+            WORD@33..34 "2"
+      DOLLAR@34..35 "$"

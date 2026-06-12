@@ -719,6 +719,7 @@ fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>) -> Ir {
             SyntaxKind::SCRIPTED => lower_scripted(&n, cx),
             SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT => lower_script(&n, cx),
             SyntaxKind::GROUP => lower_math_group(&n, cx),
+            SyntaxKind::LEFT_RIGHT => lower_left_right(&n, cx),
             // A command keeps its authored form: its arguments may be text
             // (`\text{…}`, `\operatorname{…}`), so Stage A does not reformat
             // inside commands. Verbatim is lossless on a clean parse.
@@ -740,6 +741,41 @@ fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         lower_math_seq(inner, cx),
         Ir::verbatim("}"),
     ])
+}
+
+/// Lower a `\left( … \right)` pair: the `\left`/`\right` control words and their
+/// delimiter tokens are emitted verbatim, the inner `MATH` body is trimmed and
+/// collapsed by [`lower_math_body`], and the trivia the parser kept between a
+/// delimiter command and its delimiter (for losslessness) is dropped.
+///
+/// A non-empty body is set off by one space just inside each delimiter, so
+/// `\left (  x + y  \right )` becomes `\left( x + y \right)`. That spacing is also
+/// what keeps a control-word delimiter from gluing onto the body (`\left\langle x`
+/// stays two tokens, never `\left\langlex`). An empty body stays tight
+/// (`\left.\right.`).
+fn lower_left_right(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    Ir::concat(node.children_with_tokens().filter_map(|el| match el {
+        SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
+        SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
+            if math_body_is_empty(&n) {
+                None
+            } else {
+                Some(Ir::concat([
+                    Ir::verbatim(" "),
+                    lower_math_body(&n, cx),
+                    Ir::verbatim(" "),
+                ]))
+            }
+        }
+        SyntaxElement::Token(t) => Some(Ir::verbatim(t.text())),
+        SyntaxElement::Node(n) => Some(lower_node(&n, cx)),
+    }))
+}
+
+/// Whether a math body has no visible content (only whitespace/newlines), so a
+/// `\left( … \right)` around it should not gain inner spaces.
+fn math_body_is_empty(node: &SyntaxNode) -> bool {
+    node.text().to_string().trim().is_empty()
 }
 
 /// Lower a `SCRIPTED` atom: the base then its `^`/`_` scripts, all tight (the

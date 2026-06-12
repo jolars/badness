@@ -49,6 +49,7 @@ pub enum SyntaxKind {
     SCRIPTED,     // a base atom with attached scripts: base (SUBSCRIPT | SUPERSCRIPT)+
     SUBSCRIPT,    // `_` and its tightly-bound script argument
     SUPERSCRIPT,  // `^` and its tightly-bound script argument
+    LEFT_RIGHT,   // `\left( … \right)` — a matched delimiter pair wrapping a MATH body
     PARAGRAPH,    // text delimited by blank lines
     TEXT,         // a run of text and trivia
     LINE_BREAK,   // `\\`, with a tightly-bound `*` and/or `[len]` (`\\*[2ex]`)

@@ -53,9 +53,20 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
 
    We **do** handle a bounded, growing set of *statically recognizable* patterns as
    lexer modes or semantic enrichment — `\makeatletter`/`\makeatother`,
-   `\verb`/verbatim-like environments, and `\newcommand`/`xparse` *signatures*
-   (extracted, never executed). Anything we cannot statically resolve degrades to
-   generic nodes (plus a diagnostic where useful), never a crash or corruption.
+   `\verb`/verbatim-like environments, `\left`/`\right` delimiter isolation, and
+   `\newcommand`/`xparse` *signatures* (extracted, never executed). Anything we
+   cannot statically resolve degrades to generic nodes (plus a diagnostic where
+   useful), never a crash or corruption.
+
+   **`\left`/`\right` delimiter isolation (a sanctioned lexer mode):** the single
+   delimiter following `\left`/`\right` is emitted as its own token, so a
+   word-character delimiter (`(`, `)`, `|`, `/`, `.`, `<`, `>`) does not glue into
+   the following word run and become un-splittable downstream (the same
+   surface-lexing problem `\verb` has — control-symbol/control-word/bracket
+   delimiters already lex as single tokens). The mode reads only the static fact
+   "the previous control word was `\left`/`\right`"; no macro meaning is resolved,
+   so it stays inside this decision's sanctioned set. The matched pair
+   (`LEFT_RIGHT`) is then built by the parser per decision #3.
 
    **Exception to "meaning never leaks into the parser" (decision #2), recorded
    deliberately:** for *argument-taking* verbatim environments (`lstlisting`,

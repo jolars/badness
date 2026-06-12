@@ -88,6 +88,64 @@ fn math_scripts_bind_to_base() {
 }
 
 #[test]
+fn left_right_pair() {
+    // `\left( … \right)`: the `\left`/`\right` and their delimiter tokens are
+    // direct children, the enclosed atoms wrapped in a `MATH` body.
+    insta::assert_snapshot!(tree(r"$\left( x + y \right)$"));
+}
+
+#[test]
+fn left_right_nested_and_scripted() {
+    // Nested pairs recurse, and a script after `\right)` binds to the whole pair
+    // (the `SCRIPTED` wraps the `LEFT_RIGHT`). The inner `\left[`/`\right]` is a
+    // separate pair.
+    insta::assert_snapshot!(tree(r"$\left[ \left( a \right) \right]^2$"));
+}
+
+#[test]
+fn left_right_control_word_delimiters() {
+    // A control-word delimiter (`\langle`/`\rangle`) is the delimiter token; a
+    // control-symbol one (`\|`) likewise.
+    insta::assert_snapshot!(tree(r"$\left\langle x \right\rangle$"));
+}
+
+#[test]
+fn unclosed_left_recovers() {
+    // `\left(` with no `\right` before the closing `$`: an unclosed-`\left` error,
+    // the `$` handed back to close the math, and nothing corrupted.
+    let parsed = parse(r"$\left( x $");
+    assert_eq!(parsed.syntax().to_string(), r"$\left( x $");
+    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["unclosed `\\left`"]);
+}
+
+#[test]
+fn stray_right_reports() {
+    // A `\right)` with no open `\left`: reported, consumed with its delimiter,
+    // still lossless.
+    let parsed = parse(r"$x \right) y$");
+    assert_eq!(parsed.syntax().to_string(), r"$x \right) y$");
+    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["`\\right` without matching `\\left`"]);
+}
+
+#[test]
+fn left_missing_delimiter_recovers() {
+    // `\left` immediately followed by `\right` (no delimiters): one error per
+    // missing delimiter, lossless.
+    let parsed = parse(r"$\left \right$");
+    assert_eq!(parsed.syntax().to_string(), r"$\left \right$");
+    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        [
+            "missing delimiter after `\\left`",
+            "missing delimiter after `\\right`"
+        ]
+    );
+}
+
+#[test]
 fn math_script_with_no_base() {
     // A leading `^` has no base atom: the `^` is consumed as a bare token and `2`
     // as the next atom — no SCRIPTED wrapper (the `^` has nothing to bind to).

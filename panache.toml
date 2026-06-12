@@ -7,4 +7,5 @@ extend-exclude = [
   "CLAUDE.md",
   ".claude/**/*",
   "PARSE_COMPAT.md",
+  "npm/platform-template/README.md",
 ]

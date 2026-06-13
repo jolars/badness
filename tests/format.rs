@@ -286,6 +286,20 @@ fn user_definition_drives_begin_argument_glue() {
     );
 }
 
+/// Environments carrying the `noIndent` signature flag (`document`) keep their body
+/// flush against the surrounding indentation, while environments nested inside them
+/// still indent normally. This pins the convention that `\begin{document}` content
+/// sits at the margin.
+#[test]
+fn no_indent_environment_keeps_body_flush() {
+    let input = "\\begin{document}\nHello.\n\n\\begin{itemize}\n\\item one\n\\end{itemize}\n\\end{document}\n";
+    assert_eq!(
+        format(input).expect("formats"),
+        "\\begin{document}\nHello.\n\n\\begin{itemize}\n  \\item one\n\\end{itemize}\n\\end{document}\n",
+        "document body must stay flush while nested itemize indents"
+    );
+}
+
 #[test]
 fn format_rejects_unparseable_input() {
     // A stray closing brace yields a parser diagnostic; the formatter refuses it

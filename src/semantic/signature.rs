@@ -93,6 +93,11 @@ pub struct EnvironmentSig {
     /// `!(verbatim_body || math)`. (Reflow itself is a later item; this is the
     /// recorded intent.)
     pub reflow: bool,
+    /// `true` for environments whose body the formatter must *not* indent
+    /// (`document`, …). The body is still laid out on its own lines, just at the
+    /// surrounding indentation level — `\begin{document}` content conventionally
+    /// sits flush against the margin.
+    pub no_indent: bool,
 }
 
 /// The built-in command and environment signatures, keyed by name (without the
@@ -266,6 +271,8 @@ struct RawEnvironment {
     math: bool,
     #[serde(default)]
     align: bool,
+    #[serde(default, rename = "noIndent")]
+    no_indent: bool,
 }
 
 impl From<RawEnvironment> for EnvironmentSig {
@@ -277,6 +284,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             align: raw.align,
             // A body is reflowable prose unless it is verbatim or math.
             reflow: !(raw.verbatim_body || raw.math),
+            no_indent: raw.no_indent,
         }
     }
 }

@@ -35,6 +35,8 @@
   },
 
   "environments": {
+    "document": { "noIndent": true },
+
     "tabular": { "args": ["opt", "req"] },
     "tabular*": { "args": ["req", "opt", "req"] },
     "array": { "args": ["opt", "req"] },

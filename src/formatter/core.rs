@@ -401,6 +401,10 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if matches!(body, Ir::Nil) {
         // Empty body: keep `\begin` and `\end` on their own lines.
         Ir::concat([begin, Ir::hard_line(), end])
+    } else if environment_no_indent(node, cx) {
+        // `document` and friends: lay the body on its own lines, but flush against
+        // the surrounding indentation rather than nesting it.
+        Ir::concat([begin, Ir::hard_line(), body, Ir::hard_line(), end])
     } else {
         Ir::concat([
             begin,
@@ -409,6 +413,18 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             end,
         ])
     }
+}
+
+/// Whether the environment's body should be left at the surrounding indentation
+/// level rather than nested one step in (the `noIndent` signature flag — see
+/// [`crate::semantic::signature::EnvironmentSig::no_indent`]). The canonical case
+/// is `document`, whose body conventionally sits flush against the margin.
+fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    node.children()
+        .find(|child| child.kind() == SyntaxKind::BEGIN)
+        .and_then(|begin| environment_name(&begin))
+        .and_then(|name| cx.signatures.environment(&name))
+        .is_some_and(|sig| sig.no_indent)
 }
 
 /// Lower a `\begin{name}` node, keeping the environment's *declared* argument

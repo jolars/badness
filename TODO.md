@@ -42,29 +42,29 @@ precedence-climbing `^`/`_`, `\left…\right` matching with a delimiter-isolatio
 lexer mode); texlab differential parse oracle.
 
 - [ ] Block-vs-inline refinement: a lone block env is wrapped in a `PARAGRAPH`;
-      the signature DB can later avoid that.
+  the signature DB can later avoid that.
 - [ ] Trivia-attachment policy (leading vs. trailing) --- pick one, document it.
-      *(open decision)*
+  *(open decision)*
 
 ## Formatter
 
 Done: `badness format` (parse → Wadler IR → print); **\[copy\]** IR + printer
 engine; whitespace normalization, environment + group/argument indentation
-(printer-owned, idempotent); paragraph reflow (`WrapMode`, `Ir::Fill`,
-default `Reflow`); prose-argument reflow (signature-DB `prose` flag, soft
-`Ir::group` around the fill engine); aggressive math lowering (collapse spacing,
-tight scripts, strip redundant single-token script braces); `\left…\right`
-spacing; alignment-aware `align`/matrix column grids. Protected regions
-untouched; idempotence + losslessness asserted.
+(printer-owned, idempotent); paragraph reflow (`WrapMode`, `Ir::Fill`, default
+`Reflow`); prose-argument reflow (signature-DB `prose` flag, soft `Ir::group`
+around the fill engine); aggressive math lowering (collapse spacing, tight
+scripts, strip redundant single-token script braces); `\left…\right` spacing;
+alignment-aware `align`/matrix column grids. Protected regions untouched;
+idempotence + losslessness asserted.
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
-      today. *Demoted, much later.*
+  today. *Demoted, much later.*
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
-      a prose arg onto its command line when a source break separates them.
+  a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body
-      fallback); column-spec-aware L/C/R alignment for text `tabular`/`array`.
-- [ ] Decide formatter opinionatedness: which choices are configurable vs. fixed.
-      *(open decision)*
+  fallback); column-spec-aware L/C/R alignment for text `tabular`/`array`.
+- [ ] Decide formatter opinionatedness: which choices are configurable vs.
+  fixed. *(open decision)*
 
 ## Linter
 
@@ -75,47 +75,119 @@ registry) wired into the CLI and the LSP `publishDiagnostics` path;
 single-file duplicate-label lints.
 
 - [ ] More lints: unmatched delimiters, undefined refs (needs the cross-file
-      resolver), stylistic checks.
+  resolver), stylistic checks.
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
-      (Tenet 5). `deprecated-command`'s `\bf → \bfseries` is the natural first
-      fix.
+  (Tenet 5). `deprecated-command`'s `\bf → \bfseries` is the natural first
+  fix.
 
 ## Semantic layer & signatures
 
 Done: `semantic_model` (flat label/ref def-use model, `Eq`-backdating); built-in
 signature DB (`data/signatures.json`); project include graph
 (`\input`/`\include`/`\import`/`\subfile`, salsa firewall +
-reachability/cycles); `\newcommand`/`\newenvironment`/`xparse` signature scanning
-(`semantic/define.rs`, `semantic/xparse.rs`; scanned overlaid over built-in;
-consumed by the formatter's `\begin` arity glue).
+reachability/cycles); `\newcommand`/`\newenvironment`/`xparse` signature
+scanning (`semantic/define.rs`, `semantic/xparse.rs`; scanned overlaid over
+built-in; consumed by the formatter's `\begin` arity glue).
 
 - [ ] Cross-file label resolution (`file_labels` firewall → project-level
-      `resolved_labels`) + duplicate-label / undefined-ref diagnostics. Today's
-      `unreferenced_labels`/`unresolved_refs` are per-file *facts*, not lints.
+  `resolved_labels`) + duplicate-label / undefined-ref diagnostics. Today's
+  `unreferenced_labels`/`unresolved_refs` are per-file *facts*, not lints.
 - [ ] Unbraced `\newcommand\foo…` form (parses with `\foo` as a sibling; needs
-      scanner-side sibling heuristics, not parser changes).
+  scanner-side sibling heuristics, not parser changes).
 - [ ] Salsa `document_signatures` query once an LSP consumer (hover/completion)
-      wants the scanned command sigs.
+  wants the scanned command sigs.
 - [ ] CWL corpus ingest (an import format converted *into* the signature schema)
-      once ecosystem breadth (e.g. LSP completion) needs it.
-- [ ] How much of `\newcommand` / `xparse` to model for the signature DB.
-      *(open decision)*
+  once ecosystem breadth (e.g. LSP completion) needs it.
+- [ ] How much of `\newcommand` / `xparse` to model for the signature DB. *(open
+  decision)*
 
 ## Language server
 
 Done: `src/lsp.rs` + `badness lsp` (single-threaded, salsa-backed `lsp-server`
-loop **\[diverge\]**); lifecycle, full-document sync,
-`textDocument/formatting`, `publishDiagnostics` (parse + lint); cached-tree
-reuse (`compute_format` → `format_node`); stdio smoke test.
+loop **\[diverge\]**); ra-style threading (main loop / sole-writer worker / read
+pool, `decide`-scheduled analyze with supersede-on-newer-edit); lifecycle,
+incremental text sync (`apply_content_changes` UTF-16 splice),
+`textDocument/formatting`, `publishDiagnostics` (parse + lint, version-gated);
+cached-tree reuse (`compute_format` → `format_node`); `EditorSettings` over
+`initializationOptions` + `didChangeConfiguration`; stdio smoke test.
 
-- [ ] `--wrap`/config over LSP --- today `EditorSettings` carries only
-      `line_width`/`indent_width`; `wrap` is hardcoded `Reflow`.
-- [ ] Range formatting.
-- [ ] Document symbols + folding.
-- [ ] Hover + completion from the signature DB.
-- [ ] Go-to-definition / rename for labels and refs.
-- [ ] Incremental `didChange` sync.
-- [ ] README editor-wiring docs.
+arity (`../arity/src/lsp.rs`) is the feature template: it ships formatting,
+range formatting, code actions, hover, definition, references, document
+highlight, document symbol, and prepare-rename/rename. Most of these map
+directly onto badness's existing semantic layer (label/ref def-use model,
+signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
+
+### Configuration & sync
+
+- [ ] config over LSP --- today `EditorSettings` carries only
+  `line_width`/`indent_width`; `wrap` is hardcoded `Reflow`. Plumb
+  `WrapMode` (and any future format knobs) through `EditorSettings` →
+  `FormatStyle`, keeping the namespaced/bare parsing.
+- [ ] Pull diagnostics (`textDocument/diagnostic` + `workspace/diagnostic`) as a
+  capability alongside the current push model, for clients that prefer it.
+- [ ] `workspace/didChangeWatchedFiles` so on-disk edits to non-open includes
+  (the project graph's leaves) refresh cross-file analysis.
+
+### Formatting
+
+- [ ] Range formatting (`textDocument/rangeFormatting`) --- format the smallest
+  enclosing node(s) covering the selection; clamp to node boundaries so a
+  partial selection never corrupts the tree. Mirror arity's
+  `on_range_formatting`.
+- [ ] On-type formatting (`textDocument/onTypeFormatting`), e.g. re-indent on
+  `}`/`\end{…}` close. *Lower priority; opt-in trigger characters.*
+
+### Navigation & structure
+
+- [ ] Document symbols (`textDocument/documentSymbol`) --- a nested outline from
+  the signature DB's `sectioning` levels (part/chapter/section/…), plus
+  environments (`figure`/`table`/`theorem`) and labels as leaves.
+- [ ] Folding ranges (`textDocument/foldingRange`) --- environments, sectioning
+  spans, and long comment blocks.
+- [ ] Selection ranges (`textDocument/selectionRange`) --- expand-selection from
+  the CST's node hierarchy (group → argument → command → environment).
+- [ ] Workspace symbols (`workspace/symbol`) --- labels and sectioning titles
+  across the project include graph.
+
+### Labels & references (def-use model)
+
+- [ ] Go-to-definition (`textDocument/definition`) --- a `\ref`/`\eqref`/`\cref`
+  jumps to its `\label`; cross-file via the include graph once
+  `resolved_labels` lands (see *Semantic layer*).
+- [ ] Find references (`textDocument/references`) --- all uses of a label.
+- [ ] Document highlight (`textDocument/documentHighlight`) --- highlight a
+  label and its refs within the file.
+- [ ] Rename (`textDocument/rename` + `prepareRename`) --- rename a label and
+  every referencing command atomically; project-wide via the include graph.
+  Restrict the prepare range to label/ref key tokens.
+
+### IntelliSense (signature DB)
+
+- [ ] Hover (`textDocument/hover`) --- command/environment signature (arity, arg
+  kinds, sectioning level), the resolving `\label` for a ref, and the
+  `\newcommand`/`xparse` definition for user-defined macros.
+- [ ] Completion (`textDocument/completion`) --- command and environment names
+  from the signature DB (built-in + scanned defines), `\ref`/`\cite` keys
+  from the label/citation model, and `\begin{…}`/`\end{…}` pairing. Wants
+  the `document_signatures` salsa query (see *Semantic layer*); CWL ingest
+  widens coverage.
+- [ ] Signature help (`textDocument/signatureHelp`) --- show the active argument
+  while typing a command's `{…}`/`[…]` arguments.
+
+### Code actions (autofixes)
+
+- [ ] Code actions (`textDocument/codeAction`) surfacing linter autofixes once
+  the autofix infra lands (Linter section, Tenet 5: fixes must be
+  format-clean by construction). `deprecated-command`'s `\bf → \bfseries` is
+  the natural first quick-fix; wire `CodeActionKind::QUICKFIX` + a resolve
+  path mirroring arity's `on_code_action`.
+
+### Infrastructure
+
+- [ ] Client capability negotiation --- gate advertised providers and
+  UTF-8/UTF-16 position encoding on what `initialize` reports.
+- [ ] README editor-wiring docs (Neovim/VS Code `initializationOptions`,
+  `badness lsp` invocation).
 
 ## Performance & hardening
 
@@ -123,23 +195,23 @@ reuse (`compute_format` → `format_node`); stdio smoke test.
 - [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine first),
-      depended on by both badness and arity.
+  depended on by both badness and arity.
 - [ ] `wasm32` build for a web playground.
 
 ## Tooling & infrastructure
 
-- [~] `build.rs` man/completions/markdown
-      (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
-      subcommand lives in `main.rs`; `build.rs` still deferred.
+- \[\~\] `build.rs` man/completions/markdown
+  (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
+  subcommand lives in `main.rs`; `build.rs` still deferred.
 - [x] Directory-walking file discovery for `format` and `lint`
-      (`file_discovery::collect_tex_files`, `ignore`-crate walk respecting
-      `.gitignore`, `.tex` only). **\[copy\]** from arity.
+  (`file_discovery::collect_tex_files`, `ignore`-crate walk respecting
+  `.gitignore`, `.tex` only). **\[copy\]** from arity.
 
 ## BibTeX / BibLaTeX
 
 - [ ] Parser (likely a `bib.rs` module, maybe its own crate); formatter + linter
-      rules; LSP support; salsa incremental parsing + semantic model integrated
-      with the LaTeX project graph (resolve `\bibliography` references).
+  rules; LSP support; salsa incremental parsing + semantic model integrated
+  with the LaTeX project graph (resolve `\bibliography` references).
 
 --------------------------------------------------------------------------------
 
@@ -151,4 +223,5 @@ Collected from the areas above:
 - [ ] How much of `\newcommand` / `xparse` to model. *(Semantics)*
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
 - [ ] Whether arity should also migrate tower-lsp-server → lsp-server (separate
-      decision; out of scope for badness, but the `AGENTS.md` rationale applies).
+  decision; out of scope for badness, but the `AGENTS.md` rationale
+  applies).

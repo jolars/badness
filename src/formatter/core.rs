@@ -238,10 +238,20 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// carries a forced break). Each commits the run-so-far as a fill, then a fresh run
 /// continues after, the lines joined by [`Ir::hard_line`].
 ///
+/// A lone newline is normally a break opportunity the fill rejoins, *except* when a
+/// physical line is made up solely of command(s) (a `\usepackage{…}` line, a
+/// `\section{…}` header — see [`line_is_command_only`]): the break on either side of
+/// such a line is preserved, keeping it on its own line. Prose lines around it still
+/// reflow.
+///
 /// Unlike a `PARAGRAPH` (which holds no blank lines by construction), an argument
 /// *group* body may contain blank-line paragraph breaks; a blank-line trivia run
 /// ends the current line and separates the next with an [`Ir::empty_line`].
 fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+    // Collected up front so the single-newline arm can look ahead at the next
+    // physical line ([`line_is_command_only`]).
+    let elements: Vec<SyntaxElement> = elements.collect();
+
     // Glued pieces of the atom in progress.
     let mut atom: Vec<Ir> = Vec::new();
     // Atoms of the current fill run (the current logical line).
@@ -253,6 +263,12 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
     let mut seps: Vec<Ir> = Vec::new();
     // The separator to record before the next committed line. Default: one break.
     let mut pending_sep: Ir = Ir::hard_line();
+    // Whether the current *physical* source line so far consists solely of
+    // command(s) (and inline whitespace). Such a line is kept on its own line
+    // rather than reflowed into its neighbours (see the single-newline arm). Both
+    // reset at every physical-line boundary.
+    let mut line_all_commands = true;
+    let mut line_has_content = false;
 
     /// Commit the atom in progress (if any) as one atom of the current run.
     fn flush_atom(atom: &mut Vec<Ir>, run: &mut Vec<Ir>) {
@@ -281,24 +297,44 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
         }
     }
 
-    let mut iter = elements.peekable();
-    while let Some(element) = iter.next() {
-        match element {
-            // Whitespace / newline run: an atom boundary. A blank line additionally
-            // ends the line and promotes the next separator to a blank line.
+    let mut idx = 0;
+    while idx < elements.len() {
+        match &elements[idx] {
+            // Whitespace / newline run: a physical-line and atom boundary.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                let (newlines, _) = consume_trivia_run(&token, &mut iter);
+                let newlines = consume_trivia_run_slice(&elements, &mut idx);
                 if newlines >= 2 {
+                    // A blank line ends the line and promotes the next separator.
                     end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
                     pending_sep = Ir::empty_line();
+                    line_all_commands = true;
+                    line_has_content = false;
+                } else if newlines == 1 {
+                    // A single source newline. Normally just an atom boundary the
+                    // fill rejoins, but a line that is *only* command(s) — on either
+                    // side of the break — is kept on its own line: end the line so
+                    // the break survives instead of collapsing to a fill space.
+                    let prev_is_command = line_has_content && line_all_commands;
+                    let next_is_command = line_is_command_only(&elements, idx);
+                    if prev_is_command || next_is_command {
+                        end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                    } else {
+                        flush_atom(&mut atom, &mut run);
+                    }
+                    line_all_commands = true;
+                    line_has_content = false;
                 } else {
+                    // Pure inline whitespace: an atom boundary within the line.
                     flush_atom(&mut atom, &mut run);
                 }
+                continue;
             }
             // A comment rides the end of the current line, then forces a break.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 atom.push(Ir::verbatim(token.text()));
                 end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                line_all_commands = true;
+                line_has_content = false;
             }
             // A token that carries its own newline — a `\`-at-end-of-line control
             // symbol, kept verbatim for losslessness — ends the line: emit the
@@ -311,28 +347,44 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                     atom.push(Ir::verbatim(before));
                 }
                 end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                line_all_commands = true;
+                line_has_content = false;
             }
             // Any other token (WORD, `~`, `&`, `#`, `^`, `_`, brackets, `\verb`,
-            // a bare control symbol) glues onto the current atom.
-            SyntaxElement::Token(token) => atom.push(Ir::verbatim(token.text())),
+            // a bare control symbol) glues onto the current atom — prose content,
+            // so this physical line is no longer command-only.
+            SyntaxElement::Token(token) => {
+                atom.push(Ir::verbatim(token.text()));
+                line_has_content = true;
+                line_all_commands = false;
+            }
             // An explicit `\\` line break (with its `*` / `[len]`, grouped by the
             // parser into one node) rides the end of the current line, then breaks.
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
-                atom.push(lower_node(&child, cx));
+                atom.push(lower_node(child, cx));
                 end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                line_all_commands = true;
+                line_has_content = false;
             }
             SyntaxElement::Node(child) => {
-                let ir = lower_node(&child, cx);
+                let ir = lower_node(child, cx);
                 if ir.contains_forced_break() {
                     // A block amid prose: end the current line, then place the
                     // block on its own line(s); a fresh run continues after.
                     end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
                     push_segment(ir, &mut lines, &mut seps, &mut pending_sep);
+                    line_all_commands = true;
+                    line_has_content = false;
                 } else {
+                    // A `COMMAND` keeps the line command-only; any other inline node
+                    // (math, an inline group) is content that disqualifies it.
                     atom.push(ir);
+                    line_has_content = true;
+                    line_all_commands &= child.kind() == SyntaxKind::COMMAND;
                 }
             }
         }
+        idx += 1;
     }
     end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
 
@@ -1410,6 +1462,47 @@ fn consume_trivia_run(
         absorb(&token, &mut newlines, &mut trailing_ws);
     }
     (newlines, trailing_ws)
+}
+
+/// Consume the maximal run of collapsible trivia in `elements` beginning at
+/// `*i`, advancing `*i` past it and returning the number of newlines it spans.
+/// The index-based analogue of [`consume_trivia_run`], used by
+/// [`reflow_elements`], which needs to look ahead past the run (the peekable
+/// iterator form cannot). The dropped indentation/`trailing_ws` is irrelevant to
+/// reflow, which re-derives spacing from the fill.
+fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize {
+    let mut newlines = 0;
+    while let Some(SyntaxElement::Token(tok)) = elements.get(*i) {
+        if !is_collapsible_trivia(tok.kind()) {
+            break;
+        }
+        if tok.kind() == SyntaxKind::NEWLINE {
+            newlines += 1;
+        }
+        *i += 1;
+    }
+    newlines
+}
+
+/// Whether the physical source line beginning at `start` in `elements` consists
+/// solely of command(s) and inline whitespace — the unit [`reflow_elements`]
+/// keeps on its own line rather than reflowing into its neighbours. The line runs
+/// until the next newline, comment, or end of the stream; any non-trivia element
+/// that is not a `COMMAND` node (a word, a control symbol, a group, math, a `\\`,
+/// a block) disqualifies it. A line with no command (e.g. an empty or
+/// comment-only line) is not a command line.
+fn line_is_command_only(elements: &[SyntaxElement], start: usize) -> bool {
+    let mut saw_command = false;
+    for element in &elements[start..] {
+        match element {
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::NEWLINE => break,
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => break,
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => continue,
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => saw_command = true,
+            _ => return false,
+        }
+    }
+    saw_command
 }
 
 fn absorb(tok: &SyntaxToken, newlines: &mut usize, trailing_ws: &mut String) {

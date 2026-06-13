@@ -149,6 +149,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_forced_break_with_optarg", WrapMode::Reflow, 80),
     ("reflow_comment_ends_line", WrapMode::Reflow, 80),
     ("reflow_in_environment", WrapMode::Reflow, 20),
+    // A physical line that is solely command(s) — `\usepackage{…}` lines, a
+    // `\section{…}` header — stays on its own line; the prose around it still
+    // reflows.
+    ("reflow_command_lines_preserved", WrapMode::Reflow, 80),
     // List environments (`itemize`/`enumerate`/`description`): each `\item` on
     // its own line, the body reflowed with continuation lines hanging-indented
     // under the item text (a `[label]` widens the hang; a nested list and a

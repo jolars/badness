@@ -61,15 +61,16 @@ use lsp_types::request::{Formatting, Request as _};
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    FormattingOptions, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-    Uri,
+    FormattingOptions, NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range,
+    ServerCapabilities, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, Uri,
 };
 use salsa::Database as _;
 use serde::Deserialize;
 
 use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
+use crate::linter::{Severity, lint_document};
 use crate::text::LineIndex;
 
 use task_pool::{Spawner, TaskPool, read_pool_size};
@@ -634,7 +635,7 @@ impl Worker {
                 let file = snapshot.lookup_file(&path)?;
                 let text = snapshot.file_text(file).to_owned();
                 let idx = LineIndex::new(&text);
-                let diags: Vec<Diagnostic> = snapshot
+                let mut diags: Vec<Diagnostic> = snapshot
                     .parse_diagnostics(file)
                     .iter()
                     .map(|d| Diagnostic {
@@ -645,6 +646,19 @@ impl Worker {
                         ..Default::default()
                     })
                     .collect();
+                // Lint-rule findings over the same salsa-cached tree + model.
+                let root = snapshot.parsed_tree(file);
+                let model = snapshot.semantic_model(file);
+                for d in lint_document(&path, &root, model) {
+                    diags.push(Diagnostic {
+                        range: byte_range_to_lsp(&idx, &text, d.start, d.end),
+                        severity: Some(severity_to_lsp(d.severity)),
+                        code: Some(NumberOrString::String(d.rule.to_owned())),
+                        source: Some("badness".to_owned()),
+                        message: d.message,
+                        ..Default::default()
+                    });
+                }
                 Some(diags)
             }));
             if let Ok(Some(diags)) = result {
@@ -753,6 +767,17 @@ fn respond_unhandled(connection: &Connection, req: Request) {
         format!("unhandled request: {}", req.method),
     );
     let _ = connection.sender.send(Message::Response(resp));
+}
+
+/// Map a linter [`Severity`] onto the LSP severity. Parse diagnostics bypass
+/// this (always `ERROR`); lint rules carry their own severity.
+fn severity_to_lsp(severity: Severity) -> DiagnosticSeverity {
+    match severity {
+        Severity::Error => DiagnosticSeverity::ERROR,
+        Severity::Warning => DiagnosticSeverity::WARNING,
+        Severity::Info => DiagnosticSeverity::INFORMATION,
+        Severity::Hint => DiagnosticSeverity::HINT,
+    }
 }
 
 /// Convert a byte range into an LSP range via the (UTF-16-aware) [`LineIndex`].

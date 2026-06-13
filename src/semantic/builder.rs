@@ -6,9 +6,10 @@
 //! document-global namespace, so there is no scope walk — resolution is a flat
 //! name match (contrast arity's scope-chain `resolve_reads`).
 
+use rowan::TextRange;
 use smol_str::SmolStr;
 
-use crate::ast::{command_name, nth_group_text};
+use crate::ast::{command_name, nth_group, nth_group_text};
 use crate::semantic::SemanticModel;
 use crate::semantic::label::{LabelDef, LabelRef, RefCommand};
 use crate::syntax::{SyntaxKind, SyntaxNode};
@@ -32,7 +33,7 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                 if !key.is_empty() {
                     model.labels.push(LabelDef {
                         name: SmolStr::from(key),
-                        range: command.text_range(),
+                        range: label_range(&command),
                         referenced: false,
                     });
                 }
@@ -53,6 +54,18 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
 
     resolve(&mut model);
     model
+}
+
+/// The byte range of a `\label{key}` command spanning the control word through
+/// its *first* (key) group — deliberately not `command.text_range()`, which the
+/// greedy parser may stretch over a *second* group it attached without knowing
+/// `\label`'s arity (`\label{a}\n{…}`; AGENTS.md decision #8). Falls back to the
+/// full command range when the key group is somehow absent.
+fn label_range(command: &SyntaxNode) -> TextRange {
+    match nth_group(command, 0) {
+        Some(group) => TextRange::new(command.text_range().start(), group.text_range().end()),
+        None => command.text_range(),
+    }
 }
 
 /// The recognized reference command for a control-word name, or `None`. A small

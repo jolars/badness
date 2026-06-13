@@ -149,13 +149,17 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
         L/C/R alignment for text `tabular`/`array`.
 
 - [] **Phase 6 --- Linter.** `badness lint` + `linter/{diagnostic,render}`
-     surface parse diagnostics; annotate-snippets render done.
+     surface parse diagnostics; annotate-snippets render done. Rule layer
+     (`linter/{rules,check}`, `Rule` trait + registry) landed and wired into both
+     CLI and the LSP `publishDiagnostics` path.
 
-  - [ ] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
-  - [ ] Lints: unmatched delimiters, undefined/duplicate refs, deprecated
-          commands, stylistic checks.
+  - [x] `linter/suppression` (`% badness-ignore` style). **\[copy shape\]**
+  - [~] Lints: deprecated commands (`\bf`-style font switches) and duplicate
+          labels (single-file) done. Still: unmatched delimiters, undefined refs
+          (needs the cross-file resolver), stylistic checks.
   - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
-          (Tenet 5).
+          (Tenet 5). Deferred; `deprecated-command`'s `\bf → \bfseries` is the
+          natural first fix.
 
 - [ ] **Phase 7 --- Full LSP.** Range formatting; linter diagnostics published
       alongside parse errors; document symbols + folding; hover + completion

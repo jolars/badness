@@ -29,7 +29,10 @@ impl RefId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelDef {
     pub name: SmolStr,
-    /// Range of the whole `\label{…}` command, for diagnostics / go-to-def.
+    /// Range of the `\label{key}` command — the control word through its key
+    /// group — for diagnostics / go-to-def. Excludes any *second* group the
+    /// greedy parser may have over-attached (`\label`'s arity is unknown at parse
+    /// time; see `builder::label_range`).
     pub range: TextRange,
     /// Set by the resolve pass when any reference in this file uses `name`.
     /// Per-file only — a label referenced solely from an `\input`-ed file looks

@@ -361,6 +361,11 @@ impl Analysis {
     pub fn parsed_tree(&self, file: SourceFile) -> SyntaxNode {
         self.0.parsed_tree(file)
     }
+
+    /// The file's per-file label/reference model (for lint rules).
+    pub fn semantic_model(&self, file: SourceFile) -> &SemanticModel {
+        self.0.semantic_model(file)
+    }
 }
 
 #[salsa::db]

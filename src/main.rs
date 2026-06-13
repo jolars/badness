@@ -15,8 +15,10 @@ use std::process::ExitCode;
 
 use badness::file_discovery::{FileDiscoveryError, collect_tex_files};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
-use badness::linter::{Diagnostic, OutputMode, render_findings};
+use badness::linter::{Diagnostic, OutputMode, lint_document, render_findings};
 use badness::parser::parse;
+use badness::semantic::SemanticModel;
+use badness::syntax::SyntaxNode;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// CLI surface for [`WrapMode`]. Kept here (not in the formatter) so the
@@ -176,6 +178,11 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
                 .iter()
                 .map(|err| Diagnostic::from_parse(path.clone(), err)),
         );
+        // Lint rules run off the same parse — no salsa needed on the CLI path
+        // (mirrors arity's `check_document`).
+        let root = SyntaxNode::new_root(parsed.green);
+        let model = SemanticModel::build(&root);
+        diagnostics.extend(lint_document(path, &root, &model));
     }
 
     if !diagnostics.is_empty() {

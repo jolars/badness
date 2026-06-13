@@ -37,6 +37,12 @@ pub(crate) enum Ir {
     EmptyLine,
     /// Increase the indent of everything inside by one `indent_width` step.
     Indent(Rc<Ir>),
+    /// Increase the indent of everything inside by an explicit number of columns
+    /// — unlike [`Ir::Indent`], not tied to `indent_width`. Used for a *hanging
+    /// indent* that must align continuation lines under a marker of arbitrary
+    /// width, e.g. a list item's wrapped lines aligning under the text after
+    /// `\item `. Build via [`Ir::align`].
+    Align(usize, Rc<Ir>),
     /// A break-decision boundary. The printer measures the flat rendering of
     /// `inner`; if it fits and contains no forced break, it prints flat,
     /// otherwise broken. `expand` forces broken unconditionally.
@@ -223,6 +229,15 @@ impl Ir {
         Ir::Indent(Rc::new(inner))
     }
 
+    /// A hanging indent of `width` columns (see [`Ir::Align`]). A zero width or a
+    /// [`Ir::Nil`] body degenerates to the body itself.
+    pub(crate) fn align(width: usize, inner: Ir) -> Ir {
+        if width == 0 || matches!(inner, Ir::Nil) {
+            return inner;
+        }
+        Ir::Align(width, Rc::new(inner))
+    }
+
     pub(crate) fn if_break(flat: Ir, broken: Ir) -> Ir {
         Ir::IfBreak {
             flat: Rc::new(flat),
@@ -264,7 +279,7 @@ impl Ir {
             Ir::Group { .. } | Ir::ConditionalGroup(_) | Ir::ConditionalGroupAllLines(_) => true,
             Ir::Concat(items) => items.iter().any(Ir::contains_group),
             Ir::Fill(parts) => parts.iter().any(Ir::contains_group),
-            Ir::Indent(inner) => inner.contains_group(),
+            Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
             Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
             Ir::Text(_)
             | Ir::Verbatim { .. }
@@ -302,7 +317,7 @@ impl Ir {
             // A fill's separators are soft `Line`s; only its atoms could carry a
             // forced break (none do under reflow lowering, but stay correct).
             Ir::Fill(parts) => parts.iter().any(Ir::contains_forced_break),
-            Ir::Indent(inner) => inner.contains_forced_break(),
+            Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
             Ir::Group { inner, expand, .. } => *expand || inner.contains_forced_break(),
             // The flat-most candidate decides: if even it forces a break, the
             // conditional group always breaks; otherwise some layout is flat-able.

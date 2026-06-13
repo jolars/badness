@@ -149,6 +149,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_forced_break_with_optarg", WrapMode::Reflow, 80),
     ("reflow_comment_ends_line", WrapMode::Reflow, 80),
     ("reflow_in_environment", WrapMode::Reflow, 20),
+    // List environments (`itemize`/`enumerate`/`description`): each `\item` on
+    // its own line, the body reflowed with continuation lines hanging-indented
+    // under the item text (a `[label]` widens the hang; a nested list and a
+    // blank line between items are both reproduced).
+    ("reflow_list_hanging_indent", WrapMode::Reflow, 72),
+    ("reflow_list_item_label", WrapMode::Reflow, 60),
+    ("reflow_list_nested", WrapMode::Reflow, 50),
+    ("reflow_list_blank_between_items", WrapMode::Reflow, 80),
     // Prose-argument reflow: a signature-marked prose argument (a `\footnote`
     // body, a sectioning title) reflows like a paragraph — joined when short,
     // wrapped when long — while non-prose groups (`\newcommand` body, `\label`)

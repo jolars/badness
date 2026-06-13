@@ -98,6 +98,10 @@ pub struct EnvironmentSig {
     /// surrounding indentation level — `\begin{document}` content conventionally
     /// sits flush against the margin.
     pub no_indent: bool,
+    /// `true` for list environments (`itemize`, `enumerate`, `description`, …)
+    /// whose `\item`s the formatter lays out one per line, reflowing each item's
+    /// body with continuation lines hanging-indented under the item text.
+    pub list: bool,
 }
 
 /// The built-in command and environment signatures, keyed by name (without the
@@ -273,6 +277,8 @@ struct RawEnvironment {
     align: bool,
     #[serde(default, rename = "noIndent")]
     no_indent: bool,
+    #[serde(default)]
+    list: bool,
 }
 
 impl From<RawEnvironment> for EnvironmentSig {
@@ -285,6 +291,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             // A body is reflowable prose unless it is verbatim or math.
             reflow: !(raw.verbatim_body || raw.math),
             no_indent: raw.no_indent,
+            list: raw.list,
         }
     }
 }
@@ -437,6 +444,14 @@ mod tests {
         assert!(!tabular.math);
         assert!(!tabular.align);
         assert!(tabular.reflow);
+        assert!(!tabular.list);
+        // List environments carry the `list` flag (and still reflow their bodies).
+        for name in ["itemize", "enumerate", "description"] {
+            let env = db.environment(name).unwrap();
+            assert!(env.list, "{name} should be a list environment");
+            assert!(env.reflow);
+            assert!(!env.math);
+        }
     }
 
     #[test]

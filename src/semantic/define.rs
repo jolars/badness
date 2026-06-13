@@ -212,6 +212,9 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         align: false,
         reflow: true,
         no_indent: false,
+        // A user `\newenvironment` is not assumed to be a list; the built-in DB
+        // is the source of truth for `\item`-bearing list layout.
+        list: false,
     }
 }
 

@@ -179,6 +179,11 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_alignment_env(node, cx) => {
             return lower_aligned_environment(node, cx);
         }
+        SyntaxKind::ENVIRONMENT
+            if cx.wrap == WrapMode::Reflow && !has_verbatim_body(node) && is_list_env(node, cx) =>
+        {
+            return lower_list_environment(node, cx);
+        }
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
             return lower_environment(node, cx);
         }
@@ -485,6 +490,238 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         head.extend(lower_element_stream(tail.into_iter(), cx));
     }
     Ir::concat(head)
+}
+
+/// True if `node` (an `ENVIRONMENT`) names a list environment the signature DB
+/// marks `list` — `itemize`/`enumerate`/`description`, whose `\item`s the
+/// formatter lays out one per line with a hanging indent (see
+/// [`lower_list_environment`]).
+fn is_list_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    node.children()
+        .find(|child| child.kind() == SyntaxKind::BEGIN)
+        .and_then(|begin| environment_name(&begin))
+        .and_then(|name| cx.signatures.environment(&name))
+        .is_some_and(|sig| sig.list)
+}
+
+/// One `\item` of a list environment: the rendered marker (`\item`, or
+/// `\item[label]`), and the item's body split into paragraph *chunks* (a blank
+/// line in the source starts a new chunk). `blank_before` records whether a blank
+/// line separated this item from the previous one, so it is reproduced.
+struct ListItem {
+    marker: String,
+    chunks: Vec<Vec<SyntaxElement>>,
+    blank_before: bool,
+}
+
+/// A flattened list-body element: either a real CST element or an explicit
+/// paragraph boundary (a blank line), which [`flatten_list_body`] reifies because
+/// item collection spans paragraph breaks but the trivia carrying them lives
+/// *between* the body's `PARAGRAPH` nodes.
+enum FlatItem {
+    El(SyntaxElement),
+    Blank,
+}
+
+/// Lower a list environment (`itemize`/`enumerate`/`description`): each `\item`
+/// starts its own line at the body indent and its body is reflowed with the
+/// continuation lines hanging-indented under the item text (the rendered width of
+/// `\item ` / `\item[label] `). The framing (`\begin`/`\end`, the indented body
+/// with leading/trailing `hard_line`) matches [`lower_environment`].
+///
+/// Only reached under [`WrapMode::Reflow`] (see [`lower_node`]). Falls back to the
+/// plain [`lower_environment`] when the body has no `\item` to anchor on, so an
+/// unusual shape degrades to today's indented body rather than misformatting.
+fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let mut begin = Ir::Nil;
+    let mut end = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                begin = lower_begin(child, cx);
+            }
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
+                end = lower_node(child, cx);
+            }
+            _ => body_elements.push(element),
+        }
+    }
+
+    let Some(body) = lower_list_body(&body_elements, cx) else {
+        return lower_environment(node, cx);
+    };
+    Ir::concat([
+        begin,
+        Ir::indent(Ir::concat([Ir::hard_line(), body])),
+        Ir::hard_line(),
+        end,
+    ])
+}
+
+/// Build the body IR of a list environment: split into items at each top-level
+/// `\item` and render each as `\item` + a hanging-indented reflow of its content.
+/// Returns `None` (caller falls back) when the body carries no `\item`.
+fn lower_list_body(body_elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Ir> {
+    let flat = flatten_list_body(body_elements);
+
+    // Content before the first `\item` (usually just trivia); kept as its own
+    // leading segment so nothing is dropped.
+    let mut preamble: Vec<Vec<SyntaxElement>> = vec![Vec::new()];
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut blank_pending = false;
+    for fi in flat {
+        match fi {
+            FlatItem::Blank => {
+                // A paragraph boundary: it separates items (recorded on the next
+                // item) and, within an item, starts a fresh content chunk.
+                blank_pending = true;
+                match items.last_mut() {
+                    Some(item) => item.chunks.push(Vec::new()),
+                    None => preamble.push(Vec::new()),
+                }
+            }
+            FlatItem::El(el) if is_item_command(&el) => {
+                let (marker, leading) = split_item_marker(&el, cx);
+                items.push(ListItem {
+                    marker,
+                    chunks: vec![leading],
+                    blank_before: blank_pending,
+                });
+                blank_pending = false;
+            }
+            FlatItem::El(el) => {
+                match items.last_mut() {
+                    Some(item) => item.chunks.last_mut().unwrap().push(el),
+                    None => preamble.last_mut().unwrap().push(el),
+                }
+                blank_pending = false;
+            }
+        }
+    }
+
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut segments: Vec<Ir> = Vec::new();
+    let mut seps: Vec<Ir> = Vec::new();
+    let preamble_ir = reflow_chunks(&preamble, cx);
+    if !matches!(preamble_ir, Ir::Nil) {
+        seps.push(Ir::hard_line()); // unused (segment 0 has no preceding separator)
+        segments.push(preamble_ir);
+    }
+    for item in &items {
+        seps.push(if item.blank_before {
+            Ir::empty_line()
+        } else {
+            Ir::hard_line()
+        });
+        segments.push(render_list_item(item, cx));
+    }
+
+    let mut result: Vec<Ir> = Vec::with_capacity(segments.len().saturating_mul(2));
+    for (i, segment) in segments.into_iter().enumerate() {
+        if i > 0 {
+            result.push(seps[i].clone());
+        }
+        result.push(segment);
+    }
+    Some(Ir::concat(result))
+}
+
+/// Render one [`ListItem`]: the marker, then a space and the item's body reflowed
+/// inside an [`Ir::align`] whose width is the marker's rendered width plus the
+/// separating space, so wrapped lines hang under the item text. An empty item
+/// (marker with no body) renders as the bare marker.
+fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
+    let content = reflow_chunks(&item.chunks, cx);
+    let marker = Ir::verbatim(item.marker.clone());
+    if matches!(content, Ir::Nil) {
+        return marker;
+    }
+    let hang = item.marker.chars().count() + 1;
+    Ir::concat([marker, Ir::verbatim(" "), Ir::align(hang, content)])
+}
+
+/// Reflow each paragraph chunk of an item body and join the (non-empty) results
+/// with an [`Ir::empty_line`], so a blank line inside an item becomes a blank line
+/// between its paragraphs (still under the hanging indent).
+fn reflow_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
+    let parts = chunks
+        .iter()
+        .map(|chunk| reflow_elements(chunk.iter().cloned(), cx))
+        .filter(|ir| !matches!(ir, Ir::Nil));
+    Ir::join(Ir::empty_line(), parts)
+}
+
+/// Flatten a list-environment body into a stream of inline elements, reifying each
+/// paragraph boundary (a blank line) as a [`FlatItem::Blank`]. Body-level trivia
+/// between paragraphs is dropped — the boundary it represents is already carried
+/// by the `Blank` inserted before each non-first paragraph.
+fn flatten_list_body(body_elements: &[SyntaxElement]) -> Vec<FlatItem> {
+    let mut out: Vec<FlatItem> = Vec::new();
+    let mut started = false;
+    for element in body_elements {
+        match element {
+            SyntaxElement::Node(p) if p.kind() == SyntaxKind::PARAGRAPH => {
+                if started {
+                    out.push(FlatItem::Blank);
+                }
+                out.extend(p.children_with_tokens().map(FlatItem::El));
+                started = true;
+            }
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            other => {
+                out.push(FlatItem::El(other.clone()));
+                started = true;
+            }
+        }
+    }
+    out
+}
+
+/// Whether `el` is a `\item` command node — the marker that starts a new list
+/// item.
+fn is_item_command(el: &SyntaxElement) -> bool {
+    el.as_node().is_some_and(|node| {
+        node.kind() == SyntaxKind::COMMAND && command_name(node).as_deref() == Some("item")
+    })
+}
+
+/// Split a `\item` command node into its rendered marker string (the control word
+/// plus any leading optional `[label]`, the only argument an item marker takes)
+/// and the trailing elements that are really body content — a `{…}` group the
+/// greedy parser over-attached, which belongs to the item body, not the marker.
+fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, Vec<SyntaxElement>) {
+    let node = el.as_node().expect("item command is a node");
+    let mut marker_parts: Vec<Ir> = Vec::new();
+    let mut content: Vec<SyntaxElement> = Vec::new();
+    let mut in_content = false;
+    for child in node.children_with_tokens() {
+        if in_content {
+            content.push(child);
+            continue;
+        }
+        match &child {
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::CONTROL_WORD => {
+                marker_parts.push(Ir::verbatim(t.text()));
+            }
+            // Trivia between the control word and an optional label is not part of
+            // the marker.
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::OPTIONAL => {
+                marker_parts.push(lower_node(n, cx));
+            }
+            // A brace group (or anything else) is body content, not the marker.
+            other => {
+                in_content = true;
+                content.push(other.clone());
+            }
+        }
+    }
+    let marker = Printer::new(FormatStyle::default()).print_flat(&Ir::concat(marker_parts));
+    (marker, content)
 }
 
 /// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks

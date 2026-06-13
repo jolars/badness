@@ -54,8 +54,11 @@ engine; whitespace normalization, environment + group/argument indentation
 `Reflow`); prose-argument reflow (signature-DB `prose` flag, soft `Ir::group`
 around the fill engine); aggressive math lowering (collapse spacing, tight
 scripts, strip redundant single-token script braces); `\left…\right` spacing;
-alignment-aware `align`/matrix column grids. Protected regions untouched;
-idempotence + losslessness asserted.
+alignment-aware `align`/matrix column grids; list environments (signature-DB
+`list` flag --- `itemize`/`enumerate`/`description` --- one `\item` per line,
+each body reflowed with continuation lines hanging-indented under the item text
+via `Ir::Align`). Protected regions untouched; idempotence + losslessness
+asserted.
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
   today. *Demoted, much later.*

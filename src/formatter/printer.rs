@@ -218,6 +218,13 @@ impl Printer {
                         node: inner,
                     });
                 }
+                Ir::Align(width, inner) => {
+                    stack.push(Cmd::Node {
+                        indent: indent + width,
+                        mode,
+                        node: inner,
+                    });
+                }
                 Ir::Line => match mode {
                     Mode::Flat => w.write_text(" "),
                     Mode::Break => w.newline(indent),
@@ -386,7 +393,7 @@ impl Printer {
                 Ir::Line => total += 1,
                 Ir::Concat(items) => stack.extend(items.iter()),
                 Ir::Fill(parts) => stack.extend(parts.iter()),
-                Ir::Indent(inner) => stack.push(inner),
+                Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
                 Ir::Group { inner, expand, .. } => {
                     if *expand {
@@ -527,7 +534,7 @@ impl Printer {
                         stack.push(item);
                     }
                 }
-                Ir::Indent(inner) => stack.push(inner),
+                Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
                 Ir::Line => {
                     if remaining == 0 {
                         return false;
@@ -599,7 +606,7 @@ impl Printer {
                         stack.push(item);
                     }
                 }
-                Ir::Indent(i) => stack.push(i),
+                Ir::Indent(i) | Ir::Align(_, i) => stack.push(i),
                 Ir::Line => {
                     col += 1;
                     if col > self.line_width {
@@ -690,7 +697,7 @@ impl Printer {
                         work.push((mode, item));
                     }
                 }
-                Ir::Indent(i) => work.push((mode, i)),
+                Ir::Indent(i) | Ir::Align(_, i) => work.push((mode, i)),
                 Ir::IfBreak { flat, broken } => {
                     work.push((mode, if mode == Mode::Break { broken } else { flat }));
                 }
@@ -756,7 +763,7 @@ impl Printer {
                         stack.push((mode, item));
                     }
                 }
-                Ir::Indent(inner) => stack.push((mode, inner)),
+                Ir::Indent(inner) | Ir::Align(_, inner) => stack.push((mode, inner)),
                 Ir::Line => match mode {
                     Mode::Flat => {
                         col += 1;
@@ -1001,5 +1008,33 @@ mod tests {
         // leading indent here), then "cc" wraps to a fresh line at indent 2.
         let ir = Ir::indent(Ir::fill([Ir::text("aa"), Ir::text("bb"), Ir::text("cc")]));
         assert_eq!(printer.print(&ir), "aa bb\n  cc");
+    }
+
+    #[test]
+    fn align_hangs_continuation_to_marker_width() {
+        let style = FormatStyle {
+            line_width: 12,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        // A `\item `-style marker (width 6) followed by a hanging-indented fill:
+        // the first word sits after the marker, wrapped words align under it.
+        let ir = Ir::concat([
+            Ir::text("* "),
+            Ir::align(
+                2,
+                Ir::fill([Ir::text("aa"), Ir::text("bbbb"), Ir::text("cc")]),
+            ),
+        ]);
+        // "* aa" = 4, +" bbbb" = 9, +" cc" = 12 <= 12, so it all fits on one line.
+        assert_eq!(printer.print(&ir), "* aa bbbb cc");
+        // Narrower: force a wrap and check the continuation aligns to column 2.
+        let narrow = Printer::new(FormatStyle {
+            line_width: 9,
+            indent_width: 2,
+            ..FormatStyle::default()
+        });
+        assert_eq!(narrow.print(&ir), "* aa bbbb\n  cc");
     }
 }

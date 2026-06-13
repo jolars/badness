@@ -37,6 +37,10 @@
   "environments": {
     "document": { "noIndent": true },
 
+    "itemize": { "list": true },
+    "enumerate": { "list": true },
+    "description": { "list": true },
+
     "tabular": { "args": ["opt", "req"] },
     "tabular*": { "args": ["req", "opt", "req"] },
     "array": { "args": ["opt", "req"] },

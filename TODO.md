@@ -117,7 +117,7 @@ differential oracles --- `latexindent` (formatter) and texlab/tree-sitter-latex
       lifecycle, full-document sync, `textDocument/formatting`,
       `publishDiagnostics`; stdio smoke test.
 
-- [ ] **Phase 5 --- Math.**
+- [x] **Phase 5 --- Math.**
   - [x] Structured math model over the generic math tree. A math-mode descent
         wraps each body in a `MATH` node and parses atoms (`math_atom`,
         `math_group`) instead of the text-mode `element`.

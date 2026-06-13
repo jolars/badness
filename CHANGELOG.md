@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/jolars/badness/compare/v0.2.0...v0.3.0) (2026-06-13)
+
+### Features
+- **formatter:** align itemize blocks ([`47a2b19`](https://github.com/jolars/badness/commit/47a2b199525a17bb9a1f4bffde833e7d2433ed1a))
+- **formatter:** don't indent document environment ([`3cd0d04`](https://github.com/jolars/badness/commit/3cd0d043e5fa2d2fa8e008986e896ebb32bd4a14))
+- **linter:** add rule layer with duplicate-label and deprecated-command ([`4aaee37`](https://github.com/jolars/badness/commit/4aaee372a4bdf33b6a6edd24948cf5b721b97280))
+- align & columns in align/matrix environments ([`d5abdca`](https://github.com/jolars/badness/commit/d5abdca6319aed86cca105ed5c5c06e8ccaf9d0a))
+- match \left … \right delimiter pairs in math ([`3079875`](https://github.com/jolars/badness/commit/30798752941eb6956592a572572a0f6130a49002))
+- add structured math model and math formatting ([`02802f6`](https://github.com/jolars/badness/commit/02802f60121ac265e6ef4b2a2b6549577b6ad62e))
+- support argument-taking verbatim environments ([`ab8eb74`](https://github.com/jolars/badness/commit/ab8eb74a744d546c6dcfc09e6a3d7df11a369ca1))
+- add file-walk for formatter ([`1603230`](https://github.com/jolars/badness/commit/16032307362a53e5cf8379e44c6428b0493a5e8a))
+
+### Bug Fixes
+- **formatter:** keep command-only lines on their own line under reflow ([`739a32f`](https://github.com/jolars/badness/commit/739a32fe545abcca0c6e2de8338b825419f67a5e))
+- **linter:** migrate render.rs to annotate-snippets 0.12 API ([`602d835`](https://github.com/jolars/badness/commit/602d835163e13736525682cf6994b70152035341))
+
 ## [0.2.0](https://github.com/jolars/badness/compare/v0.1.0...v0.2.0) (2026-06-12)
 
 ### Features

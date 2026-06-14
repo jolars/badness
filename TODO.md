@@ -66,16 +66,17 @@ asserted.
   a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body
   fallback); column-spec-aware L/C/R alignment for text `tabular`/`array`.
-- [ ] **Bug: a comment line inside an alignment breaks idempotence.** A
-  commented-out row (`% & … & … \\`, common as authored scaffolding) is folded
-  into the next row's first cell by `build_alignment_grid`, so its length
-  inflates that column's width and the padding *grows on every format pass*
-  (column width counts already-padded output). The grid builder must treat a
-  comment-only physical line as its own preserved line — not grid content, not
-  counted toward column widths (the alignment analog of the paragraph/math
-  comment-line fix). Repro: `\begin{aligned}\n & a & & b \\\n % & xxxx & & y
-  \\\n & c & & d \\\n\end{aligned}`. Pre-existing; surfaced once whole-file
-  formatting of real papers became reachable.
+- [x] **Bug: a comment line inside an alignment breaks idempotence.** A
+  commented-out row (`% & … & … \\`, common as authored scaffolding) was folded
+  into the next row's first cell by `build_alignment_grid`, inflating that
+  column's width so padding *grew every format pass* — and worse, the comment
+  rendered first on the row, commenting out the real cells after it. Fixed:
+  `finish_cell` now rejects any cell containing a `COMMENT` token (a comment runs
+  to end of line, so it cannot share an aligned row), so the environment falls
+  back to generic lowering with the comment on its own line. The documented
+  intent ("a comment … falls back") was relying on `contains_forced_break`, which
+  a comment's newline-free text never trips. Surfaced once whole-file formatting
+  of real papers became reachable.
 - [ ] Decide formatter opinionatedness: which choices are configurable vs.
   fixed. *(open decision)*
 

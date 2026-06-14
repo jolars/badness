@@ -72,6 +72,10 @@ const CLEAN_CASES: &[&str] = &[
     r"see \url{http://x.com/a_b} and \code{$x_y$} inline",
     r"\lstinline|a_$b$_c| then \mintinline{python}{x = $1}",
     "given by \\code{\nmulti-line $verbatim$ body with a_b} and more text here\n",
+    // A comment line inside an alignment must fall back to generic lowering (the
+    // comment runs to end of line, so it can't sit on an aligned row): otherwise
+    // padding grows every pass and the comment swallows the real cells after it.
+    "\\begin{aligned}\n & a & & b \\\\\n % & long commented-out row & & y \\\\\n & c & & d \\\\\n\\end{aligned}\n",
 ];
 
 #[test]

@@ -891,6 +891,16 @@ fn build_alignment_grid(
         while cell.last().is_some_and(&is_edge_trivia) {
             cell.pop();
         }
+        // A comment cannot sit on an aligned line: its text runs to end of line,
+        // so anything after it (later cells, the row's `\\`) would be commented
+        // out. Unlike a nested block it carries no embedded newline, so the
+        // forced-break check below misses it — reject explicitly and fall back.
+        if cell.iter().any(|e| {
+            e.as_token()
+                .is_some_and(|t| t.kind() == SyntaxKind::COMMENT)
+        }) {
+            return None;
+        }
         let ir = Ir::concat(lower_element_stream(cell.drain(..), cx));
         if ir.contains_forced_break() {
             return None;

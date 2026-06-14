@@ -20,6 +20,7 @@ use badness::parser::parse;
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
 use clap::{Parser, Subcommand, ValueEnum};
+use rowan::NodeOrToken;
 
 /// CLI surface for [`WrapMode`]. Kept here (not in the formatter) so the
 /// formatter API stays clap-free, mirroring arity's `cli.rs` convention.
@@ -88,6 +89,15 @@ enum Command {
         /// Files to lint. Omit to read from stdin.
         paths: Vec<PathBuf>,
     },
+    /// Parse LaTeX source and print its concrete syntax tree (CST).
+    ///
+    /// A debugging aid: prints the lossless parse tree as an indented
+    /// `KIND@range` listing, with token text, followed by any parse errors.
+    /// With a path, parses that file. With no path, reads stdin.
+    Parse {
+        /// File to parse. Omit to read from stdin.
+        path: Option<PathBuf>,
+    },
     /// Run the language server over stdio.
     Lsp,
 }
@@ -115,6 +125,7 @@ fn main() -> ExitCode {
             run_format(&paths, check, style)
         }
         Command::Lint { paths } => run_lint(&paths),
+        Command::Parse { path } => run_parse(path.as_deref()),
         Command::Lsp => run_lsp(),
     }
 }
@@ -202,6 +213,70 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// Parse a single file (or stdin) and print its CST to stdout. Parse errors are
+/// printed after the tree; the command exits non-zero if any are reported.
+fn run_parse(path: Option<&Path>) -> ExitCode {
+    let input = match path {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("badness: cannot read {}: {err}", path.display());
+                return ExitCode::FAILURE;
+            }
+        },
+        None => {
+            let mut input = String::new();
+            if let Err(err) = std::io::stdin().read_to_string(&mut input) {
+                eprintln!("badness: cannot read stdin: {err}");
+                return ExitCode::FAILURE;
+            }
+            input
+        }
+    };
+
+    let parsed = parse(&input);
+    let mut out = String::new();
+    render_cst(&parsed.syntax(), 0, &mut out);
+    if let Err(err) = std::io::stdout().write_all(out.as_bytes()) {
+        eprintln!("badness: cannot write stdout: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    if parsed.errors.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        for err in &parsed.errors {
+            eprintln!("error @{}..{}: {}", err.start, err.end, err.message);
+        }
+        ExitCode::FAILURE
+    }
+}
+
+/// Render a CST as an indented `KIND@range` tree, with token text. Kept in sync
+/// with the test renderer in `tests/parser.rs`.
+fn render_cst(node: &SyntaxNode, depth: usize, out: &mut String) {
+    out.push_str(&format!(
+        "{:indent$}{:?}@{:?}\n",
+        "",
+        node.kind(),
+        node.text_range(),
+        indent = depth * 2
+    ));
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Node(n) => render_cst(&n, depth + 1, out),
+            NodeOrToken::Token(t) => out.push_str(&format!(
+                "{:indent$}{:?}@{:?} {:?}\n",
+                "",
+                t.kind(),
+                t.text_range(),
+                t.text(),
+                indent = (depth + 1) * 2
+            )),
+        }
     }
 }
 

@@ -77,8 +77,16 @@ asserted.
   intent ("a comment … falls back") was relying on `contains_forced_break`, which
   a comment's newline-free text never trips. Surfaced once whole-file formatting
   of real papers became reachable.
-- [ ] Decide formatter opinionatedness: which choices are configurable vs.
-  fixed. *(open decision)*
+- [ ] Grid-align alignment environments that contain interspersed comments
+  (commented-out rows, a `% \label`, an end-of-line note). Today any comment in
+  the body forces the whole environment to the generic unaligned fallback (see
+  the fixed bug above), so a real `aligned`/`align` with authored comments loses
+  its column alignment entirely. Proper handling: treat a comment-only physical
+  line as its own preserved passthrough line *between* grid rows (not a cell, not
+  counted toward column widths), and an end-of-line comment as trailing the row's
+  last cell. Needs `build_alignment_grid`/`AlignRow` to carry non-row lines and
+  `render_alignment_rows` to interleave them — the alignment analog of the
+  paragraph/math comment-line handling.
 
 ## Linter
 

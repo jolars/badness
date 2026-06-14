@@ -190,8 +190,11 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::COMMAND if cx.wrap == WrapMode::Reflow && command_has_prose_arg(node, cx) => {
             return lower_command(node, cx);
         }
-        SyntaxKind::INLINE_MATH | SyntaxKind::DISPLAY_MATH => {
+        SyntaxKind::INLINE_MATH => {
             return lower_math(node, cx);
+        }
+        SyntaxKind::DISPLAY_MATH => {
+            return lower_display_math(node, cx);
         }
         SyntaxKind::MATH => {
             return lower_math_body(node, cx);
@@ -1194,6 +1197,51 @@ fn lower_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxElement::Node(n) => lower_node(&n, cx),
         SyntaxElement::Token(t) => Ir::verbatim(t.text()),
     }))
+}
+
+/// Lower display math (`$$…$$` or `\[…\]`) as a block: the delimiters land on
+/// their own lines with the body collapsed by [`lower_math_body`] and indented one
+/// level, mirroring [`lower_bracketed`]'s shape. Display math is conceptually its
+/// own vertical space, so unlike inline math (`\[ F \]` → `\[F\]`) it never
+/// collapses onto a single line. An empty body degenerates to the bare adjacent
+/// delimiters (`\[\]`, `$$$$`).
+fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    // Delimiters are one token for `\[`/`\]` but two `DOLLAR` tokens for `$$`, so
+    // accumulate every delimiter token on each side of the `MATH` body.
+    let mut open = String::new();
+    let mut close = String::new();
+    let mut body = Ir::Nil;
+    let mut body_empty = true;
+    let mut seen_body = false;
+    for element in node.children_with_tokens() {
+        match element {
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
+                body_empty = math_body_is_empty(&n);
+                body = trim_trailing_break(lower_math_body(&n, cx));
+                seen_body = true;
+            }
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            SyntaxElement::Token(t) if seen_body => close.push_str(t.text()),
+            SyntaxElement::Token(t) => open.push_str(t.text()),
+            // Unexpected non-MATH node child: defer to generic lowering.
+            SyntaxElement::Node(n) => {
+                body = lower_node(&n, cx);
+                body_empty = false;
+                seen_body = true;
+            }
+        }
+    }
+
+    if body_empty {
+        Ir::concat([Ir::verbatim(open), Ir::verbatim(close)])
+    } else {
+        Ir::concat([
+            Ir::verbatim(open),
+            Ir::indent(Ir::concat([Ir::hard_line(), body])),
+            Ir::hard_line(),
+            Ir::verbatim(close),
+        ])
+    }
 }
 
 /// Format a math body (a `MATH` node, or a `{…}` group body in math): collapse

@@ -53,7 +53,9 @@ engine; whitespace normalization, environment + group/argument indentation
 (printer-owned, idempotent); paragraph reflow (`WrapMode`, `Ir::Fill`, default
 `Reflow`); prose-argument reflow (signature-DB `prose` flag, soft `Ir::group`
 around the fill engine); aggressive math lowering (collapse spacing, tight
-scripts, strip redundant single-token script braces); `\left…\right` spacing;
+scripts, strip redundant single-token script braces); display math
+(`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their own
+lines; `\left…\right` spacing;
 alignment-aware `align`/matrix column grids; list environments (signature-DB
 `list` flag --- `itemize`/`enumerate`/`description` --- one `\item` per line,
 each body reflowed with continuation lines hanging-indented under the item text
@@ -98,6 +100,14 @@ single-file duplicate-label lints.
 
 - [ ] More lints: unmatched delimiters, undefined refs (needs the cross-file
   resolver), stylistic checks.
+- [ ] Lint `$$…$$` display math with a `\[…\]` autofix. *Not* a formatter rewrite:
+  `$$` is the plain-TeX primitive and `\[` routes through LaTeX's display hooks, so
+  the swap changes typeset output (it ignores `fleqn`; the `\abovedisplayskip`/
+  `\belowdisplayskip`/`\predisplaypenalty` spacing differs) --- which would break the
+  formatter's meaning-preservation contract. A lint is the right home for an
+  almost-always-wanted *semantic* change. Fire only on a parser-built `DISPLAY_MATH`
+  node (never on `$a$$b$`, two inline maths); swapping the delimiter tokens on the
+  already-blocked node is format-clean by construction (Tenet 5).
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
   (Tenet 5). `deprecated-command`'s `\bf → \bfseries` is the natural first
   fix.

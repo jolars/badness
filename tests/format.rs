@@ -192,6 +192,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_strip_single_token_braces", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),
+    // Display math (`\[…\]`, `$$…$$`) is a block: the delimiters land on their own
+    // lines with the body collapsed and indented one level, so `\[ F \]` never
+    // stays cramped on a single line the way inline `$ x $` does.
+    ("math_display_block", WrapMode::Preserve, 80),
+    ("math_display_dollars", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A
     // control-word delimiter (`\langle`) keeps one space so the body cannot glue

@@ -1045,12 +1045,37 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
         }
     }
 
+    // A comment glued to the open delimiter (`{%`, with no newline between them)
+    // must ride on the open-delimiter line. Pushing it to its own indented line
+    // would turn the newline the formatter inserts after `{` into real whitespace
+    // inside the group, changing `\cmd{%\n}` (an empty group — the `%` eats the
+    // source newline) into `\cmd{ }` (a group holding a space). The parser emits
+    // leading whitespace/newlines as their own trivia tokens, so the first body
+    // element is the comment iff it was glued to the opener.
+    let has_leading_comment = body_elements
+        .first()
+        .and_then(SyntaxElement::as_token)
+        .is_some_and(|t| t.kind() == SyntaxKind::COMMENT);
+    let open_ir = if has_leading_comment {
+        let comment = body_elements.remove(0);
+        Ir::concat([open_ir, Ir::verbatim(comment.as_token().unwrap().text())])
+    } else {
+        open_ir
+    };
+
     let body = Ir::concat(lower_element_stream(body_elements.into_iter(), cx));
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {
-        // Empty multi-line body collapses to the bare delimiters, e.g. `{\n}` → `{}`.
-        Ir::concat([open_ir, close_ir])
+        if has_leading_comment {
+            // `{%\n}`: the comment already rode the open delimiter, so the close
+            // must still drop to its own line — collapsing to `{%}` would comment
+            // out the closing brace.
+            Ir::concat([open_ir, Ir::hard_line(), close_ir])
+        } else {
+            // Empty multi-line body collapses to the bare delimiters, e.g. `{\n}` → `{}`.
+            Ir::concat([open_ir, close_ir])
+        }
     } else {
         Ir::concat([
             open_ir,

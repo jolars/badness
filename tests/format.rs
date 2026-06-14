@@ -151,6 +151,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("nested_groups", WrapMode::Preserve, 80),
     ("group_single_line_stays_inline", WrapMode::Preserve, 80),
     ("group_reindents", WrapMode::Preserve, 80),
+    // A `%` glued to the open delimiter (`{%`, no newline between) rides on the
+    // open-delimiter line instead of dropping to its own indented line: otherwise
+    // the newline the formatter inserts after `{` becomes real whitespace inside
+    // the group, turning `\textt{%\n}` (empty group) into `\textt{ }`.
+    ("group_comment_rides_open_brace", WrapMode::Preserve, 80),
     // Paragraph reflow (the new rule).
     ("reflow_join_short", WrapMode::Reflow, 80),
     ("reflow_wrap_to_width", WrapMode::Reflow, 40),

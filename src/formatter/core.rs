@@ -336,12 +336,17 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                 line_all_commands = true;
                 line_has_content = false;
             }
-            // A token that carries its own newline — a `\`-at-end-of-line control
-            // symbol, kept verbatim for losslessness — ends the line: emit the
-            // part before the break as a flat atom and let the line break supply
-            // the newline, so the result reparses to the same token (idempotent)
-            // instead of leaving an unbreakable multi-line atom inside the fill.
-            SyntaxElement::Token(token) if token.text().contains('\n') => {
+            // A `\`-at-end-of-line control symbol (`\` + newline) carries its own
+            // newline but nothing after it — kept verbatim for losslessness, it
+            // ends the line: emit the part before the break as a flat atom and let
+            // the line break supply the newline, so the result reparses to the same
+            // token (idempotent) instead of leaving an unbreakable multi-line atom
+            // inside the fill. Restricted to control symbols: a multi-line `VERB`
+            // token (a brace-verbatim argument spanning lines) has real content
+            // after its newline and must be emitted whole by the arm below.
+            SyntaxElement::Token(token)
+                if token.kind() == SyntaxKind::CONTROL_SYMBOL && token.text().contains('\n') =>
+            {
                 let before = token.text().split_once('\n').map(|(b, _)| b).unwrap_or("");
                 if !before.is_empty() {
                     atom.push(Ir::verbatim(before));

@@ -66,6 +66,12 @@ const CLEAN_CASES: &[&str] = &[
     "\\begin{myenv}\n{cc}\nbody\n\\end{myenv}\n",
     // Argument-taking verbatim environment: args structured, body opaque.
     "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")  # raw\n\\end{minted}\n",
+    // Verbatim-argument commands: brace and delimiter forms, a leading-arg
+    // command, and — crucially — a brace argument that spans a line break, which
+    // must be emitted whole (not truncated at its newline).
+    r"see \url{http://x.com/a_b} and \code{$x_y$} inline",
+    r"\lstinline|a_$b$_c| then \mintinline{python}{x = $1}",
+    "given by \\code{\nmulti-line $verbatim$ body with a_b} and more text here\n",
 ];
 
 #[test]

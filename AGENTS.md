@@ -79,6 +79,18 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    decision's sanctioned lexer modes. User-defined verbatim environments stay out of
    scope (their definitions aren't known until after parsing).
 
+   **Verbatim-argument *commands* (`\verb` generalized):** commands flagged
+   `verbatim` in the signature DB (`\verb`, `\lstinline`, `\url`, `\code`, …) have
+   their final argument captured as a single `VERB` token — a balanced `{…}` group
+   or a `\verb`-style delimiter run, chosen by the argument's first character, with
+   any leading non-verbatim args read from the DB's static arg shape (e.g.
+   `\mintinline`'s language). Same rationale as verbatim environments: reads only
+   static argument-shape data, no macro meaning resolved. A curated set of
+   well-known *class*-defined commands is allowed as built-ins (e.g. jss's `\code`,
+   whose `\@makeother\$` makes `$` literal — a runtime catcode fact we cannot
+   derive, so we record it as data); arbitrary user-defined verbatim commands stay
+   out of scope until definition-scanning lands (see `TODO.md`).
+
 2. **Two layers: syntactic vs. semantic.**
    - *Syntactic layer:* the generic CST. Knows nothing about what a command means.
    - *Semantic layer:* a **signature database** (built-in table + CWL-style data,

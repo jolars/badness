@@ -223,6 +223,33 @@ fn inline_verb_is_a_single_token() {
 }
 
 #[test]
+fn brace_verbatim_command_is_opaque() {
+    // `\code`'s brace argument is verbatim (jss `\@makeother\$`): the `$` is a
+    // literal, not math, so no "unclosed `$`" and the body is one VERB token.
+    let out = tree(r"\code{$ pip install x_y}");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(
+        !out.contains("DOLLAR@") && !out.contains("INLINE_MATH@"),
+        "{out}"
+    );
+    assert!(out.contains(r#"VERB@5..24 "{$ pip install x_y}""#), "{out}");
+}
+
+#[test]
+fn delimiter_verbatim_command_is_opaque() {
+    insta::assert_snapshot!(tree(r"\lstinline|x_$y$|"));
+}
+
+#[test]
+fn verbatim_command_skips_leading_args() {
+    // `\mintinline{lang}{code}`: the language is an ordinary group, only the
+    // trailing argument is verbatim.
+    let out = tree(r"\mintinline{python}{x = $1}");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(out.contains(r#"VERB@19..27 "{x = $1}""#), "{out}");
+}
+
+#[test]
 fn lstlisting_optional_arg_then_opaque_body() {
     insta::assert_snapshot!(tree(
         "\\begin{lstlisting}[language=Python]\nif x: pass  # $not math$\n\\end{lstlisting}"
@@ -308,8 +335,10 @@ fn unclosed_dollar_math_in_group_does_not_escape() {
     // `$`-math cannot span the enclosing group's `}`: the brace closes the
     // group, the math reports a single "unclosed `$`", and nothing downstream
     // is corrupted (no spurious "unmatched `}`" / "unclosed environment").
-    let parsed = parse("\\begin{a}\\code{$ x}\\end{a}");
-    assert_eq!(parsed.syntax().to_string(), "\\begin{a}\\code{$ x}\\end{a}");
+    // `\foo` is an ordinary (non-verbatim) command, so its argument is real
+    // math — contrast `\code`, whose argument is captured verbatim.
+    let parsed = parse("\\begin{a}\\foo{$ x}\\end{a}");
+    assert_eq!(parsed.syntax().to_string(), "\\begin{a}\\foo{$ x}\\end{a}");
     let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
     assert_eq!(messages, ["unclosed `$`"], "only the open math is reported");
 }

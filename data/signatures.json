@@ -31,7 +31,11 @@
 
     "verb": { "verbatim": true },
     "verb*": { "verbatim": true },
-    "lstinline": { "verbatim": true }
+    "lstinline": { "args": ["opt"], "verbatim": true },
+    "mintinline": { "args": ["opt", "req"], "verbatim": true },
+    "url": { "verbatim": true },
+    "path": { "verbatim": true },
+    "code": { "verbatim": true }
   },
 
   "environments": {

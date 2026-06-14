@@ -70,6 +70,16 @@ pub fn lex(input: &str) -> Vec<Token> {
             continue;
         }
 
+        // Verbatim-argument command (`\url{…}`, `\code{…}`, `\lstinline|…|`, …):
+        // emit the control word and any leading args, then a raw argument token.
+        // `\verb`/`\verb*` are handled separately in `lex_control` (delimiter
+        // only), so they fall through here.
+        if let Some(consumed) = lex_verbatim_command(rest, at_letter, &mut out) {
+            pos += consumed;
+            pending_delim = false;
+            continue;
+        }
+
         let (kind, mut len) = next_token(rest, at_letter);
         // A `\left`/`\right` delimiter that lexes as a word run: keep only its
         // first character so it does not glue into the following text.
@@ -159,21 +169,25 @@ fn lex_control(rest: &str, at_letter: bool) -> (SyntaxKind, usize) {
     }
 }
 
-/// Length in bytes of a `\verb` argument: an optional `*`, a delimiter
-/// character, then everything up to and including the matching delimiter.
+/// Length in bytes of a `\verb` argument: an optional `*`, then a delimited run.
 /// Returns `None` if malformed (no delimiter, or it spans a line break).
 fn verb_len(after: &str) -> Option<usize> {
-    let mut chars = after.chars();
-    let mut consumed = 0;
-    let mut delim = chars.next()?;
-    if delim == '*' {
-        consumed += 1;
-        delim = chars.next()?;
+    match after.strip_prefix('*') {
+        Some(rest) => Some(1 + delimited_len(rest)?),
+        None => delimited_len(after),
     }
+}
+
+/// Length in bytes of a `\verb`-style delimited run: a delimiter character, then
+/// everything up to and including its next occurrence. Returns `None` if the
+/// delimiter is whitespace or the run spans a line break.
+fn delimited_len(after: &str) -> Option<usize> {
+    let mut chars = after.chars();
+    let delim = chars.next()?;
     if delim.is_whitespace() {
         return None;
     }
-    consumed += delim.len_utf8();
+    let mut consumed = delim.len_utf8();
     for c in chars {
         if c == '\n' || c == '\r' {
             return None;
@@ -237,6 +251,73 @@ fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
         });
     }
     Some(prefix_len + args_len + body_len)
+}
+
+/// If `rest` starts with a verbatim-argument command (`\url`, `\code`,
+/// `\lstinline`, …), emit its control word, any leading non-verbatim arguments
+/// (as ordinary tokens), and finally a single raw [`SyntaxKind::VERB`] token for
+/// the verbatim argument; return the bytes consumed. Returns `None` when `rest`
+/// is not such a command or no verbatim argument follows (so the caller lexes it
+/// normally and losslessness is preserved either way).
+///
+/// The verbatim argument's form is decided by its first non-blank character,
+/// matching how these commands actually parse: a brace introduces a balanced
+/// `{…}` group (`\code{…}`, `\url{…}`); any other character is a `\verb`-style
+/// delimiter run (`\lstinline|…|`). `\verb`/`\verb*` are deliberately excluded —
+/// they are delimiter-only and handled in [`lex_control`]. Like the verbatim
+/// environment path, this reads only static signature data (decision #1).
+fn lex_verbatim_command(rest: &str, at_letter: bool, out: &mut Vec<Token>) -> Option<usize> {
+    if !rest.starts_with('\\') {
+        return None;
+    }
+    let letters = run_len(&rest[1..], |c| is_letter(c, at_letter));
+    if letters == 0 {
+        return None;
+    }
+    let word_len = 1 + letters;
+    let name = &rest[1..word_len];
+    // `\verb` keeps its dedicated delimiter-only path.
+    if name == "verb" {
+        return None;
+    }
+    let cmd = builtin().command(name).filter(|c| c.verbatim)?;
+
+    // Leading arguments precede the verbatim one (e.g. `\mintinline{lang}{code}`).
+    let after_word = &rest[word_len..];
+    let args_len = scan_verbatim_args(after_word, &cmd.args);
+
+    // Skip inline whitespace (never a line break — an argument never crosses a
+    // newline) to reach the verbatim argument's opening delimiter.
+    let region = &after_word[args_len..];
+    let ws_len = region
+        .bytes()
+        .take_while(|&b| b == b' ' || b == b'\t')
+        .count();
+    let arg_region = &region[ws_len..];
+    let arg_len = match arg_region.bytes().next() {
+        Some(b'{') => balanced_group_len(arg_region, b'}')?,
+        // A `\verb`-style delimiter run: the first character delimits, and the
+        // argument may not span a line break.
+        Some(_) => delimited_len(arg_region)?,
+        None => return None,
+    };
+
+    out.push(Token {
+        kind: SyntaxKind::CONTROL_WORD,
+        text: SmolStr::new(&rest[..word_len]),
+    });
+    lex_into(&after_word[..args_len], out);
+    if ws_len > 0 {
+        out.push(Token {
+            kind: SyntaxKind::WHITESPACE,
+            text: SmolStr::new(&region[..ws_len]),
+        });
+    }
+    out.push(Token {
+        kind: SyntaxKind::VERB,
+        text: SmolStr::new(&arg_region[..arg_len]),
+    });
+    Some(word_len + args_len + ws_len + arg_len)
 }
 
 /// Byte length of the argument span that precedes a verbatim body, given the

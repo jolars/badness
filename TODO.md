@@ -66,6 +66,16 @@ asserted.
   a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body
   fallback); column-spec-aware L/C/R alignment for text `tabular`/`array`.
+- [ ] **Bug: a comment line inside an alignment breaks idempotence.** A
+  commented-out row (`% & … & … \\`, common as authored scaffolding) is folded
+  into the next row's first cell by `build_alignment_grid`, so its length
+  inflates that column's width and the padding *grows on every format pass*
+  (column width counts already-padded output). The grid builder must treat a
+  comment-only physical line as its own preserved line — not grid content, not
+  counted toward column widths (the alignment analog of the paragraph/math
+  comment-line fix). Repro: `\begin{aligned}\n & a & & b \\\n % & xxxx & & y
+  \\\n & c & & d \\\n\end{aligned}`. Pre-existing; surfaced once whole-file
+  formatting of real papers became reachable.
 - [ ] Decide formatter opinionatedness: which choices are configurable vs.
   fixed. *(open decision)*
 
@@ -97,20 +107,16 @@ built-in; consumed by the formatter's `\begin` arity glue).
   `unreferenced_labels`/`unresolved_refs` are per-file *facts*, not lints.
 - [ ] Unbraced `\newcommand\foo…` form (parses with `\foo` as a sibling; needs
   scanner-side sibling heuristics, not parser changes).
-- [ ] Verbatim-argument **commands** (the command analog of verbatim
-  environments). The command-level `verbatim` flag in `data/signatures.json`
-  is defined + tested but **not wired into the lexer** — only `\verb`/`\verb*`
-  are special-cased (by hardcoded string), so `\lstinline{$x$}` and
-  `\url{a_b}` still lex their bodies as live math/markup. Needs a lexer mode
-  that, on a flagged command, captures its argument verbatim, with two arg
-  shapes: *delimiter*-style (`\verb|…|`, `\lstinline|…|`) and *brace*-style
-  (`\code{…}`, `\url{…}`, balanced group). Then populate the built-in DB with
-  the standard verbatim-arg commands (`\url`, `\path`, `\lstinline`,
-  `\mintinline`). *Scope decision:* class-specific markup like jss's `\code`
-  (which `\@makeother\$\_\~` then grabs its arg) is not LaTeX-core — either
-  ship a small curated set of well-known class commands as built-ins, or leave
-  them to definition-scanning below. This is what produces the `\code{$ …}`
-  "unclosed `$`" false positive today.
+- [x] Verbatim-argument **commands** (the command analog of verbatim
+  environments). The DB `verbatim` flag now drives a lexer mode
+  (`lex_verbatim_command`) that captures the final argument as one `VERB` token —
+  *brace*-style (`\code{…}`, `\url{…}`, balanced, may span lines) or
+  *delimiter*-style (`\lstinline|…|`), chosen by its first character — after any
+  leading non-verbatim args (`\mintinline`'s language). Built-ins added: `\url`,
+  `\path`, `\lstinline`, `\mintinline`, and the curated class command `\code`
+  (jss). Cleared the `\code{$ …}` "unclosed `$`" false positive. (`\verb`/`\verb*`
+  keep their dedicated delimiter-only path.) The next bullet generalizes this to
+  arbitrary user macros.
 - [ ] Detect verbatim-argument commands by **scanning their definitions**
   (extends the existing `semantic/define.rs` scanner). When a `\newcommand`/
   `\def` body reassigns a special char's catcode to "other" before grabbing an

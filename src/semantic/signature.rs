@@ -67,9 +67,12 @@ pub struct CommandSig {
     /// `Some(level)` for a sectioning command, where `0` is the outermost
     /// (`\part`) and larger numbers nest deeper. Relative depth only.
     pub sectioning: Option<u8>,
-    /// `true` for commands whose argument is raw text the formatter must not
-    /// reshape (`\verb`, `\lstinline`). Their delimiter syntax is handled in the
-    /// lexer; this flag is the semantic record.
+    /// `true` for commands whose final argument is raw text the formatter must
+    /// not reshape (`\verb`, `\lstinline`, `\url`, `\code`). The lexer captures
+    /// that argument as one `VERB` token — a balanced `{…}` group or a
+    /// `\verb`-style delimiter run, chosen by its first character. Any leading,
+    /// non-verbatim arguments (e.g. `\mintinline`'s language) are declared in
+    /// `args`; the verbatim argument itself is implicit and not listed there.
     pub verbatim: bool,
 }
 

@@ -97,6 +97,30 @@ built-in; consumed by the formatter's `\begin` arity glue).
   `unreferenced_labels`/`unresolved_refs` are per-file *facts*, not lints.
 - [ ] Unbraced `\newcommand\foo…` form (parses with `\foo` as a sibling; needs
   scanner-side sibling heuristics, not parser changes).
+- [ ] Verbatim-argument **commands** (the command analog of verbatim
+  environments). The command-level `verbatim` flag in `data/signatures.json`
+  is defined + tested but **not wired into the lexer** — only `\verb`/`\verb*`
+  are special-cased (by hardcoded string), so `\lstinline{$x$}` and
+  `\url{a_b}` still lex their bodies as live math/markup. Needs a lexer mode
+  that, on a flagged command, captures its argument verbatim, with two arg
+  shapes: *delimiter*-style (`\verb|…|`, `\lstinline|…|`) and *brace*-style
+  (`\code{…}`, `\url{…}`, balanced group). Then populate the built-in DB with
+  the standard verbatim-arg commands (`\url`, `\path`, `\lstinline`,
+  `\mintinline`). *Scope decision:* class-specific markup like jss's `\code`
+  (which `\@makeother\$\_\~` then grabs its arg) is not LaTeX-core — either
+  ship a small curated set of well-known class commands as built-ins, or leave
+  them to definition-scanning below. This is what produces the `\code{$ …}`
+  "unclosed `$`" false positive today.
+- [ ] Detect verbatim-argument commands by **scanning their definitions**
+  (extends the existing `semantic/define.rs` scanner). When a `\newcommand`/
+  `\def` body reassigns a special char's catcode to "other" before grabbing an
+  undelimited argument (`\@makeother\$`, `\catcode`\``\$=12`, `\dospecials`
+  loops, …) — possibly via a chained helper macro (jss's `\code` defers its
+  `#1` to `\@codex`) — mark that command's argument verbatim. Heuristic and
+  **conservative by construction**: a wrong verbatim flag *suppresses* real
+  diagnostics inside the body (the worse failure), so prefer false negatives.
+  Reasoning about catcode execution sits at the boundary of AGENTS.md decision
+  #1 — record the decision there if pursued.
 - [ ] Salsa `document_signatures` query once an LSP consumer (hover/completion)
   wants the scanned command sigs.
 - [ ] CWL corpus ingest (an import format converted *into* the signature schema)

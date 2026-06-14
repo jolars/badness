@@ -143,15 +143,23 @@ impl<'t> Parser<'t> {
     fn peek_meaningful(&self) -> (Option<SyntaxKind>, bool) {
         let mut i = self.pos;
         let mut newlines = 0;
+        let mut had_break = false;
         while let Some(t) = self.tokens.get(i) {
             match t.kind {
-                SyntaxKind::NEWLINE => newlines += 1,
-                SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => {}
-                k => return (Some(k), newlines >= 2),
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    had_break |= newlines >= 2;
+                }
+                SyntaxKind::WHITESPACE => {}
+                // A comment occupies its own line: it is content, not blank
+                // space, so it resets the run that detects a blank line. It
+                // does not undo a blank line already seen before it.
+                SyntaxKind::COMMENT => newlines = 0,
+                k => return (Some(k), had_break),
             }
             i += 1;
         }
-        (None, newlines >= 2)
+        (None, had_break)
     }
 
     /// True if a paragraph break (blank line) begins at the current position.
@@ -166,7 +174,10 @@ impl<'t> Parser<'t> {
                         return true;
                     }
                 }
-                SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => {}
+                SyntaxKind::WHITESPACE => {}
+                // A comment-only line is content, not a blank line: it breaks
+                // the run of newlines that would otherwise read as a `\par`.
+                SyntaxKind::COMMENT => newlines = 0,
                 _ => return false,
             }
             i += 1;
@@ -221,14 +232,21 @@ impl<'t> Parser<'t> {
     fn trivia_run_is_separator(&self, block: Block) -> bool {
         let mut i = self.pos;
         let mut newlines = 0;
+        let mut had_break = false;
         while let Some(t) = self.tokens.get(i) {
             match t.kind {
-                SyntaxKind::NEWLINE => newlines += 1,
-                SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => {}
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    had_break |= newlines >= 2;
+                }
+                SyntaxKind::WHITESPACE => {}
+                // A comment line is content: it resets the blank-line run but
+                // keeps any blank line already seen before it.
+                SyntaxKind::COMMENT => newlines = 0,
                 SyntaxKind::CONTROL_WORD if block == Block::Environment && t.text == END_CMD => {
                     return true;
                 }
-                _ => return newlines >= 2,
+                _ => return had_break,
             }
             i += 1;
         }

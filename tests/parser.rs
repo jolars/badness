@@ -186,6 +186,31 @@ fn paragraphs_split_on_blank_lines() {
 }
 
 #[test]
+fn comment_line_does_not_split_paragraph() {
+    // `\n %comment \n` is two line-ends around a comment-only line, not a
+    // blank line, so it must stay one paragraph (not a `\par` boundary).
+    let out = tree("First line.\n% an aside\nSame paragraph.");
+    assert_eq!(out.matches("PARAGRAPH@").count(), 1, "{out}");
+}
+
+#[test]
+fn comment_line_does_not_close_display_math() {
+    // A comment line inside `\[ … \]` previously read as a blank line and
+    // closed the math early, orphaning the `\]`. It must parse as one block.
+    let out = tree("\\[\n  a = b\n  % aligned variant, commented out\n  + c\n\\]");
+    assert!(!out.contains("error @"), "unexpected parse error:\n{out}");
+    assert_eq!(out.matches("DISPLAY_MATH@").count(), 1, "{out}");
+}
+
+#[test]
+fn blank_line_before_comment_still_breaks_math() {
+    // A genuine blank line preceding a comment line is still a `\par`: the
+    // comment-reset must not erase a break already seen.
+    let out = tree("\\[\n  a = b\n\n  % stray\n  c\n\\]");
+    assert!(out.contains("unclosed `\\["), "{out}");
+}
+
+#[test]
 fn verbatim_environment_is_opaque() {
     insta::assert_snapshot!(tree(
         "\\begin{verbatim}\n\\notacommand $x$ %literal\n\\end{verbatim}"

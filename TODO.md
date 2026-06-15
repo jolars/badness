@@ -55,12 +55,11 @@ engine; whitespace normalization, environment + group/argument indentation
 around the fill engine); aggressive math lowering (collapse spacing, tight
 scripts, strip redundant single-token script braces); display math
 (`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their own
-lines; `\left…\right` spacing;
-alignment-aware `align`/matrix column grids; list environments (signature-DB
-`list` flag --- `itemize`/`enumerate`/`description` --- one `\item` per line,
-each body reflowed with continuation lines hanging-indented under the item text
-via `Ir::Align`). Protected regions untouched; idempotence + losslessness
-asserted.
+lines; `\left…\right` spacing; alignment-aware `align`/matrix column grids; list
+environments (signature-DB `list` flag --- `itemize`/`enumerate`/`description`
+--- one `\item` per line, each body reflowed with continuation lines
+hanging-indented under the item text via `Ir::Align`). Protected regions
+untouched; idempotence + losslessness asserted.
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
   today. *Demoted, much later.*
@@ -70,32 +69,34 @@ asserted.
   fallback).
 - [ ] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table
   environments (`tabular`/`array` are now grid-aligned, but every column is
-  left-aligned regardless of its `{lcr}` spec). Also: `\cmidrule(lr){2-3}` paren
-  trim specs (the parenthesized part isn't recognized as part of the rule line, so
-  such a line is treated as a cell and the table falls back), and the same-line
-  `\\ \hline` form (only own-line rule commands become passthrough lines today).
+  left-aligned regardless of its `{lcr}` spec). Also: `\cmidrule(lr){2-3}`
+  paren trim specs (the parenthesized part isn't recognized as part of the
+  rule line, so such a line is treated as a cell and the table falls back),
+  and the same-line `\\ \hline` form (only own-line rule commands become
+  passthrough lines today).
 - [x] **Bug: a comment line inside an alignment breaks idempotence.** A
-  commented-out row (`% & … & … \\`, common as authored scaffolding) was folded
-  into the next row's first cell by `build_alignment_grid`, inflating that
-  column's width so padding *grew every format pass* — and worse, the comment
-  rendered first on the row, commenting out the real cells after it. Fixed:
-  `finish_cell` now rejects any cell containing a `COMMENT` token (a comment runs
-  to end of line, so it cannot share an aligned row), so the environment falls
-  back to generic lowering with the comment on its own line. The documented
-  intent ("a comment … falls back") was relying on `contains_forced_break`, which
-  a comment's newline-free text never trips. Surfaced once whole-file formatting
-  of real papers became reachable.
+  commented-out row (`% & … & … \\`, common as authored scaffolding) was
+  folded into the next row's first cell by `build_alignment_grid`, inflating
+  that column's width so padding *grew every format pass* — and worse, the
+  comment rendered first on the row, commenting out the real cells after it.
+  Fixed: `finish_cell` now rejects any cell containing a `COMMENT` token (a
+  comment runs to end of line, so it cannot share an aligned row), so the
+  environment falls back to generic lowering with the comment on its own
+  line. The documented intent ("a comment … falls back") was relying on
+  `contains_forced_break`, which a comment's newline-free text never trips.
+  Surfaced once whole-file formatting of real papers became reachable.
 - [x] **Grid-align alignment environments that contain interspersed comments.**
   `build_alignment_grid` now carries non-row lines: a `GridItem` is either a
-  `Row` or a `Passthrough` (kept verbatim between rows, never counted toward column
-  widths), and `AlignRow` gained a `trailing_comment`. A comment-only physical line
-  becomes a passthrough; an end-of-line comment (after the row's `\\`, or trailing
-  the final row) trails its row; a mid-row comment (more cells follow) still falls
-  back. The same passthrough mechanism handles horizontal-rule commands (a new
-  `rule` flag on `CommandSig`: `\hline`, `\midrule`, `\toprule`, …), and with
-  `tabular`/`tabular*`/`array` flagged `align`, text tables now grid-align with
-  their rules preserved. The alignment analog of the paragraph/math comment-line
-  handling.
+  `Row` or a `Passthrough` (kept verbatim between rows, never counted toward
+  column widths), and `AlignRow` gained a `trailing_comment`. A comment-only
+  physical line becomes a passthrough; an end-of-line comment (after the
+  row's `\\`, or trailing the final row) trails its row; a mid-row comment
+  (more cells follow) still falls back. The same passthrough mechanism
+  handles horizontal-rule commands (a new `rule` flag on `CommandSig`:
+  `\hline`, `\midrule`, `\toprule`, …), and with
+  `tabular`/`tabular*`/`array` flagged `align`, text tables now grid-align
+  with their rules preserved. The alignment analog of the paragraph/math
+  comment-line handling.
 
 ## Linter
 
@@ -107,13 +108,14 @@ single-file duplicate-label lints.
 
 - [ ] More lints: unmatched delimiters, undefined refs (needs the cross-file
   resolver), stylistic checks.
-- [ ] Lint `$$…$$` display math with a `\[…\]` autofix. *Not* a formatter rewrite:
-  `$$` is the plain-TeX primitive and `\[` routes through LaTeX's display hooks, so
-  the swap changes typeset output (it ignores `fleqn`; the `\abovedisplayskip`/
-  `\belowdisplayskip`/`\predisplaypenalty` spacing differs) --- which would break the
-  formatter's meaning-preservation contract. A lint is the right home for an
-  almost-always-wanted *semantic* change. Fire only on a parser-built `DISPLAY_MATH`
-  node (never on `$a$$b$`, two inline maths); swapping the delimiter tokens on the
+- [ ] Lint `$$…$$` display math with a `\[…\]` autofix. *Not* a formatter
+  rewrite: `$$` is the plain-TeX primitive and `\[` routes through LaTeX's
+  display hooks, so the swap changes typeset output (it ignores `fleqn`; the
+  `\abovedisplayskip`/ `\belowdisplayskip`/`\predisplaypenalty` spacing
+  differs) --- which would break the formatter's meaning-preservation
+  contract. A lint is the right home for an almost-always-wanted *semantic*
+  change. Fire only on a parser-built `DISPLAY_MATH` node (never on
+  `$a$$b$`, two inline maths); swapping the delimiter tokens on the
   already-blocked node is format-clean by construction (Tenet 5).
 - [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
   (Tenet 5). `deprecated-command`'s `\bf → \bfseries` is the natural first
@@ -135,24 +137,24 @@ built-in; consumed by the formatter's `\begin` arity glue).
   scanner-side sibling heuristics, not parser changes).
 - [x] Verbatim-argument **commands** (the command analog of verbatim
   environments). The DB `verbatim` flag now drives a lexer mode
-  (`lex_verbatim_command`) that captures the final argument as one `VERB` token —
-  *brace*-style (`\code{…}`, `\url{…}`, balanced, may span lines) or
-  *delimiter*-style (`\lstinline|…|`), chosen by its first character — after any
-  leading non-verbatim args (`\mintinline`'s language). Built-ins added: `\url`,
-  `\path`, `\lstinline`, `\mintinline`, and the curated class command `\code`
-  (jss). Cleared the `\code{$ …}` "unclosed `$`" false positive. (`\verb`/`\verb*`
-  keep their dedicated delimiter-only path.) The next bullet generalizes this to
-  arbitrary user macros.
+  (`lex_verbatim_command`) that captures the final argument as one `VERB`
+  token — *brace*-style (`\code{…}`, `\url{…}`, balanced, may span lines) or
+  *delimiter*-style (`\lstinline|…|`), chosen by its first character — after
+  any leading non-verbatim args (`\mintinline`'s language). Built-ins added:
+  `\url`, `\path`, `\lstinline`, `\mintinline`, and the curated class
+  command `\code` (jss). Cleared the `\code{$ …}` "unclosed `$`" false
+  positive. (`\verb`/`\verb*` keep their dedicated delimiter-only path.) The
+  next bullet generalizes this to arbitrary user macros.
 - [ ] Detect verbatim-argument commands by **scanning their definitions**
   (extends the existing `semantic/define.rs` scanner). When a `\newcommand`/
-  `\def` body reassigns a special char's catcode to "other" before grabbing an
-  undelimited argument (`\@makeother\$`, `\catcode`\``\$=12`, `\dospecials`
-  loops, …) — possibly via a chained helper macro (jss's `\code` defers its
-  `#1` to `\@codex`) — mark that command's argument verbatim. Heuristic and
-  **conservative by construction**: a wrong verbatim flag *suppresses* real
-  diagnostics inside the body (the worse failure), so prefer false negatives.
-  Reasoning about catcode execution sits at the boundary of AGENTS.md decision
-  #1 — record the decision there if pursued.
+  `\def` body reassigns a special char's catcode to "other" before grabbing
+  an undelimited argument (`\@makeother\$`, `\catcode`\``\$=12`,
+  `\dospecials` loops, …) — possibly via a chained helper macro (jss's
+  `\code` defers its `#1` to `\@codex`) — mark that command's argument
+  verbatim. Heuristic and **conservative by construction**: a wrong verbatim
+  flag *suppresses* real diagnostics inside the body (the worse failure), so
+  prefer false negatives. Reasoning about catcode execution sits at the
+  boundary of AGENTS.md decision #1 — record the decision there if pursued.
 - [ ] Salsa `document_signatures` query once an LSP consumer (hover/completion)
   wants the scanned command sigs.
 - [ ] CWL corpus ingest (an import format converted *into* the signature schema)

@@ -67,7 +67,13 @@ asserted.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body
-  fallback); column-spec-aware L/C/R alignment for text `tabular`/`array`.
+  fallback).
+- [ ] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table
+  environments (`tabular`/`array` are now grid-aligned, but every column is
+  left-aligned regardless of its `{lcr}` spec). Also: `\cmidrule(lr){2-3}` paren
+  trim specs (the parenthesized part isn't recognized as part of the rule line, so
+  such a line is treated as a cell and the table falls back), and the same-line
+  `\\ \hline` form (only own-line rule commands become passthrough lines today).
 - [x] **Bug: a comment line inside an alignment breaks idempotence.** A
   commented-out row (`% & … & … \\`, common as authored scaffolding) was folded
   into the next row's first cell by `build_alignment_grid`, inflating that
@@ -79,16 +85,17 @@ asserted.
   intent ("a comment … falls back") was relying on `contains_forced_break`, which
   a comment's newline-free text never trips. Surfaced once whole-file formatting
   of real papers became reachable.
-- [ ] Grid-align alignment environments that contain interspersed comments
-  (commented-out rows, a `% \label`, an end-of-line note). Today any comment in
-  the body forces the whole environment to the generic unaligned fallback (see
-  the fixed bug above), so a real `aligned`/`align` with authored comments loses
-  its column alignment entirely. Proper handling: treat a comment-only physical
-  line as its own preserved passthrough line *between* grid rows (not a cell, not
-  counted toward column widths), and an end-of-line comment as trailing the row's
-  last cell. Needs `build_alignment_grid`/`AlignRow` to carry non-row lines and
-  `render_alignment_rows` to interleave them — the alignment analog of the
-  paragraph/math comment-line handling.
+- [x] **Grid-align alignment environments that contain interspersed comments.**
+  `build_alignment_grid` now carries non-row lines: a `GridItem` is either a
+  `Row` or a `Passthrough` (kept verbatim between rows, never counted toward column
+  widths), and `AlignRow` gained a `trailing_comment`. A comment-only physical line
+  becomes a passthrough; an end-of-line comment (after the row's `\\`, or trailing
+  the final row) trails its row; a mid-row comment (more cells follow) still falls
+  back. The same passthrough mechanism handles horizontal-rule commands (a new
+  `rule` flag on `CommandSig`: `\hline`, `\midrule`, `\toprule`, …), and with
+  `tabular`/`tabular*`/`array` flagged `align`, text tables now grid-align with
+  their rules preserved. The alignment analog of the paragraph/math comment-line
+  handling.
 
 ## Linter
 

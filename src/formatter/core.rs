@@ -795,12 +795,23 @@ fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.align)
 }
 
-/// One row of an alignment grid: its rendered, trimmed cell strings and the flat
-/// text of the `\\` that terminated the row (`None` for a final row written
-/// without a trailing line break).
+/// One row of an alignment grid: its rendered, trimmed cell strings, the flat text
+/// of the `\\` that terminated the row (`None` for a final row written without a
+/// trailing line break), and an optional end-of-line comment that trails the row
+/// (rendered *after* the `\\`, so the break is never commented out).
 struct AlignRow {
     cells: Vec<String>,
     line_break: Option<String>,
+    trailing_comment: Option<String>,
+}
+
+/// One item in an alignment grid: either a [`AlignRow`] or a *passthrough* line —
+/// a physical line that is not a grid row (a comment-only line, or a line made up
+/// solely of horizontal-rule commands like `\hline`/`\midrule`). A passthrough is
+/// kept verbatim between rows and never counted toward column widths.
+enum GridItem {
+    Row(AlignRow),
+    Passthrough(String),
 }
 
 /// Lower an `align`/matrix-family environment, laying out its `&` columns into a
@@ -811,9 +822,11 @@ struct AlignRow {
 ///
 /// Falls back to [`lower_environment`] whenever the body is not a clean
 /// single-paragraph grid (see [`build_alignment_grid`]): a blank-line break, or a
-/// cell that cannot collapse to one aligned line (a comment or a nested block).
-/// The fallback is always available, so an unhandled shape degrades to today's
-/// plain indented body, never a panic or corruption.
+/// cell that cannot collapse to one aligned line (a mid-row comment or a nested
+/// block). Comment-only and rule-only lines (`\hline`, `\midrule`, …) are *not* a
+/// reason to fall back — they are kept as passthrough lines between rows. The
+/// fallback is always available, so an unhandled shape degrades to today's plain
+/// indented body, never a panic or corruption.
 fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
@@ -830,16 +843,16 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
     }
 
-    let Some(rows) = build_alignment_grid(&body_elements, cx) else {
+    let Some(items) = build_alignment_grid(&body_elements, cx) else {
         return lower_environment(node, cx);
     };
-    if rows.is_empty() {
-        // An empty (or `\\`-only) body has no grid; let the generic path render
-        // the bare `\begin`/`\end`.
+    if !items.iter().any(|item| matches!(item, GridItem::Row(_))) {
+        // A body with no actual rows (empty, `\\`-only, or comment-only) has no
+        // grid; let the generic path render it.
         return lower_environment(node, cx);
     }
 
-    let body = render_alignment_rows(&rows);
+    let body = render_alignment_rows(&items);
     Ir::concat([
         begin,
         Ir::indent(Ir::concat([Ir::hard_line(), body])),
@@ -848,9 +861,9 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     ])
 }
 
-/// Split an alignment environment body into a row×column grid of rendered cell
-/// strings, or `None` to signal the caller should fall back to the generic
-/// environment lowering.
+/// Split an alignment environment body into a sequence of grid items (rows and
+/// passthrough lines), or `None` to signal the caller should fall back to the
+/// generic environment lowering.
 ///
 /// Rows are delimited by *top-level* `\\` ([`SyntaxKind::LINE_BREAK`]) nodes and
 /// cells by top-level `&` ([`SyntaxKind::AMPERSAND`]) tokens; a `&` nested inside a
@@ -859,13 +872,21 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// [`lower_element_stream`] and render *flat* (so inline math/groups normalize as
 /// they do elsewhere), trimmed of surrounding space.
 ///
+/// **Comments and rule lines.** A physical line between rows that is made up solely
+/// of comments and/or horizontal-rule commands (`\hline`, `\midrule`, …) is kept as
+/// a [`GridItem::Passthrough`] line, not a cell. A comment at the end of a row's
+/// last physical line — directly after the row's `\\`, or trailing the final row —
+/// is attached as the row's `trailing_comment`. A comment in the *middle* of a row
+/// (with more cells after it) cannot sit on an aligned line — its text runs to end
+/// of line, commenting out the rest — so it returns `None` and falls back.
+///
 /// Returns `None` when [`flatten_alignment_body`] rejects the body (a blank-line
-/// break) or when any cell carries a forced break (a comment or a nested block
-/// that cannot sit on one aligned line).
+/// break), when a cell carries a forced break (a nested block or a continuation
+/// line), or on a mid-row comment.
 fn build_alignment_grid(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
-) -> Option<Vec<AlignRow>> {
+) -> Option<Vec<GridItem>> {
     let inline = flatten_alignment_body(body_elements)?;
     let printer = Printer::new(FormatStyle::default());
 
@@ -894,10 +915,9 @@ fn build_alignment_grid(
         while cell.last().is_some_and(&is_edge_trivia) {
             cell.pop();
         }
-        // A comment cannot sit on an aligned line: its text runs to end of line,
-        // so anything after it (later cells, the row's `\\`) would be commented
-        // out. Unlike a nested block it carries no embedded newline, so the
-        // forced-break check below misses it — reject explicitly and fall back.
+        // A comment in a cell is handled by the caller (passthrough / trailing /
+        // fallback) and never reaches here in a handled case; this guard keeps the
+        // fallback safe if one ever slips through an unmodeled path.
         if cell.iter().any(|e| {
             e.as_token()
                 .is_some_and(|t| t.kind() == SyntaxKind::COMMENT)
@@ -912,41 +932,215 @@ fn build_alignment_grid(
         Some(())
     }
 
-    let mut rows: Vec<AlignRow> = Vec::new();
+    let mut items: Vec<GridItem> = Vec::new();
     let mut cells: Vec<String> = Vec::new();
     let mut cell: Vec<SyntaxElement> = Vec::new();
-    for element in inline {
-        match element {
+    let mut final_pushed = false;
+
+    let mut idx = 0;
+    while idx < inline.len() {
+        // A row boundary: no committed cells and the current cell holds only
+        // boundary trivia. Only here can a non-row (passthrough / trailing-comment)
+        // line begin.
+        let at_boundary = cells.is_empty() && cell_is_blank(&cell);
+        if at_boundary
+            && is_comment_or_rule_start(&inline[idx], cx)
+            && let Some(line) = non_row_line(&inline, idx, &printer, cx)
+        {
+            // A comment on its own line (a newline separates it from the previous
+            // grid token), or any non-row line with no row yet before it, is a
+            // passthrough between rows.
+            let own_line = cell_has_newline(&cell);
+            let prev_is_row = matches!(items.last(), Some(GridItem::Row(_)));
+            if own_line || !prev_is_row {
+                items.push(GridItem::Passthrough(line.text));
+                cell.clear();
+                idx = line.next;
+                continue;
+            }
+            // Not on its own line: it directly follows the previous row's `\\`. A
+            // pure comment there trails that row; a rule there (the `\\ \hline`
+            // form) is not modeled — fall through so the cell path falls back.
+            if !line.has_rule {
+                if let Some(GridItem::Row(row)) = items.last_mut() {
+                    row.trailing_comment = Some(line.text);
+                }
+                cell.clear();
+                idx = line.next;
+                continue;
+            }
+        }
+
+        match &inline[idx] {
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::AMPERSAND => {
                 finish_cell(&mut cell, &mut cells, &printer, cx)?;
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
                 finish_cell(&mut cell, &mut cells, &printer, cx)?;
                 let line_break = printer
-                    .print_flat(&lower_node(&child, cx))
+                    .print_flat(&lower_node(child, cx))
                     .trim()
                     .to_string();
-                rows.push(AlignRow {
+                items.push(GridItem::Row(AlignRow {
                     cells: std::mem::take(&mut cells),
                     line_break: Some(line_break),
-                });
+                    trailing_comment: None,
+                }));
             }
-            other => cell.push(other),
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
+                // A comment that is *not* at a boundary trails cell content. It is
+                // clean only when nothing more in the body belongs to the row;
+                // otherwise it would comment out later cells — fall back.
+                if !rest_is_only_trivia(&inline, idx + 1) {
+                    return None;
+                }
+                let text = token.text().trim_end().to_string();
+                finish_cell(&mut cell, &mut cells, &printer, cx)?;
+                items.push(GridItem::Row(AlignRow {
+                    cells: std::mem::take(&mut cells),
+                    line_break: None,
+                    trailing_comment: Some(text),
+                }));
+                final_pushed = true;
+                break;
+            }
+            _ => cell.push(inline[idx].clone()),
         }
+        idx += 1;
     }
+
     // The final segment (content after the last `\\`). Drop it when it is a single
     // empty cell — the "body ended in `\\`" case — so the trailing break stays on
     // the prior row without adding a blank line; otherwise it is a real last row.
-    finish_cell(&mut cell, &mut cells, &printer, cx)?;
-    let final_is_empty = cells.len() == 1 && cells[0].is_empty();
-    if !final_is_empty {
-        rows.push(AlignRow {
-            cells,
-            line_break: None,
-        });
+    if !final_pushed {
+        finish_cell(&mut cell, &mut cells, &printer, cx)?;
+        let final_is_empty = cells.len() == 1 && cells[0].is_empty();
+        if !final_is_empty {
+            items.push(GridItem::Row(AlignRow {
+                cells,
+                line_break: None,
+                trailing_comment: None,
+            }));
+        }
     }
 
-    Some(rows)
+    Some(items)
+}
+
+/// A non-row line recognized at a grid boundary: its rendered text and the index
+/// at which the body resumes (past the line's terminating newline).
+struct NonRowLine {
+    text: String,
+    next: usize,
+    has_rule: bool,
+}
+
+/// Try to read a *non-row* line — one made up solely of comments, horizontal-rule
+/// commands (`\hline`, `\midrule`, …), and inline whitespace — starting at `start`
+/// (which the caller guarantees is a comment or rule command). Returns `None` when
+/// the line contains anything else (a cell, a `&`, a `\\`), so the caller treats it
+/// as ordinary cell content. The rendered text is the line flattened and trimmed
+/// (comments verbatim), exactly as cells and `\\` are rendered.
+fn non_row_line(
+    inline: &[SyntaxElement],
+    start: usize,
+    printer: &Printer,
+    cx: LowerCtx<'_>,
+) -> Option<NonRowLine> {
+    let mut i = start;
+    let mut content_end = start;
+    let mut has_rule = false;
+    let mut has_comment = false;
+    while i < inline.len() {
+        match &inline[i] {
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::NEWLINE => break,
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => {}
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
+                // A comment runs to end of line, so it is the line's last content.
+                has_comment = true;
+                i += 1;
+                content_end = i;
+                break;
+            }
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND && is_rule_command(n, cx) => {
+                has_rule = true;
+                i += 1;
+                content_end = i;
+                continue;
+            }
+            _ => return None,
+        }
+        i += 1;
+    }
+    if !(has_rule || has_comment) {
+        return None;
+    }
+    // Resume past the line's terminating newline (and any trailing whitespace).
+    let mut next = content_end;
+    while next < inline.len() {
+        match &inline[next] {
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => next += 1,
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::NEWLINE => {
+                next += 1;
+                break;
+            }
+            _ => break,
+        }
+    }
+    let ir = Ir::concat(lower_element_stream(
+        inline[start..content_end].iter().cloned(),
+        cx,
+    ));
+    let text = printer.print_flat(&ir).trim().to_string();
+    Some(NonRowLine {
+        text,
+        next,
+        has_rule,
+    })
+}
+
+/// Whether `element` begins a candidate non-row line — a comment, or a command the
+/// signature DB flags as a horizontal rule (`\hline`, `\midrule`, …).
+fn is_comment_or_rule_start(element: &SyntaxElement, cx: LowerCtx<'_>) -> bool {
+    match element {
+        SyntaxElement::Token(t) => t.kind() == SyntaxKind::COMMENT,
+        SyntaxElement::Node(n) => n.kind() == SyntaxKind::COMMAND && is_rule_command(n, cx),
+    }
+}
+
+/// Whether `node` (a `COMMAND`) is a horizontal-rule command per the signature DB.
+fn is_rule_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(node)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| sig.rule)
+}
+
+/// Whether the accumulated cell holds only collapsible trivia (no real content) —
+/// i.e. the parser is at a grid boundary.
+fn cell_is_blank(cell: &[SyntaxElement]) -> bool {
+    cell.iter().all(|e| {
+        e.as_token()
+            .is_some_and(|t| is_collapsible_trivia(t.kind()))
+    })
+}
+
+/// Whether the boundary trivia accumulated since the last grid token includes a
+/// newline — i.e. a following comment sits on its *own* physical line rather than
+/// trailing the previous row's `\\`.
+fn cell_has_newline(cell: &[SyntaxElement]) -> bool {
+    cell.iter().any(|e| {
+        e.as_token()
+            .is_some_and(|t| t.kind() == SyntaxKind::NEWLINE)
+    })
+}
+
+/// Whether everything from `from` onward is collapsible trivia — nothing of the
+/// row remains, so a comment at the current position is a clean trailing comment.
+fn rest_is_only_trivia(inline: &[SyntaxElement], from: usize) -> bool {
+    inline[from..].iter().all(|e| {
+        e.as_token()
+            .is_some_and(|t| is_collapsible_trivia(t.kind()))
+    })
 }
 
 /// Flatten an alignment environment's body into a single stream of inline
@@ -976,16 +1170,20 @@ fn flatten_alignment_body(body_elements: &[SyntaxElement]) -> Option<Vec<SyntaxE
 }
 
 /// Render the grid to IR: pad every non-last cell in a row to its column width
-/// (left-align), join cells with `" & "`, append the row's `\\`, and join rows
-/// with [`Ir::hard_line`]. A row is one [`Ir::text`] (no newline; cells are flat),
-/// which the caller indents one step. The row's *last* cell is never padded, so no
-/// line carries trailing whitespace.
-fn render_alignment_rows(rows: &[AlignRow]) -> Ir {
+/// (left-align), join cells with `" & "`, append the row's `\\` and any trailing
+/// comment, and join all items with [`Ir::hard_line`]. A row is one [`Ir::text`]
+/// (no newline; cells are flat), which the caller indents one step. The row's
+/// *last* cell is never padded, so no line carries trailing whitespace.
+/// [`GridItem::Passthrough`] lines (comments, `\hline`/`\midrule`, …) are emitted
+/// verbatim between rows and never counted toward column widths.
+fn render_alignment_rows(items: &[GridItem]) -> Ir {
     // Column width = the max char-count over every cell in that column (including
     // last cells, so a long final cell still widens the column above it). Char
-    // count matches the printer's own column metric.
+    // count matches the printer's own column metric. Passthrough lines do not
+    // participate.
     let mut col_widths: Vec<usize> = Vec::new();
-    for row in rows {
+    for item in items {
+        let GridItem::Row(row) = item else { continue };
         for (c, cell) in row.cells.iter().enumerate() {
             let width = cell.chars().count();
             if c == col_widths.len() {
@@ -996,7 +1194,11 @@ fn render_alignment_rows(rows: &[AlignRow]) -> Ir {
         }
     }
 
-    let lines = rows.iter().map(|row| {
+    let lines = items.iter().map(|item| {
+        let row = match item {
+            GridItem::Passthrough(text) => return Ir::text(text.clone()),
+            GridItem::Row(row) => row,
+        };
         let mut line = String::new();
         let last = row.cells.len().saturating_sub(1);
         for (c, cell) in row.cells.iter().enumerate() {
@@ -1012,6 +1214,12 @@ fn render_alignment_rows(rows: &[AlignRow]) -> Ir {
         if let Some(line_break) = &row.line_break {
             line.push(' ');
             line.push_str(line_break);
+        }
+        // The trailing comment always follows the `\\` so the break is never
+        // commented out.
+        if let Some(comment) = &row.trailing_comment {
+            line.push(' ');
+            line.push_str(comment);
         }
         Ir::text(line)
     });

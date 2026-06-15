@@ -72,9 +72,9 @@ const CLEAN_CASES: &[&str] = &[
     r"see \url{http://x.com/a_b} and \code{$x_y$} inline",
     r"\lstinline|a_$b$_c| then \mintinline{python}{x = $1}",
     "given by \\code{\nmulti-line $verbatim$ body with a_b} and more text here\n",
-    // A comment line inside an alignment must fall back to generic lowering (the
-    // comment runs to end of line, so it can't sit on an aligned row): otherwise
-    // padding grows every pass and the comment swallows the real cells after it.
+    // A comment-only line inside an alignment is kept as a passthrough line between
+    // the grid rows (not a cell, not counted toward column widths); the invariants
+    // (idempotent, clean, lossless) must still hold.
     "\\begin{aligned}\n & a & & b \\\\\n % & long commented-out row & & y \\\\\n & c & & d \\\\\n\\end{aligned}\n",
 ];
 
@@ -219,6 +219,18 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("align_columns_linebreak_optional", WrapMode::Preserve, 80),
     ("pmatrix_columns", WrapMode::Preserve, 80),
     ("align_nested_block_fallback", WrapMode::Preserve, 80),
+    // Comments and rule lines in an alignment grid: a comment-only line is kept as
+    // a passthrough between rows (not counted toward column widths); an end-of-line
+    // comment trails its row after the `\\`; a mid-row comment (more cells follow)
+    // would comment them out, so it falls back to the plain indented body. With the
+    // table environments now flagged `align`, `tabular`/`array` grid-align their
+    // cells with `\hline`/booktabs rules preserved as passthrough lines.
+    ("align_comment_only_line", WrapMode::Preserve, 80),
+    ("align_trailing_comment", WrapMode::Preserve, 80),
+    ("align_comment_mid_row_fallback", WrapMode::Preserve, 80),
+    ("tabular_hline", WrapMode::Preserve, 80),
+    ("tabular_booktabs", WrapMode::Preserve, 80),
+    ("array_columns", WrapMode::Preserve, 80),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

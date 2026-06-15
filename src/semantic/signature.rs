@@ -74,6 +74,11 @@ pub struct CommandSig {
     /// non-verbatim arguments (e.g. `\mintinline`'s language) are declared in
     /// `args`; the verbatim argument itself is implicit and not listed there.
     pub verbatim: bool,
+    /// `true` for horizontal-rule commands (`\hline`, `\midrule`, `\toprule`, …).
+    /// In an alignment environment a physical line made up solely of rule
+    /// commands is a *passthrough* line the formatter keeps between grid rows
+    /// rather than treating as a cell (see the grid lowering in `formatter`).
+    pub rule: bool,
 }
 
 /// The signature of an environment.
@@ -255,6 +260,8 @@ struct RawCommand {
     sectioning: Option<u8>,
     #[serde(default)]
     verbatim: bool,
+    #[serde(default)]
+    rule: bool,
 }
 
 impl From<RawCommand> for CommandSig {
@@ -263,6 +270,7 @@ impl From<RawCommand> for CommandSig {
             args: raw.args.into_iter().map(ArgSpec::from).collect(),
             sectioning: raw.sectioning,
             verbatim: raw.verbatim,
+            rule: raw.rule,
         }
     }
 }
@@ -441,12 +449,12 @@ mod tests {
         let pmatrix = db.environment("pmatrix").unwrap();
         assert!(pmatrix.math);
         assert!(pmatrix.align);
-        // A plain content environment reflows and is neither verbatim nor math.
+        // `tabular` is an alignment environment (its `&` columns grid-align) but,
+        // unlike the math families, it is not math.
         let tabular = db.environment("tabular").unwrap();
         assert!(!tabular.verbatim_body);
         assert!(!tabular.math);
-        assert!(!tabular.align);
-        assert!(tabular.reflow);
+        assert!(tabular.align);
         assert!(!tabular.list);
         // List environments carry the `list` flag (and still reflow their bodies).
         for name in ["itemize", "enumerate", "description"] {

@@ -96,6 +96,7 @@ fn scan_newcommand(command: &SyntaxNode, db: &mut SignatureDb) {
             args: latex2e_args(arity, first_optional),
             sectioning: None,
             verbatim: false,
+            rule: false,
         },
     );
 }
@@ -131,6 +132,7 @@ fn scan_xparse_command(command: &SyntaxNode, db: &mut SignatureDb) {
             args: xparse::parse_spec(&group_inner_source(&spec)),
             sectioning: None,
             verbatim: false,
+            rule: false,
         },
     );
 }

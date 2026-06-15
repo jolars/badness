@@ -35,7 +35,18 @@
     "mintinline": { "args": ["opt", "req"], "verbatim": true },
     "url": { "verbatim": true },
     "path": { "verbatim": true },
-    "code": { "verbatim": true }
+    "code": { "verbatim": true },
+
+    "hline": { "rule": true },
+    "hdashline": { "rule": true },
+    "toprule": { "args": ["opt"], "rule": true },
+    "midrule": { "args": ["opt"], "rule": true },
+    "bottomrule": { "args": ["opt"], "rule": true },
+    "cmidrule": { "args": ["opt", "req"], "rule": true },
+    "cline": { "args": ["req"], "rule": true },
+    "specialrule": { "args": ["req", "req", "req"], "rule": true },
+    "addlinespace": { "args": ["opt"], "rule": true },
+    "morecmidrules": { "rule": true }
   },
 
   "environments": {
@@ -45,9 +56,9 @@
     "enumerate": { "list": true },
     "description": { "list": true },
 
-    "tabular": { "args": ["opt", "req"] },
-    "tabular*": { "args": ["req", "opt", "req"] },
-    "array": { "args": ["opt", "req"] },
+    "tabular": { "args": ["opt", "req"], "align": true },
+    "tabular*": { "args": ["req", "opt", "req"], "align": true },
+    "array": { "args": ["opt", "req"], "align": true },
     "minipage": { "args": ["opt", "req"] },
     "multicols": { "args": ["req"] },
     "thebibliography": { "args": ["req"] },

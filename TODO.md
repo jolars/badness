@@ -261,7 +261,7 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 
 ## Tooling & infrastructure
 
-- \[\~\] `build.rs` man/completions/markdown
+- [ ] `build.rs` man/completions/markdown
   (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
   subcommand lives in `main.rs`; `build.rs` still deferred.
 - [x] Directory-walking file discovery for `format` and `lint`

@@ -368,15 +368,13 @@ fn balanced_group_len(s: &str, close: u8) -> Option<usize> {
             }
             b'{' => stack.push(b'}'),
             b'[' => stack.push(b']'),
-            c @ (b'}' | b']') => {
-                if stack.last() == Some(&c) {
-                    stack.pop();
-                    if stack.is_empty() {
-                        return Some(i + 1);
-                    }
+            c @ (b'}' | b']') if stack.last() == Some(&c) => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(i + 1);
                 }
-                // A non-matching closer is literal text; ignore it.
             }
+            // A non-matching closer is literal text; ignore it.
             _ => {}
         }
         i += 1;

@@ -97,6 +97,7 @@ fn scan_newcommand(command: &SyntaxNode, db: &mut SignatureDb) {
             sectioning: None,
             verbatim: false,
             rule: false,
+            inline: false,
         },
     );
 }
@@ -133,6 +134,7 @@ fn scan_xparse_command(command: &SyntaxNode, db: &mut SignatureDb) {
             sectioning: None,
             verbatim: false,
             rule: false,
+            inline: false,
         },
     );
 }

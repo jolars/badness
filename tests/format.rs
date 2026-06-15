@@ -177,16 +177,21 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_list_item_label", WrapMode::Reflow, 60),
     ("reflow_list_nested", WrapMode::Reflow, 50),
     ("reflow_list_blank_between_items", WrapMode::Reflow, 80),
-    // Prose-argument reflow: a signature-marked prose argument (a `\footnote`
-    // body, a sectioning title) reflows like a paragraph — joined when short,
-    // wrapped when long — while non-prose groups (`\newcommand` body, `\label`)
-    // are left exactly as authored.
+    // Prose-argument reflow: a signature-marked prose argument reflows like a
+    // paragraph — joined when short, wrapped when long — while non-prose groups
+    // (`\newcommand` body, `\label`) are left exactly as authored. An `inline`-
+    // flagged prose command (`\footnote`, `\emph`, …) flattens into the surrounding
+    // text so its body wraps as running prose with `{`/`}` glued to the adjacent
+    // words; a block-level prose command (`\section`, `\caption`) block-breaks its
+    // braces onto their own lines instead.
     ("reflow_prose_arg_wraps", WrapMode::Reflow, 40),
     ("reflow_prose_arg_joins_short", WrapMode::Reflow, 80),
     ("reflow_prose_arg_optional_omitted", WrapMode::Reflow, 30),
     ("reflow_non_prose_preserved", WrapMode::Reflow, 40),
     ("reflow_prose_arg_blank_line", WrapMode::Reflow, 40),
     ("reflow_prose_arg_nested_in_paragraph", WrapMode::Reflow, 50),
+    ("reflow_inline_prose_in_paragraph", WrapMode::Reflow, 50),
+    ("reflow_caption_block", WrapMode::Reflow, 40),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts, and strip redundant
     // braces around a single-token script argument (only where the following

@@ -252,8 +252,10 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// ends the current line and separates the next with an [`Ir::empty_line`].
 fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
     // Collected up front so the single-newline arm can look ahead at the next
-    // physical line ([`line_is_command_only`]).
-    let elements: Vec<SyntaxElement> = elements.collect();
+    // physical line ([`line_is_command_only`]). Inline prose commands (`\footnote`,
+    // `\emph`, …) are flattened into the stream so their bodies reflow as running
+    // text rather than block-breaking their braces (see [`flatten_inline_prose`]).
+    let elements: Vec<SyntaxElement> = flatten_inline_prose(elements.collect(), cx);
 
     // Glued pieces of the atom in progress.
     let mut atom: Vec<Ir> = Vec::new();
@@ -1320,6 +1322,120 @@ fn command_has_prose_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
         .is_some_and(|sig| sig.args.iter().any(|spec| spec.prose))
+}
+
+/// Whether `command` is an *inline* prose command — one whose prose argument sits
+/// in running text (`\footnote`, `\emph`, `\textbf`, …) rather than heading its own
+/// line. Such a command is flattened into the surrounding reflow stream (see
+/// [`flatten_inline_prose`]) so its body wraps as part of the paragraph and its
+/// `{`/`}` glue to the adjacent words, instead of block-breaking the braces onto
+/// their own lines ([`lower_prose_group`]).
+///
+/// Driven by the signature DB's explicit [`CommandSig::inline`] flag, not derived:
+/// block-level prose commands that head their own line (`\section`, `\caption`)
+/// leave it unset and keep the block treatment.
+fn command_is_inline_prose(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| sig.inline && sig.args.iter().any(|spec| spec.prose))
+}
+
+/// Pre-pass over a reflow element stream: replace each *inline* prose command
+/// ([`command_is_inline_prose`]) with its surface tokens, splicing its prose
+/// argument's body directly into the stream. The body's inter-word whitespace then
+/// becomes break opportunities in the surrounding paragraph fill, and the prose
+/// `{`/`}` glue onto the adjacent words — so an inline footnote wraps as running
+/// text instead of exploding into a block. Non-prose arguments and the control
+/// word are kept verbatim; nested inline prose commands are expanded recursively.
+fn flatten_inline_prose(elements: Vec<SyntaxElement>, cx: LowerCtx<'_>) -> Vec<SyntaxElement> {
+    let mut out = Vec::new();
+    for element in elements {
+        match &element {
+            SyntaxElement::Node(node)
+                if node.kind() == SyntaxKind::COMMAND && command_is_inline_prose(node, cx) =>
+            {
+                expand_inline_prose(node, cx, &mut out);
+            }
+            _ => out.push(element),
+        }
+    }
+    out
+}
+
+/// Expand one inline prose command into `out` (see [`flatten_inline_prose`]): the
+/// control word and any non-prose argument are emitted verbatim, while each prose
+/// argument is spliced delimiter-and-body via [`splice_prose_group`]. Slot matching
+/// mirrors [`lower_command`] so an omitted optional does not misalign positions.
+fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<SyntaxElement>) {
+    let Some(sig) = command_name(node).and_then(|name| cx.signatures.command(&name)) else {
+        out.push(SyntaxElement::Node(node.clone()));
+        return;
+    };
+    let mut slot = 0usize;
+    for child in node.children_with_tokens() {
+        match child {
+            SyntaxElement::Node(group)
+                if matches!(group.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                let is_bracket = group.kind() == SyntaxKind::OPTIONAL;
+                let prose =
+                    match_arg_slot(&sig.args, &mut slot, is_bracket).is_some_and(|spec| spec.prose);
+                if prose {
+                    splice_prose_group(&group, cx, out);
+                } else {
+                    out.push(SyntaxElement::Node(group));
+                }
+            }
+            other => out.push(other),
+        }
+    }
+}
+
+/// Splice a prose group's delimiters and body into `out` (see
+/// [`flatten_inline_prose`]). The group's own `{`/`[` and `}`/`]` tokens are
+/// emitted around the body; the body's leading and trailing whitespace is dropped
+/// so the delimiters glue tight to the first and last words, and nested inline
+/// prose commands inside the body are expanded recursively.
+fn splice_prose_group(group: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<SyntaxElement>) {
+    let mut open: Option<SyntaxElement> = None;
+    let mut close: Option<SyntaxElement> = None;
+    let mut body: Vec<SyntaxElement> = Vec::new();
+    for element in group.children_with_tokens() {
+        match &element {
+            SyntaxElement::Token(t)
+                if matches!(t.kind(), SyntaxKind::L_BRACE | SyntaxKind::L_BRACKET)
+                    && open.is_none() =>
+            {
+                open = Some(element);
+            }
+            SyntaxElement::Token(t)
+                if matches!(t.kind(), SyntaxKind::R_BRACE | SyntaxKind::R_BRACKET) =>
+            {
+                close = Some(element);
+            }
+            _ => body.push(element),
+        }
+    }
+    while body.first().is_some_and(is_collapsible_trivia_element) {
+        body.remove(0);
+    }
+    while body.last().is_some_and(is_collapsible_trivia_element) {
+        body.pop();
+    }
+    if let Some(open) = open {
+        out.push(open);
+    }
+    out.extend(flatten_inline_prose(body, cx));
+    if let Some(close) = close {
+        out.push(close);
+    }
+}
+
+/// True when `element` is a collapsible-trivia token (whitespace/newline), the
+/// boundary whitespace [`splice_prose_group`] trims so a prose delimiter glues to
+/// its body.
+fn is_collapsible_trivia_element(element: &SyntaxElement) -> bool {
+    matches!(element, SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()))
 }
 
 /// Lower a `COMMAND` whose signature marks an argument as prose (see

@@ -79,6 +79,14 @@ pub struct CommandSig {
     /// commands is a *passthrough* line the formatter keeps between grid rows
     /// rather than treating as a cell (see the grid lowering in `formatter`).
     pub rule: bool,
+    /// `true` for *inline* prose commands whose argument sits in running text
+    /// (`\footnote`, `\emph`, `\textbf`, …). The formatter flattens such a command
+    /// into the surrounding paragraph so its prose body wraps as running text with
+    /// the `{`/`}` glued to the adjacent words, rather than block-breaking the
+    /// braces onto their own lines. Block-level prose commands that head their own
+    /// line (`\section`, `\caption`) leave this `false`. Only meaningful with a
+    /// `prose` argument; the parser ignores it.
+    pub inline: bool,
 }
 
 /// The signature of an environment.
@@ -262,6 +270,8 @@ struct RawCommand {
     verbatim: bool,
     #[serde(default)]
     rule: bool,
+    #[serde(default)]
+    inline: bool,
 }
 
 impl From<RawCommand> for CommandSig {
@@ -271,6 +281,7 @@ impl From<RawCommand> for CommandSig {
             sectioning: raw.sectioning,
             verbatim: raw.verbatim,
             rule: raw.rule,
+            inline: raw.inline,
         }
     }
 }

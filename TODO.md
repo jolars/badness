@@ -51,13 +51,13 @@ lexer mode); texlab differential parse oracle.
 Done: `badness format` (parse → Wadler IR → print); **\[copy\]** IR + printer
 engine; whitespace normalization, environment + group/argument indentation
 (printer-owned, idempotent); paragraph reflow (`WrapMode`, `Ir::Fill`, default
-`Reflow`); prose-argument reflow (signature-DB `prose` flag --- commands with the
-signature-DB `inline` flag like `\footnote`/`\emph` flatten into the surrounding
-fill so the body wraps as running text with `{`/`}` glued to adjacent words;
-block-level prose commands `\section`/`\caption` block-break their braces via a
-soft `Ir::group`); aggressive math lowering (collapse spacing, tight
-scripts, strip redundant single-token script braces); display math
-(`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their own
+`Reflow`); prose-argument reflow (signature-DB `prose` flag --- commands with
+the signature-DB `inline` flag like `\footnote`/`\emph` flatten into the
+surrounding fill so the body wraps as running text with `{`/`}` glued to
+adjacent words; block-level prose commands `\section`/`\caption` block-break
+their braces via a soft `Ir::group`); aggressive math lowering (collapse
+spacing, tight scripts, strip redundant single-token script braces); display
+math (`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their own
 lines; `\left…\right` spacing; alignment-aware `align`/matrix column grids; list
 environments (signature-DB `list` flag --- `itemize`/`enumerate`/`description`
 --- one `\item` per line, each body reflowed with continuation lines

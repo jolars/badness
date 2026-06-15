@@ -439,7 +439,9 @@ fn lower_element_stream(
 /// trailing `hard_line` at the *outer* indent (so `\end` sits flush with
 /// `\begin`). All indentation is owned by the printer, so the body's own leading
 /// and trailing breaks are trimmed before wrapping — this is what makes
-/// re-indentation idempotent.
+/// re-indentation idempotent. A blank line the author placed against `\begin`/
+/// `\end` is preserved as a single blank line (the leading/trailing `hard_line`
+/// becomes an [`Ir::empty_line`]); the empty-body case keeps a single break.
 ///
 /// Verbatim-like environments never reach here (their opaque `VERBATIM_BODY`
 /// token would be corrupted by reflow); [`lower_node`] routes them to the
@@ -461,22 +463,32 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
 
     let body = Ir::concat(lower_element_stream(body_elements.into_iter(), cx));
-    let body = trim_trailing_break(trim_leading_break(body));
+    // Trim the body's own edge breaks (the indenter re-supplies them), but if the
+    // author left a blank line touching `\begin`/`\end`, preserve it as a single
+    // blank line — LaTeX blank lines are deliberate visual spacing, so we keep one
+    // rather than collapse to zero (interior runs already collapse to one).
+    let (lead_blank, body) = peel_leading_break(body);
+    let (trail_blank, body) = peel_trailing_break(body);
+    let lead = if lead_blank {
+        Ir::empty_line()
+    } else {
+        Ir::hard_line()
+    };
+    let trail = if trail_blank {
+        Ir::empty_line()
+    } else {
+        Ir::hard_line()
+    };
 
     if matches!(body, Ir::Nil) {
-        // Empty body: keep `\begin` and `\end` on their own lines.
+        // Empty body: keep `\begin` and `\end` on their own lines (no edge blank).
         Ir::concat([begin, Ir::hard_line(), end])
     } else if environment_no_indent(node, cx) {
         // `document` and friends: lay the body on its own lines, but flush against
         // the surrounding indentation rather than nesting it.
-        Ir::concat([begin, Ir::hard_line(), body, Ir::hard_line(), end])
+        Ir::concat([begin, lead, body, trail, end])
     } else {
-        Ir::concat([
-            begin,
-            Ir::indent(Ir::concat([Ir::hard_line(), body])),
-            Ir::hard_line(),
-            end,
-        ])
+        Ir::concat([begin, Ir::indent(Ir::concat([lead, body])), trail, end])
     }
 }
 
@@ -1837,48 +1849,66 @@ fn is_trimmable_break(ir: &Ir) -> bool {
     }
 }
 
-/// Drop leading break/indentation IR from `ir`, recursing into a leading
+/// Drop leading break/indentation IR from `ir`, reporting whether the trimmed-away
+/// break carried a blank line (an [`Ir::empty_line`]). Recurses into a leading
 /// `Concat` (the body's first break is often buried inside the first paragraph).
-fn trim_leading_break(ir: Ir) -> Ir {
+/// [`lower_environment`] uses the blank flag to re-supply one blank line at the
+/// body's leading edge; callers that only want the trim use [`trim_leading_break`].
+fn peel_leading_break(ir: Ir) -> (bool, Ir) {
     if is_trimmable_break(&ir) {
-        return Ir::Nil;
+        return (matches!(ir, Ir::EmptyLine), Ir::Nil);
     }
     match ir {
         Ir::Concat(items) => {
             let mut v: Vec<Ir> = items.iter().cloned().collect();
+            let mut blank = false;
             while !v.is_empty() {
-                let head = trim_leading_break(v.remove(0));
+                let (b, head) = peel_leading_break(v.remove(0));
+                blank |= b;
                 if matches!(head, Ir::Nil) {
                     continue;
                 }
                 v.insert(0, head);
                 break;
             }
-            Ir::concat(v)
+            (blank, Ir::concat(v))
         }
-        other => other,
+        other => (false, other),
     }
 }
 
-/// Drop trailing break/indentation IR from `ir`, recursing into a trailing
-/// `Concat` (mirror of [`trim_leading_break`]).
-fn trim_trailing_break(ir: Ir) -> Ir {
+/// Mirror of [`peel_leading_break`] for the trailing edge.
+fn peel_trailing_break(ir: Ir) -> (bool, Ir) {
     if is_trimmable_break(&ir) {
-        return Ir::Nil;
+        return (matches!(ir, Ir::EmptyLine), Ir::Nil);
     }
     match ir {
         Ir::Concat(items) => {
             let mut v: Vec<Ir> = items.iter().cloned().collect();
+            let mut blank = false;
             while let Some(last) = v.pop() {
-                let tail = trim_trailing_break(last);
+                let (b, tail) = peel_trailing_break(last);
+                blank |= b;
                 if matches!(tail, Ir::Nil) {
                     continue;
                 }
                 v.push(tail);
                 break;
             }
-            Ir::concat(v)
+            (blank, Ir::concat(v))
         }
-        other => other,
+        other => (false, other),
     }
+}
+
+/// Drop leading break/indentation IR from `ir`, discarding the blank flag (see
+/// [`peel_leading_break`]).
+fn trim_leading_break(ir: Ir) -> Ir {
+    peel_leading_break(ir).1
+}
+
+/// Drop trailing break/indentation IR from `ir`, discarding the blank flag (see
+/// [`peel_trailing_break`]).
+fn trim_trailing_break(ir: Ir) -> Ir {
+    peel_trailing_break(ir).1
 }

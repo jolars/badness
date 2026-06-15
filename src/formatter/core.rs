@@ -470,7 +470,23 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
     }
 
-    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), cx));
+    // A `%` that trails the `\begin{…}` header on the same source line belongs to
+    // that line (the space-suppression idiom), not the indented body. Lift it onto
+    // the `\begin` line and drop it from the body so it is not emitted twice. A
+    // comment the author placed on its own line is left in the body untouched.
+    let (begin, body) = match leading_inline_comment(&body_elements) {
+        Some(comment) => {
+            let begin = Ir::concat([begin, Ir::verbatim(comment.text())]);
+            (
+                begin,
+                lower_body_dropping_leading_comment(body_elements, cx),
+            )
+        }
+        None => (
+            begin,
+            Ir::concat(lower_element_stream(body_elements.into_iter(), cx)),
+        ),
+    };
     // Trim the body's own edge breaks (the indenter re-supplies them), but if the
     // author left a blank line touching `\begin`/`\end`, preserve it as a single
     // blank line — LaTeX blank lines are deliberate visual spacing, so we keep one
@@ -497,6 +513,94 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         Ir::concat([begin, lead, body, trail, end])
     } else {
         Ir::concat([begin, Ir::indent(Ir::concat([lead, body])), trail, end])
+    }
+}
+
+/// The `%` comment that trails the `\begin{…}` header on the *same* source line —
+/// only inline whitespace, never a newline, separates the header from it. Such a
+/// comment is the space-suppression idiom and belongs on the header line; a
+/// comment the author placed on its own line (a newline intervenes) returns
+/// `None` and stays in the body. Scans the body in source order, descending into
+/// the first node (the body's leading paragraph holds the comment as its first
+/// token): inline whitespace is skipped, a comment matches, and anything else —
+/// a newline or real content — ends the scan.
+fn leading_inline_comment(body_elements: &[SyntaxElement]) -> Option<SyntaxToken> {
+    for element in body_elements {
+        match element {
+            SyntaxElement::Token(token) => match token.kind() {
+                SyntaxKind::WHITESPACE => continue,
+                SyntaxKind::COMMENT => return Some(token.clone()),
+                _ => return None,
+            },
+            SyntaxElement::Node(node) => {
+                for token in node
+                    .descendants_with_tokens()
+                    .filter_map(|e| e.into_token())
+                {
+                    match token.kind() {
+                        SyntaxKind::WHITESPACE => continue,
+                        SyntaxKind::COMMENT => return Some(token),
+                        _ => return None,
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Lower an environment body whose leading inline comment has already been lifted
+/// onto the `\begin` header by [`lower_environment`]. The comment is dropped from
+/// the body to avoid emitting it twice: a bare comment token is skipped outright,
+/// and the leading paragraph is re-lowered with its leading whitespace-and-comment
+/// run stripped (see [`lower_node_dropping_leading_comment`]). Everything after
+/// the comment lowers through the normal stream path.
+fn lower_body_dropping_leading_comment(body_elements: Vec<SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+    let mut out: Vec<Ir> = Vec::new();
+    let mut iter = body_elements.into_iter();
+    for element in iter.by_ref() {
+        match element {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::WHITESPACE => continue,
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => break,
+            SyntaxElement::Node(node) => {
+                out.push(lower_node_dropping_leading_comment(&node, cx));
+                break;
+            }
+            // Unreachable given `leading_inline_comment` matched, but stay lossless.
+            SyntaxElement::Token(token) => {
+                out.push(Ir::verbatim(token.text()));
+                break;
+            }
+        }
+    }
+    out.extend(lower_element_stream(iter, cx));
+    Ir::concat(out)
+}
+
+/// Re-lower `node` with its leading whitespace-and-comment run dropped, using the
+/// same dispatch [`lower_node`] would (reflow for a `PARAGRAPH` under
+/// [`WrapMode::Reflow`], the generic stream otherwise). Used by
+/// [`lower_body_dropping_leading_comment`] to strip a comment lifted onto the
+/// `\begin` header.
+fn lower_node_dropping_leading_comment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let mut children: Vec<SyntaxElement> = node.children_with_tokens().collect();
+    let mut i = 0;
+    while matches!(
+        children.get(i).and_then(|c| c.as_token()).map(|t| t.kind()),
+        Some(SyntaxKind::WHITESPACE)
+    ) {
+        i += 1;
+    }
+    if matches!(
+        children.get(i).and_then(|c| c.as_token()).map(|t| t.kind()),
+        Some(SyntaxKind::COMMENT)
+    ) {
+        children.drain(..=i);
+    }
+    if node.kind() == SyntaxKind::PARAGRAPH && cx.wrap == WrapMode::Reflow {
+        reflow_elements(children.into_iter(), cx)
+    } else {
+        Ir::concat(lower_element_stream(children.into_iter(), cx))
     }
 }
 

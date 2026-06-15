@@ -474,6 +474,20 @@ mod tests {
             assert!(env.reflow);
             assert!(!env.math);
         }
+        // jss/Sweave verbatim environments are curated built-ins: their bodies are
+        // opaque (preserved verbatim, never reflowed).
+        for name in [
+            "Code",
+            "CodeInput",
+            "CodeOutput",
+            "Sinput",
+            "Soutput",
+            "Scode",
+        ] {
+            let env = db.environment(name).unwrap();
+            assert!(env.verbatim_body, "{name} should be a verbatim environment");
+            assert!(!env.reflow);
+        }
     }
 
     #[test]

@@ -137,6 +137,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // A `%` that trails `\begin{…}` on the same source line (the space-suppression
+    // idiom) rides the `\begin` header instead of dropping to its own indented
+    // line; a `%` the author put on its own line is left there.
+    ("environment_begin_trailing_comment", WrapMode::Reflow, 80),
+    // A class-defined verbatim environment (jss's `Code`) has its body preserved
+    // byte-for-byte — never reindented or reflowed.
+    ("verbatim_jss_code_environment", WrapMode::Preserve, 80),
     // Arity from a *scanned* definition (not the built-in DB): the document's own
     // `\newenvironment`/`\NewDocumentEnvironment` arg is glued onto the `\begin`.
     ("environment_user_defined_glued", WrapMode::Preserve, 80),

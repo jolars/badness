@@ -585,11 +585,15 @@ fn is_list_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 }
 
 /// One `\item` of a list environment: the rendered marker (`\item`, or
-/// `\item[label]`), and the item's body split into paragraph *chunks* (a blank
-/// line in the source starts a new chunk). `blank_before` records whether a blank
-/// line separated this item from the previous one, so it is reproduced.
+/// `\item[label]`), the width to hang continuation lines at (the rendered width of
+/// the control word plus a space — `\item `, *not* the label, so a wide
+/// `description` label does not push the body's left edge around), and the item's
+/// body split into paragraph *chunks* (a blank line in the source starts a new
+/// chunk). `blank_before` records whether a blank line separated this item from the
+/// previous one, so it is reproduced.
 struct ListItem {
     marker: String,
+    hang: usize,
     chunks: Vec<Vec<SyntaxElement>>,
     blank_before: bool,
 }
@@ -605,9 +609,10 @@ enum FlatItem {
 
 /// Lower a list environment (`itemize`/`enumerate`/`description`): each `\item`
 /// starts its own line at the body indent and its body is reflowed with the
-/// continuation lines hanging-indented under the item text (the rendered width of
-/// `\item ` / `\item[label] `). The framing (`\begin`/`\end`, the indented body
-/// with leading/trailing `hard_line`) matches [`lower_environment`].
+/// continuation lines hanging-indented at the control word's width (`\item `), so a
+/// `description` item's wide `[label]` trails on the first line but does not deepen
+/// the body indent. The framing (`\begin`/`\end`, the indented body with
+/// leading/trailing `hard_line`) matches [`lower_environment`].
 ///
 /// Only reached under [`WrapMode::Reflow`] (see [`lower_node`]). Falls back to the
 /// plain [`lower_environment`] when the body has no `\item` to anchor on, so an
@@ -662,9 +667,10 @@ fn lower_list_body(body_elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<
                 }
             }
             FlatItem::El(el) if is_item_command(&el) => {
-                let (marker, leading) = split_item_marker(&el, cx);
+                let (marker, hang, leading) = split_item_marker(&el, cx);
                 items.push(ListItem {
                     marker,
+                    hang,
                     chunks: vec![leading],
                     blank_before: blank_pending,
                 });
@@ -711,17 +717,17 @@ fn lower_list_body(body_elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<
 }
 
 /// Render one [`ListItem`]: the marker, then a space and the item's body reflowed
-/// inside an [`Ir::align`] whose width is the marker's rendered width plus the
-/// separating space, so wrapped lines hang under the item text. An empty item
-/// (marker with no body) renders as the bare marker.
+/// inside an [`Ir::align`] whose width is the item's `hang` (the control word plus
+/// the separating space — `\item `), so wrapped lines hang under where the body
+/// would start after a bare `\item`, regardless of how wide the `[label]` is. An
+/// empty item (marker with no body) renders as the bare marker.
 fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
     let content = reflow_chunks(&item.chunks, cx);
     let marker = Ir::verbatim(item.marker.clone());
     if matches!(content, Ir::Nil) {
         return marker;
     }
-    let hang = item.marker.chars().count() + 1;
-    Ir::concat([marker, Ir::verbatim(" "), Ir::align(hang, content)])
+    Ir::concat([marker, Ir::verbatim(" "), Ir::align(item.hang, content)])
 }
 
 /// Reflow each paragraph chunk of an item body and join the (non-empty) results
@@ -770,13 +776,17 @@ fn is_item_command(el: &SyntaxElement) -> bool {
 }
 
 /// Split a `\item` command node into its rendered marker string (the control word
-/// plus any leading optional `[label]`, the only argument an item marker takes)
-/// and the trailing elements that are really body content — a `{…}` group the
-/// greedy parser over-attached, which belongs to the item body, not the marker.
-fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, Vec<SyntaxElement>) {
+/// plus any leading optional `[label]`, the only argument an item marker takes),
+/// the *hang* width for continuation lines (the control word's rendered width plus
+/// one for the separating space — deliberately excluding the `[label]` so a wide
+/// `description` label does not deepen the body indent), and the trailing elements
+/// that are really body content — a `{…}` group the greedy parser over-attached,
+/// which belongs to the item body, not the marker.
+fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, usize, Vec<SyntaxElement>) {
     let node = el.as_node().expect("item command is a node");
     let mut marker_parts: Vec<Ir> = Vec::new();
     let mut content: Vec<SyntaxElement> = Vec::new();
+    let mut hang = 1; // the space separating the marker from the body
     let mut in_content = false;
     for child in node.children_with_tokens() {
         if in_content {
@@ -785,6 +795,7 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, Vec<Synta
         }
         match &child {
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::CONTROL_WORD => {
+                hang += t.text().chars().count();
                 marker_parts.push(Ir::verbatim(t.text()));
             }
             // Trivia between the control word and an optional label is not part of
@@ -801,7 +812,7 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, Vec<Synta
         }
     }
     let marker = Printer::new(FormatStyle::default()).print_flat(&Ir::concat(marker_parts));
-    (marker, content)
+    (marker, hang, content)
 }
 
 /// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks

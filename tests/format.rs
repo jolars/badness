@@ -170,9 +170,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // reflows.
     ("reflow_command_lines_preserved", WrapMode::Reflow, 80),
     // List environments (`itemize`/`enumerate`/`description`): each `\item` on
-    // its own line, the body reflowed with continuation lines hanging-indented
-    // under the item text (a `[label]` widens the hang; a nested list and a
-    // blank line between items are both reproduced).
+    // its own line, the body reflowed with continuation lines hanging-indented at
+    // the control word's width (`\item `). A `description` `[label]` trails on the
+    // first line but does *not* widen the hang, so the body keeps one left edge
+    // regardless of label width (a nested list and a blank line between items are
+    // both reproduced).
     ("reflow_list_hanging_indent", WrapMode::Reflow, 72),
     ("reflow_list_item_label", WrapMode::Reflow, 60),
     ("reflow_list_nested", WrapMode::Reflow, 50),

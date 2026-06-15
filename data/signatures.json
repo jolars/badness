@@ -71,6 +71,13 @@
     "lstlisting": { "args": ["opt"], "verbatimBody": true },
     "minted": { "args": ["opt", "req"], "verbatimBody": true },
 
+    "Code": { "verbatimBody": true },
+    "CodeInput": { "verbatimBody": true },
+    "CodeOutput": { "verbatimBody": true },
+    "Sinput": { "verbatimBody": true },
+    "Soutput": { "verbatimBody": true },
+    "Scode": { "verbatimBody": true },
+
     "math": { "math": true },
     "displaymath": { "math": true },
     "equation": { "math": true },

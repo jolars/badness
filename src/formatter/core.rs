@@ -332,8 +332,14 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                 }
                 continue;
             }
-            // A comment rides the end of the current line, then forces a break.
+            // A comment trailing content rides the end of that line, then forces a
+            // break. But a comment that *begins* its own physical line stays on its
+            // own line: end the current line first so the preceding prose run commits
+            // separately, instead of reflowing the bare `%` up into that run.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
+                if !line_has_content {
+                    end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
+                }
                 atom.push(Ir::verbatim(token.text()));
                 end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
                 line_all_commands = true;

@@ -163,6 +163,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_forced_break", WrapMode::Reflow, 80),
     ("reflow_forced_break_with_optarg", WrapMode::Reflow, 80),
     ("reflow_comment_ends_line", WrapMode::Reflow, 80),
+    ("reflow_comment_own_line", WrapMode::Reflow, 80),
     ("reflow_in_environment", WrapMode::Reflow, 20),
     // A physical line that is solely command(s) — `\usepackage{…}` lines, a
     // `\section{…}` header — stays on its own line; the prose around it still

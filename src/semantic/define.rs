@@ -223,6 +223,9 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         // package-specific knowledge; default to non-block (the parser keeps the
         // conservative `PARAGRAPH` wrapper for it).
         block: false,
+        // A scanned user environment carries no outline category; only the curated
+        // built-in floats/theorem-likes show up in the document-symbol outline.
+        outline: None,
     }
 }
 

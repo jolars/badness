@@ -89,6 +89,18 @@ pub struct CommandSig {
     pub inline: bool,
 }
 
+/// How an environment appears in the document-symbol outline, if at all. A small
+/// curated category over the `block` environments: only floats and theorem-likes
+/// earn an outline entry, so layout environments (`center`, `quote`, `frame`, …)
+/// stay out of the symbol tree. Drives `SymbolKind` selection in the LSP layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutlineKind {
+    /// A float (`figure`, `table`, and their starred forms).
+    Float,
+    /// A theorem-like environment (`theorem`, `lemma`, `proof`, …).
+    Theorem,
+}
+
 /// The signature of an environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentSig {
@@ -123,6 +135,10 @@ pub struct EnvironmentSig {
     /// to avoid wrapping a lone such environment in a redundant `PARAGRAPH`. Derived
     /// as `block_explicit || math || list || no_indent`.
     pub block: bool,
+    /// `Some(_)` for an environment that earns a document-symbol outline entry — a
+    /// float or a theorem-like. `None` for everything else. Only meaningful to the
+    /// language server's `documentSymbol`; the parser and formatter ignore it.
+    pub outline: Option<OutlineKind>,
 }
 
 /// The built-in command and environment signatures, keyed by name (without the
@@ -291,6 +307,24 @@ impl From<RawCommand> for CommandSig {
     }
 }
 
+/// An environment's outline category as written in the JSON: `"float"` or
+/// `"theorem"` (absent → `None`, no outline entry).
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum RawOutlineKind {
+    Float,
+    Theorem,
+}
+
+impl From<RawOutlineKind> for OutlineKind {
+    fn from(raw: RawOutlineKind) -> Self {
+        match raw {
+            RawOutlineKind::Float => OutlineKind::Float,
+            RawOutlineKind::Theorem => OutlineKind::Theorem,
+        }
+    }
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RawEnvironment {
@@ -308,6 +342,8 @@ struct RawEnvironment {
     list: bool,
     #[serde(default)]
     block: bool,
+    #[serde(default)]
+    outline: Option<RawOutlineKind>,
 }
 
 impl From<RawEnvironment> for EnvironmentSig {
@@ -324,6 +360,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             // Math, lists, and `document` are inherently block/display; the explicit
             // flag covers the rest (figure, center, verbatim, theorem-likes, …).
             block: raw.block || raw.math || raw.list || raw.no_indent,
+            outline: raw.outline.map(OutlineKind::from),
         }
     }
 }
@@ -393,6 +430,25 @@ mod tests {
             kinds,
             vec![ArgKind::Brace, ArgKind::Bracket, ArgKind::Brace]
         );
+    }
+
+    #[test]
+    fn outline_categories_assigned() {
+        let db = builtin();
+        assert_eq!(
+            db.environment("figure").unwrap().outline,
+            Some(OutlineKind::Float)
+        );
+        assert_eq!(
+            db.environment("table*").unwrap().outline,
+            Some(OutlineKind::Float)
+        );
+        assert_eq!(
+            db.environment("theorem").unwrap().outline,
+            Some(OutlineKind::Theorem)
+        );
+        // A block layout environment is not outline-worthy.
+        assert_eq!(db.environment("center").unwrap().outline, None);
     }
 
     #[test]

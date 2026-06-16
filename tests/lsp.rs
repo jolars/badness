@@ -12,8 +12,9 @@ use badness::formatter::{FormatStyle, format_with_style};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentFormattingParams, FormattingOptions, InitializeParams, InitializeResult,
-    InitializedParams, Position, PublishDiagnosticsParams, Range, TextDocumentContentChangeEvent,
+    DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FormattingOptions, InitializeParams, InitializeResult, InitializedParams, OneOf, Position,
+    PublishDiagnosticsParams, Range, SymbolKind, TextDocumentContentChangeEvent,
     TextDocumentIdentifier, TextDocumentItem, TextEdit, Uri, VersionedTextDocumentIdentifier,
 };
 
@@ -86,6 +87,13 @@ fn start_server(
     assert!(
         init.capabilities.document_formatting_provider.is_some(),
         "server must advertise documentFormattingProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.document_symbol_provider,
+            Some(OneOf::Left(true))
+        ),
+        "server must advertise documentSymbolProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     send_notification(
@@ -192,6 +200,64 @@ fn lsp_formatting_and_diagnostics_transcript() {
     )
     .unwrap();
     assert_eq!(edits[0].new_text, expected);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_document_symbol_outline() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///outline.tex".parse().unwrap();
+
+    // A section containing a figure (with a label) and a theorem.
+    let doc = "\\section{Intro}\n\
+        \\begin{figure}\n\
+        \\label{fig:one}\n\
+        \\end{figure}\n\
+        \\begin{theorem}\n\
+        x\n\
+        \\end{theorem}\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    send_request(
+        &client,
+        2,
+        "textDocument/documentSymbol",
+        serde_json::to_value(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let response: DocumentSymbolResponse =
+        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response");
+    let DocumentSymbolResponse::Nested(symbols) = response else {
+        panic!("expected a nested documentSymbol response");
+    };
+
+    // One root section; the figure and theorem nest under it.
+    assert_eq!(symbols.len(), 1);
+    let section = &symbols[0];
+    assert_eq!(section.name, "Intro");
+    assert_eq!(section.kind, SymbolKind::MODULE);
+    let children = section.children.as_deref().unwrap_or_default();
+    let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["figure", "theorem"]);
+
+    // The figure carries its label as a leaf.
+    let figure = &children[0];
+    assert_eq!(figure.kind, SymbolKind::OBJECT);
+    let figure_kids: &[DocumentSymbol] = figure.children.as_deref().unwrap_or_default();
+    assert_eq!(figure_kids.len(), 1);
+    assert_eq!(figure_kids[0].name, "fig:one");
+    assert_eq!(figure_kids[0].kind, SymbolKind::CONSTANT);
+
+    assert_eq!(children[1].kind, SymbolKind::CLASS);
 
     shutdown(&client, server_thread);
 }

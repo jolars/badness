@@ -5,8 +5,9 @@
 //! in `AGENTS.md`. salsa's single-writer / snapshot-readers model composes cleanly
 //! with `lsp-server`'s sync main loop.
 //!
-//! Scope: full-document **formatting** and pushed parser **diagnostics**. Rich
-//! features (hover, completion, go-to-def, symbols, range formatting) are deferred.
+//! Scope: full-document **formatting**, a **document-symbol** outline, and pushed
+//! parser **diagnostics**. Further features (hover, completion, go-to-def, range
+//! formatting) are deferred.
 //!
 //! ## Architecture (mirrors arity's `src/lsp.rs`, so the eventual shared-crate
 //! extraction stays a mechanical lift)
@@ -57,13 +58,14 @@ use lsp_types::notification::{
     DidChangeConfiguration, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{Formatting, Request as _};
+use lsp_types::request::{DocumentSymbolRequest, Formatting, Request as _};
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    FormattingOptions, NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range,
-    ServerCapabilities, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Uri,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FormattingOptions,
+    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
+    SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextEdit, Uri,
 };
 use salsa::Database as _;
 use serde::Deserialize;
@@ -71,6 +73,9 @@ use serde::Deserialize;
 use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
+use crate::parser::parse;
+use crate::semantic::{OutlineItem, OutlineSymbol, outline};
+use crate::syntax::SyntaxNode;
 use crate::text::LineIndex;
 
 use task_pool::{Spawner, TaskPool, read_pool_size};
@@ -104,6 +109,7 @@ fn server_capabilities() -> ServerCapabilities {
             TextDocumentSyncKind::INCREMENTAL,
         )),
         document_formatting_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
         ..Default::default()
     }
 }
@@ -187,6 +193,13 @@ enum WorkerJob {
         text: String,
         style: FormatStyle,
     },
+    /// A document-symbol request: build the outline on the read pool and reply to
+    /// `id`.
+    Symbols {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -237,6 +250,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                         }
                         match req.method.as_str() {
                             Formatting::METHOD => on_formatting(&connection, &state, &job_tx, req),
+                            DocumentSymbolRequest::METHOD => {
+                                on_document_symbol(&connection, &state, &job_tx, req)
+                            }
                             _ => respond_unhandled(&connection, req),
                         }
                     }
@@ -395,6 +411,44 @@ fn on_formatting(
         path: uri_to_path(&uri),
         text: doc.text.clone(),
         style,
+    });
+}
+
+/// `textDocument/documentSymbol`: build an outline job for the worker, or reply
+/// `null` when the document is unknown.
+fn on_document_symbol(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<DocumentSymbolParams>(DocumentSymbolRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid documentSymbol params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: no symbols.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::Symbols {
+        id,
+        path: uri_to_path(&uri),
+        text: doc.text.clone(),
     });
 }
 
@@ -578,6 +632,14 @@ impl Worker {
                 self.read_spawner
                     .spawn(move || run_format(&snapshot, id, &path, &text, style, &out_tx));
             }
+            WorkerJob::Symbols { id, path, text } => {
+                // Symbol reads, like formatting, run on the read pool against a
+                // snapshot (id-bound responses, not coalesced).
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || run_symbols(&snapshot, id, &path, &text, &out_tx));
+            }
         }
     }
 
@@ -737,6 +799,82 @@ fn compute_format(
         },
         new_text: formatted,
     })
+}
+
+/// Build the document-symbol outline for a [`WorkerJob::Symbols`] on the read pool
+/// and reply with a nested [`DocumentSymbolResponse`].
+///
+/// Fast path: reuse the snapshot's cached tree. On a racing write
+/// (`salsa::Cancelled`), a stale snapshot (`file_text != text`), or a cache miss,
+/// reparse the captured `text` directly. Best-effort — unlike formatting, a parse
+/// error does *not* suppress the outline (the tree is error-tolerant).
+fn run_symbols(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    out_tx: &Sender<Outbound>,
+) {
+    let symbols = compute_symbols(snapshot, path, text);
+    let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Compute the outline for `text`, preferring the snapshot's cached tree and
+/// falling back to a direct reparse when it is unavailable or stale.
+fn compute_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<DocumentSymbol> {
+    let idx = LineIndex::new(text);
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        Some(outline(&snapshot.parsed_tree(file)))
+    }));
+    let items = match cached {
+        Ok(Some(items)) => items,
+        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
+        Ok(None) | Err(_) => outline(&SyntaxNode::new_root(parse(text).green)),
+    };
+    items
+        .iter()
+        .map(|item| to_document_symbol(item, &idx, text))
+        .collect()
+}
+
+/// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte
+/// ranges through the (UTF-16-aware) [`LineIndex`].
+#[allow(deprecated)] // `DocumentSymbol::deprecated` is a required struct field.
+fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> DocumentSymbol {
+    let kind = match item.kind {
+        OutlineSymbol::Section => SymbolKind::MODULE,
+        OutlineSymbol::Float => SymbolKind::OBJECT,
+        OutlineSymbol::Theorem => SymbolKind::CLASS,
+        OutlineSymbol::Label => SymbolKind::CONSTANT,
+    };
+    let range = item.range;
+    let selection = item.selection_range;
+    let children: Vec<DocumentSymbol> = item
+        .children
+        .iter()
+        .map(|child| to_document_symbol(child, idx, text))
+        .collect();
+    DocumentSymbol {
+        name: item.name.clone(),
+        detail: None,
+        kind,
+        tags: None,
+        deprecated: None,
+        range: byte_range_to_lsp(idx, text, range.start().into(), range.end().into()),
+        selection_range: byte_range_to_lsp(
+            idx,
+            text,
+            selection.start().into(),
+            selection.end().into(),
+        ),
+        children: (!children.is_empty()).then_some(children),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -214,9 +214,10 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 
 ### Navigation & structure
 
-- [ ] Document symbols (`textDocument/documentSymbol`) --- a nested outline from
-  the signature DB's `sectioning` levels (part/chapter/section/…), plus
-  environments (`figure`/`table`/`theorem`) and labels as leaves.
+- [x] Document symbols (`textDocument/documentSymbol`) --- a nested outline from
+  the signature DB's `sectioning` levels (part/chapter/section/…), plus float and
+  theorem-like environments (tagged via a new `outline` category in the signature
+  DB) and labels as leaves. Built by the LSP-agnostic `semantic::outline` module.
 - [ ] Folding ranges (`textDocument/foldingRange`) --- environments, sectioning
   spans, and long comment blocks.
 - [ ] Selection ranges (`textDocument/selectionRange`) --- expand-selection from

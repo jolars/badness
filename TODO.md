@@ -46,8 +46,16 @@ lexer mode); texlab differential parse oracle.
   `math`/`list`/`no_indent`, with an explicit opt-in for figure/center/verbatim/
   theorem-likes/etc.); `parse_block` consults `is_block_environment` and skips the
   wrapper for a run whose sole non-trivia element is a block env.
-- [ ] Trivia-attachment policy (leading vs. trailing) --- pick one, document it.
-  *(open decision)*
+- [x] Trivia-attachment policy --- decided (AGENTS.md decision #9): rust-analyzer
+  rule. Default float-at-nearest-enclosing-node; a `%` comment run immediately
+  before a documentable construct binds *leading* into it; a blank line breaks the
+  bind. Trivia stays bare leaf tokens.
+- [ ] Implement the leading comment-bind (default float already holds). Pin the set
+  of "documentable" node kinds (command/environment/sectioning), bind contiguous
+  `%` comments forward up to a blank line, add snapshot + losslessness tests. Decide
+  grammar-local bump ordering vs. a `tree_builder` reattachment pass (the latter
+  diverges from arity's mechanical replay --- weigh against the copy-close
+  agreement).
 
 ## Formatter
 

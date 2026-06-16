@@ -131,6 +131,30 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    `{…}`/`[…]` groups to a command as argument nodes (texlab-style). Arity is not
    known at parse time; the semantic layer refines it.
 
+9. **Trivia attachment follows the rust-analyzer rule: comments bind *forward*,
+   whitespace floats, blank lines break the bind.** Trivia (`WHITESPACE`,
+   `NEWLINE`, `COMMENT`) is never dropped — losslessness forces every trivia token
+   to be a leaf under *some* node — so the only decision is *which* node owns it.
+   The policy:
+   - **Default: float at the nearest enclosing node.** Inter-sibling whitespace and
+     newlines stay direct children of the tightest block/group that contains the
+     boundary (never hoisted to `ROOT`), owned by neither neighbor. This is what the
+     inline trivia bumps in `grammar.rs` already do (`skip_trivia` between siblings).
+   - **Exception: a contiguous run of `%` comments immediately preceding a
+     documentable construct attaches *leading* into that construct**, so the comment
+     binds to the command/environment/sectioning node it annotates — exactly ra's
+     `n_attached_trivias` (comments attach forward to item-like nodes).
+   - **A blank line (`≥2` newlines, the `\par` boundary) breaks the bind:** comments
+     past a blank line stay floating, never leading. Mirrors ra's `"\n\n"` cutoff.
+
+   Trivia stays **bare leaf tokens**, never wrapped in a node — the token *kind*
+   already marks it skippable (`Parser::is_trivia`), matching arity/ra and keeping
+   `tree_builder` a mechanical replay. A *named* trivia node (e.g. a `DOC_COMMENT`
+   grouping) is reserved for a later semantic enrichment, not the default for plain
+   whitespace. There is no parse-stability invariant, so this policy is a CST-shape
+   *convention* enforced by tests, not a hard oracle. (Implementation of the leading
+   comment-bind is a follow-up; the default float already holds — see `TODO.md`.)
+
 ## Invariants (these are test oracles — enforce them)
 
 - **Losslessness:** `reconstruct(text) == text`, byte-for-byte. Enforced day one.

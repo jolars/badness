@@ -6,6 +6,8 @@
 //! extracted when its second consumer (the semantic label/reference model)
 //! appeared.
 
+use rowan::TextRange;
+
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 /// The control-word name of a `COMMAND` node (the leading `\` stripped), or
@@ -55,6 +57,19 @@ pub fn nth_group(command: &SyntaxNode, n: usize) -> Option<SyntaxNode> {
         .children()
         .filter(|child| child.kind() == SyntaxKind::GROUP)
         .nth(n)
+}
+
+/// The byte range of `command` spanning its control word through the end of its
+/// *first* `{…}` group — e.g. `\label{key}` up to the closing brace of `{key}`.
+/// Deliberately not [`SyntaxNode::text_range`], which the greedy parser may
+/// stretch over a *second* group it attached without knowing the command's arity
+/// (`\label{a}\n{…}`; AGENTS.md decision #8). Falls back to the full command range
+/// when the first group is absent.
+pub fn first_group_range(command: &SyntaxNode) -> TextRange {
+    match nth_group(command, 0) {
+        Some(group) => TextRange::new(command.text_range().start(), group.text_range().end()),
+        None => command.text_range(),
+    }
 }
 
 /// The control-word name (leading `\` stripped) of a single `COMMAND` wrapped in

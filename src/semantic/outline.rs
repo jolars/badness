@@ -23,7 +23,10 @@
 
 use rowan::{TextRange, TextSize};
 
-use crate::ast::{command_name, environment_name, group_inner_source, nth_group, nth_group_text};
+use crate::ast::{
+    command_name, environment_name, first_group_range, group_inner_source, nth_group,
+    nth_group_text,
+};
 use crate::semantic::signature::{self, OutlineKind};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -111,7 +114,7 @@ fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
         if let Some(key) = nth_group_text(command, 0) {
             let key = key.trim();
             if !key.is_empty() {
-                let range = label_range(command);
+                let range = first_group_range(command);
                 out.push(Raw {
                     level: None,
                     item: OutlineItem {
@@ -220,16 +223,6 @@ fn section_title(command: &SyntaxNode) -> Option<String> {
         .trim()
         .to_owned();
     (!text.is_empty()).then_some(text)
-}
-
-/// The byte range of a `\label{key}` command spanning the control word through its
-/// *first* (key) group — not `command.text_range()`, which the greedy parser may
-/// stretch over a second group (mirrors `semantic::builder::label_range`).
-fn label_range(command: &SyntaxNode) -> TextRange {
-    match nth_group(command, 0) {
-        Some(group) => TextRange::new(command.text_range().start(), group.text_range().end()),
-        None => command.text_range(),
-    }
 }
 
 #[cfg(test)]

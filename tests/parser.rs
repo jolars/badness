@@ -3,7 +3,7 @@
 //! the losslessness invariant. Regenerate snapshots with `task snapshots`.
 
 use badness::parser::parse;
-use badness::syntax::SyntaxNode;
+use badness::syntax::{SyntaxKind, SyntaxNode};
 use rowan::NodeOrToken;
 
 /// Render a CST as an indented `KIND@range` tree, with token text, followed by
@@ -353,4 +353,68 @@ fn nested_mismatch_unwinds_to_two_errors() {
         .filter(|e| e.message.contains("unclosed environment"))
         .count();
     assert_eq!(unclosed, 1, "only `b` is unclosed; `a` matches");
+}
+
+// --- block-vs-inline paragraph wrapping --------------------------------------
+
+/// The kinds of the root's direct child *nodes* (trivia tokens are skipped, as
+/// `SyntaxNode::children` yields only nodes). Used to assert whether a run was
+/// wrapped in a `PARAGRAPH` or left as a bare block.
+fn root_node_kinds(input: &str) -> Vec<SyntaxKind> {
+    // Losslessness must hold for every input.
+    let parsed = parse(input);
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    parsed.syntax().children().map(|n| n.kind()).collect()
+}
+
+#[test]
+fn lone_block_environment_is_not_wrapped() {
+    // A `figure` is a block env (signature DB), so it sits bare under ROOT —
+    // no redundant PARAGRAPH. Surrounding single newlines ride as direct
+    // children, preserving losslessness.
+    insta::assert_snapshot!(tree("\\begin{figure}\nx\n\\end{figure}"));
+    assert_eq!(
+        root_node_kinds("\\begin{figure}\nx\n\\end{figure}"),
+        [SyntaxKind::ENVIRONMENT]
+    );
+}
+
+#[test]
+fn block_environment_with_trailing_text_stays_wrapped() {
+    // Not a *lone* env: trailing text makes the run ordinary prose, so the
+    // PARAGRAPH wrapper is retained.
+    assert_eq!(
+        root_node_kinds(r"\begin{center}x\end{center} y"),
+        [SyntaxKind::PARAGRAPH]
+    );
+}
+
+#[test]
+fn text_before_block_environment_stays_wrapped() {
+    assert_eq!(
+        root_node_kinds(r"see \begin{center}x\end{center}"),
+        [SyntaxKind::PARAGRAPH]
+    );
+}
+
+#[test]
+fn nested_lone_block_env_drops_inner_paragraph() {
+    // The figure body's lone `center` is also left unwrapped.
+    insta::assert_snapshot!(tree(
+        "\\begin{figure}\n\\begin{center}\nx\n\\end{center}\n\\end{figure}"
+    ));
+}
+
+#[test]
+fn lone_unknown_environment_stays_wrapped() {
+    // User/unknown environments are not in the built-in DB, so they are never
+    // treated as block: the conservative PARAGRAPH wrapper is kept.
+    assert_eq!(
+        root_node_kinds("\\begin{myenv}\nx\n\\end{myenv}"),
+        [SyntaxKind::PARAGRAPH]
+    );
 }

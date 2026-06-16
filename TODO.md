@@ -41,8 +41,11 @@ guarantee; losslessness asserted; structured math model (`MATH` nodes, atoms,
 precedence-climbing `^`/`_`, `\left…\right` matching with a delimiter-isolation
 lexer mode); texlab differential parse oracle.
 
-- [ ] Block-vs-inline refinement: a lone block env is wrapped in a `PARAGRAPH`;
-  the signature DB can later avoid that.
+- [x] Block-vs-inline refinement: a lone block env is no longer wrapped in a
+  `PARAGRAPH`. The signature DB carries a `block` flag (derived from
+  `math`/`list`/`no_indent`, with an explicit opt-in for figure/center/verbatim/
+  theorem-likes/etc.); `parse_block` consults `is_block_environment` and skips the
+  wrapper for a run whose sole non-trivia element is a block env.
 - [ ] Trivia-attachment policy (leading vs. trailing) --- pick one, document it.
   *(open decision)*
 

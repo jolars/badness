@@ -3,24 +3,23 @@ source: tests/parser.rs
 expression: "tree(\"\\\\begin{Verbatim}[fontsize=\\\\small]\\nraw  text\\n\\\\end{Verbatim}\")"
 ---
 ROOT@0..58
-  PARAGRAPH@0..58
-    ENVIRONMENT@0..58
-      BEGIN@0..33
-        CONTROL_WORD@0..6 "\\begin"
-        NAME_GROUP@6..16
-          L_BRACE@6..7 "{"
-          WORD@7..15 "Verbatim"
-          R_BRACE@15..16 "}"
-        OPTIONAL@16..33
-          L_BRACKET@16..17 "["
-          WORD@17..26 "fontsize="
-          COMMAND@26..32
-            CONTROL_WORD@26..32 "\\small"
-          R_BRACKET@32..33 "]"
-      VERBATIM_BODY@33..44 "\nraw  text\n"
-      END@44..58
-        CONTROL_WORD@44..48 "\\end"
-        NAME_GROUP@48..58
-          L_BRACE@48..49 "{"
-          WORD@49..57 "Verbatim"
-          R_BRACE@57..58 "}"
+  ENVIRONMENT@0..58
+    BEGIN@0..33
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..16
+        L_BRACE@6..7 "{"
+        WORD@7..15 "Verbatim"
+        R_BRACE@15..16 "}"
+      OPTIONAL@16..33
+        L_BRACKET@16..17 "["
+        WORD@17..26 "fontsize="
+        COMMAND@26..32
+          CONTROL_WORD@26..32 "\\small"
+        R_BRACKET@32..33 "]"
+    VERBATIM_BODY@33..44 "\nraw  text\n"
+    END@44..58
+      CONTROL_WORD@44..48 "\\end"
+      NAME_GROUP@48..58
+        L_BRACE@48..49 "{"
+        WORD@49..57 "Verbatim"
+        R_BRACE@57..58 "}"

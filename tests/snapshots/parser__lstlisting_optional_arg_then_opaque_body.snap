@@ -3,22 +3,21 @@ source: tests/parser.rs
 expression: "tree(\"\\\\begin{lstlisting}[language=Python]\\nif x: pass  # $not math$\\n\\\\end{lstlisting}\")"
 ---
 ROOT@0..77
-  PARAGRAPH@0..77
-    ENVIRONMENT@0..77
-      BEGIN@0..35
-        CONTROL_WORD@0..6 "\\begin"
-        NAME_GROUP@6..18
-          L_BRACE@6..7 "{"
-          WORD@7..17 "lstlisting"
-          R_BRACE@17..18 "}"
-        OPTIONAL@18..35
-          L_BRACKET@18..19 "["
-          WORD@19..34 "language=Python"
-          R_BRACKET@34..35 "]"
-      VERBATIM_BODY@35..61 "\nif x: pass  # $not math$\n"
-      END@61..77
-        CONTROL_WORD@61..65 "\\end"
-        NAME_GROUP@65..77
-          L_BRACE@65..66 "{"
-          WORD@66..76 "lstlisting"
-          R_BRACE@76..77 "}"
+  ENVIRONMENT@0..77
+    BEGIN@0..35
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..18
+        L_BRACE@6..7 "{"
+        WORD@7..17 "lstlisting"
+        R_BRACE@17..18 "}"
+      OPTIONAL@18..35
+        L_BRACKET@18..19 "["
+        WORD@19..34 "language=Python"
+        R_BRACKET@34..35 "]"
+    VERBATIM_BODY@35..61 "\nif x: pass  # $not math$\n"
+    END@61..77
+      CONTROL_WORD@61..65 "\\end"
+      NAME_GROUP@65..77
+        L_BRACE@65..66 "{"
+        WORD@66..76 "lstlisting"
+        R_BRACE@76..77 "}"

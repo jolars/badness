@@ -3,26 +3,25 @@ source: tests/parser.rs
 expression: "tree(\"\\\\begin{minted}[frame=single]{python}\\ncode\\n\\\\end{minted}\")"
 ---
 ROOT@0..54
-  PARAGRAPH@0..54
-    ENVIRONMENT@0..54
-      BEGIN@0..36
-        CONTROL_WORD@0..6 "\\begin"
-        NAME_GROUP@6..14
-          L_BRACE@6..7 "{"
-          WORD@7..13 "minted"
-          R_BRACE@13..14 "}"
-        OPTIONAL@14..28
-          L_BRACKET@14..15 "["
-          WORD@15..27 "frame=single"
-          R_BRACKET@27..28 "]"
-        GROUP@28..36
-          L_BRACE@28..29 "{"
-          WORD@29..35 "python"
-          R_BRACE@35..36 "}"
-      VERBATIM_BODY@36..42 "\ncode\n"
-      END@42..54
-        CONTROL_WORD@42..46 "\\end"
-        NAME_GROUP@46..54
-          L_BRACE@46..47 "{"
-          WORD@47..53 "minted"
-          R_BRACE@53..54 "}"
+  ENVIRONMENT@0..54
+    BEGIN@0..36
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..14
+        L_BRACE@6..7 "{"
+        WORD@7..13 "minted"
+        R_BRACE@13..14 "}"
+      OPTIONAL@14..28
+        L_BRACKET@14..15 "["
+        WORD@15..27 "frame=single"
+        R_BRACKET@27..28 "]"
+      GROUP@28..36
+        L_BRACE@28..29 "{"
+        WORD@29..35 "python"
+        R_BRACE@35..36 "}"
+    VERBATIM_BODY@36..42 "\ncode\n"
+    END@42..54
+      CONTROL_WORD@42..46 "\\end"
+      NAME_GROUP@46..54
+        L_BRACE@46..47 "{"
+        WORD@47..53 "minted"
+        R_BRACE@53..54 "}"

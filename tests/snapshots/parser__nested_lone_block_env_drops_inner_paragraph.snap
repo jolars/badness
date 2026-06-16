@@ -1,0 +1,37 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{figure}\\n\\\\begin{center}\\nx\\n\\\\end{center}\\n\\\\end{figure}\")"
+---
+ROOT@0..57
+  ENVIRONMENT@0..57
+    BEGIN@0..14
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..14
+        L_BRACE@6..7 "{"
+        WORD@7..13 "figure"
+        R_BRACE@13..14 "}"
+    NEWLINE@14..15 "\n"
+    ENVIRONMENT@15..44
+      BEGIN@15..29
+        CONTROL_WORD@15..21 "\\begin"
+        NAME_GROUP@21..29
+          L_BRACE@21..22 "{"
+          WORD@22..28 "center"
+          R_BRACE@28..29 "}"
+      PARAGRAPH@29..31
+        NEWLINE@29..30 "\n"
+        WORD@30..31 "x"
+      NEWLINE@31..32 "\n"
+      END@32..44
+        CONTROL_WORD@32..36 "\\end"
+        NAME_GROUP@36..44
+          L_BRACE@36..37 "{"
+          WORD@37..43 "center"
+          R_BRACE@43..44 "}"
+    NEWLINE@44..45 "\n"
+    END@45..57
+      CONTROL_WORD@45..49 "\\end"
+      NAME_GROUP@49..57
+        L_BRACE@49..50 "{"
+        WORD@50..56 "figure"
+        R_BRACE@56..57 "}"

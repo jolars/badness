@@ -118,6 +118,11 @@ pub struct EnvironmentSig {
     /// whose `\item`s the formatter lays out one per line, reflowing each item's
     /// body with continuation lines hanging-indented under the item text.
     pub list: bool,
+    /// `true` for block/display environments that occupy their own vertical space
+    /// (`figure`, `center`, lists, display math, verbatim, …). The parser uses this
+    /// to avoid wrapping a lone such environment in a redundant `PARAGRAPH`. Derived
+    /// as `block_explicit || math || list || no_indent`.
+    pub block: bool,
 }
 
 /// The built-in command and environment signatures, keyed by name (without the
@@ -301,6 +306,8 @@ struct RawEnvironment {
     no_indent: bool,
     #[serde(default)]
     list: bool,
+    #[serde(default)]
+    block: bool,
 }
 
 impl From<RawEnvironment> for EnvironmentSig {
@@ -314,6 +321,9 @@ impl From<RawEnvironment> for EnvironmentSig {
             reflow: !(raw.verbatim_body || raw.math),
             no_indent: raw.no_indent,
             list: raw.list,
+            // Math, lists, and `document` are inherently block/display; the explicit
+            // flag covers the rest (figure, center, verbatim, theorem-likes, …).
+            block: raw.block || raw.math || raw.list || raw.no_indent,
         }
     }
 }
@@ -488,6 +498,22 @@ mod tests {
             assert!(env.verbatim_body, "{name} should be a verbatim environment");
             assert!(!env.reflow);
         }
+    }
+
+    #[test]
+    fn block_flag_is_explicit_or_derived() {
+        let db = builtin();
+        // Explicitly flagged display environments.
+        assert!(db.environment("figure").unwrap().block);
+        assert!(db.environment("center").unwrap().block);
+        assert!(db.environment("verbatim").unwrap().block);
+        // Derived from `math`, `list`, and `no_indent` respectively.
+        assert!(db.environment("equation").unwrap().block);
+        assert!(db.environment("itemize").unwrap().block);
+        assert!(db.environment("document").unwrap().block);
+        // The new explicit flag leaves `reflow` derivation untouched: `center`
+        // is a block env but still reflows its prose body.
+        assert!(db.environment("center").unwrap().reflow);
     }
 
     #[test]

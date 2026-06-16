@@ -3,18 +3,17 @@ source: tests/parser.rs
 expression: "tree(\"\\\\begin{verbatim}\\n\\\\notacommand $x$ %literal\\n\\\\end{verbatim}\")"
 ---
 ROOT@0..57
-  PARAGRAPH@0..57
-    ENVIRONMENT@0..57
-      BEGIN@0..16
-        CONTROL_WORD@0..6 "\\begin"
-        NAME_GROUP@6..16
-          L_BRACE@6..7 "{"
-          WORD@7..15 "verbatim"
-          R_BRACE@15..16 "}"
-      VERBATIM_BODY@16..43 "\n\\notacommand $x$ %literal\n"
-      END@43..57
-        CONTROL_WORD@43..47 "\\end"
-        NAME_GROUP@47..57
-          L_BRACE@47..48 "{"
-          WORD@48..56 "verbatim"
-          R_BRACE@56..57 "}"
+  ENVIRONMENT@0..57
+    BEGIN@0..16
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..16
+        L_BRACE@6..7 "{"
+        WORD@7..15 "verbatim"
+        R_BRACE@15..16 "}"
+    VERBATIM_BODY@16..43 "\n\\notacommand $x$ %literal\n"
+    END@43..57
+      CONTROL_WORD@43..47 "\\end"
+      NAME_GROUP@47..57
+        L_BRACE@47..48 "{"
+        WORD@48..56 "verbatim"
+        R_BRACE@56..57 "}"

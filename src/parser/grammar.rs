@@ -15,7 +15,7 @@
 
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
-use crate::parser::lexer::{Token, is_verbatim_environment};
+use crate::parser::lexer::{Token, is_block_environment, is_verbatim_environment};
 use crate::syntax::SyntaxKind;
 
 const BEGIN_CMD: &str = "\\begin";
@@ -207,8 +207,14 @@ impl<'t> Parser<'t> {
                 continue;
             }
             // Otherwise we're at paragraph content (guaranteed ≥1 token, so no
-            // empty paragraph and no infinite loop).
-            self.open(SyntaxKind::PARAGRAPH);
+            // empty paragraph and no infinite loop). Parse the run first, then
+            // splice in the `PARAGRAPH` wrapper afterwards (the `precede` idiom,
+            // cf. `math_scripted`) — unless the run's only non-trivia element is a
+            // lone block environment, which we leave bare. Block-ness is read from
+            // the built-in signature DB (`is_block_environment`).
+            let checkpoint = self.events.len();
+            let mut nontrivia_count = 0usize;
+            let mut lone_block_env = false;
             loop {
                 if self.at_block_end(block) {
                     break;
@@ -216,9 +222,24 @@ impl<'t> Parser<'t> {
                 if self.kind().is_some_and(Self::is_trivia) && self.trivia_run_is_separator(block) {
                     break;
                 }
+                let is_nontrivia = !self.kind().is_some_and(Self::is_trivia);
+                // Peek block-env status *before* consuming (the name is only
+                // available while still on the `\begin`).
+                let starts_block_env = self.at_command(BEGIN_CMD)
+                    && peek_begin_name(self.tokens, self.pos)
+                        .as_deref()
+                        .is_some_and(is_block_environment);
                 self.element();
+                if is_nontrivia {
+                    nontrivia_count += 1;
+                    lone_block_env = nontrivia_count == 1 && starts_block_env;
+                }
             }
-            self.close();
+            if !lone_block_env {
+                self.events
+                    .insert(checkpoint, Event::Start(SyntaxKind::PARAGRAPH));
+                self.close(); // matching Finish for PARAGRAPH
+            }
         }
     }
 
@@ -865,6 +886,13 @@ impl<'t> Parser<'t> {
         self.close();
         Some(name.trim().to_owned())
     }
+}
+
+/// Read the environment name from a `\begin{…}` at `begin_pos` without consuming.
+/// Identical in shape to [`peek_end_name`] (skip the control word and trivia, then
+/// read the `{name}` group); named separately for call-site clarity.
+fn peek_begin_name(tokens: &[Token], begin_pos: usize) -> Option<String> {
+    peek_end_name(tokens, begin_pos)
 }
 
 /// Read the environment name from a `\end{…}` at `end_pos` without consuming.

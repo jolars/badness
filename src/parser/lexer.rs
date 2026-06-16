@@ -51,6 +51,16 @@ pub(crate) fn is_verbatim_environment(name: &str) -> bool {
         .is_some_and(|env| env.verbatim_body)
 }
 
+/// Is `name` a block/display environment — one whose lone occurrence the parser
+/// should leave unwrapped rather than nest in a redundant `PARAGRAPH`? Resolved
+/// against the built-in signature database ([`builtin`]) only: the parser runs
+/// before any per-file `\newenvironment` scan, so (as with verbatim) user-defined
+/// block-ness is unknown at parse time and a user/unknown environment stays
+/// wrapped — the conservative, lossless-safe default.
+pub(crate) fn is_block_environment(name: &str) -> bool {
+    builtin().environment(name).is_some_and(|env| env.block)
+}
+
 /// Lex `input` into a flat, lossless token stream.
 pub fn lex(input: &str) -> Vec<Token> {
     let mut out = Vec::new();
@@ -448,6 +458,13 @@ mod tests {
     fn assert_lossless(input: &str) {
         let joined: String = lex(input).iter().map(|t| t.text.as_str()).collect();
         assert_eq!(joined, input);
+    }
+
+    #[test]
+    fn block_environment_classification() {
+        assert!(is_block_environment("figure"));
+        assert!(is_block_environment("itemize")); // derived via `list`
+        assert!(!is_block_environment("myenv")); // unknown
     }
 
     #[test]

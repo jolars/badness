@@ -219,6 +219,10 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         // A user `\newenvironment` is not assumed to be a list; the built-in DB
         // is the source of truth for `\item`-bearing list layout.
         list: false,
+        // Block-ness of a user-defined environment is unknown without
+        // package-specific knowledge; default to non-block (the parser keeps the
+        // conservative `PARAGRAPH` wrapper for it).
+        block: false,
     }
 }
 

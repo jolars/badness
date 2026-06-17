@@ -251,7 +251,9 @@ extraction stays a mechanical lift, not a merge.
 
 - Rust edition 2024; toolchain pinned in `devenv.nix` (currently 1.94.1).
 - A `wasm32-unknown-unknown` target is configured (web/playground is in scope).
-- `rustfmt` runs as a git hook; keep code rustfmt-clean. `clippy` warnings are
+- `rustfmt` runs as a git hook; keep code rustfmt-clean. **Run `cargo fmt`
+  before committing** — the hook rewrites unformatted files and aborts the
+  commit, so committing dirty means a second attempt. `clippy` warnings are
   errors (`cargo clippy --all-targets --all-features -- -D warnings`).
 - Performance is first-class: `perf`, `cargo-flamegraph`, `hyperfine`,
   `cargo-show-asm`, `cargo-llvm-cov` are in the dev shell. Benchmark before

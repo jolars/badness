@@ -121,6 +121,44 @@ fn file_ignore_all_silences_everything() {
     assert!(lint(src).is_empty());
 }
 
+#[test]
+fn stylistic_rules_collected_in_document_order() {
+    // An obsolete environment, a `$$` display, and a reversed `\left`/`\right`
+    // pair — all surface, sorted by position.
+    let src = "\
+\\begin{eqnarray}a&=&b\\end{eqnarray}
+$$x = y$$
+$\\left) a \\right| $
+";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("obsolete-environment", Severity::Warning),
+            ("dollar-display-math", Severity::Warning),
+            ("mismatched-delimiter", Severity::Warning),
+        ]
+    );
+}
+
+#[test]
+fn modern_constructs_have_no_findings() {
+    let src = "\
+\\begin{align}a &= b\\end{align}
+\\[x = y\\]
+$\\left( a \\right] $
+";
+    assert!(lint(src).is_empty(), "got: {:?}", lint(src));
+}
+
+#[test]
+fn node_ignore_silences_a_stylistic_rule() {
+    let src = "\
+% badness-ignore dollar-display-math: legacy snippet
+$$x = y$$
+";
+    assert!(lint(src).is_empty(), "got: {:?}", lint(src));
+}
+
 // --- Cross-file lints (driver + resolver) -------------------------------------
 
 #[test]

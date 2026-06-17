@@ -154,9 +154,14 @@ registry) wired into the CLI and the LSP `publishDiagnostics` path;
 `linter/suppression` (`% badness-ignore`); deprecated-command (`\bf`-style) and
 single-file duplicate-label lints.
 
-- [ ] More lints: unmatched delimiters, undefined refs (needs the cross-file
-  resolver), stylistic checks.
-- [ ] Lint `$$…$$` display math with a `\[…\]` autofix. *Not* a formatter
+- [x] More lints: unmatched delimiters (parser already surfaces unclosed/stray
+  delimiters and `\begin`/`\end` mismatches as `parse` diagnostics; the
+  `mismatched-delimiter` lint adds reversed `\left`/`\right` orientation), undefined
+  refs (`undefined-ref`, via the cross-file resolver), stylistic checks
+  (`obsolete-environment` for `eqnarray` → `align`; `dollar-display-math`).
+  Remaining stylistic ideas: missing `~` before `\cite`/`\ref`, typography.
+- [ ] Add the `\[…\]` autofix to `dollar-display-math` (detection landed
+  report-only). *Not* a formatter
   rewrite: `$$` is the plain-TeX primitive and `\[` routes through LaTeX's
   display hooks, so the swap changes typeset output (it ignores `fleqn`; the
   `\abovedisplayskip`/ `\belowdisplayskip`/`\predisplaypenalty` spacing

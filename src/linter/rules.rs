@@ -14,11 +14,17 @@ use crate::syntax::SyntaxNode;
 use super::diagnostic::{Diagnostic, Severity};
 
 pub mod deprecated_command;
+pub mod dollar_display_math;
 pub mod duplicate_label;
+pub mod mismatched_delimiter;
+pub mod obsolete_environment;
 pub mod undefined_ref;
 
 pub use deprecated_command::DeprecatedCommand;
+pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
+pub use mismatched_delimiter::MismatchedDelimiter;
+pub use obsolete_environment::ObsoleteEnvironment;
 pub use undefined_ref::UndefinedRef;
 
 /// Everything a [`Rule`] reads to produce diagnostics for one file.
@@ -58,12 +64,22 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(DuplicateLabel),
         Box::new(DeprecatedCommand),
+        Box::new(ObsoleteEnvironment),
+        Box::new(DollarDisplayMath),
+        Box::new(MismatchedDelimiter),
         Box::new(UndefinedRef),
     ]
 }
 
 /// The ids of every built-in rule. Kept in lockstep with [`all_rules`].
-pub const ALL_RULE_IDS: &[&str] = &["duplicate-label", "deprecated-command", "undefined-ref"];
+pub const ALL_RULE_IDS: &[&str] = &[
+    "duplicate-label",
+    "deprecated-command",
+    "obsolete-environment",
+    "dollar-display-math",
+    "mismatched-delimiter",
+    "undefined-ref",
+];
 
 #[cfg(test)]
 mod tests {

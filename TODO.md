@@ -152,8 +152,9 @@ built-in; consumed by the formatter's `\begin` arity glue).
 - [ ] Cross-file label resolution (`file_labels` firewall → project-level
   `resolved_labels`) + duplicate-label / undefined-ref diagnostics. Today's
   `unreferenced_labels`/`unresolved_refs` are per-file *facts*, not lints.
-- [ ] Unbraced `\newcommand\foo…` form (parses with `\foo` as a sibling; needs
-  scanner-side sibling heuristics, not parser changes).
+- [x] Unbraced `\newcommand\foo…` form (parsed with `\foo` as a sibling;
+  recovered by a scanner-side sibling heuristic in `semantic/define.rs`
+  (`resolve_command_def`), no parser change).
 - [x] Verbatim-argument **commands** (the command analog of verbatim
   environments). The DB `verbatim` flag now drives a lexer mode
   (`lex_verbatim_command`) that captures the final argument as one `VERB`

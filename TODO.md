@@ -77,11 +77,31 @@ math (`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their
 lines; `\left…\right` spacing; alignment-aware `align`/matrix column grids; list
 environments (signature-DB `list` flag --- `itemize`/`enumerate`/`description`
 --- one `\item` per line, each body reflowed with continuation lines
-hanging-indented under the item text via `Ir::Align`). Protected regions
-untouched; idempotence + losslessness asserted.
+hanging-indented under the item text via `Ir::Align`); collapsible token-list
+arguments (signature-DB `collapse` flag --- the cite family's key list folds a
+multi-line authored form to one line, never width-reflowed, with the `inline`
+flag flowing the command into the paragraph fill instead of preserving it as a
+command-only line, so multi-line and one-line forms format identically;
+`collapse` bails to the block form on a blank line, a `%` comment, or
+force-break content). Protected regions untouched; idempotence + losslessness
+asserted.
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
   today. *Demoted, much later.*
+- [ ] **Argument content-kind taxonomy.** `prose`/`collapse` are two ad-hoc
+  bools on `ArgSpec`; the real model is a per-argument *content kind* (opaque,
+  token-list, prose, document-body) the formatter dispatches whitespace and
+  break policy on. Generalize once a third case appears. The non-determinism
+  fix (`spans_multiple_lines` deciding block-vs-inline from incidental source
+  newlines) is sidestepped for collapse-flagged args but still governs every
+  *unflagged* multi-line group --- revisit when the taxonomy lands.
+- [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
+  even when the key list exceeds the width; it never breaks *at commas* (one
+  key per line) as a fallback. Needs the token-list content kind to break on
+  its own separators rather than the paragraph fill.
+- [ ] Mark `\ref`/`\eqref`/`\cref`/`\autoref`/`\nameref` `inline` so they flow
+  too (left out of this pass: their keys are single tokens where interior
+  spaces can matter, so they are *not* `collapse`, but they are still inline).
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body

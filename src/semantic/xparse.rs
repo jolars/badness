@@ -61,6 +61,7 @@ pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
                         required,
                         kind,
                         prose: false,
+                        collapse: false,
                     });
                 }
             }
@@ -89,6 +90,7 @@ fn brace(required: bool) -> ArgSpec {
         required,
         kind: ArgKind::Brace,
         prose: false,
+        collapse: false,
     }
 }
 
@@ -97,6 +99,7 @@ fn bracket(required: bool) -> ArgSpec {
         required,
         kind: ArgKind::Bracket,
         prose: false,
+        collapse: false,
     }
 }
 

@@ -206,6 +206,15 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_prose_arg_nested_in_paragraph", WrapMode::Reflow, 50),
     ("reflow_inline_prose_in_paragraph", WrapMode::Reflow, 50),
     ("reflow_caption_block", WrapMode::Reflow, 40),
+    // A signature-marked collapsible token list (`\citep` and the cite family, via
+    // the DB's `collapse` arg flag): a key list written across lines folds to one
+    // line, and the `inline`-flagged command flows into the paragraph fill as an
+    // atom instead of being kept on its own line — so the multi-line and one-line
+    // authored forms format identically (determinism). The interior is collapsed,
+    // never reflowed (the keys stay together). A `%` comment inside the list is not
+    // safely collapsible, so it keeps the indented block form.
+    ("reflow_cite_collapses_and_flows", WrapMode::Reflow, 80),
+    ("reflow_cite_comment_keeps_block", WrapMode::Reflow, 80),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts, and strip redundant
     // braces around a single-token script argument (only where the following
@@ -322,6 +331,24 @@ fn preserve_keeps_author_breaks_while_reflow_joins() {
         format(input).expect("reflow formats"),
         "one two three four\n",
         "default reflow must join the lines"
+    );
+}
+
+/// A collapsible, inline-flagged command (the cite family) formats identically
+/// regardless of how the author broke its key list across source lines: the same
+/// meaning must yield the same output (determinism). The single-line form is the
+/// canonical result both converge on.
+#[test]
+fn cite_key_list_layout_is_deterministic() {
+    let one_line =
+        "Something \\citep{koslinski2023comparative, srivastava2025amino} were selected.\n";
+    let multi_line = "Something\n\\citep{\n  koslinski2023comparative,\n  srivastava2025amino\n}\nwere selected.\n";
+
+    let from_one = format(one_line).expect("one-line formats");
+    let from_multi = format(multi_line).expect("multi-line formats");
+    assert_eq!(
+        from_one, from_multi,
+        "cite key-list layout must not depend on the authored source line breaks"
     );
 }
 

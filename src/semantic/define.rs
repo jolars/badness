@@ -272,12 +272,14 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
                     required: false,
                     kind: ArgKind::Bracket,
                     prose: false,
+                    collapse: false,
                 }
             } else {
                 ArgSpec {
                     required: true,
                     kind: ArgKind::Brace,
                     prose: false,
+                    collapse: false,
                 }
             }
         })

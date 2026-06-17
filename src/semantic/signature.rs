@@ -57,6 +57,18 @@ pub struct ArgSpec {
     /// `false`, so an unmarked argument never reflows. Only meaningful for the
     /// formatter; the parser ignores it (AGENTS.md decision #2).
     pub prose: bool,
+    /// `true` when this argument's interior whitespace is *insignificant*, so the
+    /// formatter may collapse a multi-line authored form to a single line — a
+    /// comma-separated token list whose breaks TeX (or the command's own argument
+    /// parser) ignores, e.g. a `\citep`/`\cite` key list. Unlike [`prose`], the
+    /// content is *not* reflowed to the width: the keys stay together as one atom;
+    /// only incidental source line breaks inside the braces are normalized away, so
+    /// `\citep{\n a,\n b\n}` formats identically to `\citep{a, b}` (determinism).
+    /// Default `false` — an unmarked argument is left exactly as authored — since
+    /// for most arguments interior whitespace can matter (a `minipage`/`\parbox`
+    /// body, a label key). Mutually exclusive with [`prose`] in practice. Only
+    /// meaningful for the formatter; the parser ignores it (AGENTS.md decision #2).
+    pub collapse: bool,
 }
 
 /// The signature of a control sequence.
@@ -79,13 +91,16 @@ pub struct CommandSig {
     /// commands is a *passthrough* line the formatter keeps between grid rows
     /// rather than treating as a cell (see the grid lowering in `formatter`).
     pub rule: bool,
-    /// `true` for *inline* prose commands whose argument sits in running text
-    /// (`\footnote`, `\emph`, `\textbf`, …). The formatter flattens such a command
-    /// into the surrounding paragraph so its prose body wraps as running text with
-    /// the `{`/`}` glued to the adjacent words, rather than block-breaking the
-    /// braces onto their own lines. Block-level prose commands that head their own
-    /// line (`\section`, `\caption`) leave this `false`. Only meaningful with a
-    /// `prose` argument; the parser ignores it.
+    /// `true` for *inline* commands that sit in running text (`\citep`, `\ref`,
+    /// `\emph`, `\textbf`, …) rather than occupying their own line. Paragraph reflow
+    /// treats such a command as an atom that flows into the fill even when the author
+    /// isolated it on its own source line, instead of preserving it as a
+    /// command-only line (the way a `\usepackage`/`\section` line is kept). For a
+    /// command that *also* has a `prose` argument this additionally flattens the
+    /// command into the paragraph so its body wraps as running text with the `{`/`}`
+    /// glued to the adjacent words. Block-level commands that head their own line
+    /// (`\section`, `\caption`) leave this `false`. Only meaningful to the formatter;
+    /// the parser ignores it.
     pub inline: bool,
 }
 
@@ -249,9 +264,10 @@ impl RawArgKind {
 }
 
 /// One argument as written in the JSON. Either the compact string shorthand
-/// (`"req"` / `"opt"`, the common case, prose defaulting to `false`) or an object
-/// form `{ "kind": "req", "prose": true }` that additionally marks the argument as
-/// reflowable prose (see [`ArgSpec::prose`]).
+/// (`"req"` / `"opt"`, the common case, flags defaulting to `false`) or an object
+/// form `{ "kind": "req", "prose": true }` / `{ "kind": "req", "collapse": true }`
+/// that additionally marks the argument as reflowable prose (see [`ArgSpec::prose`])
+/// or a collapsible token list (see [`ArgSpec::collapse`]).
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawArg {
@@ -260,6 +276,8 @@ enum RawArg {
         kind: RawArgKind,
         #[serde(default)]
         prose: bool,
+        #[serde(default)]
+        collapse: bool,
     },
 }
 
@@ -270,11 +288,17 @@ impl From<RawArg> for ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
                 prose: false,
+                collapse: false,
             },
-            RawArg::Full { kind, prose } => ArgSpec {
+            RawArg::Full {
+                kind,
+                prose,
+                collapse,
+            } => ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
                 prose,
+                collapse,
             },
         }
     }

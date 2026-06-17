@@ -187,7 +187,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
             return lower_environment(node, cx);
         }
-        SyntaxKind::COMMAND if cx.wrap == WrapMode::Reflow && command_has_prose_arg(node, cx) => {
+        SyntaxKind::COMMAND if cx.wrap == WrapMode::Reflow && command_has_managed_arg(node, cx) => {
             return lower_command(node, cx);
         }
         SyntaxKind::INLINE_MATH => {
@@ -320,7 +320,7 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                     // side of the break — is kept on its own line: end the line so
                     // the break survives instead of collapsing to a fill space.
                     let prev_is_command = line_has_content && line_all_commands;
-                    let next_is_command = line_is_command_only(&elements, idx);
+                    let next_is_command = line_is_command_only(&elements, idx, cx);
                     if prev_is_command || next_is_command {
                         end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
                     } else {
@@ -392,11 +392,13 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                     line_all_commands = true;
                     line_has_content = false;
                 } else {
-                    // A `COMMAND` keeps the line command-only; any other inline node
-                    // (math, an inline group) is content that disqualifies it.
+                    // A block-level `COMMAND` keeps the line command-only; an inline
+                    // command (`\citep`, `\ref`, …) is running-text content, as is any
+                    // other inline node (math, an inline group), and disqualifies it.
                     atom.push(ir);
                     line_has_content = true;
-                    line_all_commands &= child.kind() == SyntaxKind::COMMAND;
+                    line_all_commands &=
+                        child.kind() == SyntaxKind::COMMAND && !command_is_inline(child, cx);
                 }
             }
         }
@@ -1464,14 +1466,15 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
     }
 }
 
-/// Whether `command`'s signature marks any argument as reflowable prose. The
-/// cheap guard that gates the [`lower_command`] path in [`lower_node`]: a command
-/// with no prose argument (the overwhelming common case) lowers generically, so
-/// nothing regresses.
-fn command_has_prose_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+/// Whether `command`'s signature marks any argument the [`lower_command`] path
+/// must handle specially — reflowable [`prose`](ArgSpec::prose) or a collapsible
+/// token list ([`collapse`](ArgSpec::collapse)). The cheap guard that gates the
+/// [`lower_command`] path in [`lower_node`]: a command with no such argument (the
+/// overwhelming common case) lowers generically, so nothing regresses.
+fn command_has_managed_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
-        .is_some_and(|sig| sig.args.iter().any(|spec| spec.prose))
+        .is_some_and(|sig| sig.args.iter().any(|spec| spec.prose || spec.collapse))
 }
 
 /// Whether `command` is an *inline* prose command — one whose prose argument sits
@@ -1488,6 +1491,18 @@ fn command_is_inline_prose(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
         .is_some_and(|sig| sig.inline && sig.args.iter().any(|spec| spec.prose))
+}
+
+/// Whether `command` is an *inline* command that sits in running text (`\citep`,
+/// `\ref`, `\emph`, …), per the signature DB's [`CommandSig::inline`] flag. Paragraph
+/// reflow uses this so such a command flows into the fill as an atom even when the
+/// author isolated it on its own source line, rather than being preserved as a
+/// command-only line (see [`line_is_command_only`]). Broader than
+/// [`command_is_inline_prose`], which additionally requires a prose argument.
+fn command_is_inline(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| sig.inline)
 }
 
 /// Pre-pass over a reflow element stream: replace each *inline* prose command
@@ -1611,15 +1626,22 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
                 let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
-                let prose =
-                    match_arg_slot(&sig.args, &mut slot, is_bracket).is_some_and(|spec| spec.prose);
-                if prose {
-                    let (open, close) = if is_bracket {
-                        (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET)
-                    } else {
-                        (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
-                    };
+                let (open, close) = if is_bracket {
+                    (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET)
+                } else {
+                    (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
+                };
+                let spec = match_arg_slot(&sig.args, &mut slot, is_bracket);
+                if spec.is_some_and(|s| s.prose) {
                     out.push(lower_prose_group(&child, open, close, cx));
+                } else if spec.is_some_and(|s| s.collapse) {
+                    // A collapsible token list (e.g. a `\citep` key list): fold a
+                    // multi-line authored form to one line, falling back to the
+                    // generic block form when the body is not safely collapsible.
+                    out.push(
+                        collapse_arg_group(&child, open, close, cx)
+                            .unwrap_or_else(|| lower_node(&child, cx)),
+                    );
                 } else {
                     out.push(lower_node(&child, cx));
                 }
@@ -1699,6 +1721,66 @@ fn lower_prose_group(
             close_ir,
         ]))
     }
+}
+
+/// Lower a signature-marked *collapsible* argument group (see [`ArgSpec::collapse`])
+/// as a single inline atom: interior newlines collapse to spaces, so a citation list
+/// written across lines (`\citep{\n  a,\n  b\n}`) formats identically to its one-line
+/// form (`\citep{a, b}`) — an incidental source line break inside such an argument
+/// must not change the output (determinism). Unlike [`lower_prose_group`], the keys
+/// are *not* reflowed to the width; they stay together on one line (a token list, not
+/// prose).
+///
+/// Returns `None` — the caller falls back to the generic form ([`lower_node`]) — when
+/// the group is *not* safely collapsible: it holds a blank-line paragraph break, a `%`
+/// comment (which must end its line), or force-break content (a nested environment,
+/// display math, `\\`). Those keep the indented multi-line block form. Mirrors
+/// [`lower_bracketed`]'s delimiter handling and edge-break trimming.
+fn collapse_arg_group(
+    node: &SyntaxNode,
+    open: SyntaxKind,
+    close: SyntaxKind,
+    cx: LowerCtx<'_>,
+) -> Option<Ir> {
+    let mut open_ir = Ir::Nil;
+    let mut close_ir = Ir::Nil;
+    let mut body: Vec<Ir> = Vec::new();
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Token(t) if t.kind() == open && matches!(open_ir, Ir::Nil) => {
+                open_ir = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == close => {
+                close_ir = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
+                if newlines >= 2 {
+                    return None; // a blank-line `\par`: keep the block form
+                }
+                // A lone newline collapses to a single space; pure inline whitespace
+                // stays verbatim, matching the one-line generic lowering.
+                body.push(if newlines == 1 {
+                    Ir::verbatim(" ")
+                } else {
+                    Ir::verbatim(trailing_ws)
+                });
+            }
+            // A `%` comment must terminate its line, so the group cannot collapse.
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
+            SyntaxElement::Token(t) => body.push(Ir::verbatim(t.text())),
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(&child, cx);
+                if ir.contains_forced_break() {
+                    return None; // nested block content: keep the block form
+                }
+                body.push(ir);
+            }
+        }
+    }
+    let body = trim_trailing_break(trim_leading_break(Ir::concat(body)));
+    Some(Ir::concat([open_ir, body, close_ir]))
 }
 
 /// True if `node` directly contains a `NEWLINE` token — i.e. the group itself
@@ -2065,20 +2147,25 @@ fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize 
 }
 
 /// Whether the physical source line beginning at `start` in `elements` consists
-/// solely of command(s) and inline whitespace — the unit [`reflow_elements`]
-/// keeps on its own line rather than reflowing into its neighbours. The line runs
-/// until the next newline, comment, or end of the stream; any non-trivia element
-/// that is not a `COMMAND` node (a word, a control symbol, a group, math, a `\\`,
-/// a block) disqualifies it. A line with no command (e.g. an empty or
+/// solely of *block-level* command(s) and inline whitespace — the unit
+/// [`reflow_elements`] keeps on its own line rather than reflowing into its
+/// neighbours. The line runs until the next newline, comment, or end of the stream;
+/// any non-trivia element that is not a block command (a word, a control symbol, a
+/// group, math, a `\\`, a block, or an *inline* command like `\citep`/`\ref` — see
+/// [`command_is_inline`]) disqualifies it. A line with no command (e.g. an empty or
 /// comment-only line) is not a command line.
-fn line_is_command_only(elements: &[SyntaxElement], start: usize) -> bool {
+fn line_is_command_only(elements: &[SyntaxElement], start: usize, cx: LowerCtx<'_>) -> bool {
     let mut saw_command = false;
     for element in &elements[start..] {
         match element {
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::NEWLINE => break,
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => break,
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => continue,
-            SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => saw_command = true,
+            SyntaxElement::Node(n)
+                if n.kind() == SyntaxKind::COMMAND && !command_is_inline(n, cx) =>
+            {
+                saw_command = true
+            }
             _ => return false,
         }
     }

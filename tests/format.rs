@@ -391,6 +391,22 @@ fn no_indent_environment_keeps_body_flush() {
     );
 }
 
+/// The appendix-package `appendix` environment shares `document`'s `noIndent`
+/// flag: it is a sectioning-level container whose body is whole sections, so it
+/// sits flush against the surrounding indentation rather than nesting a level.
+/// Sections inside it stay at the margin, while a genuinely nested block still
+/// indents normally.
+#[test]
+fn appendix_environment_keeps_body_flush() {
+    let input = "\\begin{appendix}\n\\section{Proofs}\nText.\n\\end{appendix}\n";
+    assert_eq!(
+        format(input).expect("formats"),
+        "\\begin{appendix}\n\\section{Proofs}\nText.\n\\end{appendix}\n",
+        "appendix body must stay flush like document"
+    );
+    assert_format_invariants(input);
+}
+
 #[test]
 fn format_rejects_unparseable_input() {
     // A stray closing brace yields a parser diagnostic; the formatter refuses it

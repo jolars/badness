@@ -136,10 +136,13 @@ pub struct EnvironmentSig {
     /// `!(verbatim_body || math)`. (Reflow itself is a later item; this is the
     /// recorded intent.)
     pub reflow: bool,
-    /// `true` for environments whose body the formatter must *not* indent
-    /// (`document`, …). The body is still laid out on its own lines, just at the
-    /// surrounding indentation level — `\begin{document}` content conventionally
-    /// sits flush against the margin.
+    /// `true` for sectioning-level *containers* whose body the formatter must
+    /// *not* indent (`document`, the appendix-package `appendix`, …). The shared
+    /// property is that the body is whole sections/paragraphs — content at the
+    /// same structural altitude as the sections the container sits among, not leaf
+    /// content like a `figure` or `minipage` — which is conventionally written
+    /// flush to the margin. The body is still laid out on its own lines, just at
+    /// the surrounding indentation level rather than nested one step in.
     pub no_indent: bool,
     /// `true` for list environments (`itemize`, `enumerate`, `description`, …)
     /// whose `\item`s the formatter lays out one per line, reflowing each item's

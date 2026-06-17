@@ -56,6 +56,13 @@ pub enum SyntaxKind {
     ROOT,         // the document root  (keep LAST)
 }
 
+impl SyntaxKind {
+    /// The number of `SyntaxKind` variants. Sound because the enum is
+    /// `#[repr(u16)]` with contiguous discriminants `0..=ROOT` and `ROOT` is kept
+    /// last; used to size kind-indexed tables (e.g. the linter's dispatch table).
+    pub const COUNT: usize = SyntaxKind::ROOT as usize + 1;
+}
+
 impl From<SyntaxKind> for rowan::SyntaxKind {
     fn from(kind: SyntaxKind) -> Self {
         Self(kind as u16)

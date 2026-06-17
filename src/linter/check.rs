@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::project::ResolvedLabels;
 use crate::semantic::SemanticModel;
-use crate::syntax::SyntaxNode;
+use crate::syntax::{SyntaxKind, SyntaxNode};
 
 use super::diagnostic::Diagnostic;
 use super::rules::{RuleContext, all_rules};
@@ -33,8 +33,36 @@ pub fn lint_document(
         model,
         resolution,
     };
-    let mut diagnostics: Vec<Diagnostic> =
-        all_rules().iter().flat_map(|rule| rule.run(&ctx)).collect();
+    let rules = all_rules();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+
+    // Build the node-dispatch table: kind discriminant -> indices of subscribed
+    // rules. `SyntaxKind` is a contiguous `#[repr(u16)]`, so a flat Vec indexed by
+    // `kind as usize` beats a hash map.
+    let mut by_kind: Vec<Vec<usize>> = vec![Vec::new(); SyntaxKind::COUNT];
+    let mut any_node_rules = false;
+    for (i, rule) in rules.iter().enumerate() {
+        for kind in rule.interests() {
+            by_kind[*kind as usize].push(i);
+            any_node_rules = true;
+        }
+    }
+
+    // Single shared traversal feeding every node-shape rule. Visits tokens too
+    // (`descendants_with_tokens`) so token-level rules can subscribe to e.g.
+    // `COMMENT` or `WORD`.
+    if any_node_rules {
+        for el in root.descendants_with_tokens() {
+            for &i in &by_kind[el.kind() as usize] {
+                rules[i].check(&el, &ctx, &mut diagnostics);
+            }
+        }
+    }
+
+    // Whole-file pass for model-/resolution-driven rules.
+    for rule in &rules {
+        rule.check_file(&ctx, &mut diagnostics);
+    }
 
     let suppress = SuppressionMap::build(root);
     diagnostics.retain(|d| !suppress.is_suppressed(d.rule, d.start, d.end));

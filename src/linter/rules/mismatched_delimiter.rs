@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use rowan::NodeOrToken;
 
-use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
@@ -48,42 +48,41 @@ impl Rule for MismatchedDelimiter {
         Severity::Warning
     }
 
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
-        for pair in ctx
-            .root
-            .descendants()
-            .filter(|node| node.kind() == SyntaxKind::LEFT_RIGHT)
-        {
-            let (open, close) = delimiters(&pair);
-            // Only judge a fully-formed pair: a missing delimiter is already a
-            // parser error, so don't pile on.
-            let (Some(open), Some(close)) = (open, close) else {
-                continue;
-            };
+    fn interests(&self) -> &'static [SyntaxKind] {
+        &[SyntaxKind::LEFT_RIGHT]
+    }
 
-            if CLOSERS.contains(&open.text()) {
-                out.push(orientation_diag(
-                    self,
-                    &open,
-                    format!(
-                        "`\\left{}` uses a closing delimiter where an opening one is expected",
-                        open.text()
-                    ),
-                ));
-            }
-            if OPENERS.contains(&close.text()) {
-                out.push(orientation_diag(
-                    self,
-                    &close,
-                    format!(
-                        "`\\right{}` uses an opening delimiter where a closing one is expected",
-                        close.text()
-                    ),
-                ));
-            }
+    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(pair) = el.as_node() else {
+            return;
+        };
+        let (open, close) = delimiters(pair);
+        // Only judge a fully-formed pair: a missing delimiter is already a parser
+        // error, so don't pile on.
+        let (Some(open), Some(close)) = (open, close) else {
+            return;
+        };
+
+        if CLOSERS.contains(&open.text()) {
+            sink.push(orientation_diag(
+                self,
+                &open,
+                format!(
+                    "`\\left{}` uses a closing delimiter where an opening one is expected",
+                    open.text()
+                ),
+            ));
         }
-        out
+        if OPENERS.contains(&close.text()) {
+            sink.push(orientation_diag(
+                self,
+                &close,
+                format!(
+                    "`\\right{}` uses an opening delimiter where a closing one is expected",
+                    close.text()
+                ),
+            ));
+        }
     }
 }
 
@@ -157,7 +156,13 @@ mod tests {
             model: &model,
             resolution: None,
         };
-        MismatchedDelimiter.run(&ctx)
+        let mut out = Vec::new();
+        for el in root.descendants_with_tokens() {
+            if MismatchedDelimiter.interests().contains(&el.kind()) {
+                MismatchedDelimiter.check(&el, &ctx, &mut out);
+            }
+        }
+        out
     }
 
     #[test]

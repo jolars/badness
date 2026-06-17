@@ -37,29 +37,30 @@ impl Rule for UndefinedRef {
         Severity::Warning
     }
 
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic> {
+    fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         // No project view, or an incomplete namespace (open, or rootless): a
         // missing key may simply live in a file we never analyzed, so stay quiet.
         let Some(resolution) = ctx.resolution else {
-            return Vec::new();
+            return;
         };
         if !resolution.is_closed(ctx.path) || !resolution.is_root_component(ctx.path) {
-            return Vec::new();
+            return;
         }
 
-        ctx.model
-            .refs()
-            .iter()
-            .filter(|reference| !resolution.is_defined(ctx.path, &reference.name))
-            .map(|reference| Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
-                path: PathBuf::new(),
-                start: usize::from(reference.range.start()),
-                end: usize::from(reference.range.end()),
-                message: format!("reference to undefined label `{}`", reference.name),
-            })
-            .collect()
+        sink.extend(
+            ctx.model
+                .refs()
+                .iter()
+                .filter(|reference| !resolution.is_defined(ctx.path, &reference.name))
+                .map(|reference| Diagnostic {
+                    rule: self.id(),
+                    severity: self.default_severity(),
+                    path: PathBuf::new(),
+                    start: usize::from(reference.range.start()),
+                    end: usize::from(reference.range.end()),
+                    message: format!("reference to undefined label `{}`", reference.name),
+                }),
+        );
     }
 }
 
@@ -103,7 +104,9 @@ mod tests {
             model: &model,
             resolution,
         };
-        UndefinedRef.run(&ctx)
+        let mut out = Vec::new();
+        UndefinedRef.check_file(&ctx, &mut out);
+        out
     }
 
     #[test]

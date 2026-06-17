@@ -17,7 +17,7 @@ use rowan::NodeOrToken;
 
 use crate::ast::command_name;
 use crate::linter::diagnostic::{Diagnostic, Severity};
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Rule, RuleContext};
 
@@ -43,32 +43,31 @@ impl Rule for DeprecatedCommand {
         Severity::Warning
     }
 
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
-        for command in ctx
-            .root
-            .descendants()
-            .filter(|node| node.kind() == SyntaxKind::COMMAND)
-        {
-            let Some(name) = command_name(&command) else {
-                continue;
-            };
-            let Some((_, replacement)) = DEPRECATED.iter().find(|(dep, _)| *dep == name) else {
-                continue;
-            };
-            // Underline just the control word, not any greedily-attached group,
-            // so the caret sits tightly on `\bf`.
-            let range = control_word_range(&command).unwrap_or_else(|| command.text_range());
-            out.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
-                path: PathBuf::new(),
-                start: usize::from(range.start()),
-                end: usize::from(range.end()),
-                message: format!("`\\{name}` is deprecated; use `\\{replacement}`"),
-            });
-        }
-        out
+    fn interests(&self) -> &'static [SyntaxKind] {
+        &[SyntaxKind::COMMAND]
+    }
+
+    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(command) = el.as_node() else {
+            return;
+        };
+        let Some(name) = command_name(command) else {
+            return;
+        };
+        let Some((_, replacement)) = DEPRECATED.iter().find(|(dep, _)| *dep == name) else {
+            return;
+        };
+        // Underline just the control word, not any greedily-attached group, so
+        // the caret sits tightly on `\bf`.
+        let range = control_word_range(command).unwrap_or_else(|| command.text_range());
+        sink.push(Diagnostic {
+            rule: self.id(),
+            severity: self.default_severity(),
+            path: PathBuf::new(),
+            start: usize::from(range.start()),
+            end: usize::from(range.end()),
+            message: format!("`\\{name}` is deprecated; use `\\{replacement}`"),
+        });
     }
 }
 
@@ -99,7 +98,13 @@ mod tests {
             model: &model,
             resolution: None,
         };
-        DeprecatedCommand.run(&ctx)
+        let mut out = Vec::new();
+        for el in root.descendants_with_tokens() {
+            if DeprecatedCommand.interests().contains(&el.kind()) {
+                DeprecatedCommand.check(&el, &ctx, &mut out);
+            }
+        }
+        out
     }
 
     #[test]

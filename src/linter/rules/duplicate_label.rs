@@ -28,14 +28,13 @@ impl Rule for DuplicateLabel {
         Severity::Warning
     }
 
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic> {
+    fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         // Count occurrences of each key. Within a file, flag every definition
         // past the first — the first is the "canonical" one LaTeX would keep.
         // On a key's *first* occurrence in this file, the cross-file branch
         // instead checks whether another file in the namespace defines it (the
         // intra-file branch already owns the 2nd+ occurrences, so no overlap).
         let mut seen: HashMap<&str, usize> = HashMap::new();
-        let mut out = Vec::new();
         for label in ctx.model.labels() {
             let count = seen.entry(label.name.as_str()).or_insert(0);
             *count += 1;
@@ -46,7 +45,7 @@ impl Rule for DuplicateLabel {
                     .and_then(|resolution| cross_file_message(ctx, resolution, &label.name))
             };
             if let Some(message) = message {
-                out.push(Diagnostic {
+                sink.push(Diagnostic {
                     rule: self.id(),
                     severity: self.default_severity(),
                     path: PathBuf::new(),
@@ -56,7 +55,6 @@ impl Rule for DuplicateLabel {
                 });
             }
         }
-        out
     }
 }
 
@@ -99,7 +97,9 @@ mod tests {
             model: &model,
             resolution: None,
         };
-        DuplicateLabel.run(&ctx)
+        let mut out = Vec::new();
+        DuplicateLabel.check_file(&ctx, &mut out);
+        out
     }
 
     #[test]
@@ -176,7 +176,9 @@ mod tests {
             model: &model,
             resolution: Some(resolution),
         };
-        DuplicateLabel.run(&ctx)
+        let mut out = Vec::new();
+        DuplicateLabel.check_file(&ctx, &mut out);
+        out
     }
 
     #[test]

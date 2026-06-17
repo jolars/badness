@@ -154,6 +154,16 @@ registry) wired into the CLI and the LSP `publishDiagnostics` path;
 `linter/suppression` (`% badness-ignore`); deprecated-command (`\bf`-style) and
 single-file duplicate-label lints.
 
+**Dispatch: single shared walk** (arity's `run_rules` shape). `lint_document`
+builds a `by_kind` table (`Vec<Vec<usize>>` sized `SyntaxKind::COUNT`, indexed by
+`kind as usize`) from each rule's `interests()`, then does *one*
+`descendants_with_tokens` traversal calling `Rule::check` on subscribed rules per
+element — never O(rules × nodes). Node-shape rules (deprecated-command,
+obsolete-environment, dollar-display-math, mismatched-delimiter) implement
+`interests()` + `check()`; model/cross-file rules (duplicate-label, undefined-ref)
+leave `interests()` empty and implement `check_file()`, run once after the walk.
+Suppression stays a separate post-pass.
+
 - [x] More lints: unmatched delimiters (parser already surfaces unclosed/stray
   delimiters and `\begin`/`\end` mismatches as `parse` diagnostics; the
   `mismatched-delimiter` lint adds reversed `\left`/`\right` orientation), undefined

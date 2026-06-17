@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use rowan::NodeOrToken;
 
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
@@ -31,27 +31,26 @@ impl Rule for DollarDisplayMath {
         Severity::Warning
     }
 
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
-        for math in ctx
-            .root
-            .descendants()
-            .filter(|node| node.kind() == SyntaxKind::DISPLAY_MATH)
-        {
-            let Some(range) = opening_dollars_range(&math) else {
-                // The `\[…\]` form opens with a CONTROL_SYMBOL, not `$$` — fine.
-                continue;
-            };
-            out.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
-                path: PathBuf::new(),
-                start: usize::from(range.start()),
-                end: usize::from(range.end()),
-                message: "`$$…$$` is plain-TeX display math; use `\\[…\\]`".to_owned(),
-            });
-        }
-        out
+    fn interests(&self) -> &'static [SyntaxKind] {
+        &[SyntaxKind::DISPLAY_MATH]
+    }
+
+    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(math) = el.as_node() else {
+            return;
+        };
+        let Some(range) = opening_dollars_range(math) else {
+            // The `\[…\]` form opens with a CONTROL_SYMBOL, not `$$` — fine.
+            return;
+        };
+        sink.push(Diagnostic {
+            rule: self.id(),
+            severity: self.default_severity(),
+            path: PathBuf::new(),
+            start: usize::from(range.start()),
+            end: usize::from(range.end()),
+            message: "`$$…$$` is plain-TeX display math; use `\\[…\\]`".to_owned(),
+        });
     }
 }
 
@@ -86,7 +85,13 @@ mod tests {
             model: &model,
             resolution: None,
         };
-        DollarDisplayMath.run(&ctx)
+        let mut out = Vec::new();
+        for el in root.descendants_with_tokens() {
+            if DollarDisplayMath.interests().contains(&el.kind()) {
+                DollarDisplayMath.check(&el, &ctx, &mut out);
+            }
+        }
+        out
     }
 
     #[test]

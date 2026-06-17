@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use crate::ast::environment_name;
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
@@ -34,34 +34,33 @@ impl Rule for ObsoleteEnvironment {
         Severity::Warning
     }
 
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
-        for env in ctx
-            .root
-            .descendants()
-            .filter(|node| node.kind() == SyntaxKind::ENVIRONMENT)
-        {
-            let Some(begin) = env.children().find(|c| c.kind() == SyntaxKind::BEGIN) else {
-                continue;
-            };
-            let Some(name) = environment_name(&begin) else {
-                continue;
-            };
-            let Some((_, replacement)) = OBSOLETE.iter().find(|(obs, _)| *obs == name) else {
-                continue;
-            };
-            // Underline the name inside `\begin{…}`, not the whole environment.
-            let range = name_group_range(&begin).unwrap_or_else(|| begin.text_range());
-            out.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
-                path: PathBuf::new(),
-                start: usize::from(range.start()),
-                end: usize::from(range.end()),
-                message: format!("`{name}` is obsolete; use `{replacement}`"),
-            });
-        }
-        out
+    fn interests(&self) -> &'static [SyntaxKind] {
+        &[SyntaxKind::ENVIRONMENT]
+    }
+
+    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(env) = el.as_node() else {
+            return;
+        };
+        let Some(begin) = env.children().find(|c| c.kind() == SyntaxKind::BEGIN) else {
+            return;
+        };
+        let Some(name) = environment_name(&begin) else {
+            return;
+        };
+        let Some((_, replacement)) = OBSOLETE.iter().find(|(obs, _)| *obs == name) else {
+            return;
+        };
+        // Underline the name inside `\begin{…}`, not the whole environment.
+        let range = name_group_range(&begin).unwrap_or_else(|| begin.text_range());
+        sink.push(Diagnostic {
+            rule: self.id(),
+            severity: self.default_severity(),
+            path: PathBuf::new(),
+            start: usize::from(range.start()),
+            end: usize::from(range.end()),
+            message: format!("`{name}` is obsolete; use `{replacement}`"),
+        });
     }
 }
 
@@ -88,7 +87,13 @@ mod tests {
             model: &model,
             resolution: None,
         };
-        ObsoleteEnvironment.run(&ctx)
+        let mut out = Vec::new();
+        for el in root.descendants_with_tokens() {
+            if ObsoleteEnvironment.interests().contains(&el.kind()) {
+                ObsoleteEnvironment.check(&el, &ctx, &mut out);
+            }
+        }
+        out
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::project::ResolvedLabels;
 use crate::semantic::SemanticModel;
-use crate::syntax::SyntaxNode;
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::diagnostic::{Diagnostic, Severity};
 
@@ -45,6 +45,17 @@ pub struct RuleContext<'a> {
 
 /// A single lint. `Send + Sync` so the registry can be shared across the LSP's
 /// read pool.
+///
+/// Rules come in two flavors, both driven by [`lint_document`](super::check::lint_document)'s
+/// single shared traversal:
+///
+/// - **Node-shape rules** subscribe to [`Rule::interests`] and implement
+///   [`Rule::check`]; the driver invokes `check` once per visited element whose
+///   kind they named. They never walk the tree themselves.
+/// - **Whole-file rules** leave `interests` empty and implement
+///   [`Rule::check_file`]; the driver calls it once, after the walk. This is for
+///   rules driven by the semantic model or cross-file resolution rather than by
+///   node shape.
 pub trait Rule: Send + Sync {
     /// The stable, kebab-case identifier reported as the diagnostic's `rule` and
     /// targeted by `% badness-ignore <id>`.
@@ -55,8 +66,27 @@ pub trait Rule: Send + Sync {
         Severity::Warning
     }
 
-    /// Run the rule over `ctx`, returning its findings (path left empty).
-    fn run(&self, ctx: &RuleContext<'_>) -> Vec<Diagnostic>;
+    /// The `SyntaxKind`s this rule subscribes to. During the driver's single
+    /// shared traversal, [`Rule::check`] is invoked once for every element whose
+    /// kind appears here. The default (`&[]`) opts out of node dispatch entirely —
+    /// appropriate for rules that work off the whole file via [`Rule::check_file`].
+    fn interests(&self) -> &'static [SyntaxKind] {
+        &[]
+    }
+
+    /// Per-element callback, invoked for each CST element (node *or* token) whose
+    /// kind is in [`Rule::interests`]. Node-shape rules unwrap `el.as_node()`.
+    /// Findings are pushed onto `sink` with the path left empty.
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let _ = (el, ctx, sink);
+    }
+
+    /// Whole-file pass, run once after the shared traversal. For rules driven by
+    /// the semantic model or cross-file resolution rather than node shape. The
+    /// default is a no-op. Findings are pushed onto `sink` with the path left empty.
+    fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let _ = (ctx, sink);
+    }
 }
 
 /// Every built-in rule, in registry order.

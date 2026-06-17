@@ -50,12 +50,17 @@ lexer mode); texlab differential parse oracle.
   rule. Default float-at-nearest-enclosing-node; a `%` comment run immediately
   before a documentable construct binds *leading* into it; a blank line breaks the
   bind. Trivia stays bare leaf tokens.
-- [ ] Implement the leading comment-bind (default float already holds). Pin the set
-  of "documentable" node kinds (command/environment/sectioning), bind contiguous
-  `%` comments forward up to a blank line, add snapshot + losslessness tests. Decide
-  grammar-local bump ordering vs. a `tree_builder` reattachment pass (the latter
-  diverges from arity's mechanical replay --- weigh against the copy-close
-  agreement).
+- [x] Leading comment-bind implemented **grammar-locally** (the `tree_builder`
+  stays a mechanical replay). An own-line `%` run immediately before a documentable
+  construct (any `COMMAND` or `ENVIRONMENT` node --- decided purely on node kind, no
+  signature-DB lookup, so the syntactic layer stays semantics-free) binds *leading*
+  into it; a same-line trailing comment never binds; a blank line breaks the bind
+  (the bind is the maximal blank-line-free suffix). `parser/grammar.rs`
+  `binding_run`/`comment_starts_line` detect it, and the existing `precede` idiom
+  wraps the comments + construct (the construct self-opens, then its `Start` is
+  pulled back over the comments). The formatter's three environment lowerers emit
+  the bound run on its own line above `\begin` (`lower_environment_leading`).
+  Covered by parser snapshots, roundtrip/losslessness cases, and a format fixture.
 
 ## Formatter
 

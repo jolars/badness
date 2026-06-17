@@ -1,0 +1,24 @@
+---
+source: tests/parser.rs
+expression: "tree(\"% caption\\n\\\\begin{figure}\\nx\\n\\\\end{figure}\")"
+---
+ROOT@0..39
+  ENVIRONMENT@0..39
+    COMMENT@0..9 "% caption"
+    NEWLINE@9..10 "\n"
+    BEGIN@10..24
+      CONTROL_WORD@10..16 "\\begin"
+      NAME_GROUP@16..24
+        L_BRACE@16..17 "{"
+        WORD@17..23 "figure"
+        R_BRACE@23..24 "}"
+    PARAGRAPH@24..26
+      NEWLINE@24..25 "\n"
+      WORD@25..26 "x"
+    NEWLINE@26..27 "\n"
+    END@27..39
+      CONTROL_WORD@27..31 "\\end"
+      NAME_GROUP@31..39
+        L_BRACE@31..32 "{"
+        WORD@32..38 "figure"
+        R_BRACE@38..39 "}"

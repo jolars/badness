@@ -454,18 +454,42 @@ fn lower_element_stream(
 /// Verbatim-like environments never reach here (their opaque `VERBATIM_BODY`
 /// token would be corrupted by reflow); [`lower_node`] routes them to the
 /// generic path, which emits the body verbatim.
+/// The leading comment-bind run (an own-line `%` run the parser attached as
+/// leading children *before* the `BEGIN` node). It is not body: it lowers to its
+/// own line(s) above `\begin`, at the environment's own indentation. Returns
+/// [`Ir::Nil`] when there is no such run. Shared by every environment lowerer so
+/// the bound comment is rendered the same way regardless of body shape.
+fn lower_environment_leading(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let mut leading: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        if matches!(&element, SyntaxElement::Node(c) if c.kind() == SyntaxKind::BEGIN) {
+            break;
+        }
+        leading.push(element);
+    }
+    if leading.is_empty() {
+        Ir::Nil
+    } else {
+        Ir::concat(lower_element_stream(leading.into_iter(), cx))
+    }
+}
+
 fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let leading = lower_environment_leading(node, cx);
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    let mut seen_begin = false;
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                seen_begin = true;
                 begin = lower_begin(child, cx);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
                 end = lower_node(child, cx);
             }
+            _ if !seen_begin => {}
             _ => body_elements.push(element),
         }
     }
@@ -504,7 +528,7 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         Ir::hard_line()
     };
 
-    if matches!(body, Ir::Nil) {
+    let env = if matches!(body, Ir::Nil) {
         // Empty body: keep `\begin` and `\end` on their own lines (no edge blank).
         Ir::concat([begin, Ir::hard_line(), end])
     } else if environment_no_indent(node, cx) {
@@ -513,7 +537,8 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         Ir::concat([begin, lead, body, trail, end])
     } else {
         Ir::concat([begin, Ir::indent(Ir::concat([lead, body])), trail, end])
-    }
+    };
+    Ir::concat([leading, env])
 }
 
 /// The `%` comment that trails the `\begin{…}` header on the *same* source line —
@@ -722,17 +747,21 @@ enum FlatItem {
 /// plain [`lower_environment`] when the body has no `\item` to anchor on, so an
 /// unusual shape degrades to today's indented body rather than misformatting.
 fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let leading = lower_environment_leading(node, cx);
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    let mut seen_begin = false;
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                seen_begin = true;
                 begin = lower_begin(child, cx);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
                 end = lower_node(child, cx);
             }
+            _ if !seen_begin => {}
             _ => body_elements.push(element),
         }
     }
@@ -741,6 +770,7 @@ fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return lower_environment(node, cx);
     };
     Ir::concat([
+        leading,
         begin,
         Ir::indent(Ir::concat([Ir::hard_line(), body])),
         Ir::hard_line(),
@@ -963,17 +993,21 @@ enum GridItem {
 /// fallback is always available, so an unhandled shape degrades to today's plain
 /// indented body, never a panic or corruption.
 fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let leading = lower_environment_leading(node, cx);
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    let mut seen_begin = false;
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                seen_begin = true;
                 begin = lower_begin(child, cx);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
                 end = lower_node(child, cx);
             }
+            _ if !seen_begin => {}
             _ => body_elements.push(element),
         }
     }
@@ -989,6 +1023,7 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 
     let body = render_alignment_rows(&items);
     Ir::concat([
+        leading,
         begin,
         Ir::indent(Ir::concat([Ir::hard_line(), body])),
         Ir::hard_line(),

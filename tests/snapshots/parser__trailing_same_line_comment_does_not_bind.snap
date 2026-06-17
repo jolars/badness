@@ -1,0 +1,13 @@
+---
+source: tests/parser.rs
+expression: out
+---
+ROOT@0..13
+  PARAGRAPH@0..13
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\foo"
+    WHITESPACE@4..5 " "
+    COMMENT@5..8 "% x"
+    NEWLINE@8..9 "\n"
+    COMMAND@9..13
+      CONTROL_WORD@9..13 "\\bar"

@@ -210,6 +210,67 @@ fn blank_line_before_comment_still_breaks_math() {
     assert!(out.contains("unclosed `\\["), "{out}");
 }
 
+// --- leading comment-bind (AGENTS.md #9) ---------------------------------
+
+#[test]
+fn comment_binds_leading_into_command() {
+    // An own-line `%` run immediately before a command attaches *leading* into
+    // the `COMMAND` node, before the control word.
+    insta::assert_snapshot!(tree("% c\n\\section{A}"));
+}
+
+#[test]
+fn comment_binds_leading_into_environment() {
+    // The bound comment sits inside `ENVIRONMENT`, before `BEGIN`; a lone block
+    // environment stays bare (no `PARAGRAPH` wrapper).
+    insta::assert_snapshot!(tree("% caption\n\\begin{figure}\nx\n\\end{figure}"));
+}
+
+#[test]
+fn comment_run_binds_as_a_whole() {
+    // A contiguous run of own-line comments all bind into the construct.
+    insta::assert_snapshot!(tree("% a\n% b\n\\foo"));
+}
+
+#[test]
+fn trailing_same_line_comment_does_not_bind() {
+    // `% x` shares `\foo`'s line (no newline before it), so it is a trailing
+    // comment and floats — it does not bind into the following `\bar`.
+    let out = tree("\\foo % x\n\\bar");
+    // The comment is a direct child of the paragraph, not inside the second
+    // COMMAND: there are two sibling COMMAND nodes and the COMMENT floats.
+    assert_eq!(out.matches("COMMAND@").count(), 2, "{out}");
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn blank_line_breaks_the_leading_bind() {
+    // A blank line between the comment and the construct breaks the bind: the
+    // comment floats at the enclosing level, the `\foo` starts a fresh paragraph.
+    insta::assert_snapshot!(tree("% a\n\n\\foo"));
+}
+
+#[test]
+fn comment_after_blank_line_still_binds() {
+    // `%a` floats (blank line before `\foo`), but `%b` — with no blank line
+    // between it and `\foo` — binds. The bind is the maximal blank-line-free
+    // suffix.
+    insta::assert_snapshot!(tree("%a\n\n%b\n\\foo"));
+}
+
+#[test]
+fn comment_does_not_bind_into_non_documentable() {
+    // Math, words, and other non-command/-environment tokens are not
+    // documentable: the comment floats.
+    let math = tree("% c\n$x$");
+    assert!(
+        !math.contains("COMMAND@") && math.contains("INLINE_MATH@"),
+        "{math}"
+    );
+    let word = tree("% c\nword");
+    assert!(!word.contains("COMMAND@"), "{word}");
+}
+
 #[test]
 fn verbatim_environment_is_opaque() {
     insta::assert_snapshot!(tree(

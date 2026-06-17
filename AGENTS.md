@@ -143,17 +143,26 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    - **Exception: a contiguous run of `%` comments immediately preceding a
      documentable construct attaches *leading* into that construct**, so the comment
      binds to the command/environment/sectioning node it annotates — exactly ra's
-     `n_attached_trivias` (comments attach forward to item-like nodes).
+     `n_attached_trivias` (comments attach forward to item-like nodes). "Documentable"
+     is decided **purely on node kind** — any `COMMAND` or `ENVIRONMENT` — so no
+     signature-DB lookup leaks into the parser (sectioning commands are `COMMAND`
+     nodes, covered without special-casing). A *same-line trailing* comment
+     (`\foo % x`, no newline before it) is **not** leading and never binds.
    - **A blank line (`≥2` newlines, the `\par` boundary) breaks the bind:** comments
      past a blank line stay floating, never leading. Mirrors ra's `"\n\n"` cutoff.
+     The binding run is the *maximal blank-line-free suffix* of the preceding trivia
+     that starts at an own-line comment (so in `%a \n\n %b \foo`, `%a` floats and
+     `%b` binds).
 
    Trivia stays **bare leaf tokens**, never wrapped in a node — the token *kind*
    already marks it skippable (`Parser::is_trivia`), matching arity/ra and keeping
    `tree_builder` a mechanical replay. A *named* trivia node (e.g. a `DOC_COMMENT`
    grouping) is reserved for a later semantic enrichment, not the default for plain
    whitespace. There is no parse-stability invariant, so this policy is a CST-shape
-   *convention* enforced by tests, not a hard oracle. (Implementation of the leading
-   comment-bind is a follow-up; the default float already holds — see `TODO.md`.)
+   *convention* enforced by tests, not a hard oracle. The leading comment-bind is
+   implemented **grammar-locally** (`grammar.rs` `binding_run` + the `precede`
+   idiom), so `tree_builder` stays a mechanical replay; the construct self-opens and
+   its `Start` is pulled back over the bound comments.
 
 ## Invariants (these are test oracles — enforce them)
 

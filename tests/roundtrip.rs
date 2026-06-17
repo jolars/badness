@@ -30,6 +30,11 @@ fn roundtrip_units() {
         // the body holds characters the generic lexer would otherwise (mis)read.
         "\\begin{lstlisting}[language=C]\nint a[3] = {1};  % literal\n\\end{lstlisting}",
         "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}",
+        // Leading comment-bind: comments attached *into* a command/environment
+        // must still reconstruct byte-for-byte (the bind only re-parents tokens).
+        "% a doc comment\n\\section{Intro}\n",
+        "% caption note\n\\begin{figure}\nbody\n\\end{figure}\n",
+        "%a\n\n%b\n\\foo",
     ];
     for case in cases {
         assert_lossless(case);

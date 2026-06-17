@@ -1,0 +1,14 @@
+---
+source: tests/parser.rs
+expression: "tree(\"% c\\n\\\\section{A}\")"
+---
+ROOT@0..15
+  PARAGRAPH@0..15
+    COMMAND@0..15
+      COMMENT@0..3 "% c"
+      NEWLINE@3..4 "\n"
+      CONTROL_WORD@4..12 "\\section"
+      GROUP@12..15
+        L_BRACE@12..13 "{"
+        WORD@13..14 "A"
+        R_BRACE@14..15 "}"

@@ -141,6 +141,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // idiom) rides the `\begin` header instead of dropping to its own indented
     // line; a `%` the author put on its own line is left there.
     ("environment_begin_trailing_comment", WrapMode::Reflow, 80),
+    // A `%` run on its *own* line(s) immediately before a command or environment
+    // binds *leading* into that construct (the parser's leading comment-bind) and
+    // is rendered on its own line above `\section` / `\begin`, at the construct's
+    // indentation — not lifted onto the header line the way a same-line `%` is.
+    ("comment_binds_leading_to_construct", WrapMode::Reflow, 80),
     // A class-defined verbatim environment (jss's `Code`) has its body preserved
     // byte-for-byte — never reindented or reflowed.
     ("verbatim_jss_code_environment", WrapMode::Preserve, 80),

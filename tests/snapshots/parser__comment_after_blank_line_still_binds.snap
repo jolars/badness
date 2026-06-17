@@ -1,0 +1,13 @@
+---
+source: tests/parser.rs
+expression: "tree(\"%a\\n\\n%b\\n\\\\foo\")"
+---
+ROOT@0..11
+  COMMENT@0..2 "%a"
+  NEWLINE@2..3 "\n"
+  NEWLINE@3..4 "\n"
+  PARAGRAPH@4..11
+    COMMAND@4..11
+      COMMENT@4..6 "%b"
+      NEWLINE@6..7 "\n"
+      CONTROL_WORD@7..11 "\\foo"

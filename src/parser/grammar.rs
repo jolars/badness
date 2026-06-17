@@ -185,6 +185,73 @@ impl<'t> Parser<'t> {
         false
     }
 
+    /// True if the comment at `pos` starts its own line: scanning back over
+    /// inline whitespace only, the preceding token is a `NEWLINE` or the start of
+    /// input. A same-line trailing comment (`\foo % x`) returns `false` and never
+    /// binds forward (see [`Self::binding_run`]).
+    fn comment_starts_line(&self, pos: usize) -> bool {
+        let mut i = pos;
+        while i > 0 {
+            i -= 1;
+            match self.tokens[i].kind {
+                SyntaxKind::WHITESPACE => continue,
+                SyntaxKind::NEWLINE => return true,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// If the trivia run at `from` ends in a `%` comment run that binds *leading*
+    /// into a following documentable construct, return
+    /// `(comment_start, construct_pos, construct_kind)`:
+    /// - `comment_start` — index of the first own-line comment of the binding run
+    ///   (the maximal blank-line-free suffix; trivia before it floats),
+    /// - `construct_pos` — index of the construct's control word,
+    /// - `construct_kind` — `ENVIRONMENT` for `\begin`, otherwise `COMMAND`.
+    ///
+    /// Returns `None` when the run has no own-line comment, a blank line separates
+    /// the comment from the construct, or the next non-trivia token is not a
+    /// documentable construct. Mirrors rust-analyzer's `n_attached_trivias`
+    /// (AGENTS.md #9): comments bind forward to the item they annotate, a blank
+    /// line breaks the bind, and a same-line trailing comment never binds.
+    fn binding_run(&self, from: usize) -> Option<(usize, usize, SyntaxKind)> {
+        let mut i = from;
+        let mut newlines = 0;
+        let mut comment_start: Option<usize> = None;
+        while let Some(t) = self.tokens.get(i) {
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    // A blank line breaks the bind: only a comment *after* it can
+                    // still bind, so drop any comment seen before it.
+                    if newlines >= 2 {
+                        comment_start = None;
+                    }
+                }
+                SyntaxKind::WHITESPACE => {}
+                SyntaxKind::COMMENT => {
+                    newlines = 0;
+                    if comment_start.is_none() && self.comment_starts_line(i) {
+                        comment_start = Some(i);
+                    }
+                }
+                SyntaxKind::CONTROL_WORD => {
+                    let start = comment_start?;
+                    let kind = match self.tokens[i].text.as_str() {
+                        BEGIN_CMD => SyntaxKind::ENVIRONMENT,
+                        END_CMD => return None,
+                        _ => SyntaxKind::COMMAND,
+                    };
+                    return Some((start, i, kind));
+                }
+                _ => return None,
+            }
+            i += 1;
+        }
+        None
+    }
+
     // --- grammar -----------------------------------------------------------
 
     fn document(&mut self) {
@@ -201,9 +268,16 @@ impl<'t> Parser<'t> {
                 break;
             }
             // Separator trivia (blank lines / trailing whitespace) is emitted
-            // directly, never wrapped in a paragraph.
+            // directly, never wrapped in a paragraph — except a trailing own-line
+            // comment run that binds into the construct after it: stop before that
+            // comment so the construct (next iteration) absorbs it as leading.
             if self.kind().is_some_and(Self::is_trivia) && self.trivia_run_is_separator(block) {
-                self.skip_trivia();
+                let stop = self
+                    .binding_run(self.pos)
+                    .map_or(self.tokens.len(), |(comment_start, ..)| comment_start);
+                while self.pos < stop && self.kind().is_some_and(Self::is_trivia) {
+                    self.bump();
+                }
                 continue;
             }
             // Otherwise we're at paragraph content (guaranteed ≥1 token, so no
@@ -221,6 +295,33 @@ impl<'t> Parser<'t> {
                 }
                 if self.kind().is_some_and(Self::is_trivia) && self.trivia_run_is_separator(block) {
                     break;
+                }
+                // Leading comment-bind: an own-line `%` run immediately before a
+                // documentable construct attaches *leading* into it. Float any
+                // trivia before the comment run, then wrap the comments + construct
+                // in the construct's node (the `precede` idiom: the construct
+                // self-opens, then its `Start` is pulled back over the comments).
+                if let Some((comment_start, construct_pos, _)) = self.binding_run(self.pos) {
+                    while self.pos < comment_start {
+                        self.bump();
+                    }
+                    let checkpoint = self.events.len();
+                    while self.pos < construct_pos {
+                        self.bump();
+                    }
+                    let starts_block_env = self.tokens[construct_pos].text == BEGIN_CMD
+                        && peek_begin_name(self.tokens, construct_pos)
+                            .as_deref()
+                            .is_some_and(is_block_environment);
+                    let construct_start = self.events.len();
+                    self.element();
+                    if let Event::Start(kind) = self.events[construct_start] {
+                        self.events.remove(construct_start);
+                        self.events.insert(checkpoint, Event::Start(kind));
+                    }
+                    nontrivia_count += 1;
+                    lone_block_env = nontrivia_count == 1 && starts_block_env;
+                    continue;
                 }
                 let is_nontrivia = !self.kind().is_some_and(Self::is_trivia);
                 // Peek block-env status *before* consuming (the name is only

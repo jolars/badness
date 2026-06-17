@@ -3,8 +3,10 @@
 //!
 //! `$$` is a TeX primitive; in LaTeX it bypasses `amsmath` spacing hooks and
 //! breaks `fleqn`/`\everydisplay`, so the LaTeX team and l2tabu steer users to
-//! `\[…\]`. The replacement is a pure delimiter swap, so the message names it —
-//! the seed of a later (safe) autofix (this slice reports only; see Tenet 5).
+//! `\[…\]`. The replacement is a pure delimiter swap, carried as a `Safe`
+//! autofix ([`delimiter_swap_fix`]) that `lint --fix` applies: a single
+//! whole-node replacement copying the body verbatim, so it is format-clean by
+//! construction (Tenet 5). Withheld when the display math is unclosed.
 //!
 //! The parser builds a `DISPLAY_MATH` node for *both* `$$…$$` and `\[…\]`
 //! (`grammar.rs`, `dollar_math` vs `delim_math`); the two are told apart by the
@@ -16,7 +18,7 @@ use rowan::NodeOrToken;
 
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
-use crate::linter::diagnostic::{Diagnostic, Severity};
+use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 
 use super::{Rule, RuleContext};
 
@@ -50,8 +52,34 @@ impl Rule for DollarDisplayMath {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: "`$$…$$` is plain-TeX display math; use `\\[…\\]`".to_owned(),
+            fix: delimiter_swap_fix(math, range),
         });
     }
+}
+
+/// Build the `$$…$$` → `\[…\]` autofix: a single whole-node replacement that
+/// swaps the opening and closing delimiters while copying the math body
+/// verbatim. Returns `None` (report-only) when the node has no closing `$$`
+/// (unclosed display math / a parse error) — there is no closer to swap.
+///
+/// Each `$$`→`\[`/`$$`→`\]` is a 2-byte→2-byte glyph swap and the body bytes are
+/// reproduced unchanged, so the fix is format-clean by construction (Tenet 5).
+/// It is `Safe`: the swap is the almost-always-wanted LaTeX form.
+fn delimiter_swap_fix(math: &SyntaxNode, opening: rowan::TextRange) -> Option<Fix> {
+    let closing = closing_dollars_range(math)?;
+    let node = math.text_range();
+    // Body is everything between the opening `$$` and the closing `$$`.
+    let text = math.text().to_string();
+    let base = usize::from(node.start());
+    let body_start = usize::from(opening.end()) - base;
+    let body_end = usize::from(closing.start()) - base;
+    let body = &text[body_start..body_end];
+    Some(Fix::safe(
+        base,
+        usize::from(node.end()),
+        format!("\\[{body}\\]"),
+        "Replace `$$…$$` with `\\[…\\]`",
+    ))
 }
 
 /// The range spanning the leading `$$` of a `DISPLAY_MATH` node, or `None` when
@@ -67,6 +95,31 @@ fn opening_dollars_range(math: &SyntaxNode) -> Option<rowan::TextRange> {
     Some(rowan::TextRange::new(
         first.text_range().start(),
         second.text_range().end(),
+    ))
+}
+
+/// The range spanning the trailing `$$` of a `DISPLAY_MATH` node, or `None` when
+/// the node is unclosed (fewer than two trailing `$` tokens). The grammar bumps
+/// the closing `$$` as the node's last two tokens, after the `MATH` body.
+fn closing_dollars_range(math: &SyntaxNode) -> Option<rowan::TextRange> {
+    let mut dollars = math
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::DOLLAR);
+    // Of the (up to) four `$` tokens, the last two are the closer.
+    let trailing: Vec<_> = dollars.by_ref().collect();
+    let [.., second_last, last] = trailing.as_slice() else {
+        return None;
+    };
+    // Guard against `$$` with no body and no closer: the opener's two `$` must
+    // not be mistaken for the closer. A closed `$$…$$` has four `$` tokens; an
+    // unclosed `$$…` has only the two openers.
+    if trailing.len() < 4 {
+        return None;
+    }
+    Some(rowan::TextRange::new(
+        second_last.text_range().start(),
+        last.text_range().end(),
     ))
 }
 
@@ -101,6 +154,33 @@ mod tests {
         assert_eq!(out[0].rule, "dollar-display-math");
         // Caret covers just the opening `$$` (bytes 0..2).
         assert_eq!((out[0].start, out[0].end), (0, 2));
+    }
+
+    #[test]
+    fn carries_safe_whole_node_fix() {
+        use crate::linter::diagnostic::Applicability;
+        use crate::linter::fix::apply_fixes;
+
+        let src = "$$x = y$$\n";
+        let out = findings(src);
+        let fix = out[0].fix.as_ref().expect("should carry a fix");
+        assert_eq!(fix.applicability, Applicability::Safe);
+        // The fix spans the whole `$$…$$` node, swapping both delimiters while
+        // copying the body verbatim.
+        assert_eq!((fix.start, fix.end), (0, 9));
+        assert_eq!(fix.content, "\\[x = y\\]");
+        assert_eq!(
+            apply_fixes(src, std::slice::from_ref(fix), false).output,
+            "\\[x = y\\]\n"
+        );
+    }
+
+    #[test]
+    fn unclosed_display_math_reports_without_a_fix() {
+        // No closing `$$` to swap — report only, withhold the fix (Tenet 5).
+        let out = findings("$$x = y\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
     }
 
     #[test]

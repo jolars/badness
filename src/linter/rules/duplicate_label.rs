@@ -52,6 +52,7 @@ impl Rule for DuplicateLabel {
                     start: usize::from(label.range.start()),
                     end: usize::from(label.range.end()),
                     message,
+                    fix: None,
                 });
             }
         }

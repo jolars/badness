@@ -67,6 +67,7 @@ impl Rule for DeprecatedCommand {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: format!("`\\{name}` is deprecated; use `\\{replacement}`"),
+            fix: None,
         });
     }
 }

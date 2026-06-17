@@ -150,6 +150,7 @@ mod tests {
             start,
             end,
             message: message.to_owned(),
+            fix: None,
         }
     }
 

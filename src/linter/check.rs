@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use crate::parser::parse;
 use crate::project::ResolvedLabels;
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxKind, SyntaxNode};
@@ -11,6 +12,25 @@ use crate::syntax::{SyntaxKind, SyntaxNode};
 use super::diagnostic::Diagnostic;
 use super::rules::{RuleContext, all_rules};
 use super::suppression::SuppressionMap;
+
+/// Parse and lint a single file's `text` from scratch, returning its parse
+/// diagnostics plus rule findings. The self-contained analog of
+/// [`lint_document`] for callers that hold only text — notably the `lint --fix`
+/// fixpoint loop, which re-parses after each round. Cross-file rules run with no
+/// project view (`resolution: None`); none of them produce fixes, so the fix
+/// path loses nothing. Mirrors arity's `check_document`.
+pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
+    let parsed = parse(text);
+    let mut diagnostics: Vec<Diagnostic> = parsed
+        .errors
+        .iter()
+        .map(|err| Diagnostic::from_parse(path.to_path_buf(), err))
+        .collect();
+    let root = SyntaxNode::new_root(parsed.green);
+    let model = SemanticModel::build(&root);
+    diagnostics.extend(lint_document(path, &root, &model, None));
+    diagnostics
+}
 
 /// Run all built-in rules against `root`/`model`, returning the surviving
 /// diagnostics (suppressed ones removed, `path` stamped, sorted by position).

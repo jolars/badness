@@ -60,6 +60,7 @@ impl Rule for ObsoleteEnvironment {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: format!("`{name}` is obsolete; use `{replacement}`"),
+            fix: None,
         });
     }
 }

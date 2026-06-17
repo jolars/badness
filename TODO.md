@@ -170,19 +170,26 @@ Suppression stays a separate post-pass.
   refs (`undefined-ref`, via the cross-file resolver), stylistic checks
   (`obsolete-environment` for `eqnarray` → `align`; `dollar-display-math`).
   Remaining stylistic ideas: missing `~` before `\cite`/`\ref`, typography.
-- [ ] Add the `\[…\]` autofix to `dollar-display-math` (detection landed
-  report-only). *Not* a formatter
+- [x] Autofix infra (mirrors arity's `linter/fix.rs`): `Fix { content, start,
+  end, applicability, description }` + `Applicability::{Safe, Unsafe}` on
+  `Diagnostic`, a pure `apply_fixes(source, &[Fix], include_unsafe)` engine
+  (right-to-left splice, overlap drop), `check_document` for the fixpoint, and
+  `lint --fix`/`--unsafe-fixes` with a per-file fixpoint loop. Tenet 5
+  ("autofixes never introduce formatting errors") is enforced by a
+  `format → fix → format`-idempotent test harness in `tests/lint.rs`.
+- [x] Add the `\[…\]` autofix to `dollar-display-math`. *Not* a formatter
   rewrite: `$$` is the plain-TeX primitive and `\[` routes through LaTeX's
   display hooks, so the swap changes typeset output (it ignores `fleqn`; the
   `\abovedisplayskip`/ `\belowdisplayskip`/`\predisplaypenalty` spacing
   differs) --- which would break the formatter's meaning-preservation
   contract. A lint is the right home for an almost-always-wanted *semantic*
-  change. Fire only on a parser-built `DISPLAY_MATH` node (never on
-  `$a$$b$`, two inline maths); swapping the delimiter tokens on the
-  already-blocked node is format-clean by construction (Tenet 5).
-- [ ] Autofix infra; enforce "autofixes never introduce formatting errors"
-  (Tenet 5). `deprecated-command`'s `\bf → \bfseries` is the natural first
-  fix.
+  change. Fires only on a parser-built `DISPLAY_MATH` node (never on
+  `$a$$b$`, two inline maths); a single whole-node replacement swaps the
+  delimiters while copying the body verbatim, format-clean by construction
+  (Tenet 5), and is withheld when the display math is unclosed.
+- [ ] Wire the remaining report-only fixes onto the autofix infra:
+  `deprecated-command`'s `\bf → \bfseries` (the natural first one) and
+  `obsolete-environment`'s `eqnarray → align`.
 
 ## Semantic layer & signatures
 

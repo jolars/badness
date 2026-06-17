@@ -243,3 +243,77 @@ fn independent_documents_do_not_cross_contaminate() {
         "expected no collisions, got: {findings:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Autofixes (`lint --fix`). The engine and the `dollar-display-math` swap.
+// ---------------------------------------------------------------------------
+
+use badness::formatter::{FormatStyle, format_with_style};
+use badness::linter::{apply_fixes, check_document};
+
+/// Apply every available fix (including unsafe) to `text` at a fixpoint, exactly
+/// as the CLI's `fix_file` does, and return the rewritten text.
+fn fix_to_fixpoint(text: &str) -> String {
+    let path = Path::new("doc.tex");
+    let mut content = text.to_owned();
+    for _ in 0..10 {
+        let fixes: Vec<_> = check_document(path, &content)
+            .into_iter()
+            .filter_map(|d| d.fix)
+            .collect();
+        if fixes.is_empty() {
+            break;
+        }
+        let out = apply_fixes(&content, &fixes, true);
+        if out.applied == 0 {
+            break;
+        }
+        content = out.output;
+    }
+    content
+}
+
+/// Tenet 5: `format` → apply all fixes → the result must still parse cleanly and
+/// be format-idempotent (no fix introduces a formatting error).
+fn assert_fix_is_format_stable(input: &str) {
+    let style = FormatStyle::default();
+    let clean = format_with_style(input, style).expect("input should format");
+    let fixed = fix_to_fixpoint(&clean);
+
+    assert!(
+        parse(&fixed).errors.is_empty(),
+        "fixed output must parse cleanly:\n{fixed:?}"
+    );
+    let reformatted = format_with_style(&fixed, style).expect("fixed output should format");
+    assert_eq!(
+        fixed, reformatted,
+        "a fix introduced a formatting error (tenet 5).\nfrom:\n{clean}\n--- after fixes ---\n{fixed}\n--- but format produces ---\n{reformatted}"
+    );
+}
+
+#[test]
+fn dollar_display_fix_rewrites_to_bracket_form() {
+    assert_eq!(fix_to_fixpoint("$$x = y$$\n"), "\\[x = y\\]\n");
+}
+
+#[test]
+fn dollar_display_fix_clears_the_finding() {
+    // After the swap, re-linting the rewritten document is clean.
+    let fixed = fix_to_fixpoint("$$a + b$$\n\n$$c$$\n");
+    assert_eq!(fixed, "\\[a + b\\]\n\n\\[c\\]\n");
+    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed)
+        .into_iter()
+        .filter(|d| d.rule == "dollar-display-math")
+        .collect();
+    assert!(
+        remaining.is_empty(),
+        "expected a clean re-lint, got: {remaining:?}"
+    );
+}
+
+#[test]
+fn dollar_display_fix_is_format_stable() {
+    for case in ["$$x = y$$\n", "$$\n  a + b\n$$\n", "\\[x = y\\]\n", "$x$\n"] {
+        assert_fix_is_format_stable(case);
+    }
+}

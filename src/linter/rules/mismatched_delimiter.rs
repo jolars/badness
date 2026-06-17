@@ -99,6 +99,7 @@ fn orientation_diag(
         start: usize::from(range.start()),
         end: usize::from(range.end()),
         message,
+        fix: None,
     }
 }
 

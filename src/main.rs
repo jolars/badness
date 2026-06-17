@@ -15,7 +15,9 @@ use std::process::ExitCode;
 
 use badness::file_discovery::{FileDiscoveryError, collect_tex_files};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
-use badness::linter::{Diagnostic, OutputMode, lint_document, render_findings};
+use badness::linter::{
+    Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
+};
 use badness::parser::parse;
 use badness::project::labels::{document_label_names, is_document_root};
 use badness::project::{FileFacts, IncludeGraph, ResolvedLabels, collect_include_edge_keys};
@@ -90,6 +92,13 @@ enum Command {
     Lint {
         /// Files to lint. Omit to read from stdin.
         paths: Vec<PathBuf>,
+        /// Apply safe autofixes in place, then report what remains. Requires
+        /// path arguments; has no effect on stdin (there is nothing to write).
+        #[arg(long)]
+        fix: bool,
+        /// Also apply fixes that may change typeset output (requires `--fix`).
+        #[arg(long)]
+        unsafe_fixes: bool,
     },
     /// Parse LaTeX source and print its concrete syntax tree (CST).
     ///
@@ -126,7 +135,11 @@ fn main() -> ExitCode {
             }
             run_format(&paths, check, style)
         }
-        Command::Lint { paths } => run_lint(&paths),
+        Command::Lint {
+            paths,
+            fix,
+            unsafe_fixes,
+        } => run_lint(&paths, fix, unsafe_fixes),
         Command::Parse { path } => run_parse(path.as_deref()),
         Command::Lsp => run_lsp(),
     }
@@ -143,9 +156,25 @@ fn run_lsp() -> ExitCode {
     }
 }
 
+/// Cap on fixpoint iterations per file, guarding against a fix that fails to
+/// clear its own diagnostic.
+const MAX_FIX_ITERATIONS: usize = 10;
+
 /// Lint each path (or stdin), rendering parse diagnostics. Exits non-zero if
-/// any diagnostics are reported or any file fails to read.
-fn run_lint(paths: &[PathBuf]) -> ExitCode {
+/// any diagnostics are reported or any file fails to read. With `fix`, safe
+/// autofixes (plus unsafe ones when `unsafe_fixes` is set) are applied in place
+/// first; the reporting pass below then shows whatever findings remain.
+fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
+    // Apply fixes in place first; the reporting pass below then re-reads from
+    // disk and shows whatever findings remain. Mirrors arity's two-pass flow.
+    // Stdin (no paths) has nowhere to write back, so `--fix` only acts on files.
+    if fix
+        && !paths.is_empty()
+        && let Some(code) = apply_fixes_to_paths(paths, unsafe_fixes)
+    {
+        return code;
+    }
+
     // Hold each file's text in memory keyed by the label we report it under, so
     // the renderer can fetch source for snippets without re-reading from disk
     // (and so stdin, which has no path, still gets a source).
@@ -239,6 +268,67 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Discover `.tex` files under `paths` and apply autofixes in place. Returns
+/// `Some(exit_code)` only on a hard error (discovery / IO); on success returns
+/// `None` so the caller falls through to the normal reporting pass. Mirrors
+/// arity's `apply_fixes_to_paths`.
+fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitCode> {
+    let files = match collect_tex_files(paths) {
+        Ok(files) => files,
+        Err(err) => {
+            report_discovery_error(&err);
+            return Some(ExitCode::FAILURE);
+        }
+    };
+    if files.is_empty() {
+        eprintln!("badness: no .tex files found under the provided input paths");
+        return Some(ExitCode::FAILURE);
+    }
+    for path in files {
+        match fix_file(&path, include_unsafe) {
+            Ok(0) => {}
+            Ok(n) => eprintln!("{}: {n} fix{} applied", path.display(), plural(n)),
+            Err(err) => {
+                eprintln!("badness: cannot fix {}: {err}", path.display());
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+    None
+}
+
+/// Run the fixpoint loop on a single file and write it back if anything changed.
+/// Returns the number of individual fixes applied. Re-lints after each round so
+/// fixes can cascade; bounded by [`MAX_FIX_ITERATIONS`]. Mirrors arity's
+/// `fix_file`.
+fn fix_file(path: &Path, include_unsafe: bool) -> std::io::Result<usize> {
+    let mut content = std::fs::read_to_string(path)?;
+    let mut total = 0usize;
+    for _ in 0..MAX_FIX_ITERATIONS {
+        let fixes: Vec<_> = check_document(path, &content)
+            .into_iter()
+            .filter_map(|d| d.fix)
+            .collect();
+        if fixes.is_empty() {
+            break;
+        }
+        let outcome = apply_fixes(&content, &fixes, include_unsafe);
+        if outcome.applied == 0 {
+            break;
+        }
+        total += outcome.applied;
+        content = outcome.output;
+    }
+    if total > 0 {
+        std::fs::write(path, &content)?;
+    }
+    Ok(total)
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "es" }
 }
 
 /// Parse a single file (or stdin) and print its CST to stdout. Parse errors are

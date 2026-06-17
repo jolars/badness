@@ -59,6 +59,7 @@ impl Rule for UndefinedRef {
                     start: usize::from(reference.range.start()),
                     end: usize::from(reference.range.end()),
                     message: format!("reference to undefined label `{}`", reference.name),
+                    fix: None,
                 }),
         );
     }

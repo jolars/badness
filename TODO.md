@@ -77,7 +77,11 @@ adjacent words; block-level prose commands `\section`/`\caption` block-break
 their braces via a soft `Ir::group`); aggressive math lowering (collapse
 spacing, tight scripts, strip redundant single-token script braces); display
 math (`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their own
-lines; `\left…\right` spacing; alignment-aware `align`/matrix column grids; list
+lines, breaking a too-wide body before its top-level binary/relation operators
+(amsmath style: the first relation anchors a hanging indent via `Ir::Align`,
+later operators start continuation lines aligned under the first term after it;
+a curated operator-name table classifies relations vs. binaries, unary `+`/`-`
+excluded, comment-bearing bodies take the plain path); `\left…\right` spacing; alignment-aware `align`/matrix column grids; list
 environments (signature-DB `list` flag --- `itemize`/`enumerate`/`description`
 --- one `\item` per line, each body reflowed with continuation lines
 hanging-indented under the item text via `Ir::Align`); collapsible token-list

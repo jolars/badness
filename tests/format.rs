@@ -231,6 +231,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // stays cramped on a single line the way inline `$ x $` does.
     ("math_display_block", WrapMode::Preserve, 80),
     ("math_display_dollars", WrapMode::Preserve, 80),
+    // A display equation too wide for the line breaks before its top-level
+    // binary/relation operators (amsmath style): the first relation stays on the
+    // opening line and anchors a hanging indent, and each `+` term starts a fresh
+    // continuation line aligned under the first term after `=`. Whatever fits
+    // still stays on one line.
+    ("math_display_break_operators", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A
     // control-word delimiter (`\langle`) keeps one space so the body cannot glue

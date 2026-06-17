@@ -1816,7 +1816,7 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         match element {
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
                 body_empty = math_body_is_empty(&n);
-                body = trim_trailing_break(lower_math_body(&n, cx));
+                body = trim_trailing_break(lower_display_math_body(&n, cx));
                 seen_body = true;
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
@@ -1850,6 +1850,245 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// closing delimiter).
 fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     lower_math_seq(node.children_with_tokens(), cx)
+}
+
+/// The line-breaking role of a top-level math atom (see [`lower_display_math_body`]).
+#[derive(Clone, Copy, PartialEq)]
+enum MathRole {
+    /// A term: a variable, number, group, command-with-arguments, script, etc.
+    Operand,
+    /// A binary operator (`+`, `-`, `\cdot`, `\times`, …) sitting between two
+    /// operands. A break may be inserted *before* it.
+    Binary,
+    /// A relation (`=`, `\leq`, `\to`, …). The first one anchors the alignment;
+    /// a later one is also a break point.
+    Relation,
+}
+
+/// One top-level atom of a display-math body, paired with its [`MathRole`].
+struct MathPiece {
+    ir: Ir,
+    role: MathRole,
+}
+
+/// Relation control words (the `\` stripped) that anchor alignment / break a long
+/// display equation. Curated, growing like the signature DB; anything absent is a
+/// plain operand.
+const MATH_RELATION_COMMANDS: &[&str] = &[
+    "le",
+    "leq",
+    "ge",
+    "geq",
+    "ne",
+    "neq",
+    "equiv",
+    "approx",
+    "approxeq",
+    "sim",
+    "simeq",
+    "cong",
+    "propto",
+    "asymp",
+    "doteq",
+    "models",
+    "vdash",
+    "dashv",
+    "perp",
+    "parallel",
+    "mid",
+    "in",
+    "ni",
+    "notin",
+    "subset",
+    "subseteq",
+    "subsetneq",
+    "supset",
+    "supseteq",
+    "supsetneq",
+    "sqsubseteq",
+    "sqsupseteq",
+    "prec",
+    "preceq",
+    "succ",
+    "succeq",
+    "ll",
+    "gg",
+    "lll",
+    "ggg",
+    "to",
+    "rightarrow",
+    "longrightarrow",
+    "Rightarrow",
+    "Longrightarrow",
+    "implies",
+    "impliedby",
+    "iff",
+    "mapsto",
+    "longmapsto",
+    "leftarrow",
+    "Leftarrow",
+    "gets",
+    "leftrightarrow",
+    "Leftrightarrow",
+    "Longleftrightarrow",
+    "hookrightarrow",
+    "hookleftarrow",
+    "triangleq",
+    "coloneqq",
+    "eqqcolon",
+    "lesssim",
+    "gtrsim",
+];
+
+/// Binary-operator control words (the `\` stripped) a long display equation may
+/// break before. Curated; see [`MATH_RELATION_COMMANDS`].
+const MATH_BINARY_COMMANDS: &[&str] = &[
+    "pm",
+    "mp",
+    "times",
+    "div",
+    "cdot",
+    "ast",
+    "star",
+    "circ",
+    "bullet",
+    "cup",
+    "cap",
+    "uplus",
+    "sqcup",
+    "sqcap",
+    "vee",
+    "wedge",
+    "lor",
+    "land",
+    "oplus",
+    "ominus",
+    "otimes",
+    "oslash",
+    "odot",
+    "setminus",
+    "amalg",
+    "diamond",
+    "wr",
+    "dagger",
+    "ddagger",
+    "bigtriangleup",
+    "bigtriangledown",
+    "triangleleft",
+    "triangleright",
+];
+
+/// Classify a bare operator token by its literal text.
+fn classify_math_op_text(text: &str) -> MathRole {
+    match text {
+        "=" | "<" | ">" => MathRole::Relation,
+        "+" | "-" => MathRole::Binary,
+        _ => MathRole::Operand,
+    }
+}
+
+/// The [`MathRole`] of a top-level math atom. `prev` is the effective role of the
+/// preceding atom: a `+`/`-` (or any binary operator) with no operand to its left
+/// is unary — it glues to its operand and is *not* a break point — so it degrades
+/// to an [`MathRole::Operand`].
+fn math_atom_role(el: &SyntaxElement, prev: MathRole) -> MathRole {
+    let raw = match el {
+        SyntaxElement::Token(t) => classify_math_op_text(t.text()),
+        SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => crate::ast::command_name(n)
+            .map_or(MathRole::Operand, |name| {
+                if MATH_RELATION_COMMANDS.contains(&name.as_str()) {
+                    MathRole::Relation
+                } else if MATH_BINARY_COMMANDS.contains(&name.as_str()) {
+                    MathRole::Binary
+                } else {
+                    MathRole::Operand
+                }
+            }),
+        _ => MathRole::Operand,
+    };
+    if raw == MathRole::Binary && prev != MathRole::Operand {
+        MathRole::Operand
+    } else {
+        raw
+    }
+}
+
+/// Collect the top-level atoms of a display-math `MATH` body as [`MathPiece`]s,
+/// collapsing trivia runs exactly as [`lower_math_seq`] does. Returns `None` —
+/// signalling the caller to take the plain non-breaking path — when the body
+/// holds a comment (a comment forces its own break, which does not compose with
+/// the operator-break layout) or has fewer than two atoms (nothing to break).
+fn collect_math_pieces(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<MathPiece>> {
+    let mut pieces: Vec<MathPiece> = Vec::new();
+    let mut prev_role = MathRole::Operand;
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(el) = iter.next() {
+        match el {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                consume_trivia_run(&t, &mut iter);
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
+            other => {
+                let role = math_atom_role(&other, prev_role);
+                prev_role = role;
+                pieces.push(MathPiece {
+                    ir: lower_math_element(other, cx),
+                    role,
+                });
+            }
+        }
+    }
+    (pieces.len() >= 2).then_some(pieces)
+}
+
+/// Lower a display-math `MATH` body, additionally letting a too-long body *break*
+/// before its top-level binary/relation operators (amsmath style): the first
+/// relation stays on the opening line and anchors a hanging indent, and each
+/// later operator starts a fresh continuation line aligned under the first term
+/// after that relation. The whole body is one [`Ir::group`], so it stays on a
+/// single line whenever it fits — degrading to [`lower_math_body`] otherwise.
+fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let Some(pieces) = collect_math_pieces(node, cx) else {
+        return lower_math_body(node, cx);
+    };
+
+    // The first relation anchors alignment; continuation lines hang under the
+    // first term following it. With no relation, they hang at the base indent.
+    let anchor = pieces.iter().position(|p| p.role == MathRole::Relation);
+    let offset = match anchor {
+        Some(a) => {
+            let head = Ir::join(Ir::text(" "), pieces[..=a].iter().map(|p| p.ir.clone()));
+            Printer::new(FormatStyle::default())
+                .print_flat(&head)
+                .chars()
+                .count()
+                + 1
+        }
+        None => 0,
+    };
+
+    let mut parts: Vec<Ir> = Vec::with_capacity(pieces.len() * 2);
+    for (i, piece) in pieces.iter().enumerate() {
+        if i > 0 {
+            // Only break inside the relation's right-hand side; the head (up to
+            // and including the anchor relation) stays flat on the opening line.
+            let after_anchor = anchor.is_none_or(|a| i > a);
+            let break_here = after_anchor
+                && match piece.role {
+                    MathRole::Binary => pieces[i - 1].role == MathRole::Operand,
+                    MathRole::Relation => true,
+                    MathRole::Operand => false,
+                };
+            parts.push(if break_here {
+                Ir::line()
+            } else {
+                Ir::text(" ")
+            });
+        }
+        parts.push(piece.ir.clone());
+    }
+
+    Ir::group(Ir::align(offset, Ir::concat(parts)))
 }
 
 /// The separator owed before the next math atom.

@@ -17,6 +17,8 @@ use badness::file_discovery::{FileDiscoveryError, collect_tex_files};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
 use badness::linter::{Diagnostic, OutputMode, lint_document, render_findings};
 use badness::parser::parse;
+use badness::project::labels::{document_label_names, is_document_root};
+use badness::project::{FileFacts, IncludeGraph, ResolvedLabels, collect_include_edge_keys};
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -180,7 +182,17 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
         }
     }
 
+    // Parse and build the per-file model for every source first: cross-file
+    // label resolution needs the whole analyzed set before any one file can be
+    // linted. Lint rules run off these parses — no salsa needed on the CLI path
+    // (the salsa firewall is an editor-incrementality concern; mirrors arity's
+    // `check_document`). The resolver reuses the *same* pure helpers the salsa
+    // queries do (`document_label_names`, `is_document_root`,
+    // `collect_include_edge_keys`, `ResolvedLabels::build`), so CLI and LSP agree.
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut analyzed: Vec<(&PathBuf, SyntaxNode, SemanticModel)> = Vec::new();
+    let mut facts: Vec<FileFacts> = Vec::new();
+    let mut label_inputs = Vec::new();
     for (path, content) in &sources {
         let parsed = parse(content);
         diagnostics.extend(
@@ -189,11 +201,24 @@ fn run_lint(paths: &[PathBuf]) -> ExitCode {
                 .iter()
                 .map(|err| Diagnostic::from_parse(path.clone(), err)),
         );
-        // Lint rules run off the same parse — no salsa needed on the CLI path
-        // (mirrors arity's `check_document`).
         let root = SyntaxNode::new_root(parsed.green);
         let model = SemanticModel::build(&root);
-        diagnostics.extend(lint_document(path, &root, &model));
+        facts.push(FileFacts {
+            path: path.clone(),
+            include_edges: collect_include_edge_keys(&root, path.parent()),
+        });
+        label_inputs.push((
+            path.clone(),
+            document_label_names(&model),
+            is_document_root(&root),
+        ));
+        analyzed.push((path, root, model));
+    }
+
+    let graph = IncludeGraph::build(&facts, None);
+    let resolved = ResolvedLabels::build(&label_inputs, &graph);
+    for (path, root, model) in &analyzed {
+        diagnostics.extend(lint_document(path, root, model, Some(&resolved)));
     }
 
     if !diagnostics.is_empty() {

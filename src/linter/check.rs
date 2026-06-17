@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use crate::project::ResolvedLabels;
 use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
 
@@ -16,9 +17,22 @@ use super::suppression::SuppressionMap;
 ///
 /// `root` and `model` must describe the same file as `path`. Callers supply
 /// them from wherever is cheapest: the CLI parses directly, the LSP reuses its
-/// salsa-cached tree and model.
-pub fn lint_document(path: &Path, root: &SyntaxNode, model: &SemanticModel) -> Vec<Diagnostic> {
-    let ctx = RuleContext { path, root, model };
+/// salsa-cached tree and model. `resolution` is the cross-file label model for
+/// the project `path` belongs to, or `None` when there is no project view — the
+/// cross-file rules (`undefined-ref`, the cross-file branch of `duplicate-label`)
+/// are then inert.
+pub fn lint_document(
+    path: &Path,
+    root: &SyntaxNode,
+    model: &SemanticModel,
+    resolution: Option<&ResolvedLabels>,
+) -> Vec<Diagnostic> {
+    let ctx = RuleContext {
+        path,
+        root,
+        model,
+        resolution,
+    };
     let mut diagnostics: Vec<Diagnostic> =
         all_rules().iter().flat_map(|rule| rule.run(&ctx)).collect();
 
@@ -40,7 +54,7 @@ mod tests {
     fn lint(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        lint_document(Path::new("x.tex"), &root, &model)
+        lint_document(Path::new("x.tex"), &root, &model, None)
     }
 
     fn rules_of(src: &str) -> Vec<&'static str> {

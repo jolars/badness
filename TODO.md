@@ -174,9 +174,16 @@ reachability/cycles); `\newcommand`/`\newenvironment`/`xparse` signature
 scanning (`semantic/define.rs`, `semantic/xparse.rs`; scanned overlaid over
 built-in; consumed by the formatter's `\begin` arity glue).
 
-- [ ] Cross-file label resolution (`file_labels` firewall → project-level
-  `resolved_labels`) + duplicate-label / undefined-ref diagnostics. Today's
-  `unreferenced_labels`/`unresolved_refs` are per-file *facts*, not lints.
+- [x] Cross-file label resolution (`file_labels` firewall → project-level
+  `resolved_labels`, `project/labels.rs`) + cross-file `duplicate-label` and
+  `undefined-ref` diagnostics. The label namespace is the undirected connected
+  component of the include graph (so independent documents don't collide);
+  `undefined-ref` is root-gated (fires only in a *closed*, document-rooted
+  namespace). Wired into the CLI (`run_lint`); the LSP passes `resolution: None`
+  for now (no workspace scan yet). The per-file `unreferenced_labels`/
+  `unresolved_refs` remain *facts*; an `unused-label` lint (cross-file) is the
+  natural follow-on but is deferred (it can false-positive on labels referenced
+  from outside the analyzed set).
 - [x] Unbraced `\newcommand\foo…` form (parsed with `\foo` as a sibling;
   recovered by a scanner-side sibling heuristic in `semantic/define.rs`
   (`resolve_command_def`), no parser change).

@@ -64,8 +64,11 @@ impl SemanticModel {
     /// Label definitions never referenced within *this* file.
     ///
     /// A per-file fact, **not** a lint signal: a label referenced only from
-    /// another file looks unreferenced here. The "unused label" diagnostic must
-    /// wait for the cross-file query (Phase 6 / a later Phase 3 slice).
+    /// another file looks unreferenced here. A cross-file "unused label"
+    /// diagnostic would build on the project-level
+    /// [`crate::project::resolved_labels`] (as `undefined-ref` does for refs),
+    /// but is deferred — it can false-positive on labels referenced from outside
+    /// the analyzed set.
     pub fn unreferenced_labels(&self) -> impl Iterator<Item = LabelId> + '_ {
         (0..self.labels.len())
             .map(LabelId::from_index)
@@ -75,8 +78,9 @@ impl SemanticModel {
     /// References whose key matches no `\label` in *this* file.
     ///
     /// A per-file fact, **not** a lint signal: the key may be defined in an
-    /// included file. The "undefined reference" diagnostic awaits the cross-file
-    /// query.
+    /// included file. The `undefined-ref` lint instead consults the cross-file
+    /// [`crate::project::resolved_labels`], firing only in a closed, rooted
+    /// document namespace.
     pub fn unresolved_refs(&self) -> impl Iterator<Item = RefId> + '_ {
         (0..self.refs.len())
             .map(RefId::from_index)

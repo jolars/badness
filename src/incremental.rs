@@ -20,8 +20,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use salsa::Setter;
+use smol_str::SmolStr;
 
 use crate::parser::parse;
+use crate::project::labels::{document_label_names, is_document_root};
 use crate::project::{IncludeEdgeKey, collect_include_edge_keys};
 use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
@@ -45,9 +47,17 @@ pub enum QueryKind {
     SemanticModel,
     /// A file's range-free inclusion edges ([`include_edges`]).
     IncludeEdges,
+    /// A file's sorted, distinct label-name set ([`file_labels`]) — the firewall
+    /// the cross-file label resolver consumes.
+    FileLabels,
+    /// Whether a file is a document root ([`file_is_document_root`]).
+    FileIsDocumentRoot,
     /// The cross-file inclusion graph ([`crate::project::project_graph`]); a
     /// project-level query, not keyed on a single file.
     ProjectGraph,
+    /// The cross-file label resolution ([`crate::project::resolved_labels`]); a
+    /// project-level query, not keyed on a single file.
+    ResolvedLabels,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -150,6 +160,43 @@ pub fn include_edges(db: &dyn IncrementalDb, file: SourceFile) -> Vec<IncludeEdg
     });
     let root = parsed_tree_root(db, file);
     collect_include_edge_keys(&root, file.path(db).parent())
+}
+
+/// The file's distinct `\label` names, sorted — a range-free, ref-free
+/// projection of [`semantic_model`].
+///
+/// This is the per-file firewall the cross-file
+/// [`crate::project::resolved_labels`] resolver consumes (the LaTeX analog of
+/// arity's `file_exports`). Stripping ranges and refs means a prose edit, or a
+/// `\ref` edit, or a body edit that shifts a `\label`'s offset, leaves this
+/// `Vec` *equal* — salsa backdates and the project-level union is not rebuilt.
+/// Unlike [`project_graph`](crate::project::project_graph) it is **not** `no_eq`:
+/// `Vec<SmolStr>` is `Eq`, which is exactly what makes the firewall hold (same
+/// reasoning as [`semantic_model`]).
+#[salsa::tracked(returns(ref))]
+pub fn file_labels(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileLabels,
+        file: Some(file),
+    });
+    document_label_names(semantic_model(db, file))
+}
+
+/// Whether `file` looks like a document *root* — it carries a `\documentclass`
+/// or a `\begin{document}`. The cross-file `undefined-ref` lint only fires
+/// inside a namespace that contains a root, so a bare chapter fragment opened
+/// alone (whose labels live in the main document) is never flagged.
+///
+/// A cheap `bool` projection of the parse tree, `Eq` for the same firewall
+/// reason as [`file_labels`]: it changes only when a `\documentclass` /
+/// `\begin{document}` is added or removed, so ordinary edits backdate.
+#[salsa::tracked(returns(ref))]
+pub fn file_is_document_root(db: &dyn IncrementalDb, file: SourceFile) -> bool {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileIsDocumentRoot,
+        file: Some(file),
+    });
+    is_document_root(&parsed_tree_root(db, file))
 }
 
 #[salsa::db]
@@ -306,6 +353,17 @@ impl IncrementalDatabase {
     /// The file's per-file label/reference model.
     pub fn semantic_model(&self, file: SourceFile) -> &SemanticModel {
         semantic_model(self, file)
+    }
+
+    /// The file's distinct, sorted `\label` names (the firewall feeding the
+    /// cross-file resolver).
+    pub fn file_labels(&self, file: SourceFile) -> &[SmolStr] {
+        file_labels(self, file)
+    }
+
+    /// Whether `file` carries a `\documentclass` / `\begin{document}`.
+    pub fn file_is_document_root(&self, file: SourceFile) -> bool {
+        *file_is_document_root(self, file)
     }
 
     pub fn clear_query_log(&self) {

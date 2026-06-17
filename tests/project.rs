@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use badness::incremental::{IncrementalDatabase, QueryKind, QueryLogEntry, SourceFile};
-use badness::project::{IncludeKind, Project, ProjectMember, project_graph};
+use badness::project::{IncludeKind, Project, ProjectMember, project_graph, resolved_labels};
 
 fn count_by_kind(entries: &[QueryLogEntry]) -> HashMap<QueryKind, usize> {
     let mut counts = HashMap::new();
@@ -111,6 +111,75 @@ fn edge_change_rebuilds_graph() {
     // The new edge targets a non-member, so it lands in `unresolved`.
     assert_eq!(graph.unresolved().len(), 1);
     assert_eq!(graph.unresolved()[0].from, PathBuf::from("/proj/main.tex"));
+}
+
+#[test]
+fn resolved_labels_unions_across_the_include_graph() {
+    // main.tex is the document root and `\input`s part.tex, which defines the
+    // label `\ref`-ed from main — so the ref resolves cross-file.
+    let (db, main, part) = main_part(
+        "\\documentclass{article}\n\\input{part}\n\\ref{a}\n",
+        "\\label{a}\n",
+    );
+    let resolved = resolved_labels(&db, project_main_part(&db, main, part));
+
+    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "a"));
+    assert!(!resolved.is_defined(Path::new("/proj/main.tex"), "missing"));
+    // `\input{part}` resolves to an analyzed member, and main is a document root.
+    assert!(resolved.is_closed(Path::new("/proj/main.tex")));
+    assert!(resolved.is_root_component(Path::new("/proj/part.tex")));
+}
+
+#[test]
+fn label_set_preserving_edit_does_not_rebuild_resolved_labels() {
+    // The label firewall: adding a `\ref` to part.tex changes its semantic model
+    // (so `file_labels` re-executes) but not its `\label`-name set — so
+    // `file_labels` backdates and the cross-file `resolved_labels` memo is reused.
+    let (mut db, main, part) = main_part(
+        "\\documentclass{article}\n\\input{part}\n\\ref{a}\n",
+        "\\label{a}\n",
+    );
+    let _ = resolved_labels(&db, project_main_part(&db, main, part));
+
+    db.clear_query_log();
+
+    // The model changes (a new ref) but the label-name set is still just `{a}`.
+    db.set_file_text(part, "\\label{a}\\ref{a}\n");
+    let _ = resolved_labels(&db, project_main_part(&db, main, part));
+
+    let counts = count_by_kind(&db.query_log());
+    // part's label set is recomputed (its model changed)...
+    assert_eq!(counts.get(&QueryKind::FileLabels), Some(&1));
+    // ...but the set is unchanged, so the resolution memo is reused.
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedLabels),
+        None,
+        "resolved labels must not rebuild when no label set changed"
+    );
+}
+
+#[test]
+fn label_change_rebuilds_resolved_labels() {
+    // The complement: adding a `\label` changes part's label set, so the
+    // cross-file resolution *must* rebuild (the firewall doesn't over-cache).
+    let (mut db, main, part) = main_part(
+        "\\documentclass{article}\n\\input{part}\n\\ref{a}\n",
+        "\\label{a}\n",
+    );
+    let _ = resolved_labels(&db, project_main_part(&db, main, part));
+
+    db.clear_query_log();
+
+    db.set_file_text(part, "\\label{a}\\label{b}\n");
+    let resolved = resolved_labels(&db, project_main_part(&db, main, part));
+
+    let counts = count_by_kind(&db.query_log());
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedLabels),
+        Some(&1),
+        "resolved labels must rebuild when a label set changes"
+    );
+    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "b"));
 }
 
 #[test]

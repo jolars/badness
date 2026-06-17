@@ -97,6 +97,7 @@ mod tests {
             path: std::path::Path::new("x.tex"),
             root: &root,
             model: &model,
+            resolution: None,
         };
         DeprecatedCommand.run(&ctx)
     }

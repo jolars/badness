@@ -13,6 +13,7 @@
 
 pub mod graph;
 pub mod include;
+pub mod labels;
 
 pub use graph::{
     FileFacts, IncludeGraph, Project, ProjectMember, ResolvedInclude, UnresolvedInclude,
@@ -22,3 +23,4 @@ pub use include::{
     IncludeEdge, IncludeEdgeKey, IncludeKind, IncludeTarget, collect_include_edge_keys,
     collect_include_edges,
 };
+pub use labels::{ResolvedLabels, resolved_labels};

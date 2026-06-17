@@ -709,9 +709,14 @@ impl Worker {
                     })
                     .collect();
                 // Lint-rule findings over the same salsa-cached tree + model.
+                // Cross-file resolution is passed as `None`: the server tracks
+                // only open buffers and assembles no project, so the cross-file
+                // rules (`undefined-ref`, the cross-file branch of
+                // `duplicate-label`) stay inert here until a workspace scan +
+                // `Project` assembly lands. Per-file rules are unaffected.
                 let root = snapshot.parsed_tree(file);
                 let model = snapshot.semantic_model(file);
-                for d in lint_document(&path, &root, model) {
+                for d in lint_document(&path, &root, model, None) {
                     diags.push(Diagnostic {
                         range: byte_range_to_lsp(&idx, &text, d.start, d.end),
                         severity: Some(severity_to_lsp(d.severity)),

@@ -43,24 +43,27 @@ lexer mode); texlab differential parse oracle.
 
 - [x] Block-vs-inline refinement: a lone block env is no longer wrapped in a
   `PARAGRAPH`. The signature DB carries a `block` flag (derived from
-  `math`/`list`/`no_indent`, with an explicit opt-in for figure/center/verbatim/
-  theorem-likes/etc.); `parse_block` consults `is_block_environment` and skips the
-  wrapper for a run whose sole non-trivia element is a block env.
-- [x] Trivia-attachment policy --- decided (AGENTS.md decision #9): rust-analyzer
-  rule. Default float-at-nearest-enclosing-node; a `%` comment run immediately
-  before a documentable construct binds *leading* into it; a blank line breaks the
-  bind. Trivia stays bare leaf tokens.
+  `math`/`list`/`no_indent`, with an explicit opt-in for
+  figure/center/verbatim/ theorem-likes/etc.); `parse_block` consults
+  `is_block_environment` and skips the wrapper for a run whose sole
+  non-trivia element is a block env.
+- [x] Trivia-attachment policy --- decided (AGENTS.md decision #9):
+  rust-analyzer rule. Default float-at-nearest-enclosing-node; a `%` comment
+  run immediately before a documentable construct binds *leading* into it; a
+  blank line breaks the bind. Trivia stays bare leaf tokens.
 - [x] Leading comment-bind implemented **grammar-locally** (the `tree_builder`
-  stays a mechanical replay). An own-line `%` run immediately before a documentable
-  construct (any `COMMAND` or `ENVIRONMENT` node --- decided purely on node kind, no
-  signature-DB lookup, so the syntactic layer stays semantics-free) binds *leading*
-  into it; a same-line trailing comment never binds; a blank line breaks the bind
-  (the bind is the maximal blank-line-free suffix). `parser/grammar.rs`
-  `binding_run`/`comment_starts_line` detect it, and the existing `precede` idiom
-  wraps the comments + construct (the construct self-opens, then its `Start` is
-  pulled back over the comments). The formatter's three environment lowerers emit
-  the bound run on its own line above `\begin` (`lower_environment_leading`).
-  Covered by parser snapshots, roundtrip/losslessness cases, and a format fixture.
+  stays a mechanical replay). An own-line `%` run immediately before a
+  documentable construct (any `COMMAND` or `ENVIRONMENT` node --- decided
+  purely on node kind, no signature-DB lookup, so the syntactic layer stays
+  semantics-free) binds *leading* into it; a same-line trailing comment
+  never binds; a blank line breaks the bind (the bind is the maximal
+  blank-line-free suffix). `parser/grammar.rs`
+  `binding_run`/`comment_starts_line` detect it, and the existing `precede`
+  idiom wraps the comments + construct (the construct self-opens, then its
+  `Start` is pulled back over the comments). The formatter's three
+  environment lowerers emit the bound run on its own line above `\begin`
+  (`lower_environment_leading`). Covered by parser snapshots,
+  roundtrip/losslessness cases, and a format fixture.
 
 ## Formatter
 
@@ -89,19 +92,21 @@ asserted.
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
   today. *Demoted, much later.*
 - [ ] **Argument content-kind taxonomy.** `prose`/`collapse` are two ad-hoc
-  bools on `ArgSpec`; the real model is a per-argument *content kind* (opaque,
-  token-list, prose, document-body) the formatter dispatches whitespace and
-  break policy on. Generalize once a third case appears. The non-determinism
-  fix (`spans_multiple_lines` deciding block-vs-inline from incidental source
-  newlines) is sidestepped for collapse-flagged args but still governs every
-  *unflagged* multi-line group --- revisit when the taxonomy lands.
+  bools on `ArgSpec`; the real model is a per-argument *content kind*
+  (opaque, token-list, prose, document-body) the formatter dispatches
+  whitespace and break policy on. Generalize once a third case appears. The
+  non-determinism fix (`spans_multiple_lines` deciding block-vs-inline from
+  incidental source newlines) is sidestepped for collapse-flagged args but
+  still governs every *unflagged* multi-line group --- revisit when the
+  taxonomy lands.
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on
   its own separators rather than the paragraph fill.
 - [ ] Mark `\ref`/`\eqref`/`\cref`/`\autoref`/`\nameref` `inline` so they flow
   too (left out of this pass: their keys are single tokens where interior
-  spaces can matter, so they are *not* `collapse`, but they are still inline).
+  spaces can matter, so they are *not* `collapse`, but they are still
+  inline).
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body
@@ -241,9 +246,10 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 ### Navigation & structure
 
 - [x] Document symbols (`textDocument/documentSymbol`) --- a nested outline from
-  the signature DB's `sectioning` levels (part/chapter/section/…), plus float and
-  theorem-like environments (tagged via a new `outline` category in the signature
-  DB) and labels as leaves. Built by the LSP-agnostic `semantic::outline` module.
+  the signature DB's `sectioning` levels (part/chapter/section/…), plus
+  float and theorem-like environments (tagged via a new `outline` category
+  in the signature DB) and labels as leaves. Built by the LSP-agnostic
+  `semantic::outline` module.
 - [ ] Folding ranges (`textDocument/foldingRange`) --- environments, sectioning
   spans, and long comment blocks.
 - [ ] Selection ranges (`textDocument/selectionRange`) --- expand-selection from
@@ -321,9 +327,5 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 
 Collected from the areas above:
 
-- [ ] Trivia-attachment policy (leading vs. trailing). *(Parser)*
 - [ ] How much of `\newcommand` / `xparse` to model. *(Semantics)*
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
-- [ ] Whether arity should also migrate tower-lsp-server → lsp-server (separate
-  decision; out of scope for badness, but the `AGENTS.md` rationale
-  applies).

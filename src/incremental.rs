@@ -25,7 +25,7 @@ use smol_str::SmolStr;
 use crate::parser::parse;
 use crate::project::labels::{document_label_names, is_document_root};
 use crate::project::{IncludeEdgeKey, collect_include_edge_keys};
-use crate::semantic::SemanticModel;
+use crate::semantic::{SemanticModel, SignatureDb, scan_definitions};
 use crate::syntax::SyntaxNode;
 
 #[salsa::input]
@@ -45,6 +45,9 @@ pub enum QueryKind {
     ParsedDocument,
     /// A file's per-file label/reference model ([`semantic_model`]).
     SemanticModel,
+    /// A file's scanned `\newcommand`/`\newenvironment`/xparse signatures
+    /// ([`document_signatures`]).
+    DocumentSignatures,
     /// A file's range-free inclusion edges ([`include_edges`]).
     IncludeEdges,
     /// A file's sorted, distinct label-name set ([`file_labels`]) — the firewall
@@ -144,6 +147,24 @@ pub fn semantic_model(db: &dyn IncrementalDb, file: SourceFile) -> SemanticModel
         file: Some(file),
     });
     SemanticModel::build(&parsed_tree_root(db, file))
+}
+
+/// The file's scanned user-definition signatures — `\newcommand`,
+/// `\newenvironment`, and the xparse `\NewDocument…` family
+/// ([`crate::semantic::scan_definitions`]) — built on the cached parse tree.
+///
+/// Like [`semantic_model`] (and unlike [`parsed_document`]) this is **not**
+/// `no_eq`: [`SignatureDb`] is `Eq`, so salsa backdates when an edit defines no
+/// new command/environment (e.g. a prose or `\ref` edit), keeping completion's
+/// consumer from re-running. Its first consumer is the language server's
+/// completion request, which unions these scanned names with the built-in DB.
+#[salsa::tracked(returns(ref))]
+pub fn document_signatures(db: &dyn IncrementalDb, file: SourceFile) -> SignatureDb {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::DocumentSignatures,
+        file: Some(file),
+    });
+    scan_definitions(&parsed_tree_root(db, file))
 }
 
 /// The file's inclusion edges, range-free
@@ -355,6 +376,11 @@ impl IncrementalDatabase {
         semantic_model(self, file)
     }
 
+    /// The file's scanned user-definition signatures.
+    pub fn document_signatures(&self, file: SourceFile) -> &SignatureDb {
+        document_signatures(self, file)
+    }
+
     /// The file's distinct, sorted `\label` names (the firewall feeding the
     /// cross-file resolver).
     pub fn file_labels(&self, file: SourceFile) -> &[SmolStr] {
@@ -423,6 +449,11 @@ impl Analysis {
     /// The file's per-file label/reference model (for lint rules).
     pub fn semantic_model(&self, file: SourceFile) -> &SemanticModel {
         self.0.semantic_model(file)
+    }
+
+    /// The file's scanned user-definition signatures (for completion).
+    pub fn document_signatures(&self, file: SourceFile) -> &SignatureDb {
+        self.0.document_signatures(file)
     }
 }
 

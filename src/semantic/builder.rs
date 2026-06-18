@@ -56,8 +56,10 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
 }
 
 /// The recognized reference command for a control-word name, or `None`. A small
-/// explicit table — the analog of `project::include::include_kind`.
-fn ref_command(name: &str) -> Option<RefCommand> {
+/// explicit table — the analog of `project::include::include_kind`. Shared with
+/// the completion classifier (`crate::completion`) so the ref-family name set has
+/// a single source of truth.
+pub(crate) fn ref_command(name: &str) -> Option<RefCommand> {
     Some(match name {
         "ref" => RefCommand::Ref,
         "pageref" => RefCommand::PageRef,

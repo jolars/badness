@@ -12,6 +12,28 @@ fn parse_count(db: &IncrementalDatabase) -> usize {
         .count()
 }
 
+/// How many times `document_signatures` actually ran, per the query log.
+fn signatures_count(db: &IncrementalDatabase) -> usize {
+    db.query_log()
+        .iter()
+        .filter(|entry| entry.kind == QueryKind::DocumentSignatures)
+        .count()
+}
+
+/// An owned, sorted projection of the scanned command names.
+fn scanned_commands(
+    db: &IncrementalDatabase,
+    file: badness::incremental::SourceFile,
+) -> Vec<String> {
+    let mut names: Vec<String> = db
+        .document_signatures(file)
+        .command_names()
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
 fn parsed_document_is_memoized() {
     let db = IncrementalDatabase::default();
@@ -104,6 +126,55 @@ fn snapshot_reads_cached_parse() {
     assert_eq!(snap.file_text(file), "\\emph{hi}\n");
     assert!(snap.parse_diagnostics(file).is_empty());
     assert_eq!(snap.parsed_tree(file).to_string(), "\\emph{hi}\n");
+}
+
+#[test]
+fn document_signatures_is_memoized() {
+    let db = IncrementalDatabase::default();
+    let file = db.add_file("\\newcommand{\\foo}{x}\n");
+
+    // Many reads, but the scan runs exactly once.
+    let _ = db.document_signatures(file);
+    let _ = db.document_signatures(file);
+    let _ = db.document_signatures(file);
+
+    assert_eq!(signatures_count(&db), 1);
+    assert_eq!(scanned_commands(&db, file), vec!["foo".to_string()]);
+}
+
+#[test]
+fn editing_definitions_rebuilds_signatures() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.add_file("\\newcommand{\\foo}{x}\n");
+
+    assert_eq!(scanned_commands(&db, file), vec!["foo".to_string()]);
+    assert_eq!(signatures_count(&db), 1);
+
+    // Adding a definition changes the text, so the scan re-runs.
+    db.set_file_text(file, "\\newcommand{\\foo}{x}\n\\newcommand{\\bar}{y}\n");
+    assert_eq!(
+        scanned_commands(&db, file),
+        vec!["bar".to_string(), "foo".to_string()]
+    );
+    assert_eq!(signatures_count(&db), 2);
+}
+
+#[test]
+fn prose_edit_yields_equal_signatures() {
+    // Value-stability stand-in for backdating: an edit touching no definition
+    // leaves the scanned DB `==` its prior value, the precondition that makes
+    // salsa backdate for completion's consumer.
+    let db = IncrementalDatabase::default();
+    let file = db.add_file("\\newcommand{\\foo}{x}\n");
+
+    // A fresh db with prose appended must scan to an equal DB.
+    let other = IncrementalDatabase::default();
+    let other_file = other.add_file("\\newcommand{\\foo}{x}\n\nsome text.\n");
+
+    assert_eq!(
+        db.document_signatures(file),
+        other.document_signatures(other_file)
+    );
 }
 
 #[test]

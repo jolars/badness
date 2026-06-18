@@ -307,11 +307,18 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 - [ ] Hover (`textDocument/hover`) --- command/environment signature (arity, arg
   kinds, sectioning level), the resolving `\label` for a ref, and the
   `\newcommand`/`xparse` definition for user-defined macros.
-- [ ] Completion (`textDocument/completion`) --- command and environment names
-  from the signature DB (built-in + scanned defines), `\ref`/`\cite` keys
-  from the label/citation model, and `\begin{…}`/`\end{…}` pairing. Wants
-  the `document_signatures` salsa query (see *Semantic layer*); CWL ingest
-  widens coverage.
+- [x] Completion (`textDocument/completion`) --- command and environment names
+  from the signature DB (built-in + scanned defines, via the new
+  `document_signatures` salsa query), `\ref`-family keys from the label model,
+  `\begin{…}`/`\end{…}` names (with an auto-`\end{…}` snippet on `\begin`), and
+  file paths in `\includegraphics`/`\input`/`\include`/`\subfile`/`\import`/
+  `\bibliography`/`\addbibresource`. (`src/completion.rs` + `src/lsp.rs`.)
+  - [ ] `\cite` key completion --- deferred: there is no citation/bibliography
+    model yet. Needs a `\bibitem` scan and/or `.bib` ingest (analog of the label
+    model) before cite keys can be offered.
+  - [ ] CWL ingest to widen command/environment name coverage.
+  - [ ] `completionItem/resolve` to attach signature/doc detail lazily (mirror
+    arity's resolve path) --- `resolve_provider` is currently `false`.
 - [ ] Signature help (`textDocument/signatureHelp`) --- show the active argument
   while typing a command's `{…}`/`[…]` arguments.
 

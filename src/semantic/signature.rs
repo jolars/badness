@@ -162,7 +162,7 @@ pub struct EnvironmentSig {
 /// The built-in command and environment signatures, keyed by name (without the
 /// leading `\` for commands, the bare name for environments). Case-sensitive, as
 /// LaTeX names are (`Verbatim` ≠ `verbatim`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct SignatureDb {
     commands: HashMap<SmolStr, CommandSig>,
     environments: HashMap<SmolStr, EnvironmentSig>,
@@ -177,6 +177,20 @@ impl SignatureDb {
     /// The signature of environment `name`, if known.
     pub fn environment(&self, name: &str) -> Option<&EnvironmentSig> {
         self.environments.get(name)
+    }
+
+    /// All known command names (without the leading `\`), in arbitrary order.
+    /// Backs name completion, which unions these with the per-document scanned
+    /// definitions; the lookup methods stay the only refinement path.
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.commands.keys().map(SmolStr::as_str)
+    }
+
+    /// All known environment names, in arbitrary order. See [`command_names`].
+    ///
+    /// [`command_names`]: Self::command_names
+    pub fn environment_names(&self) -> impl Iterator<Item = &str> {
+        self.environments.keys().map(SmolStr::as_str)
     }
 
     /// Record a command signature, replacing any existing entry for `name`. Used

@@ -3,6 +3,7 @@
 //! the roadmap.
 
 pub mod ast;
+pub mod completion;
 pub mod file_discovery;
 pub mod formatter;
 pub mod incremental;

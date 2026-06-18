@@ -11,11 +11,14 @@ use std::time::Duration;
 use badness::formatter::{FormatStyle, format_with_style};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FormattingOptions, InitializeParams, InitializeResult, InitializedParams, OneOf, Position,
-    PublishDiagnosticsParams, Range, SymbolKind, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    FormattingOptions, InitializeParams, InitializeResult, InitializedParams, InsertTextFormat,
+    OneOf, PartialResultParams, Position, PublishDiagnosticsParams, Range, SymbolKind,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams,
 };
 
 fn recv(client: &Connection) -> Message {
@@ -94,6 +97,10 @@ fn start_server(
             Some(OneOf::Left(true))
         ),
         "server must advertise documentSymbolProvider"
+    );
+    assert!(
+        init.capabilities.completion_provider.is_some(),
+        "server must advertise completionProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     send_notification(
@@ -412,6 +419,144 @@ fn did_close_clears_and_allows_reopen() {
         "reopened clean doc must parse cleanly, got {:?}",
         diags.diagnostics
     );
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a `textDocument/completion` at `position` and return the items.
+fn complete(client: &Connection, id: i32, uri: &Uri, position: Position) -> Vec<CompletionItem> {
+    send_request(
+        client,
+        id,
+        "textDocument/completion",
+        serde_json::to_value(CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: None,
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(client);
+    assert_eq!(resp.id, RequestId::from(id));
+    match serde_json::from_value::<CompletionResponse>(resp.result.unwrap()).unwrap() {
+        CompletionResponse::Array(items) => items,
+        CompletionResponse::List(list) => list.items,
+    }
+}
+
+fn labels(items: &[CompletionItem]) -> Vec<&str> {
+    items.iter().map(|i| i.label.as_str()).collect()
+}
+
+#[test]
+fn lsp_completion_commands_environments_and_refs() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///complete.tex".parse().unwrap();
+
+    // A clean document so diagnostics stay empty (the env is matched).
+    let doc = "\\section{Intro}\n\
+        \\label{sec:intro}\n\
+        \\ref{sec:i}\n\
+        \\begin{itemize}\n\
+        \\item x\n\
+        \\end{itemize}\n\
+        \\sub\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(
+        diags.diagnostics.is_empty(),
+        "clean doc → no diagnostics, got {:?}",
+        diags.diagnostics
+    );
+
+    // Command names: cursor at the end of `\sub` (line 6).
+    let cmds = complete(&client, 2, &uri, Position::new(6, 4));
+    let names = labels(&cmds);
+    assert!(names.contains(&"subsection"), "{names:?}");
+    assert!(names.contains(&"subsubsection"), "{names:?}");
+    assert!(
+        cmds.iter()
+            .all(|i| i.kind == Some(CompletionItemKind::FUNCTION)),
+        "command items are FUNCTION"
+    );
+
+    // Environment names inside `\begin{it|emize}` (line 3) carry the auto-`\end`
+    // snippet.
+    let envs = complete(&client, 3, &uri, Position::new(3, 9));
+    let itemize = envs
+        .iter()
+        .find(|i| i.label == "itemize")
+        .expect("itemize env candidate");
+    assert_eq!(itemize.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    assert_eq!(
+        itemize.insert_text.as_deref(),
+        Some("itemize}\n\t$0\n\\end{itemize}")
+    );
+
+    // `\ref{sec:i|}` (line 2) completes the defined label.
+    let refs = complete(&client, 4, &uri, Position::new(2, 10));
+    assert_eq!(labels(&refs), vec!["sec:intro"]);
+    assert_eq!(refs[0].kind, Some(CompletionItemKind::REFERENCE));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_completion_file_paths() {
+    // A real on-disk directory the document lives in, holding a `.tex`, an image,
+    // and a subdirectory. The buffer text itself is in-memory.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("intro.tex"), "x").unwrap();
+    std::fs::write(dir.path().join("logo.png"), "x").unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+    std::fs::create_dir(dir.path().join("chapters")).unwrap();
+
+    let uri: Uri = format!("file://{}/main.tex", dir.path().display())
+        .parse()
+        .unwrap();
+    let (client, server_thread) = start_server(None);
+
+    // `\input{|}` → `.tex` files and directories (not the image or the `.txt`).
+    did_open(&client, &uri, 1, "\\input{}\n");
+    let _ = recv_diagnostics(&client);
+    let inputs = complete(&client, 2, &uri, Position::new(0, 7));
+    let names = labels(&inputs);
+    assert!(names.contains(&"intro.tex"), "{names:?}");
+    assert!(names.contains(&"chapters"), "{names:?}");
+    assert!(!names.contains(&"logo.png"), "{names:?}");
+    assert!(!names.contains(&"notes.txt"), "{names:?}");
+    let intro = inputs.iter().find(|i| i.label == "intro.tex").unwrap();
+    assert_eq!(intro.kind, Some(CompletionItemKind::FILE));
+    let chapters = inputs.iter().find(|i| i.label == "chapters").unwrap();
+    assert_eq!(chapters.kind, Some(CompletionItemKind::FOLDER));
+
+    // `\includegraphics{|}` → the image and directories (not the `.tex`).
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "\\includegraphics{}\n".to_owned(),
+            }],
+        })
+        .unwrap(),
+    );
+    let _ = recv_diagnostics(&client);
+    let graphics = complete(&client, 3, &uri, Position::new(0, 17));
+    let names = labels(&graphics);
+    assert!(names.contains(&"logo.png"), "{names:?}");
+    assert!(names.contains(&"chapters"), "{names:?}");
+    assert!(!names.contains(&"intro.tex"), "{names:?}");
 
     shutdown(&client, server_thread);
 }

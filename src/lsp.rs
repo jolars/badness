@@ -5,8 +5,9 @@
 //! in `AGENTS.md`. salsa's single-writer / snapshot-readers model composes cleanly
 //! with `lsp-server`'s sync main loop.
 //!
-//! Scope: full-document **formatting**, a **document-symbol** outline, and pushed
-//! parser **diagnostics**. Further features (hover, completion, go-to-def, range
+//! Scope: full-document **formatting**, a **document-symbol** outline,
+//! **completion** (command/environment names, `\ref` keys, file paths), and
+//! pushed parser **diagnostics**. Further features (hover, go-to-def, range
 //! formatting) are deferred.
 //!
 //! ## Architecture (mirrors arity's `src/lsp.rs`, so the eventual shared-crate
@@ -58,23 +59,25 @@ use lsp_types::notification::{
     DidChangeConfiguration, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{DocumentSymbolRequest, Formatting, Request as _};
+use lsp_types::request::{Completion, DocumentSymbolRequest, Formatting, Request as _};
 use lsp_types::{
-    Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FormattingOptions,
-    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextEdit, Uri,
+    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FormattingOptions, InsertTextFormat, NumberOrString, OneOf, Position, PublishDiagnosticsParams,
+    Range, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Uri,
 };
 use salsa::Database as _;
 use serde::Deserialize;
 
+use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
 use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
 use crate::parser::parse;
-use crate::semantic::{OutlineItem, OutlineSymbol, outline};
+use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
 use crate::syntax::SyntaxNode;
 use crate::text::LineIndex;
 
@@ -110,6 +113,14 @@ fn server_capabilities() -> ServerCapabilities {
         )),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        completion_provider: Some(CompletionOptions {
+            // `\` opens command/env names; `{` opens a name/key/path argument;
+            // `/` re-triggers path segments. Snippet support is read off the
+            // client's capabilities, so no extra server flag is needed.
+            trigger_characters: Some(vec!["\\".to_owned(), "{".to_owned(), "/".to_owned()]),
+            resolve_provider: Some(false),
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -200,6 +211,16 @@ enum WorkerJob {
         path: PathBuf,
         text: String,
     },
+    /// A completion request: classify the cursor and build candidates on the read
+    /// pool and reply to `id`. Carries the `uri` (not just the salsa-key `path`)
+    /// so file-path completion can derive the document's on-disk directory.
+    Completion {
+        id: RequestId,
+        uri: Uri,
+        path: PathBuf,
+        text: String,
+        position: Position,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -253,6 +274,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             DocumentSymbolRequest::METHOD => {
                                 on_document_symbol(&connection, &state, &job_tx, req)
                             }
+                            Completion::METHOD => on_completion(&connection, &state, &job_tx, req),
                             _ => respond_unhandled(&connection, req),
                         }
                     }
@@ -452,6 +474,47 @@ fn on_document_symbol(
     });
 }
 
+/// `textDocument/completion`: build a completion job for the worker, or reply
+/// `null` when the document is unknown.
+fn on_completion(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<CompletionParams>(Completion::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid completion params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position.text_document.uri;
+    let position = params.text_document_position.position;
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: nothing to complete.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::Completion {
+        id,
+        path: uri_to_path(&uri),
+        uri,
+        text: doc.text.clone(),
+        position,
+    });
+}
+
 /// Forward a worker result to the client. Diagnostics are version-gated: a result
 /// is sent only when its document is still open at exactly that version, so a
 /// stale (superseded or post-close) analyze never repaints squiggles.
@@ -639,6 +702,21 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
                     .spawn(move || run_symbols(&snapshot, id, &path, &text, &out_tx));
+            }
+            WorkerJob::Completion {
+                id,
+                uri,
+                path,
+                text,
+                position,
+            } => {
+                // Completion reads run on the read pool against a snapshot, like
+                // formatting/symbols (id-bound responses, not coalesced).
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_completion(&snapshot, id, &uri, &path, &text, position, &out_tx)
+                });
             }
         }
     }
@@ -880,6 +958,208 @@ fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> Docume
         ),
         children: (!children.is_empty()).then_some(children),
     }
+}
+
+/// Build completion items for a [`WorkerJob::Completion`] on the read pool and
+/// reply with a [`CompletionResponse`].
+///
+/// Fast path: reuse the snapshot's cached tree + the `document_signatures` /
+/// `semantic_model` queries when the tracked buffer still matches `text`. On a
+/// racing write (`salsa::Cancelled`), a stale snapshot, or a cache miss, reparse
+/// the captured `text` and recompute the signatures/model directly. Best-effort —
+/// like symbols, a parse error does not suppress completion (the tree is
+/// error-tolerant).
+fn run_completion(
+    snapshot: &Analysis,
+    id: RequestId,
+    uri: &Uri,
+    path: &Path,
+    text: &str,
+    position: Position,
+    out_tx: &Sender<Outbound>,
+) {
+    let items = compute_completion(snapshot, uri, path, text, position);
+    // `is_incomplete`: command/label universes are prefix-filtered server-side, so
+    // the client re-queries as the typed prefix narrows (matches arity).
+    let result = serde_json::to_value(CompletionResponse::List(CompletionList {
+        is_incomplete: true,
+        items,
+    }))
+    .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Compute completion items at `position`, preferring the snapshot's cached tree
+/// and queries, falling back to a direct reparse when unavailable or stale.
+fn compute_completion(
+    snapshot: &Analysis,
+    uri: &Uri,
+    path: &Path,
+    text: &str,
+    position: Position,
+) -> Vec<CompletionItem> {
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        let root = snapshot.parsed_tree(file);
+        let ctx = crate::completion::classify_context(&root, offset);
+        Some(build_completion_items(
+            &ctx,
+            snapshot.document_signatures(file),
+            snapshot.semantic_model(file),
+            uri,
+        ))
+    }));
+    match cached {
+        Ok(Some(items)) => items,
+        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
+        Ok(None) | Err(_) => {
+            let root = SyntaxNode::new_root(parse(text).green);
+            let ctx = crate::completion::classify_context(&root, offset);
+            let sigs = crate::semantic::scan_definitions(&root);
+            let model = SemanticModel::build(&root);
+            build_completion_items(&ctx, &sigs, &model, uri)
+        }
+    }
+}
+
+/// Turn a classified [`CompletionContext`] into LSP items. Name/label contexts go
+/// through the pure [`crate::completion::candidates`]; a file-path context reads
+/// the document's directory off disk (see [`file_completion_items`]).
+fn build_completion_items(
+    ctx: &CompletionContext,
+    sigs: &SignatureDb,
+    model: &SemanticModel,
+    uri: &Uri,
+) -> Vec<CompletionItem> {
+    match ctx {
+        CompletionContext::FilePath { prefix, kind } => file_completion_items(uri, prefix, *kind),
+        CompletionContext::None => Vec::new(),
+        _ => crate::completion::candidates(ctx, sigs, model)
+            .into_iter()
+            .map(candidate_to_item)
+            .collect(),
+    }
+}
+
+/// Map a neutral [`CompletionCandidate`] onto an `lsp_types::CompletionItem`.
+fn candidate_to_item(candidate: CompletionCandidate) -> CompletionItem {
+    let kind = match candidate.kind {
+        CandidateKind::Command => CompletionItemKind::FUNCTION,
+        CandidateKind::Environment => CompletionItemKind::CLASS,
+        CandidateKind::Label => CompletionItemKind::REFERENCE,
+    };
+    CompletionItem {
+        label: candidate.label,
+        kind: Some(kind),
+        insert_text: candidate.insert_text,
+        insert_text_format: candidate.snippet.then_some(InsertTextFormat::SNIPPET),
+        ..Default::default()
+    }
+}
+
+/// File-path candidates for a `\includegraphics`/`\input`/… argument: read the
+/// directory the partial path points into (relative to the document's on-disk
+/// directory) and offer matching files (by [`FileArgKind`] extension) and
+/// subdirectories. Empty for an unsaved buffer (no `file://` path) or an
+/// unreadable directory. The label is the bare entry name; editors treat `/` as a
+/// word boundary, so completing after `img/` replaces only the trailing segment.
+fn file_completion_items(uri: &Uri, prefix: &str, kind: FileArgKind) -> Vec<CompletionItem> {
+    let Some(doc_path) = uri_to_fs_path(uri) else {
+        return Vec::new();
+    };
+    let Some(doc_dir) = doc_path.parent() else {
+        return Vec::new();
+    };
+    // Split the typed prefix into its directory part and the trailing filename
+    // prefix; the directory part is resolved relative to the document.
+    let (dir_part, file_prefix) = match prefix.rfind('/') {
+        Some(slash) => (&prefix[..=slash], &prefix[slash + 1..]),
+        None => ("", prefix),
+    };
+    let Ok(entries) = std::fs::read_dir(doc_dir.join(dir_part)) else {
+        return Vec::new();
+    };
+
+    let mut items = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Skip hidden entries and those not matching the typed filename prefix.
+        if name.starts_with('.') || !name.starts_with(file_prefix) {
+            continue;
+        }
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+        if is_dir {
+            items.push(CompletionItem {
+                label: name,
+                kind: Some(CompletionItemKind::FOLDER),
+                ..Default::default()
+            });
+        } else if has_extension(&name, kind.extensions()) {
+            items.push(CompletionItem {
+                label: name,
+                kind: Some(CompletionItemKind::FILE),
+                ..Default::default()
+            });
+        }
+    }
+    items
+}
+
+/// Whether `name`'s extension (case-insensitive) is one of `exts`.
+fn has_extension(name: &str, exts: &[&str]) -> bool {
+    match name.rsplit_once('.') {
+        Some((_, ext)) => {
+            let ext = ext.to_ascii_lowercase();
+            exts.contains(&ext.as_str())
+        }
+        None => false,
+    }
+}
+
+/// Convert a `file://` document URI to a filesystem path, percent-decoding the
+/// path. Returns `None` for a non-`file` scheme (an in-memory/unsaved buffer),
+/// so file-path completion simply yields nothing there. Minimal by design — local
+/// `file:///abs/path` URIs only; no `file://host/...` authority handling (rare for
+/// editor documents) and no new dependency.
+fn uri_to_fs_path(uri: &Uri) -> Option<PathBuf> {
+    let rest = uri.as_str().strip_prefix("file://")?;
+    // An empty authority leaves `rest` starting at the absolute path's `/`. Drop a
+    // non-empty authority defensively (everything up to the first `/`).
+    let path = match rest.strip_prefix('/') {
+        Some(_) => rest,
+        None => rest.split_once('/').map(|(_, p)| p)?,
+    };
+    Some(PathBuf::from(percent_decode(path)))
+}
+
+/// Percent-decode a URI path component (`%20` → space, …), leaving any malformed
+/// escape verbatim. ASCII-oriented but UTF-8-safe for well-formed input.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // ---------------------------------------------------------------------------

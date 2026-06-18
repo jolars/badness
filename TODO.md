@@ -444,7 +444,7 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
     meaning-preserving *except* when an entry repeats a field name (e.g. two `note =`),
     where BibTeX's last/first-wins makes order significant — detect duplicates and keep
     their relative order stable (a stable sort keyed on field name handles this).
-  - **Entry order within a file:** sort entries by cite key (case-insensitive) by default,
+  - **Whole-file entry order:** sort entries by cite key (case-insensitive) by default,
     but respect the ordering constraints that are *semantic*, not cosmetic:
     - `@string` macros must be **defined before use** — keep `@string` blocks pinned ahead
       of (or in their original position relative to) the entries that reference them.

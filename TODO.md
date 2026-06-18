@@ -385,11 +385,17 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
     `@string`s, and is **fully skeleton-concordant with texlab** (no parser gaps, no
     recorded deviations). *Next:* widen further (e.g. an ACL Anthology slice) for
     long-tail constructs.
-- [ ] **Phase 1 — Semantic model + field/entry signature DB.** Bib analog of
-  `data/signatures.json` + `src/semantic/`: `data/bib_fields.json` (entry types,
-  required/optional fields, field categories — name lists, dates, verbatim-ish `url`/`doi`).
-  `bib::semantic::Model` collects entries, cite keys, `@string` defs/uses; flags duplicate
-  keys and undefined `@string` references. Mirror `src/semantic/builder.rs`.
+- [x] **Phase 1 — Semantic model + field/entry signature DB.** Bib analog of
+  `data/signatures.json` + `src/semantic/`. Landed: `data/bib_fields.json` (entry types with
+  required/optional fields incl. `one-of` alternations, field categories — name lists, dates,
+  verbatim-ish `url`/`doi`) loaded by `bib::semantic::signature` (`builtin()`, serde +
+  `LazyLock`, case-insensitive). `bib::semantic::Model` (mirrors `src/semantic/builder.rs`)
+  walks the CST via new `bib::ast` accessors to collect entries, cite keys, and `@string`
+  defs/uses, then a resolve pass flags duplicate keys and undefined `@string` refs
+  (month-macro `jan`..`dec` whitelist). Model exposes *facts* only — diagnostics are Phase 3,
+  salsa `bib_semantic_model` is Phase 4. Real-corpus test (`tests/bib_semantic.rs`): 92
+  entries + 8 `@string`s collected from `biblatex-examples.bib`, zero false duplicate/undefined
+  findings.
 - [ ] **Phase 2 — Formatter.** Lower the bib CST → the shared Wadler IR
   (`formatter/ir.rs` + `printer.rs`, reused). Own deterministic style (Tenet 1): one field
   per line, indented fields, entry-type/field-name case normalization, optional `=`

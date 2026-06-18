@@ -11,10 +11,12 @@
 //! This is the parser layer only; the formatter, linter, LSP, and salsa
 //! integration for `.bib` files come in later increments (see `TODO.md`).
 
+pub mod ast;
 pub mod core;
 pub(crate) mod events;
 pub(crate) mod grammar;
 pub mod lexer;
+pub mod semantic;
 pub mod syntax;
 pub(crate) mod tree_builder;
 

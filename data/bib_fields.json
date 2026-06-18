@@ -1,0 +1,145 @@
+{
+  "_comment": "Built-in BibTeX/BibLaTeX entry- and field-signature DB. Source of truth for bib::semantic::signature. Entry `required` elements are a field name or an array of alternatives ('one of'). Field `category` is one of name|date|verbatim|literal (default literal for unlisted fields). Curated and growable, like data/signatures.json — not exhaustive. Names are matched case-insensitively. Required/optional lean on the biblatex manual (§2.1.1), with classic-BibTeX types added.",
+
+  "entries": {
+    "article": {
+      "required": ["author", "title", "journaltitle", ["date", "year"]],
+      "optional": ["journal", "translator", "volume", "number", "pages", "issue", "month", "issn", "doi", "url", "note"]
+    },
+    "book": {
+      "required": [["author", "editor"], "title", ["date", "year"]],
+      "optional": ["publisher", "location", "address", "volume", "series", "edition", "number", "pages", "isbn", "doi", "url", "note"]
+    },
+    "mvbook": {
+      "required": [["author", "editor"], "title", ["date", "year"]],
+      "optional": ["publisher", "location", "volume", "series", "edition", "isbn", "doi", "url", "note"]
+    },
+    "inbook": {
+      "required": ["author", "title", "booktitle", ["date", "year"]],
+      "optional": ["editor", "publisher", "location", "volume", "series", "chapter", "pages", "doi", "url", "note"]
+    },
+    "bookinbook": {
+      "required": ["author", "title", "booktitle", ["date", "year"]],
+      "optional": ["editor", "publisher", "location", "volume", "series", "pages", "doi", "url", "note"]
+    },
+    "incollection": {
+      "required": ["author", "title", "booktitle", ["date", "year"]],
+      "optional": ["editor", "publisher", "location", "volume", "series", "chapter", "pages", "doi", "url", "note"]
+    },
+    "inproceedings": {
+      "required": ["author", "title", "booktitle", ["date", "year"]],
+      "optional": ["editor", "eventtitle", "publisher", "organization", "location", "address", "volume", "series", "pages", "doi", "url", "note"]
+    },
+    "conference": {
+      "required": ["author", "title", "booktitle", ["date", "year"]],
+      "optional": ["editor", "publisher", "organization", "location", "pages", "doi", "url", "note"]
+    },
+    "collection": {
+      "required": ["editor", "title", ["date", "year"]],
+      "optional": ["publisher", "location", "volume", "series", "edition", "isbn", "doi", "url", "note"]
+    },
+    "mvcollection": {
+      "required": ["editor", "title", ["date", "year"]],
+      "optional": ["publisher", "location", "volume", "series", "isbn", "doi", "url", "note"]
+    },
+    "proceedings": {
+      "required": ["title", ["date", "year"]],
+      "optional": ["editor", "eventtitle", "publisher", "organization", "location", "volume", "series", "isbn", "doi", "url", "note"]
+    },
+    "mvproceedings": {
+      "required": ["title", ["date", "year"]],
+      "optional": ["editor", "publisher", "organization", "location", "volume", "series", "doi", "url", "note"]
+    },
+    "manual": {
+      "required": ["title", ["date", "year"]],
+      "optional": ["author", "editor", "organization", "publisher", "location", "edition", "version", "isbn", "doi", "url", "note"]
+    },
+    "misc": {
+      "required": ["title"],
+      "optional": ["author", "editor", "howpublished", "organization", "publisher", "location", "month", "year", "date", "doi", "url", "note"]
+    },
+    "online": {
+      "required": ["title", ["date", "year"], "url"],
+      "optional": ["author", "editor", "organization", "urldate", "doi", "note"]
+    },
+    "patent": {
+      "required": ["author", "title", "number", ["date", "year"]],
+      "optional": ["holder", "type", "location", "doi", "url", "note"]
+    },
+    "periodical": {
+      "required": ["title", ["date", "year"]],
+      "optional": ["editor", "subtitle", "issuetitle", "volume", "number", "issue", "month", "issn", "doi", "url", "note"]
+    },
+    "report": {
+      "required": ["author", "title", "type", "institution", ["date", "year"]],
+      "optional": ["number", "version", "location", "isrn", "doi", "url", "note"]
+    },
+    "thesis": {
+      "required": ["author", "title", "type", "institution", ["date", "year"]],
+      "optional": ["location", "pages", "doi", "url", "note"]
+    },
+    "mastersthesis": {
+      "required": ["author", "title", "school", ["date", "year"]],
+      "optional": ["type", "address", "month", "doi", "url", "note"]
+    },
+    "phdthesis": {
+      "required": ["author", "title", "school", ["date", "year"]],
+      "optional": ["type", "address", "month", "doi", "url", "note"]
+    },
+    "techreport": {
+      "required": ["author", "title", "institution", ["date", "year"]],
+      "optional": ["type", "number", "address", "month", "doi", "url", "note"]
+    },
+    "booklet": {
+      "required": ["title"],
+      "optional": ["author", "howpublished", "address", "location", "month", "year", "date", "doi", "url", "note"]
+    },
+    "unpublished": {
+      "required": ["author", "title", "note"],
+      "optional": ["howpublished", "month", "year", "date", "url"]
+    },
+    "dataset": {
+      "required": ["title", ["date", "year"]],
+      "optional": ["author", "editor", "publisher", "location", "version", "type", "doi", "url", "note"]
+    },
+    "set": {
+      "required": ["entryset"],
+      "optional": ["crossref"]
+    }
+  },
+
+  "fields": {
+    "author": { "category": "name" },
+    "editor": { "category": "name" },
+    "editora": { "category": "name" },
+    "editorb": { "category": "name" },
+    "editorc": { "category": "name" },
+    "translator": { "category": "name" },
+    "bookauthor": { "category": "name" },
+    "commentator": { "category": "name" },
+    "annotator": { "category": "name" },
+    "introduction": { "category": "name" },
+    "foreword": { "category": "name" },
+    "afterword": { "category": "name" },
+    "holder": { "category": "name" },
+    "shortauthor": { "category": "name" },
+    "shorteditor": { "category": "name" },
+
+    "date": { "category": "date" },
+    "year": { "category": "date" },
+    "month": { "category": "date" },
+    "urldate": { "category": "date" },
+    "eventdate": { "category": "date" },
+    "origdate": { "category": "date" },
+
+    "url": { "category": "verbatim" },
+    "doi": { "category": "verbatim" },
+    "eprint": { "category": "verbatim" },
+    "file": { "category": "verbatim" },
+    "pdf": { "category": "verbatim" },
+
+    "title": { "category": "literal" },
+    "journaltitle": { "category": "literal" },
+    "booktitle": { "category": "literal" }
+  }
+}

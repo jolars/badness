@@ -407,12 +407,59 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   concatenation preserved as ` # `), no trailing comma,
   one blank line between blocks. `@comment` bodies and inter-entry `JUNK` preserved (junk's
   outer whitespace trimmed so blank-line normalization stays idempotent). Refuses any input
-  the parser flags. Tests (`tests/bib_format.rs` + `tests/fixtures/bib_format/`): 14
+  the parser flags. Tests (`tests/bib_format.rs` + `tests/fixtures/bib_format/`): 15
   exact-output fixtures, a meaning-preservation oracle (`semantic::Model` entries/keys/
   `@string` defs+uses), and idempotence/clean/round-trip invariants over the corpus
   (incl. `biblatex-examples.bib`). bibtex-tidy / `biber --tool` remain soft convergence
   gauges only. *Deferred to Phase 4:* CLI/LSP routing for `.bib`; *future config:*
-  value-interior reflow, brace-vs-quote/trailing-comma/paren-normalization toggles.
+  brace-vs-quote/trailing-comma/paren-normalization toggles. **Not done — value reflow
+  is its own item below.**
+- [ ] **Phase 2b — Value reflow (wrap long field values where safe).** Today value
+  interiors are emitted byte-exact (no wrapping): a long `abstract`/`title` stays one
+  physical line and author hard-wraps are preserved verbatim (continuation lines keep
+  their source column, since `Ir::verbatim` does not re-indent). Reflow long values to
+  `line_width` by default for the fields where it is *meaning-safe*, using the shared `Ir::Fill`
+  primitive with a hanging indent under the `=` (so continuation lines align past
+  `name = `, not at the field indent). **Category gating is load-bearing** (consult the
+  signature DB, as the lowering already does): reflow `Literal` prose (`title`,
+  `journaltitle`, `abstract`, …) only; **never** `Verbatim` (`url`/`doi`/`eprint`/`file`),
+  **never** `Name` (`author`/`editor` — the ` and ` separators and name-part commas are
+  structural, not prose whitespace; at most break *at* ` and ` boundaries, never inside a
+  name), and **never** a value with `#` concatenation or a single bare `LITERAL`
+  macro/number. A braced value's inner braces must stay balanced across wraps. Hold the
+  invariants: idempotence (a reflowed value must re-reflow identically — watch the
+  hanging-indent width recompute) and meaning preservation (the `semantic::Model` oracle
+  plus a value-content-modulo-whitespace check). Default-on (Tenet 1: opinionated,
+  rule-based) — the category gating above is a *correctness* boundary, not a preference,
+  so there is no opt-out knob; `line_width` alone tunes it. New fixtures: long literal
+  wrapped, `author` list left intact, `url` left intact, concatenation left intact,
+  author-wrapped value normalized.
+- [ ] **Phase 2c — Field & entry sorting (default-on).** Today both orders are preserved
+  from source (`lower_entry` walks `ast::fields` in order; `lower_root` walks blocks in
+  order). Sort deterministically by default (opinionated formatter, Tenet 1); the
+  constraints below are *correctness* guards, not opt-outs.
+  - **Field order within an entry:** emit fields in a canonical order — the signature DB's
+    required-then-optional sequence, unknown fields alphabetized after (or a flat
+    alphabetical order; pick one and pin it with fixtures). Reordering fields is
+    meaning-preserving *except* when an entry repeats a field name (e.g. two `note =`),
+    where BibTeX's last/first-wins makes order significant — detect duplicates and keep
+    their relative order stable (a stable sort keyed on field name handles this).
+  - **Entry order within a file:** sort entries by cite key (case-insensitive) by default,
+    but respect the ordering constraints that are *semantic*, not cosmetic:
+    - `@string` macros must be **defined before use** — keep `@string` blocks pinned ahead
+      of (or in their original position relative to) the entries that reference them.
+    - `crossref`/`xdata`: a cross-referenced parent must stay **after** its children
+      (BibTeX's requirement) — a topological constraint over the key graph, not a plain
+      sort. Easiest safe v1: only sort within runs that have no crossref/xdata edges, or
+      keep referenced parents pinned.
+    - Keep `@preamble`/`@comment` and inter-entry `JUNK` in place (their position can be
+      intentional).
+  - Invariants: idempotence (sort is stable and total), and meaning preservation (the
+    `semantic::Model` oracle already compares the entry/key/`@string` sets, which a correct
+    reorder leaves unchanged). Consider whether entry sorting belongs in the formatter or
+    as a linter autofix; field sorting is comfortably formatter territory. New fixtures:
+    fields reordered to canonical order, duplicate-field order kept stable, entries sorted
+    by key, `@string`-before-use preserved, crossref parent kept after child.
 - [ ] **Phase 3 — Linter rules + autofixes.** Reuse `src/linter/` infra (`Rule`, dispatch
   table, `Fix`/`apply_fixes`, suppression). Rules: duplicate key, missing required field
   (from the field DB), unknown/empty field, unused `@string`, title-capitalization

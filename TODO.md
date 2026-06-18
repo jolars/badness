@@ -379,8 +379,12 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
     skeleton similarity across the corpus.
   - Corpus grown (`tests/bib_corpus/`): biblatex entry types/fields, accents/commands &
     nested braces in values, `@string`/`#` chains, crossref, the reserved forms.
-    *Next:* vendor a large real-world `.bib` (biblatex-examples, ACL Anthology slice) to
-    widen coverage.
+  - Vendored the real-world `biblatex-examples.bib` (biblatex 3.21, LPPL; ~92 entries,
+    15 entry types — 7→92 entries, 5→15 types over the hand-written slice; provenance in
+    `tests/bib_corpus/README.md`). Parses losslessly, recognizes all 92 entries + 8
+    `@string`s, and is **fully skeleton-concordant with texlab** (no parser gaps, no
+    recorded deviations). *Next:* widen further (e.g. an ACL Anthology slice) for
+    long-tail constructs.
 - [ ] **Phase 1 — Semantic model + field/entry signature DB.** Bib analog of
   `data/signatures.json` + `src/semantic/`: `data/bib_fields.json` (entry types,
   required/optional fields, field categories — name lists, dates, verbatim-ish `url`/`doi`).

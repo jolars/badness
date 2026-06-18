@@ -6,7 +6,7 @@ This is a **soft gauge, not a quality gate.** It projects badness's bib CST and 
 
 - **Corpus:** bib corpus (`tests/bib_corpus/*.bib`)
 - **Skeleton similarity:** 100.0%  _(Dice coefficient over skeleton lines)_
-- **File concordance:** 100.0%  (5/5 files identical after projection)
+- **File concordance:** 100.0%  (6/6 files identical after projection)
 - **Intentional deviations:** 0  ·  **Unexplained divergences:** 0
 - **Skipped:** 1 (badness could not parse cleanly)
 

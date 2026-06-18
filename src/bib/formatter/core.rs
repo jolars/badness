@@ -24,6 +24,16 @@
 //!   reshaped. `@string` and `@preamble` values are also left as authored (their
 //!   conventional quoting is kept). `#` concatenation structure is preserved,
 //!   normalized to ` # `.
+//! - **Value reflow:** a long single-piece value is wrapped to `line_width` with a
+//!   hanging indent under the `=`, gated by field category (a *correctness* boundary,
+//!   not a preference — `line_width` alone tunes it). `Literal` prose (`title`,
+//!   `abstract`, …) reflows at any inter-word whitespace; a `Name` value
+//!   (`author`/`editor`) reflows **only** at top-level ` and ` boundaries, breaking
+//!   *after* "and" so the next name starts the continuation line, never inside a
+//!   name. `Verbatim`/`Date` values, `#`-concatenated values, and bare-`LITERAL`
+//!   macros/numbers are never reflowed. Brace- and `$…$`-spanning tokens stay glued
+//!   so inner braces and math never straddle a wrap; every whitespace run collapses
+//!   to one break, so a reflowed value re-reflows identically (idempotent).
 //! - **Trailing comma:** none after the last field.
 //!
 //! Protected regions are emitted byte-exact: `@comment` bodies and inter-entry
@@ -133,7 +143,8 @@ fn format_root(root: &SyntaxNode, style: FormatStyle) -> String {
 
 /// State threaded through the lowering: the built-in field/entry DB (consulted for
 /// field categories). `Copy`, like the LaTeX `LowerCtx`. There is no `wrap` field —
-/// paragraph wrapping is a LaTeX concept; bib values are not reflowed in v1.
+/// value reflow is driven entirely by the printer's `line_width` and the per-field
+/// category (no per-value wrap mode), so the DB is all the lowering needs.
 #[derive(Clone, Copy)]
 struct Lower {
     db: &'static BibFieldDb,
@@ -224,18 +235,220 @@ fn lower_entry(entry: &SyntaxNode, cx: Lower) -> Ir {
 fn lower_field(field: &SyntaxNode, name_lc: &str, width: usize, last: bool, cx: Lower) -> Ir {
     let pad = " ".repeat(width - name_lc.chars().count());
     let prefix = Ir::text(format!("{name_lc}{pad} = "));
+    // The value column = `name<pad> = ` width = `width + len(" = ")`. A pure function
+    // of the entry's (lowercased) field-name set, so it is recomputed identically on
+    // every run — the hanging indent stays stable under reflow (idempotent).
+    let prefix_width = width + " = ".len();
 
     // Regular fields normalize quotes → braces, except `Verbatim`-category fields
     // (url/doi/…), whose value is never reshaped.
-    let normalize = cx.db.category(name_lc) != FieldCategory::Verbatim;
+    let category = cx.db.category(name_lc);
+    let normalize = category != FieldCategory::Verbatim;
     let value = match ast::field_value(field) {
-        Some(value) => lower_value(&value, normalize),
+        Some(value) => lower_value_reflowed(&value, normalize, category, prefix_width),
         // Defensive: a clean field always has a value; a recovery one is refused.
         None => Ir::nil(),
     };
 
     let comma = if last { Ir::nil() } else { Ir::text(",") };
     Ir::concat([prefix, value, comma])
+}
+
+/// Lower a field value, reflowing it to `line_width` when the field's category and
+/// shape make wrapping meaning-safe; otherwise fall back to the byte-exact
+/// [`lower_value`]. The guards (in order):
+///
+/// 1. `Verbatim`/`Date` categories never reflow.
+/// 2. A `#`-concatenated value (more than one piece) never reflows — the ` # `
+///    structure is layout, not prose whitespace.
+/// 3. A single bare `LITERAL` (macro reference or number) never reflows — wrapping
+///    would change its meaning.
+/// 4. A single `BRACE_GROUP` (or a `QUOTED` piece that safely rewrites to braces)
+///    reflows: `Literal` as prose, `Name` at ` and ` boundaries only.
+fn lower_value_reflowed(
+    value: &SyntaxNode,
+    normalize: bool,
+    category: FieldCategory,
+    prefix_width: usize,
+) -> Ir {
+    // Guard 1: categories whose values are structural, not prose.
+    if matches!(category, FieldCategory::Verbatim | FieldCategory::Date) {
+        return lower_value(value, normalize);
+    }
+    // Guard 2: only a lone value piece is a reflow candidate (no `#` concatenation).
+    let pieces: Vec<SyntaxNode> = value
+        .children()
+        .filter(|piece| {
+            matches!(
+                piece.kind(),
+                SyntaxKind::LITERAL | SyntaxKind::QUOTED | SyntaxKind::BRACE_GROUP
+            )
+        })
+        .collect();
+    let [piece] = pieces.as_slice() else {
+        return lower_value(value, normalize);
+    };
+
+    // Guard 3 + extract the inner text to reflow. A bare `LITERAL` and an unsafe
+    // `QUOTED` both fall back; a `BRACE_GROUP` or a safely-rebraced `QUOTED` reflow.
+    let inner = match piece.kind() {
+        SyntaxKind::BRACE_GROUP => brace_inner(piece),
+        SyntaxKind::QUOTED => match quoted_inner_if_safe(piece, normalize) {
+            Some(inner) => inner,
+            None => return lower_value(value, normalize),
+        },
+        _ => return lower_value(value, normalize),
+    };
+
+    match category {
+        FieldCategory::Name => reflow_name_value(&inner, prefix_width),
+        // `Literal` prose (and, defensively, any other non-Verbatim/Date category).
+        _ => reflow_prose_value(&inner, prefix_width),
+    }
+}
+
+/// Reflow a `Literal` prose value (`inner` is the content between the outer braces).
+/// Words split at brace-/math-depth-0 whitespace ([`split_brace_aware`]) and flow
+/// through an [`Ir::fill`]; continuation lines hang under the value column via
+/// [`Ir::align`]. The outer braces are re-emitted around the aligned fill. An empty
+/// value degenerates to `{}`.
+fn reflow_prose_value(inner: &str, prefix_width: usize) -> Ir {
+    let words = split_brace_aware(inner);
+    let fill = Ir::fill(words.into_iter().map(Ir::text));
+    Ir::concat([
+        Ir::text("{"),
+        // `+ 1` for the `{`: align continuation lines under the first value char.
+        Ir::align(prefix_width + 1, fill),
+        Ir::text("}"),
+    ])
+}
+
+/// Reflow a `Name` value (`author`/`editor`). Names split at top-level ` and `
+/// boundaries only ([`split_top_level_and`]); each whole name is an unbreakable atom.
+/// The separator carries the literal " and" followed by an [`Ir::Line`], so the fill
+/// breaks *after* "and" (it stays at the line end; the next name starts the
+/// continuation line). A single name (or none) emits intact — there is no structural
+/// break point. Outer braces and the hanging indent match [`reflow_prose_value`].
+fn reflow_name_value(inner: &str, prefix_width: usize) -> Ir {
+    let names = split_top_level_and(inner);
+    let body = if names.len() <= 1 {
+        // One name (commas and intra-name spaces kept, normalized to single spaces)
+        // or none. Nothing to break on, so a single unbreakable atom.
+        Ir::text(names.into_iter().next().unwrap_or_default())
+    } else {
+        // Build the fill directly: `Ir::fill` only inserts a bare `Line`, but the
+        // name separator must also print the word "and" before the break.
+        let sep = Ir::concat([Ir::text(" and"), Ir::Line]);
+        let mut parts = Vec::with_capacity(names.len() * 2 - 1);
+        for (i, name) in names.into_iter().enumerate() {
+            if i > 0 {
+                parts.push(sep.clone());
+            }
+            parts.push(Ir::text(name));
+        }
+        Ir::Fill(parts.into())
+    };
+    Ir::concat([
+        Ir::text("{"),
+        Ir::align(prefix_width + 1, body),
+        Ir::text("}"),
+    ])
+}
+
+/// The text between a `BRACE_GROUP`'s outer `{ }`. The piece parsed cleanly, so the
+/// braces are present and balanced; the fallback (`unwrap_or`) is defensive.
+fn brace_inner(piece: &SyntaxNode) -> String {
+    let raw = piece.to_string();
+    raw.strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or(&raw)
+        .to_string()
+}
+
+/// The inner text of a `QUOTED` piece when it is safe to reflow as a braced value:
+/// `normalize` is set and the content's braces are balanced (the same SAFE condition
+/// as [`lower_quoted`]). Returns `None` otherwise, so the caller leaves the value
+/// byte-exact.
+fn quoted_inner_if_safe(piece: &SyntaxNode, normalize: bool) -> Option<String> {
+    let raw = piece.to_string();
+    let inner = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))?;
+    (normalize && braces_balanced(inner)).then(|| inner.to_string())
+}
+
+/// Split prose into reflowable words at **brace-/math-depth-0 whitespace runs**. A
+/// token that spans a `{…}` group or a `$…$` math span stays one unbreakable atom, so
+/// inner braces never straddle a wrap and math is never broken mid-formula. Every
+/// whitespace run (space, newline, or newline+indent) collapses to a single break, so
+/// a value the formatter already wrapped re-splits into the identical word list
+/// (idempotence). `\{`, `\}`, and `\$` are escaped and do not change depth.
+fn split_brace_aware(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut brace_depth: i32 = 0;
+    let mut in_math = false;
+    let mut escaped = false;
+    for ch in s.chars() {
+        if escaped {
+            cur.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => {
+                cur.push(ch);
+                escaped = true;
+            }
+            c if c.is_whitespace() && brace_depth == 0 && !in_math => {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                }
+            }
+            '{' => {
+                brace_depth += 1;
+                cur.push(ch);
+            }
+            '}' => {
+                brace_depth -= 1;
+                cur.push(ch);
+            }
+            '$' => {
+                in_math = !in_math;
+                cur.push(ch);
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+/// Split a `Name` value into whole names at top-level ` and ` boundaries. Tokenizes
+/// with [`split_brace_aware`] (so an "and" inside braces — `{Barnes and Noble}` — is
+/// part of one atom and never a separator), then groups the words into names,
+/// closing the current name at each standalone `and` token. Each name's words rejoin
+/// with single spaces, normalizing source hard-wraps inside the list. An empty
+/// segment (leading/trailing/duplicate ` and `) is dropped.
+fn split_top_level_and(s: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut cur: Vec<String> = Vec::new();
+    for word in split_brace_aware(s) {
+        if word == "and" {
+            if !cur.is_empty() {
+                names.push(cur.join(" "));
+                cur.clear();
+            }
+        } else {
+            cur.push(word);
+        }
+    }
+    if !cur.is_empty() {
+        names.push(cur.join(" "));
+    }
+    names
 }
 
 /// `@string{name = value}` on a single line. Both the macro name and the value are
@@ -348,4 +561,78 @@ fn braces_balanced(s: &str) -> bool {
         }
     }
     depth == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{split_brace_aware, split_top_level_and};
+
+    #[test]
+    fn splits_prose_at_depth_zero_whitespace() {
+        assert_eq!(split_brace_aware("A title here"), ["A", "title", "here"]);
+    }
+
+    #[test]
+    fn collapses_every_whitespace_run() {
+        // Spaces, a newline, and a newline+indent all collapse to one break, so a
+        // re-read of an already-wrapped value yields the identical word list.
+        assert_eq!(
+            split_brace_aware("A  title\nthat\n  wraps"),
+            ["A", "title", "that", "wraps"]
+        );
+    }
+
+    #[test]
+    fn glues_braced_and_math_spans() {
+        // A `{…}` group and a `$…$` span never split, so inner braces and math stay
+        // intact across a wrap.
+        assert_eq!(
+            split_brace_aware("a {Protected group} b"),
+            ["a", "{Protected group}", "b"]
+        );
+        assert_eq!(split_brace_aware("x $a + b$ y"), ["x", "$a + b$", "y"]);
+    }
+
+    #[test]
+    fn escapes_do_not_change_depth() {
+        // `\{` / `\}` / `\$` are literal, not delimiters: the spaces around them still
+        // split.
+        assert_eq!(split_brace_aware(r"a \{ b"), ["a", r"\{", "b"]);
+        assert_eq!(split_brace_aware(r"a \$ b"), ["a", r"\$", "b"]);
+    }
+
+    #[test]
+    fn splits_names_at_top_level_and() {
+        assert_eq!(
+            split_top_level_and("John Doe and Jane Smith"),
+            ["John Doe", "Jane Smith"]
+        );
+    }
+
+    #[test]
+    fn protects_braced_and() {
+        // An "and" inside braces is part of one corporate name, not a separator.
+        assert_eq!(
+            split_top_level_and("{Barnes and Noble} and Jane Public"),
+            ["{Barnes and Noble}", "Jane Public"]
+        );
+    }
+
+    #[test]
+    fn drops_empty_name_segments_and_normalizes_spacing() {
+        // A trailing ` and ` leaves an empty segment (dropped); intra-name source
+        // wraps collapse to single spaces.
+        assert_eq!(
+            split_top_level_and("Knuth, Donald\n  E. and Lamport and "),
+            ["Knuth, Donald E.", "Lamport"]
+        );
+    }
+
+    #[test]
+    fn single_name_stays_whole() {
+        assert_eq!(
+            split_top_level_and("Knuth, Donald E."),
+            ["Knuth, Donald E."]
+        );
+    }
 }

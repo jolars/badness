@@ -407,33 +407,35 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   concatenation preserved as ` # `), no trailing comma,
   one blank line between blocks. `@comment` bodies and inter-entry `JUNK` preserved (junk's
   outer whitespace trimmed so blank-line normalization stays idempotent). Refuses any input
-  the parser flags. Tests (`tests/bib_format.rs` + `tests/fixtures/bib_format/`): 15
+  the parser flags. Tests (`tests/bib_format.rs` + `tests/fixtures/bib_format/`):
   exact-output fixtures, a meaning-preservation oracle (`semantic::Model` entries/keys/
-  `@string` defs+uses), and idempotence/clean/round-trip invariants over the corpus
-  (incl. `biblatex-examples.bib`). bibtex-tidy / `biber --tool` remain soft convergence
-  gauges only. *Deferred to Phase 4:* CLI/LSP routing for `.bib`; *future config:*
-  brace-vs-quote/trailing-comma/paren-normalization toggles. **Not done — value reflow
-  is its own item below.**
-- [ ] **Phase 2b — Value reflow (wrap long field values where safe).** Today value
-  interiors are emitted byte-exact (no wrapping): a long `abstract`/`title` stays one
-  physical line and author hard-wraps are preserved verbatim (continuation lines keep
-  their source column, since `Ir::verbatim` does not re-indent). Reflow long values to
-  `line_width` by default for the fields where it is *meaning-safe*, using the shared `Ir::Fill`
-  primitive with a hanging indent under the `=` (so continuation lines align past
-  `name = `, not at the field indent). **Category gating is load-bearing** (consult the
-  signature DB, as the lowering already does): reflow `Literal` prose (`title`,
-  `journaltitle`, `abstract`, …) only; **never** `Verbatim` (`url`/`doi`/`eprint`/`file`),
-  **never** `Name` (`author`/`editor` — the ` and ` separators and name-part commas are
-  structural, not prose whitespace; at most break *at* ` and ` boundaries, never inside a
-  name), and **never** a value with `#` concatenation or a single bare `LITERAL`
-  macro/number. A braced value's inner braces must stay balanced across wraps. Hold the
-  invariants: idempotence (a reflowed value must re-reflow identically — watch the
-  hanging-indent width recompute) and meaning preservation (the `semantic::Model` oracle
-  plus a value-content-modulo-whitespace check). Default-on (Tenet 1: opinionated,
-  rule-based) — the category gating above is a *correctness* boundary, not a preference,
-  so there is no opt-out knob; `line_width` alone tunes it. New fixtures: long literal
-  wrapped, `author` list left intact, `url` left intact, concatenation left intact,
-  author-wrapped value normalized.
+  `@string` defs+uses, plus a `field_values` value-content check), and idempotence/clean/
+  round-trip invariants over the corpus (incl. `biblatex-examples.bib`). bibtex-tidy /
+  `biber --tool` remain soft convergence gauges only. *Deferred to Phase 4:* CLI/LSP
+  routing for `.bib`; *future config:* brace-vs-quote/trailing-comma/paren-normalization
+  toggles. **Value reflow landed in Phase 2b below.**
+- [x] **Phase 2b — Value reflow (wrap long field values where safe).** Done.
+  `lower_value_reflowed` (`src/bib/formatter/core.rs`) reflows a long single-piece value
+  to `line_width` via the shared `Ir::Fill` primitive, with a hanging indent under the
+  `=` (`Ir::align(prefix_width + 1, …)`, where `prefix_width = width + len(" = ")` is a
+  pure function of the entry's field-name set, so it is stable across passes).
+  **Category gating** (consults the signature DB): `Literal` prose (`title`,
+  `journaltitle`, `abstract`, …) reflows at any brace-/math-depth-0 whitespace
+  (`split_brace_aware`); **`Name`** (`author`/`editor`) reflows **only** at top-level
+  ` and ` boundaries, breaking *after* "and" so the next name starts the continuation
+  line, never inside a name (`split_top_level_and` + a `concat([" and", Line])`
+  separator — a braced ` and `, as in `{Barnes and Noble}`, stays one atom); **never**
+  `Verbatim` (`url`/`doi`/`eprint`/`file`) or `Date`, **never** a `#`-concatenated value
+  or a single bare `LITERAL` macro/number. Brace- and `$…$`-spanning tokens stay glued,
+  so inner braces and math never straddle a wrap. Invariants hold: idempotence (every
+  whitespace run — incl. newline+indent — collapses to one break, so a reflowed value
+  re-reflows identically) and meaning preservation (the `semantic::Model` oracle plus a
+  new `field_values` value-content-modulo-whitespace-and-delimiters check, both asserted
+  on every fixture and every clean corpus file). No opt-out knob; `line_width` alone
+  tunes it. New fixtures: `reflow_literal_wrapped`, `reflow_author_and`,
+  `author_hardwrap_normalized`, `reflow_inner_braces`, `verbatim_url_intact`,
+  `concat_no_reflow`, `single_macro_intact`, `prewrapped_idempotent`,
+  `multiline_value_reflowed`.
 - [ ] **Phase 2c — Field & entry sorting (default-on).** Today both orders are preserved
   from source (`lower_entry` walks `ast::fields` in order; `lower_root` walks blocks in
   order). Sort deterministically by default (opinionated formatter, Tenet 1); the

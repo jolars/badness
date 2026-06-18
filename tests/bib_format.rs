@@ -9,7 +9,8 @@ use std::fs;
 use std::path::Path;
 
 use badness::bib::semantic::Model;
-use badness::bib::{format, format_with_style, parse, reconstruct};
+use badness::bib::syntax::SyntaxKind;
+use badness::bib::{ast, format, format_with_style, parse, reconstruct};
 use badness::formatter::FormatStyle;
 
 /// The semantic facts formatting must preserve: each entry's (type, key) in source
@@ -38,6 +39,32 @@ fn meaning(text: &str) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
     (entries, defs, uses)
 }
 
+/// Every field's `(name_lc, value-signature)` across the document, in source order.
+/// The signature is the value text with all whitespace and value delimiters (`"`,
+/// `{`, `}`) removed — the formatter is allowed to insert/remove whitespace (reflow,
+/// ` # ` spacing) and rewrite `"…"` → `{…}`, but it must never add, drop, reorder, or
+/// mangle the actual content characters. This catches a reflow bug (a dropped or
+/// duplicated word, a split inside a braced token) that the entry/`@string`-level
+/// `meaning()` oracle cannot see, since that oracle never inspects value content.
+fn field_values(text: &str) -> Vec<(String, String)> {
+    fn signature(value_text: &str) -> String {
+        value_text
+            .chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, '"' | '{' | '}'))
+            .collect()
+    }
+    parse(text)
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::FIELD)
+        .filter_map(|field| {
+            let name = ast::field_name(&field)?.to_lowercase();
+            let value = ast::field_value(&field)?;
+            Some((name, signature(&value.to_string())))
+        })
+        .collect()
+}
+
 /// Assert the formatter invariants for one clean-parsing input. Inputs the parser
 /// rejects are out of scope (the formatter refuses them), so callers filter those.
 fn assert_bib_format_invariants(input: &str) {
@@ -63,6 +90,14 @@ fn assert_bib_format_invariants(input: &str) {
         meaning(input),
         meaning(&formatted),
         "formatting changed meaning for {input:?}"
+    );
+
+    // Value content preserved modulo whitespace and delimiters: reflow only moves
+    // whitespace, so no field's content characters may change.
+    assert_eq!(
+        field_values(input),
+        field_values(&formatted),
+        "formatting changed a field value's content for {input:?}"
     );
 }
 

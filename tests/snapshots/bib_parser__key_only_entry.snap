@@ -1,0 +1,13 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@misc{lonelykey}\")"
+---
+ROOT@0..16
+  ENTRY@0..16
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..15
+      WORD@6..15 "lonelykey"
+    R_BRACE@15..16 "}"

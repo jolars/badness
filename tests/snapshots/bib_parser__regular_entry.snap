@@ -1,0 +1,43 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@article{knuth1984,\\n  author = {Donald Knuth},\\n  year = 2020,\\n}\")"
+---
+ROOT@0..63
+  ENTRY@0..63
+    AT@0..1 "@"
+    ENTRY_TYPE@1..8
+      WORD@1..8 "article"
+    L_BRACE@8..9 "{"
+    KEY@9..18
+      WORD@9..18 "knuth1984"
+    COMMA@18..19 ","
+    NEWLINE@19..20 "\n"
+    WHITESPACE@20..22 "  "
+    FIELD@22..45
+      FIELD_NAME@22..28
+        WORD@22..28 "author"
+      WHITESPACE@28..29 " "
+      EQ@29..30 "="
+      WHITESPACE@30..31 " "
+      VALUE@31..45
+        BRACE_GROUP@31..45
+          L_BRACE@31..32 "{"
+          WORD@32..38 "Donald"
+          WHITESPACE@38..39 " "
+          WORD@39..44 "Knuth"
+          R_BRACE@44..45 "}"
+    COMMA@45..46 ","
+    NEWLINE@46..47 "\n"
+    WHITESPACE@47..49 "  "
+    FIELD@49..60
+      FIELD_NAME@49..53
+        WORD@49..53 "year"
+      WHITESPACE@53..54 " "
+      EQ@54..55 "="
+      WHITESPACE@55..56 " "
+      VALUE@56..60
+        LITERAL@56..60
+          NUMBER@56..60 "2020"
+    COMMA@60..61 ","
+    NEWLINE@61..62 "\n"
+    R_BRACE@62..63 "}"

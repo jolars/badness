@@ -1,0 +1,11 @@
+---
+source: tests/bib_lexer_snapshots.rs
+expression: "dump(\"jan 2020 key123 123abc\")"
+---
+WORD "jan"
+WHITESPACE " "
+NUMBER "2020"
+WHITESPACE " "
+WORD "key123"
+WHITESPACE " "
+WORD "123abc"

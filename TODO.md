@@ -357,9 +357,16 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 
 ## BibTeX / BibLaTeX
 
-- [ ] Parser (likely a `bib.rs` module, maybe its own crate); formatter + linter
-  rules; LSP support; salsa incremental parsing + semantic model integrated
-  with the LaTeX project graph (resolve `\bibliography` references).
+- [x] Parser — `src/bib/` module mirroring the LaTeX parser (lossless rowan CST +
+  flat event stream + side-channel byte-range errors). Own `SyntaxKind` /
+  `BibLang`; copied (EXTRACTION CANDIDATE) `events.rs` + `tree_builder.rs`. Handles
+  regular entries (`{…}` and `(…)`), the reserved `@string` / `@preamble` /
+  `@comment` forms, brace/quoted/literal values with `#` concatenation, nested
+  braces, brace-protected quotes, inter-entry junk, and error recovery. Tests:
+  `tests/bib_{parser,lexer_snapshots,roundtrip}.rs` + `tests/bib_corpus/`.
+- [ ] Formatter + linter rules; LSP support; salsa incremental parsing + semantic
+  model integrated with the LaTeX project graph (resolve `\bibliography` /
+  `\addbibresource` references).
 
 --------------------------------------------------------------------------------
 

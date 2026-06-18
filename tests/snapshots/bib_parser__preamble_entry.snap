@@ -1,0 +1,26 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(r#\"@preamble{ \"\\newcommand{\\noop}[1]{}\" }\"#)"
+---
+ROOT@0..38
+  PREAMBLE_ENTRY@0..38
+    AT@0..1 "@"
+    ENTRY_TYPE@1..9
+      WORD@1..9 "preamble"
+    L_BRACE@9..10 "{"
+    WHITESPACE@10..11 " "
+    VALUE@11..37
+      QUOTED@11..36
+        QUOTE@11..12 "\""
+        WORD@12..23 "\\newcommand"
+        BRACE_GROUP@23..30
+          L_BRACE@23..24 "{"
+          WORD@24..29 "\\noop"
+          R_BRACE@29..30 "}"
+        WORD@30..33 "[1]"
+        BRACE_GROUP@33..35
+          L_BRACE@33..34 "{"
+          R_BRACE@34..35 "}"
+        QUOTE@35..36 "\""
+      WHITESPACE@36..37 " "
+    R_BRACE@37..38 "}"

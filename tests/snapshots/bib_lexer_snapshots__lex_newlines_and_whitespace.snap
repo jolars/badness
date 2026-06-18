@@ -1,0 +1,11 @@
+---
+source: tests/bib_lexer_snapshots.rs
+expression: "dump(\"a\\r\\nb\\n\\n  c\")"
+---
+WORD "a"
+NEWLINE "\r\n"
+WORD "b"
+NEWLINE "\n"
+NEWLINE "\n"
+WHITESPACE "  "
+WORD "c"

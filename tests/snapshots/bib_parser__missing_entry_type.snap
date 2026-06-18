@@ -1,0 +1,13 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@ {oops}\")"
+---
+ROOT@0..8
+  ENTRY@0..2
+    AT@0..1 "@"
+    WHITESPACE@1..2 " "
+  JUNK@2..8
+    L_BRACE@2..3 "{"
+    WORD@3..7 "oops"
+    R_BRACE@7..8 "}"
+error @2..3: expected an entry type after `@`

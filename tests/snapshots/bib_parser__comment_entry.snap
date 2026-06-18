@@ -1,0 +1,16 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@comment{ jabref-meta: databaseType:bibtex; }\")"
+---
+ROOT@0..45
+  COMMENT_ENTRY@0..45
+    AT@0..1 "@"
+    ENTRY_TYPE@1..8
+      WORD@1..8 "comment"
+    L_BRACE@8..9 "{"
+    WHITESPACE@9..10 " "
+    WORD@10..22 "jabref-meta:"
+    WHITESPACE@22..23 " "
+    WORD@23..43 "databaseType:bibtex;"
+    WHITESPACE@43..44 " "
+    R_BRACE@44..45 "}"

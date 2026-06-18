@@ -1,0 +1,27 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@misc{k, note = {n},}\")"
+---
+ROOT@0..21
+  ENTRY@0..21
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..7
+      WORD@6..7 "k"
+    COMMA@7..8 ","
+    WHITESPACE@8..9 " "
+    FIELD@9..19
+      FIELD_NAME@9..13
+        WORD@9..13 "note"
+      WHITESPACE@13..14 " "
+      EQ@14..15 "="
+      WHITESPACE@15..16 " "
+      VALUE@16..19
+        BRACE_GROUP@16..19
+          L_BRACE@16..17 "{"
+          WORD@17..18 "n"
+          R_BRACE@18..19 "}"
+    COMMA@19..20 ","
+    R_BRACE@20..21 "}"

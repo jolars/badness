@@ -1,0 +1,16 @@
+---
+source: tests/bib_lexer_snapshots.rs
+expression: "dump(\"@article{key, year = 2020}\")"
+---
+AT "@"
+WORD "article"
+L_BRACE "{"
+WORD "key"
+COMMA ","
+WHITESPACE " "
+WORD "year"
+WHITESPACE " "
+EQ "="
+WHITESPACE " "
+NUMBER "2020"
+R_BRACE "}"

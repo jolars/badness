@@ -1,0 +1,37 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@misc{k, title = {a {B{c}} d}}\")"
+---
+ROOT@0..30
+  ENTRY@0..30
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..7
+      WORD@6..7 "k"
+    COMMA@7..8 ","
+    WHITESPACE@8..9 " "
+    FIELD@9..29
+      FIELD_NAME@9..14
+        WORD@9..14 "title"
+      WHITESPACE@14..15 " "
+      EQ@15..16 "="
+      WHITESPACE@16..17 " "
+      VALUE@17..29
+        BRACE_GROUP@17..29
+          L_BRACE@17..18 "{"
+          WORD@18..19 "a"
+          WHITESPACE@19..20 " "
+          BRACE_GROUP@20..26
+            L_BRACE@20..21 "{"
+            WORD@21..22 "B"
+            BRACE_GROUP@22..25
+              L_BRACE@22..23 "{"
+              WORD@23..24 "c"
+              R_BRACE@24..25 "}"
+            R_BRACE@25..26 "}"
+          WHITESPACE@26..27 " "
+          WORD@27..28 "d"
+          R_BRACE@28..29 "}"
+    R_BRACE@29..30 "}"

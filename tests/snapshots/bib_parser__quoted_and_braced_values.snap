@@ -1,0 +1,50 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(r#\"@article{k, a = \"quoted\", b = {braced}, c = 1999}\"#)"
+---
+ROOT@0..49
+  ENTRY@0..49
+    AT@0..1 "@"
+    ENTRY_TYPE@1..8
+      WORD@1..8 "article"
+    L_BRACE@8..9 "{"
+    KEY@9..10
+      WORD@9..10 "k"
+    COMMA@10..11 ","
+    WHITESPACE@11..12 " "
+    FIELD@12..24
+      FIELD_NAME@12..13
+        WORD@12..13 "a"
+      WHITESPACE@13..14 " "
+      EQ@14..15 "="
+      WHITESPACE@15..16 " "
+      VALUE@16..24
+        QUOTED@16..24
+          QUOTE@16..17 "\""
+          WORD@17..23 "quoted"
+          QUOTE@23..24 "\""
+    COMMA@24..25 ","
+    WHITESPACE@25..26 " "
+    FIELD@26..38
+      FIELD_NAME@26..27
+        WORD@26..27 "b"
+      WHITESPACE@27..28 " "
+      EQ@28..29 "="
+      WHITESPACE@29..30 " "
+      VALUE@30..38
+        BRACE_GROUP@30..38
+          L_BRACE@30..31 "{"
+          WORD@31..37 "braced"
+          R_BRACE@37..38 "}"
+    COMMA@38..39 ","
+    WHITESPACE@39..40 " "
+    FIELD@40..48
+      FIELD_NAME@40..41
+        WORD@40..41 "c"
+      WHITESPACE@41..42 " "
+      EQ@42..43 "="
+      WHITESPACE@43..44 " "
+      VALUE@44..48
+        LITERAL@44..48
+          NUMBER@44..48 "1999"
+    R_BRACE@48..49 "}"

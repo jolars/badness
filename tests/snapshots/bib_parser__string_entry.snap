@@ -1,0 +1,22 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(r#\"@string{jan = \"January\"}\"#)"
+---
+ROOT@0..24
+  STRING_ENTRY@0..24
+    AT@0..1 "@"
+    ENTRY_TYPE@1..7
+      WORD@1..7 "string"
+    L_BRACE@7..8 "{"
+    FIELD@8..23
+      FIELD_NAME@8..11
+        WORD@8..11 "jan"
+      WHITESPACE@11..12 " "
+      EQ@12..13 "="
+      WHITESPACE@13..14 " "
+      VALUE@14..23
+        QUOTED@14..23
+          QUOTE@14..15 "\""
+          WORD@15..22 "January"
+          QUOTE@22..23 "\""
+    R_BRACE@23..24 "}"

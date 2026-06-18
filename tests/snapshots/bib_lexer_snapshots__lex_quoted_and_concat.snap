@@ -1,0 +1,21 @@
+---
+source: tests/bib_lexer_snapshots.rs
+expression: "dump(r#\"title = \"a\" # foo # {b}\"#)"
+---
+WORD "title"
+WHITESPACE " "
+EQ "="
+WHITESPACE " "
+QUOTE "\""
+WORD "a"
+QUOTE "\""
+WHITESPACE " "
+HASH "#"
+WHITESPACE " "
+WORD "foo"
+WHITESPACE " "
+HASH "#"
+WHITESPACE " "
+L_BRACE "{"
+WORD "b"
+R_BRACE "}"

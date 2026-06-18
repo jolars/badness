@@ -1,0 +1,26 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@book(key, title = {T})\")"
+---
+ROOT@0..23
+  ENTRY@0..23
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "book"
+    L_PAREN@5..6 "("
+    KEY@6..9
+      WORD@6..9 "key"
+    COMMA@9..10 ","
+    WHITESPACE@10..11 " "
+    FIELD@11..22
+      FIELD_NAME@11..16
+        WORD@11..16 "title"
+      WHITESPACE@16..17 " "
+      EQ@17..18 "="
+      WHITESPACE@18..19 " "
+      VALUE@19..22
+        BRACE_GROUP@19..22
+          L_BRACE@19..20 "{"
+          WORD@20..21 "T"
+          R_BRACE@21..22 "}"
+    R_PAREN@22..23 ")"

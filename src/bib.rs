@@ -14,6 +14,7 @@
 pub mod ast;
 pub mod core;
 pub(crate) mod events;
+pub mod formatter;
 pub(crate) mod grammar;
 pub mod lexer;
 pub mod semantic;
@@ -21,4 +22,5 @@ pub mod syntax;
 pub(crate) mod tree_builder;
 
 pub use core::{Parse, SyntaxError, parse, reconstruct};
+pub use formatter::{FormatError, format, format_node, format_with_style};
 pub use lexer::{Token, lex};

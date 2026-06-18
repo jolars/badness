@@ -396,12 +396,23 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   salsa `bib_semantic_model` is Phase 4. Real-corpus test (`tests/bib_semantic.rs`): 92
   entries + 8 `@string`s collected from `biblatex-examples.bib`, zero false duplicate/undefined
   findings.
-- [ ] **Phase 2 — Formatter.** Lower the bib CST → the shared Wadler IR
-  (`formatter/ir.rs` + `printer.rs`, reused). Own deterministic style (Tenet 1): one field
-  per line, indented fields, entry-type/field-name case normalization, optional `=`
-  alignment, brace-vs-quote and trailing-comma policy. Hold idempotence + protected-region
-  invariants; verbatim-ish fields untouched. bibtex-tidy / `biber --tool` are soft
-  convergence gauges only, never match targets.
+- [x] **Phase 2 — Formatter.** `src/bib/formatter/` lowers the bib CST → the shared
+  Wadler IR (`formatter/{ir,printer,style}.rs`, reused; only the lowering is bib-specific,
+  mirroring `src/formatter/core.rs`). Landed deterministic style (Tenet 1): one field per
+  line, fields indented one `indent_width` step, entry-type/field-name lowercasing (cite
+  keys + `@string` names preserved), `=` aligned within each entry (precomputed text
+  padding, *not* `Ir::Align` — that is continuation indent), quote→brace value
+  normalization where safe (non-`Verbatim` field + balanced inner braces; bare `LITERAL`
+  macro/number never wrapped; `@string`/`@preamble` values kept as authored; `#`
+  concatenation preserved as ` # `), no trailing comma,
+  one blank line between blocks. `@comment` bodies and inter-entry `JUNK` preserved (junk's
+  outer whitespace trimmed so blank-line normalization stays idempotent). Refuses any input
+  the parser flags. Tests (`tests/bib_format.rs` + `tests/fixtures/bib_format/`): 14
+  exact-output fixtures, a meaning-preservation oracle (`semantic::Model` entries/keys/
+  `@string` defs+uses), and idempotence/clean/round-trip invariants over the corpus
+  (incl. `biblatex-examples.bib`). bibtex-tidy / `biber --tool` remain soft convergence
+  gauges only. *Deferred to Phase 4:* CLI/LSP routing for `.bib`; *future config:*
+  value-interior reflow, brace-vs-quote/trailing-comma/paren-normalization toggles.
 - [ ] **Phase 3 — Linter rules + autofixes.** Reuse `src/linter/` infra (`Rule`, dispatch
   table, `Fix`/`apply_fixes`, suppression). Rules: duplicate key, missing required field
   (from the field DB), unknown/empty field, unused `@string`, title-capitalization

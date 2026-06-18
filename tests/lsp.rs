@@ -21,6 +21,21 @@ use lsp_types::{
     WorkDoneProgressParams,
 };
 
+/// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
+/// path can't be string-formatted into a URI directly: on Windows it uses
+/// backslashes and a drive-letter colon (`C:\dir`), which is not valid URI
+/// syntax. Normalize separators to `/` and ensure a leading `/` so a drive
+/// path becomes `file:///C:/dir` (matching the server's `uri_to_fs_path`).
+fn path_to_file_uri(path: &std::path::Path) -> Uri {
+    let mut s = path.display().to_string().replace('\\', "/");
+    if !s.starts_with('/') {
+        s.insert(0, '/');
+    }
+    format!("file://{s}")
+        .parse()
+        .expect("path should form a valid file:// URI")
+}
+
 fn recv(client: &Connection) -> Message {
     client
         .receiver
@@ -515,9 +530,7 @@ fn lsp_completion_file_paths() {
     std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
     std::fs::create_dir(dir.path().join("chapters")).unwrap();
 
-    let uri: Uri = format!("file://{}/main.tex", dir.path().display())
-        .parse()
-        .unwrap();
+    let uri = path_to_file_uri(&dir.path().join("main.tex"));
     let (client, server_thread) = start_server(None);
 
     // `\input{|}` → `.tex` files and directories (not the image or the `.txt`).

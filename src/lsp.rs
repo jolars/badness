@@ -1135,7 +1135,28 @@ fn uri_to_fs_path(uri: &Uri) -> Option<PathBuf> {
         Some(_) => rest,
         None => rest.split_once('/').map(|(_, p)| p)?,
     };
-    Some(PathBuf::from(percent_decode(path)))
+    let path = percent_decode(path);
+    // A Windows file URI carries the absolute path as `/C:/dir/...`; the leading
+    // slash is URI syntax, not part of the filesystem path (`C:\dir`). Strip it
+    // when a drive-letter component follows so `read_dir` sees a real path. On
+    // Unix the leading `/` is the filesystem root and must stay.
+    let path = strip_drive_letter_slash(&path);
+    Some(PathBuf::from(path))
+}
+
+/// Strip the leading slash of a Windows drive-letter path (`/C:/dir` → `C:/dir`),
+/// leaving any other path (including Unix absolute paths) untouched. Recognizes a
+/// single ASCII-letter drive followed by `:` and a separator or the end.
+fn strip_drive_letter_slash(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    if let [b'/', drive, b':', rest @ ..] = bytes
+        && drive.is_ascii_alphabetic()
+        && matches!(rest, [] | [b'/', ..] | [b'\\', ..])
+    {
+        &path[1..]
+    } else {
+        path
+    }
 }
 
 /// Percent-decode a URI path component (`%20` → space, …), leaving any malformed
@@ -1219,6 +1240,32 @@ mod tests {
 
     fn uri(s: &str) -> Uri {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn uri_to_fs_path_handles_unix_and_windows() {
+        // Unix: the leading slash is the filesystem root and must be kept.
+        assert_eq!(
+            uri_to_fs_path(&uri("file:///tmp/dir/main.tex")),
+            Some(PathBuf::from("/tmp/dir/main.tex"))
+        );
+        // Windows: the leading slash before the drive letter is URI syntax only.
+        assert_eq!(
+            uri_to_fs_path(&uri("file:///C:/Users/me/main.tex")),
+            Some(PathBuf::from("C:/Users/me/main.tex"))
+        );
+        // Non-file scheme (unsaved buffer) → no path.
+        assert_eq!(uri_to_fs_path(&uri("untitled:Untitled-1")), None);
+    }
+
+    #[test]
+    fn strip_drive_letter_slash_only_strips_real_drives() {
+        assert_eq!(strip_drive_letter_slash("/C:/dir"), "C:/dir");
+        assert_eq!(strip_drive_letter_slash("/c:"), "c:");
+        assert_eq!(strip_drive_letter_slash("/C:\\dir"), "C:\\dir");
+        // Not a drive letter: leave untouched.
+        assert_eq!(strip_drive_letter_slash("/tmp/dir"), "/tmp/dir");
+        assert_eq!(strip_drive_letter_slash("/ab:/dir"), "/ab:/dir");
     }
 
     #[test]

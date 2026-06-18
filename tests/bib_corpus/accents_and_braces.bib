@@ -1,0 +1,25 @@
+% A corpus file exercising accents, commands, and nested brace protection inside
+% values — the area where badness (generic) and texlab (accent/command-aware)
+% legitimately diverge below the field level.
+
+@article{accents,
+  author  = {Kurt G{\"o}del and Paul Erd{\H{o}}s and Andr\'e Weil},
+  title   = {{\"U}ber formal unentscheidbare S{\"a}tze},
+  journal = {Monatshefte f{\"u}r Mathematik},
+  year    = {1931},
+  note    = {With a tilde~here and a \emph{command} there},
+}
+
+@book{nested,
+  title     = {A Title {with {deeply {nested}} braces} inside},
+  author    = {de~la Vall{\'e}e~Poussin, Charles-Jean},
+  publisher = {Gauthier-Villars},
+  year      = {1896},
+}
+
+@inbook{quoted,
+  author    = "Th{\'e}orie de la Renormalisation",
+  title     = "A quoted title with a {brace-protected} group inside",
+  publisher = "Some Press",
+  year      = "1900",
+}

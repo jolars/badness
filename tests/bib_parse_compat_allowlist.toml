@@ -1,0 +1,12 @@
+# Recorded intentional BibTeX parse-concordance deviations vs texlab.
+#
+# Keys are corpus file names (e.g. `messy.bib`); values are a one-line reason.
+# Used by the soft `tests/bib_parse_compat.rs` gauge to bucket a divergence as a
+# deliberate, documented choice rather than an open triage item.
+#
+# The bib skeleton stops at the field level (entry types + field names), so most
+# value-internal differences never reach this gauge. Record here only deviations
+# we have consciously decided to keep. See AGENTS.md ("measure against, never match").
+
+[deviations]
+# example.bib = "reason badness's skeleton intentionally differs from texlab's here"

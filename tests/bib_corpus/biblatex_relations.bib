@@ -1,0 +1,39 @@
+% Cross-referencing, concatenation chains, and the reserved forms together — all
+% well-formed, to exercise entry/field recognition across related entries.
+
+@preamble{ "\newcommand{\noopsort}[1]{}" # "\hyphenation{Wei-er-stra{\ss}}" }
+
+@string{dtv  = {Deutscher Taschenbuch-Verlag}}
+@string{jan  = {January}}
+@string{feb  = {February}}
+
+@collection{westfahl:space,
+  editor    = {Westfahl, Gary},
+  title     = {Space and Beyond},
+  date      = {2000},
+  publisher = dtv,
+  location  = {Westport, Conn. and London},
+}
+
+@incollection{westfahl:frontier,
+  author     = {Westfahl, Gary},
+  title      = {The True Frontier},
+  date       = {2000},
+  crossref   = {westfahl:space},
+  pages      = {55--65},
+}
+
+@article{splitseason,
+  author  = {Editor, An},
+  title   = {A Two-Month Study},
+  journal = {Journal of Months},
+  month   = jan # {--} # feb,
+  year    = {2021},
+}
+
+@comment{
+  This whole block is an explicit comment and BibTeX ignores its contents,
+  including a stray { brace } here.
+}
+
+@COMMENT{jabref-meta: databaseType:biblatex;}

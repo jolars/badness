@@ -44,6 +44,11 @@ tasks:
     cmds:
       - cargo test --test parse_compat -- --ignored --nocapture
 
+  bib-parse-compat:
+    desc: Soft differential BibTeX parse-concordance report vs texlab (writes BIB_PARSE_COMPAT.md)
+    cmds:
+      - cargo test --test bib_parse_compat -- --ignored --nocapture
+
   check:
     desc: Everything CI runs
     deps: [fmt-check, lint, test]

@@ -364,9 +364,44 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   `@comment` forms, brace/quoted/literal values with `#` concatenation, nested
   braces, brace-protected quotes, inter-entry junk, and error recovery. Tests:
   `tests/bib_{parser,lexer_snapshots,roundtrip}.rs` + `tests/bib_corpus/`.
-- [ ] Formatter + linter rules; LSP support; salsa incremental parsing + semantic
-  model integrated with the LaTeX project graph (resolve `\bibliography` /
-  `\addbibresource` references).
+- [x] **Phase 0 — Differential parse oracle.** texlab ships a full BibTeX parser
+  (`texlab_parser::parse_bibtex` → `texlab_syntax::bibtex`), already a vendored
+  dev-dependency, so the bib oracle mirrors the LaTeX one (`tests/parse_{oracle,compat}.rs`).
+  - `tests/support/bib_skeleton.rs` — projects both CSTs onto a common skeleton
+    (entry type + field names; cite keys and value internals dropped, since that is
+    where the generic and semantic parsers legitimately diverge).
+  - `tests/bib_parse_oracle.rs` — hard gate in `cargo test`. texlab's bib parser has
+    **no error channel** (unlike its LaTeX parser), so the LaTeX-style "must not error"
+    check is vacuous; the gate instead enforces an *entry-recognition floor* (texlab
+    recognizes ≥ as many `@entry`/`@string`/`@preamble` as badness on a badness-clean file).
+  - `tests/bib_parse_compat.rs` (`#[ignore]`, `task bib-parse-compat`) — soft Dice gauge
+    → `BIB_PARSE_COMPAT.md` + `tests/bib_parse_compat_allowlist.toml`. Baseline: 100%
+    skeleton similarity across the corpus.
+  - Corpus grown (`tests/bib_corpus/`): biblatex entry types/fields, accents/commands &
+    nested braces in values, `@string`/`#` chains, crossref, the reserved forms.
+    *Next:* vendor a large real-world `.bib` (biblatex-examples, ACL Anthology slice) to
+    widen coverage.
+- [ ] **Phase 1 — Semantic model + field/entry signature DB.** Bib analog of
+  `data/signatures.json` + `src/semantic/`: `data/bib_fields.json` (entry types,
+  required/optional fields, field categories — name lists, dates, verbatim-ish `url`/`doi`).
+  `bib::semantic::Model` collects entries, cite keys, `@string` defs/uses; flags duplicate
+  keys and undefined `@string` references. Mirror `src/semantic/builder.rs`.
+- [ ] **Phase 2 — Formatter.** Lower the bib CST → the shared Wadler IR
+  (`formatter/ir.rs` + `printer.rs`, reused). Own deterministic style (Tenet 1): one field
+  per line, indented fields, entry-type/field-name case normalization, optional `=`
+  alignment, brace-vs-quote and trailing-comma policy. Hold idempotence + protected-region
+  invariants; verbatim-ish fields untouched. bibtex-tidy / `biber --tool` are soft
+  convergence gauges only, never match targets.
+- [ ] **Phase 3 — Linter rules + autofixes.** Reuse `src/linter/` infra (`Rule`, dispatch
+  table, `Fix`/`apply_fixes`, suppression). Rules: duplicate key, missing required field
+  (from the field DB), unknown/empty field, unused `@string`, title-capitalization
+  protection, encoding hints. Autofixes format-clean by construction (Tenet 5).
+- [ ] **Phase 4 — Incremental + CLI + LSP + project-graph integration.** salsa
+  `parsed_bib_document` / `bib_semantic_model` queries (`incremental.rs`); route `.bib`
+  through `badness format`/`lint` (`main.rs`, `file_discovery.rs`); LSP diagnostics +
+  formatting + document symbols for `.bib`; extend `src/project/include.rs` to resolve
+  `\bibliography` / `\addbibresource` and cross-check `\cite{key}` against bib keys (an
+  `undefined-citation` rule mirroring `undefined-ref`, gated on a closed/rooted component).
 
 --------------------------------------------------------------------------------
 

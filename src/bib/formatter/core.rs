@@ -154,7 +154,11 @@ struct Lower {
 /// `@comment` / junk) on its own, separated by exactly one blank line. Bare ROOT
 /// trivia tokens are discarded — blank-line separation is re-emitted deterministically.
 fn lower_root(root: &SyntaxNode, cx: Lower) -> Ir {
-    let blocks = root.children().map(|node| lower_block(&node, cx));
+    // Entries are sorted by cite key (within barrier-delimited segments); every other
+    // block stays pinned. See `super::sort::sorted_blocks`.
+    let blocks = super::sort::sorted_blocks(root)
+        .into_iter()
+        .map(|node| lower_block(&node, cx));
     Ir::join(Ir::empty_line(), blocks)
 }
 
@@ -197,7 +201,9 @@ fn lower_entry(entry: &SyntaxNode, cx: Lower) -> Ir {
         .unwrap_or_default();
     let (open, close) = entry_delimiters(entry);
 
-    let fields: Vec<SyntaxNode> = ast::fields(entry).collect();
+    // Fields are emitted in the canonical required-then-optional order for the entry
+    // type, not source order. See `super::sort::canonical_fields`.
+    let fields: Vec<SyntaxNode> = super::sort::canonical_fields(entry, cx.db);
     let names: Vec<String> = fields
         .iter()
         .map(|field| ast::field_name(field).unwrap_or_default().to_lowercase())

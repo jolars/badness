@@ -7,5 +7,6 @@
 //! grow into a sibling file without churn.
 
 pub mod core;
+mod sort;
 
 pub use core::{FormatError, format, format_node, format_with_style};

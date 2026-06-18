@@ -436,32 +436,34 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   `author_hardwrap_normalized`, `reflow_inner_braces`, `verbatim_url_intact`,
   `concat_no_reflow`, `single_macro_intact`, `prewrapped_idempotent`,
   `multiline_value_reflowed`.
-- [ ] **Phase 2c — Field & entry sorting (default-on).** Today both orders are preserved
-  from source (`lower_entry` walks `ast::fields` in order; `lower_root` walks blocks in
-  order). Sort deterministically by default (opinionated formatter, Tenet 1); the
-  constraints below are *correctness* guards, not opt-outs.
-  - **Field order within an entry:** emit fields in a canonical order — the signature DB's
-    required-then-optional sequence, unknown fields alphabetized after (or a flat
-    alphabetical order; pick one and pin it with fixtures). Reordering fields is
-    meaning-preserving *except* when an entry repeats a field name (e.g. two `note =`),
-    where BibTeX's last/first-wins makes order significant — detect duplicates and keep
-    their relative order stable (a stable sort keyed on field name handles this).
-  - **Whole-file entry order:** sort entries by cite key (case-insensitive) by default,
-    but respect the ordering constraints that are *semantic*, not cosmetic:
-    - `@string` macros must be **defined before use** — keep `@string` blocks pinned ahead
-      of (or in their original position relative to) the entries that reference them.
-    - `crossref`/`xdata`: a cross-referenced parent must stay **after** its children
-      (BibTeX's requirement) — a topological constraint over the key graph, not a plain
-      sort. Easiest safe v1: only sort within runs that have no crossref/xdata edges, or
-      keep referenced parents pinned.
-    - Keep `@preamble`/`@comment` and inter-entry `JUNK` in place (their position can be
-      intentional).
-  - Invariants: idempotence (sort is stable and total), and meaning preservation (the
-    `semantic::Model` oracle already compares the entry/key/`@string` sets, which a correct
-    reorder leaves unchanged). Consider whether entry sorting belongs in the formatter or
-    as a linter autofix; field sorting is comfortably formatter territory. New fixtures:
-    fields reordered to canonical order, duplicate-field order kept stable, entries sorted
-    by key, `@string`-before-use preserved, crossref parent kept after child.
+- [x] **Phase 2c — Field & entry sorting (default-on).** Done. New module
+  `src/bib/formatter/sort.rs` (`canonical_fields` + `sorted_blocks`), consumed by
+  `lower_entry`/`lower_root`; reorders existing CST nodes only (meaning preserved, lowering
+  stays a pure replay), reading just the syntactic `ast` accessors + the static signature
+  DB. Hard-wired deterministic — no `FormatStyle` toggle (Tenet 1).
+  - **Field order within an entry:** the signature DB's required-then-optional sequence
+    (each `OneOf` alternative in listed order), with fields the DB does not list (incl.
+    every field of an unknown entry type) alphabetized after the known ones. A **stable**
+    `sort_by_cached_key` keeps repeated field names (two `note =`) in source order, so
+    BibTeX's last/first-wins is preserved.
+  - **Whole-file entry order:** entries sorted by cite key (case-insensitive, stable) via
+    **barrier segmentation** — every non-`ENTRY` block (`@string`, `@preamble`, `@comment`,
+    inter-entry `JUNK`) is a fixed barrier, and only the maximal runs of consecutive
+    entries *between* barriers are sorted. One mechanism gives `@string`-before-use
+    (an entry never crosses a `@string` def it began behind) **and** keeps
+    `@preamble`/`@comment`/`JUNK` pinned.
+    - **crossref/xdata guard (safe v1):** a segment containing any entry with a
+      `crossref`/`xdata` field is left in source order — skipping any run with a
+      cross-reference *source* guarantees no parent is reordered ahead of a child within
+      the run, and barriers fix cross-run order. *Future refinement:* a precise
+      topological sort over the key graph (would sort crossref runs too).
+  - Invariants: idempotence (both sorts stable and total; barrier/`JUNK` positions stable
+    across reparse) and meaning preservation. The `tests/bib_format.rs` `meaning()` and
+    `field_values()` oracles were made order-insensitive (sorted → multiset compares), so
+    they still pin the *bag* of entries/keys/`@string`/field-values while allowing reorder.
+    New fixtures: `sort_fields_canonical`, `sort_fields_unknown_alpha`,
+    `sort_fields_duplicate_stable`, `sort_entries_by_key`, `sort_string_before_use`,
+    `sort_crossref_pinned` (plus `verbatim_field_preserved` regenerated to canonical order).
 - [ ] **Phase 3 — Linter rules + autofixes.** Reuse `src/linter/` infra (`Rule`, dispatch
   table, `Fix`/`apply_fixes`, suppression). Rules: duplicate key, missing required field
   (from the field DB), unknown/empty field, unused `@string`, title-capitalization

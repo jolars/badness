@@ -13,17 +13,19 @@ use badness::bib::syntax::SyntaxKind;
 use badness::bib::{ast, format, format_with_style, parse, reconstruct};
 use badness::formatter::FormatStyle;
 
-/// The semantic facts formatting must preserve: each entry's (type, key) in source
-/// order, the `@string` definition names, and the `@string` use names. Byte ranges
-/// are intentionally dropped — they shift when layout changes — so this compares the
-/// *meaning*, not the positions.
+/// The semantic facts formatting must preserve: the *multiset* of each entry's
+/// (type, key), the `@string` definition names, and the `@string` use names. Every
+/// list is sorted so the comparison is order-insensitive: the formatter is now allowed
+/// to reorder entries (and fields), so meaning is the *bag* of facts, not their
+/// positions. Byte ranges are dropped — they shift when layout changes.
 fn meaning(text: &str) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
     let model = Model::build(&parse(text).syntax());
-    let entries = model
+    let mut entries: Vec<(String, String)> = model
         .entries()
         .iter()
         .map(|e| (e.entry_type.to_string(), e.key.to_string()))
         .collect();
+    entries.sort();
     let mut defs: Vec<String> = model
         .string_defs()
         .iter()
@@ -39,13 +41,19 @@ fn meaning(text: &str) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
     (entries, defs, uses)
 }
 
-/// Every field's `(name_lc, value-signature)` across the document, in source order.
+/// The *multiset* of every field's `(name_lc, value-signature)` across the document.
 /// The signature is the value text with all whitespace and value delimiters (`"`,
 /// `{`, `}`) removed — the formatter is allowed to insert/remove whitespace (reflow,
-/// ` # ` spacing) and rewrite `"…"` → `{…}`, but it must never add, drop, reorder, or
-/// mangle the actual content characters. This catches a reflow bug (a dropped or
-/// duplicated word, a split inside a braced token) that the entry/`@string`-level
-/// `meaning()` oracle cannot see, since that oracle never inspects value content.
+/// ` # ` spacing) and rewrite `"…"` → `{…}`, but it must never add, drop, or mangle the
+/// actual content characters. This catches a reflow bug (a dropped or duplicated word,
+/// a split inside a braced token) that the entry/`@string`-level `meaning()` oracle
+/// cannot see, since that oracle never inspects value content.
+///
+/// The result is **sorted** so the check is order-insensitive: field sorting reorders
+/// fields within an entry and entry sorting reorders entries, so the invariant is the
+/// bag of `(name, value)` pairs, not their positions. The relative order of *duplicate*
+/// fields (`note =` twice) is therefore not pinned here — that is covered by the
+/// dedicated `sort_*` fixtures plus the stable-sort guarantee in the formatter.
 fn field_values(text: &str) -> Vec<(String, String)> {
     fn signature(value_text: &str) -> String {
         value_text
@@ -53,7 +61,7 @@ fn field_values(text: &str) -> Vec<(String, String)> {
             .filter(|c| !c.is_whitespace() && !matches!(c, '"' | '{' | '}'))
             .collect()
     }
-    parse(text)
+    let mut values: Vec<(String, String)> = parse(text)
         .syntax()
         .descendants()
         .filter(|n| n.kind() == SyntaxKind::FIELD)
@@ -62,7 +70,9 @@ fn field_values(text: &str) -> Vec<(String, String)> {
             let value = ast::field_value(&field)?;
             Some((name, signature(&value.to_string())))
         })
-        .collect()
+        .collect();
+    values.sort();
+    values
 }
 
 /// Assert the formatter invariants for one clean-parsing input. Inputs the parser

@@ -14,9 +14,10 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FormattingOptions, InitializeParams, InitializeResult, InitializedParams, InsertTextFormat,
-    NumberOrString, OneOf, PartialResultParams, Position, PublishDiagnosticsParams, Range,
-    SymbolKind, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
+    InitializeResult, InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf,
+    PartialResultParams, Position, PublishDiagnosticsParams, Range, SymbolKind,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams,
 };
@@ -116,6 +117,13 @@ fn start_server(
     assert!(
         init.capabilities.completion_provider.is_some(),
         "server must advertise completionProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.definition_provider,
+            Some(OneOf::Left(true))
+        ),
+        "server must advertise definitionProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     send_notification(
@@ -747,6 +755,108 @@ fn lsp_cross_file_undefined_ref_and_citation_fire() {
         codes.iter().any(|c| c == "undefined-citation"),
         "expected undefined-citation, got {codes:?}"
     );
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a `textDocument/definition` at `position` and return the locations,
+/// draining any stray diagnostics (a freshly-seeded project re-lints) first.
+fn definition(client: &Connection, id: i32, uri: &Uri, position: Position) -> Vec<Location> {
+    send_request(
+        client,
+        id,
+        "textDocument/definition",
+        serde_json::to_value(GotoDefinitionParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    match serde_json::from_value::<GotoDefinitionResponse>(resp.result.unwrap()).unwrap() {
+        GotoDefinitionResponse::Array(locs) => locs,
+        GotoDefinitionResponse::Scalar(loc) => vec![loc],
+        GotoDefinitionResponse::Link(_) => panic!("unexpected LocationLink response"),
+    }
+}
+
+#[test]
+fn lsp_definition_same_file_ref_to_label() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///def.tex".parse().unwrap();
+    // A label and a reference to it in the same buffer.
+    let doc = "\\label{sec:intro}\n\\ref{sec:intro}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor inside `\ref{sec:intro}` on line 1 → jumps to the `\label` on line 0.
+    let locs = definition(&client, 2, &uri, Position::new(1, 6));
+    assert_eq!(locs.len(), 1, "one definition, got {locs:?}");
+    assert_eq!(locs[0].uri, uri);
+    assert_eq!(locs[0].range.start, Position::new(0, 0));
+
+    // Cursor in plain prose / on nothing → no definition (empty array).
+    let none = definition(&client, 3, &uri, Position::new(0, 0));
+    assert!(none.is_empty(), "the `\\label` site is not a reference");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_definition_cross_file_ref_and_cite() {
+    // A real on-disk project: the root `\input`s a chapter that defines the label
+    // and `\addbibresource`s a `.bib` that defines the cite key. Go-to-definition
+    // crosses files to both.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("part.tex"), "\\label{sec:intro}\n").unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{knuth1984, title={The TeXbook}}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\addbibresource{refs.bib}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\ref{sec:intro}\n\
+        \\cite{knuth1984}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    // `\ref{sec:intro}` (line 4) → the `\label` in part.tex (line 0).
+    let ref_locs = definition(&client, 2, &uri, Position::new(4, 6));
+    assert_eq!(ref_locs.len(), 1, "one label definition, got {ref_locs:?}");
+    assert_eq!(
+        ref_locs[0].uri,
+        path_to_file_uri(&dir.path().join("part.tex"))
+    );
+    assert_eq!(ref_locs[0].range.start, Position::new(0, 0));
+
+    // `\cite{knuth1984}` (line 5) → the `@article` key in refs.bib (line 0).
+    let cite_locs = definition(&client, 3, &uri, Position::new(5, 8));
+    assert_eq!(cite_locs.len(), 1, "one bib entry, got {cite_locs:?}");
+    assert_eq!(
+        cite_locs[0].uri,
+        path_to_file_uri(&dir.path().join("refs.bib"))
+    );
+    assert_eq!(cite_locs[0].range.start.line, 0);
 
     shutdown(&client, server_thread);
 }

@@ -312,9 +312,14 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
 
 ### Labels & references (def-use model)
 
-- [ ] Go-to-definition (`textDocument/definition`) --- a `\ref`/`\eqref`/`\cref`
-  jumps to its `\label`; cross-file via the include graph once
-  `resolved_labels` lands (see *Semantic layer*).
+- [x] Go-to-definition (`textDocument/definition`) --- a `\ref`/`\eqref`/`\cref`
+  jumps to its `\label`, and a `\cite`-family command jumps to its `.bib` entry;
+  cross-file via the include graph (`resolved_labels` for labels;
+  `ResolvedCitations::bib_definers` added for the bib provenance citations need).
+  *Follow-up:* a multi-key list command (`\cref{a,b}`, `\cite{a,b}`) shares one
+  command range, so the cursor resolves *every* key in the list (all definitions
+  returned); per-key sub-ranges await the deferred `LabelRef`/`CitationRef` range
+  split (see `semantic::label`).
 - [ ] Find references (`textDocument/references`) --- all uses of a label.
 - [ ] Document highlight (`textDocument/documentHighlight`) --- highlight a
   label and its refs within the file.

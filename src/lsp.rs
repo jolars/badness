@@ -68,18 +68,23 @@ use lsp_types::notification::{
     DidChangeConfiguration, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{Completion, DocumentSymbolRequest, Formatting, Request as _};
+use lsp_types::request::{
+    Completion, DocumentSymbolRequest, Formatting, GotoDefinition, Request as _,
+};
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
     CompletionResponse, Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FormattingOptions, InsertTextFormat, NumberOrString, OneOf, Position, PublishDiagnosticsParams,
-    Range, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Uri,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location,
+    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
+    SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextEdit, Uri,
 };
+use rowan::{TextRange, TextSize};
 use salsa::Database as _;
 use serde::Deserialize;
+use smol_str::SmolStr;
 
 use crate::bib::outline::{BibOutlineItem, outline as bib_outline};
 use crate::bib::semantic::Model as BibModel;
@@ -92,7 +97,7 @@ use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
 use crate::parser::parse;
-use crate::project::ProjectMember;
+use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
 use crate::syntax::SyntaxNode;
 use crate::text::LineIndex;
@@ -129,6 +134,7 @@ fn server_capabilities() -> ServerCapabilities {
         )),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        definition_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions {
             // `\` opens command/env names; `{` opens a name/key/path argument;
             // `/` re-triggers path segments. Snippet support is read off the
@@ -240,6 +246,15 @@ enum WorkerJob {
         text: String,
         position: Position,
     },
+    /// A go-to-definition request: resolve the `\ref`/`\cite` under the cursor to
+    /// its `\label`/bib entry on the read pool and reply to `id`. Cross-file, so
+    /// the worker snapshots project membership when it dispatches (like an analyze).
+    GotoDefinition {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        position: Position,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -311,6 +326,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_document_symbol(&connection, &state, &job_tx, req)
                             }
                             Completion::METHOD => on_completion(&connection, &state, &job_tx, req),
+                            GotoDefinition::METHOD => {
+                                on_goto_definition(&connection, &state, &job_tx, req)
+                            }
                             _ => respond_unhandled(&connection, req),
                         }
                     }
@@ -573,6 +591,55 @@ fn on_completion(
     });
 }
 
+/// `textDocument/definition`: build a go-to-definition job for the worker, or reply
+/// `null` when the document is unknown or is a `.bib` (cite/ref sites live in
+/// `.tex`, so a `.bib` cursor has nothing to jump *from*).
+fn on_goto_definition(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<GotoDefinitionParams>(GotoDefinition::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid definition params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: nothing to resolve.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    if file_kind_for(&path) == FileKind::Bib {
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    }
+    let _ = job_tx.send(WorkerJob::GotoDefinition {
+        id,
+        path,
+        text: doc.text.clone(),
+        position,
+    });
+}
+
 /// Forward a worker result to the client. Diagnostics are version-gated: a result
 /// is sent only when its document is still open at exactly that version, so a
 /// stale (superseded or post-close) analyze never repaints squiggles.
@@ -820,6 +887,22 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_completion(&snapshot, id, &uri, &path, &text, position, &out_tx)
+                });
+            }
+            WorkerJob::GotoDefinition {
+                id,
+                path,
+                text,
+                position,
+            } => {
+                // Go-to-def is cross-file, so it needs the same membership snapshot
+                // an analyze captures (open buffers plus seeded on-disk siblings),
+                // taken on the write side so the read job interns the latest project.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_goto_definition(&snapshot, id, &path, &text, position, members, &out_tx)
                 });
             }
         }
@@ -1310,6 +1393,179 @@ fn compute_completion(
     }
 }
 
+/// Resolve the `\ref`/`\cite` under the cursor and reply with the matching
+/// definition [`Location`]s (always an array — empty when nothing resolves).
+fn run_goto_definition(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let locations = compute_goto_definition(snapshot, path, text, position, members);
+    let result = serde_json::to_value(GotoDefinitionResponse::Array(locations))
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// What the cursor points at inside a `.tex` buffer: the keys whose command range
+/// covers the offset. Refs and citations are kept distinct so each resolves against
+/// its own namespace (labels vs. bibliography). A multi-key list command
+/// (`\cref{a,b}`, `\cite{a,b}`) shares one range, so every key at that offset is
+/// returned and resolved — per-key sub-ranges are deferred (see
+/// [`crate::semantic::label::LabelRef::range`]).
+#[derive(Debug)]
+enum CursorTarget {
+    Labels(Vec<SmolStr>),
+    Citations(Vec<SmolStr>),
+}
+
+/// Compute the definition locations for a go-to-definition at `position`, preferring
+/// the snapshot's cached model and falling back to a fresh parse when it is stale or
+/// uncached. Cross-file resolution always runs against the db snapshot's resolvers
+/// (`resolved_labels`/`resolved_citations`), interned from `members`.
+fn compute_goto_definition(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    position: Position,
+    members: Vec<ProjectMember>,
+) -> Vec<Location> {
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        // Find the reference under the cursor (off the cached model when current,
+        // else a fresh parse), then resolve cross-file against the db snapshot.
+        let (target, lint_path) = match snapshot.lookup_file(path) {
+            Some(file) if snapshot.file_text(file) == text => (
+                reference_under_cursor(snapshot.semantic_model(file), offset),
+                snapshot.file_path(file).to_path_buf(),
+            ),
+            _ => {
+                let root = SyntaxNode::new_root(parse(text).green);
+                let model = SemanticModel::build(&root);
+                (reference_under_cursor(&model, offset), path.to_path_buf())
+            }
+        };
+        let Some(target) = target else {
+            return Vec::new();
+        };
+        let (resolution, citations) = snapshot.resolve_project(members);
+        match target {
+            CursorTarget::Labels(names) => {
+                resolve_label_locations(snapshot, resolution, &lint_path, &names)
+            }
+            CursorTarget::Citations(names) => {
+                resolve_citation_locations(snapshot, citations, &lint_path, &names)
+            }
+        }
+    }));
+    cached.unwrap_or_default()
+}
+
+/// The cite/ref keys whose command range covers `offset`, refs taking precedence
+/// (a position is never both). Returns owned keys so the borrowed model can drop.
+fn reference_under_cursor(model: &SemanticModel, offset: usize) -> Option<CursorTarget> {
+    let at = TextSize::new(offset as u32);
+    let label_names: Vec<SmolStr> = model
+        .refs()
+        .iter()
+        .filter(|r| r.range.contains_inclusive(at))
+        .map(|r| r.name.clone())
+        .collect();
+    if !label_names.is_empty() {
+        return Some(CursorTarget::Labels(label_names));
+    }
+    let cite_names: Vec<SmolStr> = model
+        .citations()
+        .iter()
+        .filter(|c| c.range.contains_inclusive(at))
+        .map(|c| c.name.clone())
+        .collect();
+    (!cite_names.is_empty()).then_some(CursorTarget::Citations(cite_names))
+}
+
+/// For each `\ref` key, the `\label{key}` definition sites across the file's
+/// namespace: `resolution.definers` gives the defining files, each file's
+/// `semantic_model` the matching `LabelDef.range`.
+fn resolve_label_locations(
+    snapshot: &Analysis,
+    resolution: &ResolvedLabels,
+    lint_path: &Path,
+    names: &[SmolStr],
+) -> Vec<Location> {
+    let mut locations = Vec::new();
+    for name in names {
+        for def_path in resolution.definers(lint_path, name) {
+            let Some(file) = snapshot.lookup_file(def_path) else {
+                continue;
+            };
+            let text = snapshot.file_text(file);
+            let idx = LineIndex::new(text);
+            for label in snapshot.semantic_model(file).labels() {
+                if &label.name == name {
+                    locations.push(location_for(def_path, &idx, text, label.range));
+                }
+            }
+        }
+    }
+    dedup_locations(locations)
+}
+
+/// For each `\cite` key, the `@entry{key,…}` sites in the `.bib` files of the
+/// citation namespace: `citations.bib_definers` gives the analyzed bibliographies,
+/// each `bib_semantic_model` the matching `Entry.key_range` (case-insensitive, as
+/// BibTeX folds key case).
+fn resolve_citation_locations(
+    snapshot: &Analysis,
+    citations: &ResolvedCitations,
+    lint_path: &Path,
+    names: &[SmolStr],
+) -> Vec<Location> {
+    let mut locations = Vec::new();
+    for bib_path in citations.bib_definers(lint_path) {
+        let Some(file) = snapshot.lookup_file(bib_path) else {
+            continue;
+        };
+        let text = snapshot.file_text(file);
+        let idx = LineIndex::new(text);
+        for entry in snapshot.bib_semantic_model(file).entries() {
+            if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
+                locations.push(location_for(bib_path, &idx, text, entry.key_range));
+            }
+        }
+    }
+    dedup_locations(locations)
+}
+
+/// Build an LSP [`Location`] from a definer file's path and a byte range in its
+/// text. A path that cannot form a `file://` URI yields `None` (skipped).
+fn location_for(path: &Path, idx: &LineIndex, text: &str, range: TextRange) -> Option<Location> {
+    Some(Location {
+        uri: path_to_uri(path)?,
+        range: byte_range_to_lsp(
+            idx,
+            text,
+            usize::from(range.start()),
+            usize::from(range.end()),
+        ),
+    })
+}
+
+/// Drop duplicate locations (same URI + range), which can arise when several keys
+/// in a list command resolve to the same site.
+fn dedup_locations(locations: Vec<Option<Location>>) -> Vec<Location> {
+    let mut seen = HashSet::new();
+    locations
+        .into_iter()
+        .flatten()
+        .filter(|loc| seen.insert((loc.uri.as_str().to_owned(), loc.range.start, loc.range.end)))
+        .collect()
+}
+
 /// Turn a classified [`CompletionContext`] into LSP items. Name/label contexts go
 /// through the pure [`crate::completion::candidates`]; a file-path context reads
 /// the document's directory off disk (see [`file_completion_items`]).
@@ -1463,6 +1719,46 @@ fn percent_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Build a `file://` URI from a filesystem path — the inverse of [`uri_to_fs_path`],
+/// for the `Location`s a go-to-definition reply carries. Normalizes separators to
+/// `/`, ensures a leading `/` (so a Windows `C:\dir` becomes `file:///C:/dir`), and
+/// percent-encodes path bytes that are not URI path characters (spaces, etc.).
+/// Returns `None` if the result still does not parse, so a stray path is skipped
+/// rather than crashing the read job.
+fn path_to_uri(path: &Path) -> Option<Uri> {
+    let mut s = path.display().to_string().replace('\\', "/");
+    if !s.starts_with('/') {
+        s.insert(0, '/');
+    }
+    format!("file://{}", percent_encode_path(&s)).parse().ok()
+}
+
+/// Percent-encode a filesystem path for use in a `file://` URI, leaving the path
+/// structure (`/`), a Windows drive colon (`:`), and the URI-unreserved set
+/// (`A–Z a–z 0–9 - . _ ~`) intact and escaping everything else (e.g. a space →
+/// `%20`). The dual of [`percent_decode`].
+fn percent_encode_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/' | b':') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(
+                char::from_digit((b >> 4) as u32, 16)
+                    .unwrap()
+                    .to_ascii_uppercase(),
+            );
+            out.push(
+                char::from_digit((b & 0xf) as u32, 16)
+                    .unwrap()
+                    .to_ascii_uppercase(),
+            );
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1630,5 +1926,60 @@ mod tests {
         let s = EditorSettings::from_client_value(&namespaced);
         assert_eq!(s.line_width, Some(72));
         assert_eq!(s.indent_width, None);
+    }
+
+    /// The byte offset of the first occurrence of `needle` in `text`.
+    fn offset_of(text: &str, needle: &str) -> usize {
+        text.find(needle).expect("needle present")
+    }
+
+    #[test]
+    fn reference_under_cursor_finds_ref_and_cite() {
+        let text = "\\label{a}\n\\ref{a}\n\\cite{k}\n";
+        let model = SemanticModel::build(&SyntaxNode::new_root(parse(text).green));
+
+        // Inside `\ref{a}` → the label key `a`.
+        let at_ref = offset_of(text, "\\ref{a}") + 5; // on the `a`
+        match reference_under_cursor(&model, at_ref) {
+            Some(CursorTarget::Labels(names)) => assert_eq!(names, vec![SmolStr::new("a")]),
+            other => panic!("expected a label target, got {other:?}"),
+        }
+
+        // Inside `\cite{k}` → the cite key `k`.
+        let at_cite = offset_of(text, "\\cite{k}") + 6; // on the `k`
+        match reference_under_cursor(&model, at_cite) {
+            Some(CursorTarget::Citations(names)) => assert_eq!(names, vec![SmolStr::new("k")]),
+            other => panic!("expected a citation target, got {other:?}"),
+        }
+
+        // On the `\label` definition (not a reference) → nothing to jump *from*.
+        let at_label = offset_of(text, "\\label{a}") + 1;
+        assert!(reference_under_cursor(&model, at_label).is_none());
+    }
+
+    #[test]
+    fn reference_under_cursor_splits_cref_list() {
+        let text = "\\cref{a,b,c}\n";
+        let model = SemanticModel::build(&SyntaxNode::new_root(parse(text).green));
+        // The whole command shares one range, so every key is returned (per-key
+        // sub-ranges are deferred).
+        let at = offset_of(text, "\\cref") + 2;
+        match reference_under_cursor(&model, at) {
+            Some(CursorTarget::Labels(names)) => assert_eq!(
+                names,
+                vec![SmolStr::new("a"), SmolStr::new("b"), SmolStr::new("c")]
+            ),
+            other => panic!("expected a label target, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_to_uri_round_trips_through_uri_to_fs_path() {
+        let p = PathBuf::from("/tmp/my dir/main.tex");
+        let u = path_to_uri(&p).expect("a file path forms a URI");
+        // The space is percent-encoded in the URI text…
+        assert!(u.as_str().contains("%20"), "got {}", u.as_str());
+        // …and decodes back to the original filesystem path.
+        assert_eq!(uri_to_fs_path(&u), Some(p));
     }
 }

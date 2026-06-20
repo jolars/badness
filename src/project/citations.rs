@@ -61,6 +61,11 @@ struct Component {
     /// The cite keys available in this namespace (lowercased for case-insensitive
     /// matching, as BibTeX folds key case).
     keys: HashSet<SmolStr>,
+    /// The analyzed `.bib` files this namespace draws keys from, sorted and deduped.
+    /// Unlike [`keys`](Self::keys) (existence only), this carries provenance so
+    /// go-to-definition can locate the entry behind a cite key. Parallel to
+    /// [`labels::ResolvedLabels`](crate::project::labels)'s per-name `defs`.
+    bib_paths: Vec<PathBuf>,
     /// Whether the include graph is closed *and* every bibliography resource
     /// resolved to an analyzed `.bib`. Only then is "cited but undefined"
     /// trustworthy.
@@ -136,9 +141,12 @@ impl ResolvedCitations {
                 match target {
                     BibTarget::Dynamic => comp.closed = false,
                     BibTarget::Path(path) => match bib_keys.get(path) {
-                        Some(keys) => comp
-                            .keys
-                            .extend(keys.iter().map(|k| SmolStr::from(k.to_lowercase()))),
+                        Some(keys) => {
+                            comp.keys
+                                .extend(keys.iter().map(|k| SmolStr::from(k.to_lowercase())));
+                            // Record the analyzed `.bib` so go-to-def can search it.
+                            comp.bib_paths.push(path.clone());
+                        }
                         // A `.bib` we never analyzed: the real key set may be larger.
                         None => comp.closed = false,
                     },
@@ -154,10 +162,28 @@ impl ResolvedCitations {
             }
         }
 
+        // A `.bib` reached from several members lands in `bib_paths` once per
+        // reference; collapse to a stable, deduped set (mirrors the label resolver's
+        // per-name `definers` sort/dedup).
+        for comp in &mut components {
+            comp.bib_paths.sort_unstable();
+            comp.bib_paths.dedup();
+        }
+
         Self {
             component_of,
             components,
         }
+    }
+
+    /// The analyzed `.bib` files in `file`'s namespace, sorted. Empty when `file`
+    /// is unknown or its component references no analyzed bibliography. Go-to-def
+    /// searches these for the entry behind a cite key (the location analog of
+    /// [`is_defined`](Self::is_defined), which only answers existence).
+    pub fn bib_definers(&self, file: &Path) -> &[PathBuf] {
+        self.component_of
+            .get(file)
+            .map_or(&[], |&id| self.components[id].bib_paths.as_slice())
     }
 
     /// Whether cite `key` is defined anywhere in `file`'s namespace
@@ -394,6 +420,54 @@ mod tests {
         let mut bib = HashMap::new();
         bib.insert(PathBuf::from("/p/refs.bib"), keys(&["k"]));
         let r = ResolvedCitations::build(&[facts("/p/main.tex", &["/p/refs.bib"], true)], &g, &bib);
+        assert!(!r.is_closed(Path::new("/p/main.tex")));
+    }
+
+    #[test]
+    fn bib_definers_are_namespace_scoped() {
+        // Two disjoint projects: main1 → a.bib, main2 → b.bib (no include edge
+        // between them). Each file sees only its own component's analyzed bib.
+        let g = graph(&[("/p/main1.tex", &[]), ("/p/main2.tex", &[])]);
+        let mut bib = HashMap::new();
+        bib.insert(PathBuf::from("/p/a.bib"), keys(&["alpha"]));
+        bib.insert(PathBuf::from("/p/b.bib"), keys(&["beta"]));
+        let r = ResolvedCitations::build(
+            &[
+                facts("/p/main1.tex", &["/p/a.bib"], true),
+                facts("/p/main2.tex", &["/p/b.bib"], true),
+            ],
+            &g,
+            &bib,
+        );
+        assert_eq!(
+            r.bib_definers(Path::new("/p/main1.tex")),
+            &[PathBuf::from("/p/a.bib")]
+        );
+        // b.bib lives in the other component and is not returned for main1.
+        assert_eq!(
+            r.bib_definers(Path::new("/p/main2.tex")),
+            &[PathBuf::from("/p/b.bib")]
+        );
+        // An unknown file has no namespace, so no definers.
+        assert!(r.bib_definers(Path::new("/p/none.tex")).is_empty());
+    }
+
+    #[test]
+    fn bib_definers_only_lists_analyzed_bibs() {
+        // A resolved bib plus a never-analyzed one: only the analyzed path has a
+        // location to jump to, so only it is a definer (and the component is open).
+        let g = graph(&[("/p/main.tex", &[])]);
+        let mut bib = HashMap::new();
+        bib.insert(PathBuf::from("/p/a.bib"), keys(&["alpha"]));
+        let r = ResolvedCitations::build(
+            &[facts("/p/main.tex", &["/p/a.bib", "/p/missing.bib"], true)],
+            &g,
+            &bib,
+        );
+        assert_eq!(
+            r.bib_definers(Path::new("/p/main.tex")),
+            &[PathBuf::from("/p/a.bib")]
+        );
         assert!(!r.is_closed(Path::new("/p/main.tex")));
     }
 

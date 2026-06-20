@@ -27,8 +27,9 @@ pub enum FileDiscoveryError {
 }
 
 /// Which pipeline a lintable file feeds: the LaTeX layer (`.tex`) or the BibTeX
-/// layer (`.bib`). `Ord` so a `(PathBuf, FileKind)` list sorts/dedups by path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// layer (`.bib`). `Ord` so a `(PathBuf, FileKind)` list sorts/dedups by path;
+/// `Hash` so it can tag a [`crate::project::ProjectMember`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FileKind {
     Tex,
     Bib,

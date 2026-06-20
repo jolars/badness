@@ -23,8 +23,26 @@ use std::path::{Path, PathBuf};
 
 use smol_str::SmolStr;
 
-use crate::project::graph::IncludeGraph;
+use crate::bib::semantic::Model as BibModel;
+use crate::file_discovery::FileKind;
+use crate::incremental::{
+    IncrementalDb, QueryKind, QueryLogEntry, file_cite_facts, file_cite_names,
+    file_is_document_root,
+};
+use crate::project::graph::{IncludeGraph, Project, project_graph};
 use crate::project::include::BibTarget;
+
+/// The distinct cite keys defined in a `.bib` `model`, sorted and deduped — the
+/// per-file cite-key input to [`ResolvedCitations::build`]. Shared by the CLI
+/// (one-shot, non-salsa) and the [`crate::incremental::file_cite_names`] firewall
+/// so both feed identical data into the resolver. Kept raw (not lowercased);
+/// [`ResolvedCitations::build`] folds case when it indexes the keys.
+pub fn document_cite_names(model: &BibModel) -> Vec<SmolStr> {
+    let mut names: Vec<SmolStr> = model.entries().iter().map(|e| e.key.clone()).collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
 
 /// Per-`.tex`-file facts feeding [`ResolvedCitations::build`]: the file's
 /// bibliography resource targets, whether it has a `\nocite{*}` wildcard, and
@@ -176,6 +194,55 @@ impl ResolvedCitations {
             .get(file)
             .is_some_and(|&id| self.components[id].wildcard)
     }
+}
+
+/// The cross-file citation resolution for `project`, built from the per-file
+/// [`file_cite_names`] (the `.bib` cite-key firewall), [`file_cite_facts`] (the
+/// `.tex` resource/wildcard firewall), and the [`project_graph`].
+///
+/// `no_eq` + `unsafe(non_update_types)` for the same reason as
+/// [`resolved_labels`](crate::project::resolved_labels): [`ResolvedCitations`]
+/// holds `HashMap`s/`HashSet`s (not `Eq`/`salsa::Update`) and is a pure function
+/// of the interned [`Project`] plus the backdated per-file facts, so it carries no
+/// salsa references. The firewall pays off here: a prose or `\cite` edit leaves
+/// `file_cite_names`, `file_cite_facts`, `file_is_document_root`, and
+/// `include_edges` all backdated, so neither [`project_graph`] nor this query
+/// re-executes.
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+pub fn resolved_citations<'db>(
+    db: &'db dyn IncrementalDb,
+    project: Project<'db>,
+) -> ResolvedCitations {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::ResolvedCitations,
+        file: None,
+    });
+
+    let graph = project_graph(db, project);
+    let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
+    // Cite keys per analyzed `.bib` path, feeding [`ResolvedCitations::build`].
+    let mut bib_keys: HashMap<PathBuf, Vec<SmolStr>> = HashMap::new();
+    for member in project.members(db) {
+        match member.kind {
+            FileKind::Tex => {
+                let facts = file_cite_facts(db, member.file);
+                cite_facts.push(CiteFileFacts {
+                    path: member.path.clone(),
+                    bib_targets: facts.bib_targets.clone(),
+                    nocite_all: facts.nocite_all,
+                    is_document_root: *file_is_document_root(db, member.file),
+                });
+            }
+            FileKind::Bib => {
+                bib_keys.insert(
+                    member.path.clone(),
+                    file_cite_names(db, member.file).clone(),
+                );
+            }
+        }
+    }
+
+    ResolvedCitations::build(&cite_facts, graph, &bib_keys)
 }
 
 /// A minimal union-find (disjoint-set) with path halving and union by size. A copy

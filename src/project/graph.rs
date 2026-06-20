@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::file_discovery::FileKind;
 use crate::incremental::{IncrementalDb, QueryKind, QueryLogEntry, SourceFile, include_edges};
 use crate::project::include::{IncludeEdgeKey, IncludeKind, IncludeTarget};
 
@@ -237,13 +238,19 @@ fn normalize_cycle(cycle: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// One member of a project: its tracked input and on-disk path. Plain-derived
-/// (no `salsa::Update`) so it can key the interned [`Project`]. No `Debug`:
-/// `SourceFile` is a salsa input id without a standalone `Debug` impl.
+/// One member of a project: its tracked input, on-disk path, and which pipeline
+/// it feeds. Plain-derived (no `salsa::Update`) so it can key the interned
+/// [`Project`]. No `Debug`: `SourceFile` is a salsa input id without a standalone
+/// `Debug` impl.
+///
+/// `kind` lets the project-level queries split `.tex` from `.bib` members
+/// without re-sniffing the extension: the include graph and label resolution see
+/// only `.tex` members, while the citation resolver folds `.bib` cite keys in.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ProjectMember {
     pub file: SourceFile,
     pub path: PathBuf,
+    pub kind: FileKind,
 }
 
 /// A project as an interned membership snapshot. Interning dedups by value, so
@@ -276,9 +283,12 @@ pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
         file: None,
     });
 
+    // Only `.tex` members are inclusion-graph nodes; `.bib` members carry no
+    // `\input` edges and feed the citation resolver instead.
     let facts: Vec<FileFacts> = project
         .members(db)
         .iter()
+        .filter(|member| member.kind == FileKind::Tex)
         .map(|member| FileFacts {
             path: member.path.clone(),
             include_edges: include_edges(db, member.file).clone(),

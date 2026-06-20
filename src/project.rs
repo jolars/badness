@@ -16,7 +16,7 @@ pub mod graph;
 pub mod include;
 pub mod labels;
 
-pub use citations::{CiteFileFacts, ResolvedCitations};
+pub use citations::{CiteFileFacts, ResolvedCitations, document_cite_names, resolved_citations};
 pub use graph::{
     FileFacts, IncludeGraph, Project, ProjectMember, ResolvedInclude, UnresolvedInclude,
     project_graph,

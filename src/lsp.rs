@@ -22,10 +22,13 @@
 //!   format request, and forwards [`Outbound`] results from the workers back to
 //!   the client (version-gating diagnostics).
 //! - **Worker thread** ([`Worker`]) — the *sole* database writer. A buffer edit
-//!   is a write-phase `upsert_file` (`&mut db`) followed by a read-phase
-//!   *analyze* (compute parse diagnostics) dispatched onto the read pool, kept to
-//!   at most one in flight via [`decide`] and superseded by a fresher edit of the
-//!   same URI. `didClose` evicts the file.
+//!   is a write-phase `upsert_file` (`&mut db`) — plus a one-time
+//!   [`seed_dir`](Worker::seed_dir) that pulls the rest of the project off disk —
+//!   followed by a read-phase *analyze* (parse diagnostics + lint over an interned
+//!   `Project`) dispatched onto the read pool, kept to at most one in flight via
+//!   [`decide`] and superseded by a fresher edit of the same URI. When seeding
+//!   grows the member set, every open document is re-linted ([`Outbound::RelintAll`]).
+//!   `didClose` evicts the file.
 //! - **Read pool** (`task_pool`) — runs the diagnostics analyze and formatting
 //!   reads off a short-lived [`Analysis`] snapshot, each wrapped in
 //!   [`salsa::Cancelled::catch`] so a racing write either drops the read
@@ -36,9 +39,15 @@
 //! > built to match the documented target architecture and starts paying off the
 //! > moment an expensive async read (hover/completion/cross-file lint) lands.
 //!
-//! **URI as the salsa key.** Files are keyed by the document URI string
-//! (`PathBuf::from(uri.as_str())`); buffer text always comes from
-//! `didOpen`/`didChange`, never disk.
+//! **Filesystem path as the salsa key.** A `file:` document URI is decoded to its
+//! real (normalized) filesystem path ([`uri_to_path`]); a non-`file` buffer
+//! (untitled, etc.) falls back to the URI string as a synthetic key and never
+//! joins a project. Open-buffer text always comes from `didOpen`/`didChange`,
+//! while non-open project members (siblings reached via `\input`/`\bibliography`)
+//! are read once off disk — see [`Worker::seed_dir`] — so `undefined-ref`,
+//! cross-file `duplicate-label`, and `undefined-citation` can fire live. Edits to
+//! a non-open member on disk are not yet watched (`workspace/didChangeWatchedFiles`
+//! is a follow-up; see `TODO.md`).
 
 // `lsp_types::Uri` (a `fluent_uri` newtype) carries an internal `Cell` tag for
 // its mutable-view mechanism, which trips `clippy::mutable_key_type` when a `Uri`
@@ -48,7 +57,7 @@
 
 mod task_pool;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -78,11 +87,12 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::file_discovery::FileKind;
+use crate::file_discovery::{FileKind, collect_lint_files};
 use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
 use crate::parser::parse;
+use crate::project::ProjectMember;
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
 use crate::syntax::SyntaxNode;
 use crate::text::LineIndex;
@@ -243,11 +253,19 @@ enum Outbound {
     },
     /// A request response (e.g. a formatting edit array).
     Response(Response),
+    /// Project membership grew (the worker discovered on-disk siblings), so the
+    /// cross-file resolution may have changed for *every* open document. Re-lint
+    /// them all. Mirrors arity's `Outbound::RelintAll`.
+    RelintAll,
 }
 
-/// Map a document URI to the synthetic path the salsa file cache is keyed by.
+/// Map a document URI to the path the salsa file cache is keyed by. For a `file:`
+/// URI this is the real filesystem path (percent-decoded), so `\input`/bib
+/// resolution and on-disk sibling reads share one path space and a project can be
+/// assembled. A non-`file` buffer (untitled, etc.) falls back to the URI string as
+/// a synthetic key; it simply never joins a project.
 fn uri_to_path(uri: &Uri) -> PathBuf {
-    PathBuf::from(uri.as_str())
+    uri_to_fs_path(uri).unwrap_or_else(|| PathBuf::from(uri.as_str()))
 }
 
 /// Which language pipeline a document feeds, by its path extension. Defaults to
@@ -307,7 +325,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
             }
             recv(out_rx) -> outbound => {
                 let Ok(outbound) = outbound else { continue };
-                forward_outbound(&connection, &state, outbound);
+                forward_outbound(&connection, &state, &job_tx, outbound);
             }
         }
     }
@@ -559,7 +577,12 @@ fn on_completion(
 /// Forward a worker result to the client. Diagnostics are version-gated: a result
 /// is sent only when its document is still open at exactly that version, so a
 /// stale (superseded or post-close) analyze never repaints squiggles.
-fn forward_outbound(connection: &Connection, state: &GlobalState, outbound: Outbound) {
+fn forward_outbound(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    outbound: Outbound,
+) {
     match outbound {
         Outbound::Diagnostics {
             uri,
@@ -576,6 +599,24 @@ fn forward_outbound(connection: &Connection, state: &GlobalState, outbound: Outb
         }
         Outbound::Response(resp) => {
             let _ = connection.sender.send(Message::Response(resp));
+        }
+        Outbound::RelintAll => {
+            // Re-queue a fresh analyze for every open document at its current
+            // version. The worker coalesces per-URI, so this is cheap; salsa
+            // memos make the actual recompute incremental. A re-lint of a doc in
+            // an already-seeded directory discovers no new members, so it can't
+            // re-trigger `RelintAll` (no loop).
+            for (uri, doc) in &state.documents {
+                let path = uri_to_path(uri);
+                let kind = file_kind_for(&path);
+                let _ = job_tx.send(WorkerJob::Edit {
+                    uri: uri.clone(),
+                    path,
+                    text: doc.text.clone(),
+                    version: doc.version,
+                    kind,
+                });
+            }
         }
     }
 }
@@ -658,6 +699,7 @@ fn spawn_worker(
                 read_spawner,
                 inflight: None,
                 pending: HashMap::new(),
+                seeded_dirs: HashSet::new(),
             };
             worker.run(&job_rx, &done_rx);
         })
@@ -677,6 +719,9 @@ struct Worker {
     inflight: Option<InflightAnalyze>,
     /// Coalesced analyze queue: the latest pending request per URI.
     pending: HashMap<Uri, AnalyzeRequest>,
+    /// Directories already walked for on-disk `.tex`/`.bib` siblings, so each is
+    /// seeded at most once (the membership-discovery hot-path guard).
+    seeded_dirs: HashSet<PathBuf>,
 }
 
 impl Worker {
@@ -720,6 +765,12 @@ impl Worker {
                 // db` blocks until any outstanding read snapshot drops (single
                 // writer), which is how a fresher edit preempts an in-flight read.
                 self.db.upsert_file(&path, text);
+                // Lazily pull the rest of the project off disk so cross-file rules
+                // can fire. If this grows the member set, every open document's
+                // resolution may have changed — re-lint them all.
+                if self.seed_dir(&path) {
+                    let _ = self.out_tx.send(Outbound::RelintAll);
+                }
                 self.enqueue(AnalyzeRequest {
                     uri,
                     path,
@@ -775,6 +826,59 @@ impl Worker {
         }
     }
 
+    /// Walk the active file's directory once for `.tex`/`.bib` siblings, reading
+    /// and upserting any not already tracked, so the cross-file resolvers see the
+    /// whole project. Returns whether the member set grew. Mirrors arity's
+    /// `seed_workspace_for`.
+    ///
+    /// Skips unsaved/synthetic buffers (whose path isn't a real file) and the
+    /// filesystem root, so we never walk `/`. A sibling that is already tracked —
+    /// an open buffer, or one seeded earlier — keeps its live text (we never read
+    /// it back from disk). Each directory is walked at most once (`seeded_dirs`).
+    fn seed_dir(&mut self, path: &Path) -> bool {
+        if !path.is_file() {
+            return false;
+        }
+        let Some(dir) = path.parent() else {
+            return false;
+        };
+        // Never walk the filesystem root (a `/foo.tex` would otherwise walk all of `/`).
+        if dir.parent().is_none() {
+            return false;
+        }
+        let dir = dir.to_path_buf();
+        if !self.seeded_dirs.insert(dir.clone()) {
+            return false; // already walked
+        }
+        let Ok(files) = collect_lint_files(&[dir]) else {
+            return false;
+        };
+        let mut grew = false;
+        for (sibling, _kind) in files {
+            if self.db.lookup_file(&sibling).is_some() {
+                continue; // open buffer or already seeded — keep its live text
+            }
+            if let Ok(text) = std::fs::read_to_string(&sibling) {
+                self.db.upsert_file(&sibling, text);
+                grew = true;
+            }
+        }
+        grew
+    }
+
+    /// Snapshot the current project membership as sorted [`ProjectMember`]s, so a
+    /// read job can intern a `Project` against its db snapshot.
+    fn project_members(&self) -> Vec<ProjectMember> {
+        self.db
+            .tracked_files()
+            .into_iter()
+            .map(|(path, file)| {
+                let kind = file_kind_for(&path);
+                ProjectMember { file, path, kind }
+            })
+            .collect()
+    }
+
     /// Add `req` to the pending queue, keeping the highest version per URI.
     fn enqueue(&mut self, req: AnalyzeRequest) {
         match self.pending.get(&req.uri) {
@@ -817,6 +921,9 @@ impl Worker {
     /// so a cancelled analyze publishes nothing.
     fn start_analyze(&mut self, req: AnalyzeRequest) {
         let snapshot = self.db.snapshot();
+        // Snapshot membership now (write side) so the read job interns the same
+        // `Project` the latest edit produced.
+        let members = self.project_members();
         let out_tx = self.out_tx.clone();
         let done_tx = self.done_tx.clone();
         let AnalyzeRequest {
@@ -831,7 +938,7 @@ impl Worker {
         });
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
-                FileKind::Tex => analyze_tex(&snapshot, &path),
+                FileKind::Tex => analyze_tex(&snapshot, &path, members),
                 FileKind::Bib => analyze_bib(&snapshot, &path),
             }));
             if let Ok(Some(diags)) = result {
@@ -851,15 +958,24 @@ impl Worker {
 }
 
 /// Compute diagnostics for a `.tex` file off the snapshot: parse diagnostics plus
-/// lint-rule findings over the same salsa-cached tree + model.
+/// lint-rule findings over the same salsa-cached tree + model, with cross-file
+/// resolution from the `members` snapshot.
 ///
-/// Cross-file resolution is passed as `None`: the server tracks only open buffers
-/// and assembles no project, so the cross-file rules (`undefined-ref`, the
-/// cross-file branch of `duplicate-label`) stay inert here until a workspace scan
-/// + `Project` assembly lands. Per-file rules are unaffected.
-fn analyze_tex(snapshot: &Analysis, path: &Path) -> Option<Vec<Diagnostic>> {
+/// The `Project` is interned from the membership the worker captured (open buffers
+/// plus lazily-read on-disk siblings); `resolved_labels` / `resolved_citations`
+/// then drive `undefined-ref`, the cross-file branch of `duplicate-label`, and
+/// `undefined-citation`. Their gates (closed, rooted namespace) keep a bare
+/// fragment opened alone from being flagged.
+fn analyze_tex(
+    snapshot: &Analysis,
+    path: &Path,
+    members: Vec<ProjectMember>,
+) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
     let text = snapshot.file_text(file).to_owned();
+    // The file's normalized identity, which keys the cross-file resolvers (it
+    // equals this file's `ProjectMember::path`).
+    let lint_path = snapshot.file_path(file).to_path_buf();
     let idx = LineIndex::new(&text);
     let mut diags: Vec<Diagnostic> = snapshot
         .parse_diagnostics(file)
@@ -874,10 +990,8 @@ fn analyze_tex(snapshot: &Analysis, path: &Path) -> Option<Vec<Diagnostic>> {
         .collect();
     let root = snapshot.parsed_tree(file);
     let model = snapshot.semantic_model(file);
-    // Cross-file resolution (labels and citations) is `None`: the server tracks
-    // only open buffers and assembles no project, so `undefined-ref` /
-    // `undefined-citation` stay inert until a workspace scan lands.
-    for d in lint_document(path, &root, model, None, None) {
+    let (resolution, citations) = snapshot.resolve_project(members);
+    for d in lint_document(&lint_path, &root, model, Some(resolution), Some(citations)) {
         diags.push(lint_to_lsp(&idx, &text, d));
     }
     Some(diags)

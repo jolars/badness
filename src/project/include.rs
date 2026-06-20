@@ -174,7 +174,7 @@ fn default_tex_extension(path: PathBuf) -> PathBuf {
 /// The target of a bibliography-resource command (`\bibliography`,
 /// `\addbibresource`). Mirrors [`IncludeTarget`]: a statically-resolved `.bib`
 /// path, or [`BibTarget::Dynamic`] for a missing or non-literal argument.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum BibTarget {
     /// A resolved path with a `.bib` extension defaulted in and joined onto the
     /// including file's directory when relative.

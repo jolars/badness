@@ -210,19 +210,23 @@ built-in; consumed by the formatter's `\begin` arity glue).
   `unresolved_refs` remain *facts*; an `unused-label` lint (cross-file) is the
   natural follow-on but is deferred (it can false-positive on labels referenced
   from outside the analyzed set).
-- [ ] **LSP cross-file project assembly.** The editor path passes both
-  `resolution: None` and `citations: None` (`lsp.rs` `analyze_tex`), so every
-  cross-file rule — `undefined-ref`, cross-file `duplicate-label`, and now
-  `undefined-citation` — is inert in the editor while green on the CLI. Assemble
-  a salsa `Project` from open buffers + on-disk includes and feed `resolved_labels`
-  + a new `resolved_citations` so these fire live. Prereqs/companions: the
-  deferred salsa **`resolved_citations` / `file_cite_names`** queries (the bib
-  analog of `resolved_labels`/`file_labels`; currently only the pure
-  `ResolvedCitations::build` exists, used by the CLI), and tracking referenced
-  `.bib` files as salsa inputs (resolve `\bibliography`/`\addbibresource` to disk,
-  reuse `parsed_bib_document`/`bib_semantic_model`). Pairs with
-  `workspace/didChangeWatchedFiles` (LSP §Configuration) so edits to non-open
-  includes/`.bib`s reanalyze.
+- [x] **LSP cross-file project assembly.** `lsp.rs` `analyze_tex` now interns a
+  salsa `Project` from the open buffers plus on-disk siblings, and feeds
+  `resolved_labels` + the new `resolved_citations`, so `undefined-ref`, cross-file
+  `duplicate-label`, and `undefined-citation` fire live in the editor (gated by the
+  same closed/rooted-namespace tests as the CLI). Salsa keying switched from the
+  URI string to the real (normalized) filesystem path so `\input`/bib resolution
+  and on-disk reads share one path space. Added the deferred salsa queries
+  `file_cite_names` / `file_cite_facts` (firewalls) and `resolved_citations`
+  (project-level), the bib analog of `file_labels`/`resolved_labels`; `.bib` files
+  are tracked as salsa inputs and tagged via `ProjectMember.kind`. The worker
+  lazily walks an opened file's directory once (`Worker::seed_dir`, gitignore-aware
+  via `collect_lint_files`) and re-lints all open docs on membership growth
+  (`Outbound::RelintAll`). Follow-up (deferred, as arity does): no file watcher yet
+  — edits to a **non-open** include/`.bib` on disk don't reanalyze until that file
+  is opened. Wire `workspace/didChangeWatchedFiles` + dynamic
+  `client/registerCapability` for `**/*.{tex,bib}` so on-disk changes to non-open
+  members reanalyze (re-read + re-upsert + `RelintAll`).
 - [x] Unbraced `\newcommand\foo…` form (parsed with `\foo` as a sibling;
   recovered by a scanner-side sibling heuristic in `semantic/define.rs`
   (`resolve_command_def`), no parser change).

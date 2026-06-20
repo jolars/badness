@@ -25,8 +25,12 @@ use smol_str::SmolStr;
 use crate::bib::semantic::Model as BibModel;
 use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
 use crate::parser::parse;
+use crate::project::citations::document_cite_names;
 use crate::project::labels::{document_label_names, is_document_root};
-use crate::project::{IncludeEdgeKey, collect_include_edge_keys};
+use crate::project::{
+    BibTarget, IncludeEdgeKey, Project, ProjectMember, ResolvedCitations, ResolvedLabels,
+    collect_bib_resource_targets, collect_include_edge_keys, resolved_citations, resolved_labels,
+};
 use crate::semantic::{SemanticModel, SignatureDb, scan_definitions};
 use crate::syntax::SyntaxNode;
 
@@ -68,6 +72,15 @@ pub enum QueryKind {
     /// A `.bib` file's per-file entry / cite-key / `@string` model
     /// ([`bib_semantic_model`]).
     BibSemanticModel,
+    /// A `.bib` file's sorted, distinct cite-key set ([`file_cite_names`]) — the
+    /// firewall the cross-file citation resolver consumes.
+    FileCiteNames,
+    /// A `.tex` file's bibliography-resource targets + `\nocite{*}` flag
+    /// ([`file_cite_facts`]) — the per-file citation firewall.
+    FileCiteFacts,
+    /// The cross-file citation resolution ([`crate::project::resolved_citations`]);
+    /// a project-level query, not keyed on a single file.
+    ResolvedCitations,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -296,6 +309,52 @@ pub fn bib_semantic_model(db: &dyn IncrementalDb, file: SourceFile) -> BibModel 
     BibModel::build(&parsed_bib_tree_root(db, file))
 }
 
+/// A `.bib` file's distinct cite keys, sorted — a range-free projection of
+/// [`bib_semantic_model`].
+///
+/// The per-file firewall the cross-file [`crate::project::resolved_citations`]
+/// resolver consumes (the bib analog of [`file_labels`]). Stripping ranges means
+/// an edit that shifts a `@entry`'s offset, or touches a field but not a key,
+/// leaves this `Vec` *equal* — salsa backdates and the project-level union is not
+/// rebuilt. Like [`file_labels`] it is **not** `no_eq`: `Vec<SmolStr>` is `Eq`,
+/// which is what makes the firewall hold.
+#[salsa::tracked(returns(ref))]
+pub fn file_cite_names(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileCiteNames,
+        file: Some(file),
+    });
+    document_cite_names(bib_semantic_model(db, file))
+}
+
+/// A `.tex` file's citation facts: its bibliography-resource targets
+/// (`\bibliography`/`\addbibresource`) and whether it carries a `\nocite{*}`
+/// wildcard. The per-file firewall feeding [`crate::project::resolved_citations`]
+/// on the `.tex` side (the document-root flag reuses [`file_is_document_root`]).
+///
+/// `Eq` for the same firewall reason as [`file_labels`]: a prose or `\cite` edit
+/// changes neither the resource targets nor the wildcard, so it backdates and the
+/// cross-file resolution memo holds. Resolves relative targets against the file's
+/// own directory (`path.parent()`), like [`include_edges`].
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct FileCiteFacts {
+    pub bib_targets: Vec<BibTarget>,
+    pub nocite_all: bool,
+}
+
+#[salsa::tracked(returns(ref))]
+pub fn file_cite_facts(db: &dyn IncrementalDb, file: SourceFile) -> FileCiteFacts {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileCiteFacts,
+        file: Some(file),
+    });
+    let root = parsed_tree_root(db, file);
+    FileCiteFacts {
+        bib_targets: collect_bib_resource_targets(&root, file.path(db).parent()),
+        nocite_all: semantic_model(db, file).has_wildcard_nocite(),
+    }
+}
+
 #[salsa::db]
 pub struct IncrementalDatabase {
     storage: salsa::Storage<Self>,
@@ -341,6 +400,31 @@ impl std::fmt::Debug for IncrementalDatabase {
     }
 }
 
+/// Lexically normalize `path` for use as a deduplication key: absolutize it
+/// (against the current directory, without touching the filesystem) and collapse
+/// `.` / `..` segments. Purely textual — no symlink resolution, no existence
+/// check — so it is stable for not-yet-saved buffers and never blocks on I/O.
+/// `a.tex`, `./a.tex`, and a sibling resolved as `dir/../a.tex` all map to one
+/// key, so the language server's `\input`-resolved siblings collapse onto the
+/// same input as the buffer the editor opened. Copied from arity's `normalize_path`.
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut out = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 /// Monotonic counter minting unique synthetic paths for in-memory documents, so
 /// two of them never alias in a path-keyed query. Unique-within-process is
 /// sufficient; this sidesteps a `uuid` dependency.
@@ -365,11 +449,12 @@ impl IncrementalDatabase {
     /// updates the text of an existing input so unchanged downstream queries stay
     /// cached.
     pub fn upsert_file(&mut self, path: &Path, text: String) -> SourceFile {
+        let key = normalize_path(path);
         let existing = self
             .files
             .lock()
             .expect("file cache mutex poisoned")
-            .get(path)
+            .get(&key)
             .copied();
         match existing {
             Some(file) => {
@@ -382,14 +467,31 @@ impl IncrementalDatabase {
                 file
             }
             None => {
-                let file = SourceFile::new(self, path.to_path_buf(), text);
+                // Store the normalized key as the input's path so `\input`/bib
+                // resolution (which joins onto `file.path(db).parent()`) lands in
+                // the same normalized space as the member set.
+                let file = SourceFile::new(self, key.clone(), text);
                 self.files
                     .lock()
                     .expect("file cache mutex poisoned")
-                    .insert(path.to_path_buf(), file);
+                    .insert(key, file);
                 file
             }
         }
+    }
+
+    /// Every currently-tracked `(normalized path, input)` pair, sorted by path —
+    /// the membership snapshot the language server interns a `Project` from.
+    pub fn tracked_files(&self) -> Vec<(PathBuf, SourceFile)> {
+        let mut files: Vec<(PathBuf, SourceFile)> = self
+            .files
+            .lock()
+            .expect("file cache mutex poisoned")
+            .iter()
+            .map(|(path, &file)| (path.clone(), file))
+            .collect();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
     }
 
     /// The `SourceFile` input currently tracked for `path`, if any. Read-only:
@@ -400,7 +502,7 @@ impl IncrementalDatabase {
         self.files
             .lock()
             .expect("file cache mutex poisoned")
-            .get(path)
+            .get(&normalize_path(path))
             .copied()
     }
 
@@ -419,7 +521,7 @@ impl IncrementalDatabase {
         self.files
             .lock()
             .expect("file cache mutex poisoned")
-            .remove(path)
+            .remove(&normalize_path(path))
     }
 
     /// The text currently tracked for `file`.
@@ -527,6 +629,16 @@ impl Analysis {
         self.0.file_text(file)
     }
 
+    /// The normalized path `file` is tracked under (its cross-file identity).
+    pub fn file_path(&self, file: SourceFile) -> &Path {
+        self.0.file_path(file)
+    }
+
+    /// Every currently-tracked `(normalized path, input)` pair, sorted by path.
+    pub fn tracked_files(&self) -> Vec<(PathBuf, SourceFile)> {
+        self.0.tracked_files()
+    }
+
     /// Parse diagnostics for `file` (empty when it parses cleanly).
     pub fn parse_diagnostics(&self, file: SourceFile) -> &[ParseDiagnosticData] {
         self.0.parse_diagnostics(file)
@@ -560,6 +672,22 @@ impl Analysis {
     /// The file's per-file bib model (entries, `@string` defs/uses).
     pub fn bib_semantic_model(&self, file: SourceFile) -> &BibModel {
         self.0.bib_semantic_model(file)
+    }
+
+    /// Intern `members` as a `Project` against this snapshot and resolve its
+    /// cross-file label and citation models (the inputs the cross-file lint rules
+    /// consume). The returned references borrow the snapshot's salsa storage, so
+    /// they live as long as this `Analysis`. Interning takes `&db` and is safe on a
+    /// read snapshot.
+    pub fn resolve_project(
+        &self,
+        members: Vec<ProjectMember>,
+    ) -> (&ResolvedLabels, &ResolvedCitations) {
+        let project = Project::new(&self.0, members);
+        (
+            resolved_labels(&self.0, project),
+            resolved_citations(&self.0, project),
+        )
     }
 }
 

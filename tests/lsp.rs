@@ -15,8 +15,8 @@ use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FormattingOptions, InitializeParams, InitializeResult, InitializedParams, InsertTextFormat,
-    OneOf, PartialResultParams, Position, PublishDiagnosticsParams, Range, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    NumberOrString, OneOf, PartialResultParams, Position, PublishDiagnosticsParams, Range,
+    SymbolKind, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams,
 };
@@ -655,6 +655,123 @@ fn lsp_completion_file_paths() {
     assert!(names.contains(&"logo.png"), "{names:?}");
     assert!(names.contains(&"chapters"), "{names:?}");
     assert!(!names.contains(&"intro.tex"), "{names:?}");
+
+    shutdown(&client, server_thread);
+}
+
+/// The lint-rule codes carried by a diagnostics batch (parse diagnostics have no
+/// code and are dropped), for asserting which cross-file rules fired.
+fn rule_codes(diags: &PublishDiagnosticsParams) -> Vec<String> {
+    diags
+        .diagnostics
+        .iter()
+        .filter_map(|d| match &d.code {
+            Some(NumberOrString::String(code)) => Some(code.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn lsp_cross_file_resolution_clears_diagnostics() {
+    // A real on-disk project: a root that `\input`s a chapter (defining the
+    // referenced label) and an `\addbibresource` bibliography (defining the cited
+    // key). Only the root is opened; the server discovers the siblings on disk,
+    // assembles a project, and the cross-file rules resolve — no diagnostics.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("part.tex"), "\\label{sec:intro}\n").unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{knuth1984, title={The TeXbook}}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\addbibresource{refs.bib}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\ref{sec:intro}\n\
+        \\cite{knuth1984}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    assert!(
+        diags.diagnostics.is_empty(),
+        "cross-file label + citation must resolve, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_cross_file_undefined_ref_and_citation_fire() {
+    // The same shape, but the root references a label and a cite key that nothing
+    // in the (now closed, rooted) project defines — so `undefined-ref` and
+    // `undefined-citation` fire live in the editor.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("part.tex"), "\\label{sec:intro}\n").unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{knuth1984, title={The TeXbook}}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\addbibresource{refs.bib}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\ref{sec:missing}\n\
+        \\cite{lamport1986}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    let codes = rule_codes(&diags);
+    assert!(
+        codes.iter().any(|c| c == "undefined-ref"),
+        "expected undefined-ref, got {codes:?}"
+    );
+    assert!(
+        codes.iter().any(|c| c == "undefined-citation"),
+        "expected undefined-citation, got {codes:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_lone_fragment_has_no_cross_file_diagnostics() {
+    // A bare chapter opened standalone (no `\documentclass`): its namespace is
+    // rootless, so `undefined-ref` stays inert even though `\ref{x}` resolves to
+    // nothing — exactly the gate that keeps fragments quiet.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let frag_path = dir.path().join("frag.tex");
+    let frag = "\\section{Loose}\n\\ref{nowhere}\n";
+    std::fs::write(&frag_path, frag).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&frag_path);
+    did_open(&client, &uri, 1, frag);
+
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    assert!(
+        rule_codes(&diags).iter().all(|c| c != "undefined-ref"),
+        "a rootless fragment must not flag undefined-ref, got {:?}",
+        diags.diagnostics
+    );
 
     shutdown(&client, server_thread);
 }

@@ -9,8 +9,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use badness::file_discovery::FileKind;
 use badness::incremental::{IncrementalDatabase, QueryKind, QueryLogEntry, SourceFile};
-use badness::project::{IncludeKind, Project, ProjectMember, project_graph, resolved_labels};
+use badness::project::{
+    IncludeKind, Project, ProjectMember, project_graph, resolved_citations, resolved_labels,
+};
 
 fn count_by_kind(entries: &[QueryLogEntry]) -> HashMap<QueryKind, usize> {
     let mut counts = HashMap::new();
@@ -32,14 +35,47 @@ fn project_main_part<'db>(
         ProjectMember {
             file: main,
             path: PathBuf::from("/proj/main.tex"),
+            kind: FileKind::Tex,
         },
         ProjectMember {
             file: part,
             path: PathBuf::from("/proj/part.tex"),
+            kind: FileKind::Tex,
         },
     ];
     members.sort_by(|a, b| a.path.cmp(&b.path));
     Project::new(db, members)
+}
+
+/// Intern the membership `{main.tex, refs.bib}` under `/proj`, with `main` the
+/// document root. Re-interns from a fresh sorted snapshot on each call, as a real
+/// consumer would.
+fn project_main_bib<'db>(
+    db: &'db IncrementalDatabase,
+    main: SourceFile,
+    bib: SourceFile,
+) -> Project<'db> {
+    let mut members = vec![
+        ProjectMember {
+            file: main,
+            path: PathBuf::from("/proj/main.tex"),
+            kind: FileKind::Tex,
+        },
+        ProjectMember {
+            file: bib,
+            path: PathBuf::from("/proj/refs.bib"),
+            kind: FileKind::Bib,
+        },
+    ];
+    members.sort_by(|a, b| a.path.cmp(&b.path));
+    Project::new(db, members)
+}
+
+fn main_bib(main_text: &str, bib_text: &str) -> (IncrementalDatabase, SourceFile, SourceFile) {
+    let mut db = IncrementalDatabase::default();
+    let main = db.upsert_file(Path::new("/proj/main.tex"), main_text.to_string());
+    let bib = db.upsert_file(Path::new("/proj/refs.bib"), bib_text.to_string());
+    (db, main, bib)
 }
 
 fn main_part(main_text: &str, part_text: &str) -> (IncrementalDatabase, SourceFile, SourceFile) {
@@ -180,6 +216,78 @@ fn label_change_rebuilds_resolved_labels() {
         "resolved labels must rebuild when a label set changes"
     );
     assert!(resolved.is_defined(Path::new("/proj/main.tex"), "b"));
+}
+
+#[test]
+fn resolved_citations_unions_referenced_bib_keys() {
+    // main.tex is the document root and `\addbibresource`s refs.bib, which defines
+    // the cite key `\cite`d from main — so the citation resolves cross-file.
+    let (db, main, bib) = main_bib(
+        "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\cite{knuth}\n",
+        "@article{knuth, title={x}}\n",
+    );
+    let resolved = resolved_citations(&db, project_main_bib(&db, main, bib));
+
+    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "knuth"));
+    assert!(!resolved.is_defined(Path::new("/proj/main.tex"), "missing"));
+    // The bib resource resolves to an analyzed member, and main is a document root.
+    assert!(resolved.is_closed(Path::new("/proj/main.tex")));
+    assert!(resolved.is_root_component(Path::new("/proj/main.tex")));
+}
+
+#[test]
+fn cite_set_preserving_edit_does_not_rebuild_resolved_citations() {
+    // The cite firewall: adding a `@string` to refs.bib changes its bib model (so
+    // `file_cite_names` re-executes) but not its cite-key set — so `file_cite_names`
+    // backdates and the cross-file `resolved_citations` memo is reused.
+    let (mut db, main, bib) = main_bib(
+        "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\cite{knuth}\n",
+        "@article{knuth, title={x}}\n",
+    );
+    let _ = resolved_citations(&db, project_main_bib(&db, main, bib));
+
+    db.clear_query_log();
+
+    // The model changes (a new `@string` def) but the cite-key set is still `{knuth}`.
+    db.set_file_text(bib, "@article{knuth, title={x}}\n@string{foo = \"bar\"}\n");
+    let _ = resolved_citations(&db, project_main_bib(&db, main, bib));
+
+    let counts = count_by_kind(&db.query_log());
+    // refs.bib's cite-key set is recomputed (its model changed)...
+    assert_eq!(counts.get(&QueryKind::FileCiteNames), Some(&1));
+    // ...but the set is unchanged, so the resolution memo is reused.
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedCitations),
+        None,
+        "resolved citations must not rebuild when no cite-key set changed"
+    );
+}
+
+#[test]
+fn cite_key_change_rebuilds_resolved_citations() {
+    // The complement: adding an entry changes refs.bib's cite-key set, so the
+    // cross-file resolution *must* rebuild (the firewall doesn't over-cache).
+    let (mut db, main, bib) = main_bib(
+        "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\cite{knuth}\n",
+        "@article{knuth, title={x}}\n",
+    );
+    let _ = resolved_citations(&db, project_main_bib(&db, main, bib));
+
+    db.clear_query_log();
+
+    db.set_file_text(
+        bib,
+        "@article{knuth, title={x}}\n@article{lamport, title={y}}\n",
+    );
+    let resolved = resolved_citations(&db, project_main_bib(&db, main, bib));
+
+    let counts = count_by_kind(&db.query_log());
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedCitations),
+        Some(&1),
+        "resolved citations must rebuild when a cite-key set changes"
+    );
+    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "lamport"));
 }
 
 #[test]

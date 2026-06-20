@@ -106,6 +106,16 @@ fn lint_file_kind(path: &Path) -> Option<FileKind> {
     }
 }
 
+/// The [`FileKind`] of `path` by extension, defaulting to [`FileKind::Tex`] for any
+/// non-`.bib` extension (including none). The permissive resolver used where a
+/// pipeline must be picked for content that has no real file on disk — the LSP
+/// (buffers named only by URI) and the CLI's `--stdin-filepath`. Contrast
+/// [`collect_lint_files`], which *rejects* an unsupported explicit path rather than
+/// defaulting it.
+pub fn file_kind_or_tex(path: &Path) -> FileKind {
+    lint_file_kind(path).unwrap_or(FileKind::Tex)
+}
+
 /// Resolve `paths` (files and/or directories) into a sorted, de-duplicated list of
 /// lintable files tagged by [`FileKind`]. Explicit file paths must be `.tex` or
 /// `.bib`; directories are walked recursively, keeping both kinds and honoring
@@ -268,5 +278,17 @@ mod tests {
             collect_lint_files(std::slice::from_ref(&path)),
             Err(FileDiscoveryError::UnsupportedLintFilePath { path })
         );
+    }
+
+    #[test]
+    fn file_kind_or_tex_dispatches_by_extension() {
+        // The permissive resolver behind the LSP and `--stdin-filepath`: `.bib`
+        // (any case) → Bib; `.tex`, an unknown extension, and no extension all
+        // default to Tex. It reads only the name, so the file need not exist.
+        assert_eq!(file_kind_or_tex(Path::new("refs.bib")), FileKind::Bib);
+        assert_eq!(file_kind_or_tex(Path::new("refs.BIB")), FileKind::Bib);
+        assert_eq!(file_kind_or_tex(Path::new("doc.tex")), FileKind::Tex);
+        assert_eq!(file_kind_or_tex(Path::new("pkg.sty")), FileKind::Tex);
+        assert_eq!(file_kind_or_tex(Path::new("buffer")), FileKind::Tex);
     }
 }

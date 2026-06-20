@@ -87,7 +87,7 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::file_discovery::{FileKind, collect_lint_files};
+use crate::file_discovery::{FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
@@ -270,12 +270,11 @@ fn uri_to_path(uri: &Uri) -> PathBuf {
 
 /// Which language pipeline a document feeds, by its path extension. Defaults to
 /// [`FileKind::Tex`] for anything that is not a `.bib` file (including unsaved
-/// buffers with no extension), matching the conservative CLI/stdin behavior.
+/// buffers with no extension), matching the conservative CLI/stdin behavior. The
+/// resolution itself lives in [`file_kind_or_tex`], shared with the CLI's
+/// `--stdin-filepath`.
 fn file_kind_for(path: &Path) -> FileKind {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some(ext) if ext.eq_ignore_ascii_case("bib") => FileKind::Bib,
-        _ => FileKind::Tex,
-    }
+    file_kind_or_tex(path)
 }
 
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and

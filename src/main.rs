@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use badness::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files};
+use badness::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
 use badness::linter::{
     Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
@@ -81,6 +81,11 @@ enum Command {
         /// if any file is not already formatted.
         #[arg(long)]
         check: bool,
+        /// Name the stdin buffer so its language is dispatched by extension
+        /// (`.bib` → BibTeX, anything else → LaTeX). No file is read or written;
+        /// only the extension is used. Ignored when paths are given.
+        #[arg(long, value_name = "PATH")]
+        stdin_filepath: Option<PathBuf>,
         /// Maximum line width before the formatter breaks a line.
         #[arg(long)]
         line_width: Option<usize>,
@@ -125,6 +130,7 @@ fn main() -> ExitCode {
         Command::Format {
             paths,
             check,
+            stdin_filepath,
             line_width,
             indent_width,
             wrap,
@@ -139,7 +145,7 @@ fn main() -> ExitCode {
             if let Some(w) = wrap {
                 style.wrap = w.into();
             }
-            run_format(&paths, check, style)
+            run_format(&paths, check, stdin_filepath.as_deref(), style)
         }
         Command::Lint {
             paths,
@@ -460,12 +466,17 @@ fn render_cst(node: &SyntaxNode, depth: usize, out: &mut String) {
     }
 }
 
-fn run_format(paths: &[PathBuf], check: bool, style: FormatStyle) -> ExitCode {
+fn run_format(
+    paths: &[PathBuf],
+    check: bool,
+    stdin_filepath: Option<&Path>,
+    style: FormatStyle,
+) -> ExitCode {
     if check {
         return run_check(paths, style);
     }
     if paths.is_empty() {
-        run_format_stdin(style)
+        run_format_stdin(stdin_filepath, style)
     } else {
         run_format_paths(paths, style)
     }
@@ -496,14 +507,21 @@ fn run_check(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
     }
 }
 
-/// No paths: read stdin, format, write to stdout.
-fn run_format_stdin(style: FormatStyle) -> ExitCode {
+/// No paths: read stdin, format, write to stdout. The pipeline is chosen from
+/// `stdin_filepath`'s extension (`.bib` → BibTeX, else LaTeX); with no name given,
+/// stdin stays LaTeX, the long-standing conservative default.
+fn run_format_stdin(stdin_filepath: Option<&Path>, style: FormatStyle) -> ExitCode {
     let mut input = String::new();
     if let Err(err) = std::io::stdin().read_to_string(&mut input) {
         eprintln!("badness: cannot read stdin: {err}");
         return ExitCode::FAILURE;
     }
-    match format_with_style(&input, style) {
+    let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
+    let formatted = match kind {
+        FileKind::Tex => format_with_style(&input, style).map_err(|e| e.to_string()),
+        FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
+    };
+    match formatted {
         Ok(formatted) => {
             if let Err(err) = std::io::stdout().write_all(formatted.as_bytes()) {
                 eprintln!("badness: cannot write stdout: {err}");
@@ -511,8 +529,8 @@ fn run_format_stdin(style: FormatStyle) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(err) => {
-            eprintln!("badness: {err}");
+        Err(msg) => {
+            eprintln!("badness: {msg}");
             ExitCode::FAILURE
         }
     }

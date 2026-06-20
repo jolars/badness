@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use badness::parser::parse;
 use parse_skeleton::{
-    dice, lcs_len, project_badness, project_texlab, render_lines, texlab_has_error,
+    Badness, dice, lcs_len, project, project_texlab, render_lines, texlab_has_error,
 };
 
 /// One corpus file's outcome.
@@ -61,6 +61,13 @@ fn parse_compat_report() {
 
     let allowlist = load_allowlist();
 
+    // Optional triage aid: `PARSE_COMPAT_DUMP=1 task parse-compat` writes a per-file
+    // skeleton diff for every divergent/skipped file to `target/parse_compat_diffs.txt`,
+    // so a classifier can read the actual badness-vs-texlab shapes (the report only
+    // carries similarity numbers). Off by default; touches only this test harness.
+    let dump_enabled = std::env::var_os("PARSE_COMPAT_DUMP").is_some();
+    let mut dump = String::new();
+
     let mut reports: Vec<FileReport> = Vec::new();
     let mut total_lcs2 = 0usize; // sum of 2 * LCS
     let mut total_lines = 0usize; // sum of (badness_lines + texlab_lines) over compared files
@@ -70,7 +77,18 @@ fn parse_compat_report() {
             continue;
         };
 
-        if !parse(&text).errors.is_empty() {
+        let parsed = parse(&text);
+        if !parsed.errors.is_empty() {
+            if dump_enabled {
+                let badness_lines = render_lines(&project::<Badness>(&parsed.syntax()));
+                let texlab_lines = render_lines(&project_texlab(&text));
+                let errs: String = parsed
+                    .errors
+                    .iter()
+                    .map(|e| format!("    {e:?}\n"))
+                    .collect();
+                dump.push_str(&dump_section(key, &errs, &badness_lines, &texlab_lines));
+            }
             reports.push(FileReport {
                 key: key.clone(),
                 outcome: Outcome::SkippedBadness,
@@ -79,7 +97,7 @@ fn parse_compat_report() {
             continue;
         }
 
-        let badness_lines = render_lines(&project_badness(&text));
+        let badness_lines = render_lines(&project::<Badness>(&parsed.syntax()));
         let texlab_lines = render_lines(&project_texlab(&text));
         let texlab_error = texlab_has_error(&text);
 
@@ -93,11 +111,25 @@ fn parse_compat_report() {
                 similarity: dice(&badness_lines, &texlab_lines),
             }
         };
+        if dump_enabled && !matches!(outcome, Outcome::Concordant) {
+            dump.push_str(&dump_section(key, "", &badness_lines, &texlab_lines));
+        }
         reports.push(FileReport {
             key: key.clone(),
             outcome,
             texlab_error,
         });
+    }
+
+    if dump_enabled {
+        let dump_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("parse_compat_diffs.txt");
+        fs::write(&dump_path, &dump).expect("write parse_compat_diffs.txt");
+        eprintln!(
+            "parse-compat: wrote {} (PARSE_COMPAT_DUMP)",
+            dump_path.display()
+        );
     }
 
     let report = render_report(
@@ -165,6 +197,61 @@ fn load_allowlist() -> BTreeMap<String, String> {
         map.insert(key, value);
     }
     map
+}
+
+// --- triage dump (PARSE_COMPAT_DUMP) --------------------------------------
+
+/// One file's section in the triage dump: optional badness parse errors followed
+/// by an LCS-aligned diff of the two skeletons.
+fn dump_section(key: &str, errors: &str, badness: &[String], texlab: &[String]) -> String {
+    let mut s = format!("===== {key} =====\n");
+    if !errors.is_empty() {
+        s.push_str("badness parse errors (SkippedBadness):\n");
+        s.push_str(errors);
+    }
+    s.push_str("diff (`-` badness-only, `+` texlab-only, ` ` common):\n");
+    s.push_str(&unified_diff(badness, texlab));
+    s.push('\n');
+    s
+}
+
+/// A minimal LCS-aligned unified diff of two line slices. `-` marks a line only in
+/// `a` (badness), `+` a line only in `b` (texlab), and a leading space a shared line.
+fn unified_diff(a: &[String], b: &[String]) -> String {
+    let (n, m) = (a.len(), b.len());
+    // dp[i][j] = LCS length of a[i..] and b[j..].
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let mut out = String::new();
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if a[i] == b[j] {
+            out.push_str(&format!("  {}\n", a[i]));
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            out.push_str(&format!("- {}\n", a[i]));
+            i += 1;
+        } else {
+            out.push_str(&format!("+ {}\n", b[j]));
+            j += 1;
+        }
+    }
+    for line in &a[i..] {
+        out.push_str(&format!("- {line}\n"));
+    }
+    for line in &b[j..] {
+        out.push_str(&format!("+ {line}\n"));
+    }
+    out
 }
 
 // --- reporting ------------------------------------------------------------

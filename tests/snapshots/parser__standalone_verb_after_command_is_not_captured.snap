@@ -1,0 +1,10 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\foo \\verb|x|\")"
+---
+ROOT@0..13
+  PARAGRAPH@0..13
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\foo"
+    WHITESPACE@4..5 " "
+    VERB@5..13 "\\verb|x|"

@@ -1,0 +1,9 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\url{a_$b$}\")"
+---
+ROOT@0..11
+  PARAGRAPH@0..11
+    COMMAND@0..11
+      CONTROL_WORD@0..4 "\\url"
+      VERB@4..11 "{a_$b$}"

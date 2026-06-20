@@ -222,6 +222,9 @@ built-in; consumed by the formatter's `\begin` arity glue).
   `\url`, `\path`, `\lstinline`, `\mintinline`, and the curated class
   command `\code` (jss). Cleared the `\code{$ …}` "unclosed `$`" false
   positive. (`\verb`/`\verb*` keep their dedicated delimiter-only path.) The
+  `VERB` body attaches as a **child** of the `COMMAND` node (via
+  `attach_arguments`, like any greedy argument — decision #8), not a stranded
+  sibling; a standalone `\verb…` token is guarded out by its `\` prefix. The
   next bullet generalizes this to arbitrary user macros.
 - [ ] Detect verbatim-argument commands by **scanning their definitions**
   (extends the existing `semantic/define.rs` scanner). When a `\newcommand`/

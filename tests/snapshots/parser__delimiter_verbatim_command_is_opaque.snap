@@ -1,10 +1,9 @@
 ---
 source: tests/parser.rs
-assertion_line: 237
 expression: "tree(r\"\\lstinline|x_$y$|\")"
 ---
 ROOT@0..17
   PARAGRAPH@0..17
-    COMMAND@0..10
+    COMMAND@0..17
       CONTROL_WORD@0..10 "\\lstinline"
-    VERB@10..17 "|x_$y$|"
+      VERB@10..17 "|x_$y$|"

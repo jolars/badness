@@ -298,16 +298,35 @@ fn brace_verbatim_command_is_opaque() {
 
 #[test]
 fn delimiter_verbatim_command_is_opaque() {
+    // The `VERB` body attaches *into* the command (a child, like any greedy
+    // argument — decision #8), not as a stranded sibling.
     insta::assert_snapshot!(tree(r"\lstinline|x_$y$|"));
+}
+
+#[test]
+fn brace_verbatim_command_argument_is_a_child() {
+    // `\url{…}`: the brace-delimited verbatim body is the command's argument, so
+    // it nests under the `COMMAND` node rather than floating beside it.
+    insta::assert_snapshot!(tree(r"\url{a_$b$}"));
 }
 
 #[test]
 fn verbatim_command_skips_leading_args() {
     // `\mintinline{lang}{code}`: the language is an ordinary group, only the
-    // trailing argument is verbatim.
+    // trailing argument is verbatim. Both the group and the `VERB` body nest
+    // under the command, which therefore spans the whole construct.
     let out = tree(r"\mintinline{python}{x = $1}");
     assert!(!out.contains("error @"), "{out}");
     assert!(out.contains(r#"VERB@19..27 "{x = $1}""#), "{out}");
+    assert!(out.contains("COMMAND@0..27"), "{out}");
+}
+
+#[test]
+fn standalone_verb_after_command_is_not_captured() {
+    // A self-contained `\verb…` token (text begins with `\`) following another
+    // command must stay a sibling — it is no one's argument. Only a verbatim
+    // *argument* `VERB` (`{…}` / delimiter run, never `\`-prefixed) is attached.
+    insta::assert_snapshot!(tree(r"\foo \verb|x|"));
 }
 
 #[test]

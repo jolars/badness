@@ -162,6 +162,20 @@ impl<'t> Parser<'t> {
         (None, had_break)
     }
 
+    /// Text of the next non-trivia token at/after `self.pos`, if any. Does not
+    /// consume. Used to distinguish a verbatim-argument `VERB` from a standalone
+    /// `\verb…` token (see `attach_arguments`).
+    fn peek_meaningful_text(&self) -> Option<&str> {
+        let mut i = self.pos;
+        while let Some(t) = self.tokens.get(i) {
+            if !Self::is_trivia(t.kind) {
+                return Some(t.text.as_str());
+            }
+            i += 1;
+        }
+        None
+    }
+
     /// True if a paragraph break (blank line) begins at the current position.
     fn at_paragraph_break(&self) -> bool {
         let mut i = self.pos;
@@ -471,6 +485,22 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::L_BRACKET) => {
                     self.skip_trivia();
                     self.optional();
+                }
+                // A verbatim-argument command's body (`\url{…}`, `\lstinline|…|`,
+                // the final arg of `\mintinline{lang}{code}`) is lexed as a single
+                // `VERB` token immediately following the command, so attach it as a
+                // child like any other argument (decision #8) instead of leaving it
+                // a sibling. A *standalone* `\verb…`/`\verb*…` token (its text starts
+                // with `\`) is self-contained and belongs to no command — never
+                // capture it. Only `lex_verbatim_command` emits a non-`\` `VERB`, and
+                // always directly after its own command, so the open node here owns it.
+                Some(SyntaxKind::VERB)
+                    if !self
+                        .peek_meaningful_text()
+                        .is_some_and(|t| t.starts_with('\\')) =>
+                {
+                    self.skip_trivia();
+                    self.bump(); // the VERB argument
                 }
                 _ => break,
             }

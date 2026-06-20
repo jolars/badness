@@ -2,15 +2,16 @@
 //! without writing anything.
 //!
 //! Adapted from arity's `src/formatter/check.rs`: the input paths are resolved to
-//! the concrete `.tex` files via [`collect_tex_files`] (explicit files and/or
-//! recursively-walked directories) before checking.
+//! the concrete `.tex`/`.bib` files via [`collect_lint_files`] (explicit files
+//! and/or recursively-walked directories) before checking, then each file is
+//! checked through its own formatter (LaTeX or BibTeX) by [`FileKind`].
 
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
 use super::{FormatError, FormatStyle, format_with_style};
-use crate::file_discovery::{FileDiscoveryError, collect_tex_files};
+use crate::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
@@ -21,11 +22,26 @@ pub struct CheckResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckError {
     MissingPaths,
-    NoTexFiles,
-    NonTexFilePath { path: PathBuf },
-    WalkError { path: PathBuf, message: String },
-    ReadError { path: PathBuf, source: String },
-    FormatError { path: PathBuf, source: FormatError },
+    NoFiles,
+    UnsupportedFilePath {
+        path: PathBuf,
+    },
+    WalkError {
+        path: PathBuf,
+        message: String,
+    },
+    ReadError {
+        path: PathBuf,
+        source: String,
+    },
+    FormatError {
+        path: PathBuf,
+        source: FormatError,
+    },
+    BibFormatError {
+        path: PathBuf,
+        source: crate::bib::FormatError,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -37,13 +53,16 @@ impl fmt::Display for CheckError {
                     "--check requires at least one input path (file or directory)"
                 )
             }
-            Self::NoTexFiles => {
-                write!(f, "no .tex files found under the provided input paths")
-            }
-            Self::NonTexFilePath { path } => {
+            Self::NoFiles => {
                 write!(
                     f,
-                    "input file {} is not a .tex file; --check only supports .tex files",
+                    "no .tex or .bib files found under the provided input paths"
+                )
+            }
+            Self::UnsupportedFilePath { path } => {
+                write!(
+                    f,
+                    "input file {} is not a .tex or .bib file",
                     path.display()
                 )
             }
@@ -56,6 +75,9 @@ impl fmt::Display for CheckError {
             Self::FormatError { path, source } => {
                 write!(f, "failed to format {}: {source}", path.display())
             }
+            Self::BibFormatError { path, source } => {
+                write!(f, "failed to format {}: {source}", path.display())
+            }
         }
     }
 }
@@ -66,7 +88,9 @@ impl From<FileDiscoveryError> for CheckError {
     fn from(value: FileDiscoveryError) -> Self {
         match value {
             FileDiscoveryError::NonTexFilePath { path }
-            | FileDiscoveryError::UnsupportedLintFilePath { path } => Self::NonTexFilePath { path },
+            | FileDiscoveryError::UnsupportedLintFilePath { path } => {
+                Self::UnsupportedFilePath { path }
+            }
             FileDiscoveryError::WalkError { path, message } => Self::WalkError { path, message },
         }
     }
@@ -84,25 +108,34 @@ pub fn check_paths_with_style(
         return Err(CheckError::MissingPaths);
     }
 
-    let files = collect_tex_files(paths)?;
+    let files = collect_lint_files(paths)?;
     if files.is_empty() {
-        return Err(CheckError::NoTexFiles);
+        return Err(CheckError::NoFiles);
     }
 
     let checked_files = files.len();
     let mut changed_files = Vec::new();
 
-    for path in files {
+    for (path, kind) in files {
         let content = fs::read_to_string(&path).map_err(|err| CheckError::ReadError {
             path: path.clone(),
             source: err.to_string(),
         })?;
 
-        let formatted =
-            format_with_style(&content, style).map_err(|err| CheckError::FormatError {
-                path: path.clone(),
-                source: err,
-            })?;
+        let formatted = match kind {
+            FileKind::Tex => {
+                format_with_style(&content, style).map_err(|err| CheckError::FormatError {
+                    path: path.clone(),
+                    source: err,
+                })?
+            }
+            FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {
+                CheckError::BibFormatError {
+                    path: path.clone(),
+                    source: err,
+                }
+            })?,
+        };
         if formatted != content {
             changed_files.push(path);
         }
@@ -112,4 +145,52 @@ pub fn check_paths_with_style(
         checked_files,
         changed_files,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn check_flags_unformatted_bib() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refs.bib");
+        // Lowercase entry type, no padding: the bib formatter would rewrite this.
+        fs::write(&path, "@article{k,title={T}}\n").unwrap();
+
+        let result = check_paths(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(result.checked_files, 1);
+        assert_eq!(result.changed_files, vec![path]);
+    }
+
+    #[test]
+    fn check_passes_formatted_bib() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refs.bib");
+        // Pre-format so a second pass is a no-op (idempotence).
+        let formatted = crate::bib::format("@article{k,title={T}}\n").unwrap();
+        fs::write(&path, &formatted).unwrap();
+
+        let result = check_paths(std::slice::from_ref(&path)).unwrap();
+        assert!(
+            result.changed_files.is_empty(),
+            "got: {:?}",
+            result.changed_files
+        );
+    }
+
+    #[test]
+    fn check_mixes_tex_and_bib() {
+        let dir = tempfile::tempdir().unwrap();
+        let bib = dir.path().join("refs.bib");
+        let tex = dir.path().join("doc.tex");
+        fs::write(&bib, "@misc{k,title={T}}\n").unwrap();
+        fs::write(&tex, "\\section{Hi}\n").unwrap();
+
+        let result = check_paths(&[dir.path().to_path_buf()]).unwrap();
+        assert_eq!(result.checked_files, 2);
+        // Only the unformatted bib should be flagged.
+        assert_eq!(result.changed_files, vec![bib]);
+    }
 }

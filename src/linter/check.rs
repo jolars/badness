@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use crate::parser::parse;
-use crate::project::ResolvedLabels;
+use crate::project::{ResolvedCitations, ResolvedLabels};
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -28,7 +28,7 @@ pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
         .collect();
     let root = SyntaxNode::new_root(parsed.green);
     let model = SemanticModel::build(&root);
-    diagnostics.extend(lint_document(path, &root, &model, None));
+    diagnostics.extend(lint_document(path, &root, &model, None, None));
     diagnostics
 }
 
@@ -37,21 +37,24 @@ pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
 ///
 /// `root` and `model` must describe the same file as `path`. Callers supply
 /// them from wherever is cheapest: the CLI parses directly, the LSP reuses its
-/// salsa-cached tree and model. `resolution` is the cross-file label model for
-/// the project `path` belongs to, or `None` when there is no project view — the
-/// cross-file rules (`undefined-ref`, the cross-file branch of `duplicate-label`)
-/// are then inert.
+/// salsa-cached tree and model. `resolution` is the cross-file label model and
+/// `citations` the cross-file bibliography model for the project `path` belongs
+/// to, each `None` when there is no project view — the cross-file rules
+/// (`undefined-ref`, `undefined-citation`, the cross-file branch of
+/// `duplicate-label`) are then inert.
 pub fn lint_document(
     path: &Path,
     root: &SyntaxNode,
     model: &SemanticModel,
     resolution: Option<&ResolvedLabels>,
+    citations: Option<&ResolvedCitations>,
 ) -> Vec<Diagnostic> {
     let ctx = RuleContext {
         path,
         root,
         model,
         resolution,
+        citations,
     };
     let rules = all_rules();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -102,7 +105,7 @@ mod tests {
     fn lint(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        lint_document(Path::new("x.tex"), &root, &model, None)
+        lint_document(Path::new("x.tex"), &root, &model, None, None)
     }
 
     fn rules_of(src: &str) -> Vec<&'static str> {

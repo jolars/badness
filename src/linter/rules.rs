@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::project::ResolvedLabels;
+use crate::project::{ResolvedCitations, ResolvedLabels};
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
@@ -18,6 +18,7 @@ pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod mismatched_delimiter;
 pub mod obsolete_environment;
+pub mod undefined_citation;
 pub mod undefined_ref;
 
 pub use deprecated_command::DeprecatedCommand;
@@ -25,6 +26,7 @@ pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use obsolete_environment::ObsoleteEnvironment;
+pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
 
 /// Everything a [`Rule`] reads to produce diagnostics for one file.
@@ -41,6 +43,10 @@ pub struct RuleContext<'a> {
     /// server today — that hasn't assembled one). Cross-file rules are inert when
     /// this is `None`. `path` keys into it to find this file's label namespace.
     pub resolution: Option<&'a ResolvedLabels>,
+    /// Cross-file citation resolution (cite keys reachable via the project's
+    /// `.bib` resources), or `None` when there is no project view. Gates
+    /// `undefined-citation`, the bibliographic analog of `resolution`.
+    pub citations: Option<&'a ResolvedCitations>,
 }
 
 /// A single lint. `Send + Sync` so the registry can be shared across the LSP's
@@ -98,6 +104,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DollarDisplayMath),
         Box::new(MismatchedDelimiter),
         Box::new(UndefinedRef),
+        Box::new(UndefinedCitation),
     ]
 }
 
@@ -109,6 +116,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "dollar-display-math",
     "mismatched-delimiter",
     "undefined-ref",
+    "undefined-citation",
 ];
 
 #[cfg(test)]

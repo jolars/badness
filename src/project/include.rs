@@ -171,6 +171,72 @@ fn default_tex_extension(path: PathBuf) -> PathBuf {
     }
 }
 
+/// The target of a bibliography-resource command (`\bibliography`,
+/// `\addbibresource`). Mirrors [`IncludeTarget`]: a statically-resolved `.bib`
+/// path, or [`BibTarget::Dynamic`] for a missing or non-literal argument.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum BibTarget {
+    /// A resolved path with a `.bib` extension defaulted in and joined onto the
+    /// including file's directory when relative.
+    Path(PathBuf),
+    /// A missing or non-literal argument we cannot resolve without expanding TeX.
+    Dynamic,
+}
+
+/// Collect the bibliography-resource targets declared in `root`: `\bibliography{a,b}`
+/// (a comma-separated list, each defaulting `.bib`) and `\addbibresource{a.bib}`
+/// (a single resource). Relative targets resolve against `base_dir`. The
+/// bibliography analog of [`collect_include_edge_keys`] — the cross-file citation
+/// resolver consumes these. Out of scope (per the include-module docs): these are
+/// *not* source includes.
+pub fn collect_bib_resource_targets(root: &SyntaxNode, base_dir: Option<&Path>) -> Vec<BibTarget> {
+    let mut targets = Vec::new();
+    for command in root
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::COMMAND)
+    {
+        let Some(name) = command_name(&command) else {
+            continue;
+        };
+        match name.as_str() {
+            // `\bibliography{a,b}`: a comma-separated list of `.bib` basenames.
+            "bibliography" => match nth_group_text(&command, 0) {
+                Some(list) => {
+                    for entry in list.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                        targets.push(resolve_bib(PathBuf::from(entry), base_dir));
+                    }
+                    if list.split(',').all(|e| e.trim().is_empty()) {
+                        targets.push(BibTarget::Dynamic);
+                    }
+                }
+                None => targets.push(BibTarget::Dynamic),
+            },
+            // `\addbibresource{refs.bib}`: a single resource (usually with `.bib`).
+            "addbibresource" => match nth_group_text(&command, 0) {
+                Some(file) => targets.push(resolve_bib(PathBuf::from(file), base_dir)),
+                None => targets.push(BibTarget::Dynamic),
+            },
+            _ => {}
+        }
+    }
+    targets
+}
+
+/// Resolve one bibliography target: default the `.bib` extension, then join onto
+/// `base_dir` when relative.
+fn resolve_bib(raw: PathBuf, base_dir: Option<&Path>) -> BibTarget {
+    let with_ext = if raw.extension().is_none() {
+        raw.with_extension("bib")
+    } else {
+        raw
+    };
+    let resolved = match base_dir {
+        Some(dir) if with_ext.is_relative() => dir.join(with_ext),
+        _ => with_ext,
+    };
+    BibTarget::Path(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +367,46 @@ mod tests {
             })
             .collect();
         assert_eq!(names, vec![PathBuf::from("a.tex"), PathBuf::from("b.tex")]);
+    }
+
+    fn bib_targets(src: &str, base_dir: Option<&Path>) -> Vec<BibTarget> {
+        let root = SyntaxNode::new_root(parse(src).green);
+        collect_bib_resource_targets(&root, base_dir)
+    }
+
+    #[test]
+    fn bibliography_splits_comma_list_and_defaults_bib() {
+        let base = PathBuf::from("/proj");
+        let t = bib_targets("\\bibliography{refs,extra}\n", Some(&base));
+        assert_eq!(
+            t,
+            vec![
+                BibTarget::Path(PathBuf::from("/proj/refs.bib")),
+                BibTarget::Path(PathBuf::from("/proj/extra.bib")),
+            ]
+        );
+    }
+
+    #[test]
+    fn addbibresource_keeps_explicit_extension() {
+        let t = bib_targets("\\addbibresource{refs.bib}\n", None);
+        assert_eq!(t, vec![BibTarget::Path(PathBuf::from("refs.bib"))]);
+    }
+
+    #[test]
+    fn addbibresource_without_extension_defaults_bib() {
+        let t = bib_targets("\\addbibresource{refs}\n", None);
+        assert_eq!(t, vec![BibTarget::Path(PathBuf::from("refs.bib"))]);
+    }
+
+    #[test]
+    fn bibliography_missing_argument_is_dynamic() {
+        let t = bib_targets("\\bibliography\n", None);
+        assert_eq!(t, vec![BibTarget::Dynamic]);
+    }
+
+    #[test]
+    fn non_bibliography_commands_are_ignored() {
+        assert!(bib_targets("\\input{a}\n\\cite{k}\n", None).is_empty());
     }
 }

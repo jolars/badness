@@ -14,10 +14,9 @@
 //! extract later" (`AGENTS.md`). A future shared linter-core crate parameterized
 //! over kind + context would lift both sides mechanically.
 //!
-//! **Deferred (see `TODO.md`):** suppression has no carrier yet — bib has no
-//! comment token (free text is `JUNK`, structured comments are `@comment`), so
-//! there is no `% badness-ignore` analog; the driver leaves a no-op seam. The LSP
-//! and `.bib` salsa integration also come later.
+//! **Suppression** is carried in `@comment{badness-ignore …}` entries (bib has no
+//! `%` line-comment token), parsed by [`suppression::BibSuppressionMap`] — the bib
+//! analog of the LaTeX `% badness-ignore` directive.
 //!
 //! [`SyntaxKind`]: crate::bib::syntax::SyntaxKind
 //! [`Model`]: crate::bib::semantic::Model
@@ -28,9 +27,11 @@
 
 pub mod check;
 pub mod rules;
+pub mod suppression;
 
 pub use check::{check_document, lint_document};
 pub use rules::{ALL_BIB_RULE_IDS, BibRule, BibRuleContext, all_rules};
+pub use suppression::BibSuppressionMap;
 
 // The diagnostic surface is shared with the LaTeX linter; re-export it here so bib
 // callers don't reach across into `crate::linter`.

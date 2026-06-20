@@ -24,13 +24,19 @@ use crate::linter::diagnostic::{Diagnostic, Severity};
 
 pub mod duplicate_key;
 pub mod empty_field;
+pub mod encoding_hints;
 pub mod missing_required_field;
+pub mod title_capitalization;
+pub mod undefined_string;
 pub mod unknown_field;
 pub mod unused_string;
 
 pub use duplicate_key::DuplicateKey;
 pub use empty_field::EmptyField;
+pub use encoding_hints::EncodingHints;
 pub use missing_required_field::MissingRequiredField;
+pub use title_capitalization::TitleCapitalization;
+pub use undefined_string::UndefinedString;
 pub use unknown_field::UnknownField;
 pub use unused_string::UnusedString;
 
@@ -96,6 +102,9 @@ pub fn all_rules() -> Vec<Box<dyn BibRule>> {
         Box::new(UnknownField),
         Box::new(EmptyField),
         Box::new(UnusedString),
+        Box::new(UndefinedString),
+        Box::new(TitleCapitalization),
+        Box::new(EncodingHints),
     ]
 }
 
@@ -106,6 +115,9 @@ pub const ALL_BIB_RULE_IDS: &[&str] = &[
     "unknown-field",
     "empty-field",
     "unused-string",
+    "undefined-string",
+    "title-capitalization",
+    "encoding-hints",
 ];
 
 #[cfg(test)]

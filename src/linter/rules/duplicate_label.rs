@@ -97,6 +97,7 @@ mod tests {
             root: &root,
             model: &model,
             resolution: None,
+            citations: None,
         };
         let mut out = Vec::new();
         DuplicateLabel.check_file(&ctx, &mut out);
@@ -176,6 +177,7 @@ mod tests {
             root: &root,
             model: &model,
             resolution: Some(resolution),
+            citations: None,
         };
         let mut out = Vec::new();
         DuplicateLabel.check_file(&ctx, &mut out);

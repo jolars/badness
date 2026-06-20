@@ -20,6 +20,22 @@ fn signatures_count(db: &IncrementalDatabase) -> usize {
         .count()
 }
 
+/// How many times `parsed_bib_document` actually ran, per the query log.
+fn bib_parse_count(db: &IncrementalDatabase) -> usize {
+    db.query_log()
+        .iter()
+        .filter(|entry| entry.kind == QueryKind::ParsedBibDocument)
+        .count()
+}
+
+/// How many times `bib_semantic_model` actually ran, per the query log.
+fn bib_model_count(db: &IncrementalDatabase) -> usize {
+    db.query_log()
+        .iter()
+        .filter(|entry| entry.kind == QueryKind::BibSemanticModel)
+        .count()
+}
+
 /// An owned, sorted projection of the scanned command names.
 fn scanned_commands(
     db: &IncrementalDatabase,
@@ -174,6 +190,70 @@ fn prose_edit_yields_equal_signatures() {
     assert_eq!(
         db.document_signatures(file),
         other.document_signatures(other_file)
+    );
+}
+
+#[test]
+fn parsed_bib_document_is_memoized() {
+    let db = IncrementalDatabase::default();
+    let file = db.add_file("@article{k, title = {Hi}}\n");
+
+    // Several consumers of the cached bib parse, but the parse runs once.
+    let _ = db.parsed_bib_tree(file);
+    let _ = db.parsed_bib_tree(file);
+    let _ = db.bib_parse_diagnostics(file);
+    let _ = db.bib_semantic_model(file);
+
+    assert_eq!(bib_parse_count(&db), 1);
+}
+
+#[test]
+fn editing_bib_text_reparses() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.add_file("@misc{a}\n");
+
+    let _ = db.parsed_bib_tree(file);
+    assert_eq!(bib_parse_count(&db), 1);
+
+    db.set_file_text(file, "@misc{b}\n");
+    let _ = db.parsed_bib_tree(file);
+    assert_eq!(bib_parse_count(&db), 2);
+}
+
+#[test]
+fn cached_bib_tree_is_lossless() {
+    let db = IncrementalDatabase::default();
+    let input = "@article{k,\n  title = {Hi},\n  year = 2020,\n}\n";
+    let file = db.add_file(input);
+
+    assert_eq!(db.parsed_bib_tree(file).to_string(), input);
+}
+
+#[test]
+fn bib_semantic_model_is_memoized() {
+    let db = IncrementalDatabase::default();
+    let file = db.add_file("@book{k, publisher = cup}\n@string{cup = {C}}\n");
+
+    let _ = db.bib_semantic_model(file);
+    let _ = db.bib_semantic_model(file);
+
+    assert_eq!(bib_model_count(&db), 1);
+}
+
+#[test]
+fn equal_bib_edit_yields_equal_model() {
+    // Value-stability stand-in for backdating: two files whose entries/keys and
+    // `@string` set match build `==` models, the precondition that makes salsa
+    // backdate `bib_semantic_model` (it is `Eq`, not `no_eq`).
+    let db = IncrementalDatabase::default();
+    let file = db.add_file("@article{k, title = {A}}\n");
+
+    let other = IncrementalDatabase::default();
+    let other_file = other.add_file("@article{k, title = {A}}\n");
+
+    assert_eq!(
+        db.bib_semantic_model(file),
+        other.bib_semantic_model(other_file)
     );
 }
 

@@ -104,6 +104,7 @@ mod tests {
             root: &root,
             model: &model,
             resolution,
+            citations: None,
         };
         let mut out = Vec::new();
         UndefinedRef.check_file(&ctx, &mut out);

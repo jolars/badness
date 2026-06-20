@@ -72,7 +72,13 @@ use lsp_types::{
 use salsa::Database as _;
 use serde::Deserialize;
 
+use crate::bib::outline::{BibOutlineItem, outline as bib_outline};
+use crate::bib::semantic::Model as BibModel;
+use crate::bib::{
+    format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
+};
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
+use crate::file_discovery::FileKind;
 use crate::formatter::{FormatStyle, format_node, format_with_style};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
@@ -193,6 +199,7 @@ enum WorkerJob {
         path: PathBuf,
         text: String,
         version: i32,
+        kind: FileKind,
     },
     /// `didClose`: evict the file from the db. Diagnostics are cleared directly by
     /// the main loop.
@@ -203,6 +210,7 @@ enum WorkerJob {
         path: PathBuf,
         text: String,
         style: FormatStyle,
+        kind: FileKind,
     },
     /// A document-symbol request: build the outline on the read pool and reply to
     /// `id`.
@@ -210,6 +218,7 @@ enum WorkerJob {
         id: RequestId,
         path: PathBuf,
         text: String,
+        kind: FileKind,
     },
     /// A completion request: classify the cursor and build candidates on the read
     /// pool and reply to `id`. Carries the `uri` (not just the salsa-key `path`)
@@ -239,6 +248,16 @@ enum Outbound {
 /// Map a document URI to the synthetic path the salsa file cache is keyed by.
 fn uri_to_path(uri: &Uri) -> PathBuf {
     PathBuf::from(uri.as_str())
+}
+
+/// Which language pipeline a document feeds, by its path extension. Defaults to
+/// [`FileKind::Tex`] for anything that is not a `.bib` file (including unsaved
+/// buffers with no extension), matching the conservative CLI/stdin behavior.
+fn file_kind_for(path: &Path) -> FileKind {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("bib") => FileKind::Bib,
+        _ => FileKind::Tex,
+    }
 }
 
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
@@ -322,11 +341,14 @@ fn on_notification(
                     version: doc.version,
                 },
             );
+            let path = uri_to_path(&uri);
+            let kind = file_kind_for(&path);
             let _ = job_tx.send(WorkerJob::Edit {
-                path: uri_to_path(&uri),
+                path,
                 uri,
                 text: doc.text,
                 version: doc.version,
+                kind,
             });
         }
         DidChangeTextDocument::METHOD => {
@@ -343,11 +365,14 @@ fn on_notification(
             apply_content_changes(&mut doc.text, params.content_changes);
             doc.version = version;
             let text = doc.text.clone();
+            let path = uri_to_path(&uri);
+            let kind = file_kind_for(&path);
             let _ = job_tx.send(WorkerJob::Edit {
-                path: uri_to_path(&uri),
+                path,
                 uri,
                 text,
                 version,
+                kind,
             });
         }
         DidCloseTextDocument::METHOD => {
@@ -428,11 +453,14 @@ fn on_formatting(
         return;
     };
     let style = resolve_style(&state.editor_settings, &params.options);
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
     let _ = job_tx.send(WorkerJob::Format {
         id,
-        path: uri_to_path(&uri),
+        path,
         text: doc.text.clone(),
         style,
+        kind,
     });
 }
 
@@ -467,10 +495,13 @@ fn on_document_symbol(
         )));
         return;
     };
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
     let _ = job_tx.send(WorkerJob::Symbols {
         id,
-        path: uri_to_path(&uri),
+        path,
         text: doc.text.clone(),
+        kind,
     });
 }
 
@@ -498,6 +529,7 @@ fn on_completion(
 
     let uri = params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
+    let path = uri_to_path(&uri);
     let Some(doc) = state.documents.get(&uri) else {
         // Unknown document: nothing to complete.
         let _ = connection.sender.send(Message::Response(Response::new_ok(
@@ -506,9 +538,18 @@ fn on_completion(
         )));
         return;
     };
+    // Completion is LaTeX-only for now: there is no `.bib` completion model yet,
+    // so a `.bib` cursor yields nothing rather than LaTeX candidates.
+    if file_kind_for(&path) == FileKind::Bib {
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    }
     let _ = job_tx.send(WorkerJob::Completion {
         id,
-        path: uri_to_path(&uri),
+        path,
         uri,
         text: doc.text.clone(),
         position,
@@ -562,6 +603,7 @@ struct AnalyzeRequest {
     uri: Uri,
     path: PathBuf,
     version: i32,
+    kind: FileKind,
 }
 
 /// What [`Worker::try_dispatch`] should do given the in-flight analyze and the
@@ -671,13 +713,19 @@ impl Worker {
                 path,
                 text,
                 version,
+                kind,
             } => {
                 // Write-phase: push the live buffer into the db. Cheap — the parse
                 // is a lazy salsa query deferred to the analyze. Acquiring `&mut
                 // db` blocks until any outstanding read snapshot drops (single
                 // writer), which is how a fresher edit preempts an in-flight read.
                 self.db.upsert_file(&path, text);
-                self.enqueue(AnalyzeRequest { uri, path, version });
+                self.enqueue(AnalyzeRequest {
+                    uri,
+                    path,
+                    version,
+                    kind,
+                });
             }
             WorkerJob::Close { path } => {
                 self.db.remove_file(&path);
@@ -687,21 +735,27 @@ impl Worker {
                 path,
                 text,
                 style,
+                kind,
             } => {
                 // Format reads run on the read pool against a snapshot, concurrent
                 // with the analyze slot (they are id-bound responses, not coalesced).
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
-                    .spawn(move || run_format(&snapshot, id, &path, &text, style, &out_tx));
+                    .spawn(move || run_format(&snapshot, id, &path, &text, style, kind, &out_tx));
             }
-            WorkerJob::Symbols { id, path, text } => {
+            WorkerJob::Symbols {
+                id,
+                path,
+                text,
+                kind,
+            } => {
                 // Symbol reads, like formatting, run on the read pool against a
                 // snapshot (id-bound responses, not coalesced).
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
-                    .spawn(move || run_symbols(&snapshot, id, &path, &text, &out_tx));
+                    .spawn(move || run_symbols(&snapshot, id, &path, &text, kind, &out_tx));
             }
             WorkerJob::Completion {
                 id,
@@ -765,46 +819,20 @@ impl Worker {
         let snapshot = self.db.snapshot();
         let out_tx = self.out_tx.clone();
         let done_tx = self.done_tx.clone();
-        let AnalyzeRequest { uri, path, version } = req;
+        let AnalyzeRequest {
+            uri,
+            path,
+            version,
+            kind,
+        } = req;
         self.inflight = Some(InflightAnalyze {
             uri: uri.clone(),
             version,
         });
         self.read_spawner.spawn(move || {
-            let result = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-                let file = snapshot.lookup_file(&path)?;
-                let text = snapshot.file_text(file).to_owned();
-                let idx = LineIndex::new(&text);
-                let mut diags: Vec<Diagnostic> = snapshot
-                    .parse_diagnostics(file)
-                    .iter()
-                    .map(|d| Diagnostic {
-                        range: byte_range_to_lsp(&idx, &text, d.start, d.end),
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        source: Some("badness".to_owned()),
-                        message: d.message.clone(),
-                        ..Default::default()
-                    })
-                    .collect();
-                // Lint-rule findings over the same salsa-cached tree + model.
-                // Cross-file resolution is passed as `None`: the server tracks
-                // only open buffers and assembles no project, so the cross-file
-                // rules (`undefined-ref`, the cross-file branch of
-                // `duplicate-label`) stay inert here until a workspace scan +
-                // `Project` assembly lands. Per-file rules are unaffected.
-                let root = snapshot.parsed_tree(file);
-                let model = snapshot.semantic_model(file);
-                for d in lint_document(&path, &root, model, None) {
-                    diags.push(Diagnostic {
-                        range: byte_range_to_lsp(&idx, &text, d.start, d.end),
-                        severity: Some(severity_to_lsp(d.severity)),
-                        code: Some(NumberOrString::String(d.rule.to_owned())),
-                        source: Some("badness".to_owned()),
-                        message: d.message,
-                        ..Default::default()
-                    });
-                }
-                Some(diags)
+            let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
+                FileKind::Tex => analyze_tex(&snapshot, &path),
+                FileKind::Bib => analyze_bib(&snapshot, &path),
             }));
             if let Ok(Some(diags)) = result {
                 let _ = out_tx.send(Outbound::Diagnostics {
@@ -822,6 +850,79 @@ impl Worker {
     }
 }
 
+/// Compute diagnostics for a `.tex` file off the snapshot: parse diagnostics plus
+/// lint-rule findings over the same salsa-cached tree + model.
+///
+/// Cross-file resolution is passed as `None`: the server tracks only open buffers
+/// and assembles no project, so the cross-file rules (`undefined-ref`, the
+/// cross-file branch of `duplicate-label`) stay inert here until a workspace scan
+/// + `Project` assembly lands. Per-file rules are unaffected.
+fn analyze_tex(snapshot: &Analysis, path: &Path) -> Option<Vec<Diagnostic>> {
+    let file = snapshot.lookup_file(path)?;
+    let text = snapshot.file_text(file).to_owned();
+    let idx = LineIndex::new(&text);
+    let mut diags: Vec<Diagnostic> = snapshot
+        .parse_diagnostics(file)
+        .iter()
+        .map(|d| Diagnostic {
+            range: byte_range_to_lsp(&idx, &text, d.start, d.end),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("badness".to_owned()),
+            message: d.message.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let root = snapshot.parsed_tree(file);
+    let model = snapshot.semantic_model(file);
+    // Cross-file resolution (labels and citations) is `None`: the server tracks
+    // only open buffers and assembles no project, so `undefined-ref` /
+    // `undefined-citation` stay inert until a workspace scan lands.
+    for d in lint_document(path, &root, model, None, None) {
+        diags.push(lint_to_lsp(&idx, &text, d));
+    }
+    Some(diags)
+}
+
+/// Compute diagnostics for a `.bib` file off the snapshot: bib parse diagnostics
+/// plus bib lint-rule findings over the cached bib tree + model. The bib linter
+/// has no cross-file resolution argument (no bib rule is cross-file-sensitive
+/// yet).
+fn analyze_bib(snapshot: &Analysis, path: &Path) -> Option<Vec<Diagnostic>> {
+    let file = snapshot.lookup_file(path)?;
+    let text = snapshot.file_text(file).to_owned();
+    let idx = LineIndex::new(&text);
+    let mut diags: Vec<Diagnostic> = snapshot
+        .bib_parse_diagnostics(file)
+        .iter()
+        .map(|d| Diagnostic {
+            range: byte_range_to_lsp(&idx, &text, d.start, d.end),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("badness".to_owned()),
+            message: d.message.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let root = snapshot.parsed_bib_tree(file);
+    let model = snapshot.bib_semantic_model(file);
+    for d in crate::bib::linter::lint_document(path, &root, model) {
+        diags.push(lint_to_lsp(&idx, &text, d));
+    }
+    Some(diags)
+}
+
+/// Map a linter [`crate::linter::Diagnostic`] (shared by the LaTeX and BibTeX
+/// linters) onto an LSP [`Diagnostic`].
+fn lint_to_lsp(idx: &LineIndex, text: &str, d: crate::linter::Diagnostic) -> Diagnostic {
+    Diagnostic {
+        range: byte_range_to_lsp(idx, text, d.start, d.end),
+        severity: Some(severity_to_lsp(d.severity)),
+        code: Some(NumberOrString::String(d.rule.to_owned())),
+        source: Some("badness".to_owned()),
+        message: d.message,
+        ..Default::default()
+    }
+}
+
 /// Format the buffer behind a [`WorkerJob::Format`] on the read pool and reply.
 ///
 /// Fast path: reuse the snapshot's cached tree (no reparse). On a racing write
@@ -834,9 +935,10 @@ fn run_format(
     path: &Path,
     text: &str,
     style: FormatStyle,
+    kind: FileKind,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_format(snapshot, path, text, style) {
+    let result = match compute_format(snapshot, path, text, style, kind) {
         Some(edit) => serde_json::to_value(vec![edit]).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -845,11 +947,13 @@ fn run_format(
 
 /// Produce the whole-document replacing edit, or `None` for a no-op / refusal /
 /// unknown buffer. See [`run_format`] for the cancellation/fallback contract.
+/// Routes to the LaTeX or BibTeX formatter by [`FileKind`].
 fn compute_format(
     snapshot: &Analysis,
     path: &Path,
     text: &str,
     style: FormatStyle,
+    kind: FileKind,
 ) -> Option<TextEdit> {
     // `Some(Some(s))` = formatted; `Some(None)` = clean refusal (parse/format
     // error); `None` = cache miss / stale snapshot (fall back to the captured text).
@@ -858,16 +962,30 @@ fn compute_format(
         if snapshot.file_text(file) != text {
             return None;
         }
-        if !snapshot.parse_diagnostics(file).is_empty() {
-            return Some(None);
+        match kind {
+            FileKind::Tex => {
+                if !snapshot.parse_diagnostics(file).is_empty() {
+                    return Some(None);
+                }
+                let root = snapshot.parsed_tree(file);
+                Some(format_node(&root, style).ok())
+            }
+            FileKind::Bib => {
+                if !snapshot.bib_parse_diagnostics(file).is_empty() {
+                    return Some(None);
+                }
+                let root = snapshot.parsed_bib_tree(file);
+                Some(bib_format_node(&root, style).ok())
+            }
         }
-        let root = snapshot.parsed_tree(file);
-        Some(format_node(&root, style).ok())
     }));
 
     let formatted = match cached {
         Ok(Some(opt)) => opt,
-        Ok(None) | Err(_) => format_with_style(text, style).ok(),
+        Ok(None) | Err(_) => match kind {
+            FileKind::Tex => format_with_style(text, style).ok(),
+            FileKind::Bib => bib_format_with_style(text, style).ok(),
+        },
     }?;
 
     if formatted == text {
@@ -896,15 +1014,19 @@ fn run_symbols(
     id: RequestId,
     path: &Path,
     text: &str,
+    kind: FileKind,
     out_tx: &Sender<Outbound>,
 ) {
-    let symbols = compute_symbols(snapshot, path, text);
+    let symbols = match kind {
+        FileKind::Tex => compute_symbols(snapshot, path, text),
+        FileKind::Bib => compute_bib_symbols(snapshot, path, text),
+    };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
-/// Compute the outline for `text`, preferring the snapshot's cached tree and
+/// Compute the LaTeX outline for `text`, preferring the snapshot's cached tree and
 /// falling back to a direct reparse when it is unavailable or stale.
 fn compute_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<DocumentSymbol> {
     let idx = LineIndex::new(text);
@@ -923,6 +1045,29 @@ fn compute_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<Document
     items
         .iter()
         .map(|item| to_document_symbol(item, &idx, text))
+        .collect()
+}
+
+/// Compute the BibTeX outline (a flat entry list) for `text`, preferring the
+/// snapshot's cached bib model and falling back to a direct reparse when it is
+/// unavailable or stale.
+fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<DocumentSymbol> {
+    let idx = LineIndex::new(text);
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        Some(bib_outline(snapshot.bib_semantic_model(file)))
+    }));
+    let items = match cached {
+        Ok(Some(items)) => items,
+        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
+        Ok(None) | Err(_) => bib_outline(&BibModel::build(&bib_parse(text).syntax())),
+    };
+    items
+        .iter()
+        .map(|item| bib_to_document_symbol(item, &idx, text))
         .collect()
 }
 
@@ -957,6 +1102,30 @@ fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> Docume
             selection.end().into(),
         ),
         children: (!children.is_empty()).then_some(children),
+    }
+}
+
+/// Convert a flat [`BibOutlineItem`] into an LSP [`DocumentSymbol`]. Bib entries
+/// have no nesting, so there are never children; the cite key is the name and the
+/// entry type the detail.
+#[allow(deprecated)] // `DocumentSymbol::deprecated` is a required struct field.
+fn bib_to_document_symbol(item: &BibOutlineItem, idx: &LineIndex, text: &str) -> DocumentSymbol {
+    let range = item.range;
+    let selection = item.selection_range;
+    DocumentSymbol {
+        name: item.name.clone(),
+        detail: Some(item.detail.clone()),
+        kind: SymbolKind::CONSTANT,
+        tags: None,
+        deprecated: None,
+        range: byte_range_to_lsp(idx, text, range.start().into(), range.end().into()),
+        selection_range: byte_range_to_lsp(
+            idx,
+            text,
+            selection.start().into(),
+            selection.end().into(),
+        ),
+        children: None,
     }
 }
 

@@ -285,6 +285,91 @@ fn lsp_document_symbol_outline() {
 }
 
 #[test]
+fn lsp_bib_diagnostics_formatting_and_symbols() {
+    let (client, server_thread) = start_server(None);
+    // A `.bib` URI: the server routes by extension to the BibTeX pipeline.
+    let uri: Uri = "file:///refs.bib".parse().unwrap();
+
+    // Two entries sharing a cite key (a lint warning, not a parse error) plus
+    // unformatted spacing. The duplicate is reported; formatting still works.
+    let doc = "@article{k, title={A}}\n@misc{k, title={B}}\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    assert!(
+        diags.diagnostics.iter().any(|d| d.code
+            == Some(lsp_types::NumberOrString::String(
+                "duplicate-key".to_owned()
+            ))),
+        "a duplicate cite key must produce a duplicate-key diagnostic, got {:?}",
+        diags.diagnostics
+    );
+
+    // textDocument/formatting → a whole-document edit equal to the bib formatter's
+    // own output at the requested tab size.
+    send_request(
+        &client,
+        2,
+        "textDocument/formatting",
+        serde_json::to_value(DocumentFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(edits.len(), 1, "expected one whole-document edit");
+    let expected = badness::bib::format_with_style(
+        doc,
+        FormatStyle {
+            line_width: 80,
+            indent_width: 2,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(edits[0].new_text, expected);
+
+    // textDocument/documentSymbol → a flat list of entries (cite key + type).
+    send_request(
+        &client,
+        3,
+        "textDocument/documentSymbol",
+        serde_json::to_value(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(3));
+    let DocumentSymbolResponse::Nested(symbols) =
+        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response")
+    else {
+        panic!("expected a nested documentSymbol response");
+    };
+    assert_eq!(symbols.len(), 2, "two entries → two flat symbols");
+    assert!(symbols.iter().all(|s| s.name == "k"));
+    assert!(symbols.iter().all(|s| s.kind == SymbolKind::CONSTANT));
+    assert!(symbols.iter().all(|s| s.children.is_none()));
+    let details: Vec<&str> = symbols
+        .iter()
+        .map(|s| s.detail.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(details, vec!["article", "misc"]);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn incremental_did_change_splices_buffer() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///inc.tex".parse().unwrap();

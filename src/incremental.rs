@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex};
 use salsa::Setter;
 use smol_str::SmolStr;
 
+use crate::bib::semantic::Model as BibModel;
+use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
 use crate::parser::parse;
 use crate::project::labels::{document_label_names, is_document_root};
 use crate::project::{IncludeEdgeKey, collect_include_edge_keys};
@@ -61,6 +63,11 @@ pub enum QueryKind {
     /// The cross-file label resolution ([`crate::project::resolved_labels`]); a
     /// project-level query, not keyed on a single file.
     ResolvedLabels,
+    /// A `.bib` file's parse tree ([`parsed_bib_document`]).
+    ParsedBibDocument,
+    /// A `.bib` file's per-file entry / cite-key / `@string` model
+    /// ([`bib_semantic_model`]).
+    BibSemanticModel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,6 +94,17 @@ pub struct ParseDiagnosticData {
 /// because the tree is a pure function of the text.
 #[derive(Debug, Clone)]
 pub struct ParsedDocument {
+    pub green: rowan::GreenNode,
+    pub diagnostics: Vec<ParseDiagnosticData>,
+}
+
+/// A cached `.bib` parse: the green tree plus parse diagnostics. The bib analog
+/// of [`ParsedDocument`], `no_eq, unsafe(non_update_types)` for the identical
+/// reason — `rowan::GreenNode` is neither `Eq` nor `salsa::Update`, so
+/// [`parsed_bib_document`] relies purely on text-input change detection to
+/// invalidate.
+#[derive(Debug, Clone)]
+pub struct ParsedBibDocument {
     pub green: rowan::GreenNode,
     pub diagnostics: Vec<ParseDiagnosticData>,
 }
@@ -218,6 +236,64 @@ pub fn file_is_document_root(db: &dyn IncrementalDb, file: SourceFile) -> bool {
         file: Some(file),
     });
     is_document_root(&parsed_tree_root(db, file))
+}
+
+/// A `.bib` file's cached parse: the green tree plus parse diagnostics. The bib
+/// analog of [`parsed_document`].
+///
+/// `no_eq, unsafe(non_update_types)` for the same reason — `GreenNode` is neither
+/// `Eq` nor `salsa::Update`, so salsa never compares parses and relies on
+/// text-input change detection. The same [`SourceFile`] input feeds both this and
+/// [`parsed_document`]: queries dispatch on the function, not the path, so a
+/// buffer's `.bib`-ness is decided by which query the caller runs, not by the
+/// input's synthetic extension.
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+pub fn parsed_bib_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedBibDocument {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::ParsedBibDocument,
+        file: Some(file),
+    });
+
+    let parsed = crate::bib::parse(file.text(db).as_str());
+    let diagnostics = parsed
+        .errors
+        .into_iter()
+        .map(|error| ParseDiagnosticData {
+            message: error.message,
+            start: error.start,
+            end: error.end,
+        })
+        .collect();
+
+    ParsedBibDocument {
+        green: parsed.green,
+        diagnostics,
+    }
+}
+
+/// The `.bib` parse diagnostics for `file` (empty when it parses cleanly).
+pub fn bib_parse_diagnostics(db: &dyn IncrementalDb, file: SourceFile) -> &[ParseDiagnosticData] {
+    &parsed_bib_document(db, file).diagnostics
+}
+
+/// Materialize the cached `.bib` parse for `file` as a fresh bib `SyntaxNode`.
+pub fn parsed_bib_tree_root(db: &dyn IncrementalDb, file: SourceFile) -> BibSyntaxNode {
+    BibSyntaxNode::new_root(parsed_bib_document(db, file).green.clone())
+}
+
+/// The per-file bib model (entries, `@string` defs/uses), built on the cached
+/// `.bib` parse.
+///
+/// Like [`semantic_model`] and unlike [`parsed_bib_document`] this is **not**
+/// `no_eq`: [`crate::bib::semantic::Model`] is `Eq`, so salsa backdates when an
+/// edit leaves the model unchanged.
+#[salsa::tracked(returns(ref))]
+pub fn bib_semantic_model(db: &dyn IncrementalDb, file: SourceFile) -> BibModel {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::BibSemanticModel,
+        file: Some(file),
+    });
+    BibModel::build(&parsed_bib_tree_root(db, file))
 }
 
 #[salsa::db]
@@ -392,6 +468,21 @@ impl IncrementalDatabase {
         *file_is_document_root(self, file)
     }
 
+    /// `.bib` parse diagnostics for `file` (empty when it parses cleanly).
+    pub fn bib_parse_diagnostics(&self, file: SourceFile) -> &[ParseDiagnosticData] {
+        bib_parse_diagnostics(self, file)
+    }
+
+    /// A fresh bib `SyntaxNode` over the cached `.bib` parse tree.
+    pub fn parsed_bib_tree(&self, file: SourceFile) -> BibSyntaxNode {
+        parsed_bib_tree_root(self, file)
+    }
+
+    /// The file's per-file bib model (entries, `@string` defs/uses).
+    pub fn bib_semantic_model(&self, file: SourceFile) -> &BibModel {
+        bib_semantic_model(self, file)
+    }
+
     pub fn clear_query_log(&self) {
         self.query_log
             .lock()
@@ -454,6 +545,21 @@ impl Analysis {
     /// The file's scanned user-definition signatures (for completion).
     pub fn document_signatures(&self, file: SourceFile) -> &SignatureDb {
         self.0.document_signatures(file)
+    }
+
+    /// `.bib` parse diagnostics for `file` (empty when it parses cleanly).
+    pub fn bib_parse_diagnostics(&self, file: SourceFile) -> &[ParseDiagnosticData] {
+        self.0.bib_parse_diagnostics(file)
+    }
+
+    /// A fresh bib `SyntaxNode` over the cached `.bib` parse tree.
+    pub fn parsed_bib_tree(&self, file: SourceFile) -> BibSyntaxNode {
+        self.0.parsed_bib_tree(file)
+    }
+
+    /// The file's per-file bib model (entries, `@string` defs/uses).
+    pub fn bib_semantic_model(&self, file: SourceFile) -> &BibModel {
+        self.0.bib_semantic_model(file)
     }
 }
 

@@ -491,14 +491,33 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
       driver leaves a no-op seam where the LaTeX `SuppressionMap` runs.
     - *Rules:* `undefined-string` (needs a cross-file gate like `undefined-ref`),
       `title-capitalization` protection, `encoding-hints` — all Phase 4.
-- [ ] **Phase 4 — Incremental + LSP + project-graph integration.** salsa
-  `parsed_bib_document` / `bib_semantic_model` queries (`incremental.rs`); route `.bib`
-  through `badness format` (lint routing landed in Phase 3); LSP diagnostics + formatting +
-  document symbols for `.bib`; the deferred bib lint rules above (`undefined-string`,
-  `title-capitalization`, `encoding-hints`) + bib suppression carrier + `empty-field`
-  autofix; extend `src/project/include.rs` to resolve `\bibliography` / `\addbibresource`
-  and cross-check `\cite{key}` against bib keys (an `undefined-citation` rule mirroring
-  `undefined-ref`, gated on a closed/rooted component).
+- [x] **Phase 4 — Incremental + LSP + project-graph integration.** Landed in three
+  independently-committable sub-phases.
+  - **4a — Infrastructure.** salsa `parsed_bib_document` (`no_eq`) + `bib_semantic_model`
+    (`Eq`-backdated) queries with `Analysis`/`IncrementalDatabase` accessors
+    (`incremental.rs`); `.bib` routed through `badness format` + `--check` (`run_format_paths`
+    and `formatter/check.rs` now use `collect_lint_files` + `FileKind` dispatch, new
+    `CheckError::BibFormatError`); LSP file-kind routing (`file_kind_for`, threaded through
+    `WorkerJob`/`AnalyzeRequest`) for diagnostics (`analyze_bib`), formatting, and a flat
+    document-symbol outline (new `src/bib/outline.rs`). Completion stays `.tex`-only.
+  - **4b — Bib-local rules, autofix, suppression.** Suppression carrier =
+    `@comment{badness-ignore <rule>: …}` (new `src/bib/linter/suppression.rs`,
+    `BibSuppressionMap`), wired at the former no-op seam. New rules `undefined-string`
+    (single-file-sound), `title-capitalization` (acronym heuristic: ≥2-cap runs or mid-word
+    caps unprotected by braces), `encoding-hints` (non-ASCII runs, `Hint`). `empty-field`
+    gained a format-clean deletion autofix (withheld when it would change `=` alignment);
+    `main.rs` `fix_file`/`apply_fixes_to_paths` now fix `.bib` too.
+  - **4c — Cross-file `undefined-citation`.** `collect_bib_resource_targets` +
+    `BibTarget` (`\bibliography{a,b}`/`\addbibresource`) in `project/include.rs`;
+    `CitationRef` + `cite_command` recognizer + `\nocite{*}` wildcard in `semantic/`;
+    `ResolvedCitations` (new `src/project/citations.rs`, component union mirroring
+    `ResolvedLabels`); `undefined-citation` rule gated on closed/rooted/no-wildcard;
+    `RuleContext.citations` + `lint_document`'s 5th arg; `main.rs run_lint` collects bib
+    keys per `.bib` and builds the resolver. LSP passes `None` (no project assembly yet,
+    same as `undefined-ref`).
+  - **Deferred:** a salsa `resolved_citations`/`file_cite_names` query (no consumer until
+    the LSP assembles a project — it passes `None` today); cross-file `@string` resolution
+    for `undefined-string`.
 
 --------------------------------------------------------------------------------
 

@@ -87,3 +87,20 @@ pub struct LabelRef {
     /// Set by the resolve pass when `name` matches a `\label` in *this* file.
     pub resolved: bool,
 }
+
+/// A citation *use* site — one per key. A `\cite{a,b}` produces two
+/// `CitationRef`s. Citations are always cross-file: cite keys live in `.bib`
+/// files, so there is no in-file resolution (no `resolved` flag); the
+/// `undefined-citation` lint resolves them against the project's bibliography via
+/// [`crate::project::citations::ResolvedCitations`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CitationRef {
+    /// The cite key, as authored.
+    pub name: SmolStr,
+    /// The citation command that introduced it, sans backslash (`cite`,
+    /// `parencite`, `nocite`, …) — informational, for diagnostics.
+    pub command: SmolStr,
+    /// Range of the enclosing command (shared by keys split from one `\cite{a,b}`,
+    /// like [`LabelRef::range`]).
+    pub range: TextRange,
+}

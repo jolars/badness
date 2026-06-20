@@ -5,7 +5,8 @@
 
 use std::path::Path;
 
-use badness::bib::linter::{Severity, check_document};
+use badness::bib::format;
+use badness::bib::linter::{Severity, apply_fixes, check_document};
 
 /// Lint `src` through the public bib driver, returning `(rule, severity)` per
 /// finding in driver order (sorted by byte position).
@@ -96,4 +97,77 @@ fn paths_are_stamped() {
     let diags = check_document(Path::new("refs.bib"), "@string{x = {y}}\n");
     assert!(!diags.is_empty());
     assert!(diags.iter().all(|d| d.path == Path::new("refs.bib")));
+}
+
+#[test]
+fn phase_4b_rules_surface() {
+    // undefined-string, title-capitalization, and encoding-hints all fire.
+    let src = "@article{k,\n  title = {The DNA of Erdős},\n  publisher = nope,\n}\n";
+    let found = rules(src);
+    assert!(found.contains(&"undefined-string"), "{found:?}");
+    assert!(found.contains(&"title-capitalization"), "{found:?}");
+    assert!(found.contains(&"encoding-hints"), "{found:?}");
+}
+
+#[test]
+fn comment_directive_suppresses_following_entry() {
+    // A `@comment{badness-ignore …}` carrier suppresses the named rule on the next
+    // entry only.
+    let src = "\
+@comment{badness-ignore unused-string: intentional}
+@string{cup = {Cambridge University Press}}
+@string{other = {O}}
+";
+    let found = rules(src);
+    // Only the second @string's unused-string survives.
+    assert_eq!(
+        found.iter().filter(|r| **r == "unused-string").count(),
+        1,
+        "{found:?}"
+    );
+}
+
+#[test]
+fn file_directive_suppresses_all() {
+    let src = "\
+@comment{badness-ignore-file: quiet}
+@string{a = {A}}
+@misc{k, title = {DNA}}
+";
+    assert!(rules(src).is_empty(), "got: {:?}", rules(src));
+}
+
+#[test]
+fn empty_field_fix_survives_format_roundtrip() {
+    // Tenet 5: format → lint --fix → format --check stays green. Start messy,
+    // format, apply the empty-field fix, then assert the result is already
+    // formatted (a second format is a no-op).
+    let messy = "@article{k, title = {T}, note = {}, year = 2020}\n";
+    let formatted = format(messy).unwrap();
+
+    // Apply every available fix (the empty-field deletion) to the formatted text.
+    let fixes: Vec<_> = check_document(Path::new("refs.bib"), &formatted)
+        .into_iter()
+        .filter_map(|d| d.fix)
+        .collect();
+    assert!(!fixes.is_empty(), "expected an empty-field fix");
+    let fixed = apply_fixes(&formatted, &fixes, false).output;
+
+    // The empty field is gone and the fixed text is already format-clean.
+    assert!(
+        !fixed.contains("note"),
+        "empty field not removed: {fixed:?}"
+    );
+    assert_eq!(
+        format(&fixed).unwrap(),
+        fixed,
+        "fix output is not format-clean"
+    );
+
+    // And no empty-field finding remains.
+    let remaining = rules(&fixed);
+    assert!(
+        !remaining.contains(&"empty-field"),
+        "empty-field should be cleared: {remaining:?}"
+    );
 }

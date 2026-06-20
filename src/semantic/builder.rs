@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 
 use crate::ast::{command_name, first_group_range, nth_group_text};
 use crate::semantic::SemanticModel;
-use crate::semantic::label::{LabelDef, LabelRef, RefCommand};
+use crate::semantic::label::{CitationRef, LabelDef, LabelRef, RefCommand};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 pub fn build(root: &SyntaxNode) -> SemanticModel {
@@ -48,11 +48,57 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                     resolved: false,
                 });
             }
+        } else if is_cite_command(&name)
+            && let Some(arg) = nth_group_text(&command, 0)
+        {
+            // `\nocite{*}` is a wildcard pulling in every entry — recorded as a flag,
+            // not a key, so it suppresses `undefined-citation` rather than being one.
+            if name == "nocite" && arg.trim() == "*" {
+                model.nocite_all = true;
+            } else {
+                for key in arg.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                    model.citations.push(CitationRef {
+                        name: SmolStr::from(key),
+                        command: SmolStr::from(name.as_str()),
+                        range: command.text_range(),
+                    });
+                }
+            }
         }
     }
 
     resolve(&mut model);
     model
+}
+
+/// Whether `name` is a citation command (`\cite` and the natbib/biblatex family,
+/// plus `\nocite`). Capitalized biblatex variants (`\Cite`, `\Textcite`, …) and
+/// the `cite`-prefixed natbib set are covered by the prefix check; an explicit
+/// short list catches the rest. Keys are comma-separated for all of them.
+fn is_cite_command(name: &str) -> bool {
+    const EXTRA: &[&str] = &[
+        "parencite",
+        "Parencite",
+        "footcite",
+        "footcitetext",
+        "textcite",
+        "Textcite",
+        "smartcite",
+        "Smartcite",
+        "autocite",
+        "Autocite",
+        "supercite",
+        "fullcite",
+        "footfullcite",
+        "nocite",
+        "notecite",
+        "Notecite",
+        "pnotecite",
+        "fnotecite",
+    ];
+    // The `\cite` family: `\cite`, `\citep`, `\citet`, `\citeauthor`,
+    // `\citeyear`, `\Citep`, … all begin with `cite`/`Cite`.
+    name.starts_with("cite") || name.starts_with("Cite") || EXTRA.contains(&name)
 }
 
 /// The recognized reference command for a control-word name, or `None`. A small

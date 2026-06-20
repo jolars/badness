@@ -87,6 +87,7 @@ mod tests {
             root: &root,
             model: &model,
             resolution: None,
+            citations: None,
         };
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {

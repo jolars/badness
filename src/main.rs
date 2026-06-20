@@ -13,20 +13,24 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use badness::file_discovery::{
-    FileDiscoveryError, FileKind, collect_lint_files, collect_tex_files,
-};
+use badness::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
 use badness::linter::{
     Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
 };
+use std::collections::HashMap;
+
 use badness::parser::parse;
 use badness::project::labels::{document_label_names, is_document_root};
-use badness::project::{FileFacts, IncludeGraph, ResolvedLabels, collect_include_edge_keys};
+use badness::project::{
+    CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
+    collect_bib_resource_targets, collect_include_edge_keys,
+};
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
 use clap::{Parser, Subcommand, ValueEnum};
 use rowan::NodeOrToken;
+use smol_str::SmolStr;
 
 /// CLI surface for [`WrapMode`]. Kept here (not in the formatter) so the
 /// formatter API stays clap-free, mirroring arity's `cli.rs` convention.
@@ -227,10 +231,31 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
     let mut analyzed: Vec<(&PathBuf, SyntaxNode, SemanticModel)> = Vec::new();
     let mut facts: Vec<FileFacts> = Vec::new();
     let mut label_inputs = Vec::new();
+    let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
+    // Cite keys per analyzed `.bib` path, feeding the cross-file citation resolver.
+    let mut bib_keys: HashMap<PathBuf, Vec<SmolStr>> = HashMap::new();
     for (path, content, kind) in &sources {
         match kind {
             FileKind::Bib => {
-                diagnostics.extend(badness::bib::linter::check_document(path, content));
+                // Build the model once: it yields both the lint diagnostics and the
+                // cite keys this `.bib` contributes to the citation resolver.
+                let parsed = badness::bib::parse(content);
+                diagnostics.extend(parsed.errors.iter().map(|err| Diagnostic {
+                    rule: "parse",
+                    severity: badness::linter::Severity::Error,
+                    path: path.clone(),
+                    start: err.start,
+                    end: err.end,
+                    message: err.message.clone(),
+                    fix: None,
+                }));
+                let root = parsed.syntax();
+                let model = badness::bib::semantic::Model::build(&root);
+                bib_keys.insert(
+                    path.clone(),
+                    model.entries().iter().map(|e| e.key.clone()).collect(),
+                );
+                diagnostics.extend(badness::bib::linter::lint_document(path, &root, &model));
             }
             FileKind::Tex => {
                 let parsed = parse(content);
@@ -251,6 +276,12 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
                     document_label_names(&model),
                     is_document_root(&root),
                 ));
+                cite_facts.push(CiteFileFacts {
+                    path: path.clone(),
+                    bib_targets: collect_bib_resource_targets(&root, path.parent()),
+                    nocite_all: model.has_wildcard_nocite(),
+                    is_document_root: is_document_root(&root),
+                });
                 analyzed.push((path, root, model));
             }
         }
@@ -258,8 +289,15 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
 
     let graph = IncludeGraph::build(&facts, None);
     let resolved = ResolvedLabels::build(&label_inputs, &graph);
+    let resolved_citations = ResolvedCitations::build(&cite_facts, &graph, &bib_keys);
     for (path, root, model) in &analyzed {
-        diagnostics.extend(lint_document(path, root, model, Some(&resolved)));
+        diagnostics.extend(lint_document(
+            path,
+            root,
+            model,
+            Some(&resolved),
+            Some(&resolved_citations),
+        ));
     }
 
     // Findings from the two pipelines arrive interleaved by file; sort so the
@@ -297,9 +335,9 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
 /// `None` so the caller falls through to the normal reporting pass. Mirrors
 /// arity's `apply_fixes_to_paths`.
 ///
-/// Only `.tex` files are fixed: the bib linter emits no autofixes yet (Tenet 5
-/// withholds them until each is proven format-clean), so `.bib` files are skipped
-/// here and still reported in the pass that follows.
+/// Both `.tex` and `.bib` files are fixed, each through its own linter; rules that
+/// emit no autofix (the report-only majority) leave their findings for the
+/// reporting pass that follows.
 fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitCode> {
     let files = match collect_lint_files(paths) {
         Ok(files) => files,
@@ -313,10 +351,7 @@ fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitC
         return Some(ExitCode::FAILURE);
     }
     for (path, kind) in files {
-        if kind != FileKind::Tex {
-            continue; // `.bib` has no autofixes yet.
-        }
-        match fix_file(&path, include_unsafe) {
+        match fix_file(&path, kind, include_unsafe) {
             Ok(0) => {}
             Ok(n) => eprintln!("{}: {n} fix{} applied", path.display(), plural(n)),
             Err(err) => {
@@ -331,15 +366,16 @@ fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitC
 /// Run the fixpoint loop on a single file and write it back if anything changed.
 /// Returns the number of individual fixes applied. Re-lints after each round so
 /// fixes can cascade; bounded by [`MAX_FIX_ITERATIONS`]. Mirrors arity's
-/// `fix_file`.
-fn fix_file(path: &Path, include_unsafe: bool) -> std::io::Result<usize> {
+/// `fix_file`. Routes to the LaTeX or BibTeX linter by [`FileKind`].
+fn fix_file(path: &Path, kind: FileKind, include_unsafe: bool) -> std::io::Result<usize> {
     let mut content = std::fs::read_to_string(path)?;
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
-        let fixes: Vec<_> = check_document(path, &content)
-            .into_iter()
-            .filter_map(|d| d.fix)
-            .collect();
+        let diagnostics = match kind {
+            FileKind::Tex => check_document(path, &content),
+            FileKind::Bib => badness::bib::linter::check_document(path, &content),
+        };
+        let fixes: Vec<_> = diagnostics.into_iter().filter_map(|d| d.fix).collect();
         if fixes.is_empty() {
             break;
         }
@@ -506,10 +542,11 @@ fn report_discovery_error(err: &FileDiscoveryError) {
     }
 }
 
-/// Resolve the input paths to `.tex` files in place, writing only files whose
-/// content changes.
+/// Resolve the input paths to `.tex`/`.bib` files and format each in place,
+/// writing only files whose content changes. Each file is routed to its own
+/// formatter by [`FileKind`].
 fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
-    let files = match collect_tex_files(paths) {
+    let files = match collect_lint_files(paths) {
         Ok(files) => files,
         Err(err) => {
             report_discovery_error(&err);
@@ -517,12 +554,12 @@ fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
         }
     };
     if files.is_empty() {
-        eprintln!("badness: no .tex files found under the provided input paths");
+        eprintln!("badness: no .tex or .bib files found under the provided input paths");
         return ExitCode::FAILURE;
     }
 
     let mut failed = false;
-    for path in &files {
+    for (path, kind) in &files {
         let content = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) => {
@@ -531,17 +568,23 @@ fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
                 continue;
             }
         };
-        match format_with_style(&content, style) {
+        let formatted = match kind {
+            FileKind::Tex => format_with_style(&content, style).map_err(|e| e.to_string()),
+            FileKind::Bib => {
+                badness::bib::format_with_style(&content, style).map_err(|e| e.to_string())
+            }
+        };
+        match formatted {
             Ok(formatted) => {
-                if formatted != content
+                if formatted != *content
                     && let Err(err) = std::fs::write(path, formatted)
                 {
                     eprintln!("badness: cannot write {}: {err}", path.display());
                     failed = true;
                 }
             }
-            Err(err) => {
-                eprintln!("badness: cannot format {}: {err}", path.display());
+            Err(msg) => {
+                eprintln!("badness: cannot format {}: {msg}", path.display());
                 failed = true;
             }
         }

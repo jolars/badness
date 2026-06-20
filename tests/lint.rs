@@ -17,7 +17,7 @@ use badness::syntax::SyntaxNode;
 fn lint(src: &str) -> Vec<(&'static str, Severity)> {
     let root = SyntaxNode::new_root(parse(src).green);
     let model = SemanticModel::build(&root);
-    lint_document(Path::new("doc.tex"), &root, &model, None)
+    lint_document(Path::new("doc.tex"), &root, &model, None, None)
         .into_iter()
         .map(|d| (d.rule, d.severity))
         .collect()
@@ -58,7 +58,7 @@ fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
 
     let mut out = Vec::new();
     for (path, root, model) in &parsed {
-        for d in lint_document(path, root, model, Some(&resolved)) {
+        for d in lint_document(path, root, model, Some(&resolved), None) {
             out.push((path.display().to_string(), d.rule, d.message));
         }
     }
@@ -67,6 +67,86 @@ fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
 
 fn rules_only(findings: &[(String, &'static str, String)]) -> Vec<&'static str> {
     findings.iter().map(|(_, rule, _)| *rule).collect()
+}
+
+/// Lint a `.tex` source against a set of `(bib_path, bib_source)` bibliographies,
+/// exactly as the CLI's `run_lint` assembles cross-file citation resolution.
+/// Returns the rule ids of every finding for the `.tex` file (`doc.tex`).
+fn lint_with_bib(tex: &str, bibs: &[(&str, &str)]) -> Vec<&'static str> {
+    use badness::project::{CiteFileFacts, ResolvedCitations, collect_bib_resource_targets};
+    use smol_str::SmolStr;
+    use std::collections::HashMap;
+
+    let tex_path = PathBuf::from("doc.tex");
+    let root = SyntaxNode::new_root(parse(tex).green);
+    let model = SemanticModel::build(&root);
+
+    let bib_keys: HashMap<PathBuf, Vec<SmolStr>> = bibs
+        .iter()
+        .map(|(path, src)| {
+            let bib_model =
+                badness::bib::semantic::Model::build(&badness::bib::parse(src).syntax());
+            (
+                PathBuf::from(path),
+                bib_model.entries().iter().map(|e| e.key.clone()).collect(),
+            )
+        })
+        .collect();
+
+    let facts = vec![FileFacts {
+        path: tex_path.clone(),
+        include_edges: collect_include_edge_keys(&root, tex_path.parent()),
+    }];
+    let graph = IncludeGraph::build(&facts, None);
+    let cite_facts = vec![CiteFileFacts {
+        path: tex_path.clone(),
+        bib_targets: collect_bib_resource_targets(&root, tex_path.parent()),
+        nocite_all: model.has_wildcard_nocite(),
+        is_document_root: is_document_root(&root),
+    }];
+    let citations = ResolvedCitations::build(&cite_facts, &graph, &bib_keys);
+
+    lint_document(&tex_path, &root, &model, None, Some(&citations))
+        .into_iter()
+        .map(|d| d.rule)
+        .collect()
+}
+
+#[test]
+fn cross_file_undefined_citation_is_flagged() {
+    let tex = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\begin{document}\n\\cite{missing}\n\\end{document}\n";
+    let bib = "@article{present, title = {T}}\n";
+    let rules = lint_with_bib(tex, &[("refs.bib", bib)]);
+    assert!(rules.contains(&"undefined-citation"), "{rules:?}");
+}
+
+#[test]
+fn cross_file_resolved_citation_is_silent() {
+    let tex = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\begin{document}\n\\cite{present}\n\\end{document}\n";
+    let bib = "@article{present, title = {T}}\n";
+    let rules = lint_with_bib(tex, &[("refs.bib", bib)]);
+    assert!(!rules.contains(&"undefined-citation"), "{rules:?}");
+}
+
+#[test]
+fn citation_gating_holds_for_fragment_and_wildcard() {
+    let bib = "@article{present, title = {T}}\n";
+    // No \documentclass → rootless fragment → not flagged even if the key is absent.
+    let fragment = "\\addbibresource{refs.bib}\n\\cite{missing}\n";
+    assert!(!lint_with_bib(fragment, &[("refs.bib", bib)]).contains(&"undefined-citation"));
+
+    // \nocite{*} pulls in every entry → nothing is undefined.
+    let wildcard = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\nocite{*}\n\\begin{document}\n\\cite{missing}\n\\end{document}\n";
+    assert!(!lint_with_bib(wildcard, &[("refs.bib", bib)]).contains(&"undefined-citation"));
+}
+
+#[test]
+fn bibliography_command_resolves_keys() {
+    // The legacy `\bibliography{refs}` form (default `.bib`) resolves too.
+    let tex = "\\documentclass{article}\n\\begin{document}\n\\cite{present}\n\\bibliography{refs}\n\\end{document}\n";
+    let bib = "@article{present, title = {T}}\n";
+    let rules = lint_with_bib(tex, &[("refs.bib", bib)]);
+    assert!(!rules.contains(&"undefined-citation"), "{rules:?}");
 }
 
 #[test]

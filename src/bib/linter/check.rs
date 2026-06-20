@@ -15,6 +15,7 @@ use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
 use super::rules::{BibRuleContext, all_rules};
+use super::suppression::BibSuppressionMap;
 
 /// Parse and lint a single `.bib` file's `text` from scratch, returning its parse
 /// diagnostics plus rule findings. The self-contained analog of
@@ -89,7 +90,9 @@ pub fn lint_document(path: &Path, root: &SyntaxNode, model: &Model) -> Vec<Diagn
         rule.check_file(&ctx, &mut diagnostics);
     }
 
-    // Suppression seam (deferred — no bib comment carrier; see module docs).
+    // Filter out findings suppressed by a `@comment{badness-ignore …}` carrier.
+    let suppress = BibSuppressionMap::build(root);
+    diagnostics.retain(|d| !suppress.is_suppressed(d.rule, d.start, d.end));
 
     for d in &mut diagnostics {
         d.path = path.to_path_buf();

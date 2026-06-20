@@ -11,16 +11,18 @@
 //! arity's (`source.rs` ↔ `include.rs`, `scope.rs`/`graph.rs` ↔ `graph.rs`) so a
 //! later shared-crate extraction stays a mechanical lift.
 
+pub mod citations;
 pub mod graph;
 pub mod include;
 pub mod labels;
 
+pub use citations::{CiteFileFacts, ResolvedCitations};
 pub use graph::{
     FileFacts, IncludeGraph, Project, ProjectMember, ResolvedInclude, UnresolvedInclude,
     project_graph,
 };
 pub use include::{
-    IncludeEdge, IncludeEdgeKey, IncludeKind, IncludeTarget, collect_include_edge_keys,
-    collect_include_edges,
+    BibTarget, IncludeEdge, IncludeEdgeKey, IncludeKind, IncludeTarget,
+    collect_bib_resource_targets, collect_include_edge_keys, collect_include_edges,
 };
 pub use labels::{ResolvedLabels, resolved_labels};

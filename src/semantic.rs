@@ -22,7 +22,7 @@ pub mod signature;
 pub mod xparse;
 
 pub use define::scan_definitions;
-pub use label::{LabelDef, LabelId, LabelRef, RefCommand, RefId};
+pub use label::{CitationRef, LabelDef, LabelId, LabelRef, RefCommand, RefId};
 pub use outline::{OutlineItem, OutlineSymbol, outline};
 pub use signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb, Signatures};
 
@@ -37,6 +37,11 @@ use crate::syntax::SyntaxNode;
 pub struct SemanticModel {
     pub(crate) labels: Vec<LabelDef>,
     pub(crate) refs: Vec<LabelRef>,
+    pub(crate) citations: Vec<CitationRef>,
+    /// Whether the file contains a `\nocite{*}` wildcard, which pulls every entry
+    /// of the bibliography into the document — so `undefined-citation` cannot flag
+    /// anything in its namespace.
+    pub(crate) nocite_all: bool,
 }
 
 impl SemanticModel {
@@ -55,6 +60,16 @@ impl SemanticModel {
 
     pub fn refs(&self) -> &[LabelRef] {
         &self.refs
+    }
+
+    /// The citation uses (`\cite`/`\parencite`/… keys) in this file.
+    pub fn citations(&self) -> &[CitationRef] {
+        &self.citations
+    }
+
+    /// Whether the file contains a `\nocite{*}` wildcard.
+    pub fn has_wildcard_nocite(&self) -> bool {
+        self.nocite_all
     }
 
     pub fn reference(&self, id: RefId) -> &LabelRef {

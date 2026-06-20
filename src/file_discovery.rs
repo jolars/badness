@@ -13,8 +13,25 @@ use ignore::WalkBuilder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileDiscoveryError {
-    NonTexFilePath { path: PathBuf },
-    WalkError { path: PathBuf, message: String },
+    NonTexFilePath {
+        path: PathBuf,
+    },
+    /// An explicit lint input that is neither `.tex` nor `.bib`.
+    UnsupportedLintFilePath {
+        path: PathBuf,
+    },
+    WalkError {
+        path: PathBuf,
+        message: String,
+    },
+}
+
+/// Which pipeline a lintable file feeds: the LaTeX layer (`.tex`) or the BibTeX
+/// layer (`.bib`). `Ord` so a `(PathBuf, FileKind)` list sorts/dedups by path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FileKind {
+    Tex,
+    Bib,
 }
 
 /// Resolve `paths` (files and/or directories) into a sorted, de-duplicated list
@@ -73,6 +90,77 @@ fn is_tex_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("tex"))
+}
+
+/// The lint [`FileKind`] of `path` by extension (`.tex`/`.bib`), or `None` for any
+/// other file.
+fn lint_file_kind(path: &Path) -> Option<FileKind> {
+    let ext = path.extension().and_then(|ext| ext.to_str())?;
+    if ext.eq_ignore_ascii_case("tex") {
+        Some(FileKind::Tex)
+    } else if ext.eq_ignore_ascii_case("bib") {
+        Some(FileKind::Bib)
+    } else {
+        None
+    }
+}
+
+/// Resolve `paths` (files and/or directories) into a sorted, de-duplicated list of
+/// lintable files tagged by [`FileKind`]. Explicit file paths must be `.tex` or
+/// `.bib`; directories are walked recursively, keeping both kinds and honoring
+/// `.gitignore`. The lint analog of [`collect_tex_files`] (which stays `.tex`-only
+/// for `format`).
+pub fn collect_lint_files(
+    paths: &[PathBuf],
+) -> Result<Vec<(PathBuf, FileKind)>, FileDiscoveryError> {
+    let mut files = Vec::new();
+
+    for path in paths {
+        if path.is_file() {
+            match lint_file_kind(path) {
+                Some(kind) => files.push((path.clone(), kind)),
+                None => {
+                    return Err(FileDiscoveryError::UnsupportedLintFilePath { path: path.clone() });
+                }
+            }
+            continue;
+        }
+
+        if path.is_dir() {
+            let mut builder = WalkBuilder::new(path);
+            builder.standard_filters(true);
+            builder.hidden(false);
+            for entry in builder.build() {
+                match entry {
+                    Ok(entry) => {
+                        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                            continue;
+                        }
+                        let entry_path = entry.path().to_path_buf();
+                        if let Some(kind) = lint_file_kind(&entry_path) {
+                            files.push((entry_path, kind));
+                        }
+                    }
+                    Err(err) => {
+                        return Err(FileDiscoveryError::WalkError {
+                            path: path.clone(),
+                            message: err.to_string(),
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+
+        return Err(FileDiscoveryError::WalkError {
+            path: path.clone(),
+            message: "path does not exist".to_string(),
+        });
+    }
+
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -138,5 +226,46 @@ mod tests {
         fs::write(&path, "a").unwrap();
         let files = collect_tex_files(&[path.clone(), path.clone()]).unwrap();
         assert_eq!(files, vec![path]);
+    }
+
+    #[test]
+    fn collect_lint_files_keeps_both_kinds_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("b.tex"), "b").unwrap();
+        fs::write(root.join("a.bib"), "a").unwrap();
+        fs::write(root.join("note.sty"), "x").unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("c.bib"), "c").unwrap();
+
+        let files = collect_lint_files(&[root.to_path_buf()]).unwrap();
+        assert_eq!(
+            files,
+            vec![
+                (root.join("a.bib"), FileKind::Bib),
+                (root.join("b.tex"), FileKind::Tex),
+                (root.join("sub").join("c.bib"), FileKind::Bib),
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_lint_files_accepts_explicit_bib() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refs.BIB");
+        fs::write(&path, "x").unwrap();
+        let files = collect_lint_files(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(files, vec![(path, FileKind::Bib)]);
+    }
+
+    #[test]
+    fn collect_lint_files_rejects_unsupported_explicit_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pkg.sty");
+        fs::write(&path, "x").unwrap();
+        assert_eq!(
+            collect_lint_files(std::slice::from_ref(&path)),
+            Err(FileDiscoveryError::UnsupportedLintFilePath { path })
+        );
     }
 }

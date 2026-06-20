@@ -17,6 +17,7 @@ pub(crate) mod events;
 pub mod formatter;
 pub(crate) mod grammar;
 pub mod lexer;
+pub mod linter;
 pub mod semantic;
 pub mod syntax;
 pub(crate) mod tree_builder;

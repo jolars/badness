@@ -72,6 +72,22 @@ impl Model {
     pub fn undefined_string_uses(&self) -> impl Iterator<Item = &StringUse> {
         self.string_uses.iter().filter(|u| !u.resolved)
     }
+
+    /// `@string` definitions never referenced by any use in this file.
+    ///
+    /// A per-file fact, **not** a lint signal on its own: in a multi-file
+    /// bibliography a `@string` defined here may be referenced from another `.bib`,
+    /// so the Phase-3 `unused-string` lint that builds on this carries a single-file
+    /// false-positive caveat until cross-file resolution gates it (Phase 4), exactly
+    /// as [`undefined_string_uses`](Self::undefined_string_uses) is gated. Both
+    /// `name` fields are lowercased, so the membership test is case-correct.
+    pub fn unused_string_defs(&self) -> impl Iterator<Item = &StringDef> {
+        let used: std::collections::HashSet<&str> =
+            self.string_uses.iter().map(|u| u.name.as_str()).collect();
+        self.string_defs
+            .iter()
+            .filter(move |d| !used.contains(d.name.as_str()))
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +167,23 @@ mod tests {
     fn number_value_is_not_a_string_use() {
         let model = model_of("@article{k, year = 2020}\n");
         assert_eq!(model.string_uses().len(), 0);
+    }
+
+    #[test]
+    fn unused_string_def_reported() {
+        let model =
+            model_of("@string{cup = {C}}\n@string{used = {U}}\n@book{k, publisher = used}\n");
+        let unused: Vec<_> = model
+            .unused_string_defs()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(unused, vec!["cup"]);
+    }
+
+    #[test]
+    fn all_strings_used_reports_none() {
+        let model = model_of("@string{cup = {C}}\n@book{k, publisher = cup}\n");
+        assert_eq!(model.unused_string_defs().count(), 0);
     }
 
     #[test]

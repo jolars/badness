@@ -467,16 +467,38 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
     New fixtures: `sort_fields_canonical`, `sort_fields_unknown_alpha`,
     `sort_fields_duplicate_stable`, `sort_entries_by_key`, `sort_string_before_use`,
     `sort_crossref_pinned` (plus `verbatim_field_preserved` regenerated to canonical order).
-- [ ] **Phase 3 — Linter rules + autofixes.** Reuse `src/linter/` infra (`Rule`, dispatch
-  table, `Fix`/`apply_fixes`, suppression). Rules: duplicate key, missing required field
-  (from the field DB), unknown/empty field, unused `@string`, title-capitalization
-  protection, encoding hints. Autofixes format-clean by construction (Tenet 5).
-- [ ] **Phase 4 — Incremental + CLI + LSP + project-graph integration.** salsa
+- [x] **Phase 3 — Linter rules (initial slice).** A **parallel** `src/bib/linter/` module
+  (mirroring the LaTeX `src/linter/`, the way `src/bib/formatter/` mirrors `src/formatter/`),
+  with its own `BibRule` trait + `BibRuleContext` + kind-indexed driver, **reusing the
+  language-agnostic** `Diagnostic`/`Fix`/`Severity`/`apply_fixes` from `crate::linter`
+  wholesale (`AGENTS.md` "copy now, extract later"). The trait is *not* generified over the
+  language — the two `SyntaxKind` enums and model types are distinct.
+  - Rules shipped (5, all single-file-sound, **report-only**): `duplicate-key` (off
+    `Model::duplicate_keys`), `missing-required-field` + `unknown-field` (off the field DB
+    signatures, regular `ENTRY` only), `empty-field` (`{}`/`""`/`{  }`), `unused-string`
+    (new `Model::unused_string_defs`). Each has per-rule unit tests; integration in
+    `tests/bib_lint.rs`; registry⇔id-list agreement test.
+  - CLI wiring: `file_discovery::collect_lint_files` + `FileKind` tag `.tex`/`.bib`;
+    `main.rs run_lint` partitions by kind (`.bib` → `bib::linter::check_document`, no
+    cross-file step) and renders both streams through the shared `render_findings`; the
+    `--fix` pass skips `.bib` (no autofixes yet). `badness lint foo.bib` works end-to-end.
+  - **Deferred (conscious decisions):**
+    - *Autofixes:* none yet — kept report-only so `format → lint --fix → format --check`
+      stays trivially green (Tenet 5). `empty-field` deletion (field + separating comma) is
+      the first candidate, once validated against the `tests/bib_format.rs` oracle.
+    - *Suppression:* no carrier — bib has **no comment token** (free text is `JUNK`,
+      structured comments are `@comment`), so there is no `% badness-ignore` analog. The
+      driver leaves a no-op seam where the LaTeX `SuppressionMap` runs.
+    - *Rules:* `undefined-string` (needs a cross-file gate like `undefined-ref`),
+      `title-capitalization` protection, `encoding-hints` — all Phase 4.
+- [ ] **Phase 4 — Incremental + LSP + project-graph integration.** salsa
   `parsed_bib_document` / `bib_semantic_model` queries (`incremental.rs`); route `.bib`
-  through `badness format`/`lint` (`main.rs`, `file_discovery.rs`); LSP diagnostics +
-  formatting + document symbols for `.bib`; extend `src/project/include.rs` to resolve
-  `\bibliography` / `\addbibresource` and cross-check `\cite{key}` against bib keys (an
-  `undefined-citation` rule mirroring `undefined-ref`, gated on a closed/rooted component).
+  through `badness format` (lint routing landed in Phase 3); LSP diagnostics + formatting +
+  document symbols for `.bib`; the deferred bib lint rules above (`undefined-string`,
+  `title-capitalization`, `encoding-hints`) + bib suppression carrier + `empty-field`
+  autofix; extend `src/project/include.rs` to resolve `\bibliography` / `\addbibresource`
+  and cross-check `\cite{key}` against bib keys (an `undefined-citation` rule mirroring
+  `undefined-ref`, gated on a closed/rooted component).
 
 --------------------------------------------------------------------------------
 

@@ -65,7 +65,8 @@ impl std::error::Error for CheckError {}
 impl From<FileDiscoveryError> for CheckError {
     fn from(value: FileDiscoveryError) -> Self {
         match value {
-            FileDiscoveryError::NonTexFilePath { path } => Self::NonTexFilePath { path },
+            FileDiscoveryError::NonTexFilePath { path }
+            | FileDiscoveryError::UnsupportedLintFilePath { path } => Self::NonTexFilePath { path },
             FileDiscoveryError::WalkError { path, message } => Self::WalkError { path, message },
         }
     }

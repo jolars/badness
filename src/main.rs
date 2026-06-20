@@ -13,7 +13,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use badness::file_discovery::{FileDiscoveryError, collect_tex_files};
+use badness::file_discovery::{
+    FileDiscoveryError, FileKind, collect_lint_files, collect_tex_files,
+};
 use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
 use badness::linter::{
     Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
@@ -175,10 +177,11 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
         return code;
     }
 
-    // Hold each file's text in memory keyed by the label we report it under, so
-    // the renderer can fetch source for snippets without re-reading from disk
-    // (and so stdin, which has no path, still gets a source).
-    let mut sources: Vec<(PathBuf, String)> = Vec::new();
+    // Hold each file's text (and which pipeline it feeds) in memory keyed by the
+    // label we report it under, so the renderer can fetch source for snippets
+    // without re-reading from disk (and so stdin, which has no path, still gets a
+    // source). Stdin has no extension to dispatch on, so it is treated as LaTeX.
+    let mut sources: Vec<(PathBuf, String, FileKind)> = Vec::new();
     let mut failed = false;
 
     if paths.is_empty() {
@@ -187,9 +190,9 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
             eprintln!("badness: cannot read stdin: {err}");
             return ExitCode::FAILURE;
         }
-        sources.push((PathBuf::from("<stdin>"), input));
+        sources.push((PathBuf::from("<stdin>"), input, FileKind::Tex));
     } else {
-        let files = match collect_tex_files(paths) {
+        let files = match collect_lint_files(paths) {
             Ok(files) => files,
             Err(err) => {
                 report_discovery_error(&err);
@@ -197,12 +200,12 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
             }
         };
         if files.is_empty() {
-            eprintln!("badness: no .tex files found under the provided input paths");
+            eprintln!("badness: no .tex or .bib files found under the provided input paths");
             return ExitCode::FAILURE;
         }
-        for path in files {
+        for (path, kind) in files {
             match std::fs::read_to_string(&path) {
-                Ok(content) => sources.push((path, content)),
+                Ok(content) => sources.push((path, content, kind)),
                 Err(err) => {
                     eprintln!("badness: cannot read {}: {err}", path.display());
                     failed = true;
@@ -211,10 +214,12 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
         }
     }
 
-    // Parse and build the per-file model for every source first: cross-file
+    // Parse and build the per-file model for every LaTeX source first: cross-file
     // label resolution needs the whole analyzed set before any one file can be
-    // linted. Lint rules run off these parses — no salsa needed on the CLI path
-    // (the salsa firewall is an editor-incrementality concern; mirrors arity's
+    // linted. `.bib` files have no cross-file resolution yet (Phase 4), so each is
+    // linted standalone via the bib driver and its findings folded straight in.
+    // Lint rules run off these parses — no salsa needed on the CLI path (the salsa
+    // firewall is an editor-incrementality concern; mirrors arity's
     // `check_document`). The resolver reuses the *same* pure helpers the salsa
     // queries do (`document_label_names`, `is_document_root`,
     // `collect_include_edge_keys`, `ResolvedLabels::build`), so CLI and LSP agree.
@@ -222,26 +227,33 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
     let mut analyzed: Vec<(&PathBuf, SyntaxNode, SemanticModel)> = Vec::new();
     let mut facts: Vec<FileFacts> = Vec::new();
     let mut label_inputs = Vec::new();
-    for (path, content) in &sources {
-        let parsed = parse(content);
-        diagnostics.extend(
-            parsed
-                .errors
-                .iter()
-                .map(|err| Diagnostic::from_parse(path.clone(), err)),
-        );
-        let root = SyntaxNode::new_root(parsed.green);
-        let model = SemanticModel::build(&root);
-        facts.push(FileFacts {
-            path: path.clone(),
-            include_edges: collect_include_edge_keys(&root, path.parent()),
-        });
-        label_inputs.push((
-            path.clone(),
-            document_label_names(&model),
-            is_document_root(&root),
-        ));
-        analyzed.push((path, root, model));
+    for (path, content, kind) in &sources {
+        match kind {
+            FileKind::Bib => {
+                diagnostics.extend(badness::bib::linter::check_document(path, content));
+            }
+            FileKind::Tex => {
+                let parsed = parse(content);
+                diagnostics.extend(
+                    parsed
+                        .errors
+                        .iter()
+                        .map(|err| Diagnostic::from_parse(path.clone(), err)),
+                );
+                let root = SyntaxNode::new_root(parsed.green);
+                let model = SemanticModel::build(&root);
+                facts.push(FileFacts {
+                    path: path.clone(),
+                    include_edges: collect_include_edge_keys(&root, path.parent()),
+                });
+                label_inputs.push((
+                    path.clone(),
+                    document_label_names(&model),
+                    is_document_root(&root),
+                ));
+                analyzed.push((path, root, model));
+            }
+        }
     }
 
     let graph = IncludeGraph::build(&facts, None);
@@ -250,12 +262,22 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
         diagnostics.extend(lint_document(path, root, model, Some(&resolved)));
     }
 
+    // Findings from the two pipelines arrive interleaved by file; sort so the
+    // renderer presents them deterministically (by path, then position).
+    diagnostics.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then(a.start.cmp(&b.start))
+            .then(a.end.cmp(&b.end))
+            .then(a.rule.cmp(b.rule))
+    });
+
     if !diagnostics.is_empty() {
         let source_for = |path: &Path| {
             sources
                 .iter()
-                .find(|(p, _)| p == path)
-                .map(|(_, text)| text.clone())
+                .find(|(p, _, _)| p == path)
+                .map(|(_, text, _)| text.clone())
         };
         eprint!(
             "{}",
@@ -270,12 +292,16 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
     }
 }
 
-/// Discover `.tex` files under `paths` and apply autofixes in place. Returns
+/// Discover lintable files under `paths` and apply autofixes in place. Returns
 /// `Some(exit_code)` only on a hard error (discovery / IO); on success returns
 /// `None` so the caller falls through to the normal reporting pass. Mirrors
 /// arity's `apply_fixes_to_paths`.
+///
+/// Only `.tex` files are fixed: the bib linter emits no autofixes yet (Tenet 5
+/// withholds them until each is proven format-clean), so `.bib` files are skipped
+/// here and still reported in the pass that follows.
 fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitCode> {
-    let files = match collect_tex_files(paths) {
+    let files = match collect_lint_files(paths) {
         Ok(files) => files,
         Err(err) => {
             report_discovery_error(&err);
@@ -283,10 +309,13 @@ fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitC
         }
     };
     if files.is_empty() {
-        eprintln!("badness: no .tex files found under the provided input paths");
+        eprintln!("badness: no .tex or .bib files found under the provided input paths");
         return Some(ExitCode::FAILURE);
     }
-    for path in files {
+    for (path, kind) in files {
+        if kind != FileKind::Tex {
+            continue; // `.bib` has no autofixes yet.
+        }
         match fix_file(&path, include_unsafe) {
             Ok(0) => {}
             Ok(n) => eprintln!("{}: {n} fix{} applied", path.display(), plural(n)),
@@ -459,6 +488,12 @@ fn report_discovery_error(err: &FileDiscoveryError) {
         FileDiscoveryError::NonTexFilePath { path } => {
             eprintln!(
                 "badness: input file {} is not a .tex file; only .tex files are supported",
+                path.display()
+            );
+        }
+        FileDiscoveryError::UnsupportedLintFilePath { path } => {
+            eprintln!(
+                "badness: input file {} is not a .tex or .bib file",
                 path.display()
             );
         }

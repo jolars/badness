@@ -1,0 +1,162 @@
+//! `missing-required-field`: a regular entry lacking a field its type requires,
+//! per the built-in signature DB (`data/bib_fields.json`).
+//!
+//! Only entry types the DB knows are checked — an unknown type carries no
+//! signature, so we make no claim (no false positives on custom `@`-types). A
+//! [`RequiredField::OneOf`] alternation (e.g. `date` *or* `year`) is satisfied by
+//! any one alternative. This is a [`Severity::Warning`]: a missing field degrades
+//! the bibliography but is not a parse error, and styles vary in what they enforce.
+//! Report-only — we cannot invent field content (Tenet 5).
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+use crate::bib::ast::{cite_key, entry_type, field_name, fields};
+use crate::bib::semantic::RequiredField;
+use crate::bib::syntax::{SyntaxElement, SyntaxKind};
+use crate::linter::diagnostic::{Diagnostic, Severity};
+
+use super::{BibRule, BibRuleContext};
+
+pub struct MissingRequiredField;
+
+impl BibRule for MissingRequiredField {
+    fn id(&self) -> &'static str {
+        "missing-required-field"
+    }
+
+    fn default_severity(&self) -> Severity {
+        Severity::Warning
+    }
+
+    fn interests(&self) -> &'static [SyntaxKind] {
+        // Regular entries only. `@string`/`@preamble`/`@comment` are distinct kinds,
+        // so they are excluded without a guard.
+        &[SyntaxKind::ENTRY]
+    }
+
+    fn check(&self, el: &SyntaxElement, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(entry) = el.as_node() else {
+            return;
+        };
+        let Some(ty) = entry_type(entry) else {
+            return;
+        };
+        let Some(sig) = ctx.db.entry(&ty) else {
+            return; // Unknown entry type: no signature, no claim.
+        };
+
+        // The entry's field names, lowercased (BibTeX is case-insensitive).
+        let present: HashSet<String> = fields(entry)
+            .filter_map(|f| field_name(&f))
+            .map(|n| n.to_lowercase())
+            .collect();
+
+        // Underline the cite key; fall back to the whole entry on a keyless recovery.
+        let range = cite_key(entry)
+            .map(|(_, r)| r)
+            .unwrap_or_else(|| entry.text_range());
+
+        for req in &sig.required {
+            let missing_message = match req {
+                RequiredField::One(name) => (!present.contains(name.as_str()))
+                    .then(|| format!("entry `{ty}` is missing required field `{name}`")),
+                RequiredField::OneOf(alts) => {
+                    let satisfied = alts.iter().any(|a| present.contains(a.as_str()));
+                    (!satisfied).then(|| {
+                        let names = alts
+                            .iter()
+                            .map(|a| format!("`{a}`"))
+                            .collect::<Vec<_>>()
+                            .join(" or ");
+                        format!("entry `{ty}` is missing a required field ({names})")
+                    })
+                }
+            };
+            if let Some(message) = missing_message {
+                sink.push(Diagnostic {
+                    rule: self.id(),
+                    severity: self.default_severity(),
+                    path: PathBuf::new(),
+                    start: usize::from(range.start()),
+                    end: usize::from(range.end()),
+                    message,
+                    fix: None,
+                });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bib::parse;
+    use crate::bib::semantic::Model;
+
+    fn findings(src: &str) -> Vec<Diagnostic> {
+        let root = parse(src).syntax();
+        let model = Model::build(&root);
+        let ctx = BibRuleContext {
+            path: std::path::Path::new("x.bib"),
+            root: &root,
+            model: &model,
+            db: crate::bib::semantic::builtin(),
+        };
+        let mut out = Vec::new();
+        for el in root.descendants_with_tokens() {
+            if MissingRequiredField.interests().contains(&el.kind()) {
+                MissingRequiredField.check(&el, &ctx, &mut out);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn flags_missing_single_required_field() {
+        // `@article` requires author, title, journaltitle, and date-or-year. Here
+        // only title is present.
+        let out = findings("@article{k, title = {T}}\n");
+        let msgs: Vec<&str> = out.iter().map(|d| d.message.as_str()).collect();
+        assert!(msgs.iter().any(|m| m.contains("`author`")), "got: {msgs:?}");
+        assert!(out.iter().all(|d| d.rule == "missing-required-field"));
+    }
+
+    #[test]
+    fn oneof_satisfied_by_year() {
+        // `date` OR `year`: providing `year` satisfies the alternation, so no
+        // date/year finding (other required fields may still be flagged).
+        let out =
+            findings("@article{k, author = {A}, title = {T}, journaltitle = {J}, year = 2020}\n");
+        assert!(
+            out.is_empty(),
+            "fully-specified article should be clean, got: {:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn oneof_missing_is_one_finding() {
+        // author, title, journaltitle present; neither date nor year.
+        let out = findings("@article{k, author = {A}, title = {T}, journaltitle = {J}}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("date") && out[0].message.contains("year"));
+    }
+
+    #[test]
+    fn unknown_entry_type_is_skipped() {
+        assert!(findings("@frobnicate{k, wat = {x}}\n").is_empty());
+    }
+
+    #[test]
+    fn underlines_the_cite_key() {
+        let out = findings("@article{mykey, title = {T}}\n");
+        let start = "@article{".len();
+        let end = start + "mykey".len();
+        assert!(
+            out.iter().all(|d| (d.start, d.end) == (start, end)),
+            "expected all findings at the key range, got: {:?}",
+            out.iter().map(|d| (d.start, d.end)).collect::<Vec<_>>()
+        );
+    }
+}

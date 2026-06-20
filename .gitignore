@@ -346,3 +346,4 @@ TSWLatexianTemp*
 # mdBook docs
 /docs/book/
 /docs/doc-utils/target/
+/test.bib

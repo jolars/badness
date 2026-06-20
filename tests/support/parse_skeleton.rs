@@ -77,9 +77,12 @@ pub fn project<P: Projector>(root: &Node<P>) -> Vec<Atom> {
 
 fn project_node<P: Projector>(node: &Node<P>) -> Vec<Atom> {
     match P::cat(node.kind()) {
+        // The command-name token is consumed for the head, so it must be skipped
+        // when projecting children (otherwise it re-emits as a nested `Cmd` — see
+        // `project_elem`, which now projects bare command tokens).
         Cat::Cmd => vec![Atom::Cmd(
             command_name::<P>(node),
-            project_children::<P>(node),
+            project_command_args::<P>(node),
         )],
         Cat::Env => {
             let body = node
@@ -106,12 +109,41 @@ fn project_children<P: Projector>(node: &Node<P>) -> Vec<Atom> {
         .collect()
 }
 
+/// Like [`project_children`], but for a command node: the first command-name
+/// token is the node's own head (already captured by [`command_name`]), so it is
+/// skipped to avoid re-emitting it as a nested `Cmd`.
+fn project_command_args<P: Projector>(node: &Node<P>) -> Vec<Atom> {
+    let mut skipped_name = false;
+    node.children_with_tokens()
+        .flat_map(|e| {
+            if !skipped_name
+                && let NodeOrToken::Token(t) = &e
+                && P::is_command_token(t.kind())
+            {
+                skipped_name = true;
+                return Vec::new();
+            }
+            project_elem::<P>(&e)
+        })
+        .collect()
+}
+
 fn project_elem<P: Projector>(
     elem: &NodeOrToken<Node<P>, rowan::SyntaxToken<P::Lang>>,
 ) -> Vec<Atom> {
     match elem {
         NodeOrToken::Node(n) => project_node::<P>(n),
         NodeOrToken::Token(t) if P::is_verbatim_token(t.kind()) => vec![Atom::Verbatim],
+        // A bare command-name token with no enclosing command node. badness emits
+        // control *symbols* (`\,`, `\{`, `\$`, `\\`) as floating `CONTROL_SYMBOL`
+        // tokens rather than wrapping them in a `COMMAND` node (only control words
+        // are wrapped); texlab renders the same constructs as `GENERIC_COMMAND`.
+        // Projecting them to `Cmd` keeps the two skeletons symmetric so the gauge
+        // measures real structural divergence, not this tokenization asymmetry.
+        NodeOrToken::Token(t) if P::is_command_token(t.kind()) => vec![Atom::Cmd(
+            t.text().trim_start_matches('\\').to_string(),
+            Vec::new(),
+        )],
         NodeOrToken::Token(_) => vec![],
     }
 }

@@ -181,9 +181,9 @@ but they are not held to structural equality with the input.
 The formatter is intentionally used to stress the parser: any formatter ambiguity
 should surface a parser modeling gap. Lean on this loop.
 
-**Differential oracles** (steal arity's `air_compat` pattern): use **texlab's
-parser / tree-sitter-latex** as a differential *parse* oracle over a corpus.
-Both are external reference implementations we measure against, never match.
+**Differential oracle** (steal arity's `air_compat` pattern): use **texlab's
+parser** as a differential *parse* oracle over a corpus. It is an external
+reference implementation we measure against, never match.
 
 ## Technology choices (aligned with arity's Cargo.toml)
 

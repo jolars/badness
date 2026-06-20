@@ -25,8 +25,8 @@ include graph); a minimal salsa-backed LSP; and a linter with a rule layer wired
 into both the CLI and LSP.
 
 Work below is organized **by area**. Use formatter ambiguities to drive parser
-fixes (AGENTS.md tenet 3). The differential oracles --- texlab/tree-sitter-latex
-(parse) --- remain available as hardening tracks throughout.
+fixes (AGENTS.md tenet 3). The differential oracle --- texlab (parse) --- remains
+available as a hardening track throughout.
 
 --------------------------------------------------------------------------------
 

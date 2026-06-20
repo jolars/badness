@@ -9,4 +9,6 @@
 # See AGENTS.md ("measure against, never match").
 
 [deviations]
-# example.tex = "reason badness's skeleton intentionally differs from texlab's here"
+edge.tex = "Greedy `{…}` args attach to control *words*, not bare control-symbol tokens (`\\^{}`, `\\~{}`), so accent groups stay siblings; `\\def`'s signature is not special-cased, so its argument attachment differs from texlab."
+environments.tex = "texlab opens a semantic scope for `\\item` (nesting following content) and glues subscripts into the command name (`\\varepsilon_0`); badness keeps `\\item` a generic command and `_0` a separate SUBSCRIPT. `\\` is a LINE_BREAK node here vs texlab's generic command + greedy optional arg."
+math.tex = "texlab glues the subscript into the command name (`\\int_0`); badness keeps `\\int` a command and `_0` a separate SUBSCRIPT (badness is the more faithful surface reading). `\\` is a LINE_BREAK node vs texlab's generic command + optional arg."

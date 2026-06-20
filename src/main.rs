@@ -110,6 +110,11 @@ enum Command {
         /// Also apply fixes that may change typeset output (requires `--fix`).
         #[arg(long)]
         unsafe_fixes: bool,
+        /// Name the stdin buffer so its language is dispatched by extension
+        /// (`.bib` → BibTeX, anything else → LaTeX). No file is read or written;
+        /// only the extension is used. Ignored when paths are given.
+        #[arg(long, value_name = "PATH")]
+        stdin_filepath: Option<PathBuf>,
     },
     /// Parse LaTeX source and print its concrete syntax tree (CST).
     ///
@@ -151,7 +156,8 @@ fn main() -> ExitCode {
             paths,
             fix,
             unsafe_fixes,
-        } => run_lint(&paths, fix, unsafe_fixes),
+            stdin_filepath,
+        } => run_lint(&paths, fix, unsafe_fixes, stdin_filepath.as_deref()),
         Command::Parse { path } => run_parse(path.as_deref()),
         Command::Lsp => run_lsp(),
     }
@@ -176,7 +182,12 @@ const MAX_FIX_ITERATIONS: usize = 10;
 /// any diagnostics are reported or any file fails to read. With `fix`, safe
 /// autofixes (plus unsafe ones when `unsafe_fixes` is set) are applied in place
 /// first; the reporting pass below then shows whatever findings remain.
-fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
+fn run_lint(
+    paths: &[PathBuf],
+    fix: bool,
+    unsafe_fixes: bool,
+    stdin_filepath: Option<&Path>,
+) -> ExitCode {
     // Apply fixes in place first; the reporting pass below then re-reads from
     // disk and shows whatever findings remain. Mirrors arity's two-pass flow.
     // Stdin (no paths) has nowhere to write back, so `--fix` only acts on files.
@@ -190,7 +201,9 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
     // Hold each file's text (and which pipeline it feeds) in memory keyed by the
     // label we report it under, so the renderer can fetch source for snippets
     // without re-reading from disk (and so stdin, which has no path, still gets a
-    // source). Stdin has no extension to dispatch on, so it is treated as LaTeX.
+    // source). Stdin has no extension to dispatch on, so it is LaTeX unless
+    // `--stdin-filepath` names the buffer (`.bib` → BibTeX); the label stays
+    // `<stdin>` regardless, so the named path never reaches the report or disk.
     let mut sources: Vec<(PathBuf, String, FileKind)> = Vec::new();
     let mut failed = false;
 
@@ -200,7 +213,8 @@ fn run_lint(paths: &[PathBuf], fix: bool, unsafe_fixes: bool) -> ExitCode {
             eprintln!("badness: cannot read stdin: {err}");
             return ExitCode::FAILURE;
         }
-        sources.push((PathBuf::from("<stdin>"), input, FileKind::Tex));
+        let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
+        sources.push((PathBuf::from("<stdin>"), input, kind));
     } else {
         let files = match collect_lint_files(paths) {
             Ok(files) => files,

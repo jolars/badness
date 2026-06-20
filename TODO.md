@@ -210,6 +210,19 @@ built-in; consumed by the formatter's `\begin` arity glue).
   `unresolved_refs` remain *facts*; an `unused-label` lint (cross-file) is the
   natural follow-on but is deferred (it can false-positive on labels referenced
   from outside the analyzed set).
+- [ ] **LSP cross-file project assembly.** The editor path passes both
+  `resolution: None` and `citations: None` (`lsp.rs` `analyze_tex`), so every
+  cross-file rule — `undefined-ref`, cross-file `duplicate-label`, and now
+  `undefined-citation` — is inert in the editor while green on the CLI. Assemble
+  a salsa `Project` from open buffers + on-disk includes and feed `resolved_labels`
+  + a new `resolved_citations` so these fire live. Prereqs/companions: the
+  deferred salsa **`resolved_citations` / `file_cite_names`** queries (the bib
+  analog of `resolved_labels`/`file_labels`; currently only the pure
+  `ResolvedCitations::build` exists, used by the CLI), and tracking referenced
+  `.bib` files as salsa inputs (resolve `\bibliography`/`\addbibresource` to disk,
+  reuse `parsed_bib_document`/`bib_semantic_model`). Pairs with
+  `workspace/didChangeWatchedFiles` (LSP §Configuration) so edits to non-open
+  includes/`.bib`s reanalyze.
 - [x] Unbraced `\newcommand\foo…` form (parsed with `\foo` as a sibling;
   recovered by a scanner-side sibling heuristic in `semantic/define.rs`
   (`resolve_command_def`), no parser change).
@@ -316,9 +329,14 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   `\begin{…}`/`\end{…}` names (with an auto-`\end{…}` snippet on `\begin`), and
   file paths in `\includegraphics`/`\input`/`\include`/`\subfile`/`\import`/
   `\bibliography`/`\addbibresource`. (`src/completion.rs` + `src/lsp.rs`.)
-  - [ ] `\cite` key completion --- deferred: there is no citation/bibliography
-    model yet. Needs a `\bibitem` scan and/or `.bib` ingest (analog of the label
-    model) before cite keys can be offered.
+  - [ ] `\cite` key completion --- now unblocked: Phase 4c added the citation
+    model (`SemanticModel::citations`) and `.bib` key ingest
+    (`ResolvedCitations`). Remaining work is wiring it into `completion.rs`
+    (classify a `\cite`-family argument cursor, offer keys from the resolved
+    bibliography), which needs the LSP project assembly below so cross-file bib
+    keys are in scope (a lone-buffer fallback could offer only same-file
+    `\bibitem`/open-`.bib` keys). A `\bibitem` scan would add embedded
+    `thebibliography` keys.
   - [ ] CWL ingest to widen command/environment name coverage.
   - [ ] `completionItem/resolve` to attach signature/doc detail lazily (mirror
     arity's resolve path) --- `resolve_provider` is currently `false`.
@@ -518,6 +536,22 @@ signature DB with sectioning/arity/verbatim/prose, cross-file include graph).
   - **Deferred:** a salsa `resolved_citations`/`file_cite_names` query (no consumer until
     the LSP assembles a project — it passes `None` today); cross-file `@string` resolution
     for `undefined-string`.
+- [ ] **Phase 4 follow-ups (bib).**
+  - Cross-file `undefined-string`: a `@string` defined in one `.bib` and used in another
+    resolves only once a project-level `@string` union exists (today `undefined-string` is
+    single-file-sound, carrying the same caveat as `unused-string`).
+  - Bib-aware LSP completion (currently `.tex`-only): `@string` macro names in value
+    position, field names per entry type, and entry types after `@` — plus `\cite` key
+    completion on the `.tex` side (see LSP §IntelliSense).
+  - Bib document-symbol outline completeness: `src/bib/outline.rs` surfaces regular
+    entries only; consider `@string`/`@preamble`/`@comment` blocks (and a richer
+    `SymbolKind`/detail).
+  - `title-capitalization` refinement: the acronym heuristic flags mid-word capitals, so
+    CamelCase names in titles (`McDonald`, `DeForest`) are false positives — a curated
+    name-particle allowlist or a smarter word model would tighten it.
+  - Shared component-finder: `ResolvedCitations` duplicates the union-find + component
+    assignment from `ResolvedLabels` (marked EXTRACTION CANDIDATE in `project/citations.rs`);
+    factor one helper when a third consumer appears.
 
 --------------------------------------------------------------------------------
 

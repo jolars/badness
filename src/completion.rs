@@ -10,15 +10,16 @@
 //!
 //! Names are drawn from the signature DB (built-in [`builtin`] unioned with the
 //! per-document scanned definitions) and labels from the [`SemanticModel`].
-//! `\cite` keys are intentionally **not** completed: there is no
-//! citation/bibliography model yet (see `TODO.md`), so a `\cite{…}` cursor
-//! falls through to [`CompletionContext::None`].
+//! `\cite` keys classify to [`CompletionContext::CitationKey`], but — like
+//! [`CompletionContext::FilePath`] — their candidates come from the project
+//! bibliography (a cross-file snapshot query), so the LSP layer resolves them; the
+//! pure [`candidates`] here yields nothing for them.
 
 use rowan::{TextSize, TokenAtOffset};
 
 use crate::ast::command_name;
 use crate::semantic::SemanticModel;
-use crate::semantic::builder::ref_command;
+use crate::semantic::builder::{is_cite_command, ref_command};
 use crate::semantic::signature::{SignatureDb, builtin};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -31,6 +32,12 @@ pub enum CompletionContext {
     EnvironmentName { prefix: String, closing: bool },
     /// Inside the key group of a `\ref`-family command (`\ref`, `\cref`, …).
     LabelRef { prefix: String },
+    /// Inside the key group of a `\cite`-family command. Keys come from the project
+    /// bibliography (a cross-file snapshot query), so — like [`FilePath`] — this is
+    /// resolved in the LSP layer, not by [`candidates`].
+    ///
+    /// [`FilePath`]: CompletionContext::FilePath
+    CitationKey { prefix: String },
     /// Inside the path argument of a file-taking command (`\includegraphics`,
     /// `\input`, …). `prefix` is the partial path typed so far (may contain `/`).
     FilePath { prefix: String, kind: FileArgKind },
@@ -177,6 +184,14 @@ fn command_arg_context(
             prefix: prefix.to_string(),
         });
     }
+    if is_cite_command(name) && index == 0 {
+        // A `\cite{a,b|}` completes the key after the last comma, like `\cref`.
+        let inner = group_prefix(group, offset);
+        let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
+        return Some(CompletionContext::CitationKey {
+            prefix: prefix.to_string(),
+        });
+    }
     if let Some((kind, path_index)) = file_arg(name)
         && index == path_index
     {
@@ -264,7 +279,9 @@ pub fn candidates(
             environment_candidates(user_sigs, prefix, *closing)
         }
         CompletionContext::LabelRef { prefix } => label_candidates(model, prefix),
-        CompletionContext::FilePath { .. } | CompletionContext::None => Vec::new(),
+        CompletionContext::FilePath { .. }
+        | CompletionContext::CitationKey { .. }
+        | CompletionContext::None => Vec::new(),
     }
 }
 
@@ -547,9 +564,35 @@ mod tests {
     }
 
     #[test]
-    fn cite_is_not_completed() {
+    fn cite_is_classified_as_citation_key() {
         let src = "\\cite{key}\n";
-        assert_eq!(classify(src, at(src, "\\cite{ke")), CompletionContext::None);
+        assert_eq!(
+            classify(src, at(src, "\\cite{ke")),
+            CompletionContext::CitationKey {
+                prefix: "ke".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn citep_completes_key_after_last_comma() {
+        let src = "\\citep{a,b}\n";
+        assert_eq!(
+            classify(src, at(src, "\\citep{a,b")),
+            CompletionContext::CitationKey {
+                prefix: "b".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn citation_key_candidates_empty_from_pure() {
+        // Keys are resolved in the LSP layer (cross-file), so the pure path is empty.
+        let src = "\\cite{ke}\n";
+        let tree = root(src);
+        let ctx = classify_context(&tree, at(src, "\\cite{ke"));
+        let cands = candidates(&ctx, &SignatureDb::default(), &SemanticModel::build(&tree));
+        assert!(cands.is_empty());
     }
 
     #[test]

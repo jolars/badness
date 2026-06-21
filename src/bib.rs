@@ -12,6 +12,7 @@
 //! integration for `.bib` files come in later increments (see `TODO.md`).
 
 pub mod ast;
+pub mod completion;
 pub mod core;
 pub(crate) mod events;
 pub mod formatter;

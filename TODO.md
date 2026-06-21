@@ -372,9 +372,11 @@ infra --- `duplicate-key`, `missing-required-field`, `unknown-field`,
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
   single-file-sound, same caveat as `unused-string`).
-- [ ] Bib-aware LSP completion (currently `.tex`-only): `@string` macro names in
-  value position, field names per entry type, and entry types after `@` --- plus
-  `\cite` key completion on the `.tex` side (see LSP §IntelliSense).
+- [x] Bib-aware LSP completion: `@string` macro names in value position, field
+  names per entry type (type-scoped, hiding fields already present), and entry
+  types after `@` (`src/bib/completion.rs`); plus `\cite` key completion on the
+  `.tex` side, resolved cross-file via `ResolvedCitations` (`src/lsp.rs`
+  `cite_completion_items`).
 - [ ] Bib document-symbol outline completeness: `src/bib/outline.rs` surfaces
   regular entries only; consider `@string`/`@preamble`/`@comment` blocks (and a
   richer `SymbolKind`/detail).

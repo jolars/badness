@@ -20,6 +20,8 @@ pub mod signature;
 pub use entry::{Entry, StringDef, StringUse};
 pub use signature::{BibFieldDb, EntrySig, FieldCategory, FieldSig, RequiredField, builtin};
 
+pub(crate) use builder::MONTH_MACROS;
+
 use crate::bib::syntax::SyntaxNode;
 
 /// A file's regular entries, `@string` definitions, and `@string` uses.

@@ -17,7 +17,7 @@ use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 
 /// Month abbreviations BibTeX/biber predefine as `@string` macros. A bare use of one
 /// is always resolved, so whitelisting them avoids false "undefined string" findings.
-const MONTH_MACROS: [&str; 12] = [
+pub(crate) const MONTH_MACROS: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 ];
 

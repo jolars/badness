@@ -86,6 +86,9 @@ use salsa::Database as _;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
+use crate::bib::completion::{
+    BibCandidateKind, BibCompletionCandidate, bib_candidates, classify_bib_context,
+};
 use crate::bib::outline::{BibOutlineItem, outline as bib_outline};
 use crate::bib::semantic::Model as BibModel;
 use crate::bib::{
@@ -139,7 +142,12 @@ fn server_capabilities() -> ServerCapabilities {
             // `\` opens command/env names; `{` opens a name/key/path argument;
             // `/` re-triggers path segments. Snippet support is read off the
             // client's capabilities, so no extra server flag is needed.
-            trigger_characters: Some(vec!["\\".to_owned(), "{".to_owned(), "/".to_owned()]),
+            trigger_characters: Some(vec![
+                "\\".to_owned(),
+                "{".to_owned(),
+                "/".to_owned(),
+                "@".to_owned(),
+            ]),
             resolve_provider: Some(false),
             ..Default::default()
         }),
@@ -237,12 +245,11 @@ enum WorkerJob {
         kind: FileKind,
     },
     /// A completion request: classify the cursor and build candidates on the read
-    /// pool and reply to `id`. Carries the `uri` (not just the salsa-key `path`)
-    /// so file-path completion can derive the document's on-disk directory.
+    /// pool and reply to `id`. Carries the `uri` (the salsa-key path is derived from
+    /// it) so file-path completion can read the document's on-disk directory.
     Completion {
         id: RequestId,
         uri: Uri,
-        path: PathBuf,
         text: String,
         position: Position,
     },
@@ -564,7 +571,6 @@ fn on_completion(
 
     let uri = params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
-    let path = uri_to_path(&uri);
     let Some(doc) = state.documents.get(&uri) else {
         // Unknown document: nothing to complete.
         let _ = connection.sender.send(Message::Response(Response::new_ok(
@@ -573,18 +579,8 @@ fn on_completion(
         )));
         return;
     };
-    // Completion is LaTeX-only for now: there is no `.bib` completion model yet,
-    // so a `.bib` cursor yields nothing rather than LaTeX candidates.
-    if file_kind_for(&path) == FileKind::Bib {
-        let _ = connection.sender.send(Message::Response(Response::new_ok(
-            id,
-            serde_json::Value::Null,
-        )));
-        return;
-    }
     let _ = job_tx.send(WorkerJob::Completion {
         id,
-        path,
         uri,
         text: doc.text.clone(),
         position,
@@ -877,16 +873,18 @@ impl Worker {
             WorkerJob::Completion {
                 id,
                 uri,
-                path,
                 text,
                 position,
             } => {
                 // Completion reads run on the read pool against a snapshot, like
-                // formatting/symbols (id-bound responses, not coalesced).
+                // formatting/symbols (id-bound responses, not coalesced). Cite-key
+                // completion is cross-file, so — like go-to-def — we snapshot project
+                // membership here on the write side.
                 let snapshot = self.db.snapshot();
+                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_completion(&snapshot, id, &uri, &path, &text, position, &out_tx)
+                    run_completion(&snapshot, id, &uri, &text, position, members, &out_tx)
                 });
             }
             WorkerJob::GotoDefinition {
@@ -1338,13 +1336,15 @@ fn run_completion(
     snapshot: &Analysis,
     id: RequestId,
     uri: &Uri,
-    path: &Path,
     text: &str,
     position: Position,
+    members: Vec<ProjectMember>,
     out_tx: &Sender<Outbound>,
 ) {
-    let items = compute_completion(snapshot, uri, path, text, position);
-    // `is_incomplete`: command/label universes are prefix-filtered server-side, so
+    // The salsa-key path is derived from the URI (the same mapping `on_completion` uses).
+    let path = uri_to_path(uri);
+    let items = compute_completion(snapshot, uri, &path, text, position, members);
+    // `is_incomplete`: command/label/key universes are prefix-filtered server-side, so
     // the client re-queries as the typed prefix narrows (matches arity).
     let result = serde_json::to_value(CompletionResponse::List(CompletionList {
         is_incomplete: true,
@@ -1354,42 +1354,156 @@ fn run_completion(
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
-/// Compute completion items at `position`, preferring the snapshot's cached tree
-/// and queries, falling back to a direct reparse when unavailable or stale.
+/// Compute completion items at `position`. A `.bib` cursor goes through the bib
+/// classifier; a `.tex` cursor through the LaTeX one, preferring the snapshot's cached
+/// tree/queries and falling back to a direct reparse when unavailable or stale.
 fn compute_completion(
     snapshot: &Analysis,
     uri: &Uri,
     path: &Path,
     text: &str,
     position: Position,
+    members: Vec<ProjectMember>,
 ) -> Vec<CompletionItem> {
     let idx = LineIndex::new(text);
     let offset = idx.offset_at(text, position.line, position.character);
 
-    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
-            return None;
-        }
-        let root = snapshot.parsed_tree(file);
-        let ctx = crate::completion::classify_context(&root, offset);
-        Some(build_completion_items(
-            &ctx,
-            snapshot.document_signatures(file),
-            snapshot.semantic_model(file),
-            uri,
-        ))
-    }));
-    match cached {
-        Ok(Some(items)) => items,
-        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
-        Ok(None) | Err(_) => {
-            let root = SyntaxNode::new_root(parse(text).green);
+    if file_kind_for(path) == FileKind::Bib {
+        return compute_bib_completion(text, offset);
+    }
+    compute_tex_completion(snapshot, uri, path, text, offset, members)
+}
+
+/// Bib completion: a fresh parse + model (sub-ms, and there is no cached bib tree
+/// query) drives the bib classifier and candidate builder.
+fn compute_bib_completion(text: &str, offset: usize) -> Vec<CompletionItem> {
+    let root = bib_parse(text).syntax();
+    let ctx = classify_bib_context(&root, offset);
+    let model = BibModel::build(&root);
+    bib_candidates(&ctx, &model)
+        .into_iter()
+        .map(bib_candidate_to_item)
+        .collect()
+}
+
+/// The outcome of classifying a `.tex` cursor: either ready-to-send pure items, or a
+/// cite-key context whose candidates need the cross-file bibliography (resolved
+/// against the snapshot, like a file-path read).
+enum TexCompletion {
+    Items(Vec<CompletionItem>),
+    Cite { prefix: String, lint_path: PathBuf },
+}
+
+/// LaTeX completion, mirroring go-to-def's cached-or-reparse-then-resolve shape: the
+/// pure (command/env/label/file-path) contexts resolve immediately; a `\cite` context
+/// defers to [`cite_completion_items`] against the project bibliography.
+fn compute_tex_completion(
+    snapshot: &Analysis,
+    uri: &Uri,
+    path: &Path,
+    text: &str,
+    offset: usize,
+    members: Vec<ProjectMember>,
+) -> Vec<CompletionItem> {
+    // Classify off the cached tree when current; reparse on stale/miss. A cancelled
+    // read also falls back to a reparse (`unwrap_or_else`) — neither touches `members`.
+    let resolved = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        if let Some(file) = snapshot.lookup_file(path)
+            && snapshot.file_text(file) == text
+        {
+            let root = snapshot.parsed_tree(file);
             let ctx = crate::completion::classify_context(&root, offset);
+            return match ctx {
+                CompletionContext::CitationKey { prefix } => TexCompletion::Cite {
+                    prefix,
+                    lint_path: snapshot.file_path(file).to_path_buf(),
+                },
+                _ => TexCompletion::Items(build_completion_items(
+                    &ctx,
+                    snapshot.document_signatures(file),
+                    snapshot.semantic_model(file),
+                    uri,
+                )),
+            };
+        }
+        reparse_tex_completion(text, offset, uri, path)
+    }))
+    .unwrap_or_else(|_| reparse_tex_completion(text, offset, uri, path));
+
+    match resolved {
+        TexCompletion::Items(items) => items,
+        TexCompletion::Cite { prefix, lint_path } => {
+            // Cross-file resolve against the db snapshot; a racing write yields none.
+            salsa::Cancelled::catch(AssertUnwindSafe(|| {
+                let (_, citations) = snapshot.resolve_project(members);
+                cite_completion_items(snapshot, citations, &lint_path, &prefix)
+            }))
+            .unwrap_or_default()
+        }
+    }
+}
+
+/// Classify a `.tex` cursor off a fresh parse (the snapshot-free fallback). For a
+/// `\cite` context this still defers resolution to the snapshot, keying off `path`.
+fn reparse_tex_completion(text: &str, offset: usize, uri: &Uri, path: &Path) -> TexCompletion {
+    let root = SyntaxNode::new_root(parse(text).green);
+    let ctx = crate::completion::classify_context(&root, offset);
+    match ctx {
+        CompletionContext::CitationKey { prefix } => TexCompletion::Cite {
+            prefix,
+            lint_path: path.to_path_buf(),
+        },
+        _ => {
             let sigs = crate::semantic::scan_definitions(&root);
             let model = SemanticModel::build(&root);
-            build_completion_items(&ctx, &sigs, &model, uri)
+            TexCompletion::Items(build_completion_items(&ctx, &sigs, &model, uri))
         }
+    }
+}
+
+/// Cite-key candidates: every entry key in the citing file's bibliography namespace,
+/// prefix-filtered (case-insensitive, as BibTeX folds key case) and deduped. Mirrors
+/// [`resolve_citation_locations`] but collects all keys rather than matching a target.
+fn cite_completion_items(
+    snapshot: &Analysis,
+    citations: &ResolvedCitations,
+    lint_path: &Path,
+    prefix: &str,
+) -> Vec<CompletionItem> {
+    let prefix = prefix.to_lowercase();
+    let mut keys: Vec<SmolStr> = Vec::new();
+    for bib_path in citations.bib_definers(lint_path) {
+        let Some(file) = snapshot.lookup_file(bib_path) else {
+            continue;
+        };
+        for entry in snapshot.bib_semantic_model(file).entries() {
+            if entry.key.to_lowercase().starts_with(&prefix) {
+                keys.push(entry.key.clone());
+            }
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .map(|key| CompletionItem {
+            label: key.to_string(),
+            kind: Some(CompletionItemKind::REFERENCE),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Map a neutral [`BibCompletionCandidate`] onto an `lsp_types::CompletionItem`.
+fn bib_candidate_to_item(candidate: BibCompletionCandidate) -> CompletionItem {
+    let kind = match candidate.kind {
+        BibCandidateKind::EntryType => CompletionItemKind::STRUCT,
+        BibCandidateKind::FieldName => CompletionItemKind::FIELD,
+        BibCandidateKind::StringMacro => CompletionItemKind::CONSTANT,
+    };
+    CompletionItem {
+        label: candidate.label,
+        kind: Some(kind),
+        ..Default::default()
     }
 }
 

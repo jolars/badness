@@ -152,7 +152,14 @@ fn did_open(client: &Connection, uri: &Uri, version: i32, text: &str) {
 
 fn shutdown(client: &Connection, server_thread: std::thread::JoinHandle<()>) {
     send_request(client, 99, "shutdown", serde_json::Value::Null);
-    let resp = recv_response(client);
+    // Drain any in-flight notifications (e.g. a project re-lint racing the response).
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected the shutdown response, got {other:?}"),
+        }
+    };
     assert_eq!(resp.id, RequestId::from(99));
     send_notification(client, "exit", serde_json::Value::Null);
     server_thread.join().expect("server thread panicked");
@@ -882,6 +889,120 @@ fn lsp_lone_fragment_has_no_cross_file_diagnostics() {
         "a rootless fragment must not flag undefined-ref, got {:?}",
         diags.diagnostics
     );
+
+    shutdown(&client, server_thread);
+}
+
+/// Like [`complete`], but drains interleaved notifications (a freshly-opened `.bib`
+/// or a seeded project re-lints) before the response.
+fn complete_draining(
+    client: &Connection,
+    id: i32,
+    uri: &Uri,
+    position: Position,
+) -> Vec<CompletionItem> {
+    send_request(
+        client,
+        id,
+        "textDocument/completion",
+        serde_json::to_value(CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: None,
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    match serde_json::from_value::<CompletionResponse>(resp.result.unwrap()).unwrap() {
+        CompletionResponse::Array(items) => items,
+        CompletionResponse::List(list) => list.items,
+    }
+}
+
+#[test]
+fn lsp_bib_completion_entry_types() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///refs.bib".parse().unwrap();
+
+    // Cursor at the end of `@art` → entry-type candidates.
+    did_open(&client, &uri, 1, "@art\n");
+    let items = complete_draining(&client, 2, &uri, Position::new(0, 4));
+    let names = labels(&items);
+    assert!(names.contains(&"article"), "{names:?}");
+    let article = items.iter().find(|i| i.label == "article").unwrap();
+    assert_eq!(article.kind, Some(CompletionItemKind::STRUCT));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_bib_completion_field_names() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///fields.bib".parse().unwrap();
+
+    // Cursor at the end of `au` (a field-name position inside an `@article`).
+    did_open(&client, &uri, 1, "@article{k,\n  au\n}\n");
+    let items = complete_draining(&client, 2, &uri, Position::new(1, 4));
+    let names = labels(&items);
+    assert!(names.contains(&"author"), "{names:?}");
+    let author = items.iter().find(|i| i.label == "author").unwrap();
+    assert_eq!(author.kind, Some(CompletionItemKind::FIELD));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_bib_completion_string_macros() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///strings.bib".parse().unwrap();
+
+    // A `@string` def then a value position referencing it → macro candidates.
+    let doc = "@string{els = {Elsevier}}\n@article{k, publisher = e}\n";
+    did_open(&client, &uri, 1, doc);
+    let items = complete_draining(&client, 2, &uri, Position::new(1, 25));
+    let names = labels(&items);
+    assert!(names.contains(&"els"), "{names:?}");
+    let els = items.iter().find(|i| i.label == "els").unwrap();
+    assert_eq!(els.kind, Some(CompletionItemKind::CONSTANT));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_cite_completion_cross_file() {
+    // A real on-disk project: the root `\addbibresource`s a `.bib` defining the key.
+    // Only the root is opened; the server seeds the sibling and offers its keys.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{knuth1984, title={The TeXbook}}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\addbibresource{refs.bib}\n\\cite{kn}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+
+    // Cursor inside `\cite{kn|}` → the project's entry key, prefix-filtered.
+    let items = complete_draining(&client, 2, &uri, Position::new(1, 8));
+    let names = labels(&items);
+    assert!(names.contains(&"knuth1984"), "{names:?}");
+    let key = items.iter().find(|i| i.label == "knuth1984").unwrap();
+    assert_eq!(key.kind, Some(CompletionItemKind::REFERENCE));
 
     shutdown(&client, server_thread);
 }

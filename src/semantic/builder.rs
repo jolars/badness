@@ -75,7 +75,7 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
 /// plus `\nocite`). Capitalized biblatex variants (`\Cite`, `\Textcite`, …) and
 /// the `cite`-prefixed natbib set are covered by the prefix check; an explicit
 /// short list catches the rest. Keys are comma-separated for all of them.
-fn is_cite_command(name: &str) -> bool {
+pub(crate) fn is_cite_command(name: &str) -> bool {
     const EXTRA: &[&str] = &[
         "parencite",
         "Parencite",

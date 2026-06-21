@@ -55,6 +55,7 @@
 // `Hash`/`Eq` go through `as_str()`, so this is sound. Allow it module-wide.
 #![allow(clippy::mutable_key_type)]
 
+mod folding;
 mod task_pool;
 
 use std::collections::{HashMap, HashSet};
@@ -69,17 +70,19 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, DocumentSymbolRequest, Formatting, GotoDefinition, References, Request as _,
+    Completion, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, References,
+    Request as _,
 };
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
     CompletionResponse, Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location,
-    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ReferenceParams,
-    ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Uri,
+    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions,
+    GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location, NumberOrString,
+    OneOf, Position, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
+    SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextEdit, Uri,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -139,6 +142,7 @@ fn server_capabilities() -> ServerCapabilities {
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             // `\` opens command/env names; `{` opens a name/key/path argument;
             // `/` re-triggers path segments. Snippet support is read off the
@@ -240,6 +244,14 @@ enum WorkerJob {
     /// A document-symbol request: build the outline on the read pool and reply to
     /// `id`.
     Symbols {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        kind: FileKind,
+    },
+    /// A folding-range request: compute foldable regions on the read pool and reply
+    /// to `id`. Single-file like [`Symbols`](Self::Symbols), with no project snapshot.
+    FoldingRange {
         id: RequestId,
         path: PathBuf,
         text: String,
@@ -349,6 +361,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_goto_definition(&connection, &state, &job_tx, req)
                             }
                             References::METHOD => on_references(&connection, &state, &job_tx, req),
+                            FoldingRangeRequest::METHOD => {
+                                on_folding_range(&connection, &state, &job_tx, req)
+                            }
                             _ => respond_unhandled(&connection, req),
                         }
                     }
@@ -556,6 +571,47 @@ fn on_document_symbol(
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
     let _ = job_tx.send(WorkerJob::Symbols {
+        id,
+        path,
+        text: doc.text.clone(),
+        kind,
+    });
+}
+
+/// `textDocument/foldingRange`: build a folding job for the worker, or reply `null`
+/// when the document is unknown.
+fn on_folding_range(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<FoldingRangeParams>(FoldingRangeRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid foldingRange params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: no folds.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    let _ = job_tx.send(WorkerJob::FoldingRange {
         id,
         path,
         text: doc.text.clone(),
@@ -930,6 +986,19 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
                     .spawn(move || run_symbols(&snapshot, id, &path, &text, kind, &out_tx));
+            }
+            WorkerJob::FoldingRange {
+                id,
+                path,
+                text,
+                kind,
+            } => {
+                // Folding reads run on the read pool against a snapshot, like
+                // symbols (id-bound responses, not coalesced).
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || run_folding(&snapshot, id, &path, &text, kind, &out_tx));
             }
             WorkerJob::Completion {
                 id,
@@ -1356,6 +1425,55 @@ fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<Docu
         .iter()
         .map(|item| bib_to_document_symbol(item, &idx, text))
         .collect()
+}
+
+/// Compute folding ranges for a [`WorkerJob::FoldingRange`] on the read pool and
+/// reply with a `Vec<FoldingRange>`. Same snapshot fast-path / reparse fallback as
+/// [`run_symbols`].
+fn run_folding(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    out_tx: &Sender<Outbound>,
+) {
+    let ranges = compute_folding(snapshot, path, text, kind);
+    let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Compute LaTeX folding ranges for `text`, preferring the snapshot's cached tree and
+/// falling back to a direct reparse when it is unavailable or stale. `.bib` files have
+/// no LaTeX structure to fold (the LaTeX parser does not apply), so they yield none.
+fn compute_folding(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+) -> Vec<FoldingRange> {
+    if kind == FileKind::Bib {
+        return Vec::new();
+    }
+    let idx = LineIndex::new(text);
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        Some(folding::folding_ranges(
+            &snapshot.parsed_tree(file),
+            &idx,
+            text,
+        ))
+    }));
+    match cached {
+        Ok(Some(ranges)) => ranges,
+        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
+        Ok(None) | Err(_) => {
+            folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx, text)
+        }
+    }
 }
 
 /// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte

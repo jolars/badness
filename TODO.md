@@ -198,7 +198,7 @@ directly onto badness's existing semantic layer.
 
 ### Navigation & structure
 
-- [ ] Folding ranges (`textDocument/foldingRange`) --- environments, sectioning
+- [x] Folding ranges (`textDocument/foldingRange`) --- environments, sectioning
   spans, and long comment blocks.
 - [ ] Selection ranges (`textDocument/selectionRange`) --- expand-selection from
   the CST's node hierarchy (group → argument → command → environment).

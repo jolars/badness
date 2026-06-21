@@ -14,6 +14,7 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
     FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
     InitializeResult, InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf,
     PartialResultParams, Position, PublishDiagnosticsParams, Range, ReferenceContext,
@@ -131,6 +132,13 @@ fn start_server(
             Some(OneOf::Left(true))
         ),
         "server must advertise referencesProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.folding_range_provider,
+            Some(FoldingRangeProviderCapability::Simple(true))
+        ),
+        "server must advertise foldingRangeProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     send_notification(
@@ -302,6 +310,63 @@ fn lsp_document_symbol_outline() {
     assert_eq!(figure_kids[0].kind, SymbolKind::CONSTANT);
 
     assert_eq!(children[1].kind, SymbolKind::CLASS);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_folding_ranges() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///fold.tex".parse().unwrap();
+
+    // line 0: \section{Intro}
+    //      1-3: a comment block
+    //      4-6: a multi-line environment
+    let doc = "\\section{Intro}\n\
+        % a\n\
+        % b\n\
+        % c\n\
+        \\begin{itemize}\n\
+        \\item x\n\
+        \\end{itemize}\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    send_request(
+        &client,
+        2,
+        "textDocument/foldingRange",
+        serde_json::to_value(FoldingRangeParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let ranges: Vec<FoldingRange> =
+        serde_json::from_value(resp.result.unwrap()).expect("a foldingRange response");
+
+    let triples: Vec<(u32, u32, Option<FoldingRangeKind>)> = ranges
+        .iter()
+        .map(|r| (r.start_line, r.end_line, r.kind.clone()))
+        .collect();
+    // The section spans the whole document; the comment block folds 1..3; the
+    // itemize folds 4..6.
+    assert!(
+        triples.contains(&(0, 6, None)),
+        "section fold, got {triples:?}"
+    );
+    assert!(
+        triples.contains(&(1, 3, Some(FoldingRangeKind::Comment))),
+        "comment fold, got {triples:?}"
+    );
+    assert!(
+        triples.contains(&(4, 6, None)),
+        "itemize fold, got {triples:?}"
+    );
 
     shutdown(&client, server_thread);
 }

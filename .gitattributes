@@ -5,6 +5,8 @@
 # and losslessness/snapshot assertions match on every platform, including Windows.
 tests/fixtures/**/*.tex eol=lf
 tests/fixtures/**/*.bib eol=lf
+tests/fixtures/**/*.sty eol=lf
+tests/fixtures/**/*.cls eol=lf
 tests/corpus/** eol=lf
 
 # Snapshot files should always use LF

@@ -276,7 +276,9 @@ extraction stays a mechanical lift, not a merge.
 
 ## Repo conventions
 
-- Rust edition 2024; toolchain pinned in `devenv.nix` (currently 1.94.1).
+- Rust edition 2024; the toolchain is defined by `rust-toolchain.toml` (the
+  single source of truth, currently `stable`), which `devenv.nix` consumes via
+  `toolchainFile` and CI honors as the override.
 - A `wasm32-unknown-unknown` target is configured (web/playground is in scope).
 - `rustfmt` runs as a git hook; keep code rustfmt-clean. **Run `cargo fmt`
   before committing** — the hook rewrites unformatted files and aborts the

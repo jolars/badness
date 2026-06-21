@@ -1,9 +1,10 @@
 # Let Git auto-detect text files
 * text=auto
 
-# LaTeX fixtures and corpus must use LF so formatter output (always LF) and
-# losslessness/snapshot assertions match on every platform, including Windows.
+# LaTeX/BibTeX fixtures and corpus must use LF so formatter output (always LF)
+# and losslessness/snapshot assertions match on every platform, including Windows.
 tests/fixtures/**/*.tex eol=lf
+tests/fixtures/**/*.bib eol=lf
 tests/corpus/** eol=lf
 
 # Snapshot files should always use LF

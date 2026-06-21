@@ -141,6 +141,15 @@ mod tests {
     }
 
     #[test]
+    fn standard_biblatex_fields_on_article_are_fine() {
+        // Standard BibLaTeX fields absent from `article`'s optional list but valid
+        // everywhere (manual §2.2): they carry global metadata and must not flag.
+        let src = "@article{k, title = {T}, langid = {english}, \
+                   publisher = {P}, shortjournal = {SJ}, shorttitle = {ST}}\n";
+        assert!(findings(src).is_empty(), "got: {:?}", findings(src));
+    }
+
+    #[test]
     fn unknown_entry_type_is_skipped() {
         assert!(findings("@frobnicate{k, wat = {x}}\n").is_empty());
     }

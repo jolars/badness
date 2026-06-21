@@ -14,5 +14,5 @@ pub(crate) mod printer;
 pub mod style;
 
 pub use check::{CheckError, CheckResult, check_paths, check_paths_with_style};
-pub use core::{FormatError, format, format_node, format_with_style};
+pub use core::{FormatError, format, format_node, format_with_style, format_with_style_flavored};
 pub use style::{FormatStyle, WrapMode};

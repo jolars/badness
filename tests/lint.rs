@@ -330,6 +330,7 @@ fn independent_documents_do_not_cross_contaminate() {
 
 use badness::formatter::{FormatStyle, format_with_style};
 use badness::linter::{apply_fixes, check_document};
+use badness::parser::LatexFlavor;
 
 /// Apply every available fix (including unsafe) to `text` at a fixpoint, exactly
 /// as the CLI's `fix_file` does, and return the rewritten text.
@@ -337,7 +338,7 @@ fn fix_to_fixpoint(text: &str) -> String {
     let path = Path::new("doc.tex");
     let mut content = text.to_owned();
     for _ in 0..10 {
-        let fixes: Vec<_> = check_document(path, &content)
+        let fixes: Vec<_> = check_document(path, &content, LatexFlavor::Document)
             .into_iter()
             .filter_map(|d| d.fix)
             .collect();
@@ -381,7 +382,7 @@ fn dollar_display_fix_clears_the_finding() {
     // After the swap, re-linting the rewritten document is clean.
     let fixed = fix_to_fixpoint("$$a + b$$\n\n$$c$$\n");
     assert_eq!(fixed, "\\[a + b\\]\n\n\\[c\\]\n");
-    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed)
+    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed, LatexFlavor::Document)
         .into_iter()
         .filter(|d| d.rule == "dollar-display-math")
         .collect();

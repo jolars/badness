@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 use smol_str::SmolStr;
 
 use crate::ast::{command_name, environment_name};
-use crate::file_discovery::FileKind;
 use crate::incremental::{
     IncrementalDb, QueryKind, QueryLogEntry, file_is_document_root, file_labels,
 };
@@ -220,12 +219,12 @@ pub fn resolved_labels<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -
     });
 
     let graph = project_graph(db, project);
-    // Labels live in `.tex` files; `.bib` members carry none and are not part of
-    // the include-graph namespace.
+    // Labels live in LaTeX files (`.tex`/`.sty`/`.cls`); `.bib` members carry none
+    // and are not part of the include-graph namespace.
     let files: Vec<(PathBuf, Vec<SmolStr>, bool)> = project
         .members(db)
         .iter()
-        .filter(|member| member.kind == FileKind::Tex)
+        .filter(|member| member.kind.is_latex())
         .map(|member| {
             (
                 member.path.clone(),

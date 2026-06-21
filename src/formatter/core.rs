@@ -42,7 +42,7 @@
 use std::iter::Peekable;
 
 use crate::ast::{command_name, environment_name};
-use crate::parser::parse;
+use crate::parser::{LatexFlavor, parse_with_flavor};
 use crate::semantic::{ArgKind, ArgSpec, Signatures, scan_definitions};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -89,9 +89,25 @@ pub fn format(input: &str) -> Result<String, FormatError> {
 
 /// Format `input` under `style`. Returns [`FormatError`] if the input does not
 /// parse cleanly. Note: badness's [`crate::parser::Parse`] carries `errors` +
-/// `syntax()` (arity uses `diagnostics` + `cst`).
+/// `syntax()` (arity uses `diagnostics` + `cst`). Uses the
+/// [`Document`](LatexFlavor::Document) flavor; [`format_with_style_flavored`] is
+/// the entry for `.sty`/`.cls`.
 pub fn format_with_style(input: &str, style: FormatStyle) -> Result<String, FormatError> {
-    let parsed = parse(input);
+    format_with_style_flavored(input, style, LatexFlavor::Document)
+}
+
+/// Like [`format_with_style`] but parses `input` under an explicit
+/// [`LatexFlavor`], so a [`Package`](LatexFlavor::Package) flavor (`.sty`/`.cls`)
+/// lexes with `@` as a letter (the implicit `\makeatletter`). The wrap mode is a
+/// `style` concern, decided by the caller (`.sty`/`.cls` default to
+/// [`crate::formatter::WrapMode::Preserve`] via
+/// [`crate::file_discovery::FileKind::default_wrap`]).
+pub fn format_with_style_flavored(
+    input: &str,
+    style: FormatStyle,
+    flavor: LatexFlavor,
+) -> Result<String, FormatError> {
+    let parsed = parse_with_flavor(input, flavor);
     if !parsed.errors.is_empty() {
         return Err(FormatError::ParseErrors {
             count: parsed.errors.len(),

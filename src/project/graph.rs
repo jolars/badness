@@ -283,12 +283,12 @@ pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
         file: None,
     });
 
-    // Only `.tex` members are inclusion-graph nodes; `.bib` members carry no
-    // `\input` edges and feed the citation resolver instead.
+    // Only LaTeX members (`.tex`/`.sty`/`.cls`) are inclusion-graph nodes; `.bib`
+    // members carry no `\input` edges and feed the citation resolver instead.
     let facts: Vec<FileFacts> = project
         .members(db)
         .iter()
-        .filter(|member| member.kind == FileKind::Tex)
+        .filter(|member| member.kind.is_latex())
         .map(|member| FileFacts {
             path: member.path.clone(),
             include_edges: include_edges(db, member.file).clone(),

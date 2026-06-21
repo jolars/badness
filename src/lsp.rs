@@ -96,7 +96,7 @@ use crate::bib::{
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
 use crate::file_discovery::{FileKind, collect_lint_files, file_kind_or_tex};
-use crate::formatter::{FormatStyle, format_node, format_with_style};
+use crate::formatter::{FormatStyle, format_node, format_with_style_flavored};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
 use crate::parser::parse;
@@ -494,9 +494,12 @@ fn on_formatting(
         )));
         return;
     };
-    let style = resolve_style(&state.editor_settings, &params.options);
+    let mut style = resolve_style(&state.editor_settings, &params.options);
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
+    // `EditorSettings` carries no wrap mode yet (it is hardcoded `Reflow`), so the
+    // file kind decides it: a package/class body is code, defaulting to `Preserve`.
+    style.wrap = kind.default_wrap();
     let _ = job_tx.send(WorkerJob::Format {
         id,
         path,
@@ -1018,7 +1021,9 @@ impl Worker {
         });
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
-                FileKind::Tex => analyze_tex(&snapshot, &path, members),
+                FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+                    analyze_tex(&snapshot, &path, members)
+                }
                 FileKind::Bib => analyze_bib(&snapshot, &path),
             }));
             if let Ok(Some(diags)) = result {
@@ -1157,10 +1162,13 @@ fn compute_format(
             return None;
         }
         match kind {
-            FileKind::Tex => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
                 if !snapshot.parse_diagnostics(file).is_empty() {
                     return Some(None);
                 }
+                // The cached tree was already parsed with the file's flavor (the
+                // salsa `parsed_document` query flavors by path), so `format_node`
+                // needs no flavor here.
                 let root = snapshot.parsed_tree(file);
                 Some(format_node(&root, style).ok())
             }
@@ -1177,7 +1185,9 @@ fn compute_format(
     let formatted = match cached {
         Ok(Some(opt)) => opt,
         Ok(None) | Err(_) => match kind {
-            FileKind::Tex => format_with_style(text, style).ok(),
+            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+                format_with_style_flavored(text, style, kind.latex_flavor()).ok()
+            }
             FileKind::Bib => bib_format_with_style(text, style).ok(),
         },
     }?;
@@ -1212,7 +1222,7 @@ fn run_symbols(
     out_tx: &Sender<Outbound>,
 ) {
     let symbols = match kind {
-        FileKind::Tex => compute_symbols(snapshot, path, text),
+        FileKind::Tex | FileKind::Sty | FileKind::Cls => compute_symbols(snapshot, path, text),
         FileKind::Bib => compute_bib_symbols(snapshot, path, text),
     };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))

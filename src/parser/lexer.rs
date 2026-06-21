@@ -39,6 +39,29 @@ pub struct Token {
     pub text: SmolStr,
 }
 
+/// The LaTeX file flavor, fixing the lexer's *initial* catcode regime. A
+/// document (`.tex`) starts in the ordinary regime; a package or class
+/// (`.sty`/`.cls`) is loaded under an implicit `\makeatletter`, so `@` is a
+/// letter from the first byte (a static, extension-driven catcode fact —
+/// sanctioned exactly like the explicit `\makeatletter` mode, `AGENTS.md`
+/// decision #1). A trailing explicit `\makeatother` still applies.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum LatexFlavor {
+    /// A `.tex` document: ordinary catcodes at the start.
+    #[default]
+    Document,
+    /// A `.sty`/`.cls` package or class: `@` is a letter from the start.
+    Package,
+}
+
+impl LatexFlavor {
+    /// Whether the lexer should begin with `@` already a letter (the implicit
+    /// `\makeatletter` of a package/class load).
+    fn letter_mode_start(self) -> bool {
+        matches!(self, LatexFlavor::Package)
+    }
+}
+
 /// Per-parse lexer context carrying *user-defined* verbatim constructs — those a
 /// document declares with catcode manipulation (`\@makeother\$`, …), found by scanning
 /// definition bodies ([`crate::semantic::define`]). The lexer consults it (alongside
@@ -137,19 +160,21 @@ fn is_definition_keyword(text: &str) -> bool {
 
 /// Lex `input` into a flat, lossless token stream, consulting only the built-in
 /// signature DB for verbatim commands/environments. The entry used by the first
-/// parse pass; [`lex_with`] adds user-defined verbatim commands.
+/// parse pass; [`lex_with`] adds user-defined verbatim commands. Uses the
+/// [`Document`](LatexFlavor::Document) flavor (ordinary starting catcodes).
 pub fn lex(input: &str) -> Vec<Token> {
-    lex_with(input, &VerbCtx::default())
+    lex_with(input, &VerbCtx::default(), LatexFlavor::Document)
 }
 
 /// Lex `input` like [`lex`], additionally treating the user-defined verbatim
 /// commands in `ctx` as verbatim (their final argument captured as one `VERB`
 /// token). Used by the second parse pass once definition scanning has discovered
-/// catcode-othering commands.
-pub fn lex_with(input: &str, ctx: &VerbCtx) -> Vec<Token> {
+/// catcode-othering commands. `flavor` fixes the initial catcode regime: a
+/// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter.
+pub fn lex_with(input: &str, ctx: &VerbCtx, flavor: LatexFlavor) -> Vec<Token> {
     let mut out = Vec::new();
     let mut pos = 0;
-    let mut at_letter = false; // `\makeatletter` state
+    let mut at_letter = flavor.letter_mode_start(); // `\makeatletter` state
     // True when the previous meaningful token was `\left`/`\right`, so the next
     // delimiter must be isolated as a single token (it carries across whitespace,
     // which TeX skips before the delimiter).
@@ -737,6 +762,39 @@ mod tests {
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo@bar")));
         // …after \makeatother it splits into `\foo` + `@bar`.
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
+    }
+
+    #[test]
+    fn package_flavor_starts_in_letter_mode() {
+        // A `.sty`/`.cls` is loaded under an implicit `\makeatletter`, so `@` is a
+        // letter from the first byte — `\foo@bar` is one control word with no
+        // explicit `\makeatletter`.
+        let toks = lex_with(r"\foo@bar", &VerbCtx::default(), LatexFlavor::Package);
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert_eq!(seen, vec![(SyntaxKind::CONTROL_WORD, "\\foo@bar")]);
+    }
+
+    #[test]
+    fn package_flavor_respects_trailing_makeatother() {
+        // Letter-mode starts on, but an explicit `\makeatother` still turns it off.
+        let toks = lex_with(
+            r"\foo@bar\makeatother\foo@bar",
+            &VerbCtx::default(),
+            LatexFlavor::Package,
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo@bar")));
+        // After \makeatother the second occurrence splits into `\foo` + `@bar`.
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
+    }
+
+    #[test]
+    fn document_flavor_keeps_at_non_letter() {
+        // The default `.tex` flavor does not start in letter-mode.
+        let toks = lex(r"\foo@bar");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
+        assert!(!seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo@bar")));
     }
 
     #[test]

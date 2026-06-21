@@ -24,7 +24,8 @@ use smol_str::SmolStr;
 
 use crate::bib::semantic::Model as BibModel;
 use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
-use crate::parser::parse;
+use crate::file_discovery::file_kind_or_tex;
+use crate::parser::parse_with_flavor;
 use crate::project::citations::document_cite_names;
 use crate::project::labels::{document_label_names, is_document_root};
 use crate::project::{
@@ -134,7 +135,11 @@ pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocume
         file: Some(file),
     });
 
-    let parsed = parse(file.text(db).as_str());
+    // Parse with the flavor implied by the file's extension: a `.sty`/`.cls` is
+    // loaded under an implicit `\makeatletter` (`LatexFlavor::Package`), so `@` is
+    // a letter throughout. `file_kind_or_tex` reads only the path name.
+    let flavor = file_kind_or_tex(file.path(db)).latex_flavor();
+    let parsed = parse_with_flavor(file.text(db).as_str(), flavor);
     let diagnostics = parsed
         .errors
         .into_iter()

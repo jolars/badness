@@ -8,8 +8,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use badness::formatter::{FormatStyle, WrapMode, format, format_with_style};
-use badness::parser::{parse, reconstruct};
+use badness::formatter::{
+    FormatStyle, WrapMode, format, format_with_style, format_with_style_flavored,
+};
+use badness::parser::{LatexFlavor, parse, parse_with_flavor, reconstruct};
 
 /// Assert the formatter invariants for a single clean-parsing input. Inputs the
 /// parser rejects are out of scope for the formatter (it refuses them), so the
@@ -273,6 +275,61 @@ fn fixture_path(name: &str, file: &str) -> PathBuf {
         .join("tests/fixtures/formatter")
         .join(name)
         .join(file)
+}
+
+/// Package/class fixtures under `tests/fixtures/formatter/<name>/`, each an
+/// `input.<ext>` + `expected.<ext>` pair where `<ext>` is `sty` or `cls`. They are
+/// parsed and formatted under the [`LatexFlavor::Package`] flavor (`@` is a letter
+/// throughout, the implicit `\makeatletter`) and default to [`WrapMode::Preserve`]
+/// (package bodies are code, not prose), exactly as the CLI/LSP resolve a
+/// `.sty`/`.cls` file.
+const PACKAGE_FIXTURES: &[(&str, &str)] = &[
+    ("package_at_letter_command", "sty"),
+    ("class_provides_preserve", "cls"),
+];
+
+#[test]
+fn package_fixtures_match_expected() {
+    for &(name, ext) in PACKAGE_FIXTURES {
+        let style = FormatStyle {
+            wrap: WrapMode::Preserve,
+            ..FormatStyle::default()
+        };
+        let input = fs::read_to_string(fixture_path(name, &format!("input.{ext}")))
+            .unwrap_or_else(|e| panic!("read {name}/input.{ext}: {e}"));
+        let expected = fs::read_to_string(fixture_path(name, &format!("expected.{ext}")))
+            .unwrap_or_else(|e| panic!("read {name}/expected.{ext}: {e}"));
+
+        // Under the package flavor the input must parse cleanly (in particular, no
+        // spurious diagnostics from `@`-bearing control words mis-lexing).
+        assert!(
+            parse_with_flavor(&input, LatexFlavor::Package)
+                .errors
+                .is_empty(),
+            "fixture {name} input must parse cleanly under the package flavor"
+        );
+
+        let formatted = format_with_style_flavored(&input, style, LatexFlavor::Package)
+            .unwrap_or_else(|e| panic!("format {name}: {e}"));
+        assert_eq!(formatted, expected, "fixture {name} output mismatch");
+
+        // Idempotent (same flavor + style), clean, and lossless.
+        assert_eq!(
+            format_with_style_flavored(&formatted, style, LatexFlavor::Package).expect("reformat"),
+            formatted,
+            "fixture {name} is not idempotent"
+        );
+        let reparsed = parse_with_flavor(&formatted, LatexFlavor::Package);
+        assert!(
+            reparsed.errors.is_empty(),
+            "fixture {name} formatted output must parse cleanly"
+        );
+        assert_eq!(
+            reparsed.syntax().to_string(),
+            formatted,
+            "fixture {name} formatted output must round-trip losslessly"
+        );
+    }
 }
 
 #[test]

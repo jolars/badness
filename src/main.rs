@@ -14,13 +14,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use badness::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex};
-use badness::formatter::{FormatStyle, WrapMode, check_paths_with_style, format_with_style};
+use badness::formatter::{
+    FormatStyle, WrapMode, check_paths_with_style, format_with_style_flavored,
+};
 use badness::linter::{
     Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
 };
 use std::collections::HashMap;
 
-use badness::parser::parse;
+use badness::parser::{LatexFlavor, parse_with_flavor};
 use badness::project::labels::{document_label_names, is_document_root};
 use badness::project::{
     CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
@@ -147,10 +149,17 @@ fn main() -> ExitCode {
             if let Some(w) = indent_width {
                 style.indent_width = w;
             }
-            if let Some(w) = wrap {
-                style.wrap = w.into();
-            }
-            run_format(&paths, check, stdin_filepath.as_deref(), style)
+            // `--wrap` is a *global* override; without it each file falls back to
+            // its kind's default wrap (`.sty`/`.cls` → Preserve, `.tex` → Reflow),
+            // resolved per file at dispatch.
+            let wrap_override: Option<WrapMode> = wrap.map(Into::into);
+            run_format(
+                &paths,
+                check,
+                stdin_filepath.as_deref(),
+                style,
+                wrap_override,
+            )
         }
         Command::Lint {
             paths,
@@ -224,7 +233,9 @@ fn run_lint(
             }
         };
         if files.is_empty() {
-            eprintln!("badness: no .tex or .bib files found under the provided input paths");
+            eprintln!(
+                "badness: no .tex, .sty, .cls, or .bib files found under the provided input paths"
+            );
             return ExitCode::FAILURE;
         }
         for (path, kind) in files {
@@ -277,8 +288,8 @@ fn run_lint(
                 );
                 diagnostics.extend(badness::bib::linter::lint_document(path, &root, &model));
             }
-            FileKind::Tex => {
-                let parsed = parse(content);
+            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+                let parsed = parse_with_flavor(content, kind.latex_flavor());
                 diagnostics.extend(
                     parsed
                         .errors
@@ -392,7 +403,9 @@ fn fix_file(path: &Path, kind: FileKind, include_unsafe: bool) -> std::io::Resul
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
-            FileKind::Tex => check_document(path, &content),
+            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+                check_document(path, &content, kind.latex_flavor())
+            }
             FileKind::Bib => badness::bib::linter::check_document(path, &content),
         };
         let fixes: Vec<_> = diagnostics.into_iter().filter_map(|d| d.fix).collect();
@@ -437,7 +450,10 @@ fn run_parse(path: Option<&Path>) -> ExitCode {
         }
     };
 
-    let parsed = parse(&input);
+    let flavor = path.map_or(LatexFlavor::Document, |p| {
+        file_kind_or_tex(p).latex_flavor()
+    });
+    let parsed = parse_with_flavor(&input, flavor);
     let mut out = String::new();
     render_cst(&parsed.syntax(), 0, &mut out);
     if let Err(err) = std::io::stdout().write_all(out.as_bytes()) {
@@ -485,20 +501,21 @@ fn run_format(
     check: bool,
     stdin_filepath: Option<&Path>,
     style: FormatStyle,
+    wrap_override: Option<WrapMode>,
 ) -> ExitCode {
     if check {
-        return run_check(paths, style);
+        return run_check(paths, style, wrap_override);
     }
     if paths.is_empty() {
-        run_format_stdin(stdin_filepath, style)
+        run_format_stdin(stdin_filepath, style, wrap_override)
     } else {
-        run_format_paths(paths, style)
+        run_format_paths(paths, style, wrap_override)
     }
 }
 
 /// `--check`: report unformatted files, exit code 1 if any.
-fn run_check(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
-    match check_paths_with_style(paths, style) {
+fn run_check(paths: &[PathBuf], style: FormatStyle, wrap_override: Option<WrapMode>) -> ExitCode {
+    match check_paths_with_style(paths, style, wrap_override) {
         Ok(result) => {
             if result.changed_files.is_empty() {
                 ExitCode::SUCCESS
@@ -524,15 +541,23 @@ fn run_check(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
 /// No paths: read stdin, format, write to stdout. The pipeline is chosen from
 /// `stdin_filepath`'s extension (`.bib` → BibTeX, else LaTeX); with no name given,
 /// stdin stays LaTeX, the long-standing conservative default.
-fn run_format_stdin(stdin_filepath: Option<&Path>, style: FormatStyle) -> ExitCode {
+fn run_format_stdin(
+    stdin_filepath: Option<&Path>,
+    mut style: FormatStyle,
+    wrap_override: Option<WrapMode>,
+) -> ExitCode {
     let mut input = String::new();
     if let Err(err) = std::io::stdin().read_to_string(&mut input) {
         eprintln!("badness: cannot read stdin: {err}");
         return ExitCode::FAILURE;
     }
     let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
+    style.wrap = wrap_override.unwrap_or(kind.default_wrap());
     let formatted = match kind {
-        FileKind::Tex => format_with_style(&input, style).map_err(|e| e.to_string()),
+        FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+            format_with_style_flavored(&input, style, kind.latex_flavor())
+                .map_err(|e| e.to_string())
+        }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
     };
     match formatted {
@@ -561,7 +586,7 @@ fn report_discovery_error(err: &FileDiscoveryError) {
         }
         FileDiscoveryError::UnsupportedLintFilePath { path } => {
             eprintln!(
-                "badness: input file {} is not a .tex or .bib file",
+                "badness: input file {} is not a .tex, .sty, .cls, or .bib file",
                 path.display()
             );
         }
@@ -577,7 +602,11 @@ fn report_discovery_error(err: &FileDiscoveryError) {
 /// Resolve the input paths to `.tex`/`.bib` files and format each in place,
 /// writing only files whose content changes. Each file is routed to its own
 /// formatter by [`FileKind`].
-fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
+fn run_format_paths(
+    paths: &[PathBuf],
+    mut style: FormatStyle,
+    wrap_override: Option<WrapMode>,
+) -> ExitCode {
     let files = match collect_lint_files(paths) {
         Ok(files) => files,
         Err(err) => {
@@ -586,7 +615,9 @@ fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
         }
     };
     if files.is_empty() {
-        eprintln!("badness: no .tex or .bib files found under the provided input paths");
+        eprintln!(
+            "badness: no .tex, .sty, .cls, or .bib files found under the provided input paths"
+        );
         return ExitCode::FAILURE;
     }
 
@@ -600,8 +631,12 @@ fn run_format_paths(paths: &[PathBuf], style: FormatStyle) -> ExitCode {
                 continue;
             }
         };
+        style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
-            FileKind::Tex => format_with_style(&content, style).map_err(|e| e.to_string()),
+            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+                format_with_style_flavored(&content, style, kind.latex_flavor())
+                    .map_err(|e| e.to_string())
+            }
             FileKind::Bib => {
                 badness::bib::format_with_style(&content, style).map_err(|e| e.to_string())
             }

@@ -1,0 +1,14 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{demo}[2026/06/21 v1.0 demo package]
+
+
+
+\newcommand\demo@internal{internal}
+\def\demo@wrap#1{(#1)}
+
+\newcommand{\demo}[1]{%
+  \demo@wrap{\demo@internal: #1}%
+}
+
+\makeatother
+\newcommand\after@other{plain}

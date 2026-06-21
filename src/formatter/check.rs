@@ -10,7 +10,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{FormatError, FormatStyle, format_with_style};
+use super::{FormatError, FormatStyle, WrapMode, format_with_style_flavored};
 use crate::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,13 +56,13 @@ impl fmt::Display for CheckError {
             Self::NoFiles => {
                 write!(
                     f,
-                    "no .tex or .bib files found under the provided input paths"
+                    "no .tex, .sty, .cls, or .bib files found under the provided input paths"
                 )
             }
             Self::UnsupportedFilePath { path } => {
                 write!(
                     f,
-                    "input file {} is not a .tex or .bib file",
+                    "input file {} is not a .tex, .sty, .cls, or .bib file",
                     path.display()
                 )
             }
@@ -97,12 +97,16 @@ impl From<FileDiscoveryError> for CheckError {
 }
 
 pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
-    check_paths_with_style(paths, FormatStyle::default())
+    check_paths_with_style(paths, FormatStyle::default(), None)
 }
 
+/// Check `paths` under `style`. `wrap_override` is the global `--wrap` value: when
+/// `None`, each file uses its kind's default wrap ([`FileKind::default_wrap`], so
+/// `.sty`/`.cls` default to `Preserve`), resolved per file below.
 pub fn check_paths_with_style(
     paths: &[PathBuf],
-    style: FormatStyle,
+    mut style: FormatStyle,
+    wrap_override: Option<WrapMode>,
 ) -> Result<CheckResult, CheckError> {
     if paths.is_empty() {
         return Err(CheckError::MissingPaths);
@@ -122,11 +126,14 @@ pub fn check_paths_with_style(
             source: err.to_string(),
         })?;
 
+        style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
-            FileKind::Tex => {
-                format_with_style(&content, style).map_err(|err| CheckError::FormatError {
-                    path: path.clone(),
-                    source: err,
+            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
+                format_with_style_flavored(&content, style, kind.latex_flavor()).map_err(|err| {
+                    CheckError::FormatError {
+                        path: path.clone(),
+                        source: err,
+                    }
                 })?
             }
             FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {

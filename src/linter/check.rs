@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use crate::parser::parse;
+use crate::parser::{LatexFlavor, parse_with_flavor};
 use crate::project::{ResolvedCitations, ResolvedLabels};
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxKind, SyntaxNode};
@@ -18,9 +18,11 @@ use super::suppression::SuppressionMap;
 /// [`lint_document`] for callers that hold only text — notably the `lint --fix`
 /// fixpoint loop, which re-parses after each round. Cross-file rules run with no
 /// project view (`resolution: None`); none of them produce fixes, so the fix
-/// path loses nothing. Mirrors arity's `check_document`.
-pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
-    let parsed = parse(text);
+/// path loses nothing. Mirrors arity's `check_document`. `flavor` fixes the
+/// lexer's initial catcode regime so a `.sty`/`.cls` parses under the implicit
+/// `\makeatletter` ([`LatexFlavor::Package`]).
+pub fn check_document(path: &Path, text: &str, flavor: LatexFlavor) -> Vec<Diagnostic> {
+    let parsed = parse_with_flavor(text, flavor);
     let mut diagnostics: Vec<Diagnostic> = parsed
         .errors
         .iter()

@@ -265,14 +265,17 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Parsing
 
-- [ ] **File-kind detection.** Extend `FileKind` (today `.tex`/`.bib`) to
-  `.sty`/`.cls`/`.dtx`/`.ins`, threaded through file discovery, the CLI, and
-  the LSP the way the `.bib` kind already is.
-- [ ] **`@`-as-letter for `.sty`/`.cls`.** The package loader does
-  `\makeatletter` implicitly, so `@` is a letter throughout these files. Start
-  the lexer in letter-mode for these kinds (a static, extension-driven catcode
-  fact --- sanctioned exactly like the explicit `\makeatletter` mode, decision
-  #1); a trailing `\makeatother` still applies.
+- [x] **File-kind detection (`.sty`/`.cls`).** `FileKind` gained `Sty`/`Cls`,
+  threaded through file discovery, the CLI, and the LSP the way the `.bib` kind
+  already is (`FileKind::is_latex`/`latex_flavor`/`default_wrap` route them
+  through the LaTeX pipeline). `.dtx`/`.ins` kinds remain (deferred with the
+  docstrip work below).
+- [x] **`@`-as-letter for `.sty`/`.cls`.** The package loader does
+  `\makeatletter` implicitly, so `@` is a letter throughout these files. The
+  lexer starts in letter-mode for these kinds via the `LatexFlavor::Package`
+  flavor (a static, extension-driven catcode fact --- sanctioned exactly like
+  the explicit `\makeatletter` mode, decision #1); a trailing `\makeatother`
+  still applies.
 - [ ] **expl3 (LaTeX3) syntax mode.** `\ExplSyntaxOn` … `\ExplSyntaxOff`
   reassign catcodes statically: `_` and `:` become *letters* (so
   `\seq_new:N`, `\tl_set:Nn`, `\__module_internal:nn` lex as single control
@@ -303,12 +306,15 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Formatting
 
-- [ ] **`.sty`/`.cls` as code, not prose.** Default `WrapMode::Preserve` (a
-  package body is code, not running text), with group/argument indentation and
-  the existing macro-definition lowering. Respect letter-mode and the expl3
-  mode (inside `\ExplSyntaxOn` whitespace is non-semantic, so the formatter has
-  more freedom there but `~` is a literal space and must be preserved); keep
-  `\ProvidesPackage`/option-processing boilerplate ordering intact.
+- [x] **`.sty`/`.cls` as code, not prose.** `FileKind::default_wrap` makes
+  `.sty`/`.cls` default to `WrapMode::Preserve` (a package body is code, not
+  running text) when no `--wrap` is given, with the existing group/argument
+  indentation and macro-definition lowering (definition bodies stay as
+  authored). `\ProvidesPackage`/option-processing boilerplate ordering is
+  preserved for free under `Preserve` (it never reorders). Letter-mode is
+  respected via the `Package` flavor. The expl3-mode freedom (whitespace
+  non-semantic inside `\ExplSyntaxOn`, `~` a literal space) is deferred with the
+  expl3 lexer mode above.
 - [ ] **`.dtx` two-layer formatting.** Preserve the docstrip margins and `%<…>`
   guards byte-for-byte (protected); format the documentation prose layer and
   the `macrocode` code layer independently; never disturb the leading-`%`

@@ -11,5 +11,5 @@ pub(crate) mod grammar;
 pub mod lexer;
 pub(crate) mod tree_builder;
 
-pub use core::{Parse, SyntaxError, parse, reconstruct};
-pub use lexer::{Token, lex};
+pub use core::{Parse, SyntaxError, parse, parse_with_flavor, reconstruct};
+pub use lexer::{LatexFlavor, Token, lex};

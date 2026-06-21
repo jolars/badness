@@ -27,7 +27,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.94.1
+          toolchain: stable
 
       - name: Publish to crates.io
         env:

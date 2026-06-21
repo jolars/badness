@@ -10,4 +10,5 @@ extend-exclude = [
   "PARSE_COMPAT.md",
   "BIB_PARSE_COMPAT.md",
   "npm/platform-template/README.md",
+  "docs/parse-compat-triage.md",
 ]

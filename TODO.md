@@ -315,9 +315,14 @@ scope (the same boundary the include graph and CWL ingest keep).
     lines pair through the ordinary environment grammar; the body lexes as real
     code under the package regime (`@` a letter), a stray `%` line inside is a
     code comment, and a missing terminator recovers losslessly.
-  - [ ] **M2 guards.** `%<*tag>` / `%</tag>` / inline `%<tag>` as a `GUARD`
+  - [x] **M2 guards.** `%<*tag>` / `%</tag>` / inline `%<tag>` as a `GUARD`
     token (flat floating leaf — *no* `GUARD_BLOCK` node; guard nesting is
-    orthogonal to LaTeX nesting). Currently guard lines lex as plain comments.
+    orthogonal to LaTeX nesting). A line-leading `%<…>` (through the closing
+    `>`) lexes as a `GUARD` trivia leaf in *any* layer (`macrocode` bodies
+    included — docstrip processes guards line-by-line); an inline guard's
+    trailing code lexes normally, a malformed `%<` (no `>` before EOL) falls
+    back to a comment. `GUARD` floats like `DOC_MARGIN` through every
+    `grammar.rs` trivia scanner.
   - [ ] **M3 doc/ltxdoc semantic signatures.** `\DocInput`,
     `\DescribeMacro`/`\DescribeEnv`, `\StopEventually`, `macro`/`environment`
     envs; classify `macrocode`/`macrocode*` as code-not-prose. Pure

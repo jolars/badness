@@ -3,7 +3,9 @@
 //! M1a establishes the documentation-margin model — a line-leading `%` becomes a
 //! `DOC_MARGIN` trivia token so the doc layer parses as ordinary LaTeX — and lets
 //! `macrocode` pair through the existing environment grammar with its body lexed
-//! as real code. Every case also re-checks losslessness.
+//! as real code. M2 adds docstrip guards: a line-leading `%<…>` becomes a `GUARD`
+//! trivia leaf (flat, never a block node) in any layer. Every case also re-checks
+//! losslessness.
 
 use badness::parser::{LatexFlavor, LexConfig, parse_with_flavor};
 use badness::syntax::{SyntaxKind, SyntaxNode};
@@ -68,16 +70,55 @@ fn line_leading_percent_is_a_margin_mid_line_percent_is_a_comment() {
 }
 
 #[test]
-fn a_guard_line_stays_a_comment_for_now() {
-    // M1a leaves `%<…>` docstrip guards as ordinary comments (guards land in M2):
-    // the line-leading `%<` is *not* treated as a margin.
+fn block_guards_are_guard_tokens_wrapping_ordinary_code() {
+    // `%<*tag>` / `%</tag>` block delimiters lex as `GUARD` tokens (not margins, not
+    // comments); the enclosed un-margined driver code parses as ordinary LaTeX.
     let root = parse_dtx("%<*driver>\n\\documentclass{article}\n%</driver>\n");
     let toks = tokens(&root);
     assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 0);
-    assert!(toks.contains(&(SyntaxKind::COMMENT, "%<*driver>".to_string())));
-    assert!(toks.contains(&(SyntaxKind::COMMENT, "%</driver>".to_string())));
-    // The un-margined driver code parses as ordinary LaTeX.
+    assert_eq!(count_token(&root, SyntaxKind::GUARD), 2);
+    assert!(toks.contains(&(SyntaxKind::GUARD, "%<*driver>".to_string())));
+    assert!(toks.contains(&(SyntaxKind::GUARD, "%</driver>".to_string())));
+    // No `%<…>` line was mistaken for a comment.
+    assert!(!toks.iter().any(|(k, _)| *k == SyntaxKind::COMMENT));
     assert!(count(&root, SyntaxKind::COMMAND) >= 1);
+}
+
+#[test]
+fn an_inline_guard_prefixes_parsed_code() {
+    // `%<tag>code` is a `GUARD` prefix; the code after the closing `>` lexes as
+    // ordinary LaTeX (it is not swallowed into the guard token).
+    let root = parse_dtx("%<plain>\\RequirePackage{xcolor}\n");
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::GUARD, "%<plain>".to_string())));
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\RequirePackage".to_string())));
+    assert!(toks.contains(&(SyntaxKind::WORD, "xcolor".to_string())));
+    assert_eq!(count(&root, SyntaxKind::COMMAND), 1);
+}
+
+#[test]
+fn guards_punctuate_macrocode_bodies() {
+    // Guards are recognized in any layer, `macrocode` body included; a plain `%`
+    // comment line inside the body still lexes as a code comment, not a guard.
+    let input =
+        "%    \\begin{macrocode}\n%<*foo>\n\\def\\x{y}\n% note\n%</foo>\n%    \\end{macrocode}\n";
+    let root = parse_dtx(input);
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::GUARD, "%<*foo>".to_string())));
+    assert!(toks.contains(&(SyntaxKind::GUARD, "%</foo>".to_string())));
+    // The `\def` parses as code under the package regime.
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\def".to_string())));
+    // The non-guard `%` line stays a code comment.
+    assert!(toks.contains(&(SyntaxKind::COMMENT, "% note".to_string())));
+}
+
+#[test]
+fn a_malformed_guard_falls_back_to_a_comment() {
+    // A `%<` with no closing `>` before the line ends is not a guard.
+    let root = parse_dtx("%<unterminated\nword\n");
+    let toks = tokens(&root);
+    assert_eq!(count_token(&root, SyntaxKind::GUARD), 0);
+    assert!(toks.contains(&(SyntaxKind::COMMENT, "%<unterminated".to_string())));
 }
 
 #[test]

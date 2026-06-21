@@ -33,6 +33,7 @@ pub enum SyntaxKind {
     VERB,           // `\verb|…|` / `\verb*|…|` inline verbatim (a single token)
     VERBATIM_BODY,  // the raw body of a verbatim-like environment (a single token)
     DOC_MARGIN,     // a `.dtx` documentation line's leading `%` margin (trivia)
+    GUARD,          // a `.dtx` docstrip guard `%<…>` (`%<*t>`/`%</t>`/inline) (trivia)
     ERROR,          // lexer fallback; the lexer is total, so this is unused today
 
     // --- Nodes (composites, produced by the Phase 1 parser) ---

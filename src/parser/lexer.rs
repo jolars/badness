@@ -66,7 +66,8 @@ impl LatexFlavor {
 /// catcode regime (a `.sty`/`.cls` starts under an implicit `\makeatletter`),
 /// while [`dtx`](Self::dtx) is an orthogonal axis: when set, the lexer runs the
 /// bounded line-oriented docstrip mode for a `.dtx` file — line-leading `%`
-/// margins become [`DOC_MARGIN`](SyntaxKind::DOC_MARGIN) trivia and `macrocode`
+/// margins become [`DOC_MARGIN`](SyntaxKind::DOC_MARGIN) trivia, line-leading
+/// `%<…>` guards become [`GUARD`](SyntaxKind::GUARD) trivia, and `macrocode`
 /// bodies lex as ordinary code (`AGENTS.md` decision #1). The two axes are
 /// independent because a `.dtx`'s catcode regime varies *by layer* (its
 /// documentation is `Document`-flavored, its `macrocode` `Package`-flavored), so
@@ -254,8 +255,34 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             continue;
         }
 
+        // `.dtx` docstrip guard: a line-leading `%<…>` is a docstrip guard
+        // expression (`%<*tag>`/`%</tag>` block delimiters or an inline `%<tag>`
+        // prefix), not a comment. Emit the `%<…>` (through the closing `>`) as a
+        // single `GUARD` trivia leaf; code after an inline guard's `>` lexes
+        // normally. Guards nest on the docstrip axis, orthogonal to LaTeX nesting,
+        // so this is a flat floating leaf (no block node), like a margin. Recognized
+        // at line start only (column-0 rule) but in *any* layer — guards punctuate
+        // `macrocode` bodies too — so it is not gated on `in_macrocode`. A `%<` with
+        // no closing `>` before the line ends is not a guard; it falls through to an
+        // ordinary comment. Trivia, so `pending_delim`/`pending_def` carry across.
+        if config.dtx
+            && at_line_start
+            && rest.starts_with("%<")
+            && let Some(rel) = rest[2..].find(['>', '\n', '\r'])
+            && rest.as_bytes()[2 + rel] == b'>'
+        {
+            let len = 2 + rel + 1;
+            out.push(Token {
+                kind: SyntaxKind::GUARD,
+                text: SmolStr::new(&rest[..len]),
+            });
+            pos += len;
+            at_line_start = false;
+            continue;
+        }
+
         // `.dtx` documentation margin: a line-leading `%` (but not a `%<…>` guard,
-        // which stays an ordinary comment until M2) is a documentation line's
+        // which lexes as a `GUARD` above) is a documentation line's
         // comment *margin*, not a comment. Emit it as a `DOC_MARGIN` trivia token —
         // one byte, never the following space — so the rest of the line lexes (and
         // parses) as ordinary LaTeX and the margin floats like whitespace. Only the
@@ -986,18 +1013,56 @@ mod tests {
     }
 
     #[test]
-    fn dtx_mode_is_off_by_default_and_for_guards() {
-        // Without the docstrip flag a `%` line stays a comment (plain `.tex`)…
+    fn dtx_mode_is_off_by_default_for_margins_and_guards() {
+        // Without the docstrip flag a `%` line stays a comment (plain `.tex`); a
+        // `%<…>` guard likewise stays a single comment.
         let plain = lex("% \\foo\n");
         assert_eq!(plain[0].kind, SyntaxKind::COMMENT);
-        // …and even in dtx mode a `%<…>` guard line is left as a comment (M2 work).
+        let plain_guard = lex("%<*driver>\n");
+        assert_eq!(plain_guard[0].kind, SyntaxKind::COMMENT);
+        assert_eq!(plain_guard[0].text, "%<*driver>");
+    }
+
+    #[test]
+    fn dtx_mode_lexes_line_leading_guards() {
         let dtx = LexConfig {
             flavor: LatexFlavor::Document,
             dtx: true,
         };
-        let guard = lex_with("%<*driver>\n", &VerbCtx::default(), dtx);
-        assert_eq!(guard[0].kind, SyntaxKind::COMMENT);
-        assert_eq!(guard[0].text, "%<*driver>");
+        // `%<*tag>` / `%</tag>` block delimiters are single `GUARD` tokens.
+        let block = lex_with("%<*driver>\n%</driver>\n", &VerbCtx::default(), dtx);
+        assert_eq!(block[0].kind, SyntaxKind::GUARD);
+        assert_eq!(block[0].text, "%<*driver>");
+        assert!(
+            block
+                .iter()
+                .any(|t| t.kind == SyntaxKind::GUARD && t.text == "%</driver>")
+        );
+        // An inline `%<tag>` is a `GUARD` prefix; the rest of the line lexes as code.
+        let inline = lex_with("%<plain>\\RequirePackage{x}\n", &VerbCtx::default(), dtx);
+        assert_eq!(inline[0].kind, SyntaxKind::GUARD);
+        assert_eq!(inline[0].text, "%<plain>");
+        assert!(
+            inline
+                .iter()
+                .any(|t| t.kind == SyntaxKind::CONTROL_WORD && t.text == "\\RequirePackage")
+        );
+        // A boolean tag expression stays one token (through the closing `>`).
+        let expr = lex_with("%<*package|driver>\n", &VerbCtx::default(), dtx);
+        assert_eq!(expr[0].kind, SyntaxKind::GUARD);
+        assert_eq!(expr[0].text, "%<*package|driver>");
+        // A guard recognized only at column 0: a mid-line `%<…>` stays a comment.
+        let midline = lex_with("a %<x>\n", &VerbCtx::default(), dtx);
+        assert!(
+            midline
+                .iter()
+                .any(|t| t.kind == SyntaxKind::COMMENT && t.text == "%<x>")
+        );
+        assert!(!midline.iter().any(|t| t.kind == SyntaxKind::GUARD));
+        // A `%<` with no closing `>` before the line ends is not a guard.
+        let malformed = lex_with("%<unterminated\n", &VerbCtx::default(), dtx);
+        assert_eq!(malformed[0].kind, SyntaxKind::COMMENT);
+        assert_eq!(malformed[0].text, "%<unterminated");
     }
 
     #[test]

@@ -79,6 +79,10 @@ fn roundtrip_dtx_units() {
         "%    \\begin{macrocode}\n\\foo\n\\bar\n",
         // Inline docstrip guard prefixing a code line.
         "%<*pkg>\n\\RequirePackage{xcolor}\n%</pkg>\n",
+        // A guard block with CRLF line endings (the `>` terminates before `\r`).
+        "%<*driver>\r\n\\documentclass{ltxdoc}\r\n%</driver>\r\n",
+        // A guard with a boolean tag expression.
+        "%<*package|driver>\n\\foo\n%</package|driver>\n",
     ];
     for case in cases {
         assert_lossless_dtx(case);

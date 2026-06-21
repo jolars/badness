@@ -1,7 +1,119 @@
 {
-  "_comment": "Built-in BibTeX/BibLaTeX entry- and field-signature DB. Source of truth for bib::semantic::signature. Entry `required` elements are a field name or an array of alternatives ('one of'). Field `category` is one of name|date|verbatim|literal (default literal for unlisted fields). Curated and growable, like data/signatures.json — not exhaustive. Names are matched case-insensitively. Required/optional lean on the biblatex manual (§2.1.1), with classic-BibTeX types added.",
+  "_comment": "Built-in BibTeX/BibLaTeX entry- and field-signature DB. Source of truth for bib::semantic::signature. Entry/field coverage is derived from BibLaTeX's canonical data model (blx-dm.def, v3.21 / TeX Live 2025): every entry type, every input field, the per-type field lists, and the mandatory-field constraints are taken verbatim from the \\DeclareDatamodel* declarations. Classic-BibTeX entry-type aliases (conference, mastersthesis, phdthesis, techreport) and input-field aliases (address, annote, archiveprefix, journal, key, school, primaryclass, pdf, year, month) are added on top. Entry `required` elements are a field name or an array of alternatives ('one of', from \\constraintfieldsor/xor). Field `category` is one of name|date|verbatim|literal (mapped from the data model datatype: name→name, date→date, verbatim/uri→verbatim, else→literal; default literal for unlisted fields). Names are matched case-insensitively.",
 
   "entries": {
+    "artwork": {
+      "required": [],
+      "optional": []
+    },
+    "audio": {
+      "required": [],
+      "optional": []
+    },
+    "bibnote": {
+      "required": [],
+      "optional": ["note"]
+    },
+    "commentary": {
+      "required": [],
+      "optional": []
+    },
+    "customa": {
+      "required": [],
+      "optional": []
+    },
+    "customb": {
+      "required": [],
+      "optional": []
+    },
+    "customc": {
+      "required": [],
+      "optional": []
+    },
+    "customd": {
+      "required": [],
+      "optional": []
+    },
+    "custome": {
+      "required": [],
+      "optional": []
+    },
+    "customf": {
+      "required": [],
+      "optional": []
+    },
+    "inreference": {
+      "required": [["date", "year"], "author", "editor", "title", "booktitle"],
+      "optional": ["addendum", "afterword", "annotator", "booksubtitle", "booktitleaddon", "chapter", "commentator", "edition", "editora", "editorb", "editorc", "editortype", "editoratype", "editorbtype", "editorctype", "eid", "foreword", "introduction", "isbn", "language", "location", "mainsubtitle", "maintitle", "maintitleaddon", "note", "number", "origlanguage", "pages", "part", "publisher", "pubstate", "series", "subtitle", "titleaddon", "translator", "volume", "volumes"]
+    },
+    "image": {
+      "required": [],
+      "optional": []
+    },
+    "jurisdiction": {
+      "required": [],
+      "optional": []
+    },
+    "legal": {
+      "required": [],
+      "optional": []
+    },
+    "legislation": {
+      "required": [],
+      "optional": []
+    },
+    "letter": {
+      "required": [],
+      "optional": []
+    },
+    "movie": {
+      "required": [],
+      "optional": []
+    },
+    "music": {
+      "required": [],
+      "optional": []
+    },
+    "mvreference": {
+      "required": ["editor", "title"],
+      "optional": ["addendum", "afterword", "annotator", "author", "commentator", "edition", "editora", "editorb", "editorc", "editortype", "editoratype", "editorbtype", "editorctype", "foreword", "introduction", "isbn", "language", "location", "note", "number", "origlanguage", "publisher", "pubstate", "subtitle", "titleaddon", "translator", "volume", "volumes"]
+    },
+    "performance": {
+      "required": [],
+      "optional": []
+    },
+    "reference": {
+      "required": [["date", "year"], "editor", "title"],
+      "optional": ["addendum", "afterword", "annotator", "chapter", "commentator", "edition", "editora", "editorb", "editorc", "editortype", "editoratype", "editorbtype", "editorctype", "eid", "foreword", "introduction", "isbn", "language", "location", "mainsubtitle", "maintitle", "maintitleaddon", "note", "number", "origlanguage", "pages", "pagetotal", "part", "publisher", "pubstate", "series", "subtitle", "titleaddon", "translator", "volume", "volumes"]
+    },
+    "review": {
+      "required": [],
+      "optional": []
+    },
+    "software": {
+      "required": ["title"],
+      "optional": ["addendum", "author", "editor", "editortype", "howpublished", "language", "location", "note", "organization", "pubstate", "subtitle", "titleaddon", "type", "version"]
+    },
+    "standard": {
+      "required": [],
+      "optional": []
+    },
+    "suppbook": {
+      "required": [["date", "year"], "author", "title", "booktitle"],
+      "optional": ["addendum", "afterword", "annotator", "bookauthor", "booksubtitle", "booktitleaddon", "chapter", "commentator", "edition", "editor", "editora", "editorb", "editorc", "editortype", "editoratype", "editorbtype", "editorctype", "eid", "foreword", "introduction", "isbn", "language", "location", "mainsubtitle", "maintitle", "maintitleaddon", "note", "number", "origlanguage", "part", "publisher", "pages", "pubstate", "series", "subtitle", "titleaddon", "translator", "volume", "volumes"]
+    },
+    "suppcollection": {
+      "required": [["date", "year"], "author", "editor", "title", "booktitle"],
+      "optional": ["addendum", "afterword", "annotator", "booksubtitle", "booktitleaddon", "chapter", "commentator", "edition", "editora", "editorb", "editorc", "editortype", "editoratype", "editorbtype", "editorctype", "eid", "foreword", "introduction", "isbn", "language", "location", "mainsubtitle", "maintitle", "maintitleaddon", "note", "number", "origlanguage", "pages", "part", "publisher", "pubstate", "series", "subtitle", "titleaddon", "translator", "volume", "volumes"]
+    },
+    "suppperiodical": {
+      "required": [["date", "year"]],
+      "optional": []
+    },
+    "video": {
+      "required": [],
+      "optional": []
+    },
     "article": {
       "required": ["author", "title", "journaltitle", ["date", "year"]],
       "optional": ["journal", "translator", "volume", "number", "pages", "issue", "month", "issn", "doi", "url", "note"]
@@ -132,11 +244,55 @@
     "sortname": { "category": "name" },
 
     "date": { "category": "date" },
-    "year": { "category": "date" },
-    "month": { "category": "date" },
-    "urldate": { "category": "date" },
     "eventdate": { "category": "date" },
     "origdate": { "category": "date" },
+    "urldate": { "category": "date" },
+    "year": { "category": "date" },
+    "month": { "category": "date" },
+    "day": { "category": "date" },
+    "hour": { "category": "date" },
+    "minute": { "category": "date" },
+    "second": { "category": "date" },
+    "timezone": { "category": "date" },
+    "yeardivision": { "category": "date" },
+    "endyear": { "category": "date" },
+    "endmonth": { "category": "date" },
+    "endday": { "category": "date" },
+    "endhour": { "category": "date" },
+    "endminute": { "category": "date" },
+    "endsecond": { "category": "date" },
+    "endtimezone": { "category": "date" },
+    "endyeardivision": { "category": "date" },
+    "origyear": { "category": "date" },
+    "origmonth": { "category": "date" },
+    "origday": { "category": "date" },
+    "orighour": { "category": "date" },
+    "origminute": { "category": "date" },
+    "origsecond": { "category": "date" },
+    "origtimezone": { "category": "date" },
+    "origyeardivision": { "category": "date" },
+    "origendyear": { "category": "date" },
+    "origendmonth": { "category": "date" },
+    "origendday": { "category": "date" },
+    "origendhour": { "category": "date" },
+    "origendminute": { "category": "date" },
+    "origendsecond": { "category": "date" },
+    "origendtimezone": { "category": "date" },
+    "origendyeardivision": { "category": "date" },
+    "urlyear": { "category": "date" },
+    "urlmonth": { "category": "date" },
+    "urlday": { "category": "date" },
+    "urlhour": { "category": "date" },
+    "urlminute": { "category": "date" },
+    "urlsecond": { "category": "date" },
+    "urltimezone": { "category": "date" },
+    "urlendyear": { "category": "date" },
+    "urlendmonth": { "category": "date" },
+    "urlendday": { "category": "date" },
+    "urlendhour": { "category": "date" },
+    "urlendminute": { "category": "date" },
+    "urlendsecond": { "category": "date" },
+    "urlendtimezone": { "category": "date" },
 
     "url": { "category": "verbatim" },
     "doi": { "category": "verbatim" },

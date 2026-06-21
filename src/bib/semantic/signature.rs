@@ -213,6 +213,52 @@ mod tests {
     }
 
     #[test]
+    fn covers_the_full_biblatex_data_model() {
+        // Entry types and fields are taken verbatim from blx-dm.def. Spot-check
+        // types and fields that the original hand-curated table lacked.
+        let db = builtin();
+        for ty in [
+            "software",
+            "reference",
+            "dataset",
+            "online",
+            "suppperiodical",
+        ] {
+            assert!(db.entry(ty).is_some(), "missing entry type `{ty}`");
+        }
+        // `software` requires `title` (data model mandatory constraint).
+        assert!(
+            db.entry("software")
+                .unwrap()
+                .required
+                .contains(&RequiredField::One(SmolStr::new("title")))
+        );
+        // Standard fields absent from the original table, now globally known.
+        for f in [
+            "langid",
+            "shortjournal",
+            "shorttitle",
+            "pubstate",
+            "urlyear",
+        ] {
+            assert!(db.field(f).is_some(), "missing field `{f}`");
+        }
+        assert_eq!(db.category("urlyear"), FieldCategory::Date);
+        assert_eq!(db.category("shortauthor"), FieldCategory::Name);
+    }
+
+    #[test]
+    fn new_data_model_types_use_oneof_date_constraints() {
+        // A type added from the data model carries the `date`-or-`year` alternation
+        // from its `\constraintfieldsxor`.
+        let suppbook = builtin().entry("suppbook").expect("suppbook entry");
+        assert!(suppbook.required.iter().any(|r| matches!(
+            r,
+            RequiredField::OneOf(alts) if alts.iter().any(|a| a == "date")
+        )));
+    }
+
+    #[test]
     fn article_required_fields() {
         let article = builtin().entry("article").expect("article entry");
         assert!(

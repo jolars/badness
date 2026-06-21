@@ -322,6 +322,34 @@ fn verbatim_command_skips_leading_args() {
 }
 
 #[test]
+fn user_defined_verbatim_command_argument_is_opaque() {
+    // A document that *defines* a catcode-othering command (`\@makeother\$`) makes
+    // its call-site argument verbatim via the second parse pass. `\shellcmd` is not a
+    // built-in verbatim command, so the VERB capture proves the definition scan, not
+    // the built-in DB, did the work: `$`/`_` inside `{a_$b$}` stay literal.
+    let out = tree("\\newcommand\\shellcmd[1]{\\@makeother\\$#1}\n\\shellcmd{a_$b$}\n");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(
+        !out.contains("DOLLAR@") && !out.contains("INLINE_MATH@"),
+        "{out}"
+    );
+    assert!(
+        out.contains("VERB@") && out.contains(r#""{a_$b$}""#),
+        "{out}"
+    );
+}
+
+#[test]
+fn undefined_command_argument_is_not_verbatim() {
+    // The fast path: with no catcode-othering definition, the same call site stays
+    // ordinary — a single parse pass, and `$b$` lexes as inline math. Guards against
+    // the two-pass ever firing (and changing tokenization) when it should not.
+    let out = tree("\\shellcmd{a_$b$}\n");
+    assert!(out.contains("INLINE_MATH@"), "{out}");
+    assert!(!out.contains(r#""{a_$b$}""#), "{out}");
+}
+
+#[test]
 fn standalone_verb_after_command_is_not_captured() {
     // A self-contained `\verb…` token (text begins with `\`) following another
     // command must stay a sibling — it is no one's argument. Only a verbatim

@@ -243,16 +243,20 @@ built-in; consumed by the formatter's `\begin` arity glue).
   `attach_arguments`, like any greedy argument — decision #8), not a stranded
   sibling; a standalone `\verb…` token is guarded out by its `\` prefix. The
   next bullet generalizes this to arbitrary user macros.
-- [ ] Detect verbatim-argument commands by **scanning their definitions**
-  (extends the existing `semantic/define.rs` scanner). When a `\newcommand`/
-  `\def` body reassigns a special char's catcode to "other" before grabbing
-  an undelimited argument (`\@makeother\$`, `\catcode`\``\$=12`,
-  `\dospecials` loops, …) — possibly via a chained helper macro (jss's
-  `\code` defers its `#1` to `\@codex`) — mark that command's argument
-  verbatim. Heuristic and **conservative by construction**: a wrong verbatim
-  flag *suppresses* real diagnostics inside the body (the worse failure), so
-  prefer false negatives. Reasoning about catcode execution sits at the
-  boundary of AGENTS.md decision #1 — record the decision there if pursued.
+- [x] Detect verbatim-argument commands by **scanning their definitions**
+  (extends the existing `semantic/define.rs` scanner). A `\newcommand`/xparse
+  body whose surface text reassigns a special char's catcode to "other"
+  (`\@makeother\$`, `\catcode`\``\$=12`, `\dospecials`, `\@sanitize`) — directly
+  or via a chained helper macro it calls (followed across the scanned definition
+  set, cycle-guarded) — flags that command's final argument verbatim. Conservative
+  (prefers false negatives; a `\def` helper breaks a chain). Consumed by a bounded
+  **two-pass parse** in `parser::core` so the flag actually protects call sites
+  (`pending_def` in the lexer shields the command's own definition site). Decision
+  recorded in AGENTS.md decision #1. Follow-ups, still open:
+  - [ ] `\def`-defined verbatim commands (needs parameter-text scanning) and
+    `\def`-helper chains (a `\def` helper currently breaks chain resolution).
+  - [ ] Verbatim *environments* defined with catcode setup in their begin-code
+    (needs the `VerbCtx` threaded into `grammar.rs`'s `is_verbatim_environment`).
 - [ ] Salsa `document_signatures` query once an LSP consumer (hover/completion)
   wants the scanned command sigs.
 - [ ] CWL corpus ingest (an import format converted *into* the signature schema)

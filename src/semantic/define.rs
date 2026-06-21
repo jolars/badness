@@ -25,11 +25,14 @@
 //! meaning-free (decision #2). Environment names are brace-delimited *text*, never a
 //! bare control word, so they have no unbraced form to recover.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::ast::{command_name, group_command_name, group_inner_source, nth_group, nth_group_text};
 use crate::semantic::signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb};
 use crate::semantic::xparse;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 use rowan::NodeOrToken;
+use smol_str::SmolStr;
 
 /// Scan `root` for user command/environment definitions and return their extracted
 /// signatures. Names already defined earlier in the document are overwritten, so a
@@ -37,6 +40,10 @@ use rowan::NodeOrToken;
 /// we do not track.
 pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
     let mut db = SignatureDb::default();
+    // Replacement-body facts collected alongside each command signature, keyed by
+    // name (last definition wins, mirroring `db`). Consumed after the walk to flag
+    // catcode-othering verbatim-argument commands (`apply_verbatim_flags`).
+    let mut bodies: HashMap<SmolStr, DefBody> = HashMap::new();
 
     for command in root
         .descendants()
@@ -46,15 +53,113 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
             continue;
         };
         match DefKind::of(&name) {
-            Some(DefKind::Command) => scan_newcommand(&command, &mut db),
+            Some(DefKind::Command) => scan_newcommand(&command, &mut db, &mut bodies),
             Some(DefKind::Environment) => scan_newenvironment(&command, &mut db),
-            Some(DefKind::XparseCommand) => scan_xparse_command(&command, &mut db),
+            Some(DefKind::XparseCommand) => scan_xparse_command(&command, &mut db, &mut bodies),
             Some(DefKind::XparseEnvironment) => scan_xparse_environment(&command, &mut db),
             None => {}
         }
     }
 
+    apply_verbatim_flags(&mut db, &bodies);
     db
+}
+
+/// Replacement-body facts for one scanned command definition, used to detect
+/// verbatim-argument commands without executing anything. We read only *static*
+/// surface text of the body — no macro expansion (AGENTS.md decision #1).
+struct DefBody {
+    /// A catcode-othering signal appears directly in this command's own body
+    /// (`\@makeother`, `\catcode…12`, `\dospecials`, …) — see [`catcode_signal`].
+    signal: bool,
+    /// Control words the body invokes, so chained helpers can be followed to find a
+    /// catcode signal one or more hops away (jss's `\code`→helper idiom).
+    called: Vec<SmolStr>,
+}
+
+/// Flag user commands whose argument is verbatim. A command is verbatim when it
+/// **takes at least one argument** (so it grabs the user's `{…}` itself) **and** a
+/// catcode-othering signal is reachable from its body — present directly, or in the
+/// body of a scanned macro it transitively calls. Conservative by construction
+/// (AGENTS.md): a wrong flag *suppresses* real diagnostics inside the body, so we
+/// flag only on a clear catcode signal and otherwise leave the body ordinary.
+///
+/// On a match we adopt the built-in convention: only the *leading* (non-verbatim)
+/// arguments stay in `args`; the final argument becomes the implicit verbatim one, so
+/// we drop the last `ArgSpec` and set `verbatim = true`. This keeps the lexer's
+/// `lex_verbatim_command` path uniform between built-in and user commands.
+fn apply_verbatim_flags(db: &mut SignatureDb, bodies: &HashMap<SmolStr, DefBody>) {
+    let verbatim: Vec<SmolStr> = bodies
+        .keys()
+        .filter(|name| {
+            // Needs an argument of its own to capture, and a reachable signal.
+            db.command(name).is_some_and(|sig| !sig.args.is_empty())
+                && reaches_signal(name, bodies, &mut HashSet::new())
+        })
+        .cloned()
+        .collect();
+
+    for name in verbatim {
+        if let Some(mut sig) = db.command(&name).cloned() {
+            sig.args.pop(); // the final argument is the implicit verbatim one
+            sig.verbatim = true;
+            db.insert_command(name, sig);
+        }
+    }
+}
+
+/// Whether a catcode-othering signal is reachable from `name`'s body, following
+/// chained helper macros within the scanned definition set. A `visited` set breaks
+/// definition cycles (mutually recursive helpers terminate). A helper defined via
+/// `\def` (not scanned) is absent from `bodies`, so the chain breaks there and we do
+/// not flag — the conservative false-negative.
+fn reaches_signal(
+    name: &str,
+    bodies: &HashMap<SmolStr, DefBody>,
+    visited: &mut HashSet<SmolStr>,
+) -> bool {
+    if !visited.insert(SmolStr::new(name)) {
+        return false;
+    }
+    let Some(body) = bodies.get(name) else {
+        return false;
+    };
+    body.signal
+        || body
+            .called
+            .iter()
+            .any(|callee| reaches_signal(callee, bodies, visited))
+}
+
+/// Whether `body` text reassigns a special char's catcode to "other" — the static
+/// fingerprint of a verbatim-argument command's setup. Strict, to avoid false
+/// positives (which would silence real diagnostics): each pattern is verbatim-setup
+/// specific. We match surface text only; no catcode arithmetic is evaluated.
+fn catcode_signal(body: &str) -> bool {
+    body.contains("\\@makeother")
+        || body.contains("\\@sanitize")
+        || body.contains("\\dospecials")
+        // `\catcode`<char>`=12` others a char; the literal `12` is the "other"
+        // category. Require both tokens so an unrelated `\catcode…=11` does not match.
+        || (body.contains("\\catcode") && body.contains("12"))
+}
+
+/// The control-word names (leading `\` stripped) the body invokes, for chained-helper
+/// resolution. `@` is treated as a name char so `\@makeother`/`\@codex`-style helpers
+/// are captured; control symbols (`\$`, `\\`) yield no name and are skipped. Reads
+/// surface text only.
+fn called_macros(body: &str) -> Vec<SmolStr> {
+    body.match_indices('\\')
+        .filter_map(|(pos, _)| {
+            let after = &body[pos + 1..];
+            let len: usize = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic() || *c == '@')
+                .map(char::len_utf8)
+                .sum();
+            (len > 0).then(|| SmolStr::new(&after[..len]))
+        })
+        .collect()
 }
 
 /// Which definition family a control word names, if any.
@@ -90,11 +195,22 @@ impl DefKind {
 /// second optional `[default]` makes the first argument optional `[…]` while the
 /// rest are mandatory `{…}` — LaTeX2e's `\newcommand` shape. The unbraced
 /// `\newcommand\name[n]…` form is recovered the same way via [`resolve_command_def`].
-fn scan_newcommand(command: &SyntaxNode, db: &mut SignatureDb) {
+fn scan_newcommand(
+    command: &SyntaxNode,
+    db: &mut SignatureDb,
+    bodies: &mut HashMap<SmolStr, DefBody>,
+) {
     let Some(def) = resolve_command_def(command) else {
         return;
     };
     let (arity, first_optional) = newcommand_arity(&def.host);
+    // The replacement body is the group right after the name: index `first_arg_group`
+    // on the host (group 1 for the braced form, group 0 for the unbraced sibling).
+    record_body(
+        bodies,
+        &def.name,
+        nth_group(&def.host, def.first_arg_group).as_ref(),
+    );
     db.insert_command(
         def.name,
         CommandSig {
@@ -103,6 +219,19 @@ fn scan_newcommand(command: &SyntaxNode, db: &mut SignatureDb) {
             verbatim: false,
             rule: false,
             inline: false,
+        },
+    );
+}
+
+/// Record the catcode/called-macro facts of a command definition's replacement
+/// `body` group (absent or unresolvable body → no signal, no calls).
+fn record_body(bodies: &mut HashMap<SmolStr, DefBody>, name: &str, body: Option<&SyntaxNode>) {
+    let text = body.map(group_inner_source).unwrap_or_default();
+    bodies.insert(
+        SmolStr::new(name),
+        DefBody {
+            signal: catcode_signal(&text),
+            called: called_macros(&text),
         },
     );
 }
@@ -127,13 +256,23 @@ fn scan_newenvironment(command: &SyntaxNode, db: &mut SignatureDb) {
 /// xparse spec. The unbraced `\NewDocumentCommand\name{spec}…` form is recovered the
 /// same way via [`resolve_command_def`]; `first_arg_group` indexes the spec group on
 /// whichever node hosts the arguments.
-fn scan_xparse_command(command: &SyntaxNode, db: &mut SignatureDb) {
+fn scan_xparse_command(
+    command: &SyntaxNode,
+    db: &mut SignatureDb,
+    bodies: &mut HashMap<SmolStr, DefBody>,
+) {
     let Some(def) = resolve_command_def(command) else {
         return;
     };
     let Some(spec) = nth_group(&def.host, def.first_arg_group) else {
         return;
     };
+    // The body follows the spec group, so it sits one index further along.
+    record_body(
+        bodies,
+        &def.name,
+        nth_group(&def.host, def.first_arg_group + 1).as_ref(),
+    );
     db.insert_command(
         def.name,
         CommandSig {
@@ -462,5 +601,89 @@ mod tests {
     fn commented_definition_ignored() {
         let db = db_of("% \\newcommand{\\foo}[1]{x}\n");
         assert!(db.command("foo").is_none());
+    }
+
+    #[test]
+    fn verbatim_makeother_flagged() {
+        // `\@makeother\$` in the body others `$`, so the argument is verbatim. The
+        // single argument becomes the implicit verbatim one, leaving no leading args.
+        let db = db_of("\\newcommand\\shellcmd[1]{\\@makeother\\$#1}\n");
+        let sig = db.command("shellcmd").expect("shellcmd defined");
+        assert!(sig.verbatim);
+        assert!(sig.args.is_empty());
+    }
+
+    #[test]
+    fn verbatim_catcode_flagged() {
+        // A `\catcode … 12` ("other") assignment is the same signal.
+        let db = db_of("\\newcommand\\shellcmd[1]{\\catcode 36=12 #1}\n");
+        assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
+    }
+
+    #[test]
+    fn verbatim_dospecials_flagged() {
+        // The classic verbatim setup loop.
+        let db = db_of("\\newcommand\\shellcmd[1]{\\let\\do\\@makeother\\dospecials #1}\n");
+        assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
+    }
+
+    #[test]
+    fn verbatim_keeps_leading_args() {
+        // Only the *final* argument is verbatim: a two-arg command keeps its first
+        // (leading) slot and drops the last as the implicit verbatim argument.
+        let db = db_of("\\newcommand\\mycode[2]{\\@makeother\\$#1#2}\n");
+        let sig = db.command("mycode").expect("mycode defined");
+        assert!(sig.verbatim);
+        assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace]);
+    }
+
+    #[test]
+    fn verbatim_via_chained_helper() {
+        // The catcode signal lives in a helper the command calls, not in its own
+        // body; the chain is followed across scanned definitions.
+        let db =
+            db_of("\\newcommand\\setup{\\@makeother\\$}\\newcommand\\shellcmd[1]{\\setup#1}\n");
+        assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
+        // The arity-0 helper itself takes no argument, so it is never flagged.
+        assert!(!db.command("setup").expect("setup defined").verbatim);
+    }
+
+    #[test]
+    fn verbatim_chain_cycle_terminates() {
+        // Mutually recursive helpers with no signal must terminate (visited guard)
+        // and flag neither command.
+        let db = db_of("\\newcommand\\a[1]{\\b#1}\\newcommand\\b[1]{\\a#1}\n");
+        assert!(!db.command("a").expect("a defined").verbatim);
+        assert!(!db.command("b").expect("b defined").verbatim);
+    }
+
+    #[test]
+    fn ordinary_command_not_verbatim() {
+        let db = db_of("\\newcommand\\foo[1]{\\emph{#1}}\n");
+        assert!(!db.command("foo").expect("foo defined").verbatim);
+    }
+
+    #[test]
+    fn verbatim_needs_an_argument() {
+        // An arity-0 command grabs no `{…}` of its own, so a catcode signal in its
+        // body does not make it a verbatim-*argument* command.
+        let db = db_of("\\newcommand\\setup{\\@makeother\\$}\n");
+        assert!(!db.command("setup").expect("setup defined").verbatim);
+    }
+
+    #[test]
+    fn def_helper_chain_not_followed() {
+        // The helper is defined with `\def` (out of scanning scope), so the chain
+        // breaks and we conservatively do not flag — a tolerated false negative.
+        let db = db_of("\\def\\setup{\\@makeother\\$}\\newcommand\\shellcmd[1]{\\setup#1}\n");
+        assert!(!db.command("shellcmd").expect("shellcmd defined").verbatim);
+    }
+
+    #[test]
+    fn verbatim_xparse_flagged() {
+        let db = db_of("\\NewDocumentCommand\\shellcmd{m}{\\@makeother\\$#1}\n");
+        let sig = db.command("shellcmd").expect("shellcmd defined");
+        assert!(sig.verbatim);
+        assert!(sig.args.is_empty());
     }
 }

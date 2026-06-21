@@ -88,8 +88,32 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
    static argument-shape data, no macro meaning resolved. A curated set of
    well-known *class*-defined commands is allowed as built-ins (e.g. jss's `\code`,
    whose `\@makeother\$` makes `$` literal — a runtime catcode fact we cannot
-   derive, so we record it as data); arbitrary user-defined verbatim commands stay
-   out of scope until definition-scanning lands (see `TODO.md`).
+   derive, so we record it as data).
+
+   **User-defined verbatim-argument commands via definition scanning (a bounded
+   two-pass parse):** beyond the curated built-ins, the definition scanner
+   (`semantic::define`) flags an *arbitrary* command verbatim when its
+   `\newcommand`/xparse replacement **body** reassigns a special char's catcode to
+   "other" — the static fingerprint `\@makeother`, `\catcode…12`, `\dospecials`,
+   `\@sanitize`, possibly one or more hops away through a chained helper macro it
+   calls (followed across the scanned definition set, with a cycle guard). Only the
+   command's *own* arity gates it (it must take an argument to capture); the final
+   argument becomes the implicit verbatim one. This **reads replacement-body surface
+   text** — a deliberate, recorded step past "signatures only" — but executes
+   nothing, expands nothing, and evaluates no catcode arithmetic; it matches static
+   substrings. It is **conservative by construction**: a false positive *suppresses*
+   real diagnostics (the worse failure), so we flag only on a clear catcode signal
+   and prefer false negatives (e.g. a `\def`-defined helper, out of scanning scope,
+   breaks a chain and is not followed). Because the lexer must know a verbatim
+   command *before* it tokenizes call sites, but such commands are only discoverable
+   from the parsed tree, `parser::parse` runs a **bounded two-pass parse**: pass 1
+   with built-ins only, a definition scan, and — only when it finds a user verbatim
+   command — pass 2 re-lexing with those names fed into the lexer (a lexer
+   `pending_def` state keeps a command's own definition site from being mis-lexed as
+   a call). Two passes is the bound; a definition visible only after re-tokenization
+   is a tolerated false negative. Reparse cost is paid only when such a definition
+   exists (decision #6). `\def`-defined verbatim commands and verbatim
+   *environments* defined this way stay out of scope (see `TODO.md`).
 
 2. **Two layers: syntactic vs. semantic.**
    - *Syntactic layer:* the generic CST. Knows nothing about what a command means.

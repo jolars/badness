@@ -5,10 +5,12 @@
 //! Syntax errors ride a side channel and never abort the parse.
 
 use rowan::GreenNode;
+use smol_str::SmolStr;
 
 use crate::parser::grammar;
-use crate::parser::lexer::lex;
+use crate::parser::lexer::{VerbCtx, lex_with};
 use crate::parser::tree_builder::build_tree;
+use crate::semantic::define::scan_definitions;
 use crate::syntax::SyntaxNode;
 
 /// A parsed document: the green tree plus any syntax errors gathered alongside
@@ -36,11 +38,47 @@ pub struct SyntaxError {
 }
 
 /// Parse LaTeX source into a lossless CST.
+///
+/// A bounded **two-pass** parse handles user-defined verbatim-argument commands
+/// (`\newcommand`/xparse definitions that other a special char's catcode — see
+/// [`crate::semantic::define`]): the lexer needs to know such commands *before* it
+/// tokenizes their call sites, but they are only discoverable from the parsed tree.
+/// So pass 1 parses with built-in verbatim knowledge only, scans the result for
+/// catcode-verbatim definitions, and — *only* when it finds any — pass 2 re-parses
+/// with those commands fed into the lexer so their arguments become opaque `VERB`
+/// tokens. Two passes is the deliberate, conservative bound: a definition visible
+/// only after the second pass's re-tokenization is a tolerated false negative. The
+/// common case (no such definition) is a single parse (AGENTS.md decisions #1, #6).
 pub fn parse(input: &str) -> Parse {
-    let tokens = lex(input);
+    let pass1 = parse_with(input, &VerbCtx::default());
+    let ctx = verbatim_ctx(&pass1.syntax());
+    if ctx.is_empty() {
+        return pass1;
+    }
+    parse_with(input, &ctx)
+}
+
+/// Run the lex → grammar → tree-build pipeline once with a fixed verbatim context.
+fn parse_with(input: &str, ctx: &VerbCtx) -> Parse {
+    let tokens = lex_with(input, ctx);
     let (events, errors) = grammar::parse(&tokens);
     let green = build_tree(&tokens, &events);
     Parse { green, errors }
+}
+
+/// Scan `root` for user definitions and collect the catcode-verbatim commands into a
+/// lexer [`VerbCtx`]. Each scanned command's `verbatim` flag is already resolved
+/// (`scan_definitions`), and its `args` hold the leading, non-verbatim arguments — the
+/// exact shape the lexer needs.
+fn verbatim_ctx(root: &SyntaxNode) -> VerbCtx {
+    let db = scan_definitions(root);
+    let mut ctx = VerbCtx::default();
+    for name in db.command_names() {
+        if let Some(sig) = db.command(name).filter(|sig| sig.verbatim) {
+            ctx.insert(SmolStr::new(name), sig.args.clone());
+        }
+    }
+    ctx
 }
 
 /// Parse `input` and render the CST back to source. By the losslessness

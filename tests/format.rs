@@ -383,6 +383,20 @@ fn user_definition_drives_begin_argument_glue() {
     );
 }
 
+/// A user-defined catcode-othering command (`\@makeother\$`) makes its argument a
+/// protected verbatim region: the formatter must leave the body's literal `$`, `_`,
+/// and interior spacing exactly as authored, and the result must be idempotent.
+#[test]
+fn user_verbatim_command_body_is_protected() {
+    let input = "\\newcommand\\shellcmd[1]{\\@makeother\\$#1}\n\\shellcmd{a_$b$  c}\n";
+    let formatted = format(input).expect("formats");
+    assert!(
+        formatted.contains("\\shellcmd{a_$b$  c}"),
+        "verbatim body must pass through unaltered: {formatted:?}"
+    );
+    assert_format_invariants(input);
+}
+
 /// Environments carrying the `noIndent` signature flag (`document`) keep their body
 /// flush against the surrounding indentation, while environments nested inside them
 /// still indent normally. This pins the convention that `\begin{document}` content

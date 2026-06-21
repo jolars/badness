@@ -25,6 +25,8 @@
 //! None of these resolve macro meaning; they are surface lexing concerns (in
 //! TeX, catcodes genuinely change in these regions).
 
+use std::collections::HashMap;
+
 use smol_str::SmolStr;
 
 use crate::semantic::signature::{ArgKind, ArgSpec, builtin};
@@ -35,6 +37,38 @@ use crate::syntax::SyntaxKind;
 pub struct Token {
     pub kind: SyntaxKind,
     pub text: SmolStr,
+}
+
+/// Per-parse lexer context carrying *user-defined* verbatim-argument commands —
+/// those a document declares with catcode manipulation (`\@makeother\$`, …), found
+/// by scanning definition bodies ([`crate::semantic::define`]). The lexer consults
+/// it (alongside the built-in DB) to capture such a command's final argument as one
+/// `VERB` token. Empty for the first parse pass; populated for the second when the
+/// document defines any (see `parser::core`). Each entry maps a command name (no
+/// leading `\`) to its *leading*, non-verbatim argument shape, the verbatim argument
+/// itself being implicit — matching the built-in convention.
+#[derive(Debug, Default, Clone)]
+pub struct VerbCtx {
+    commands: HashMap<SmolStr, Vec<ArgSpec>>,
+}
+
+impl VerbCtx {
+    /// Whether the context names no user verbatim commands (the common case — the
+    /// second parse pass is skipped entirely).
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    /// Record that `name` is a verbatim-argument command with the given `leading`
+    /// (non-verbatim) argument shape.
+    pub(crate) fn insert(&mut self, name: SmolStr, leading: Vec<ArgSpec>) {
+        self.commands.insert(name, leading);
+    }
+
+    /// The leading argument shape of `name` if it is a known user verbatim command.
+    fn leading_args(&self, name: &str) -> Option<&[ArgSpec]> {
+        self.commands.get(name).map(Vec::as_slice)
+    }
 }
 
 /// Is `name` a verbatim-like environment — one whose body the lexer must capture
@@ -61,8 +95,42 @@ pub(crate) fn is_block_environment(name: &str) -> bool {
     builtin().environment(name).is_some_and(|env| env.block)
 }
 
-/// Lex `input` into a flat, lossless token stream.
+/// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a command-definition
+/// keyword whose immediately-following name must not be lexed as a verbatim call.
+/// Covers the LaTeX2e and xparse families the definition scanner recognizes plus the
+/// primitive `\def` family; `\let` is included since it too binds a following name.
+/// Reads only the static keyword, no macro meaning.
+fn is_definition_keyword(text: &str) -> bool {
+    matches!(
+        text,
+        "\\newcommand"
+            | "\\renewcommand"
+            | "\\providecommand"
+            | "\\DeclareRobustCommand"
+            | "\\NewDocumentCommand"
+            | "\\RenewDocumentCommand"
+            | "\\ProvideDocumentCommand"
+            | "\\DeclareDocumentCommand"
+            | "\\def"
+            | "\\edef"
+            | "\\gdef"
+            | "\\xdef"
+            | "\\let"
+    )
+}
+
+/// Lex `input` into a flat, lossless token stream, consulting only the built-in
+/// signature DB for verbatim commands/environments. The entry used by the first
+/// parse pass; [`lex_with`] adds user-defined verbatim commands.
 pub fn lex(input: &str) -> Vec<Token> {
+    lex_with(input, &VerbCtx::default())
+}
+
+/// Lex `input` like [`lex`], additionally treating the user-defined verbatim
+/// commands in `ctx` as verbatim (their final argument captured as one `VERB`
+/// token). Used by the second parse pass once definition scanning has discovered
+/// catcode-othering commands.
+pub fn lex_with(input: &str, ctx: &VerbCtx) -> Vec<Token> {
     let mut out = Vec::new();
     let mut pos = 0;
     let mut at_letter = false; // `\makeatletter` state
@@ -70,6 +138,14 @@ pub fn lex(input: &str) -> Vec<Token> {
     // delimiter must be isolated as a single token (it carries across whitespace,
     // which TeX skips before the delimiter).
     let mut pending_delim = false;
+    // True while the next control word is the *name being defined* by a definition
+    // keyword (`\newcommand\foo…`, `\NewDocumentCommand{\foo}…`, `\def\foo…`), so it
+    // must not be lexed as a verbatim *call*: at a definition site the trailing
+    // `{…}` are the signature/body, not the command's argument. Persists across the
+    // intervening `{`/whitespace of the braced form and clears once the name is
+    // consumed. Without this, a command flagged verbatim in pass 1 would have its own
+    // definition's first group captured as a `VERB` in pass 2.
+    let mut pending_def = false;
     while pos < input.len() {
         let rest = &input[pos..];
 
@@ -77,14 +153,17 @@ pub fn lex(input: &str) -> Vec<Token> {
         if let Some(consumed) = lex_verbatim_environment(rest, &mut out) {
             pos += consumed;
             pending_delim = false;
+            pending_def = false;
             continue;
         }
 
         // Verbatim-argument command (`\url{…}`, `\code{…}`, `\lstinline|…|`, …):
         // emit the control word and any leading args, then a raw argument token.
         // `\verb`/`\verb*` are handled separately in `lex_control` (delimiter
-        // only), so they fall through here.
-        if let Some(consumed) = lex_verbatim_command(rest, at_letter, &mut out) {
+        // only), so they fall through here. Suppressed at a definition site
+        // (`pending_def`), where the following groups are the signature/body.
+        if !pending_def && let Some(consumed) = lex_verbatim_command(rest, at_letter, ctx, &mut out)
+        {
             pos += consumed;
             pending_delim = false;
             continue;
@@ -109,6 +188,16 @@ pub fn lex(input: &str) -> Vec<Token> {
             // Trivia is skipped before the delimiter, so the mode persists.
             SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => pending_delim,
             SyntaxKind::CONTROL_WORD if text == "\\left" || text == "\\right" => true,
+            _ => false,
+        };
+        pending_def = match kind {
+            // A definition keyword arms the suppression for the name that follows.
+            SyntaxKind::CONTROL_WORD if is_definition_keyword(text) => true,
+            // The braced name form (`\newcommand{\foo}`) interposes a `{` and
+            // whitespace before the name; keep the suppression armed across them.
+            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::L_BRACE => pending_def,
+            // Any other token — in particular the defined name's own control word —
+            // consumes the suppression.
             _ => false,
         };
         out.push(Token {
@@ -276,7 +365,12 @@ fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
 /// delimiter run (`\lstinline|…|`). `\verb`/`\verb*` are deliberately excluded —
 /// they are delimiter-only and handled in [`lex_control`]. Like the verbatim
 /// environment path, this reads only static signature data (decision #1).
-fn lex_verbatim_command(rest: &str, at_letter: bool, out: &mut Vec<Token>) -> Option<usize> {
+fn lex_verbatim_command(
+    rest: &str,
+    at_letter: bool,
+    ctx: &VerbCtx,
+    out: &mut Vec<Token>,
+) -> Option<usize> {
     if !rest.starts_with('\\') {
         return None;
     }
@@ -290,11 +384,16 @@ fn lex_verbatim_command(rest: &str, at_letter: bool, out: &mut Vec<Token>) -> Op
     if name == "verb" {
         return None;
     }
-    let cmd = builtin().command(name).filter(|c| c.verbatim)?;
+    // A user-defined catcode-verbatim command (from `ctx`) wins over the built-in DB;
+    // either way we read only the static leading-argument shape, never macro meaning.
+    let leading = match ctx.leading_args(name) {
+        Some(args) => args,
+        None => &builtin().command(name).filter(|c| c.verbatim)?.args,
+    };
 
     // Leading arguments precede the verbatim one (e.g. `\mintinline{lang}{code}`).
     let after_word = &rest[word_len..];
-    let args_len = scan_verbatim_args(after_word, &cmd.args);
+    let args_len = scan_verbatim_args(after_word, leading);
 
     // Skip inline whitespace (never a line break — an argument never crosses a
     // newline) to reach the verbatim argument's opening delimiter.

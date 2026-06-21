@@ -28,11 +28,10 @@ checklist* (texlab is GPLv3; no snippets were copied). The drop in headline
 similarity is expected and healthy: the new files exercise constructs that
 trigger texlab's semantic scoping, which badness deliberately does not model.
 
-**\[[Headline:\\*\\*\](Headline:\*\*)\*\*](Headline:\*\*](Headline:**)**)**)\*\*
-badness's CST shape held up well. Of 13 divergences, 12 are deliberate and
-correct (and in several the *more* faithful surface reading); 1 was a genuine
-shape inconsistency, **now fixed** (below). The single skipped file is correct
-error handling.
+**Headline:** badness's CST shape held up well. Of 13 divergences, 12 are
+deliberate and correct (and in several the *more* faithful surface reading); 1
+was a genuine shape inconsistency, **now fixed** (below). The single skipped
+file is correct error handling.
 
 ## The one genuine modeling gap — fixed in this pass
 

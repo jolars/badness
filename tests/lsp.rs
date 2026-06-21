@@ -16,9 +16,9 @@ use lsp_types::{
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
     InitializeResult, InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf,
-    PartialResultParams, Position, PublishDiagnosticsParams, Range, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    PartialResultParams, Position, PublishDiagnosticsParams, Range, ReferenceContext,
+    ReferenceParams, SymbolKind, TextDocumentContentChangeEvent, TextDocumentIdentifier,
+    TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams,
 };
 
@@ -124,6 +124,13 @@ fn start_server(
             Some(OneOf::Left(true))
         ),
         "server must advertise definitionProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.references_provider,
+            Some(OneOf::Left(true))
+        ),
+        "server must advertise referencesProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     send_notification(
@@ -870,6 +877,171 @@ fn lsp_definition_cross_file_ref_and_cite() {
         path_to_file_uri(&dir.path().join("refs.bib"))
     );
     assert_eq!(cite_locs[0].range.start.line, 0);
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a `textDocument/references` at `position` and return the locations,
+/// draining any stray diagnostics first (mirrors [`definition`]).
+fn references(
+    client: &Connection,
+    id: i32,
+    uri: &Uri,
+    position: Position,
+    include_declaration: bool,
+) -> Vec<Location> {
+    send_request(
+        client,
+        id,
+        "textDocument/references",
+        serde_json::to_value(ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: ReferenceContext {
+                include_declaration,
+            },
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    serde_json::from_value::<Vec<Location>>(resp.result.unwrap()).unwrap()
+}
+
+/// Sort locations by (line, character) of their start so assertions don't depend
+/// on the namespace-member iteration order.
+fn sorted_starts(mut locs: Vec<Location>) -> Vec<Position> {
+    locs.sort_by_key(|l| (l.range.start.line, l.range.start.character));
+    locs.into_iter().map(|l| l.range.start).collect()
+}
+
+#[test]
+fn lsp_references_same_file_label_uses() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    // A label and two references to it in the same buffer.
+    let doc = "\\label{sec:intro}\n\\ref{sec:intro}\n\\ref{sec:intro}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor inside the first `\ref` → both `\ref` use sites, declaration excluded.
+    let uses = references(&client, 2, &uri, Position::new(1, 6), false);
+    assert_eq!(
+        sorted_starts(uses),
+        vec![Position::new(1, 0), Position::new(2, 0)],
+        "both \\ref uses, no \\label"
+    );
+
+    // includeDeclaration → the `\label` site joins the two uses.
+    let with_decl = references(&client, 3, &uri, Position::new(1, 6), true);
+    assert_eq!(
+        sorted_starts(with_decl),
+        vec![
+            Position::new(0, 0),
+            Position::new(1, 0),
+            Position::new(2, 0),
+        ],
+        "the \\label declaration is included"
+    );
+
+    // Invoking on the `\label` definition itself resolves the same use set.
+    let from_def = references(&client, 4, &uri, Position::new(0, 8), false);
+    assert_eq!(
+        sorted_starts(from_def),
+        vec![Position::new(1, 0), Position::new(2, 0)],
+        "find-references works from the definition site"
+    );
+
+    // Cursor past the document content (the trailing newline) is on no label/ref.
+    let none = references(&client, 5, &uri, Position::new(3, 0), true);
+    assert!(none.is_empty(), "no reference under an empty position");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_references_cross_file_cite_from_tex_and_bib() {
+    // A real on-disk project: the root `\input`s a chapter and `\addbibresource`s a
+    // `.bib`. Both the chapter and the root cite the same key.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{knuth1984, title={The TeXbook}}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("part.tex"), "\\cite{knuth1984}\n").unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\addbibresource{refs.bib}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\cite{knuth1984}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let part_uri = path_to_file_uri(&dir.path().join("part.tex"));
+    let bib_uri = path_to_file_uri(&dir.path().join("refs.bib"));
+
+    // From the `\cite` in main (line 4) → both cite sites across the namespace.
+    let uses = references(&client, 2, &main_uri, Position::new(4, 8), false);
+    let mut found: Vec<(Uri, u32)> = uses
+        .iter()
+        .map(|l| (l.uri.clone(), l.range.start.line))
+        .collect();
+    found.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()).then(a.1.cmp(&b.1)));
+    assert_eq!(
+        found,
+        vec![(main_uri.clone(), 4), (part_uri.clone(), 0)],
+        "both \\cite sites, declaration excluded, got {uses:?}"
+    );
+
+    // includeDeclaration adds the `.bib` entry.
+    let with_decl = references(&client, 3, &main_uri, Position::new(4, 8), true);
+    assert!(
+        with_decl.iter().any(|l| l.uri == bib_uri),
+        "the bib entry is included, got {with_decl:?}"
+    );
+    assert_eq!(
+        with_decl.len(),
+        3,
+        "two cites + one entry, got {with_decl:?}"
+    );
+
+    // Invoking on the `@article` key in the `.bib` finds the same `\cite` uses.
+    did_open(
+        &client,
+        &bib_uri,
+        1,
+        "@article{knuth1984, title={The TeXbook}}\n",
+    );
+    let _ = recv_diagnostics(&client);
+    let from_bib = references(&client, 4, &bib_uri, Position::new(0, 12), false);
+    let mut bib_found: Vec<(Uri, u32)> = from_bib
+        .iter()
+        .map(|l| (l.uri.clone(), l.range.start.line))
+        .collect();
+    bib_found.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()).then(a.1.cmp(&b.1)));
+    assert_eq!(
+        bib_found,
+        vec![(main_uri.clone(), 4), (part_uri.clone(), 0)],
+        "cite uses resolved from the bib entry, got {from_bib:?}"
+    );
 
     shutdown(&client, server_thread);
 }

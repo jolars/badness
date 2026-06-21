@@ -213,7 +213,13 @@ directly onto badness's existing semantic layer.
   `\cite{a,b}`) shares one command range, so the cursor resolves *every* key;
   per-key sub-ranges await the deferred `LabelRef`/`CitationRef` range split
   (see `semantic::label`).
-- [ ] Find references (`textDocument/references`) --- all uses of a label.
+- [x] Find references (`textDocument/references`) --- all uses of a label or
+  cite key across the namespace, invokable from a use site *or* a definition site
+  (the `\label`, and an `@entry` key in a `.bib`); honors `includeDeclaration`.
+  Inverts go-to-def via new `namespace_members`/`bib_citers` resolver accessors
+  (`src/project/{labels,citations}.rs`). *Follow-up:* per-key sub-ranges for
+  multi-key list commands still deferred (shared with go-to-def, see
+  `semantic::label`).
 - [ ] Document highlight (`textDocument/documentHighlight`) --- highlight a
   label and its refs within the file.
 - [ ] Rename (`textDocument/rename` + `prepareRename`) --- rename a label and

@@ -184,6 +184,25 @@ impl ResolvedLabels {
         !self.definers(file, name).is_empty()
     }
 
+    /// All member files sharing `file`'s namespace (its connected component),
+    /// sorted; empty when `file` is unknown. Includes `file` itself. Unlike
+    /// [`definers`](Self::definers) (which files *define* a name) this is every
+    /// file in the namespace — the search set for find-references, which must scan
+    /// each member for `\ref` use sites.
+    pub fn namespace_members(&self, file: &Path) -> Vec<&Path> {
+        let Some(&id) = self.component_of.get(file) else {
+            return Vec::new();
+        };
+        let mut members: Vec<&Path> = self
+            .component_of
+            .iter()
+            .filter(|&(_, &cid)| cid == id)
+            .map(|(p, _)| p.as_path())
+            .collect();
+        members.sort_unstable();
+        members
+    }
+
     /// Whether `file`'s namespace is closed — every include resolves to an
     /// analyzed member. Gates `undefined-ref` (an open namespace may define the
     /// key in a file we never saw).
@@ -360,6 +379,34 @@ mod tests {
             r.definers(Path::new("/p/a.tex"), "k"),
             &[PathBuf::from("/p/a.tex"), PathBuf::from("/p/b.tex")]
         );
+        // The whole diamond is one namespace: every member is a reference-search
+        // target, regardless of whether it defines anything.
+        assert_eq!(
+            r.namespace_members(Path::new("/p/shared.tex")),
+            &[
+                Path::new("/p/a.tex"),
+                Path::new("/p/b.tex"),
+                Path::new("/p/main.tex"),
+                Path::new("/p/shared.tex"),
+            ]
+        );
+    }
+
+    #[test]
+    fn namespace_members_isolates_independent_documents() {
+        let g = graph(&[("/p/one.tex", &[]), ("/p/two.tex", &[])]);
+        let r = ResolvedLabels::build(
+            &[
+                (PathBuf::from("/p/one.tex"), names(&["x"]), true),
+                (PathBuf::from("/p/two.tex"), names(&["x"]), true),
+            ],
+            &g,
+        );
+        assert_eq!(
+            r.namespace_members(Path::new("/p/one.tex")),
+            &[Path::new("/p/one.tex")]
+        );
+        assert!(r.namespace_members(Path::new("/p/missing.tex")).is_empty());
     }
 
     #[test]

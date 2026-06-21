@@ -186,6 +186,49 @@ impl ResolvedCitations {
             .map_or(&[], |&id| self.components[id].bib_paths.as_slice())
     }
 
+    /// All LaTeX member files sharing `file`'s namespace (its connected
+    /// component), sorted; empty when `file` is unknown. `.bib` files are not
+    /// keyed in `component_of`, so this is the `.tex`/`.sty`/`.cls` members only —
+    /// the search set for find-references, which scans each for `\cite` use sites.
+    /// Parallel to [`labels::ResolvedLabels::namespace_members`](crate::project::labels::ResolvedLabels::namespace_members).
+    pub fn namespace_members(&self, file: &Path) -> Vec<&Path> {
+        let Some(&id) = self.component_of.get(file) else {
+            return Vec::new();
+        };
+        let mut members: Vec<&Path> = self
+            .component_of
+            .iter()
+            .filter(|&(_, &cid)| cid == id)
+            .map(|(p, _)| p.as_path())
+            .collect();
+        members.sort_unstable();
+        members
+    }
+
+    /// The LaTeX members of every component whose bibliography includes
+    /// `bib_path`, sorted and deduped. A `.bib` is not keyed in `component_of`
+    /// (it lives in each citing component's `bib_paths`) and may be shared by
+    /// several independent documents, so this unions the citers across
+    /// components — the search set for find-references invoked on a `.bib` entry.
+    pub fn bib_citers(&self, bib_path: &Path) -> Vec<&Path> {
+        let ids: HashSet<usize> = self
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(_, comp)| comp.bib_paths.iter().any(|p| p == bib_path))
+            .map(|(id, _)| id)
+            .collect();
+        let mut members: Vec<&Path> = self
+            .component_of
+            .iter()
+            .filter(|&(_, id)| ids.contains(id))
+            .map(|(p, _)| p.as_path())
+            .collect();
+        members.sort_unstable();
+        members.dedup();
+        members
+    }
+
     /// Whether cite `key` is defined anywhere in `file`'s namespace
     /// (case-insensitive).
     pub fn is_defined(&self, file: &Path, key: &str) -> bool {
@@ -450,6 +493,50 @@ mod tests {
         );
         // An unknown file has no namespace, so no definers.
         assert!(r.bib_definers(Path::new("/p/none.tex")).is_empty());
+    }
+
+    #[test]
+    fn namespace_members_and_bib_citers_scope_to_the_component() {
+        // Two disjoint projects share `common.bib`; sharing a bibliography does not
+        // merge their include components.
+        let g = graph(&[
+            ("/p/main1.tex", &[(IncludeKind::Input, "/p/chap1.tex")]),
+            ("/p/chap1.tex", &[]),
+            ("/p/main2.tex", &[]),
+        ]);
+        let mut bib = HashMap::new();
+        bib.insert(PathBuf::from("/p/common.bib"), keys(&["k"]));
+        let r = ResolvedCitations::build(
+            &[
+                facts("/p/main1.tex", &["/p/common.bib"], true),
+                facts("/p/chap1.tex", &[], false),
+                facts("/p/main2.tex", &["/p/common.bib"], true),
+            ],
+            &g,
+            &bib,
+        );
+        // The first project's namespace is its two LaTeX members (the `.bib` is not
+        // keyed in `component_of`).
+        assert_eq!(
+            r.namespace_members(Path::new("/p/chap1.tex")),
+            &[Path::new("/p/chap1.tex"), Path::new("/p/main1.tex")]
+        );
+        assert_eq!(
+            r.namespace_members(Path::new("/p/main2.tex")),
+            &[Path::new("/p/main2.tex")]
+        );
+        // The shared bib is cited from both independent documents, so its citers
+        // union the LaTeX members of every component referencing it.
+        assert_eq!(
+            r.bib_citers(Path::new("/p/common.bib")),
+            &[
+                Path::new("/p/chap1.tex"),
+                Path::new("/p/main1.tex"),
+                Path::new("/p/main2.tex"),
+            ]
+        );
+        assert!(r.bib_citers(Path::new("/p/unknown.bib")).is_empty());
+        assert!(r.namespace_members(Path::new("/p/none.tex")).is_empty());
     }
 
     #[test]

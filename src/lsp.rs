@@ -69,7 +69,7 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, DocumentSymbolRequest, Formatting, GotoDefinition, Request as _,
+    Completion, DocumentSymbolRequest, Formatting, GotoDefinition, References, Request as _,
 };
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
@@ -77,9 +77,9 @@ use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location,
-    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextEdit, Uri,
+    NumberOrString, OneOf, Position, PublishDiagnosticsParams, Range, ReferenceParams,
+    ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, Uri,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -138,6 +138,7 @@ fn server_capabilities() -> ServerCapabilities {
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions {
             // `\` opens command/env names; `{` opens a name/key/path argument;
             // `/` re-triggers path segments. Snippet support is read off the
@@ -262,6 +263,17 @@ enum WorkerJob {
         text: String,
         position: Position,
     },
+    /// A find-references request: enumerate every `\ref`/`\cite` use of the
+    /// label/key under the cursor on the read pool and reply to `id`. Cross-file
+    /// (and invokable from a definition site), so the worker snapshots project
+    /// membership when it dispatches, like [`GotoDefinition`](Self::GotoDefinition).
+    References {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        position: Position,
+        include_declaration: bool,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -336,6 +348,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             GotoDefinition::METHOD => {
                                 on_goto_definition(&connection, &state, &job_tx, req)
                             }
+                            References::METHOD => on_references(&connection, &state, &job_tx, req),
                             _ => respond_unhandled(&connection, req),
                         }
                     }
@@ -639,6 +652,51 @@ fn on_goto_definition(
     });
 }
 
+/// `textDocument/references`: build a find-references job for the worker, or reply
+/// `null` when the document is unknown. Unlike go-to-definition, a `.bib` cursor is
+/// *not* rejected — find-references can start on an `@entry` key and report its
+/// `\cite` use sites.
+fn on_references(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<ReferenceParams>(References::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid references params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position.text_document.uri;
+    let position = params.text_document_position.position;
+    let include_declaration = params.context.include_declaration;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: nothing to resolve.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::References {
+        id,
+        path,
+        text: doc.text.clone(),
+        position,
+        include_declaration,
+    });
+}
+
 /// Forward a worker result to the client. Diagnostics are version-gated: a result
 /// is sent only when its document is still open at exactly that version, so a
 /// stale (superseded or post-close) analyze never repaints squiggles.
@@ -904,6 +962,31 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_goto_definition(&snapshot, id, &path, &text, position, members, &out_tx)
+                });
+            }
+            WorkerJob::References {
+                id,
+                path,
+                text,
+                position,
+                include_declaration,
+            } => {
+                // Find-references is cross-file like go-to-def, so it captures the
+                // same membership snapshot on the write side before the read job runs.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_references(
+                        &snapshot,
+                        id,
+                        &path,
+                        &text,
+                        position,
+                        members,
+                        include_declaration,
+                        &out_tx,
+                    )
                 });
             }
         }
@@ -1534,6 +1617,25 @@ fn run_goto_definition(
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
+/// Resolve the label/key under the cursor and reply with every use [`Location`]
+/// across its namespace (always an array — empty when nothing resolves).
+#[allow(clippy::too_many_arguments)]
+fn run_references(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    members: Vec<ProjectMember>,
+    include_declaration: bool,
+    out_tx: &Sender<Outbound>,
+) {
+    let locations =
+        compute_references(snapshot, path, text, position, members, include_declaration);
+    let result = serde_json::to_value(locations).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
 /// What the cursor points at inside a `.tex` buffer: the keys whose command range
 /// covers the offset. Refs and citations are kept distinct so each resolves against
 /// its own namespace (labels vs. bibliography). A multi-key list command
@@ -1610,6 +1712,216 @@ fn reference_under_cursor(model: &SemanticModel, offset: usize) -> Option<Cursor
         .map(|c| c.name.clone())
         .collect();
     (!cite_names.is_empty()).then_some(CursorTarget::Citations(cite_names))
+}
+
+/// Compute every use location for a find-references at `position`. The inverse of
+/// [`compute_goto_definition`]: resolves a label/key (from a `\ref`/`\cite` use,
+/// a `\label` definition, or — in a `.bib` buffer — an `@entry` key) to all of its
+/// `\ref`/`\cite` use sites across the namespace. The cursor's own buffer is read
+/// off the cached tree when current, else a fresh parse. `include_declaration`
+/// appends the `\label`/`@entry` definition to the results.
+fn compute_references(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    position: Position,
+    members: Vec<ProjectMember>,
+    include_declaration: bool,
+) -> Vec<Location> {
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let (resolution, citations) = snapshot.resolve_project(members);
+
+        // `.bib` origin: the `@entry` key under the cursor → its `\cite` uses. A
+        // `.bib` path is not keyed in the citation `component_of`, so resolution
+        // goes through `bib_citers`.
+        if file_kind_for(path) == FileKind::Bib {
+            let Some((key, key_range)) = bib_entry_under_cursor(snapshot, path, text, offset)
+            else {
+                return Vec::new();
+            };
+            let origin = snapshot
+                .lookup_file(path)
+                .map(|file| snapshot.file_path(file).to_path_buf())
+                .unwrap_or_else(|| path.to_path_buf());
+            let decl = if include_declaration {
+                location_for(&origin, &idx, text, key_range)
+            } else {
+                None
+            };
+            return reference_citation_locations(
+                snapshot,
+                citations,
+                &origin,
+                FileKind::Bib,
+                &[key],
+                include_declaration,
+                decl,
+            );
+        }
+
+        // `.tex` origin: a `\ref`/`\cite` use *or* a `\label` definition.
+        let (target, origin) = match snapshot.lookup_file(path) {
+            Some(file) if snapshot.file_text(file) == text => (
+                references_target_under_cursor(snapshot.semantic_model(file), offset),
+                snapshot.file_path(file).to_path_buf(),
+            ),
+            _ => {
+                let root = SyntaxNode::new_root(parse(text).green);
+                let model = SemanticModel::build(&root);
+                (
+                    references_target_under_cursor(&model, offset),
+                    path.to_path_buf(),
+                )
+            }
+        };
+        let Some(target) = target else {
+            return Vec::new();
+        };
+        match target {
+            CursorTarget::Labels(names) => reference_label_locations(
+                snapshot,
+                resolution,
+                &origin,
+                &names,
+                include_declaration,
+            ),
+            CursorTarget::Citations(names) => reference_citation_locations(
+                snapshot,
+                citations,
+                &origin,
+                FileKind::Tex,
+                &names,
+                include_declaration,
+                None,
+            ),
+        }
+    }));
+    computed.unwrap_or_default()
+}
+
+/// Like [`reference_under_cursor`] but also recognizes a `\label` *definition*
+/// under the cursor, so find-references can be invoked from the definition site
+/// (a `\ref` and a `\label` both resolve to the same label name). Precedence
+/// matches [`reference_under_cursor`] (refs, then citations), with label defs
+/// slotted last; a position is in at most one of the three.
+fn references_target_under_cursor(model: &SemanticModel, offset: usize) -> Option<CursorTarget> {
+    if let Some(target) = reference_under_cursor(model, offset) {
+        return Some(target);
+    }
+    let at = TextSize::new(offset as u32);
+    let label_names: Vec<SmolStr> = model
+        .labels()
+        .iter()
+        .filter(|l| l.range.contains_inclusive(at))
+        .map(|l| l.name.clone())
+        .collect();
+    (!label_names.is_empty()).then_some(CursorTarget::Labels(label_names))
+}
+
+/// The cite key of the `@entry` whose key range covers `offset` in a `.bib`
+/// buffer, with that key's byte range. Reads the cached model when current, else a
+/// fresh bib parse (the bib analog of [`compute_references`]'s `.tex` guard).
+fn bib_entry_under_cursor(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    offset: usize,
+) -> Option<(SmolStr, TextRange)> {
+    let at = TextSize::new(offset as u32);
+    let find = |model: &BibModel| {
+        model
+            .entries()
+            .iter()
+            .find(|e| e.key_range.contains_inclusive(at))
+            .map(|e| (e.key.clone(), e.key_range))
+    };
+    match snapshot.lookup_file(path) {
+        Some(file) if snapshot.file_text(file) == text => find(snapshot.bib_semantic_model(file)),
+        _ => find(&BibModel::build(&bib_parse(text).syntax())),
+    }
+}
+
+/// Every `\ref`-family use of `names` across `origin`'s label namespace, plus the
+/// `\label` definitions when `include_declaration`. The inverse of
+/// [`resolve_label_locations`]: scans each namespace member's uses, not its defs.
+fn reference_label_locations(
+    snapshot: &Analysis,
+    resolution: &ResolvedLabels,
+    origin: &Path,
+    names: &[SmolStr],
+    include_declaration: bool,
+) -> Vec<Location> {
+    let mut locations = Vec::new();
+    for member in resolution.namespace_members(origin) {
+        let Some(file) = snapshot.lookup_file(member) else {
+            continue;
+        };
+        let text = snapshot.file_text(file);
+        let idx = LineIndex::new(text);
+        let model = snapshot.semantic_model(file);
+        for r in model.refs() {
+            if names.contains(&r.name) {
+                locations.push(location_for(member, &idx, text, r.range));
+            }
+        }
+        if include_declaration {
+            for label in model.labels() {
+                if names.contains(&label.name) {
+                    locations.push(location_for(member, &idx, text, label.range));
+                }
+            }
+        }
+    }
+    dedup_locations(locations)
+}
+
+/// Every `\cite`-family use of `names` across `origin`'s citation namespace, plus
+/// the bibliography `@entry` definitions when `include_declaration`. Use sites
+/// live in `.tex` members — `bib_citers` for a `.bib` origin (whose path is not
+/// keyed in the citation `component_of`), else `namespace_members`. The
+/// declaration is the cursor's own entry (`decl_for_bib`) for a `.bib` origin, or
+/// [`resolve_citation_locations`] for a `.tex` origin.
+#[allow(clippy::too_many_arguments)]
+fn reference_citation_locations(
+    snapshot: &Analysis,
+    citations: &ResolvedCitations,
+    origin: &Path,
+    kind: FileKind,
+    names: &[SmolStr],
+    include_declaration: bool,
+    decl_for_bib: Option<Location>,
+) -> Vec<Location> {
+    let members = if kind == FileKind::Bib {
+        citations.bib_citers(origin)
+    } else {
+        citations.namespace_members(origin)
+    };
+    let mut locations = Vec::new();
+    for member in members {
+        let Some(file) = snapshot.lookup_file(member) else {
+            continue;
+        };
+        let text = snapshot.file_text(file);
+        let idx = LineIndex::new(text);
+        for c in snapshot.semantic_model(file).citations() {
+            if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
+                locations.push(location_for(member, &idx, text, c.range));
+            }
+        }
+    }
+    let mut locations = dedup_locations(locations);
+    if include_declaration {
+        match kind {
+            FileKind::Bib => locations.extend(decl_for_bib),
+            _ => locations.extend(resolve_citation_locations(
+                snapshot, citations, origin, names,
+            )),
+        }
+    }
+    locations
 }
 
 /// For each `\ref` key, the `\label{key}` definition sites across the file's

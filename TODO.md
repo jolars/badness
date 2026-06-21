@@ -249,12 +249,16 @@ built-in; consumed by the formatter's `\begin` arity glue).
   (`\@makeother\$`, `\catcode`\``\$=12`, `\dospecials`, `\@sanitize`) — directly
   or via a chained helper macro it calls (followed across the scanned definition
   set, cycle-guarded) — flags that command's final argument verbatim. Conservative
-  (prefers false negatives; a `\def` helper breaks a chain). Consumed by a bounded
+  (prefers false negatives). Consumed by a bounded
   **two-pass parse** in `parser::core` so the flag actually protects call sites
   (`pending_def` in the lexer shields the command's own definition site). Decision
-  recorded in AGENTS.md decision #1. Follow-ups, still open:
-  - [ ] `\def`-defined verbatim commands (needs parameter-text scanning) and
-    `\def`-helper chains (a `\def` helper currently breaks chain resolution).
+  recorded in AGENTS.md decision #1. Follow-ups:
+  - [x] `\def`-defined verbatim commands and `\def`-helper chains. `scan_def`
+    (`semantic/define.rs`) scans `\def`/`\edef`/`\gdef`/`\xdef`, counting arity from
+    the `#1#2…` parameter text and recording the body, so a `\def` command is flagged
+    verbatim directly and a `\def` helper's body now participates in chain resolution.
+    (`\def`-defined verbatim *environments* and delimited-parameter macros stay out of
+    scope.)
   - [ ] Verbatim *environments* defined with catcode setup in their begin-code
     (needs the `VerbCtx` threaded into `grammar.rs`'s `is_verbatim_environment`).
 - [ ] Salsa `document_signatures` query once an LSP consumer (hover/completion)

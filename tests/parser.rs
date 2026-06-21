@@ -340,6 +340,23 @@ fn user_defined_verbatim_command_argument_is_opaque() {
 }
 
 #[test]
+fn def_defined_verbatim_command_argument_is_opaque() {
+    // The same two-pass protection extends to `\def`-defined commands: the parameter
+    // text (`#1`) is scanned for arity and the body for the catcode signal, so the
+    // call-site argument of `\shellcmd` is captured verbatim and `$`/`_` stay literal.
+    let out = tree("\\def\\shellcmd#1{\\@makeother\\$#1}\n\\shellcmd{a_$b$}\n");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(
+        !out.contains("DOLLAR@") && !out.contains("INLINE_MATH@"),
+        "{out}"
+    );
+    assert!(
+        out.contains("VERB@") && out.contains(r#""{a_$b$}""#),
+        "{out}"
+    );
+}
+
+#[test]
 fn undefined_command_argument_is_not_verbatim() {
     // The fast path: with no catcode-othering definition, the same call site stays
     // ordinary — a single parse pass, and `$b$` lexes as inline math. Guards against

@@ -54,6 +54,7 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
         };
         match DefKind::of(&name) {
             Some(DefKind::Command) => scan_newcommand(&command, &mut db, &mut bodies),
+            Some(DefKind::Def) => scan_def(&command, &mut db, &mut bodies),
             Some(DefKind::Environment) => scan_newenvironment(&command, &mut db),
             Some(DefKind::XparseCommand) => scan_xparse_command(&command, &mut db, &mut bodies),
             Some(DefKind::XparseEnvironment) => scan_xparse_environment(&command, &mut db),
@@ -165,6 +166,7 @@ fn called_macros(body: &str) -> Vec<SmolStr> {
 /// Which definition family a control word names, if any.
 enum DefKind {
     Command,
+    Def,
     Environment,
     XparseCommand,
     XparseEnvironment,
@@ -176,6 +178,9 @@ impl DefKind {
             "newcommand" | "renewcommand" | "providecommand" | "DeclareRobustCommand" => {
                 DefKind::Command
             }
+            // Plain TeX `\def` and its global/expanded variants. `\let` is excluded: it
+            // aliases an existing meaning rather than carrying a replacement body to scan.
+            "def" | "edef" | "gdef" | "xdef" => DefKind::Def,
             "newenvironment" | "renewenvironment" => DefKind::Environment,
             "NewDocumentCommand"
             | "RenewDocumentCommand"
@@ -221,6 +226,79 @@ fn scan_newcommand(
             inline: false,
         },
     );
+}
+
+/// `\def\name<param text>{body}` (and the `\edef`/`\gdef`/`\xdef` variants) → a
+/// [`CommandSig`]. `\def` has only the unbraced name form (TeX has no `\def{\name}`), so
+/// the name is the immediately-following sibling `COMMAND`. The arity comes from the
+/// **parameter text** (`#1#2…`) between the name and the body — counted by
+/// [`def_params_and_body`] — not from a `[n]` optional. We record the body for the same
+/// catcode-signal/helper-chain analysis as `\newcommand`, which is what lets a `\def`
+/// helper participate in chain resolution ([`reaches_signal`]).
+fn scan_def(command: &SyntaxNode, db: &mut SignatureDb, bodies: &mut HashMap<SmolStr, DefBody>) {
+    let Some(name_node) = adjacent_sibling_command(command) else {
+        return;
+    };
+    let Some(name) = command_name(&name_node) else {
+        return;
+    };
+    let (arity, body) = def_params_and_body(&name_node);
+    record_body(bodies, &name, body.as_ref());
+    db.insert_command(
+        name,
+        CommandSig {
+            // `\def` parameters carry no brace/bracket distinction; model them as the same
+            // all-mandatory-brace shape scanned `\newcommand`s use. `apply_verbatim_flags`
+            // pops the final slot and sets `verbatim` if a catcode signal is reachable.
+            args: latex2e_args(arity, false),
+            sectioning: None,
+            verbatim: false,
+            rule: false,
+            inline: false,
+        },
+    );
+}
+
+/// The `(arity, body)` of a `\def`-style definition, reading its parameter text off the
+/// name `COMMAND` node. Two CST shapes arise under greedy attachment:
+/// - **No parameters** (`\def\foo{body}`): the body brace group attaches as `\foo`'s first
+///   child `GROUP`, so arity is `0` and the body is `nth_group(name_node, 0)`.
+/// - **With parameters** (`\def\foo#1#2{body}`): the leading `#` (`HASH`) breaks greedy
+///   attachment, so `\foo` has no child group and the `#1`, `#2`, and `{body}` are all
+///   siblings. Arity is the number of `HASH` tokens (each `#1` lexes as `HASH` + `WORD`)
+///   before the first sibling `GROUP`, which is the body.
+///
+/// Anything other than trivia/`HASH`/`WORD` before a group means delimited or malformed
+/// parameter text we do not model; we stop and report no body (so no catcode signal is
+/// recorded for it — the conservative choice). Arity is capped at 9 like `\newcommand`.
+fn def_params_and_body(name_node: &SyntaxNode) -> (usize, Option<SyntaxNode>) {
+    // No parameter text: the body attached greedily as the name command's first group.
+    if let Some(body) = nth_group(name_node, 0) {
+        return (0, Some(body));
+    }
+    // Parameter text intervened: count `#` markers up to the first sibling group (the body).
+    let mut arity = 0usize;
+    let mut next = name_node.next_sibling_or_token();
+    while let Some(element) = next {
+        match element {
+            NodeOrToken::Token(token) if is_trivia(token.kind()) => {
+                next = token.next_sibling_or_token();
+            }
+            NodeOrToken::Token(token) if token.kind() == SyntaxKind::HASH => {
+                arity += 1;
+                next = token.next_sibling_or_token();
+            }
+            // The digit following `#`, or a literal delimiter token in a delimited macro.
+            NodeOrToken::Token(token) if token.kind() == SyntaxKind::WORD => {
+                next = token.next_sibling_or_token();
+            }
+            NodeOrToken::Node(node) if node.kind() == SyntaxKind::GROUP => {
+                return (arity.min(9), Some(node));
+            }
+            _ => return (arity.min(9), None),
+        }
+    }
+    (arity.min(9), None)
 }
 
 /// Record the catcode/called-macro facts of a command definition's replacement
@@ -672,11 +750,60 @@ mod tests {
     }
 
     #[test]
-    fn def_helper_chain_not_followed() {
-        // The helper is defined with `\def` (out of scanning scope), so the chain
-        // breaks and we conservatively do not flag — a tolerated false negative.
+    fn def_helper_chain_followed() {
+        // The helper is defined with `\def`; its body is now scanned, so the chain from
+        // `\shellcmd` through `\setup` to the catcode signal resolves and flags the caller.
         let db = db_of("\\def\\setup{\\@makeother\\$}\\newcommand\\shellcmd[1]{\\setup#1}\n");
-        assert!(!db.command("shellcmd").expect("shellcmd defined").verbatim);
+        assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
+        // The arity-0 helper itself takes no argument, so it is never flagged.
+        assert!(!db.command("setup").expect("setup defined").verbatim);
+    }
+
+    #[test]
+    fn def_direct_verbatim_flagged() {
+        // A `\def` command whose own body others a special char is verbatim; its single
+        // parameter becomes the implicit verbatim argument, leaving no leading args.
+        let db = db_of("\\def\\shellcmd#1{\\@makeother\\$#1}\n");
+        let sig = db.command("shellcmd").expect("shellcmd defined");
+        assert!(sig.verbatim);
+        assert!(sig.args.is_empty());
+    }
+
+    #[test]
+    fn def_zero_params() {
+        // No parameter text: the body attaches as the name command's child group.
+        let db = db_of("\\def\\foo{x}\n");
+        let sig = db.command("foo").expect("foo defined");
+        assert!(sig.args.is_empty());
+        assert!(!sig.verbatim);
+    }
+
+    #[test]
+    fn def_counts_params() {
+        // `#1#2` parameter text → arity 2, all mandatory brace slots.
+        let db = db_of("\\def\\foo#1#2{#1#2}\n");
+        let sig = db.command("foo").expect("foo defined");
+        assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace, ArgKind::Brace]);
+    }
+
+    #[test]
+    fn def_variants_scanned() {
+        // `\edef`/`\gdef`/`\xdef` share `\def`'s shape and are scanned the same way.
+        let db = db_of("\\edef\\a#1{x}\\gdef\\b{y}\\xdef\\c#1{\\@makeother\\$#1}\n");
+        assert_eq!(db.command("a").expect("a defined").args.len(), 1);
+        assert!(db.command("b").expect("b defined").args.is_empty());
+        let c = db.command("c").expect("c defined");
+        assert!(c.verbatim);
+        assert!(c.args.is_empty());
+    }
+
+    #[test]
+    fn def_chain_through_def_helpers() {
+        // A `\def` → `\def` helper chain still reaches the signal and flags the caller.
+        let db = db_of(
+            "\\def\\inner{\\@makeother\\$}\\def\\outer{\\inner}\\newcommand\\cmd[1]{\\outer#1}\n",
+        );
+        assert!(db.command("cmd").expect("cmd defined").verbatim);
     }
 
     #[test]

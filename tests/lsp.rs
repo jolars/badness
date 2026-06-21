@@ -801,7 +801,13 @@ fn definition(client: &Connection, id: i32, uri: &Uri, position: Position) -> Ve
 #[test]
 fn lsp_definition_same_file_ref_to_label() {
     let (client, server_thread) = start_server(None);
-    let uri: Uri = "file:///def.tex".parse().unwrap();
+    // Build the URI from a platform-absolute path: go-to-definition re-derives the
+    // reply `Location`'s URI from the db's normalized (absolutized) path, so a
+    // bare `file:///def.tex` round-trips on Unix but not on Windows, where
+    // `/def.tex` lacks a drive and gets the cwd drive prepended. No file is
+    // created; the buffer stays in-memory.
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
     // A label and a reference to it in the same buffer.
     let doc = "\\label{sec:intro}\n\\ref{sec:intro}\n";
     did_open(&client, &uri, 1, doc);

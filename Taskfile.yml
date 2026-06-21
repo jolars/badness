@@ -49,6 +49,16 @@ tasks:
     cmds:
       - cargo test --test bib_parse_compat -- --ignored --nocapture
 
+  bib-fields:check:
+    desc: Check data/bib_fields.json is in sync with biblatex's data model (blx-dm.def)
+    cmds:
+      - python3 scripts/gen_bib_fields.py
+
+  bib-fields:sync:
+    desc: Re-sync data/bib_fields.json's mechanical facts from biblatex's data model
+    cmds:
+      - python3 scripts/gen_bib_fields.py --write
+
   check:
     desc: Everything CI runs
     deps: [fmt-check, lint, test]

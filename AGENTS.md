@@ -286,6 +286,13 @@ extraction stays a mechanical lift, not a merge.
   `cargo-show-asm`, `cargo-llvm-cov` are in the dev shell. Benchmark before
   optimizing; never regress losslessness for speed.
 - Task runner: `go-task` (`Taskfile.yml`, mirror arity's targets).
+- The bib field/entry DB (`data/bib_fields.json`) tracks **biblatex's canonical
+  data model** (`blx-dm.def`). `scripts/gen_bib_fields.py` keeps the *mechanical*
+  facts (entry-type set, field categories, `required` constraints) in sync with the
+  installed biblatex, preserving the hand-curated `optional` ordering and the
+  classic-BibTeX overlay. `task bib-fields:check` reports drift (run after a biblatex
+  bump); `task bib-fields:sync` applies it. Don't hand-edit those mechanical facts —
+  change them via the model and re-sync.
 
 ## Working agreements for agents
 

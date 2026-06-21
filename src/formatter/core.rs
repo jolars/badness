@@ -97,17 +97,18 @@ pub fn format_with_style(input: &str, style: FormatStyle) -> Result<String, Form
 }
 
 /// Like [`format_with_style`] but parses `input` under an explicit
-/// [`LatexFlavor`], so a [`Package`](LatexFlavor::Package) flavor (`.sty`/`.cls`)
-/// lexes with `@` as a letter (the implicit `\makeatletter`). The wrap mode is a
+/// [`LexConfig`], so a [`Package`](LatexFlavor::Package) flavor (`.sty`/`.cls`)
+/// lexes with `@` as a letter (the implicit `\makeatletter`) and a `.dtx` runs
+/// the docstrip mode. A bare [`LatexFlavor`] coerces in. The wrap mode is a
 /// `style` concern, decided by the caller (`.sty`/`.cls` default to
 /// [`crate::formatter::WrapMode::Preserve`] via
 /// [`crate::file_discovery::FileKind::default_wrap`]).
 pub fn format_with_style_flavored(
     input: &str,
     style: FormatStyle,
-    flavor: LatexFlavor,
+    config: impl Into<crate::parser::LexConfig>,
 ) -> Result<String, FormatError> {
-    let parsed = parse_with_flavor(input, flavor);
+    let parsed = parse_with_flavor(input, config);
     if !parsed.errors.is_empty() {
         return Err(FormatError::ParseErrors {
             count: parsed.errors.len(),

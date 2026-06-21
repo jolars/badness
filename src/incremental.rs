@@ -135,11 +135,12 @@ pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocume
         file: Some(file),
     });
 
-    // Parse with the flavor implied by the file's extension: a `.sty`/`.cls` is
+    // Parse with the config implied by the file's extension: a `.sty`/`.cls` is
     // loaded under an implicit `\makeatletter` (`LatexFlavor::Package`), so `@` is
-    // a letter throughout. `file_kind_or_tex` reads only the path name.
-    let flavor = file_kind_or_tex(file.path(db)).latex_flavor();
-    let parsed = parse_with_flavor(file.text(db).as_str(), flavor);
+    // a letter throughout, and a `.dtx` runs the docstrip mode.
+    // `file_kind_or_tex` reads only the path name.
+    let config = file_kind_or_tex(file.path(db)).lex_config();
+    let parsed = parse_with_flavor(file.text(db).as_str(), config);
     let diagnostics = parsed
         .errors
         .into_iter()

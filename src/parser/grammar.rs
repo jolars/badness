@@ -102,7 +102,10 @@ impl<'t> Parser<'t> {
     fn is_trivia(k: SyntaxKind) -> bool {
         matches!(
             k,
-            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT
+            SyntaxKind::WHITESPACE
+                | SyntaxKind::NEWLINE
+                | SyntaxKind::COMMENT
+                | SyntaxKind::DOC_MARGIN
         )
     }
 
@@ -155,7 +158,10 @@ impl<'t> Parser<'t> {
                     newlines += 1;
                     had_break |= newlines >= 2;
                 }
-                SyntaxKind::WHITESPACE => {}
+                // A `.dtx` margin floats like whitespace: it neither counts nor
+                // resets the newline run, so a margin-only line (`%\n%\n`) reads as
+                // the doc-layer blank line via its two `NEWLINE`s.
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => {}
                 // A comment occupies its own line: it is content, not blank
                 // space, so it resets the run that detects a blank line. It
                 // does not undo a blank line already seen before it.
@@ -193,7 +199,8 @@ impl<'t> Parser<'t> {
                         return true;
                     }
                 }
-                SyntaxKind::WHITESPACE => {}
+                // A `.dtx` margin floats like whitespace (see `peek_meaningful`).
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => {}
                 // A comment-only line is content, not a blank line: it breaks
                 // the run of newlines that would otherwise read as a `\par`.
                 SyntaxKind::COMMENT => newlines = 0,
@@ -213,7 +220,9 @@ impl<'t> Parser<'t> {
         while i > 0 {
             i -= 1;
             match self.tokens[i].kind {
-                SyntaxKind::WHITESPACE => continue,
+                // A `.dtx` margin is skipped like whitespace when deciding whether a
+                // comment owns its line (the margin is not itself the comment).
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => continue,
                 SyntaxKind::NEWLINE => return true,
                 _ => return false,
             }
@@ -248,7 +257,10 @@ impl<'t> Parser<'t> {
                         comment_start = None;
                     }
                 }
-                SyntaxKind::WHITESPACE => {}
+                // A `.dtx` margin floats like whitespace and is *not* a doc-comment,
+                // so it never starts a binding run (decision #9's leading-comment
+                // bind keys on real `COMMENT` tokens, which margins are not).
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => {}
                 SyntaxKind::COMMENT => {
                     newlines = 0;
                     if comment_start.is_none() && self.comment_starts_line(i) {
@@ -380,7 +392,8 @@ impl<'t> Parser<'t> {
                     newlines += 1;
                     had_break |= newlines >= 2;
                 }
-                SyntaxKind::WHITESPACE => {}
+                // A `.dtx` margin floats like whitespace (see `peek_meaningful`).
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => {}
                 // A comment line is content: it resets the blank-line run but
                 // keeps any blank line already seen before it.
                 SyntaxKind::COMMENT => newlines = 0,
@@ -398,7 +411,10 @@ impl<'t> Parser<'t> {
     fn element(&mut self) {
         let Some(k) = self.kind() else { return };
         match k {
-            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT => self.bump(),
+            SyntaxKind::WHITESPACE
+            | SyntaxKind::NEWLINE
+            | SyntaxKind::COMMENT
+            | SyntaxKind::DOC_MARGIN => self.bump(),
             SyntaxKind::CONTROL_WORD => {
                 if self.at_command(BEGIN_CMD) {
                     self.environment();
@@ -684,7 +700,12 @@ impl<'t> Parser<'t> {
     /// recovery anchors before invoking this, so the cursor is at body content.
     fn math_element(&mut self) {
         match self.kind() {
-            Some(SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT) => self.bump(),
+            Some(
+                SyntaxKind::WHITESPACE
+                | SyntaxKind::NEWLINE
+                | SyntaxKind::COMMENT
+                | SyntaxKind::DOC_MARGIN,
+            ) => self.bump(),
             _ => self.math_scripted(),
         }
     }
@@ -740,7 +761,10 @@ impl<'t> Parser<'t> {
                     }
                     i += 1;
                 }
-                SyntaxKind::WHITESPACE => i += 1,
+                // A `.dtx` margin is skipped like whitespace, so a script binds
+                // across a doc-layer line continuation (`% x\n% ^2`) but not across a
+                // blank margin line (the `newlines >= 2` guard still ends the math).
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => i += 1,
                 SyntaxKind::CARET | SyntaxKind::UNDERSCORE => return true,
                 _ => return false,
             }

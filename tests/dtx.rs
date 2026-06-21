@@ -1,0 +1,169 @@
+//! `.dtx` (docstrip literate) parsing: the two-layer surface model.
+//!
+//! M1a establishes the documentation-margin model — a line-leading `%` becomes a
+//! `DOC_MARGIN` trivia token so the doc layer parses as ordinary LaTeX — and lets
+//! `macrocode` pair through the existing environment grammar with its body lexed
+//! as real code. Every case also re-checks losslessness.
+
+use badness::parser::{LatexFlavor, LexConfig, parse_with_flavor};
+use badness::syntax::{SyntaxKind, SyntaxNode};
+
+/// Parse `input` under the docstrip (`.dtx`) config, asserting losslessness.
+fn parse_dtx(input: &str) -> SyntaxNode {
+    let config = LexConfig {
+        flavor: LatexFlavor::Document,
+        dtx: true,
+    };
+    let parsed = parse_with_flavor(input, config);
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    parsed.syntax()
+}
+
+/// Count descendant nodes of a given kind.
+fn count(root: &SyntaxNode, kind: SyntaxKind) -> usize {
+    root.descendants().filter(|n| n.kind() == kind).count()
+}
+
+/// Count tokens (leaves) of a given kind.
+fn count_token(root: &SyntaxNode, kind: SyntaxKind) -> usize {
+    root.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| t.kind() == kind)
+        .count()
+}
+
+/// All `(kind, text)` tokens in document order.
+fn tokens(root: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
+    root.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .map(|t| (t.kind(), t.text().to_string()))
+        .collect()
+}
+
+#[test]
+fn line_leading_percent_is_a_margin_mid_line_percent_is_a_comment() {
+    // The first `%` opens a documentation line (a margin); the `%` on the code
+    // line is preceded by `word `, so it is an ordinary trailing comment.
+    let root = parse_dtx("% doc text\nword % trailing\n");
+    let toks = tokens(&root);
+    let margins: Vec<_> = toks
+        .iter()
+        .filter(|(k, _)| *k == SyntaxKind::DOC_MARGIN)
+        .collect();
+    let comments: Vec<_> = toks
+        .iter()
+        .filter(|(k, _)| *k == SyntaxKind::COMMENT)
+        .collect();
+    assert_eq!(margins, vec![&(SyntaxKind::DOC_MARGIN, "%".to_string())]);
+    assert_eq!(
+        comments,
+        vec![&(SyntaxKind::COMMENT, "% trailing".to_string())]
+    );
+    // The documentation content lexes as real words, not as comment text.
+    assert!(toks.contains(&(SyntaxKind::WORD, "doc".to_string())));
+}
+
+#[test]
+fn a_guard_line_stays_a_comment_for_now() {
+    // M1a leaves `%<…>` docstrip guards as ordinary comments (guards land in M2):
+    // the line-leading `%<` is *not* treated as a margin.
+    let root = parse_dtx("%<*driver>\n\\documentclass{article}\n%</driver>\n");
+    let toks = tokens(&root);
+    assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 0);
+    assert!(toks.contains(&(SyntaxKind::COMMENT, "%<*driver>".to_string())));
+    assert!(toks.contains(&(SyntaxKind::COMMENT, "%</driver>".to_string())));
+    // The un-margined driver code parses as ordinary LaTeX.
+    assert!(count(&root, SyntaxKind::COMMAND) >= 1);
+}
+
+#[test]
+fn blank_margin_line_breaks_the_paragraph() {
+    // `%\n` is the doc-layer blank line: the two surrounding `NEWLINE`s, with the
+    // floating margins, form a `\par` boundary.
+    let root = parse_dtx("% first paragraph\n%\n% second paragraph\n");
+    assert_eq!(count(&root, SyntaxKind::PARAGRAPH), 2);
+}
+
+#[test]
+fn continuation_margins_keep_one_paragraph() {
+    // Consecutive content doc lines are a single paragraph; the margins float
+    // inside it like whitespace.
+    let root = parse_dtx("% one two three\n% four five six\n");
+    assert_eq!(count(&root, SyntaxKind::PARAGRAPH), 1);
+}
+
+#[test]
+fn macrocode_is_an_environment_whose_body_is_real_code() {
+    let input = "%    \\begin{macrocode}\n\\def\\foo{\\bar}\n%    \\end{macrocode}\n";
+    let root = parse_dtx(input);
+    // The framing lines pair through the ordinary environment grammar.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+    // The body is parsed code (a `\def` command), not an opaque verbatim blob.
+    assert!(count(&root, SyntaxKind::COMMAND) >= 1);
+    assert_eq!(count_token(&root, SyntaxKind::VERBATIM_BODY), 0);
+    // Both framing lines kept their margins.
+    assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 2);
+}
+
+#[test]
+fn macrocode_body_lexes_under_the_package_regime() {
+    // Inside `macrocode`, `@` is a letter (`\bar@baz` is one control word) — the
+    // package internals regime. In the documentation layer it is not.
+    let inside = parse_dtx("%    \\begin{macrocode}\n\\bar@baz\n%    \\end{macrocode}\n");
+    assert!(tokens(&inside).contains(&(SyntaxKind::CONTROL_WORD, "\\bar@baz".to_string())));
+
+    let doc = parse_dtx("% \\bar@baz\n");
+    let dtoks = tokens(&doc);
+    assert!(dtoks.contains(&(SyntaxKind::CONTROL_WORD, "\\bar".to_string())));
+    assert!(
+        !dtoks
+            .iter()
+            .any(|(k, t)| *k == SyntaxKind::CONTROL_WORD && t == "\\bar@baz")
+    );
+}
+
+#[test]
+fn a_stray_percent_line_inside_macrocode_is_a_code_comment() {
+    // Within the body, a line-leading `%` that is not the terminator is an
+    // ordinary code comment, not a documentation margin.
+    let input =
+        "%    \\begin{macrocode}\n\\foo\n% an in-code comment\n\\bar\n%    \\end{macrocode}\n";
+    let root = parse_dtx(input);
+    assert!(tokens(&root).contains(&(SyntaxKind::COMMENT, "% an in-code comment".to_string())));
+    // Only the two frame lines carry margins.
+    assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 2);
+}
+
+#[test]
+fn verbatim_command_defined_and_used_inside_macrocode_is_two_pass_stable() {
+    // A catcode-othering command defined in `macrocode` (only lexable because `@`
+    // is a letter there) is discovered by the definition scan and, on the second
+    // pass, captures its call-site argument as one opaque `VERB`. The docstrip
+    // mode reproduces identically across both passes, so this round-trips.
+    let input = "%    \\begin{macrocode}\n\\newcommand\\shex[1]{\\@makeother\\$#1}\n\\shex{a_$b$}\n%    \\end{macrocode}\n";
+    let root = parse_dtx(input);
+    assert_eq!(count_token(&root, SyntaxKind::VERB), 1);
+}
+
+#[test]
+fn unterminated_macrocode_recovers_losslessly() {
+    // No closing `%    \end{macrocode}`: the environment grammar recovers at EOF
+    // and the bytes still round-trip (losslessness asserted in `parse_dtx`).
+    let root = parse_dtx("%    \\begin{macrocode}\n\\foo\n\\bar\n");
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+}
+
+#[test]
+fn meta_comment_header_parses_as_documentation() {
+    // The conventional self-extracting header: every line is a margin doc line
+    // carrying `\iffalse … \fi` (left un-evaluated — ordinary commands to us).
+    let root = parse_dtx("% \\iffalse meta-comment\n% \\fi\n");
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\iffalse".to_string())));
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\fi".to_string())));
+    assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 2);
+}

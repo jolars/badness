@@ -22,7 +22,7 @@ use badness::linter::{
 };
 use std::collections::HashMap;
 
-use badness::parser::{LatexFlavor, parse_with_flavor};
+use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, is_document_root};
 use badness::project::{
     CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
@@ -288,8 +288,8 @@ fn run_lint(
                 );
                 diagnostics.extend(badness::bib::linter::lint_document(path, &root, &model));
             }
-            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
-                let parsed = parse_with_flavor(content, kind.latex_flavor());
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+                let parsed = parse_with_flavor(content, kind.lex_config());
                 diagnostics.extend(
                     parsed
                         .errors
@@ -403,8 +403,8 @@ fn fix_file(path: &Path, kind: FileKind, include_unsafe: bool) -> std::io::Resul
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
-                check_document(path, &content, kind.latex_flavor())
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+                check_document(path, &content, kind.lex_config())
             }
             FileKind::Bib => badness::bib::linter::check_document(path, &content),
         };
@@ -450,10 +450,8 @@ fn run_parse(path: Option<&Path>) -> ExitCode {
         }
     };
 
-    let flavor = path.map_or(LatexFlavor::Document, |p| {
-        file_kind_or_tex(p).latex_flavor()
-    });
-    let parsed = parse_with_flavor(&input, flavor);
+    let config = path.map_or(LexConfig::default(), |p| file_kind_or_tex(p).lex_config());
+    let parsed = parse_with_flavor(&input, config);
     let mut out = String::new();
     render_cst(&parsed.syntax(), 0, &mut out);
     if let Err(err) = std::io::stdout().write_all(out.as_bytes()) {
@@ -554,9 +552,8 @@ fn run_format_stdin(
     let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
     style.wrap = wrap_override.unwrap_or(kind.default_wrap());
     let formatted = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls => {
-            format_with_style_flavored(&input, style, kind.latex_flavor())
-                .map_err(|e| e.to_string())
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            format_with_style_flavored(&input, style, kind.lex_config()).map_err(|e| e.to_string())
         }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
     };
@@ -633,8 +630,8 @@ fn run_format_paths(
         };
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
-                format_with_style_flavored(&content, style, kind.latex_flavor())
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+                format_with_style_flavored(&content, style, kind.lex_config())
                     .map_err(|e| e.to_string())
             }
             FileKind::Bib => {

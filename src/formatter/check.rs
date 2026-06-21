@@ -128,8 +128,8 @@ pub fn check_paths_with_style(
 
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls => {
-                format_with_style_flavored(&content, style, kind.latex_flavor()).map_err(|err| {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+                format_with_style_flavored(&content, style, kind.lex_config()).map_err(|err| {
                     CheckError::FormatError {
                         path: path.clone(),
                         source: err,

@@ -62,6 +62,31 @@ impl LatexFlavor {
     }
 }
 
+/// The lexer's per-parse mode. [`flavor`](Self::flavor) fixes the *initial*
+/// catcode regime (a `.sty`/`.cls` starts under an implicit `\makeatletter`),
+/// while [`dtx`](Self::dtx) is an orthogonal axis: when set, the lexer runs the
+/// bounded line-oriented docstrip mode for a `.dtx` file — line-leading `%`
+/// margins become [`DOC_MARGIN`](SyntaxKind::DOC_MARGIN) trivia and `macrocode`
+/// bodies lex as ordinary code (`AGENTS.md` decision #1). The two axes are
+/// independent because a `.dtx`'s catcode regime varies *by layer* (its
+/// documentation is `Document`-flavored, its `macrocode` `Package`-flavored), so
+/// `dtx` cannot be folded into a [`LatexFlavor`] variant.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LexConfig {
+    /// The initial catcode regime.
+    pub flavor: LatexFlavor,
+    /// Run the docstrip (`.dtx`) line-oriented lexer mode.
+    pub dtx: bool,
+}
+
+impl From<LatexFlavor> for LexConfig {
+    /// A plain (non-`.dtx`) config of the given flavor — the common case, so a
+    /// bare [`LatexFlavor`] coerces into a [`LexConfig`] at call sites.
+    fn from(flavor: LatexFlavor) -> Self {
+        Self { flavor, dtx: false }
+    }
+}
+
 /// Per-parse lexer context carrying *user-defined* verbatim constructs — those a
 /// document declares with catcode manipulation (`\@makeother\$`, …), found by scanning
 /// definition bodies ([`crate::semantic::define`]). The lexer consults it (alongside
@@ -163,18 +188,31 @@ fn is_definition_keyword(text: &str) -> bool {
 /// parse pass; [`lex_with`] adds user-defined verbatim commands. Uses the
 /// [`Document`](LatexFlavor::Document) flavor (ordinary starting catcodes).
 pub fn lex(input: &str) -> Vec<Token> {
-    lex_with(input, &VerbCtx::default(), LatexFlavor::Document)
+    lex_with(input, &VerbCtx::default(), LexConfig::default())
 }
 
 /// Lex `input` like [`lex`], additionally treating the user-defined verbatim
 /// commands in `ctx` as verbatim (their final argument captured as one `VERB`
 /// token). Used by the second parse pass once definition scanning has discovered
-/// catcode-othering commands. `flavor` fixes the initial catcode regime: a
-/// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter.
-pub fn lex_with(input: &str, ctx: &VerbCtx, flavor: LatexFlavor) -> Vec<Token> {
+/// catcode-othering commands. `config` fixes the initial catcode regime (a
+/// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter) and
+/// whether to run the `.dtx` docstrip mode.
+pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     let mut out = Vec::new();
     let mut pos = 0;
-    let mut at_letter = flavor.letter_mode_start(); // `\makeatletter` state
+    let mut at_letter = config.flavor.letter_mode_start(); // `\makeatletter` state
+    // `.dtx` docstrip mode: true at the start of a physical line (start of input
+    // or just after a `NEWLINE`), so a line-leading `%` can be recognized as a
+    // documentation margin. Any token — including whitespace — clears it, matching
+    // docstrip's rule that only a `%` in *column 0* is a margin.
+    let mut at_line_start = true;
+    // True while inside a `macrocode`/`macrocode*` environment body (between its
+    // frame lines). There, code lines carry no margin, a line-leading `%` is an
+    // ordinary code comment (not a margin), and `@` is a letter (`macrocode` runs
+    // under `\makeatletter`). The pre-macrocode `at_letter` is saved here and
+    // restored on exit.
+    let mut in_macrocode = false;
+    let mut saved_at_letter = at_letter;
     // True when the previous meaningful token was `\left`/`\right`, so the next
     // delimiter must be isolated as a single token (it carries across whitespace,
     // which TeX skips before the delimiter).
@@ -190,11 +228,62 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, flavor: LatexFlavor) -> Vec<Token> {
     while pos < input.len() {
         let rest = &input[pos..];
 
+        // `.dtx` `macrocode` frame line. A `%␣*\begin{macrocode}` line opens a code
+        // region; its `%␣*\end{macrocode}` terminator closes it. Both lex as a
+        // margin + indent + `\begin`/`\end{macrocode}` so the ordinary environment
+        // grammar pairs them, but the *body* in between lexes as real code, under
+        // the package regime (`@` a letter) with no margin stripping. We look for a
+        // begin frame outside the body and the end frame inside it; anything else on
+        // a `%` line inside the body is an ordinary code comment.
+        if config.dtx
+            && at_line_start
+            && let Some(consumed) = lex_macrocode_frame(rest, !in_macrocode, &mut out)
+        {
+            if in_macrocode {
+                in_macrocode = false;
+                at_letter = saved_at_letter;
+            } else {
+                in_macrocode = true;
+                saved_at_letter = at_letter;
+                at_letter = true;
+            }
+            pos += consumed;
+            at_line_start = false;
+            pending_delim = false;
+            pending_def = false;
+            continue;
+        }
+
+        // `.dtx` documentation margin: a line-leading `%` (but not a `%<…>` guard,
+        // which stays an ordinary comment until M2) is a documentation line's
+        // comment *margin*, not a comment. Emit it as a `DOC_MARGIN` trivia token —
+        // one byte, never the following space — so the rest of the line lexes (and
+        // parses) as ordinary LaTeX and the margin floats like whitespace. Only the
+        // line-leading `%` is a margin; a later `%` on the same line stays a
+        // `COMMENT`. Inside a `macrocode` body there is no margin (code lines own
+        // their `%`), so this is gated on `!in_macrocode`. The margin is trivia, so
+        // it carries `pending_delim`/`pending_def` across unchanged (like whitespace).
+        if config.dtx
+            && at_line_start
+            && !in_macrocode
+            && rest.starts_with('%')
+            && !rest.starts_with("%<")
+        {
+            out.push(Token {
+                kind: SyntaxKind::DOC_MARGIN,
+                text: SmolStr::new("%"),
+            });
+            pos += 1;
+            at_line_start = false;
+            continue;
+        }
+
         // Verbatim-like environment: emit `\begin{name}` then a raw body token.
         if let Some(consumed) = lex_verbatim_environment(rest, ctx, &mut out) {
             pos += consumed;
             pending_delim = false;
             pending_def = false;
+            at_line_start = false;
             continue;
         }
 
@@ -207,6 +296,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, flavor: LatexFlavor) -> Vec<Token> {
         {
             pos += consumed;
             pending_delim = false;
+            at_line_start = false;
             continue;
         }
 
@@ -245,6 +335,9 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, flavor: LatexFlavor) -> Vec<Token> {
             kind,
             text: SmolStr::new(text),
         });
+        // A new physical line begins right after a `NEWLINE`; any other token
+        // (whitespace included) leaves the cursor mid-line.
+        at_line_start = kind == SyntaxKind::NEWLINE;
         pos += len;
     }
     out
@@ -402,6 +495,75 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
         });
     }
     Some(prefix_len + args_len + body_len)
+}
+
+/// A `.dtx` `macrocode` frame line, at a line start: `%␣*\begin{macrocode}` (when
+/// `want_begin`) or `%␣*\end{macrocode}` (otherwise), with the `*` variant
+/// accepted. On a match, emit the frame tokens — the `%` margin, the indent
+/// whitespace, the `\begin`/`\end` control word, and the `{macrocode}` name group —
+/// and return the bytes consumed (through the closing `}`; the trailing newline
+/// lexes normally). Returns `None` when `rest` is not the requested frame.
+///
+/// Unlike a verbatim environment, the body is *not* captured here: it lexes as
+/// ordinary code in the main loop (under the package regime). The frame line must
+/// hold nothing but trailing whitespace after the name group, so a stray
+/// `\begin{macrocode}{x}` is not mistaken for a frame.
+fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Option<usize> {
+    let after_pct = rest.strip_prefix('%')?;
+    let ws_len = after_pct
+        .bytes()
+        .take_while(|&b| b == b' ' || b == b'\t')
+        .count();
+    let body = &after_pct[ws_len..];
+    let (control, open) = if want_begin {
+        ("\\begin", "\\begin{")
+    } else {
+        ("\\end", "\\end{")
+    };
+    let after_open = body.strip_prefix(open)?;
+    let close = after_open.find('}')?;
+    let name = &after_open[..close];
+    if name != "macrocode" && name != "macrocode*" {
+        return None;
+    }
+    // The frame line carries nothing but trailing whitespace after `}`.
+    let after_close = &after_open[close + 1..];
+    let trailing = after_close
+        .bytes()
+        .take_while(|&b| b == b' ' || b == b'\t')
+        .count();
+    let tail = &after_close[trailing..];
+    if !(tail.is_empty() || tail.starts_with('\n') || tail.starts_with('\r')) {
+        return None;
+    }
+
+    out.push(Token {
+        kind: SyntaxKind::DOC_MARGIN,
+        text: SmolStr::new("%"),
+    });
+    if ws_len > 0 {
+        out.push(Token {
+            kind: SyntaxKind::WHITESPACE,
+            text: SmolStr::new(&after_pct[..ws_len]),
+        });
+    }
+    out.push(Token {
+        kind: SyntaxKind::CONTROL_WORD,
+        text: SmolStr::new(control),
+    });
+    out.push(Token {
+        kind: SyntaxKind::L_BRACE,
+        text: SmolStr::new("{"),
+    });
+    out.push(Token {
+        kind: SyntaxKind::WORD,
+        text: SmolStr::new(name),
+    });
+    out.push(Token {
+        kind: SyntaxKind::R_BRACE,
+        text: SmolStr::new("}"),
+    });
+    Some(1 + ws_len + control.len() + 1 + name.len() + 1)
 }
 
 /// If `rest` starts with a verbatim-argument command (`\url`, `\code`,
@@ -769,7 +931,11 @@ mod tests {
         // A `.sty`/`.cls` is loaded under an implicit `\makeatletter`, so `@` is a
         // letter from the first byte — `\foo@bar` is one control word with no
         // explicit `\makeatletter`.
-        let toks = lex_with(r"\foo@bar", &VerbCtx::default(), LatexFlavor::Package);
+        let toks = lex_with(
+            r"\foo@bar",
+            &VerbCtx::default(),
+            LatexFlavor::Package.into(),
+        );
         let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
         assert_eq!(seen, vec![(SyntaxKind::CONTROL_WORD, "\\foo@bar")]);
     }
@@ -780,7 +946,7 @@ mod tests {
         let toks = lex_with(
             r"\foo@bar\makeatother\foo@bar",
             &VerbCtx::default(),
-            LatexFlavor::Package,
+            LatexFlavor::Package.into(),
         );
         let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo@bar")));
@@ -795,6 +961,43 @@ mod tests {
         let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
         assert!(!seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo@bar")));
+    }
+
+    #[test]
+    fn dtx_mode_lexes_line_leading_percent_as_a_margin() {
+        // A line-leading `%` is a one-byte `DOC_MARGIN`; the rest of the doc line
+        // lexes as ordinary LaTeX. A `%` not in column 0 stays a `COMMENT`.
+        let dtx = LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        };
+        let toks = lex_with("% \\foo\nbar % tail\n", &VerbCtx::default(), dtx);
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert_eq!(seen[0], (SyntaxKind::DOC_MARGIN, "%"));
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
+        assert!(seen.contains(&(SyntaxKind::COMMENT, "% tail")));
+        // Exactly one margin (column 0 of the first line only).
+        assert_eq!(
+            seen.iter()
+                .filter(|(k, _)| *k == SyntaxKind::DOC_MARGIN)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dtx_mode_is_off_by_default_and_for_guards() {
+        // Without the docstrip flag a `%` line stays a comment (plain `.tex`)…
+        let plain = lex("% \\foo\n");
+        assert_eq!(plain[0].kind, SyntaxKind::COMMENT);
+        // …and even in dtx mode a `%<…>` guard line is left as a comment (M2 work).
+        let dtx = LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        };
+        let guard = lex_with("%<*driver>\n", &VerbCtx::default(), dtx);
+        assert_eq!(guard[0].kind, SyntaxKind::COMMENT);
+        assert_eq!(guard[0].text, "%<*driver>");
     }
 
     #[test]

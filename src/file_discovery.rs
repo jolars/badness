@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 
 use crate::formatter::WrapMode;
-use crate::parser::LatexFlavor;
+use crate::parser::{LatexFlavor, LexConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileDiscoveryError {
@@ -41,6 +41,8 @@ pub enum FileKind {
     Sty,
     /// A `.cls` class source.
     Cls,
+    /// A `.dtx` docstrip literate source (interleaved documentation + code).
+    Dtx,
     /// A `.bib` bibliography database.
     Bib,
 }
@@ -51,12 +53,17 @@ impl FileKind {
     /// linter, differing only in [`latex_flavor`](Self::latex_flavor) and
     /// [`default_wrap`](Self::default_wrap).
     pub fn is_latex(self) -> bool {
-        matches!(self, FileKind::Tex | FileKind::Sty | FileKind::Cls)
+        matches!(
+            self,
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx
+        )
     }
 
     /// The [`LatexFlavor`] to parse this kind with: `.sty`/`.cls` are loaded under
     /// an implicit `\makeatletter` ([`LatexFlavor::Package`]); everything else is a
-    /// plain [`LatexFlavor::Document`].
+    /// plain [`LatexFlavor::Document`]. A `.dtx`'s *documentation* layer is
+    /// `Document`-flavored — its `macrocode` body switches to the package regime
+    /// internally (the docstrip mode, see [`lex_config`](Self::lex_config)).
     pub fn latex_flavor(self) -> LatexFlavor {
         match self {
             FileKind::Sty | FileKind::Cls => LatexFlavor::Package,
@@ -64,12 +71,23 @@ impl FileKind {
         }
     }
 
+    /// The full [`LexConfig`] to parse this kind with: its [`latex_flavor`] plus
+    /// the `.dtx` docstrip mode for [`Dtx`](FileKind::Dtx).
+    pub fn lex_config(self) -> LexConfig {
+        LexConfig {
+            flavor: self.latex_flavor(),
+            dtx: matches!(self, FileKind::Dtx),
+        }
+    }
+
     /// The default paragraph [`WrapMode`] for this kind when the caller gives no
     /// explicit override: a package/class body is code, not prose, so it defaults
-    /// to [`WrapMode::Preserve`]; a document reflows ([`WrapMode::Reflow`]).
+    /// to [`WrapMode::Preserve`]; a document reflows ([`WrapMode::Reflow`]). A
+    /// `.dtx` is code-heavy and defaults to [`WrapMode::Preserve`] (its two-layer
+    /// formatting is a later milestone).
     pub fn default_wrap(self) -> WrapMode {
         match self {
-            FileKind::Sty | FileKind::Cls => WrapMode::Preserve,
+            FileKind::Sty | FileKind::Cls | FileKind::Dtx => WrapMode::Preserve,
             _ => WrapMode::Reflow,
         }
     }
@@ -143,6 +161,8 @@ fn lint_file_kind(path: &Path) -> Option<FileKind> {
         Some(FileKind::Sty)
     } else if ext.eq_ignore_ascii_case("cls") {
         Some(FileKind::Cls)
+    } else if ext.eq_ignore_ascii_case("dtx") {
+        Some(FileKind::Dtx)
     } else if ext.eq_ignore_ascii_case("bib") {
         Some(FileKind::Bib)
     } else {
@@ -342,6 +362,8 @@ mod tests {
         assert_eq!(file_kind_or_tex(Path::new("Pkg.STY")), FileKind::Sty);
         assert_eq!(file_kind_or_tex(Path::new("base.cls")), FileKind::Cls);
         assert_eq!(file_kind_or_tex(Path::new("Base.CLS")), FileKind::Cls);
+        assert_eq!(file_kind_or_tex(Path::new("array.dtx")), FileKind::Dtx);
+        assert_eq!(file_kind_or_tex(Path::new("Array.DTX")), FileKind::Dtx);
         assert_eq!(file_kind_or_tex(Path::new("buffer")), FileKind::Tex);
     }
 
@@ -375,5 +397,26 @@ mod tests {
         assert_eq!(FileKind::Tex.latex_flavor(), LatexFlavor::Document);
         assert_eq!(FileKind::Tex.default_wrap(), WrapMode::Reflow);
         assert!(!FileKind::Bib.is_latex());
+    }
+
+    #[test]
+    fn dtx_kind_is_latex_document_flavor_with_docstrip_lex_config() {
+        // A `.dtx` feeds the LaTeX pipeline: its documentation layer is
+        // `Document`-flavored, it defaults to code-not-prose wrapping, and its
+        // `lex_config` carries the docstrip mode (its `macrocode` body switches to
+        // the package regime internally).
+        let dtx = FileKind::Dtx;
+        assert!(dtx.is_latex());
+        assert_eq!(dtx.latex_flavor(), LatexFlavor::Document);
+        assert_eq!(dtx.default_wrap(), WrapMode::Preserve);
+        assert_eq!(
+            dtx.lex_config(),
+            LexConfig {
+                flavor: LatexFlavor::Document,
+                dtx: true,
+            }
+        );
+        // A bare flavor coerces into a non-docstrip config (the common case).
+        assert!(!LexConfig::from(LatexFlavor::Package).dtx);
     }
 }

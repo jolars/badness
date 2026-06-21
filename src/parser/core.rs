@@ -8,7 +8,7 @@ use rowan::GreenNode;
 use smol_str::SmolStr;
 
 use crate::parser::grammar;
-use crate::parser::lexer::{LatexFlavor, VerbCtx, lex_with};
+use crate::parser::lexer::{LatexFlavor, LexConfig, VerbCtx, lex_with};
 use crate::parser::tree_builder::build_tree;
 use crate::semantic::define::scan_definitions;
 use crate::syntax::SyntaxNode;
@@ -53,23 +53,26 @@ pub fn parse(input: &str) -> Parse {
     parse_with_flavor(input, LatexFlavor::Document)
 }
 
-/// Parse LaTeX source into a lossless CST under an explicit [`LatexFlavor`].
+/// Parse LaTeX source into a lossless CST under an explicit [`LexConfig`].
 ///
-/// Identical to [`parse`] but fixes the lexer's initial catcode regime: a
-/// [`Package`](LatexFlavor::Package) flavor (`.sty`/`.cls`) starts with `@` as a
-/// letter. [`parse`] is the [`Document`](LatexFlavor::Document) wrapper.
-pub fn parse_with_flavor(input: &str, flavor: LatexFlavor) -> Parse {
-    let pass1 = parse_with(input, &VerbCtx::default(), flavor);
+/// Identical to [`parse`] but fixes the lexer's initial catcode regime (a
+/// [`Package`](LatexFlavor::Package) flavor — `.sty`/`.cls` — starts with `@` as a
+/// letter) and whether to run the `.dtx` docstrip mode. A bare [`LatexFlavor`]
+/// coerces in, so most callers pass one directly; [`parse`] is the
+/// [`Document`](LatexFlavor::Document) wrapper.
+pub fn parse_with_flavor(input: &str, config: impl Into<LexConfig>) -> Parse {
+    let config = config.into();
+    let pass1 = parse_with(input, &VerbCtx::default(), config);
     let ctx = verbatim_ctx(&pass1.syntax());
     if ctx.is_empty() {
         return pass1;
     }
-    parse_with(input, &ctx, flavor)
+    parse_with(input, &ctx, config)
 }
 
 /// Run the lex → grammar → tree-build pipeline once with a fixed verbatim context.
-fn parse_with(input: &str, ctx: &VerbCtx, flavor: LatexFlavor) -> Parse {
-    let tokens = lex_with(input, ctx, flavor);
+fn parse_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Parse {
+    let tokens = lex_with(input, ctx, config);
     let (events, errors) = grammar::parse(&tokens, ctx);
     let green = build_tree(&tokens, &events);
     Parse { green, errors }

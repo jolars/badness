@@ -298,17 +298,32 @@ scope (the same boundary the include graph and CWL ingest keep).
   guard syntax with `.dtx` (see below). They are docstrip drivers
   (`\input docstrip`, `\generate{\file{…}{\from{…}{…}}}`, `\endbatchfile`) ---
   parse + format as code (`WrapMode::Preserve`), never run the extraction.
-- [ ] **`.dtx`/`.ins` docstrip surface syntax.** A distinct literate format that
+- **`.dtx`/`.ins` docstrip surface syntax.** A distinct literate format that
   interleaves two layers: a documentation margin (lines whose leading `%` is a
-  comment margin) and code (lines with no leading `%`). The `macrocode` /
-  `macrocode*` environments delimit real package code
-  (`%    \begin{macrocode}` … a terminating `%    \end{macrocode}` line,
-  4-space indented), and docstrip module guards `%<*tag>` … `%</tag>` /
-  inline `%<tag>` select code per module. Recognize `\DocInput`,
-  `\DescribeMacro`/`\DescribeEnv`, the driver `\iffalse…\fi` wrapper. Likely a
-  dedicated lexer mode / preprocessor producing the two interleaved layers;
-  guards and the `%` margin are **protected regions**, never executed or
-  rewritten. Big bullet --- break down once the file-kind plumbing lands.
+  comment margin) and code (lines with no leading `%`). Implemented as a bounded
+  line-oriented lexer mode (`LexConfig.dtx`, sanctioned by decision #1), reusing
+  the LaTeX grammar for both layers via a `DOC_MARGIN` trivia token. Broken down:
+  - [x] **M0 file-kind plumbing.** `FileKind::Dtx` (extension-detected),
+    `LexConfig { flavor, dtx }` threaded through `lex_with`/`parse_with_flavor`/
+    `format_with_style_flavored`/`check_document` (a bare `LatexFlavor` coerces
+    in). `latex_flavor` → `Document`, `default_wrap` → `Preserve`.
+  - [x] **M1a margins.** Line-leading `%` (not `%<`) lexes as a one-byte
+    `DOC_MARGIN` trivia (never swallows the space); threaded through every
+    `grammar.rs` trivia scanner like whitespace (so `%\n%\n` is a `\par` break,
+    `%␣x\n%␣y` one paragraph) and kept out of the leading-comment bind.
+  - [x] **M1b macrocode.** `%␣*\begin{macrocode}` … `%␣*\end{macrocode}` frame
+    lines pair through the ordinary environment grammar; the body lexes as real
+    code under the package regime (`@` a letter), a stray `%` line inside is a
+    code comment, and a missing terminator recovers losslessly.
+  - [ ] **M2 guards.** `%<*tag>` / `%</tag>` / inline `%<tag>` as a `GUARD`
+    token (flat floating leaf — *no* `GUARD_BLOCK` node; guard nesting is
+    orthogonal to LaTeX nesting). Currently guard lines lex as plain comments.
+  - [ ] **M3 doc/ltxdoc semantic signatures.** `\DocInput`,
+    `\DescribeMacro`/`\DescribeEnv`, `\StopEventually`, `macro`/`environment`
+    envs; classify `macrocode`/`macrocode*` as code-not-prose. Pure
+    signature-DB work; enables the deferred doc-comment binding.
+  - [ ] **M4 driver / `\iffalse` + `.ins`.** `\iffalse…\fi` stays
+    un-evaluated (already lossless as ordinary commands); `.ins` deferred.
 
 ### Formatting
 

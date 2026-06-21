@@ -357,6 +357,24 @@ fn def_defined_verbatim_command_argument_is_opaque() {
 }
 
 #[test]
+fn user_defined_verbatim_environment_body_is_opaque() {
+    // A document that defines a catcode-othering *environment* (`\@makeother\$` in its
+    // begin-code) makes its `\begin…\end` body verbatim via the second parse pass.
+    // `shellenv` is not a built-in verbatim environment, so the VERBATIM_BODY capture
+    // proves the definition scan did the work: `$`/`_`/`%` inside stay literal.
+    let out = tree(concat!(
+        "\\newenvironment{shellenv}{\\@makeother\\$}{}\n",
+        "\\begin{shellenv}\na_$b$ % literal\n\\end{shellenv}\n",
+    ));
+    assert!(!out.contains("error @"), "{out}");
+    assert!(
+        !out.contains("DOLLAR@") && !out.contains("INLINE_MATH@") && !out.contains("COMMENT@"),
+        "{out}"
+    );
+    assert!(out.contains("VERBATIM_BODY@"), "{out}");
+}
+
+#[test]
 fn undefined_command_argument_is_not_verbatim() {
     // The fast path: with no catcode-othering definition, the same call site stays
     // ordinary — a single parse pass, and `$b$` lexes as inline math. Guards against

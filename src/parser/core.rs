@@ -61,21 +61,27 @@ pub fn parse(input: &str) -> Parse {
 /// Run the lex → grammar → tree-build pipeline once with a fixed verbatim context.
 fn parse_with(input: &str, ctx: &VerbCtx) -> Parse {
     let tokens = lex_with(input, ctx);
-    let (events, errors) = grammar::parse(&tokens);
+    let (events, errors) = grammar::parse(&tokens, ctx);
     let green = build_tree(&tokens, &events);
     Parse { green, errors }
 }
 
-/// Scan `root` for user definitions and collect the catcode-verbatim commands into a
-/// lexer [`VerbCtx`]. Each scanned command's `verbatim` flag is already resolved
-/// (`scan_definitions`), and its `args` hold the leading, non-verbatim arguments — the
-/// exact shape the lexer needs.
+/// Scan `root` for user definitions and collect the catcode-verbatim commands and
+/// environments into a lexer [`VerbCtx`]. Each scanned signature's verbatim flag is
+/// already resolved (`scan_definitions`); a command's `args` hold its leading,
+/// non-verbatim arguments and an environment's `args` its (all leading) arguments —
+/// the exact shapes the lexer needs.
 fn verbatim_ctx(root: &SyntaxNode) -> VerbCtx {
     let db = scan_definitions(root);
     let mut ctx = VerbCtx::default();
     for name in db.command_names() {
         if let Some(sig) = db.command(name).filter(|sig| sig.verbatim) {
             ctx.insert(SmolStr::new(name), sig.args.clone());
+        }
+    }
+    for name in db.environment_names() {
+        if let Some(sig) = db.environment(name).filter(|sig| sig.verbatim_body) {
+            ctx.insert_environment(SmolStr::new(name), sig.args.clone());
         }
     }
     ctx

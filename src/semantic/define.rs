@@ -44,6 +44,11 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
     // name (last definition wins, mirroring `db`). Consumed after the walk to flag
     // catcode-othering verbatim-argument commands (`apply_verbatim_flags`).
     let mut bodies: HashMap<SmolStr, DefBody> = HashMap::new();
+    // The same for environment *begin-code*, kept in a separate map because
+    // environment names live in a different namespace from commands (and so a name
+    // collision must not let one shadow the other during chain resolution). The
+    // begin-code's *called* helpers are resolved against the command `bodies` map.
+    let mut env_bodies: HashMap<SmolStr, DefBody> = HashMap::new();
 
     for command in root
         .descendants()
@@ -55,14 +60,17 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
         match DefKind::of(&name) {
             Some(DefKind::Command) => scan_newcommand(&command, &mut db, &mut bodies),
             Some(DefKind::Def) => scan_def(&command, &mut db, &mut bodies),
-            Some(DefKind::Environment) => scan_newenvironment(&command, &mut db),
+            Some(DefKind::Environment) => scan_newenvironment(&command, &mut db, &mut env_bodies),
             Some(DefKind::XparseCommand) => scan_xparse_command(&command, &mut db, &mut bodies),
-            Some(DefKind::XparseEnvironment) => scan_xparse_environment(&command, &mut db),
+            Some(DefKind::XparseEnvironment) => {
+                scan_xparse_environment(&command, &mut db, &mut env_bodies)
+            }
             None => {}
         }
     }
 
     apply_verbatim_flags(&mut db, &bodies);
+    apply_verbatim_env_flags(&mut db, &env_bodies, &bodies);
     db
 }
 
@@ -109,6 +117,36 @@ fn apply_verbatim_flags(db: &mut SignatureDb, bodies: &HashMap<SmolStr, DefBody>
     }
 }
 
+/// Flag user environments whose body is verbatim — the environment analog of
+/// [`apply_verbatim_flags`]. An environment is verbatim when a catcode-othering signal
+/// is reachable from its **begin-code** (the first definition body), directly or via a
+/// chained helper command. Unlike commands, no argument is dropped: an environment's
+/// declared args are all leading and its body follows the `\begin{…}…` arguments, so
+/// we only flip `verbatim_body` (and the derived `reflow`). The begin-code's called
+/// helpers are resolved against the *command* `bodies` map (`\newcommand`/`\def`
+/// helpers live there). Conservative by construction, like the command case.
+fn apply_verbatim_env_flags(
+    db: &mut SignatureDb,
+    env_bodies: &HashMap<SmolStr, DefBody>,
+    bodies: &HashMap<SmolStr, DefBody>,
+) {
+    let verbatim: Vec<SmolStr> = env_bodies
+        .iter()
+        .filter(|(name, body)| {
+            db.environment(name).is_some() && reaches_signal_body(body, bodies, &mut HashSet::new())
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    for name in verbatim {
+        if let Some(mut sig) = db.environment(&name).cloned() {
+            sig.verbatim_body = true;
+            sig.reflow = false; // a verbatim body is never reflowed
+            db.insert_environment(name, sig);
+        }
+    }
+}
+
 /// Whether a catcode-othering signal is reachable from `name`'s body, following
 /// chained helper macros within the scanned definition set. A `visited` set breaks
 /// definition cycles (mutually recursive helpers terminate). A helper defined via
@@ -125,6 +163,19 @@ fn reaches_signal(
     let Some(body) = bodies.get(name) else {
         return false;
     };
+    reaches_signal_body(body, bodies, visited)
+}
+
+/// Whether a catcode-othering signal is reachable from a definition `body` —
+/// present directly, or in the body of a scanned command it transitively calls. The
+/// body-level entry point used both by [`reaches_signal`] (after a name lookup) and by
+/// [`apply_verbatim_env_flags`] (for an environment's begin-code, which has no command
+/// name to look up).
+fn reaches_signal_body(
+    body: &DefBody,
+    bodies: &HashMap<SmolStr, DefBody>,
+    visited: &mut HashSet<SmolStr>,
+) -> bool {
     body.signal
         || body
             .called
@@ -315,10 +366,14 @@ fn record_body(bodies: &mut HashMap<SmolStr, DefBody>, name: &str, body: Option<
 }
 
 /// `\newenvironment{name}[n][default]{begin}{end}` → an [`EnvironmentSig`]. Same
-/// arg-count shape as [`scan_newcommand`]; the body is assumed reflowable prose (a
-/// user verbatim-like environment would be declared with package-specific macros we
-/// do not scan).
-fn scan_newenvironment(command: &SyntaxNode, db: &mut SignatureDb) {
+/// arg-count shape as [`scan_newcommand`]. The begin-code (group 1 — the optionals
+/// `[n][default]` are `OPTIONAL` nodes, so they don't shift `nth_group` indexing) is
+/// recorded so [`apply_verbatim_env_flags`] can flag a catcode-othering body verbatim.
+fn scan_newenvironment(
+    command: &SyntaxNode,
+    db: &mut SignatureDb,
+    env_bodies: &mut HashMap<SmolStr, DefBody>,
+) {
     let Some(name) = nth_group_text(command, 0) else {
         return;
     };
@@ -326,6 +381,7 @@ fn scan_newenvironment(command: &SyntaxNode, db: &mut SignatureDb) {
     if name.is_empty() {
         return;
     }
+    record_body(env_bodies, name, nth_group(command, 1).as_ref());
     let (arity, first_optional) = newcommand_arity(command);
     db.insert_environment(name, environment_sig(latex2e_args(arity, first_optional)));
 }
@@ -436,8 +492,13 @@ fn is_trivia(kind: SyntaxKind) -> bool {
 }
 
 /// `\NewDocumentEnvironment{name}{spec}{begin}{end}` → an [`EnvironmentSig`] with
-/// args from the xparse spec.
-fn scan_xparse_environment(command: &SyntaxNode, db: &mut SignatureDb) {
+/// args from the xparse spec. The begin-code (group 2 — after `{name}` and `{spec}`)
+/// is recorded for verbatim detection, as in [`scan_newenvironment`].
+fn scan_xparse_environment(
+    command: &SyntaxNode,
+    db: &mut SignatureDb,
+    env_bodies: &mut HashMap<SmolStr, DefBody>,
+) {
     let Some(name) = nth_group_text(command, 0) else {
         return;
     };
@@ -448,6 +509,7 @@ fn scan_xparse_environment(command: &SyntaxNode, db: &mut SignatureDb) {
     let Some(spec) = nth_group(command, 1) else {
         return;
     };
+    record_body(env_bodies, name, nth_group(command, 2).as_ref());
     db.insert_environment(
         name,
         environment_sig(xparse::parse_spec(&group_inner_source(&spec))),
@@ -812,5 +874,56 @@ mod tests {
         let sig = db.command("shellcmd").expect("shellcmd defined");
         assert!(sig.verbatim);
         assert!(sig.args.is_empty());
+    }
+
+    #[test]
+    fn env_makeother_flagged() {
+        // `\@makeother\$` in the begin-code others `$`, so the environment body is
+        // verbatim. The environment analog of `verbatim_makeother_flagged`.
+        let db = db_of("\\newenvironment{shellenv}{\\@makeother\\$}{}\n");
+        let sig = db.environment("shellenv").expect("shellenv defined");
+        assert!(sig.verbatim_body);
+        assert!(!sig.reflow); // a verbatim body is never reflowed
+    }
+
+    #[test]
+    fn env_catcode_flagged() {
+        // A `\catcode … 12` ("other") assignment in the begin-code is the same signal.
+        let db = db_of("\\newenvironment{shellenv}[1]{\\catcode 36=12 }{}\n");
+        let sig = db.environment("shellenv").expect("shellenv defined");
+        assert!(sig.verbatim_body);
+        // Declared args are kept (they are all leading; the body follows them).
+        assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace]);
+    }
+
+    #[test]
+    fn env_via_chained_helper() {
+        // The catcode signal lives in a helper the begin-code calls, not in the
+        // begin-code itself; the chain is followed through the command bodies map.
+        let db =
+            db_of("\\newcommand\\setup{\\@makeother\\$}\\newenvironment{shellenv}{\\setup}{}\n");
+        assert!(
+            db.environment("shellenv")
+                .expect("shellenv defined")
+                .verbatim_body
+        );
+    }
+
+    #[test]
+    fn env_without_signal_not_flagged() {
+        // An ordinary `\newenvironment` with no catcode setup stays reflowable.
+        let db = db_of("\\newenvironment{remark}{\\par\\noindent\\textbf{Remark.}}{\\par}\n");
+        let sig = db.environment("remark").expect("remark defined");
+        assert!(!sig.verbatim_body);
+        assert!(sig.reflow);
+    }
+
+    #[test]
+    fn xparse_env_makeother_flagged() {
+        // `\NewDocumentEnvironment`: the begin-code is group 2 (after name and spec).
+        let db = db_of("\\NewDocumentEnvironment{shellenv}{O{x}}{\\dospecials}{}\n");
+        let sig = db.environment("shellenv").expect("shellenv defined");
+        assert!(sig.verbatim_body);
+        assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
     }
 }

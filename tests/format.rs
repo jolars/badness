@@ -397,6 +397,22 @@ fn user_verbatim_command_body_is_protected() {
     assert_format_invariants(input);
 }
 
+/// A user-defined catcode-othering *environment* (`\@makeother\$` in its begin-code)
+/// makes its `\begin…\end` body a protected verbatim region: the formatter must leave
+/// the body's literal `$`, `_`, comment, and interior spacing exactly as authored, and
+/// the result must be idempotent. The environment analog of
+/// [`user_verbatim_command_body_is_protected`].
+#[test]
+fn user_verbatim_environment_body_is_protected() {
+    let input = "\\newenvironment{shellenv}{\\@makeother\\$}{}\n\\begin{shellenv}\na_$b$  c % literal\n\\end{shellenv}\n";
+    let formatted = format(input).expect("formats");
+    assert!(
+        formatted.contains("a_$b$  c % literal"),
+        "verbatim body must pass through unaltered: {formatted:?}"
+    );
+    assert_format_invariants(input);
+}
+
 /// Environments carrying the `noIndent` signature flag (`document`) keep their body
 /// flush against the surrounding indentation, while environments nested inside them
 /// still indent normally. This pins the convention that `\begin{document}` content

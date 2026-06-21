@@ -30,6 +30,9 @@ fn roundtrip_units() {
         // the body holds characters the generic lexer would otherwise (mis)read.
         "\\begin{lstlisting}[language=C]\nint a[3] = {1};  % literal\n\\end{lstlisting}",
         "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}",
+        // A user-defined verbatim environment (catcode-othering begin-code) routes its
+        // body to the opaque branch via the two-pass parse; it must still round-trip.
+        "\\newenvironment{shellenv}{\\@makeother\\$}{}\n\\begin{shellenv}\na_$b$ % literal\n\\end{shellenv}\n",
         // Leading comment-bind: comments attached *into* a command/environment
         // must still reconstruct byte-for-byte (the bind only re-parents tokens).
         "% a doc comment\n\\section{Intro}\n",

@@ -15,7 +15,7 @@
 
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
-use crate::parser::lexer::{Token, is_block_environment, is_verbatim_environment};
+use crate::parser::lexer::{Token, VerbCtx, is_block_environment};
 use crate::syntax::SyntaxKind;
 
 const BEGIN_CMD: &str = "\\begin";
@@ -35,14 +35,18 @@ enum Block {
 }
 
 /// Parse a token stream into parser events and a list of syntax errors.
-pub(crate) fn parse(tokens: &[Token]) -> (Vec<Event>, Vec<SyntaxError>) {
-    let mut p = Parser::new(tokens);
+pub(crate) fn parse(tokens: &[Token], ctx: &VerbCtx) -> (Vec<Event>, Vec<SyntaxError>) {
+    let mut p = Parser::new(tokens, ctx);
     p.document();
     (p.events, p.errors)
 }
 
 struct Parser<'t> {
     tokens: &'t [Token],
+    /// User-defined verbatim constructs, consulted to route a verbatim environment to
+    /// its raw-body branch (its body is already one `VERBATIM_BODY` token from the
+    /// lexer; the grammar must not try to parse it structurally).
+    ctx: &'t VerbCtx,
     /// `starts[i]` is the byte offset of token `i`; `starts[len]` is the total
     /// length. Used to give syntax errors byte ranges.
     starts: Vec<usize>,
@@ -52,7 +56,7 @@ struct Parser<'t> {
 }
 
 impl<'t> Parser<'t> {
-    fn new(tokens: &'t [Token]) -> Self {
+    fn new(tokens: &'t [Token], ctx: &'t VerbCtx) -> Self {
         let mut starts = Vec::with_capacity(tokens.len() + 1);
         let mut off = 0;
         for t in tokens {
@@ -62,6 +66,7 @@ impl<'t> Parser<'t> {
         starts.push(off);
         Self {
             tokens,
+            ctx,
             starts,
             pos: 0,
             events: Vec::new(),
@@ -918,7 +923,10 @@ impl<'t> Parser<'t> {
         self.attach_arguments(); // `\begin{tabular}{ll}`, `[options]`, etc.
         self.close(); // BEGIN
 
-        if name.as_deref().is_some_and(is_verbatim_environment) {
+        if name
+            .as_deref()
+            .is_some_and(|n| self.ctx.is_verbatim_environment(n))
+        {
             self.verbatim_body(name.as_deref().expect("verbatim name"));
         } else {
             self.parse_block(Block::Environment);

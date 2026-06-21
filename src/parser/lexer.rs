@@ -39,24 +39,30 @@ pub struct Token {
     pub text: SmolStr,
 }
 
-/// Per-parse lexer context carrying *user-defined* verbatim-argument commands —
-/// those a document declares with catcode manipulation (`\@makeother\$`, …), found
-/// by scanning definition bodies ([`crate::semantic::define`]). The lexer consults
-/// it (alongside the built-in DB) to capture such a command's final argument as one
-/// `VERB` token. Empty for the first parse pass; populated for the second when the
-/// document defines any (see `parser::core`). Each entry maps a command name (no
-/// leading `\`) to its *leading*, non-verbatim argument shape, the verbatim argument
-/// itself being implicit — matching the built-in convention.
+/// Per-parse lexer context carrying *user-defined* verbatim constructs — those a
+/// document declares with catcode manipulation (`\@makeother\$`, …), found by scanning
+/// definition bodies ([`crate::semantic::define`]). The lexer consults it (alongside
+/// the built-in DB) to capture a verbatim *command*'s final argument as one `VERB`
+/// token, and a verbatim *environment*'s body as one `VERBATIM_BODY` token. Empty for
+/// the first parse pass; populated for the second when the document defines any (see
+/// `parser::core`).
+///
+/// A command entry maps a name (no leading `\`) to its *leading*, non-verbatim
+/// argument shape, the verbatim argument itself being implicit — matching the built-in
+/// convention. An environment entry maps a name to its full argument shape (an
+/// environment's args are all leading; its body follows the `\begin{…}` arguments), so
+/// presence in `environments` means the environment is verbatim.
 #[derive(Debug, Default, Clone)]
 pub struct VerbCtx {
     commands: HashMap<SmolStr, Vec<ArgSpec>>,
+    environments: HashMap<SmolStr, Vec<ArgSpec>>,
 }
 
 impl VerbCtx {
-    /// Whether the context names no user verbatim commands (the common case — the
+    /// Whether the context names no user verbatim constructs (the common case — the
     /// second parse pass is skipped entirely).
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
+        self.commands.is_empty() && self.environments.is_empty()
     }
 
     /// Record that `name` is a verbatim-argument command with the given `leading`
@@ -65,24 +71,34 @@ impl VerbCtx {
         self.commands.insert(name, leading);
     }
 
+    /// Record that environment `name` is verbatim, with the given argument shape (all
+    /// leading; the raw body follows the arguments).
+    pub(crate) fn insert_environment(&mut self, name: SmolStr, args: Vec<ArgSpec>) {
+        self.environments.insert(name, args);
+    }
+
     /// The leading argument shape of `name` if it is a known user verbatim command.
     fn leading_args(&self, name: &str) -> Option<&[ArgSpec]> {
         self.commands.get(name).map(Vec::as_slice)
     }
-}
 
-/// Is `name` a verbatim-like environment — one whose body the lexer must capture
-/// raw, per `AGENTS.md` Core decision #1? Resolved against the built-in signature
-/// database ([`builtin`]), the single source of truth for which environments carry
-/// a verbatim body and what arguments precede that body. Both the lexer (to find
-/// where the raw body begins) and the structural parser (`grammar.rs`, to route the
-/// environment to its raw-body branch) ask this question, so one lookup keeps them
-/// in lockstep. We read only static argument-shape data; no macro meaning is
-/// resolved, so this stays within decision #1's sanctioned lexer modes.
-pub(crate) fn is_verbatim_environment(name: &str) -> bool {
-    builtin()
-        .environment(name)
-        .is_some_and(|env| env.verbatim_body)
+    /// The argument shape of `name` if it is a user-defined verbatim environment.
+    fn verbatim_environment_args(&self, name: &str) -> Option<&[ArgSpec]> {
+        self.environments.get(name).map(Vec::as_slice)
+    }
+
+    /// Is `name` a verbatim-like environment — one whose body the parser must route to
+    /// its raw-body branch, per `AGENTS.md` Core decision #1? A user-defined one (from
+    /// this context) or a built-in one ([`builtin`]). Both the lexer (to find where the
+    /// raw body begins) and the structural parser (`grammar.rs`) ask this question, so
+    /// one lookup keeps them in lockstep. We read only static argument-shape data; no
+    /// macro meaning is resolved, so this stays within decision #1's sanctioned modes.
+    pub(crate) fn is_verbatim_environment(&self, name: &str) -> bool {
+        self.environments.contains_key(name)
+            || builtin()
+                .environment(name)
+                .is_some_and(|env| env.verbatim_body)
+    }
 }
 
 /// Is `name` a block/display environment — one whose lone occurrence the parser
@@ -150,7 +166,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx) -> Vec<Token> {
         let rest = &input[pos..];
 
         // Verbatim-like environment: emit `\begin{name}` then a raw body token.
-        if let Some(consumed) = lex_verbatim_environment(rest, &mut out) {
+        if let Some(consumed) = lex_verbatim_environment(rest, ctx, &mut out) {
             pos += consumed;
             pending_delim = false;
             pending_def = false;
@@ -309,11 +325,22 @@ fn delimited_len(after: &str) -> Option<usize> {
 /// text. The built-in signature ([`builtin`]) bounds how many leading groups count
 /// as arguments, so a body that legitimately starts with `[` (an option-free
 /// `lstlisting` whose first code line is `[1,2,3]`) is not mistaken for one.
-fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
+fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> Option<usize> {
     let after_begin = rest.strip_prefix("\\begin{")?;
     let close = after_begin.find('}')?;
     let name = &after_begin[..close];
-    let env = builtin().environment(name).filter(|e| e.verbatim_body)?;
+    // A user-defined catcode-verbatim environment (from `ctx`) wins over the built-in
+    // DB; either way we read only the static leading-argument shape, never macro
+    // meaning. The verbatim args are all leading — the raw body follows them.
+    let args: &[ArgSpec] = match ctx.verbatim_environment_args(name) {
+        Some(args) => args,
+        None => {
+            &builtin()
+                .environment(name)
+                .filter(|e| e.verbatim_body)?
+                .args
+        }
+    };
 
     let prefix_len = "\\begin{".len() + name.len() + "}".len();
     out.push(Token {
@@ -337,7 +364,7 @@ fn lex_verbatim_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
     // verbatim-begin, so the ordinary token loop is safe and lets the parser build
     // the usual OPTIONAL/GROUP argument nodes.
     let args_region = &rest[prefix_len..];
-    let args_len = scan_verbatim_args(args_region, &env.args);
+    let args_len = scan_verbatim_args(args_region, args);
     lex_into(&args_region[..args_len], out);
 
     let body_region = &args_region[args_len..];

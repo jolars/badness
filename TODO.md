@@ -259,8 +259,15 @@ built-in; consumed by the formatter's `\begin` arity glue).
     verbatim directly and a `\def` helper's body now participates in chain resolution.
     (`\def`-defined verbatim *environments* and delimited-parameter macros stay out of
     scope.)
-  - [ ] Verbatim *environments* defined with catcode setup in their begin-code
-    (needs the `VerbCtx` threaded into `grammar.rs`'s `is_verbatim_environment`).
+  - [x] Verbatim *environments* defined with catcode setup in their begin-code.
+    `scan_newenvironment`/`scan_xparse_environment` (`semantic/define.rs`) now record
+    the begin-code body; `apply_verbatim_env_flags` flags the environment
+    `verbatim_body` when a catcode signal is reachable from it (same helper-chain
+    resolution as commands, via `reaches_signal_body`). `VerbCtx` gained an
+    `environments` map threaded through the lexer (`lex_verbatim_environment`) and into
+    `grammar.rs`'s environment routing (`VerbCtx::is_verbatim_environment`), so the
+    two-pass parse captures such an environment's body as one `VERBATIM_BODY` token.
+    (`\def`-defined verbatim environments stay out of scope.)
 - [ ] Salsa `document_signatures` query once an LSP consumer (hover/completion)
   wants the scanned command sigs.
 - [ ] CWL corpus ingest (an import format converted *into* the signature schema)

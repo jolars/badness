@@ -1,5 +1,5 @@
 {
-  "_comment": "Built-in BibTeX/BibLaTeX entry- and field-signature DB. Source of truth for bib::semantic::signature. Entry/field coverage is derived from BibLaTeX's canonical data model (blx-dm.def, v3.21 / TeX Live 2025): every entry type, every input field, the per-type field lists, and the mandatory-field constraints are taken verbatim from the \\DeclareDatamodel* declarations. Classic-BibTeX entry-type aliases (conference, mastersthesis, phdthesis, techreport) and input-field aliases (address, annote, archiveprefix, journal, key, school, primaryclass, pdf, year, month) are added on top. Entry `required` elements are a field name or an array of alternatives ('one of', from \\constraintfieldsor/xor). Field `category` is one of name|date|verbatim|literal (mapped from the data model datatype: name→name, date→date, verbatim/uri→verbatim, else→literal; default literal for unlisted fields). Names are matched case-insensitively.",
+  "_comment": "Built-in BibTeX/BibLaTeX entry- and field-signature DB. Source of truth for bib::semantic::signature. Entry/field coverage is derived from BibLaTeX's canonical data model (blx-dm.def, v3.21 / TeX Live 2025): every entry type, every input field, the per-type field lists, and the mandatory-field constraints are taken verbatim from the \\DeclareDatamodel* declarations. Classic-BibTeX entry-type aliases (conference, mastersthesis, phdthesis, techreport) and input-field aliases (address, annote, archiveprefix, journal, key, school, primaryclass, pdf, year, month) are added on top; mastersthesis/phdthesis/techreport do not exist in the data model and keep classic-BibTeX required fields (e.g. school). Every other entry type's `required` list matches the data model's mandatory constraints verbatim. Entry `required` elements are a field name or an array of alternatives ('one of', from \\constraintfieldsor/xor). Field `category` is one of name|date|verbatim|literal (mapped from the data model datatype: name→name, date→date, verbatim/uri→verbatim, else→literal; default literal for unlisted fields). Names are matched case-insensitively.",
 
   "entries": {
     "artwork": {
@@ -119,11 +119,11 @@
       "optional": ["journal", "translator", "volume", "number", "pages", "issue", "month", "issn", "doi", "url", "note"]
     },
     "book": {
-      "required": [["author", "editor"], "title", ["date", "year"]],
+      "required": ["author", "title", ["date", "year"]],
       "optional": ["publisher", "location", "address", "volume", "series", "edition", "number", "pages", "isbn", "doi", "url", "note"]
     },
     "mvbook": {
-      "required": [["author", "editor"], "title", ["date", "year"]],
+      "required": ["author", "title", ["date", "year"]],
       "optional": ["publisher", "location", "volume", "series", "edition", "isbn", "doi", "url", "note"]
     },
     "inbook": {
@@ -135,7 +135,7 @@
       "optional": ["editor", "publisher", "location", "volume", "series", "pages", "doi", "url", "note"]
     },
     "incollection": {
-      "required": ["author", "title", "booktitle", ["date", "year"]],
+      "required": ["author", "editor", "title", "booktitle", ["date", "year"]],
       "optional": ["editor", "publisher", "location", "volume", "series", "chapter", "pages", "doi", "url", "note"]
     },
     "inproceedings": {
@@ -159,7 +159,7 @@
       "optional": ["editor", "eventtitle", "publisher", "organization", "location", "volume", "series", "isbn", "doi", "url", "note"]
     },
     "mvproceedings": {
-      "required": ["title", ["date", "year"]],
+      "required": ["title"],
       "optional": ["editor", "publisher", "organization", "location", "volume", "series", "doi", "url", "note"]
     },
     "manual": {
@@ -167,11 +167,11 @@
       "optional": ["author", "editor", "organization", "publisher", "location", "edition", "version", "isbn", "doi", "url", "note"]
     },
     "misc": {
-      "required": ["title"],
+      "required": ["title", ["date", "year"]],
       "optional": ["author", "editor", "howpublished", "organization", "publisher", "location", "month", "year", "date", "doi", "url", "note"]
     },
     "online": {
-      "required": ["title", ["date", "year"], "url"],
+      "required": ["title", ["date", "year"], ["url", "doi", "eprint"]],
       "optional": ["author", "editor", "organization", "urldate", "doi", "note"]
     },
     "patent": {
@@ -179,7 +179,7 @@
       "optional": ["holder", "type", "location", "doi", "url", "note"]
     },
     "periodical": {
-      "required": ["title", ["date", "year"]],
+      "required": ["editor", "title", ["date", "year"]],
       "optional": ["editor", "subtitle", "issuetitle", "volume", "number", "issue", "month", "issn", "doi", "url", "note"]
     },
     "report": {
@@ -203,19 +203,19 @@
       "optional": ["type", "number", "address", "month", "doi", "url", "note"]
     },
     "booklet": {
-      "required": ["title"],
+      "required": [["author", "editor"], "title", ["date", "year"]],
       "optional": ["author", "howpublished", "address", "location", "month", "year", "date", "doi", "url", "note"]
     },
     "unpublished": {
-      "required": ["author", "title", "note"],
-      "optional": ["howpublished", "month", "year", "date", "url"]
+      "required": ["author", "title", ["date", "year"]],
+      "optional": ["howpublished", "note", "month", "url"]
     },
     "dataset": {
-      "required": ["title", ["date", "year"]],
+      "required": ["title"],
       "optional": ["author", "editor", "publisher", "location", "version", "type", "doi", "url", "note"]
     },
     "set": {
-      "required": ["entryset"],
+      "required": ["entryset", ["date", "year"]],
       "optional": ["crossref"]
     }
   },

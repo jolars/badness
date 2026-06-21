@@ -259,6 +259,56 @@ mod tests {
     }
 
     #[test]
+    fn existing_types_required_aligned_to_data_model() {
+        let db = builtin();
+        let one = |s: &str| RequiredField::One(SmolStr::new(s));
+
+        // `book` requires `author` specifically, not author-or-editor (edited
+        // volumes are `@collection`).
+        assert!(db.entry("book").unwrap().required.contains(&one("author")));
+
+        // `incollection` and `periodical` mandate `editor` per the data model.
+        assert!(
+            db.entry("incollection")
+                .unwrap()
+                .required
+                .contains(&one("editor"))
+        );
+        assert!(
+            db.entry("periodical")
+                .unwrap()
+                .required
+                .contains(&one("editor"))
+        );
+
+        // `online` mandates url OR doi OR eprint (a `\constraintfieldsor`).
+        assert!(
+            db.entry("online")
+                .unwrap()
+                .required
+                .iter()
+                .any(|r| matches!(
+                    r,
+                    RequiredField::OneOf(alts)
+                        if alts.iter().any(|a| a == "url") && alts.iter().any(|a| a == "eprint")
+                ))
+        );
+
+        // `misc` is in the data model's date-mandatory constraint list.
+        assert!(db.entry("misc").unwrap().required.iter().any(|r| matches!(
+            r, RequiredField::OneOf(alts) if alts.iter().any(|a| a == "date")
+        )));
+
+        // Classic-BibTeX-only types are absent from the model and keep `school`.
+        assert!(
+            db.entry("mastersthesis")
+                .unwrap()
+                .required
+                .contains(&one("school"))
+        );
+    }
+
+    #[test]
     fn article_required_fields() {
         let article = builtin().entry("article").expect("article entry");
         assert!(

@@ -16,6 +16,11 @@
 //!   body starts); see [`lex_verbatim_environment`].
 //! - **`\makeatletter` / `\makeatother`**: toggles `@` into a letter so that
 //!   `\foo@bar` lexes as one control word.
+//! - **`\ExplSyntaxOn` / `\ExplSyntaxOff`** (also opened by `\ProvidesExplPackage`
+//!   / `\ProvidesExplClass` / `\ProvidesExplFile`): toggles `_` and `:` into
+//!   letters so expl3 names (`\seq_new:N`, `\__module_internal:nn`) lex as one
+//!   control word. Composes with `\makeatletter` for the `@@` module-prefix
+//!   convention (`\g_@@_frame_title_tl`).
 //! - **`\left` / `\right` delimiters**: the single delimiter that follows is
 //!   isolated as its own token, so a word-character delimiter (`(`, `)`, `|`,
 //!   `/`, `.`, `<`, `>`) does not glue into the following word run and become
@@ -202,6 +207,12 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     let mut out = Vec::new();
     let mut pos = 0;
     let mut at_letter = config.flavor.letter_mode_start(); // `\makeatletter` state
+    // `\ExplSyntaxOn` state: while true, `_` and `:` are catcode-11 letters, so
+    // expl3 names (`\seq_new:N`, `\__module_internal:nn`) lex as single control
+    // words. Toggled by `\ExplSyntaxOn`/`\ExplSyntaxOff` and turned on by the
+    // `\ProvidesExpl*` package/class/file declarations (a sanctioned static lexer
+    // mode, `AGENTS.md` decision #1). Independent of `at_letter`; the two compose.
+    let mut expl_syntax = false;
     // `.dtx` docstrip mode: true at the start of a physical line (start of input
     // or just after a `NEWLINE`), so a line-leading `%` can be recognized as a
     // documentation margin. Any token — including whitespace — clears it, matching
@@ -319,7 +330,9 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         // `\verb`/`\verb*` are handled separately in `lex_control` (delimiter
         // only), so they fall through here. Suppressed at a definition site
         // (`pending_def`), where the following groups are the signature/body.
-        if !pending_def && let Some(consumed) = lex_verbatim_command(rest, at_letter, ctx, &mut out)
+        if !pending_def
+            && let Some(consumed) =
+                lex_verbatim_command(rest, at_letter, expl_syntax, ctx, &mut out)
         {
             pos += consumed;
             pending_delim = false;
@@ -327,7 +340,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             continue;
         }
 
-        let (kind, mut len) = next_token(rest, at_letter);
+        let (kind, mut len) = next_token(rest, at_letter, expl_syntax);
         // A `\left`/`\right` delimiter that lexes as a word run: keep only its
         // first character so it does not glue into the following text.
         if pending_delim && kind == SyntaxKind::WORD {
@@ -339,6 +352,14 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             match text {
                 "\\makeatletter" => at_letter = true,
                 "\\makeatother" => at_letter = false,
+                "\\ExplSyntaxOn" => expl_syntax = true,
+                "\\ExplSyntaxOff" => expl_syntax = false,
+                // The `\ProvidesExpl*` declarations open expl3 syntax for the rest
+                // of the file (they appear at the top of an expl3 package/class),
+                // so left-to-right they act as an `\ExplSyntaxOn`.
+                "\\ProvidesExplPackage" | "\\ProvidesExplClass" | "\\ProvidesExplFile" => {
+                    expl_syntax = true;
+                }
                 _ => {}
             }
         }
@@ -371,10 +392,10 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
 }
 
 /// Classify the token at the start of `rest` and return its `(kind, byte_len)`.
-fn next_token(rest: &str, at_letter: bool) -> (SyntaxKind, usize) {
+fn next_token(rest: &str, at_letter: bool, expl_syntax: bool) -> (SyntaxKind, usize) {
     let c = rest.chars().next().expect("rest is non-empty");
     match c {
-        '\\' => lex_control(rest, at_letter),
+        '\\' => lex_control(rest, at_letter, expl_syntax),
         '%' => (
             SyntaxKind::COMMENT,
             run_len(rest, |c| c != '\n' && c != '\r'),
@@ -387,7 +408,9 @@ fn next_token(rest: &str, at_letter: bool) -> (SyntaxKind, usize) {
         '&' => (SyntaxKind::AMPERSAND, 1),
         '#' => (SyntaxKind::HASH, 1),
         '^' => (SyntaxKind::CARET, 1),
-        '_' => (SyntaxKind::UNDERSCORE, 1),
+        // Under `\ExplSyntaxOn`, `_` is a catcode-11 letter, not a subscript: a
+        // bare `_` joins the surrounding word run (handled by the default arm).
+        '_' if !expl_syntax => (SyntaxKind::UNDERSCORE, 1),
         '~' => (SyntaxKind::TILDE, 1),
         '\n' => (SyntaxKind::NEWLINE, 1),
         '\r' => {
@@ -402,17 +425,20 @@ fn next_token(rest: &str, at_letter: bool) -> (SyntaxKind, usize) {
             SyntaxKind::WHITESPACE,
             run_len(rest, |c| c == ' ' || c == '\t'),
         ),
-        _ => (SyntaxKind::WORD, run_len(rest, is_word_char)),
+        _ => (
+            SyntaxKind::WORD,
+            run_len(rest, |c| is_word_char(c) || (expl_syntax && c == '_')),
+        ),
     }
 }
 
 /// Lex a control sequence: `rest` is known to start with `\`.
-fn lex_control(rest: &str, at_letter: bool) -> (SyntaxKind, usize) {
+fn lex_control(rest: &str, at_letter: bool, expl_syntax: bool) -> (SyntaxKind, usize) {
     match rest[1..].chars().next() {
         // Control word: backslash + one or more letters (`@` too under
-        // `\makeatletter`).
-        Some(d) if is_letter(d, at_letter) => {
-            let letters = run_len(&rest[1..], |c| is_letter(c, at_letter));
+        // `\makeatletter`; `_`/`:` too under `\ExplSyntaxOn`).
+        Some(d) if is_letter(d, at_letter, expl_syntax) => {
+            let letters = run_len(&rest[1..], |c| is_letter(c, at_letter, expl_syntax));
             let word_len = 1 + letters;
             // `\verb` / `\verb*`: swallow the delimited argument as one token.
             if &rest[..word_len] == "\\verb"
@@ -609,13 +635,14 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
 fn lex_verbatim_command(
     rest: &str,
     at_letter: bool,
+    expl_syntax: bool,
     ctx: &VerbCtx,
     out: &mut Vec<Token>,
 ) -> Option<usize> {
     if !rest.starts_with('\\') {
         return None;
     }
-    let letters = run_len(&rest[1..], |c| is_letter(c, at_letter));
+    let letters = run_len(&rest[1..], |c| is_letter(c, at_letter, expl_syntax));
     if letters == 0 {
         return None;
     }
@@ -738,7 +765,7 @@ fn balanced_group_len(s: &str, close: u8) -> Option<usize> {
 fn lex_into(region: &str, out: &mut Vec<Token>) {
     let mut pos = 0;
     while pos < region.len() {
-        let (kind, len) = next_token(&region[pos..], false);
+        let (kind, len) = next_token(&region[pos..], false, false);
         debug_assert!(len > 0, "lexer made no progress in verbatim args");
         out.push(Token {
             kind,
@@ -761,10 +788,10 @@ fn run_len(s: &str, pred: impl Fn(char) -> bool) -> usize {
     len
 }
 
-/// A control-word continuation character: a letter, or `@` under
-/// `\makeatletter`.
-fn is_letter(c: char, at_letter: bool) -> bool {
-    c.is_ascii_alphabetic() || (at_letter && c == '@')
+/// A control-word continuation character: a letter, `@` under `\makeatletter`,
+/// or `_`/`:` under `\ExplSyntaxOn` (where they are catcode-11 letters).
+fn is_letter(c: char, at_letter: bool, expl_syntax: bool) -> bool {
+    c.is_ascii_alphabetic() || (at_letter && c == '@') || (expl_syntax && (c == '_' || c == ':'))
 }
 
 /// Ordinary text: anything that is not whitespace, a line break, or one of the
@@ -824,6 +851,7 @@ mod tests {
             "\\begin{minted}[frame=single]{python}\nprint(\"$x$\")\n\\end{minted}",
             "\\begin{lstlisting}\n[1,2,3]\n\\end{lstlisting}",
             r"\makeatletter\a@b\makeatother\a@b",
+            r"\ExplSyntaxOn\seq_new:N \g_@@_x_tl a_b\ExplSyntaxOff\seq_new:N",
             r"$\left(x+y\right)^2 \left.\frac{a}{b}\right|_0$",
         ] {
             assert_lossless(input);
@@ -951,6 +979,49 @@ mod tests {
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo@bar")));
         // …after \makeatother it splits into `\foo` + `@bar`.
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
+    }
+
+    #[test]
+    fn expl_syntax_makes_underscore_and_colon_letters() {
+        let toks = lex(r"\ExplSyntaxOn\seq_new:N\ExplSyntaxOff\seq_new:N");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        // Under \ExplSyntaxOn, `\seq_new:N` is one control word…
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
+        // …after \ExplSyntaxOff it stops at the first `_`.
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq")));
+    }
+
+    #[test]
+    fn expl_syntax_lexes_internal_double_underscore_name() {
+        let toks = lex(r"\ExplSyntaxOn\__module_internal:nn");
+        assert_eq!(toks[1].kind, SyntaxKind::CONTROL_WORD);
+        assert_eq!(toks[1].text, "\\__module_internal:nn");
+    }
+
+    #[test]
+    fn provides_expl_package_turns_on_expl_syntax() {
+        let toks = lex(r"\ProvidesExplPackage{p}{2026/01/01}{1.0}{d}\tl_set:Nn");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        // The `\ProvidesExplPackage` declaration opens expl3 syntax, so the later
+        // `\tl_set:Nn` lexes as one control word.
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\tl_set:Nn")));
+    }
+
+    #[test]
+    fn expl_syntax_composes_with_makeatletter() {
+        // The `@@` module-prefix convention needs both `@` and `_`/`:` as letters.
+        let toks = lex(r"\makeatletter\ExplSyntaxOn\g_@@_frame_title_tl");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\g_@@_frame_title_tl")));
+    }
+
+    #[test]
+    fn expl_syntax_makes_bare_underscore_a_word_not_subscript() {
+        let toks = lex(r"\ExplSyntaxOn a_b");
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        // Under expl3, `_` is a catcode-11 letter: `a_b` is one word, no UNDERSCORE.
+        assert!(seen.contains(&(SyntaxKind::WORD, "a_b")));
+        assert!(!seen.iter().any(|(k, _)| *k == SyntaxKind::UNDERSCORE));
     }
 
     #[test]

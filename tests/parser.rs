@@ -434,6 +434,11 @@ fn makeatletter_control_word_with_at() {
 }
 
 #[test]
+fn expl_syntax_control_word_with_underscore_and_colon() {
+    insta::assert_snapshot!(tree(r"\ExplSyntaxOn\seq_new:N\ExplSyntaxOff\seq_new:N"));
+}
+
+#[test]
 fn line_break_groups_star_and_optional_length() {
     // `\\`, `\\*`, `\\[2ex]`, and `\\*[2ex]` each parse to one `LINE_BREAK` node
     // with the `*` / `[len]` bound in; a plain `\\` (here at the end) stays bare.

@@ -53,10 +53,24 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
 
    We **do** handle a bounded, growing set of *statically recognizable* patterns as
    lexer modes or semantic enrichment — `\makeatletter`/`\makeatother`,
-   `\verb`/verbatim-like environments, `\left`/`\right` delimiter isolation, and
-   `\newcommand`/`xparse` *signatures* (extracted, never executed). Anything we
-   cannot statically resolve degrades to generic nodes (plus a diagnostic where
-   useful), never a crash or corruption.
+   `\ExplSyntaxOn`/`\ExplSyntaxOff` (expl3 letter mode), `\verb`/verbatim-like
+   environments, `\left`/`\right` delimiter isolation, and `\newcommand`/`xparse`
+   *signatures* (extracted, never executed). Anything we cannot statically resolve
+   degrades to generic nodes (plus a diagnostic where useful), never a crash or
+   corruption.
+
+   **expl3 syntax mode (a sanctioned lexer mode):** between `\ExplSyntaxOn` and
+   `\ExplSyntaxOff` (and after a `\ProvidesExplPackage`/`\ProvidesExplClass`/
+   `\ProvidesExplFile` declaration, which opens it for the rest of the file), `_`
+   and `:` are catcode-11 *letters*, so expl3 names (`\seq_new:N`,
+   `\__module_internal:nn`) lex as single control words and a bare `_` is text, not
+   a subscript. The mode reads only the static fact "we are inside an expl3 region";
+   no macro meaning is resolved. It is an independent boolean flag that *composes*
+   with `\makeatletter` (the `@@` module-prefix convention `\g_@@_x_tl` needs both),
+   threaded through the lexer exactly like `at_letter`. Scope is deliberately
+   letters-only: expl3's other catcode changes (`~`→space, spaces/tabs ignored) and
+   *implicit* detection in toggle-less `.dtx` sources are recorded follow-ups in
+   `TODO.md`, not yet modeled.
 
    **`\left`/`\right` delimiter isolation (a sanctioned lexer mode):** the single
    delimiter following `\left`/`\right` is emitted as its own token, so a

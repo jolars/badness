@@ -282,18 +282,28 @@ scope (the same boundary the include graph and CWL ingest keep).
   flavor (a static, extension-driven catcode fact --- sanctioned exactly like
   the explicit `\makeatletter` mode, decision #1); a trailing `\makeatother`
   still applies.
-- [ ] **expl3 (LaTeX3) syntax mode.** `\ExplSyntaxOn` … `\ExplSyntaxOff`
-  reassign catcodes statically: `_` and `:` become *letters* (so
-  `\seq_new:N`, `\tl_set:Nn`, `\__module_internal:nn` lex as single control
-  words), spaces and `~` are ignored/space, and `~` is a literal space. A
-  sanctioned lexer mode like `\makeatletter`/`\verb` (decision #1) --- it reads
-  only the static fact "we are between `\ExplSyntaxOn` and `\ExplSyntaxOff`",
-  resolves no macro meaning. Auto-on for the whole file under
-  `\ProvidesExplPackage`/`\ProvidesExplClass`/`\ProvidesExplFile`. Without it,
-  every expl3 control word mis-lexes (the word stops at the first `_`/`:`),
-  which corrupts argument grouping and the signature scan downstream --- so this
-  is a prerequisite for parsing modern packages at all. Pairs with the
-  `@`-as-letter mode above; the two can nest.
+- [x] **expl3 (LaTeX3) syntax mode (letters, explicit toggles).** `\ExplSyntaxOn`
+  … `\ExplSyntaxOff` make `_` and `:` catcode-11 *letters*, so `\seq_new:N`,
+  `\tl_set:Nn`, `\__module_internal:nn` lex as single control words (and a bare `_`
+  is text, not a subscript). A sanctioned lexer mode like `\makeatletter`/`\verb`
+  (decision #1) --- it reads only the static fact "we are inside an expl3 region",
+  resolves no macro meaning. An independent boolean flag threaded like `at_letter`;
+  composes with the `@`-as-letter mode (the `@@` convention `\g_@@_x_tl` needs
+  both). Opened for the rest of the file by `\ProvidesExplPackage`/
+  `\ProvidesExplClass`/`\ProvidesExplFile` (handled left-to-right as an
+  `\ExplSyntaxOn`). Without it every expl3 control word mis-lexes (the word stops at
+  the first `_`/`:`), corrupting argument grouping and the downstream signature scan
+  --- a prerequisite for parsing modern packages.
+- [ ] **expl3 full catcode model (deferred).** Model `~` as a literal space
+  (catcode 10) and spaces/tabs as ignored (catcode 9) inside expl3 regions. Formatter
+  territory (insignificant-whitespace reflow), beyond the letters-only mechanism above.
+- [ ] **expl3 implicit detection in toggle-less `.dtx` (deferred).** Real expl3
+  package sources (e.g. `ltx-talk-structure.dtx`) carry no in-file `\ExplSyntaxOn`/
+  `\ProvidesExpl*`; expl3 is declared in the parent `.dtx`/build, and `@@` is a
+  docstrip module prefix (`%<@@=mod>`). Treat `macrocode` bodies as expl3 when the
+  file carries a static expl3 signal (a `%<@@=mod>` guard or `\ProvidesExpl*`
+  anywhere). Needs a file-level scan plus the `macrocode` save/restore interaction
+  (mirror `at_letter`).
 - [ ] **`.ins` installation scripts.** Recognize the kind; share the docstrip
   guard syntax with `.dtx` (see below). They are docstrip drivers
   (`\input docstrip`, `\generate{\file{…}{\from{…}{…}}}`, `\endbatchfile`) ---

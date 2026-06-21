@@ -1,0 +1,17 @@
+---
+source: tests/parser.rs
+assertion_line: 438
+expression: "tree(r\"\\ExplSyntaxOn\\seq_new:N\\ExplSyntaxOff\\seq_new:N\")"
+---
+ROOT@0..47
+  PARAGRAPH@0..47
+    COMMAND@0..13
+      CONTROL_WORD@0..13 "\\ExplSyntaxOn"
+    COMMAND@13..23
+      CONTROL_WORD@13..23 "\\seq_new:N"
+    COMMAND@23..37
+      CONTROL_WORD@23..37 "\\ExplSyntaxOff"
+    COMMAND@37..41
+      CONTROL_WORD@37..41 "\\seq"
+    UNDERSCORE@41..42 "_"
+    WORD@42..47 "new:N"

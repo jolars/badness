@@ -54,6 +54,9 @@ fn roundtrip_units() {
         "% a doc comment\n\\section{Intro}\n",
         "% caption note\n\\begin{figure}\nbody\n\\end{figure}\n",
         "%a\n\n%b\n\\foo",
+        // expl3 syntax mode: `_`/`:` become letters between the toggles, so names
+        // lex as single control words. Losslessness holds regardless of token kind.
+        r"\ExplSyntaxOn\seq_new:N \g_@@_x_tl\ExplSyntaxOff\seq_new:N",
     ];
     for case in cases {
         assert_lossless(case);

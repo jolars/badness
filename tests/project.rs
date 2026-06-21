@@ -23,6 +23,15 @@ fn count_by_kind(entries: &[QueryLogEntry]) -> HashMap<QueryKind, usize> {
     counts
 }
 
+/// The path a `SourceFile` is actually tracked under. `upsert_file` lexically
+/// normalizes (absolutizes) the path, which is a no-op for the `/proj/...`
+/// literals on Unix but prepends a drive prefix on Windows. Member paths and
+/// assertions must use this stored form so the include-graph and resolution
+/// lookups (keyed on that same normalized space) match on every platform.
+fn fpath(db: &IncrementalDatabase, file: SourceFile) -> PathBuf {
+    db.file_path(file).to_path_buf()
+}
+
 /// Intern the membership `{main.tex, part.tex}` under `/proj`. Re-interns from a
 /// fresh (sorted) snapshot on each call, as a real consumer would — so the
 /// interned `Project` borrow never spans a `&mut db` write.
@@ -34,12 +43,12 @@ fn project_main_part<'db>(
     let mut members = vec![
         ProjectMember {
             file: main,
-            path: PathBuf::from("/proj/main.tex"),
+            path: fpath(db, main),
             kind: FileKind::Tex,
         },
         ProjectMember {
             file: part,
-            path: PathBuf::from("/proj/part.tex"),
+            path: fpath(db, part),
             kind: FileKind::Tex,
         },
     ];
@@ -58,12 +67,12 @@ fn project_main_bib<'db>(
     let mut members = vec![
         ProjectMember {
             file: main,
-            path: PathBuf::from("/proj/main.tex"),
+            path: fpath(db, main),
             kind: FileKind::Tex,
         },
         ProjectMember {
             file: bib,
-            path: PathBuf::from("/proj/refs.bib"),
+            path: fpath(db, bib),
             kind: FileKind::Bib,
         },
     ];
@@ -90,14 +99,11 @@ fn graph_resolves_an_input_edge() {
     let (db, main, part) = main_part("\\input{part}\n", "hello\n");
     let graph = project_graph(&db, project_main_part(&db, main, part));
 
-    let out = graph.outgoing(Path::new("/proj/main.tex"));
+    let out = graph.outgoing(&fpath(&db, main));
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].to, PathBuf::from("/proj/part.tex"));
+    assert_eq!(out[0].to, fpath(&db, part));
     assert_eq!(out[0].kind, IncludeKind::Input);
-    assert_eq!(
-        graph.included_by(Path::new("/proj/part.tex")),
-        &[PathBuf::from("/proj/main.tex")]
-    );
+    assert_eq!(graph.included_by(&fpath(&db, part)), &[fpath(&db, main)]);
     assert!(graph.unresolved().is_empty());
 }
 
@@ -146,7 +152,7 @@ fn edge_change_rebuilds_graph() {
     );
     // The new edge targets a non-member, so it lands in `unresolved`.
     assert_eq!(graph.unresolved().len(), 1);
-    assert_eq!(graph.unresolved()[0].from, PathBuf::from("/proj/main.tex"));
+    assert_eq!(graph.unresolved()[0].from, fpath(&db, main));
 }
 
 #[test]
@@ -159,11 +165,11 @@ fn resolved_labels_unions_across_the_include_graph() {
     );
     let resolved = resolved_labels(&db, project_main_part(&db, main, part));
 
-    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "a"));
-    assert!(!resolved.is_defined(Path::new("/proj/main.tex"), "missing"));
+    assert!(resolved.is_defined(&fpath(&db, main), "a"));
+    assert!(!resolved.is_defined(&fpath(&db, main), "missing"));
     // `\input{part}` resolves to an analyzed member, and main is a document root.
-    assert!(resolved.is_closed(Path::new("/proj/main.tex")));
-    assert!(resolved.is_root_component(Path::new("/proj/part.tex")));
+    assert!(resolved.is_closed(&fpath(&db, main)));
+    assert!(resolved.is_root_component(&fpath(&db, part)));
 }
 
 #[test]
@@ -215,7 +221,7 @@ fn label_change_rebuilds_resolved_labels() {
         Some(&1),
         "resolved labels must rebuild when a label set changes"
     );
-    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "b"));
+    assert!(resolved.is_defined(&fpath(&db, main), "b"));
 }
 
 #[test]
@@ -228,11 +234,11 @@ fn resolved_citations_unions_referenced_bib_keys() {
     );
     let resolved = resolved_citations(&db, project_main_bib(&db, main, bib));
 
-    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "knuth"));
-    assert!(!resolved.is_defined(Path::new("/proj/main.tex"), "missing"));
+    assert!(resolved.is_defined(&fpath(&db, main), "knuth"));
+    assert!(!resolved.is_defined(&fpath(&db, main), "missing"));
     // The bib resource resolves to an analyzed member, and main is a document root.
-    assert!(resolved.is_closed(Path::new("/proj/main.tex")));
-    assert!(resolved.is_root_component(Path::new("/proj/main.tex")));
+    assert!(resolved.is_closed(&fpath(&db, main)));
+    assert!(resolved.is_root_component(&fpath(&db, main)));
 }
 
 #[test]
@@ -287,7 +293,7 @@ fn cite_key_change_rebuilds_resolved_citations() {
         Some(&1),
         "resolved citations must rebuild when a cite-key set changes"
     );
-    assert!(resolved.is_defined(Path::new("/proj/main.tex"), "lamport"));
+    assert!(resolved.is_defined(&fpath(&db, main), "lamport"));
 }
 
 #[test]

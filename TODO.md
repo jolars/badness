@@ -7,8 +7,8 @@ load-bearing design decisions, invariants, and the copy-from-arity strategy.
 Single-crate package (not a workspace). Parser and formatter are **intentionally
 interleaved**: the formatter is the primary tool for stress-testing the parser.
 
-Files marked **\[copy\]** are lifted \~wholesale from arity; **\[rewrite\]** are
-LaTeX-specific; **\[diverge\]** intentionally differs from arity.
+Files marked **[copy]** are lifted \~wholesale from arity; **[rewrite]** are
+LaTeX-specific; **[diverge]** intentionally differs from arity.
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 

@@ -195,15 +195,23 @@ Load-bearing. If a change pushes against one of these, raise it explicitly.
      that starts at an own-line comment (so in `%a \n\n %b \foo`, `%a` floats and
      `%b` binds).
 
-   Trivia stays **bare leaf tokens**, never wrapped in a node — the token *kind*
-   already marks it skippable (`Parser::is_trivia`), matching arity/ra and keeping
-   `tree_builder` a mechanical replay. A *named* trivia node (e.g. a `DOC_COMMENT`
-   grouping) is reserved for a later semantic enrichment, not the default for plain
-   whitespace. There is no parse-stability invariant, so this policy is a CST-shape
-   *convention* enforced by tests, not a hard oracle. The leading comment-bind is
-   implemented **grammar-locally** (`grammar.rs` `binding_run` + the `precede`
-   idiom), so `tree_builder` stays a mechanical replay; the construct self-opens and
-   its `Start` is pulled back over the bound comments.
+   Plain whitespace trivia stays **bare leaf tokens**, never wrapped in a node —
+   the token *kind* already marks it skippable (`Parser::is_trivia`), matching
+   arity/ra and keeping `tree_builder` a mechanical replay. The one *named*-node
+   exception is the bound leading-comment run: it is grouped into a `DOC_COMMENT`
+   node (the construct's first child) so downstream (LSP/formatter) sees the doc
+   comment as one unit. The node groups only the contiguous *bound* run; a margin/
+   guard or an unbound floating comment is never wrapped. There is no
+   parse-stability invariant, so this policy is a CST-shape *convention* enforced
+   by tests, not a hard oracle. The leading comment-bind is implemented
+   **grammar-locally** (`grammar.rs` `binding_run` + the `precede` idiom, the run
+   wrapped via `open(DOC_COMMENT)`/`close`), so `tree_builder` stays a mechanical
+   replay; the construct self-opens and its `Start` is pulled back over the
+   `DOC_COMMENT`. The doc/ltxdoc *semantic* association of a doc comment with the
+   macro it documents in a `.dtx` (where the documentation lives behind floating
+   `DOC_MARGIN` trivia, not `COMMENT` tokens, so nothing binds) is a deferred
+   semantic-layer query, not a parser concern — keeping decision #2's no-meaning-
+   in-the-parser rule intact.
 
 ## Invariants (these are test oracles — enforce them)
 

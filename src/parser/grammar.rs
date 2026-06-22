@@ -337,14 +337,20 @@ impl<'t> Parser<'t> {
                 // trivia before the comment run, then wrap the comments + construct
                 // in the construct's node (the `precede` idiom: the construct
                 // self-opens, then its `Start` is pulled back over the comments).
+                // The bound run itself is grouped into a `DOC_COMMENT` node — the
+                // named-trivia enrichment AGENTS.md #9 reserved — so downstream
+                // (LSP/formatter) sees the doc comment as one unit rather than
+                // bare leaves.
                 if let Some((comment_start, construct_pos, _)) = self.binding_run(self.pos) {
                     while self.pos < comment_start {
                         self.bump();
                     }
                     let checkpoint = self.events.len();
+                    self.open(SyntaxKind::DOC_COMMENT);
                     while self.pos < construct_pos {
                         self.bump();
                     }
+                    self.close();
                     let starts_block_env = self.tokens[construct_pos].text == BEGIN_CMD
                         && peek_begin_name(self.tokens, construct_pos)
                             .as_deref()

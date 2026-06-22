@@ -199,6 +199,32 @@ fn unterminated_macrocode_recovers_losslessly() {
 }
 
 #[test]
+fn doc_margins_never_form_a_doc_comment() {
+    // The leading-comment bind (decision #9) keys on real `COMMENT` tokens. A
+    // `.dtx` documentation margin is a `DOC_MARGIN` trivia leaf, not a comment, so
+    // even prose directly above a documentable construct never binds into a
+    // `DOC_COMMENT` node — margins float like whitespace.
+    let root = parse_dtx(
+        "% Some prose about \\foo.\n%    \\begin{macrocode}\n\\foo\n%    \\end{macrocode}\n",
+    );
+    assert_eq!(count(&root, SyntaxKind::DOC_COMMENT), 0);
+}
+
+#[test]
+fn macro_env_and_describe_parse_in_the_doc_layer() {
+    // The doc/ltxdoc vocabulary lexes as ordinary LaTeX in the documentation
+    // layer: the `macro` environment frames its documentation, `\DescribeMacro`
+    // is a plain command. Their arities come from the signature DB, not the parse.
+    let root =
+        parse_dtx("% \\begin{macro}{\\foo}\n% \\DescribeMacro{\\foo} does foo.\n% \\end{macro}\n");
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\DescribeMacro".to_string())));
+    // No comment bind in the doc layer (margins float).
+    assert_eq!(count(&root, SyntaxKind::DOC_COMMENT), 0);
+}
+
+#[test]
 fn meta_comment_header_parses_as_documentation() {
     // The conventional self-extracting header: every line is a margin doc line
     // carrying `\iffalse … \fi` (left un-evaluated — ordinary commands to us).

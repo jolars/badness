@@ -127,14 +127,21 @@ pub struct EnvironmentSig {
     pub verbatim_body: bool,
     /// `true` for math environments (`equation`, `align`, …).
     pub math: bool,
+    /// `true` for environments whose body is *real parsed code*, not prose —
+    /// the doc/ltxdoc `macrocode`/`macrocode*` (whose body is LaTeX/expl3 code,
+    /// parsed and re-lexed under the package regime, *not* an opaque verbatim
+    /// blob like `verbatim_body`). The formatter preserves the body's layout and
+    /// never reflows it as prose; the distinction from `verbatim_body` is that the
+    /// content is a real CST, not a single `VERBATIM_BODY` token.
+    pub code: bool,
     /// `true` for alignment environments whose `&` columns the formatter lays out
     /// into a grid (`align`, `pmatrix`, …). Independent of `math`: every flagged
     /// environment here is also math, but the formatter consults this flag, not
     /// `math`, to decide column alignment.
     pub align: bool,
     /// `true` when the body is ordinary prose the formatter may reflow. Derived as
-    /// `!(verbatim_body || math)`. (Reflow itself is a later item; this is the
-    /// recorded intent.)
+    /// `!(verbatim_body || math || code)`. (Reflow itself is a later item; this is
+    /// the recorded intent.)
     pub reflow: bool,
     /// `true` for sectioning-level *containers* whose body the formatter must
     /// *not* indent (`document`, the appendix-package `appendix`, …). The shared
@@ -376,6 +383,8 @@ struct RawEnvironment {
     #[serde(default)]
     math: bool,
     #[serde(default)]
+    code: bool,
+    #[serde(default)]
     align: bool,
     #[serde(default, rename = "noIndent")]
     no_indent: bool,
@@ -393,9 +402,10 @@ impl From<RawEnvironment> for EnvironmentSig {
             args: raw.args.into_iter().map(ArgSpec::from).collect(),
             verbatim_body: raw.verbatim_body,
             math: raw.math,
+            code: raw.code,
             align: raw.align,
-            // A body is reflowable prose unless it is verbatim or math.
-            reflow: !(raw.verbatim_body || raw.math),
+            // A body is reflowable prose unless it is verbatim, math, or code.
+            reflow: !(raw.verbatim_body || raw.math || raw.code),
             no_indent: raw.no_indent,
             list: raw.list,
             // Math, lists, and `document` are inherently block/display; the explicit
@@ -611,6 +621,58 @@ mod tests {
         // The new explicit flag leaves `reflow` derivation untouched: `center`
         // is a block env but still reflows its prose body.
         assert!(db.environment("center").unwrap().reflow);
+    }
+
+    #[test]
+    fn doc_ltxdoc_signatures() {
+        let db = builtin();
+        // doc/ltxdoc driver commands each take one mandatory argument.
+        for name in ["DocInput", "DescribeMacro", "DescribeEnv", "StopEventually"] {
+            let cmd = db
+                .command(name)
+                .unwrap_or_else(|| panic!("{name} signature"));
+            assert_eq!(cmd.args.len(), 1, "{name} arity");
+            assert!(cmd.args[0].required, "{name} arg is mandatory");
+        }
+        // The `macro`/`environment` doc envs document one item and are block
+        // containers, but their body is ordinary prose (it still reflows).
+        for name in ["macro", "environment"] {
+            let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
+            assert_eq!(env.args.len(), 1, "{name} arity");
+            assert!(env.block, "{name} is a block env");
+            assert!(env.reflow, "{name} body reflows as prose");
+            assert!(!env.code, "{name} is not a code env");
+        }
+        // `macrocode`/`macrocode*` are code-not-prose: real parsed code (not an
+        // opaque verbatim blob), so `code` is set, `reflow` is off, and
+        // `verbatim_body` stays off (otherwise the lexer would swallow the body).
+        for name in ["macrocode", "macrocode*"] {
+            let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
+            assert!(env.code, "{name} is code");
+            assert!(!env.reflow, "{name} never reflows");
+            assert!(!env.verbatim_body, "{name} body is parsed, not verbatim");
+            assert!(env.block, "{name} is a block env");
+        }
+    }
+
+    #[test]
+    fn code_flag_parses_and_drives_reflow() {
+        // The `code` flag defaults false and, when set, suppresses reflow without
+        // making the body verbatim.
+        let db = parse(
+            r#"{ "environments": {
+                "plain": {},
+                "codeish": { "code": true }
+            } }"#,
+        )
+        .expect("valid code schema");
+        let plain = db.environment("plain").unwrap();
+        assert!(!plain.code);
+        assert!(plain.reflow);
+        let codeish = db.environment("codeish").unwrap();
+        assert!(codeish.code);
+        assert!(!codeish.reflow);
+        assert!(!codeish.verbatim_body);
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub enum SyntaxKind {
     SUPERSCRIPT,  // `^` and its tightly-bound script argument
     LEFT_RIGHT,   // `\left( … \right)` — a matched delimiter pair wrapping a MATH body
     PARAGRAPH,    // text delimited by blank lines
+    DOC_COMMENT,  // a bound leading-`%` comment run, grouped before its construct
     TEXT,         // a run of text and trivia
     LINE_BREAK,   // `\\`, with a tightly-bound `*` and/or `[len]` (`\\*[2ex]`)
     ROOT,         // the document root  (keep LAST)

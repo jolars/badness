@@ -43,6 +43,11 @@
     "footcite": { "args": ["opt", "opt", { "kind": "req", "collapse": true }], "inline": true },
     "smartcite": { "args": ["opt", "opt", { "kind": "req", "collapse": true }], "inline": true },
 
+    "DocInput": { "args": ["req"] },
+    "DescribeMacro": { "args": ["req"] },
+    "DescribeEnv": { "args": ["req"] },
+    "StopEventually": { "args": ["req"] },
+
     "verb": { "verbatim": true },
     "verb*": { "verbatim": true },
     "lstinline": { "args": ["opt"], "verbatim": true },
@@ -109,6 +114,11 @@
     "alltt": { "verbatimBody": true, "block": true },
     "lstlisting": { "args": ["opt"], "verbatimBody": true, "block": true },
     "minted": { "args": ["opt", "req"], "verbatimBody": true, "block": true },
+
+    "macro": { "args": ["req"], "block": true },
+    "environment": { "args": ["req"], "block": true },
+    "macrocode": { "code": true, "block": true },
+    "macrocode*": { "code": true, "block": true },
 
     "Code": { "verbatimBody": true, "block": true },
     "CodeInput": { "verbatimBody": true, "block": true },

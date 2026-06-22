@@ -1,11 +1,13 @@
 ---
 source: tests/parser.rs
+assertion_line: 226
 expression: "tree(\"% caption\\n\\\\begin{figure}\\nx\\n\\\\end{figure}\")"
 ---
 ROOT@0..39
   ENVIRONMENT@0..39
-    COMMENT@0..9 "% caption"
-    NEWLINE@9..10 "\n"
+    DOC_COMMENT@0..10
+      COMMENT@0..9 "% caption"
+      NEWLINE@9..10 "\n"
     BEGIN@10..24
       CONTROL_WORD@10..16 "\\begin"
       NAME_GROUP@16..24

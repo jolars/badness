@@ -333,10 +333,24 @@ scope (the same boundary the include graph and CWL ingest keep).
     trailing code lexes normally, a malformed `%<` (no `>` before EOL) falls
     back to a comment. `GUARD` floats like `DOC_MARGIN` through every
     `grammar.rs` trivia scanner.
-  - [ ] **M3 doc/ltxdoc semantic signatures.** `\DocInput`,
-    `\DescribeMacro`/`\DescribeEnv`, `\StopEventually`, `macro`/`environment`
-    envs; classify `macrocode`/`macrocode*` as code-not-prose. Pure
-    signature-DB work; enables the deferred doc-comment binding.
+  - [x] **M3 doc/ltxdoc semantic signatures + `DOC_COMMENT` node.** Added
+    `\DocInput`, `\DescribeMacro`/`\DescribeEnv`, `\StopEventually` command sigs
+    and `macro`/`environment` env sigs to `data/signatures.json`; classified
+    `macrocode`/`macrocode*` as code-not-prose via a new `EnvironmentSig.code`
+    flag (real parsed code, *not* `verbatim_body` — folds into the `reflow`
+    derivation). Also implemented the "doc-comment binding": the bound
+    leading-comment run is now grouped into a `DOC_COMMENT` node (the named-trivia
+    enrichment AGENTS.md #9 reserved), grammar-local via `open`/`close`. The
+    formatter lowers `DOC_COMMENT` transparently. Follow-ups recorded below.
+  - [ ] **Doc/ltxdoc semantic prose↔code association (deferred).** Associate a
+    `.dtx` documentation comment (behind floating `DOC_MARGIN`) with the
+    `macro`/`macrocode`/`\DescribeMacro` it documents. Must live in the *semantic*
+    layer (an `outline.rs`-style query that may consult the signature DB), not the
+    parser — decision #9 forbids signature lookups in the binding decision.
+  - [ ] **Outline entries for `macro`/`environment` (deferred).** Give the doc
+    envs (and `\DescribeMacro`/`\DescribeEnv`) `documentSymbol` entries so a
+    `.dtx`'s documented macros are navigable — needs a new `OutlineKind` variant
+    and name extraction from the first arg.
   - [ ] **M4 driver / `\iffalse` + `.ins`.** `\iffalse…\fi` stays
     un-evaluated (already lossless as ordinary commands); `.ins` deferred.
 

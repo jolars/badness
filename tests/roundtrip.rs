@@ -86,6 +86,11 @@ fn roundtrip_dtx_units() {
         "%<*driver>\r\n\\documentclass{ltxdoc}\r\n%</driver>\r\n",
         // A guard with a boolean tag expression.
         "%<*package|driver>\n\\foo\n%</package|driver>\n",
+        // A `macrocode` body with nested groups (the formatter indents these from a
+        // column-0 base; losslessness must hold regardless).
+        "%    \\begin{macrocode}\n\\def\\foo{%\n\\begingroup\n\\bar\n\\endgroup\n}\n%    \\end{macrocode}\n",
+        // A documentation-layer environment whose frames sit on margin lines.
+        "% \\begin{itemize}\n% \\item first\n% \\item second\n% \\end{itemize}\n",
     ];
     for case in cases {
         assert_lossless_dtx(case);

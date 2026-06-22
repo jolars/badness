@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use badness::formatter::{
     FormatStyle, WrapMode, format, format_with_style, format_with_style_flavored,
 };
-use badness::parser::{LatexFlavor, parse, parse_with_flavor, reconstruct};
+use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 
 /// Assert the formatter invariants for a single clean-parsing input. Inputs the
 /// parser rejects are out of scope for the formatter (it refuses them), so the
@@ -320,6 +320,71 @@ fn package_fixtures_match_expected() {
             "fixture {name} is not idempotent"
         );
         let reparsed = parse_with_flavor(&formatted, LatexFlavor::Package);
+        assert!(
+            reparsed.errors.is_empty(),
+            "fixture {name} formatted output must parse cleanly"
+        );
+        assert_eq!(
+            reparsed.syntax().to_string(),
+            formatted,
+            "fixture {name} formatted output must round-trip losslessly"
+        );
+    }
+}
+
+/// `.dtx` (docstrip) fixtures under `tests/fixtures/formatter/<name>/`, each an
+/// `input.dtx` + `expected.dtx` pair. They are parsed and formatted under the
+/// docstrip [`LexConfig`] (`dtx: true`, `Document` flavor) and default to
+/// [`WrapMode::Preserve`], exactly as the CLI/LSP resolve a `.dtx` file. The
+/// two-layer rules are pinned here: documentation margins (`%`) and docstrip
+/// guards (`%<…>`) stay byte-for-byte at column 0, a `macrocode` body formats as
+/// code at a column-0 base, and a documentation-layer environment's frames are
+/// never reindented or split.
+const DTX_FIXTURES: &[&str] = &[
+    "dtx_macrocode_basic",
+    "dtx_macrocode_nested_groups",
+    "dtx_prose_itemize",
+    "dtx_guards",
+    "dtx_margin_blank_line",
+];
+
+/// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).
+fn dtx_config() -> LexConfig {
+    LexConfig {
+        flavor: LatexFlavor::Document,
+        dtx: true,
+    }
+}
+
+#[test]
+fn dtx_fixtures_match_expected() {
+    for &name in DTX_FIXTURES {
+        let style = FormatStyle {
+            wrap: WrapMode::Preserve,
+            ..FormatStyle::default()
+        };
+        let input = fs::read_to_string(fixture_path(name, "input.dtx"))
+            .unwrap_or_else(|e| panic!("read {name}/input.dtx: {e}"));
+        let expected = fs::read_to_string(fixture_path(name, "expected.dtx"))
+            .unwrap_or_else(|e| panic!("read {name}/expected.dtx: {e}"));
+
+        // Under the docstrip config the input must parse cleanly.
+        assert!(
+            parse_with_flavor(&input, dtx_config()).errors.is_empty(),
+            "fixture {name} input must parse cleanly under the dtx config"
+        );
+
+        let formatted = format_with_style_flavored(&input, style, dtx_config())
+            .unwrap_or_else(|e| panic!("format {name}: {e}"));
+        assert_eq!(formatted, expected, "fixture {name} output mismatch");
+
+        // Idempotent (same config + style), clean, and lossless.
+        assert_eq!(
+            format_with_style_flavored(&formatted, style, dtx_config()).expect("reformat"),
+            formatted,
+            "fixture {name} is not idempotent"
+        );
+        let reparsed = parse_with_flavor(&formatted, dtx_config());
         assert!(
             reparsed.errors.is_empty(),
             "fixture {name} formatted output must parse cleanly"

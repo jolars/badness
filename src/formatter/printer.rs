@@ -128,6 +128,18 @@ impl Writer {
             self.col += segment.chars().count();
         }
     }
+
+    /// Write a single-line chunk pinned to column 0: discard any pending indent so
+    /// the chunk starts flush at the line's left margin (a `.dtx` margin/guard,
+    /// see [`Ir::ColumnZero`]). The caller guarantees this is the first visible
+    /// token of its physical line, so dropping the indent is exactly the column-0
+    /// rule and never clobbers already-emitted content.
+    fn write_column_zero(&mut self, s: &str) {
+        self.needs_indent = false;
+        self.pending_indent = 0;
+        self.out.push_str(s);
+        self.col += s.chars().count();
+    }
 }
 
 impl Printer {
@@ -197,6 +209,7 @@ impl Printer {
                 Ir::Nil => {}
                 Ir::Text(s) => w.write_text(s),
                 Ir::Verbatim { text, .. } => w.write_verbatim(text),
+                Ir::ColumnZero(text) => w.write_column_zero(text),
                 Ir::Concat(items) => {
                     for item in items.iter().rev() {
                         stack.push(Cmd::Node {
@@ -382,7 +395,7 @@ impl Printer {
         while let Some(node) = stack.pop() {
             match node {
                 Ir::Nil | Ir::SoftLine => {}
-                Ir::Text(s) => total += s.chars().count(),
+                Ir::Text(s) | Ir::ColumnZero(s) => total += s.chars().count(),
                 Ir::Verbatim { text, .. } => {
                     if text.contains('\n') {
                         return None;
@@ -496,7 +509,7 @@ impl Printer {
         while let Some(node) = stack.pop() {
             match node {
                 Ir::Nil | Ir::SoftLine => {}
-                Ir::Text(s) => {
+                Ir::Text(s) | Ir::ColumnZero(s) => {
                     let w = s.chars().count();
                     if w > remaining {
                         if self.atom_is_unfittable(hug, excuse_overflow, w) {
@@ -585,7 +598,7 @@ impl Printer {
         while let Some(node) = stack.pop() {
             match node {
                 Ir::Nil | Ir::SoftLine => {}
-                Ir::Text(s) => {
+                Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
                     if col > self.line_width {
                         return false;
@@ -666,7 +679,7 @@ impl Printer {
                 Ir::Nil | Ir::SoftLine if mode == Mode::Flat => {}
                 Ir::Nil => {}
                 Ir::SoftLine => return true,
-                Ir::Text(s) => {
+                Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
                     if col > self.line_width {
                         return false;
@@ -736,7 +749,7 @@ impl Printer {
         while let Some((mode, node)) = stack.pop() {
             match node {
                 Ir::Nil => {}
-                Ir::Text(s) => {
+                Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
                     if col > self.line_width {
                         return false;

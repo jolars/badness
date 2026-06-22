@@ -193,6 +193,14 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Reflow => {
             return lower_paragraph_reflow(node, cx);
         }
+        // A `.dtx` docstrip frame (`%␣␣␣␣\begin{macrocode}`, a documentation-layer
+        // `% \begin{itemize}`): the body is never indented and the closing frame is
+        // kept whole at column 0. Routed before the alignment/list lowerers so a
+        // margin-framed environment never reaches a layout that would reindent its
+        // frame margins.
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_margin_framed(node) => {
+            return lower_margin_framed_environment(node, cx);
+        }
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_alignment_env(node, cx) => {
             return lower_aligned_environment(node, cx);
         }
@@ -385,9 +393,10 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
             }
             // Any other token (WORD, `~`, `&`, `#`, `^`, `_`, brackets, `\verb`,
             // a bare control symbol) glues onto the current atom — prose content,
-            // so this physical line is no longer command-only.
+            // so this physical line is no longer command-only. A `.dtx` margin/guard
+            // (only under the dtx config) pins to column 0 instead of reflowing.
             SyntaxElement::Token(token) => {
-                atom.push(Ir::verbatim(token.text()));
+                atom.push(lower_loose_token(token));
                 line_has_content = true;
                 line_all_commands = false;
             }
@@ -434,6 +443,19 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
     Ir::concat(result)
 }
 
+/// Lower a single loose token (one not collapsed into a trivia run) to inline IR.
+/// A `.dtx` documentation margin (`DOC_MARGIN`) or docstrip guard (`GUARD`) pins
+/// to column 0 via [`Ir::column_zero`] so docstrip's left-margin anchor survives
+/// any surrounding LaTeX nesting; every other token splices verbatim. These tokens
+/// only exist under the `.dtx` lexer config, so non-`.dtx` lowering is unaffected.
+fn lower_loose_token(token: &SyntaxToken) -> Ir {
+    if matches!(token.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD) {
+        Ir::column_zero(token.text())
+    } else {
+        Ir::verbatim(token.text())
+    }
+}
+
 /// Lower a stream of elements: child nodes recurse, non-trivia tokens (and the
 /// protected `\verb`/verbatim/comment tokens) are emitted verbatim, and maximal
 /// runs of `WHITESPACE`/`NEWLINE` trivia are collapsed into a single break
@@ -453,7 +475,7 @@ fn lower_element_stream(
                 let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
                 out.push(classify_trivia(newlines, trailing_ws));
             }
-            SyntaxElement::Token(token) => out.push(Ir::verbatim(token.text())),
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
         }
     }
     out
@@ -560,6 +582,137 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::concat([leading, env])
 }
 
+/// Whether the environment is *margin-framed*: a `.dtx` documentation margin
+/// (`DOC_MARGIN`) or docstrip guard (`GUARD`) sits immediately before its `\begin`
+/// on the same physical line — `%␣␣␣␣\begin{macrocode}`, a documentation-layer
+/// `% \begin{itemize}`. The `\begin`/`\end` are docstrip *frame lines* anchored at
+/// column 0, so the body must not be indented (indenting would push the frame
+/// margins off column 0 and split the closing `%␣␣␣␣\end{…}` frame — the corruption
+/// this fixes). A pure CST-shape fact: it walks back over inline whitespace from
+/// `\begin` and asks only "is the previous token a margin/guard on this line", with
+/// no signature lookup, so it stays out of the semantic layer (decision #2) and
+/// covers `macrocode` and any prose-layer environment uniformly. `DOC_MARGIN`/
+/// `GUARD` exist only under the `.dtx` config, so this is always false elsewhere.
+fn is_margin_framed(node: &SyntaxNode) -> bool {
+    let Some(begin) = node.children().find(|c| c.kind() == SyntaxKind::BEGIN) else {
+        return false;
+    };
+    let mut tok = begin.first_token().and_then(|t| t.prev_token());
+    while let Some(t) = tok {
+        match t.kind() {
+            SyntaxKind::WHITESPACE => tok = t.prev_token(),
+            SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Split a trailing closing-frame margin run off `body`, returning it (the docstrip
+/// `\end` frame's `%␣␣␣␣` prefix) so the caller can ride it onto the `\end` line at
+/// column 0 instead of leaving it as body tail with a break before `\end` (which
+/// would split the frame). The frame is the maximal trailing run of inline
+/// `WHITESPACE` / `DOC_MARGIN` / `GUARD` tokens, and only counts as a frame when it
+/// actually contains a margin/guard; the `NEWLINE` before it stays in `body` as the
+/// trailing break that becomes the frame line's leading break. Returns `None` when
+/// `\end` has no preceding margin on its own line (e.g. a prose-layer `\end{…}`
+/// authored flush against content), so the caller falls back to the plain
+/// no-indent shape.
+fn split_closing_frame(body: &mut Vec<SyntaxElement>) -> Option<Vec<SyntaxElement>> {
+    let mut boundary = body.len();
+    let mut has_margin = false;
+    while boundary > 0 {
+        match &body[boundary - 1] {
+            SyntaxElement::Token(t)
+                if matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD) =>
+            {
+                has_margin = true;
+                boundary -= 1;
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => boundary -= 1,
+            _ => break,
+        }
+    }
+    has_margin.then(|| body.split_off(boundary))
+}
+
+/// Lower a *margin-framed* environment (see [`is_margin_framed`]): a `.dtx`
+/// docstrip frame whose `\begin`/`\end` sit on column-0 margin lines. Unlike
+/// [`lower_environment`] this never indents the body (the frames are not a real
+/// indentation scope) and it pulls the closing `%␣␣␣␣` frame back onto the `\end`
+/// line so the terminator stays a single byte-faithful frame line. The body is
+/// still lowered as ordinary content — for `macrocode` that is real code whose
+/// interior groups/environments indent relative to their column-0 base; for a
+/// prose-layer environment it is margin lines, each pinned to column 0 by
+/// [`Ir::column_zero`].
+fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let leading = lower_environment_leading(node, cx);
+    let mut begin = Ir::Nil;
+    let mut end = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    let mut seen_begin = false;
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                seen_begin = true;
+                begin = lower_begin(child, cx);
+            }
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
+                end = lower_node(child, cx);
+            }
+            _ if !seen_begin => {}
+            _ => body_elements.push(element),
+        }
+    }
+
+    // Pull the `%␣␣␣␣` that frames `\end` onto the `\end` line; what remains is the
+    // real body.
+    let frame = split_closing_frame(&mut body_elements);
+    let frame_ir = frame
+        .map(|f| Ir::concat(lower_element_stream(f.into_iter(), cx)))
+        .filter(|ir| !matches!(ir, Ir::Nil));
+
+    // A `%` trailing the `\begin{…}` header on the same line is the space-suppression
+    // idiom: lift it onto the `\begin` line, as [`lower_environment`] does, so it is
+    // not relocated to its own line.
+    let (begin, body) = match leading_inline_comment(&body_elements) {
+        Some(comment) => (
+            Ir::concat([begin, Ir::verbatim(comment.text())]),
+            lower_body_dropping_leading_comment(body_elements, cx),
+        ),
+        None => (
+            begin,
+            Ir::concat(lower_element_stream(body_elements.into_iter(), cx)),
+        ),
+    };
+    let (lead_blank, body) = peel_leading_break(body);
+    let (trail_blank, body) = peel_trailing_break(body);
+    let lead = if lead_blank {
+        Ir::empty_line()
+    } else {
+        Ir::hard_line()
+    };
+    // The break that separates the body (or `\begin`, for an empty body) from the
+    // `\end` frame line.
+    let close_break = if trail_blank {
+        Ir::empty_line()
+    } else {
+        Ir::hard_line()
+    };
+
+    let env = match (matches!(body, Ir::Nil), frame_ir) {
+        // Empty body, framed close: `\begin` then the `%␣␣␣␣\end` frame line.
+        (true, Some(frame_ir)) => Ir::concat([begin, close_break, frame_ir, end]),
+        // Empty body, no frame: `\begin` and `\end` on their own lines.
+        (true, None) => Ir::concat([begin, Ir::hard_line(), end]),
+        // Body then the `%␣␣␣␣\end` frame line at column 0.
+        (false, Some(frame_ir)) => Ir::concat([begin, lead, body, close_break, frame_ir, end]),
+        // Body but no closing margin: behave like a no-indent environment.
+        (false, None) => Ir::concat([begin, lead, body, close_break, end]),
+    };
+    Ir::concat([leading, env])
+}
+
 /// The `%` comment that trails the `\begin{…}` header on the *same* source line —
 /// only inline whitespace, never a newline, separates the header from it. Such a
 /// comment is the space-suppression idiom and belongs on the header line; a
@@ -612,7 +765,7 @@ fn lower_body_dropping_leading_comment(body_elements: Vec<SyntaxElement>, cx: Lo
             }
             // Unreachable given `leading_inline_comment` matched, but stay lossless.
             SyntaxElement::Token(token) => {
-                out.push(Ir::verbatim(token.text()));
+                out.push(lower_loose_token(&token));
                 break;
             }
         }
@@ -711,7 +864,7 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             SyntaxElement::Node(child) => head.push(lower_node(child, cx)),
             // Drop header breaks/whitespace: the arguments glue to `\begin{name}`.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
-            SyntaxElement::Token(token) => head.push(Ir::verbatim(token.text())),
+            SyntaxElement::Token(token) => head.push(lower_loose_token(token)),
         }
     }
     if !tail.is_empty() {
@@ -1668,7 +1821,7 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
                 out.push(classify_trivia(newlines, trailing_ws));
             }
-            SyntaxElement::Token(token) => out.push(Ir::verbatim(token.text())),
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
         }
     }
     Ir::concat(out)

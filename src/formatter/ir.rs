@@ -74,6 +74,14 @@ pub(crate) enum Ir {
     /// stay flat (used for comments and for multi-line bridged renderings);
     /// otherwise it behaves as opaque inline text of its own width.
     Verbatim { text: Rc<str>, force_break: bool },
+    /// A verbatim chunk pinned to column 0: before splicing `text` the printer
+    /// discards any pending indent so the chunk starts flush at the line's left
+    /// margin. Used for a `.dtx` documentation margin (`%`) or docstrip guard
+    /// (`%<…>`), which docstrip anchors at column 0 regardless of the surrounding
+    /// LaTeX nesting. Always the first visible token of its physical line, so
+    /// zeroing the indent is exactly the column-0 rule. Behaves as opaque inline
+    /// text otherwise (no forced break). Build via [`Ir::column_zero`].
+    ColumnZero(Rc<str>),
     /// An ordered list of candidate layouts. The printer picks the first
     /// candidate whose *first line* fits at the current column under a
     /// break-aware measurement (nested groups decide their own break, success
@@ -262,6 +270,12 @@ impl Ir {
         }
     }
 
+    /// A verbatim chunk pinned to column 0; see [`Ir::ColumnZero`]. `text` must
+    /// never contain a newline (a margin/guard is a single line-leading token).
+    pub(crate) fn column_zero(s: impl Into<Rc<str>>) -> Ir {
+        Ir::ColumnZero(s.into())
+    }
+
     pub(crate) fn line() -> Ir {
         Ir::Line
     }
@@ -283,6 +297,7 @@ impl Ir {
             Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
             Ir::Text(_)
             | Ir::Verbatim { .. }
+            | Ir::ColumnZero(_)
             | Ir::HardLine
             | Ir::EmptyLine
             | Ir::Line
@@ -324,7 +339,12 @@ impl Ir {
             Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                 cands.first().is_some_and(Ir::contains_forced_break)
             }
-            Ir::Text(_) | Ir::Line | Ir::SoftLine | Ir::IfBreak { .. } | Ir::Nil => false,
+            Ir::Text(_)
+            | Ir::ColumnZero(_)
+            | Ir::Line
+            | Ir::SoftLine
+            | Ir::IfBreak { .. }
+            | Ir::Nil => false,
         }
     }
 }

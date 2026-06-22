@@ -211,6 +211,57 @@ fn doc_margins_never_form_a_doc_comment() {
 }
 
 #[test]
+fn macrocode_frame_margins_sit_where_the_formatter_expects() {
+    // The formatter's two-layer lowering relies on a CST-shape fact: the opening
+    // frame's `DOC_MARGIN` immediately precedes `\begin` (reachable by walking back
+    // over inline whitespace), and the closing frame's `DOC_MARGIN` is a child token
+    // of the ENVIRONMENT sitting *before* the END node (so it can be pulled onto the
+    // `\end` line). Pin both so a future grammar change can't silently break the
+    // formatter.
+    let root = parse_dtx("%    \\begin{macrocode}\n\\def\\foo{x}\n%    \\end{macrocode}\n");
+    let env = root
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .expect("environment");
+
+    // Opening frame: the token before `\begin`, skipping inline whitespace, is a
+    // DOC_MARGIN.
+    let begin = env
+        .children()
+        .find(|c| c.kind() == SyntaxKind::BEGIN)
+        .expect("begin");
+    let mut tok = begin.first_token().and_then(|t| t.prev_token());
+    while let Some(t) = &tok {
+        if t.kind() == SyntaxKind::WHITESPACE {
+            tok = t.prev_token();
+        } else {
+            break;
+        }
+    }
+    assert_eq!(
+        tok.map(|t| t.kind()),
+        Some(SyntaxKind::DOC_MARGIN),
+        "opening `\\begin` must be preceded by a DOC_MARGIN on its line"
+    );
+
+    // Closing frame: a DOC_MARGIN child of the ENVIRONMENT appears before the END
+    // node in document order.
+    let children: Vec<_> = env.children_with_tokens().collect();
+    let last_margin = children
+        .iter()
+        .rposition(|e| e.kind() == SyntaxKind::DOC_MARGIN)
+        .expect("a closing-frame DOC_MARGIN");
+    let end = children
+        .iter()
+        .position(|e| e.kind() == SyntaxKind::END)
+        .expect("END node");
+    assert!(
+        last_margin < end,
+        "the closing-frame DOC_MARGIN must precede the END node within the environment"
+    );
+}
+
+#[test]
 fn macro_env_and_describe_parse_in_the_doc_layer() {
     // The doc/ltxdoc vocabulary lexes as ordinary LaTeX in the documentation
     // layer: the `macro` environment frames its documentation, `\DescribeMacro`

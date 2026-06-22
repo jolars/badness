@@ -365,10 +365,26 @@ scope (the same boundary the include graph and CWL ingest keep).
   respected via the `Package` flavor. The expl3-mode freedom (whitespace
   non-semantic inside `\ExplSyntaxOn`, `~` a literal space) is deferred with the
   expl3 lexer mode above.
-- [ ] **`.dtx` two-layer formatting.** Preserve the docstrip margins and `%<…>`
-  guards byte-for-byte (protected); format the documentation prose layer and
-  the `macrocode` code layer independently; never disturb the leading-`%`
-  margin or guard lines. Idempotence + losslessness as elsewhere.
+- [x] **`.dtx` two-layer formatting (foundation, Preserve).** The formatter is now
+  `.dtx`-aware. A new `Ir::ColumnZero` leaf pins every `DOC_MARGIN` (`%`) and
+  `GUARD` (`%<…>`) to column 0 in the printer (the single layout authority), so
+  margins and guards stay byte-for-byte regardless of surrounding LaTeX nesting
+  (`lower_loose_token` in `formatter/core.rs`). A structural `is_margin_framed`
+  predicate (the env's `\begin` is preceded by a margin/guard on its line — a pure
+  CST-shape fact, no signature lookup) routes both `macrocode` *and* any
+  documentation-layer environment (`itemize`, `macro`, …) through
+  `lower_margin_framed_environment`: the body is never indented (frames are not a
+  real indentation scope) and `split_closing_frame` pulls the closing `%␣␣␣␣`
+  onto the `\end` line so the terminator stays one whole frame line. A `macrocode`
+  body thus formats as code at a column-0 base (interior groups/envs still indent);
+  prose margin lines stay pinned. Pinned by `DTX_FIXTURES` in `tests/format.rs`
+  (equality + idempotence + losslessness under the dtx config) plus `tests/dtx.rs`
+  and `tests/roundtrip.rs` coverage. Default wrap is `Preserve`.
+- [ ] **`.dtx` prose reflow (deferred).** Under `--wrap reflow`, reflow the
+  documentation prose layer by re-emitting a `% ` margin on each *wrapped* line.
+  Needs new printer machinery (per-line margin prefixes synthesized on a break) the
+  current `newline`/`empty_line` path lacks; the column-0 pin already degrades a
+  reflow run to preserve-like margins safely, so this is purely additive.
 
 ### Semantic / integration
 

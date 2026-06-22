@@ -99,7 +99,7 @@ use crate::bib::{
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
 use crate::file_discovery::{FileKind, collect_lint_files, file_kind_or_tex};
-use crate::formatter::{FormatStyle, format_node, format_with_style_flavored};
+use crate::formatter::{FormatStyle, format_node_with_signatures, format_with_style_flavored};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
 use crate::parser::parse;
@@ -321,6 +321,21 @@ fn uri_to_path(uri: &Uri) -> PathBuf {
 /// `--stdin-filepath`.
 fn file_kind_for(path: &Path) -> FileKind {
     file_kind_or_tex(path)
+}
+
+/// The current project membership of a read snapshot, as sorted-by-caller
+/// [`ProjectMember`]s — the snapshot-side counterpart of
+/// [`GlobalState`]'s `project_members`, used by a format read to intern a
+/// `Project` for [`Analysis::scope_signatures`].
+fn members_of(snapshot: &Analysis) -> Vec<ProjectMember> {
+    snapshot
+        .tracked_files()
+        .into_iter()
+        .map(|(path, file)| {
+            let kind = file_kind_for(&path);
+            ProjectMember { file, path, kind }
+        })
+        .collect()
 }
 
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
@@ -1319,10 +1334,12 @@ fn compute_format(
                     return Some(None);
                 }
                 // The cached tree was already parsed with the file's flavor (the
-                // salsa `parsed_document` query flavors by path), so `format_node`
-                // needs no flavor here.
+                // salsa `parsed_document` query flavors by path), so this needs no
+                // flavor. The merged signature scope folds in the file's loaded
+                // local packages (those tracked as project members).
                 let root = snapshot.parsed_tree(file);
-                Some(format_node(&root, style).ok())
+                let sigs = snapshot.scope_signatures(members_of(snapshot), file);
+                Some(format_node_with_signatures(&root, style, sigs).ok())
             }
             FileKind::Bib => {
                 if !snapshot.bib_parse_diagnostics(file).is_empty() {
@@ -1633,7 +1650,9 @@ fn compute_tex_completion(
                 },
                 _ => TexCompletion::Items(build_completion_items(
                     &ctx,
-                    snapshot.document_signatures(file),
+                    // The merged scope folds in loaded local packages' macros; the
+                    // `members` clone leaves the original for the cite branch below.
+                    snapshot.scope_signatures(members.clone(), file),
                     snapshot.semantic_model(file),
                     uri,
                 )),

@@ -402,11 +402,29 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Semantic / integration
 
-- [ ] **Package load graph.** Treat `\usepackage`/`\RequirePackage`/`\LoadClass`/
-  `\LoadClassWithOptions`/`\documentclass` as edges (the analog of the
-  `\input`/`\include` graph in `project/include.rs`), resolving **local**
-  `.sty`/`.cls` files only. Pull each loaded package's exported macro
-  signatures into the document's signature scope.
+- [x] **Package load graph.** `\usepackage`/`\RequirePackage`/`\LoadClass`/
+  `\LoadClassWithOptions`/`\documentclass` are extracted as load edges in
+  `project/package.rs` (the load-graph analog of `project/include.rs`:
+  `PackageKind`/`PackageTarget`/`PackageEdge`/`PackageEdgeKey`, comma-list
+  expansion, `.sty`/`.cls` extension defaulting, options skipped). They assemble
+  into a cross-file `PackageGraph` (`project/graph.rs`) over the `package_edges`
+  salsa firewall (`package_graph`), resolving **local** `.sty`/`.cls` only —
+  cycle/reachability helpers are now generic and shared with the include graph.
+  `scope_signatures` (`incremental.rs`) merges a file's transitively-loaded
+  package definitions (via the existing unmodified `scan_definitions`) under its
+  own (document-wins, post-order so a package overrides its deps). Wired into the
+  formatter (`format_node_with_signatures` / `format_file_with_packages`, used by
+  the CLI `format`/`--check` and the LSP) and LSP completion. The pure db-less
+  collector is `semantic/load.rs` (`collect_package_signatures` + `PackageSource`,
+  `DiskPackageSource` for the CLI). Tests: `src/project/package.rs`,
+  `src/project/graph.rs`, `src/semantic/load.rs`, `tests/package.rs`,
+  `tests/format_packages.rs`. *Follow-ups:* scope is per-file (a file + its
+  transitively-loaded packages), not namespace-wide — an `\input`-ed chapter does
+  not yet inherit the main preamble's packages (would reuse the include-graph
+  connected-component machinery labels use); and a package-defined **verbatim**
+  command is not protected by the lexer (the two-pass verbatim scan reads the
+  document, not packages) — only the formatter's signature-driven layout uses the
+  package scope.
 - [ ] **Signature extraction from package sources.** Run the existing
   `semantic/define.rs` scanner across loaded `.sty`/`.cls` (and `macrocode`
   blocks of a `.dtx` when no generated `.sty` is present), extending it to

@@ -29,8 +29,9 @@ use crate::parser::parse_with_flavor;
 use crate::project::citations::document_cite_names;
 use crate::project::labels::{document_label_names, is_document_root};
 use crate::project::{
-    BibTarget, IncludeEdgeKey, Project, ProjectMember, ResolvedCitations, ResolvedLabels,
-    collect_bib_resource_targets, collect_include_edge_keys, resolved_citations, resolved_labels,
+    BibTarget, IncludeEdgeKey, PackageEdgeKey, Project, ProjectMember, ResolvedCitations,
+    ResolvedLabels, collect_bib_resource_targets, collect_include_edge_keys,
+    collect_package_edge_keys, package_graph, resolved_citations, resolved_labels,
 };
 use crate::semantic::{
     DocAssociation, SemanticModel, SignatureDb, doc_associations as build_doc_associations,
@@ -62,6 +63,8 @@ pub enum QueryKind {
     DocAssociations,
     /// A file's range-free inclusion edges ([`include_edges`]).
     IncludeEdges,
+    /// A file's range-free package/class load edges ([`package_edges`]).
+    PackageEdges,
     /// A file's sorted, distinct label-name set ([`file_labels`]) — the firewall
     /// the cross-file label resolver consumes.
     FileLabels,
@@ -70,6 +73,12 @@ pub enum QueryKind {
     /// The cross-file inclusion graph ([`crate::project::project_graph`]); a
     /// project-level query, not keyed on a single file.
     ProjectGraph,
+    /// The cross-file package-load graph ([`crate::project::package_graph`]); a
+    /// project-level query, not keyed on a single file.
+    PackageGraph,
+    /// A file's merged signature scope — its own definitions plus those of its
+    /// transitively loaded local packages ([`scope_signatures`]).
+    ScopeSignatures,
     /// The cross-file label resolution ([`crate::project::resolved_labels`]); a
     /// project-level query, not keyed on a single file.
     ResolvedLabels,
@@ -209,6 +218,48 @@ pub fn document_signatures(db: &dyn IncrementalDb, file: SourceFile) -> Signatur
     scan_definitions(&parsed_tree_root(db, file))
 }
 
+/// The file's merged **signature scope**: the scanned definitions of every package
+/// it transitively loads (local `.sty`/`.cls` members of `project`), unioned in
+/// load order, with the file's *own* [`document_signatures`] overlaid on top so a
+/// document redefinition wins over any package. Built from the cross-file
+/// [`package_graph`](crate::project::package_graph) and the per-file
+/// [`document_signatures`] firewall.
+///
+/// Like [`document_signatures`] this is **not** `no_eq`: [`SignatureDb`] is `Eq`,
+/// so it backdates when no definition-relevant edit occurred anywhere in the
+/// loaded set. Its consumers are the formatter (package-defined arities/verbatim)
+/// and completion. A name like `amsmath` with no sibling `amsmath.sty` simply
+/// contributes nothing — resolution is local-only.
+#[salsa::tracked(returns(ref))]
+pub fn scope_signatures<'db>(
+    db: &'db dyn IncrementalDb,
+    project: Project<'db>,
+    file: SourceFile,
+) -> SignatureDb {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::ScopeSignatures,
+        file: Some(file),
+    });
+
+    let graph = package_graph(db, project);
+    // Map each member's path back to its tracked input, to fetch its scan.
+    let by_path: HashMap<&Path, SourceFile> = project
+        .members(db)
+        .iter()
+        .map(|member| (member.path.as_path(), member.file))
+        .collect();
+
+    let mut merged = SignatureDb::default();
+    for loaded in graph.transitively_loaded(file.path(db)) {
+        if let Some(&member) = by_path.get(loaded.as_path()) {
+            merged.merge_from(document_signatures(db, member));
+        }
+    }
+    // The document's own definitions are applied last, so they win over packages.
+    merged.merge_from(document_signatures(db, file));
+    merged
+}
+
 /// The file's `.dtx` documentation↔code associations
 /// ([`crate::semantic::doc_associations`]) — each documented `macro`/`environment`
 /// or `\DescribeMacro`/`\DescribeEnv` paired with the `macrocode` it brackets.
@@ -240,6 +291,22 @@ pub fn include_edges(db: &dyn IncrementalDb, file: SourceFile) -> Vec<IncludeEdg
     });
     let root = parsed_tree_root(db, file);
     collect_include_edge_keys(&root, file.path(db).parent())
+}
+
+/// The file's package/class load edges, range-free
+/// ([`crate::project::collect_package_edge_keys`]), as a tracked query — the
+/// load-graph analog of [`include_edges`]. Resolves relative `.sty`/`.cls` targets
+/// against the file's own directory; backdates when the load edges are unchanged,
+/// the firewall that keeps a body edit from rebuilding
+/// [`crate::project::package_graph`].
+#[salsa::tracked(returns(ref))]
+pub fn package_edges(db: &dyn IncrementalDb, file: SourceFile) -> Vec<PackageEdgeKey> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::PackageEdges,
+        file: Some(file),
+    });
+    let root = parsed_tree_root(db, file);
+    collect_package_edge_keys(&root, file.path(db).parent())
 }
 
 /// The file's distinct `\label` names, sorted — a range-free, ref-free
@@ -721,6 +788,15 @@ impl Analysis {
             resolved_labels(&self.0, project),
             resolved_citations(&self.0, project),
         )
+    }
+
+    /// Intern `members` as a `Project` and compute `file`'s merged signature scope
+    /// ([`scope_signatures`]): its own scanned definitions plus those of every
+    /// package it transitively loads from the local member set. The formatter and
+    /// completion consume this. Borrows the snapshot's storage.
+    pub fn scope_signatures(&self, members: Vec<ProjectMember>, file: SourceFile) -> &SignatureDb {
+        let project = Project::new(&self.0, members);
+        scope_signatures(&self.0, project, file)
     }
 }
 

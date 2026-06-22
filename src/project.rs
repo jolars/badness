@@ -15,14 +15,19 @@ pub mod citations;
 pub mod graph;
 pub mod include;
 pub mod labels;
+pub mod package;
 
 pub use citations::{CiteFileFacts, ResolvedCitations, document_cite_names, resolved_citations};
 pub use graph::{
-    FileFacts, IncludeGraph, Project, ProjectMember, ResolvedInclude, UnresolvedInclude,
-    project_graph,
+    FileFacts, IncludeGraph, PackageFileFacts, PackageGraph, Project, ProjectMember,
+    ResolvedInclude, ResolvedLoad, UnresolvedInclude, UnresolvedLoad, package_graph, project_graph,
 };
 pub use include::{
     BibTarget, IncludeEdge, IncludeEdgeKey, IncludeKind, IncludeTarget,
     collect_bib_resource_targets, collect_include_edge_keys, collect_include_edges,
 };
 pub use labels::{ResolvedLabels, resolved_labels};
+pub use package::{
+    PackageEdge, PackageEdgeKey, PackageKind, PackageTarget, collect_package_edge_keys,
+    collect_package_edges,
+};

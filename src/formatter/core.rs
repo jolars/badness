@@ -43,7 +43,7 @@ use std::iter::Peekable;
 
 use crate::ast::{command_name, environment_name};
 use crate::parser::{LatexFlavor, parse_with_flavor};
-use crate::semantic::{ArgKind, ArgSpec, Signatures, scan_definitions};
+use crate::semantic::{ArgKind, ArgSpec, SignatureDb, Signatures, scan_definitions};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::context::FormatContext;
@@ -108,6 +108,22 @@ pub fn format_with_style_flavored(
     style: FormatStyle,
     config: impl Into<crate::parser::LexConfig>,
 ) -> Result<String, FormatError> {
+    format_with_style_flavored_with_signatures(input, style, config, &SignatureDb::default())
+}
+
+/// Like [`format_with_style_flavored`] but additionally folds an `external`
+/// signature scope — the merged definitions of the document's loaded local
+/// packages ([`crate::semantic::collect_package_signatures`] /
+/// [`crate::incremental::scope_signatures`]) — into the lowering, so calls to
+/// package-defined macros are shaped by their real arity/verbatim-ness. The
+/// document's own definitions always win over `external`. The CLI uses this for a
+/// real file path; passing an empty DB recovers [`format_with_style_flavored`].
+pub fn format_with_style_flavored_with_signatures(
+    input: &str,
+    style: FormatStyle,
+    config: impl Into<crate::parser::LexConfig>,
+    external: &SignatureDb,
+) -> Result<String, FormatError> {
     let parsed = parse_with_flavor(input, config);
     if !parsed.errors.is_empty() {
         return Err(FormatError::ParseErrors {
@@ -115,7 +131,30 @@ pub fn format_with_style_flavored(
         });
     }
 
-    format_node(&parsed.syntax(), style)
+    format_node_with_signatures(&parsed.syntax(), style, external)
+}
+
+/// Format an on-disk file's `content` (located at `path`, parsed under `config`),
+/// pulling the signatures of its local loaded packages in from disk so calls to
+/// package-defined macros are shaped correctly. The shared CLI entry for both
+/// `format` and `format --check` — using one entry keeps the two consistent, so a
+/// formatted file checks clean. `path`'s directory anchors local `.sty`/`.cls`
+/// resolution; stdin (no path) uses [`format_with_style_flavored`] instead.
+pub fn format_file_with_packages(
+    content: &str,
+    path: &std::path::Path,
+    style: FormatStyle,
+    config: impl Into<crate::parser::LexConfig>,
+) -> Result<String, FormatError> {
+    let parsed = parse_with_flavor(content, config);
+    if !parsed.errors.is_empty() {
+        return Err(FormatError::ParseErrors {
+            count: parsed.errors.len(),
+        });
+    }
+    let root = parsed.syntax();
+    let external = crate::semantic::disk_scope_signatures(&root, path);
+    format_node_with_signatures(&root, style, &external)
 }
 
 /// Format an already-parsed CST `root` under `style`. This is the
@@ -125,10 +164,22 @@ pub fn format_with_style_flavored(
 /// enforces the `ERROR`-token invariant ([`validate_supported_tokens`]).
 /// [`format_with_style`] is the parse-then-format convenience wrapper.
 pub fn format_node(root: &SyntaxNode, style: FormatStyle) -> Result<String, FormatError> {
+    format_node_with_signatures(root, style, &SignatureDb::default())
+}
+
+/// Like [`format_node`] but folds an `external` signature scope (loaded local
+/// packages' merged definitions) into the lowering. The language server passes the
+/// salsa-cached [`crate::incremental::scope_signatures`] here; the document's own
+/// definitions always win over `external`. An empty DB recovers [`format_node`].
+pub fn format_node_with_signatures(
+    root: &SyntaxNode,
+    style: FormatStyle,
+    external: &SignatureDb,
+) -> Result<String, FormatError> {
     validate_supported_tokens(root)?;
 
     let ctx = FormatContext::new(style);
-    let mut formatted = format_root(root, ctx);
+    let mut formatted = format_root(root, ctx, external);
     // Normalize the document's trailing edge: drop any trailing blank lines and
     // per-line trailing whitespace at EOF, then guarantee exactly one final
     // newline. Empty output stays empty. Only ASCII whitespace/newlines are
@@ -158,11 +209,16 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
     Ok(())
 }
 
-fn format_root(root: &SyntaxNode, ctx: FormatContext) -> String {
+fn format_root(root: &SyntaxNode, ctx: FormatContext, external: &SignatureDb) -> String {
     // Scan the document's own `\newcommand`/`\newenvironment`/xparse definitions
-    // once, so the lowering resolves a locally-defined environment's arity (not
-    // just the built-in DB's). Held by value for the whole lowering.
-    let user = scan_definitions(root);
+    // once, so the lowering resolves a locally-defined construct's arity (not just
+    // the built-in DB's). They are overlaid on top of `external` — the merged
+    // signatures of any loaded local packages — so a document redefinition wins
+    // over a package. `external` is empty for the contextless entry points, in
+    // which case this is exactly the old document-only scan. Held by value for the
+    // whole lowering.
+    let mut user = external.clone();
+    user.merge_from(&scan_definitions(root));
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
         signatures: Signatures::new(&user),

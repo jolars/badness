@@ -169,7 +169,7 @@ pub struct EnvironmentSig {
 /// The built-in command and environment signatures, keyed by name (without the
 /// leading `\` for commands, the bare name for environments). Case-sensitive, as
 /// LaTeX names are (`Verbatim` ≠ `verbatim`).
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SignatureDb {
     commands: HashMap<SmolStr, CommandSig>,
     environments: HashMap<SmolStr, EnvironmentSig>,
@@ -211,6 +211,20 @@ impl SignatureDb {
     /// Record an environment signature, replacing any existing entry for `name`.
     pub fn insert_environment(&mut self, name: impl Into<SmolStr>, sig: EnvironmentSig) {
         self.environments.insert(name.into(), sig);
+    }
+
+    /// Merge every command and environment of `other` into `self`, with `other`
+    /// winning on a name clash (last-definition-wins, like an individual
+    /// `insert_*`). Used to fold a loaded package's scanned definitions into a
+    /// document's merged signature scope; the caller orders the merges so the
+    /// document's own definitions are applied last and override any package.
+    pub fn merge_from(&mut self, other: &SignatureDb) {
+        for (name, sig) in &other.commands {
+            self.commands.insert(name.clone(), sig.clone());
+        }
+        for (name, sig) in &other.environments {
+            self.environments.insert(name.clone(), sig.clone());
+        }
     }
 }
 

@@ -15,7 +15,8 @@ use std::process::ExitCode;
 
 use badness::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex};
 use badness::formatter::{
-    FormatStyle, WrapMode, check_paths_with_style, format_with_style_flavored,
+    FormatStyle, WrapMode, check_paths_with_style, format_file_with_packages,
+    format_with_style_flavored,
 };
 use badness::linter::{
     Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
@@ -631,7 +632,7 @@ fn run_format_paths(
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
             FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_with_style_flavored(&content, style, kind.lex_config())
+                format_file_with_packages(&content, path, style, kind.lex_config())
                     .map_err(|e| e.to_string())
             }
             FileKind::Bib => {

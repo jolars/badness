@@ -10,7 +10,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{FormatError, FormatStyle, WrapMode, format_with_style_flavored};
+use super::{FormatError, FormatStyle, WrapMode, format_file_with_packages};
 use crate::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,12 +129,12 @@ pub fn check_paths_with_style(
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
             FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_with_style_flavored(&content, style, kind.lex_config()).map_err(|err| {
-                    CheckError::FormatError {
+                format_file_with_packages(&content, &path, style, kind.lex_config()).map_err(
+                    |err| CheckError::FormatError {
                         path: path.clone(),
                         source: err,
-                    }
-                })?
+                    },
+                )?
             }
             FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {
                 CheckError::BibFormatError {

@@ -293,7 +293,7 @@ pub fn resolved_citations<'db>(
     let mut bib_keys: HashMap<PathBuf, Vec<SmolStr>> = HashMap::new();
     for member in project.members(db) {
         match member.kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                 let facts = file_cite_facts(db, member.file);
                 cite_facts.push(CiteFileFacts {
                     path: member.path.clone(),

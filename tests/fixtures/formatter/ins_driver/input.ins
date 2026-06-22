@@ -1,0 +1,22 @@
+%% foo.ins -- docstrip installation script for the foo package.
+\input docstrip.tex
+\keepsilent
+
+
+
+\usedir{tex/latex/foo}
+
+\preamble
+
+This is a generated file from the foo package.
+
+\endpreamble
+
+\generate{
+\file{foo.sty}{\from{foo.dtx}{package}}
+\file{foo-extra.sty}{\from{foo.dtx}{extra}}
+}
+
+% \generate{\file{skip.sty}{\from{foo.dtx}{skip}}}
+
+\endbatchfile

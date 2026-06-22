@@ -1173,7 +1173,7 @@ impl Worker {
         });
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
-                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                     analyze_tex(&snapshot, &path, members)
                 }
                 FileKind::Bib => analyze_bib(&snapshot, &path),
@@ -1314,7 +1314,7 @@ fn compute_format(
             return None;
         }
         match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                 if !snapshot.parse_diagnostics(file).is_empty() {
                     return Some(None);
                 }
@@ -1337,7 +1337,7 @@ fn compute_format(
     let formatted = match cached {
         Ok(Some(opt)) => opt,
         Ok(None) | Err(_) => match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                 format_with_style_flavored(text, style, kind.lex_config()).ok()
             }
             FileKind::Bib => bib_format_with_style(text, style).ok(),
@@ -1374,7 +1374,7 @@ fn run_symbols(
     out_tx: &Sender<Outbound>,
 ) {
     let symbols = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
             compute_symbols(snapshot, path, text)
         }
         FileKind::Bib => compute_bib_symbols(snapshot, path, text),

@@ -304,10 +304,17 @@ scope (the same boundary the include graph and CWL ingest keep).
   file carries a static expl3 signal (a `%<@@=mod>` guard or `\ProvidesExpl*`
   anywhere). Needs a file-level scan plus the `macrocode` save/restore interaction
   (mirror `at_letter`).
-- [ ] **`.ins` installation scripts.** Recognize the kind; share the docstrip
-  guard syntax with `.dtx` (see below). They are docstrip drivers
+- [x] **`.ins` installation scripts.** `FileKind::Ins` (extension-detected),
+  threaded through file discovery, the CLI, the LSP, and citation/project
+  collection the way the other LaTeX kinds are. They are docstrip drivers
   (`\input docstrip`, `\generate{\file{…}{\from{…}{…}}}`, `\endbatchfile`) ---
-  parse + format as code (`WrapMode::Preserve`), never run the extraction.
+  parsed + formatted **as plain `Document`-flavored code** (`WrapMode::Preserve`,
+  `dtx = false`), never running the extraction. Contrary to the original wording,
+  the docstrip guard syntax is *not* shared: a `.ins` is run **directly by TeX**
+  (not read by docstrip), so a leading `%` --- and a `%<…>` line --- is an ordinary
+  comment, and reusing the `.dtx` mode would mis-lex a commented-out driver line as
+  code, breaking comment protection. Guards stay comments (harmless under
+  `Preserve`, where a column-0 comment stays put).
 - **`.dtx`/`.ins` docstrip surface syntax.** A distinct literate format that
   interleaves two layers: a documentation margin (lines whose leading `%` is a
   comment margin) and code (lines with no leading `%`). Implemented as a bounded

@@ -397,6 +397,61 @@ fn dtx_fixtures_match_expected() {
     }
 }
 
+/// `.ins` (docstrip installation script) fixtures under
+/// `tests/fixtures/formatter/<name>/`, each an `input.ins` + `expected.ins` pair.
+/// A `.ins` is a driver TeX runs directly, so — unlike a `.dtx` — it is parsed as
+/// plain `Document`-flavored LaTeX with the docstrip mode *off* (`dtx: false`):
+/// a leading `%` stays an ordinary comment (never a `DOC_MARGIN`), so commented-out
+/// driver lines are protected. It defaults to [`WrapMode::Preserve`] (it is code),
+/// exactly as the CLI/LSP resolve a `.ins` file (`FileKind::Ins`).
+const INS_FIXTURES: &[&str] = &["ins_driver"];
+
+/// The config a `.ins` file resolves to (`FileKind::Ins`): plain `Document`
+/// flavor, no docstrip mode.
+fn ins_config() -> LexConfig {
+    LexConfig::from(LatexFlavor::Document)
+}
+
+#[test]
+fn ins_fixtures_match_expected() {
+    for &name in INS_FIXTURES {
+        let style = FormatStyle {
+            wrap: WrapMode::Preserve,
+            ..FormatStyle::default()
+        };
+        let input = fs::read_to_string(fixture_path(name, "input.ins"))
+            .unwrap_or_else(|e| panic!("read {name}/input.ins: {e}"));
+        let expected = fs::read_to_string(fixture_path(name, "expected.ins"))
+            .unwrap_or_else(|e| panic!("read {name}/expected.ins: {e}"));
+
+        assert!(
+            parse_with_flavor(&input, ins_config()).errors.is_empty(),
+            "fixture {name} input must parse cleanly under the ins config"
+        );
+
+        let formatted = format_with_style_flavored(&input, style, ins_config())
+            .unwrap_or_else(|e| panic!("format {name}: {e}"));
+        assert_eq!(formatted, expected, "fixture {name} output mismatch");
+
+        // Idempotent (same config + style), clean, and lossless.
+        assert_eq!(
+            format_with_style_flavored(&formatted, style, ins_config()).expect("reformat"),
+            formatted,
+            "fixture {name} is not idempotent"
+        );
+        let reparsed = parse_with_flavor(&formatted, ins_config());
+        assert!(
+            reparsed.errors.is_empty(),
+            "fixture {name} formatted output must parse cleanly"
+        );
+        assert_eq!(
+            reparsed.syntax().to_string(),
+            formatted,
+            "fixture {name} formatted output must round-trip losslessly"
+        );
+    }
+}
+
 #[test]
 fn formatter_fixtures_match_expected() {
     for &(name, wrap, line_width) in FIXTURES {

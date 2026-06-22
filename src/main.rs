@@ -234,7 +234,7 @@ fn run_lint(
         };
         if files.is_empty() {
             eprintln!(
-                "badness: no .tex, .sty, .cls, or .bib files found under the provided input paths"
+                "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
             );
             return ExitCode::FAILURE;
         }
@@ -288,7 +288,7 @@ fn run_lint(
                 );
                 diagnostics.extend(badness::bib::linter::lint_document(path, &root, &model));
             }
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                 let parsed = parse_with_flavor(content, kind.lex_config());
                 diagnostics.extend(
                     parsed
@@ -403,7 +403,7 @@ fn fix_file(path: &Path, kind: FileKind, include_unsafe: bool) -> std::io::Resul
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                 check_document(path, &content, kind.lex_config())
             }
             FileKind::Bib => badness::bib::linter::check_document(path, &content),
@@ -552,7 +552,7 @@ fn run_format_stdin(
     let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
     style.wrap = wrap_override.unwrap_or(kind.default_wrap());
     let formatted = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
             format_with_style_flavored(&input, style, kind.lex_config()).map_err(|e| e.to_string())
         }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
@@ -583,7 +583,7 @@ fn report_discovery_error(err: &FileDiscoveryError) {
         }
         FileDiscoveryError::UnsupportedLintFilePath { path } => {
             eprintln!(
-                "badness: input file {} is not a .tex, .sty, .cls, or .bib file",
+                "badness: input file {} is not a .tex, .sty, .cls, .dtx, .ins, or .bib file",
                 path.display()
             );
         }
@@ -613,7 +613,7 @@ fn run_format_paths(
     };
     if files.is_empty() {
         eprintln!(
-            "badness: no .tex, .sty, .cls, or .bib files found under the provided input paths"
+            "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
         );
         return ExitCode::FAILURE;
     }
@@ -630,7 +630,7 @@ fn run_format_paths(
         };
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx => {
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
                 format_with_style_flavored(&content, style, kind.lex_config())
                     .map_err(|e| e.to_string())
             }

@@ -57,6 +57,10 @@ fn roundtrip_units() {
         // expl3 syntax mode: `_`/`:` become letters between the toggles, so names
         // lex as single control words. Losslessness holds regardless of token kind.
         r"\ExplSyntaxOn\seq_new:N \g_@@_x_tl\ExplSyntaxOff\seq_new:N",
+        // A `.ins` docstrip driver: plain `Document`-config code (no docstrip mode),
+        // so a `%<…>`-looking line and a commented-out `\generate` are ordinary
+        // comments and must reconstruct byte-for-byte.
+        "\\input docstrip.tex\n\\keepsilent\n%<*nonsense>\n\\generate{\\file{foo.sty}{\\from{foo.dtx}{package}}}\n% \\generate{\\file{x}{\\from{y}{z}}}\n\\endbatchfile\n",
     ];
     for case in cases {
         assert_lossless(case);

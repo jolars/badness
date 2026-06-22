@@ -43,19 +43,21 @@ pub enum FileKind {
     Cls,
     /// A `.dtx` docstrip literate source (interleaved documentation + code).
     Dtx,
+    /// A `.ins` docstrip installation script (a driver TeX runs directly).
+    Ins,
     /// A `.bib` bibliography database.
     Bib,
 }
 
 impl FileKind {
-    /// Whether this kind feeds the LaTeX pipeline (`.tex`/`.sty`/`.cls`), as
-    /// opposed to the BibTeX one. The LaTeX kinds share a parser, formatter, and
-    /// linter, differing only in [`latex_flavor`](Self::latex_flavor) and
-    /// [`default_wrap`](Self::default_wrap).
+    /// Whether this kind feeds the LaTeX pipeline (`.tex`/`.sty`/`.cls`/`.dtx`/
+    /// `.ins`), as opposed to the BibTeX one. The LaTeX kinds share a parser,
+    /// formatter, and linter, differing only in
+    /// [`latex_flavor`](Self::latex_flavor) and [`default_wrap`](Self::default_wrap).
     pub fn is_latex(self) -> bool {
         matches!(
             self,
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx
+            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins
         )
     }
 
@@ -84,10 +86,11 @@ impl FileKind {
     /// explicit override: a package/class body is code, not prose, so it defaults
     /// to [`WrapMode::Preserve`]; a document reflows ([`WrapMode::Reflow`]). A
     /// `.dtx` is code-heavy and defaults to [`WrapMode::Preserve`] (its two-layer
-    /// formatting is a later milestone).
+    /// formatting is a later milestone). A `.ins` is a docstrip driver — pure code
+    /// — so it also defaults to [`WrapMode::Preserve`].
     pub fn default_wrap(self) -> WrapMode {
         match self {
-            FileKind::Sty | FileKind::Cls | FileKind::Dtx => WrapMode::Preserve,
+            FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => WrapMode::Preserve,
             _ => WrapMode::Reflow,
         }
     }
@@ -163,6 +166,8 @@ fn lint_file_kind(path: &Path) -> Option<FileKind> {
         Some(FileKind::Cls)
     } else if ext.eq_ignore_ascii_case("dtx") {
         Some(FileKind::Dtx)
+    } else if ext.eq_ignore_ascii_case("ins") {
+        Some(FileKind::Ins)
     } else if ext.eq_ignore_ascii_case("bib") {
         Some(FileKind::Bib)
     } else {
@@ -311,6 +316,8 @@ mod tests {
         fs::write(root.join("a.bib"), "a").unwrap();
         fs::write(root.join("note.sty"), "x").unwrap();
         fs::write(root.join("base.cls"), "x").unwrap();
+        fs::write(root.join("array.dtx"), "x").unwrap();
+        fs::write(root.join("array.ins"), "x").unwrap();
         fs::write(root.join("readme.md"), "x").unwrap();
         fs::create_dir(root.join("sub")).unwrap();
         fs::write(root.join("sub").join("c.bib"), "c").unwrap();
@@ -320,12 +327,14 @@ mod tests {
             files,
             vec![
                 (root.join("a.bib"), FileKind::Bib),
+                (root.join("array.dtx"), FileKind::Dtx),
+                (root.join("array.ins"), FileKind::Ins),
                 (root.join("b.tex"), FileKind::Tex),
                 (root.join("base.cls"), FileKind::Cls),
                 (root.join("note.sty"), FileKind::Sty),
                 (root.join("sub").join("c.bib"), FileKind::Bib),
             ],
-            "the `.md` file is ignored; `.sty`/`.cls` are collected as LaTeX kinds"
+            "the `.md` file is ignored; `.sty`/`.cls`/`.dtx`/`.ins` are collected as LaTeX kinds"
         );
     }
 
@@ -364,6 +373,8 @@ mod tests {
         assert_eq!(file_kind_or_tex(Path::new("Base.CLS")), FileKind::Cls);
         assert_eq!(file_kind_or_tex(Path::new("array.dtx")), FileKind::Dtx);
         assert_eq!(file_kind_or_tex(Path::new("Array.DTX")), FileKind::Dtx);
+        assert_eq!(file_kind_or_tex(Path::new("array.ins")), FileKind::Ins);
+        assert_eq!(file_kind_or_tex(Path::new("Array.INS")), FileKind::Ins);
         assert_eq!(file_kind_or_tex(Path::new("buffer")), FileKind::Tex);
     }
 
@@ -418,5 +429,41 @@ mod tests {
         );
         // A bare flavor coerces into a non-docstrip config (the common case).
         assert!(!LexConfig::from(LatexFlavor::Package).dtx);
+    }
+
+    #[test]
+    fn ins_kind_is_plain_document_code_no_docstrip_mode() {
+        // A `.ins` is a docstrip driver TeX runs directly — plain `Document`-flavored
+        // code, not a docstrip-read literate source. So it feeds the LaTeX pipeline,
+        // defaults to `Preserve` (it is code), and its `lex_config` does *not* enable
+        // the docstrip mode (`dtx = false`): a leading `%` stays an ordinary comment.
+        let ins = FileKind::Ins;
+        assert!(ins.is_latex());
+        assert_eq!(ins.latex_flavor(), LatexFlavor::Document);
+        assert_eq!(ins.default_wrap(), WrapMode::Preserve);
+        assert_eq!(
+            ins.lex_config(),
+            LexConfig {
+                flavor: LatexFlavor::Document,
+                dtx: false,
+            }
+        );
+    }
+
+    #[test]
+    fn collect_lint_files_accepts_explicit_dtx_and_ins() {
+        let dir = tempfile::tempdir().unwrap();
+        let dtx = dir.path().join("pkg.dtx");
+        let ins = dir.path().join("pkg.ins");
+        fs::write(&dtx, "x").unwrap();
+        fs::write(&ins, "x").unwrap();
+        assert_eq!(
+            collect_lint_files(std::slice::from_ref(&dtx)).unwrap(),
+            vec![(dtx, FileKind::Dtx)]
+        );
+        assert_eq!(
+            collect_lint_files(std::slice::from_ref(&ins)).unwrap(),
+            vec![(ins, FileKind::Ins)]
+        );
     }
 }

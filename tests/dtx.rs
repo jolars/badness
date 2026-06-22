@@ -8,6 +8,7 @@
 //! losslessness.
 
 use badness::parser::{LatexFlavor, LexConfig, parse_with_flavor};
+use badness::semantic::{DocKind, doc_associations};
 use badness::syntax::{SyntaxKind, SyntaxNode};
 
 /// Parse `input` under the docstrip (`.dtx`) config, asserting losslessness.
@@ -273,6 +274,27 @@ fn macro_env_and_describe_parse_in_the_doc_layer() {
     assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\DescribeMacro".to_string())));
     // No comment bind in the doc layer (margins float).
     assert_eq!(count(&root, SyntaxKind::DOC_COMMENT), 0);
+}
+
+#[test]
+fn doc_associations_pair_prose_with_nested_code() {
+    // The semantic prose↔code association (TODO M3 follow-up): a realistic `.dtx`
+    // slice with a documented macro (code nested in `macrocode`) followed by a
+    // `\DescribeMacro`. The parser leaves margins floating; the semantic query ties
+    // each documented name to the code it brackets.
+    let src = "% \\begin{macro}{\\foo}\n%   The \\foo macro.\n%    \\begin{macrocode}\n\\def\\foo{x}\n%    \\end{macrocode}\n% \\end{macro}\n% \\DescribeMacro\\bar is described.\n";
+    let root = parse_dtx(src);
+    let assocs = doc_associations(&root);
+
+    assert_eq!(assocs.len(), 2);
+    assert_eq!(assocs[0].name, "\\foo");
+    assert_eq!(assocs[0].kind, DocKind::Macro);
+    assert_eq!(assocs[0].code.len(), 1);
+    assert!(src[assocs[0].code[0]].contains("\\def\\foo{x}"));
+
+    assert_eq!(assocs[1].name, "\\bar");
+    assert_eq!(assocs[1].kind, DocKind::DescribeMacro);
+    assert!(assocs[1].code.is_empty());
 }
 
 #[test]

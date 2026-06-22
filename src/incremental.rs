@@ -32,7 +32,10 @@ use crate::project::{
     BibTarget, IncludeEdgeKey, Project, ProjectMember, ResolvedCitations, ResolvedLabels,
     collect_bib_resource_targets, collect_include_edge_keys, resolved_citations, resolved_labels,
 };
-use crate::semantic::{SemanticModel, SignatureDb, scan_definitions};
+use crate::semantic::{
+    DocAssociation, SemanticModel, SignatureDb, doc_associations as build_doc_associations,
+    scan_definitions,
+};
 use crate::syntax::SyntaxNode;
 
 #[salsa::input]
@@ -55,6 +58,8 @@ pub enum QueryKind {
     /// A file's scanned `\newcommand`/`\newenvironment`/xparse signatures
     /// ([`document_signatures`]).
     DocumentSignatures,
+    /// A `.dtx` file's documentation↔code associations ([`doc_associations`]).
+    DocAssociations,
     /// A file's range-free inclusion edges ([`include_edges`]).
     IncludeEdges,
     /// A file's sorted, distinct label-name set ([`file_labels`]) — the firewall
@@ -202,6 +207,23 @@ pub fn document_signatures(db: &dyn IncrementalDb, file: SourceFile) -> Signatur
         file: Some(file),
     });
     scan_definitions(&parsed_tree_root(db, file))
+}
+
+/// The file's `.dtx` documentation↔code associations
+/// ([`crate::semantic::doc_associations`]) — each documented `macro`/`environment`
+/// or `\DescribeMacro`/`\DescribeEnv` paired with the `macrocode` it brackets.
+///
+/// Like [`semantic_model`] (and unlike [`parsed_document`]) this is **not** `no_eq`:
+/// `Vec<DocAssociation>` is `Eq`, so salsa backdates when an edit changes no
+/// documented construct. The query runs on any file; a non-`.dtx` source simply
+/// carries none of the ltxdoc vocabulary, so the result is empty.
+#[salsa::tracked(returns(ref))]
+pub fn doc_associations(db: &dyn IncrementalDb, file: SourceFile) -> Vec<DocAssociation> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::DocAssociations,
+        file: Some(file),
+    });
+    build_doc_associations(&parsed_tree_root(db, file))
 }
 
 /// The file's inclusion edges, range-free
@@ -563,6 +585,11 @@ impl IncrementalDatabase {
     /// The file's scanned user-definition signatures.
     pub fn document_signatures(&self, file: SourceFile) -> &SignatureDb {
         document_signatures(self, file)
+    }
+
+    /// The file's `.dtx` documentation↔code associations.
+    pub fn doc_associations(&self, file: SourceFile) -> &[DocAssociation] {
+        doc_associations(self, file)
     }
 
     /// The file's distinct, sorted `\label` names (the firewall feeding the

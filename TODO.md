@@ -349,11 +349,18 @@ scope (the same boundary the include graph and CWL ingest keep).
     leading-comment run is now grouped into a `DOC_COMMENT` node (the named-trivia
     enrichment AGENTS.md #9 reserved), grammar-local via `open`/`close`. The
     formatter lowers `DOC_COMMENT` transparently. Follow-ups recorded below.
-  - [ ] **Doc/ltxdoc semantic prose↔code association (deferred).** Associate a
-    `.dtx` documentation comment (behind floating `DOC_MARGIN`) with the
-    `macro`/`macrocode`/`\DescribeMacro` it documents. Must live in the *semantic*
-    layer (an `outline.rs`-style query that may consult the signature DB), not the
-    parser — decision #9 forbids signature lookups in the binding decision.
+  - [x] **Doc/ltxdoc semantic prose↔code association.** A `semantic::doc`
+    query (`doc_associations`, salsa-wired as `QueryKind::DocAssociations`) ties each
+    documented `macro`/`environment` env and `\DescribeMacro`/`\DescribeEnv` command
+    to the name it documents and the `macrocode` block(s) it brackets. Mirrors
+    `outline.rs` (one CST walk, LSP-agnostic byte ranges); recognizes the static
+    ltxdoc vocabulary by name like `outline`'s `\label`, so no signature-DB change
+    and no parser change (decision #9's margin-never-binds rule stays intact). Code
+    is found structurally (nested `macrocode`, descent stopping at a nested doc env so
+    its code is attributed to it). Handles both `\DescribeMacro{\foo}` and the
+    braceless `\DescribeMacro\foo` (next-sibling command). Follow-up: file-wide
+    def-site linking for `\DescribeMacro` whose definition lives in a separate
+    `macrocode` (would reuse `semantic::define::scan_definitions`).
   - [ ] **Outline entries for `macro`/`environment` (deferred).** Give the doc
     envs (and `\DescribeMacro`/`\DescribeEnv`) `documentSymbol` entries so a
     `.dtx`'s documented macros are navigable — needs a new `OutlineKind` variant

@@ -16,12 +16,14 @@
 
 pub mod builder;
 pub mod define;
+pub mod doc;
 pub mod label;
 pub mod outline;
 pub mod signature;
 pub mod xparse;
 
 pub use define::scan_definitions;
+pub use doc::{DocAssociation, DocKind, doc_associations};
 pub use label::{CitationRef, LabelDef, LabelId, LabelRef, RefCommand, RefId};
 pub use outline::{OutlineItem, OutlineSymbol, outline};
 pub use signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb, Signatures};

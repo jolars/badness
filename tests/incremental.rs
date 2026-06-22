@@ -2,6 +2,8 @@
 //! revision-driven re-runs, the unchanged-text short-circuit, and that the
 //! cached parse path preserves losslessness.
 
+use std::path::Path;
+
 use badness::incremental::{IncrementalDatabase, QueryKind};
 
 /// How many times `parsed_document` actually ran, per the query log.
@@ -33,6 +35,14 @@ fn bib_model_count(db: &IncrementalDatabase) -> usize {
     db.query_log()
         .iter()
         .filter(|entry| entry.kind == QueryKind::BibSemanticModel)
+        .count()
+}
+
+/// How many times `doc_associations` actually ran, per the query log.
+fn doc_assoc_count(db: &IncrementalDatabase) -> usize {
+    db.query_log()
+        .iter()
+        .filter(|entry| entry.kind == QueryKind::DocAssociations)
         .count()
 }
 
@@ -173,6 +183,51 @@ fn editing_definitions_rebuilds_signatures() {
         vec!["bar".to_string(), "foo".to_string()]
     );
     assert_eq!(signatures_count(&db), 2);
+}
+
+#[test]
+fn doc_associations_is_memoized() {
+    // A `.dtx` path runs the docstrip mode, so the documentation margins parse and
+    // the documented `macro` surfaces. Many reads, but the query runs once.
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(
+        Path::new("doc.dtx"),
+        "% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n".to_string(),
+    );
+
+    let _ = db.doc_associations(file);
+    let _ = db.doc_associations(file);
+    let _ = db.doc_associations(file);
+
+    assert_eq!(doc_assoc_count(&db), 1);
+    let assocs = db.doc_associations(file);
+    assert_eq!(assocs.len(), 1);
+    assert_eq!(assocs[0].name, "\\foo");
+}
+
+#[test]
+fn editing_dtx_rebuilds_doc_associations() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(
+        Path::new("doc.dtx"),
+        "% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n".to_string(),
+    );
+
+    assert_eq!(db.doc_associations(file).len(), 1);
+    assert_eq!(doc_assoc_count(&db), 1);
+
+    // Documenting a second macro changes the text, so the query re-runs.
+    db.upsert_file(
+        Path::new("doc.dtx"),
+        "% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n% \\begin{macro}{\\bar}\n% docs.\n% \\end{macro}\n".to_string(),
+    );
+    let names: Vec<_> = db
+        .doc_associations(file)
+        .iter()
+        .map(|a| a.name.clone())
+        .collect();
+    assert_eq!(names, vec!["\\foo".to_string(), "\\bar".to_string()]);
+    assert_eq!(doc_assoc_count(&db), 2);
 }
 
 #[test]

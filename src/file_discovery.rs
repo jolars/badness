@@ -7,12 +7,90 @@
 //! arity's version so the eventual shared-crate extraction stays a mechanical
 //! lift.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::formatter::WrapMode;
 use crate::parser::{LatexFlavor, LexConfig};
+
+/// A compiled set of exclude patterns applied during directory discovery.
+///
+/// Patterns use gitignore semantics and are resolved relative to a root (the
+/// directory containing `badness.toml`, or the working directory when there is no
+/// config). The filter prunes matching directories and files from the walk; it
+/// does **not** affect paths a user names explicitly on the command line (those
+/// are always processed, matching ruff's default, non-`force-exclude` behavior).
+///
+/// Ported from arity's `ExcludeFilter`, minus its `use_defaults` flag: badness
+/// folds the built-in [`DEFAULT_EXCLUDE`](crate::config::DEFAULT_EXCLUDE) set into
+/// the pattern list at the call site (see
+/// [`Config::exclude_patterns`](crate::config::Config::exclude_patterns)), because
+/// the Ruff-style `exclude`/`extend-exclude` model decides the base set there.
+#[derive(Debug, Clone)]
+pub struct ExcludeFilter {
+    matcher: Option<Gitignore>,
+}
+
+/// A malformed exclude pattern, surfaced to the CLI so it can report and exit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExcludeError {
+    pub pattern: String,
+    pub message: String,
+}
+
+impl fmt::Display for ExcludeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid exclude pattern `{}`: {}",
+            self.pattern, self.message
+        )
+    }
+}
+
+impl std::error::Error for ExcludeError {}
+
+impl ExcludeFilter {
+    /// A filter that excludes nothing. Used by callers that do their own scoping
+    /// (the LSP, salsa-internal sibling discovery) or have no config in hand.
+    pub fn none() -> Self {
+        Self { matcher: None }
+    }
+
+    /// Compile `patterns` (already including any built-in defaults, in priority
+    /// order) into a matcher rooted at `root`.
+    pub fn new(root: &Path, patterns: &[String]) -> Result<Self, ExcludeError> {
+        if patterns.is_empty() {
+            return Ok(Self::none());
+        }
+        let mut builder = GitignoreBuilder::new(root);
+        for pattern in patterns {
+            if let Err(err) = builder.add_line(None, pattern) {
+                return Err(ExcludeError {
+                    pattern: pattern.clone(),
+                    message: err.to_string(),
+                });
+            }
+        }
+        let matcher = builder.build().map_err(|err| ExcludeError {
+            pattern: String::new(),
+            message: err.to_string(),
+        })?;
+        Ok(Self {
+            matcher: Some(matcher),
+        })
+    }
+
+    fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
+        match &self.matcher {
+            Some(matcher) => matcher.matched(path, is_dir).is_ignore(),
+            None => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileDiscoveryError {
@@ -98,8 +176,12 @@ impl FileKind {
 
 /// Resolve `paths` (files and/or directories) into a sorted, de-duplicated list
 /// of `.tex` files. Explicit file paths must be `.tex` files; directories are
-/// walked recursively, keeping only `.tex` files and honoring `.gitignore`.
-pub fn collect_tex_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, FileDiscoveryError> {
+/// walked recursively, keeping only `.tex` files and honoring `.gitignore` plus
+/// `exclude`.
+pub fn collect_tex_files(
+    paths: &[PathBuf],
+    exclude: &ExcludeFilter,
+) -> Result<Vec<PathBuf>, FileDiscoveryError> {
     let mut files = Vec::new();
 
     for path in paths {
@@ -107,6 +189,8 @@ pub fn collect_tex_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, FileDiscover
             if !is_tex_file(path) {
                 return Err(FileDiscoveryError::NonTexFilePath { path: path.clone() });
             }
+            // An explicitly named file is always processed, even if it matches an
+            // exclude pattern (no `force-exclude` mode).
             files.push(path.clone());
             continue;
         }
@@ -115,6 +199,14 @@ pub fn collect_tex_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, FileDiscover
             let mut builder = WalkBuilder::new(path);
             builder.standard_filters(true);
             builder.hidden(false);
+            // Prune excluded entries during the walk so a matched directory is
+            // never descended into, matching gitignore semantics. The filter is
+            // cloned into the `'static` closure.
+            let filter = exclude.clone();
+            builder.filter_entry(move |entry| {
+                let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+                !filter.is_excluded(entry.path(), is_dir)
+            });
             for entry in builder.build() {
                 match entry {
                     Ok(entry) => {
@@ -188,15 +280,18 @@ pub fn file_kind_or_tex(path: &Path) -> FileKind {
 /// Resolve `paths` (files and/or directories) into a sorted, de-duplicated list of
 /// lintable files tagged by [`FileKind`]. Explicit file paths must be `.tex` or
 /// `.bib`; directories are walked recursively, keeping both kinds and honoring
-/// `.gitignore`. The lint analog of [`collect_tex_files`] (which stays `.tex`-only
-/// for `format`).
+/// `.gitignore` plus `exclude`. The lint analog of [`collect_tex_files`] (which
+/// stays `.tex`-only for `format`).
 pub fn collect_lint_files(
     paths: &[PathBuf],
+    exclude: &ExcludeFilter,
 ) -> Result<Vec<(PathBuf, FileKind)>, FileDiscoveryError> {
     let mut files = Vec::new();
 
     for path in paths {
         if path.is_file() {
+            // An explicitly named file is always processed, even if it matches an
+            // exclude pattern (no `force-exclude` mode).
             match lint_file_kind(path) {
                 Some(kind) => files.push((path.clone(), kind)),
                 None => {
@@ -210,6 +305,11 @@ pub fn collect_lint_files(
             let mut builder = WalkBuilder::new(path);
             builder.standard_filters(true);
             builder.hidden(false);
+            let filter = exclude.clone();
+            builder.filter_entry(move |entry| {
+                let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+                !filter.is_excluded(entry.path(), is_dir)
+            });
             for entry in builder.build() {
                 match entry {
                     Ok(entry) => {
@@ -258,7 +358,7 @@ mod tests {
         fs::create_dir(root.join("sub")).unwrap();
         fs::write(root.join("sub").join("c.tex"), "c").unwrap();
 
-        let files = collect_tex_files(&[root.to_path_buf()]).unwrap();
+        let files = collect_tex_files(&[root.to_path_buf()], &ExcludeFilter::none()).unwrap();
         assert_eq!(
             files,
             vec![
@@ -274,7 +374,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Doc.TEX");
         fs::write(&path, "x").unwrap();
-        let files = collect_tex_files(std::slice::from_ref(&path)).unwrap();
+        let files = collect_tex_files(std::slice::from_ref(&path), &ExcludeFilter::none()).unwrap();
         assert_eq!(files, vec![path]);
     }
 
@@ -284,7 +384,7 @@ mod tests {
         let path = dir.path().join("pkg.sty");
         fs::write(&path, "x").unwrap();
         assert_eq!(
-            collect_tex_files(std::slice::from_ref(&path)),
+            collect_tex_files(std::slice::from_ref(&path), &ExcludeFilter::none()),
             Err(FileDiscoveryError::NonTexFilePath { path })
         );
     }
@@ -294,7 +394,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nope");
         assert!(matches!(
-            collect_tex_files(&[path]),
+            collect_tex_files(&[path], &ExcludeFilter::none()),
             Err(FileDiscoveryError::WalkError { .. })
         ));
     }
@@ -304,7 +404,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.tex");
         fs::write(&path, "a").unwrap();
-        let files = collect_tex_files(&[path.clone(), path.clone()]).unwrap();
+        let files =
+            collect_tex_files(&[path.clone(), path.clone()], &ExcludeFilter::none()).unwrap();
         assert_eq!(files, vec![path]);
     }
 
@@ -322,7 +423,7 @@ mod tests {
         fs::create_dir(root.join("sub")).unwrap();
         fs::write(root.join("sub").join("c.bib"), "c").unwrap();
 
-        let files = collect_lint_files(&[root.to_path_buf()]).unwrap();
+        let files = collect_lint_files(&[root.to_path_buf()], &ExcludeFilter::none()).unwrap();
         assert_eq!(
             files,
             vec![
@@ -343,7 +444,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("refs.BIB");
         fs::write(&path, "x").unwrap();
-        let files = collect_lint_files(std::slice::from_ref(&path)).unwrap();
+        let files =
+            collect_lint_files(std::slice::from_ref(&path), &ExcludeFilter::none()).unwrap();
         assert_eq!(files, vec![(path, FileKind::Bib)]);
     }
 
@@ -353,7 +455,7 @@ mod tests {
         let path = dir.path().join("readme.md");
         fs::write(&path, "x").unwrap();
         assert_eq!(
-            collect_lint_files(std::slice::from_ref(&path)),
+            collect_lint_files(std::slice::from_ref(&path), &ExcludeFilter::none()),
             Err(FileDiscoveryError::UnsupportedLintFilePath { path })
         );
     }
@@ -386,11 +488,11 @@ mod tests {
         fs::write(&sty, "x").unwrap();
         fs::write(&cls, "x").unwrap();
         assert_eq!(
-            collect_lint_files(std::slice::from_ref(&sty)).unwrap(),
+            collect_lint_files(std::slice::from_ref(&sty), &ExcludeFilter::none()).unwrap(),
             vec![(sty, FileKind::Sty)]
         );
         assert_eq!(
-            collect_lint_files(std::slice::from_ref(&cls)).unwrap(),
+            collect_lint_files(std::slice::from_ref(&cls), &ExcludeFilter::none()).unwrap(),
             vec![(cls, FileKind::Cls)]
         );
     }
@@ -458,12 +560,50 @@ mod tests {
         fs::write(&dtx, "x").unwrap();
         fs::write(&ins, "x").unwrap();
         assert_eq!(
-            collect_lint_files(std::slice::from_ref(&dtx)).unwrap(),
+            collect_lint_files(std::slice::from_ref(&dtx), &ExcludeFilter::none()).unwrap(),
             vec![(dtx, FileKind::Dtx)]
         );
         assert_eq!(
-            collect_lint_files(std::slice::from_ref(&ins)).unwrap(),
+            collect_lint_files(std::slice::from_ref(&ins), &ExcludeFilter::none()).unwrap(),
             vec![(ins, FileKind::Ins)]
         );
+    }
+
+    #[test]
+    fn exclude_prunes_matching_directory_during_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("keep.tex"), "k").unwrap();
+        fs::create_dir(root.join("vendor")).unwrap();
+        fs::write(root.join("vendor").join("skip.tex"), "s").unwrap();
+
+        let filter = ExcludeFilter::new(root, &["vendor/".to_string()]).unwrap();
+        let files = collect_lint_files(&[root.to_path_buf()], &filter).unwrap();
+        assert_eq!(files, vec![(root.join("keep.tex"), FileKind::Tex)]);
+    }
+
+    #[test]
+    fn explicitly_named_file_bypasses_exclude() {
+        // No `force-exclude`: a path named on the command line is always processed
+        // even when it matches an exclude pattern.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("vendor")).unwrap();
+        let path = root.join("vendor").join("x.tex");
+        fs::write(&path, "x").unwrap();
+
+        let filter = ExcludeFilter::new(root, &["vendor/".to_string()]).unwrap();
+        let files = collect_lint_files(std::slice::from_ref(&path), &filter).unwrap();
+        assert_eq!(files, vec![(path, FileKind::Tex)]);
+    }
+
+    #[test]
+    fn empty_pattern_list_excludes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("a.tex"), "a").unwrap();
+        let filter = ExcludeFilter::new(root, &[]).unwrap();
+        let files = collect_lint_files(&[root.to_path_buf()], &filter).unwrap();
+        assert_eq!(files, vec![(root.join("a.tex"), FileKind::Tex)]);
     }
 }

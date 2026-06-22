@@ -1,9 +1,11 @@
 //! The rule abstraction: the [`Rule`] trait every lint implements, the
 //! [`RuleContext`] handed to it, and the registry of built-in rules.
 //!
-//! Mirrors arity's `linter/rules.rs`, trimmed to what this first slice needs:
-//! there is no config layer yet (badness has none), so every rule is always on
-//! and there is no `select`/`ignore` resolution (arity's `ResolvedRules`).
+//! Mirrors arity's `linter/rules.rs`. Every rule is on by default; the
+//! `badness.toml` `[lint]` `select`/`ignore` keys (and the CLI's matching flags)
+//! narrow the active set via [`RuleSelection`] — the id-based analog of arity's
+//! `ResolvedRules`, applied as a post-filter so the shared `lint_document` driver
+//! stays config-unaware.
 
 use std::path::Path;
 
@@ -119,6 +121,65 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "undefined-citation",
 ];
 
+/// The pseudo-rule id parse diagnostics carry. It is never a lint rule, so
+/// `select`/`ignore` never touch it: a parse error always surfaces.
+pub const PARSE_RULE_ID: &str = "parse";
+
+/// The active lint-rule set for one run, after applying `select`/`ignore`.
+///
+/// Resolution by rule id (not by constructing the rule objects) so it can filter
+/// the diagnostics `lint_document` already produced without changing that shared
+/// entry point's signature. Semantics mirror arity's `ResolvedRules`:
+///
+/// 1. Base set = the ids in `select` when it is `Some`, else every built-in rule.
+/// 2. Subtract anything in `ignore`.
+/// 3. Unknown ids in `select`/`ignore` (not in [`ALL_RULE_IDS`]) are returned via
+///    the second tuple element so the caller can surface them; they do not error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSelection {
+    active: Vec<&'static str>,
+}
+
+impl RuleSelection {
+    /// Build the active set from `select`/`ignore`, returning it plus any unknown
+    /// ids encountered (preserving their original spelling and order).
+    pub fn resolve(select: Option<&[String]>, ignore: &[String]) -> (Self, Vec<String>) {
+        let mut unknown = Vec::new();
+        for id in select.iter().flat_map(|v| v.iter()).chain(ignore.iter()) {
+            if !ALL_RULE_IDS.contains(&id.as_str()) {
+                unknown.push(id.clone());
+            }
+        }
+        let base: Vec<&'static str> = match select {
+            Some(picks) => ALL_RULE_IDS
+                .iter()
+                .copied()
+                .filter(|id| picks.iter().any(|p| p == id))
+                .collect(),
+            None => ALL_RULE_IDS.to_vec(),
+        };
+        let active = base
+            .into_iter()
+            .filter(|id| !ignore.iter().any(|i| i == id))
+            .collect();
+        (Self { active }, unknown)
+    }
+
+    /// The unfiltered set: every built-in rule active. The default for callers
+    /// with no config (the LSP, the library API).
+    pub fn all() -> Self {
+        Self {
+            active: ALL_RULE_IDS.to_vec(),
+        }
+    }
+
+    /// Whether a diagnostic with this `rule` should be kept. Parse diagnostics
+    /// ([`PARSE_RULE_ID`]) are always kept; lint rules are kept iff active.
+    pub fn is_active(&self, rule: &str) -> bool {
+        rule == PARSE_RULE_ID || self.active.contains(&rule)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +188,54 @@ mod tests {
     fn registry_and_id_list_agree() {
         let ids: Vec<&str> = all_rules().iter().map(|r| r.id()).collect();
         assert_eq!(ids, ALL_RULE_IDS);
+    }
+
+    #[test]
+    fn all_selection_keeps_every_rule_and_parse() {
+        let sel = RuleSelection::all();
+        for id in ALL_RULE_IDS {
+            assert!(sel.is_active(id), "{id} should be active");
+        }
+        assert!(sel.is_active(PARSE_RULE_ID));
+    }
+
+    #[test]
+    fn select_restricts_to_listed_rules_but_keeps_parse() {
+        let (sel, unknown) = RuleSelection::resolve(Some(&["duplicate-label".to_string()]), &[]);
+        assert!(unknown.is_empty());
+        assert!(sel.is_active("duplicate-label"));
+        assert!(!sel.is_active("deprecated-command"));
+        // Parse errors are never filtered out by a `select`.
+        assert!(sel.is_active(PARSE_RULE_ID));
+    }
+
+    #[test]
+    fn ignore_subtracts_from_default_set() {
+        let (sel, unknown) = RuleSelection::resolve(None, &["deprecated-command".to_string()]);
+        assert!(unknown.is_empty());
+        assert!(!sel.is_active("deprecated-command"));
+        assert!(sel.is_active("duplicate-label"));
+    }
+
+    #[test]
+    fn ignore_overrides_select() {
+        let (sel, _) = RuleSelection::resolve(
+            Some(&["duplicate-label".to_string(), "undefined-ref".to_string()]),
+            &["undefined-ref".to_string()],
+        );
+        assert!(sel.is_active("duplicate-label"));
+        assert!(!sel.is_active("undefined-ref"));
+    }
+
+    #[test]
+    fn unknown_ids_are_reported() {
+        let (_, unknown) = RuleSelection::resolve(
+            Some(&["duplicate-label".to_string(), "no-such-rule".to_string()]),
+            &["also-bogus".to_string()],
+        );
+        assert_eq!(
+            unknown,
+            vec!["no-such-rule".to_string(), "also-bogus".to_string()]
+        );
     }
 }

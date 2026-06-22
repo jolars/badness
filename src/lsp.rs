@@ -98,7 +98,7 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::file_discovery::{FileKind, collect_lint_files, file_kind_or_tex};
+use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::{FormatStyle, format_node_with_signatures, format_with_style_flavored};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
@@ -1100,7 +1100,9 @@ impl Worker {
         if !self.seeded_dirs.insert(dir.clone()) {
             return false; // already walked
         }
-        let Ok(files) = collect_lint_files(&[dir]) else {
+        // The LSP does its own scoping and does not read `badness.toml` yet, so
+        // sibling discovery applies no exclude filter.
+        let Ok(files) = collect_lint_files(&[dir], &ExcludeFilter::none()) else {
             return false;
         };
         let mut grew = false;

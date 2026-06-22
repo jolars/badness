@@ -13,13 +13,17 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use badness::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex};
+use badness::config::Config;
+use badness::file_discovery::{
+    ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
+};
 use badness::formatter::{
     FormatStyle, WrapMode, check_paths_with_style, format_file_with_packages,
     format_with_style_flavored,
 };
 use badness::linter::{
-    Diagnostic, OutputMode, apply_fixes, check_document, lint_document, render_findings,
+    Diagnostic, OutputMode, RuleSelection, apply_fixes, check_document, lint_document,
+    render_findings,
 };
 use std::collections::HashMap;
 
@@ -69,6 +73,13 @@ impl From<WrapArg> for WrapMode {
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Path to a `badness.toml` to use instead of discovering one. Applies to
+    /// `format` and `lint`; ignored by `parse`, `lsp`, and `init`.
+    #[arg(long, value_name = "PATH", global = true, conflicts_with = "no_config")]
+    config: Option<PathBuf>,
+    /// Ignore any `badness.toml` and use built-in defaults.
+    #[arg(long, global = true)]
+    no_config: bool,
 }
 
 #[derive(Subcommand)]
@@ -98,6 +109,10 @@ enum Command {
         /// How to lay out line breaks inside a paragraph.
         #[arg(long, value_enum)]
         wrap: Option<WrapArg>,
+        /// Gitignore-style pattern to skip during directory discovery (repeatable).
+        /// Added on top of any `exclude`/`extend-exclude` from `badness.toml`.
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
     },
     /// Lint LaTeX source, reporting parse diagnostics.
     ///
@@ -118,6 +133,18 @@ enum Command {
         /// only the extension is used. Ignored when paths are given.
         #[arg(long, value_name = "PATH")]
         stdin_filepath: Option<PathBuf>,
+        /// Gitignore-style pattern to skip during directory discovery (repeatable).
+        /// Added on top of any `exclude`/`extend-exclude` from `badness.toml`.
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
+        /// Run only these rules (repeatable). Overrides `[lint] select` from
+        /// `badness.toml` when given.
+        #[arg(long, value_name = "RULE")]
+        select: Vec<String>,
+        /// Disable these rules (repeatable). Overrides `[lint] ignore` from
+        /// `badness.toml` when given.
+        #[arg(long, value_name = "RULE")]
+        ignore: Vec<String>,
     },
     /// Parse LaTeX source and print its concrete syntax tree (CST).
     ///
@@ -130,11 +157,21 @@ enum Command {
     },
     /// Run the language server over stdio.
     Lsp,
+    /// Write a commented starter `badness.toml` to the current directory.
+    Init {
+        /// Overwrite an existing `badness.toml`.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match cli.command {
+    let Cli {
+        command,
+        config: config_arg,
+        no_config,
+    } = Cli::parse();
+    match command {
         Command::Format {
             paths,
             check,
@@ -142,24 +179,46 @@ fn main() -> ExitCode {
             line_width,
             indent_width,
             wrap,
+            exclude,
         } => {
-            let mut style = FormatStyle::default();
+            // Discover/load `badness.toml` from the working directory (one config
+            // per invocation, like arity's CLI). The exclude filter is rooted at
+            // the config's directory so its patterns resolve relative to it.
+            let anchor = match cwd_anchor() {
+                Ok(anchor) => anchor,
+                Err(code) => return code,
+            };
+            let (config, config_path) =
+                match resolve_config(config_arg.as_deref(), no_config, &anchor) {
+                    Ok(resolved) => resolved,
+                    Err(code) => return code,
+                };
+            let exclude_filter =
+                match build_exclude_filter(&config, config_path.as_deref(), &anchor, &exclude) {
+                    Ok(filter) => filter,
+                    Err(code) => return code,
+                };
+
+            let mut style = FormatStyle::from(&config.format);
             if let Some(w) = line_width {
                 style.line_width = w;
             }
             if let Some(w) = indent_width {
                 style.indent_width = w;
             }
-            // `--wrap` is a *global* override; without it each file falls back to
-            // its kind's default wrap (`.sty`/`.cls` → Preserve, `.tex` → Reflow),
-            // resolved per file at dispatch.
-            let wrap_override: Option<WrapMode> = wrap.map(Into::into);
+            // Wrap precedence: `--wrap` > config `wrap` > file-kind default. The
+            // override is `None` only when neither is set, leaving each file on its
+            // kind's default wrap (`.sty`/`.cls`/`.dtx`/`.ins` → Preserve, `.tex` →
+            // Reflow), resolved per file at dispatch.
+            let wrap_override: Option<WrapMode> =
+                wrap.map(Into::into).or(config.format.wrap.map(Into::into));
             run_format(
                 &paths,
                 check,
                 stdin_filepath.as_deref(),
                 style,
                 wrap_override,
+                &exclude_filter,
             )
         }
         Command::Lint {
@@ -167,9 +226,138 @@ fn main() -> ExitCode {
             fix,
             unsafe_fixes,
             stdin_filepath,
-        } => run_lint(&paths, fix, unsafe_fixes, stdin_filepath.as_deref()),
+            exclude,
+            select,
+            ignore,
+        } => {
+            let anchor = match cwd_anchor() {
+                Ok(anchor) => anchor,
+                Err(code) => return code,
+            };
+            let (mut config, config_path) =
+                match resolve_config(config_arg.as_deref(), no_config, &anchor) {
+                    Ok(resolved) => resolved,
+                    Err(code) => return code,
+                };
+            let exclude_filter =
+                match build_exclude_filter(&config, config_path.as_deref(), &anchor, &exclude) {
+                    Ok(filter) => filter,
+                    Err(code) => return code,
+                };
+            // CLI `--select`/`--ignore` override the configured selection when given.
+            if !select.is_empty() {
+                config.lint.select = Some(select);
+            }
+            if !ignore.is_empty() {
+                config.lint.ignore = ignore;
+            }
+            let (rules, unknown) =
+                RuleSelection::resolve(config.lint.select.as_deref(), &config.lint.ignore);
+            for id in &unknown {
+                eprintln!("badness: warning: unknown lint rule `{id}`");
+            }
+            run_lint(
+                &paths,
+                fix,
+                unsafe_fixes,
+                stdin_filepath.as_deref(),
+                &exclude_filter,
+                &rules,
+            )
+        }
         Command::Parse { path } => run_parse(path.as_deref()),
         Command::Lsp => run_lsp(),
+        Command::Init { force } => run_init(force),
+    }
+}
+
+/// The directory to anchor config discovery and exclude-pattern roots at: the
+/// current working directory.
+fn cwd_anchor() -> Result<PathBuf, ExitCode> {
+    std::env::current_dir().map_err(|err| {
+        eprintln!("badness: cannot determine the current directory: {err}");
+        ExitCode::from(2)
+    })
+}
+
+/// Resolve the effective config, mapping any [`ConfigError`] to a stderr message
+/// and exit code 2.
+fn resolve_config(
+    explicit: Option<&Path>,
+    no_config: bool,
+    anchor: &Path,
+) -> Result<(Config, Option<PathBuf>), ExitCode> {
+    Config::resolve(explicit, no_config, anchor).map_err(|err| {
+        eprintln!("badness: {err}");
+        ExitCode::from(2)
+    })
+}
+
+/// Build the directory-discovery exclude filter from the resolved config plus any
+/// `--exclude` CLI patterns. Patterns resolve relative to the directory holding
+/// `badness.toml` (or `anchor` when there is no config file).
+fn build_exclude_filter(
+    config: &Config,
+    config_path: Option<&Path>,
+    anchor: &Path,
+    cli_excludes: &[String],
+) -> Result<ExcludeFilter, ExitCode> {
+    let root = config_path
+        .and_then(Path::parent)
+        .unwrap_or(anchor)
+        .to_path_buf();
+    let patterns = config.exclude_patterns(cli_excludes);
+    ExcludeFilter::new(&root, &patterns).map_err(|err| {
+        eprintln!("badness: {err}");
+        ExitCode::from(2)
+    })
+}
+
+/// A commented starter `badness.toml` showing every key at its default.
+const STARTER_CONFIG: &str = "\
+# badness configuration. All keys are optional; values shown are the defaults.
+
+# Gitignore-style patterns to skip during directory discovery. `exclude` replaces
+# the built-in default set (`.git/`); `extend-exclude` adds on top of it. Both
+# apply to `format` and `lint`.
+# exclude = [\".git/\"]
+# extend-exclude = []
+
+[format]
+# line-width = 80
+# indent-width = 2
+# wrap = \"reflow\"  # reflow | sentence | semantic | preserve
+                     # omit to use each file kind's default
+                     # (.tex -> reflow, .sty/.cls/.dtx/.ins -> preserve)
+
+[lint]
+# select = [\"...\"]  # if set, only these rules run
+# ignore = []        # rules to disable
+";
+
+/// `badness init`: write a commented starter config to `<cwd>/badness.toml`.
+fn run_init(force: bool) -> ExitCode {
+    let anchor = match cwd_anchor() {
+        Ok(anchor) => anchor,
+        Err(code) => return code,
+    };
+    let path = anchor.join(badness::config::CONFIG_FILE_NAME);
+    if path.exists() && !force {
+        eprintln!(
+            "badness: {} already exists; pass --force to overwrite",
+            path.display()
+        );
+        return ExitCode::from(2);
+    }
+    match std::fs::write(&path, STARTER_CONFIG) {
+        Ok(()) => {
+            println!("Wrote {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("badness: failed to write {}: {err}", path.display());
+            ExitCode::from(2)
+        }
     }
 }
 
@@ -197,13 +385,15 @@ fn run_lint(
     fix: bool,
     unsafe_fixes: bool,
     stdin_filepath: Option<&Path>,
+    exclude: &ExcludeFilter,
+    rules: &RuleSelection,
 ) -> ExitCode {
     // Apply fixes in place first; the reporting pass below then re-reads from
     // disk and shows whatever findings remain. Mirrors arity's two-pass flow.
     // Stdin (no paths) has nowhere to write back, so `--fix` only acts on files.
     if fix
         && !paths.is_empty()
-        && let Some(code) = apply_fixes_to_paths(paths, unsafe_fixes)
+        && let Some(code) = apply_fixes_to_paths(paths, unsafe_fixes, exclude, rules)
     {
         return code;
     }
@@ -226,7 +416,7 @@ fn run_lint(
         let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
         sources.push((PathBuf::from("<stdin>"), input, kind));
     } else {
-        let files = match collect_lint_files(paths) {
+        let files = match collect_lint_files(paths, exclude) {
             Ok(files) => files,
             Err(err) => {
                 report_discovery_error(&err);
@@ -332,6 +522,10 @@ fn run_lint(
         ));
     }
 
+    // Drop findings from rules the config/CLI deselected. Parse diagnostics
+    // (`rule == "parse"`) are always kept (see `RuleSelection::is_active`).
+    diagnostics.retain(|d| rules.is_active(d.rule));
+
     // Findings from the two pipelines arrive interleaved by file; sort so the
     // renderer presents them deterministically (by path, then position).
     diagnostics.sort_by(|a, b| {
@@ -370,8 +564,13 @@ fn run_lint(
 /// Both `.tex` and `.bib` files are fixed, each through its own linter; rules that
 /// emit no autofix (the report-only majority) leave their findings for the
 /// reporting pass that follows.
-fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitCode> {
-    let files = match collect_lint_files(paths) {
+fn apply_fixes_to_paths(
+    paths: &[PathBuf],
+    include_unsafe: bool,
+    exclude: &ExcludeFilter,
+    rules: &RuleSelection,
+) -> Option<ExitCode> {
+    let files = match collect_lint_files(paths, exclude) {
         Ok(files) => files,
         Err(err) => {
             report_discovery_error(&err);
@@ -383,7 +582,7 @@ fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitC
         return Some(ExitCode::FAILURE);
     }
     for (path, kind) in files {
-        match fix_file(&path, kind, include_unsafe) {
+        match fix_file(&path, kind, include_unsafe, rules) {
             Ok(0) => {}
             Ok(n) => eprintln!("{}: {n} fix{} applied", path.display(), plural(n)),
             Err(err) => {
@@ -398,8 +597,14 @@ fn apply_fixes_to_paths(paths: &[PathBuf], include_unsafe: bool) -> Option<ExitC
 /// Run the fixpoint loop on a single file and write it back if anything changed.
 /// Returns the number of individual fixes applied. Re-lints after each round so
 /// fixes can cascade; bounded by [`MAX_FIX_ITERATIONS`]. Mirrors arity's
-/// `fix_file`. Routes to the LaTeX or BibTeX linter by [`FileKind`].
-fn fix_file(path: &Path, kind: FileKind, include_unsafe: bool) -> std::io::Result<usize> {
+/// `fix_file`. Routes to the LaTeX or BibTeX linter by [`FileKind`]. `rules` gates
+/// which findings contribute fixes, so a deselected rule's autofix never applies.
+fn fix_file(
+    path: &Path,
+    kind: FileKind,
+    include_unsafe: bool,
+    rules: &RuleSelection,
+) -> std::io::Result<usize> {
     let mut content = std::fs::read_to_string(path)?;
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
@@ -409,7 +614,11 @@ fn fix_file(path: &Path, kind: FileKind, include_unsafe: bool) -> std::io::Resul
             }
             FileKind::Bib => badness::bib::linter::check_document(path, &content),
         };
-        let fixes: Vec<_> = diagnostics.into_iter().filter_map(|d| d.fix).collect();
+        let fixes: Vec<_> = diagnostics
+            .into_iter()
+            .filter(|d| rules.is_active(d.rule))
+            .filter_map(|d| d.fix)
+            .collect();
         if fixes.is_empty() {
             break;
         }
@@ -501,20 +710,27 @@ fn run_format(
     stdin_filepath: Option<&Path>,
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    exclude: &ExcludeFilter,
 ) -> ExitCode {
     if check {
-        return run_check(paths, style, wrap_override);
+        return run_check(paths, style, wrap_override, exclude);
     }
     if paths.is_empty() {
+        // Stdin has no directory to walk, so the exclude filter never applies.
         run_format_stdin(stdin_filepath, style, wrap_override)
     } else {
-        run_format_paths(paths, style, wrap_override)
+        run_format_paths(paths, style, wrap_override, exclude)
     }
 }
 
 /// `--check`: report unformatted files, exit code 1 if any.
-fn run_check(paths: &[PathBuf], style: FormatStyle, wrap_override: Option<WrapMode>) -> ExitCode {
-    match check_paths_with_style(paths, style, wrap_override) {
+fn run_check(
+    paths: &[PathBuf],
+    style: FormatStyle,
+    wrap_override: Option<WrapMode>,
+    exclude: &ExcludeFilter,
+) -> ExitCode {
+    match check_paths_with_style(paths, style, wrap_override, exclude) {
         Ok(result) => {
             if result.changed_files.is_empty() {
                 ExitCode::SUCCESS
@@ -604,8 +820,9 @@ fn run_format_paths(
     paths: &[PathBuf],
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    exclude: &ExcludeFilter,
 ) -> ExitCode {
-    let files = match collect_lint_files(paths) {
+    let files = match collect_lint_files(paths, exclude) {
         Ok(files) => files,
         Err(err) => {
             report_discovery_error(&err);

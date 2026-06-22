@@ -5,6 +5,7 @@
 pub mod ast;
 pub mod bib;
 pub mod completion;
+pub mod config;
 pub mod file_discovery;
 pub mod formatter;
 pub mod incremental;

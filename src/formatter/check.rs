@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::{FormatError, FormatStyle, WrapMode, format_file_with_packages};
-use crate::file_discovery::{FileDiscoveryError, FileKind, collect_lint_files};
+use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
@@ -97,22 +97,24 @@ impl From<FileDiscoveryError> for CheckError {
 }
 
 pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
-    check_paths_with_style(paths, FormatStyle::default(), None)
+    check_paths_with_style(paths, FormatStyle::default(), None, &ExcludeFilter::none())
 }
 
 /// Check `paths` under `style`. `wrap_override` is the global `--wrap` value: when
 /// `None`, each file uses its kind's default wrap ([`FileKind::default_wrap`], so
-/// `.sty`/`.cls` default to `Preserve`), resolved per file below.
+/// `.sty`/`.cls` default to `Preserve`), resolved per file below. `exclude` prunes
+/// directory discovery (explicitly-named files are never pruned).
 pub fn check_paths_with_style(
     paths: &[PathBuf],
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    exclude: &ExcludeFilter,
 ) -> Result<CheckResult, CheckError> {
     if paths.is_empty() {
         return Err(CheckError::MissingPaths);
     }
 
-    let files = collect_lint_files(paths)?;
+    let files = collect_lint_files(paths, exclude)?;
     if files.is_empty() {
         return Err(CheckError::NoFiles);
     }

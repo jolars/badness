@@ -22,6 +22,7 @@ use crate::bib::semantic::{BibFieldDb, Model};
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
+pub mod duplicate_field;
 pub mod duplicate_key;
 pub mod empty_field;
 pub mod encoding_hints;
@@ -31,6 +32,7 @@ pub mod undefined_string;
 pub mod unknown_field;
 pub mod unused_string;
 
+pub use duplicate_field::DuplicateField;
 pub use duplicate_key::DuplicateKey;
 pub use empty_field::EmptyField;
 pub use encoding_hints::EncodingHints;
@@ -101,6 +103,7 @@ pub fn all_rules() -> Vec<Box<dyn BibRule>> {
         Box::new(MissingRequiredField),
         Box::new(UnknownField),
         Box::new(EmptyField),
+        Box::new(DuplicateField),
         Box::new(UnusedString),
         Box::new(UndefinedString),
         Box::new(TitleCapitalization),
@@ -114,6 +117,7 @@ pub const ALL_BIB_RULE_IDS: &[&str] = &[
     "missing-required-field",
     "unknown-field",
     "empty-field",
+    "duplicate-field",
     "unused-string",
     "undefined-string",
     "title-capitalization",

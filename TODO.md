@@ -484,8 +484,8 @@ quote→brace normalization, value reflow gated by field category, default-on
 field + entry sorting with a crossref/xdata guard); a parallel linter
 (`src/bib/linter/`, `BibRule` trait reusing the shared `Diagnostic`/`Fix`
 infra --- `duplicate-key`, `missing-required-field`, `unknown-field`,
-`empty-field` (with autofix), `unused-string`, `undefined-string`,
-`title-capitalization`, `encoding-hints`; suppression via
+`empty-field` (with autofix), `duplicate-field`, `unused-string`,
+`undefined-string`, `title-capitalization`, `encoding-hints`; suppression via
 `@comment{badness-ignore …}`); and Phase 4 integration (salsa
 `parsed_bib_document`/`bib_semantic_model`, `.bib` routed through
 `format`/`--check`/LSP diagnostics+formatting+outline, cross-file

@@ -110,7 +110,9 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
     ]
 }
 
-/// The ids of every built-in rule. Kept in lockstep with [`all_rules`].
+/// The ids of every built-in **LaTeX** rule. Kept in lockstep with [`all_rules`].
+/// The bib rules live in [`crate::bib::linter::ALL_BIB_RULE_IDS`]; the selectable
+/// universe is the union of the two (see [`all_known_rule_ids`]).
 pub const ALL_RULE_IDS: &[&str] = &[
     "duplicate-label",
     "deprecated-command",
@@ -120,6 +122,21 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "undefined-ref",
     "undefined-citation",
 ];
+
+/// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).
+///
+/// The CLI lints `.tex` and `.bib` files in one pass and folds their findings into
+/// a single diagnostic stream filtered by one [`RuleSelection`], so the selectable
+/// universe — and the set `select`/`ignore` are validated against — must span both
+/// registries. Without the bib half, every bib finding's id reads as "not active"
+/// and the CLI silently drops it (the LSP, which doesn't post-filter, still shows
+/// them — the source of the CLI/LSP divergence).
+fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
+    ALL_RULE_IDS
+        .iter()
+        .copied()
+        .chain(crate::bib::linter::ALL_BIB_RULE_IDS.iter().copied())
+}
 
 /// The pseudo-rule id parse diagnostics carry. It is never a lint rule, so
 /// `select`/`ignore` never touch it: a parse error always surfaces.
@@ -146,17 +163,15 @@ impl RuleSelection {
     pub fn resolve(select: Option<&[String]>, ignore: &[String]) -> (Self, Vec<String>) {
         let mut unknown = Vec::new();
         for id in select.iter().flat_map(|v| v.iter()).chain(ignore.iter()) {
-            if !ALL_RULE_IDS.contains(&id.as_str()) {
+            if !all_known_rule_ids().any(|known| known == id) {
                 unknown.push(id.clone());
             }
         }
         let base: Vec<&'static str> = match select {
-            Some(picks) => ALL_RULE_IDS
-                .iter()
-                .copied()
+            Some(picks) => all_known_rule_ids()
                 .filter(|id| picks.iter().any(|p| p == id))
                 .collect(),
-            None => ALL_RULE_IDS.to_vec(),
+            None => all_known_rule_ids().collect(),
         };
         let active = base
             .into_iter()
@@ -169,7 +184,7 @@ impl RuleSelection {
     /// with no config (the LSP, the library API).
     pub fn all() -> Self {
         Self {
-            active: ALL_RULE_IDS.to_vec(),
+            active: all_known_rule_ids().collect(),
         }
     }
 
@@ -225,6 +240,34 @@ mod tests {
         );
         assert!(sel.is_active("duplicate-label"));
         assert!(!sel.is_active("undefined-ref"));
+    }
+
+    #[test]
+    fn bib_rules_are_active_by_default() {
+        // The CLI filters bib findings through the same `RuleSelection`; bib rule
+        // ids must count as known/active or the CLI silently drops every bib finding
+        // (while the LSP, which doesn't post-filter, still shows them).
+        let sel = RuleSelection::all();
+        for id in crate::bib::linter::ALL_BIB_RULE_IDS {
+            assert!(sel.is_active(id), "{id} should be active");
+        }
+        let (sel, unknown) = RuleSelection::resolve(None, &[]);
+        assert!(unknown.is_empty());
+        assert!(sel.is_active("missing-required-field"));
+    }
+
+    #[test]
+    fn bib_rules_are_selectable_and_ignorable() {
+        let (sel, unknown) =
+            RuleSelection::resolve(Some(&["missing-required-field".to_string()]), &[]);
+        assert!(unknown.is_empty(), "bib id must be recognized, not unknown");
+        assert!(sel.is_active("missing-required-field"));
+        assert!(!sel.is_active("duplicate-label"));
+
+        let (sel, unknown) = RuleSelection::resolve(None, &["missing-required-field".to_string()]);
+        assert!(unknown.is_empty());
+        assert!(!sel.is_active("missing-required-field"));
+        assert!(sel.is_active("duplicate-label"));
     }
 
     #[test]

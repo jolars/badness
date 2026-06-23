@@ -6,7 +6,7 @@
 //! extracted when its second consumer (the semantic label/reference model)
 //! appeared.
 
-use rowan::TextRange;
+use rowan::{TextRange, TextSize};
 
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -46,6 +46,53 @@ pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
         }
     }
     Some(text)
+}
+
+/// The byte range of the content *inside* the `n`-th `GROUP` argument (the span
+/// between the braces) together with that inner text — the location-aware
+/// counterpart to [`nth_group_text`]. The inner range runs from the first inner
+/// token's start to the last inner token's end; an empty group (`{}`) yields a
+/// zero-width range just after the `{`. Returns `None` under exactly the same
+/// conditions as [`nth_group_text`] (no `n`-th group, or non-token content such as
+/// a nested command), so callers see the same skip-on-nested-macro behavior.
+///
+/// The text/range correspondence is exact: in the success path the group holds
+/// only flat tokens, so its inner bytes are contiguous and per-key sub-ranges can
+/// be sliced off `inner_range` by byte offset (used by the semantic builder to give
+/// each key in a `\cref{a,b}` its own precise span).
+pub fn nth_group_inner(command: &SyntaxNode, n: usize) -> Option<(TextRange, String)> {
+    let group = command
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::GROUP)
+        .nth(n)?;
+
+    let mut text = String::new();
+    let mut start: Option<TextSize> = None;
+    let mut end: Option<TextSize> = None;
+    // Fallback anchor for an empty group: the byte just after the opening brace.
+    let mut after_l_brace = group.text_range().start();
+    for element in group.children_with_tokens() {
+        match element {
+            rowan::NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::L_BRACE => after_l_brace = token.text_range().end(),
+                SyntaxKind::R_BRACE => {}
+                _ => {
+                    let range = token.text_range();
+                    start.get_or_insert(range.start());
+                    end = Some(range.end());
+                    text.push_str(token.text());
+                }
+            },
+            // A nested node (e.g. a COMMAND) means the argument isn't a flat
+            // literal; treat the whole thing as unresolvable, like `nth_group_text`.
+            rowan::NodeOrToken::Node(_) => return None,
+        }
+    }
+    let range = match (start, end) {
+        (Some(start), Some(end)) => TextRange::new(start, end),
+        _ => TextRange::empty(after_l_brace),
+    };
+    Some((range, text))
 }
 
 /// The `n`-th `GROUP` argument node of `command`, if present. The thin node-level
@@ -151,6 +198,29 @@ mod tests {
             nth_group_text(&command("\\label{sec:intro}\n"), 0).as_deref(),
             Some("sec:intro")
         );
+    }
+
+    #[test]
+    fn nth_group_inner_spans_only_the_key() {
+        // The inner range must cover `sec:intro` exactly, excluding the braces.
+        let src = "\\label{sec:intro}\n";
+        let cmd = command(src);
+        let (range, text) = nth_group_inner(&cmd, 0).expect("an inner span");
+        assert_eq!(text, "sec:intro");
+        assert_eq!(&src[range], "sec:intro");
+    }
+
+    #[test]
+    fn nth_group_inner_empty_group_is_zero_width_after_brace() {
+        let cmd = command("\\label{}\n");
+        let (range, text) = nth_group_inner(&cmd, 0).expect("an inner span");
+        assert!(text.is_empty());
+        assert!(range.is_empty());
+    }
+
+    #[test]
+    fn nth_group_inner_none_for_nested_command() {
+        assert_eq!(nth_group_inner(&command("\\input{\\jobname}\n"), 0), None);
     }
 
     #[test]

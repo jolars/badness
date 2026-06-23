@@ -212,22 +212,28 @@ directly onto badness's existing semantic layer.
 
 - [x] Go-to-definition (`textDocument/definition`) --- refs jump to their
   `\label`, cite-family commands to their `.bib` entry; cross-file via the
-  include graph. *Follow-up:* a multi-key list command (`\cref{a,b}`,
-  `\cite{a,b}`) shares one command range, so the cursor resolves *every* key;
-  per-key sub-ranges await the deferred `LabelRef`/`CitationRef` range split
-  (see `semantic::label`).
+  include graph. *Note:* a multi-key list command (`\cref{a,b}`, `\cite{a,b}`)
+  shares one command *navigation* range, so the cursor resolves *every* key —
+  go-to-def deliberately jumps to the whole command. Per-key sub-ranges now exist
+  (`LabelRef`/`CitationRef::key_range`, added for rename) if precise per-key
+  go-to-def is ever wanted.
 - [x] Find references (`textDocument/references`) --- all uses of a label or
   cite key across the namespace, invokable from a use site *or* a definition site
   (the `\label`, and an `@entry` key in a `.bib`); honors `includeDeclaration`.
   Inverts go-to-def via new `namespace_members`/`bib_citers` resolver accessors
-  (`src/project/{labels,citations}.rs`). *Follow-up:* per-key sub-ranges for
-  multi-key list commands still deferred (shared with go-to-def, see
-  `semantic::label`).
+  (`src/project/{labels,citations}.rs`). Reports the whole-command range per use;
+  precise per-key spans now live in `key_range` (added for rename).
 - [ ] Document highlight (`textDocument/documentHighlight`) --- highlight a
   label and its refs within the file.
-- [ ] Rename (`textDocument/rename` + `prepareRename`) --- rename a label and
-  every referencing command atomically; project-wide via the include graph.
-  Restrict the prepare range to label/ref key tokens.
+- [x] Rename (`textDocument/rename` + `prepareRename`) --- renames a label or
+  cite key and every referencing command atomically; project-wide via the include
+  graph; best-effort across a non-closed namespace (mirrors find-references). The
+  prepare range and every edit are anchored to the per-key token (`key_range`), so
+  a sibling key in a `\cref{a,b}` stays untouched and an unsafe new name is
+  declined. Built on the new `LabelRef`/`CitationRef`/`LabelDef` `key_range`
+  (`ast::nth_group_inner`), which also closes the per-key sub-range gap noted above.
+  *Follow-up:* a cross-edit `prepareRename` anchor (resolve currently re-derives
+  from the request position, like the other nav features).
 
 ### IntelliSense (signature DB)
 

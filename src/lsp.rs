@@ -70,8 +70,8 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, References,
-    Request as _,
+    Completion, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition,
+    PrepareRenameRequest, References, Rename, Request as _,
 };
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
@@ -80,9 +80,10 @@ use lsp_types::{
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions,
     GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location, NumberOrString,
-    OneOf, Position, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
-    SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextEdit, Uri,
+    OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
+    RenameOptions, RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Uri,
+    WorkspaceEdit,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -142,6 +143,13 @@ fn server_capabilities() -> ServerCapabilities {
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        // Rename a `\label`/`\cite` key and every referencing command across its
+        // namespace. `prepare_provider` lets the client pre-validate the cursor and
+        // anchor the prepare range to the key token.
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             // `\` opens command/env names; `{` opens a name/key/path argument;
@@ -286,6 +294,27 @@ enum WorkerJob {
         position: Position,
         include_declaration: bool,
     },
+    /// A `prepareRename` request: confirm the cursor sits on a renameable label/cite
+    /// key and reply with that key's range + placeholder. Resolved off a single
+    /// parse of the cursor buffer; no cross-file work, but dispatched to the read
+    /// pool like the others to keep the threading model uniform.
+    PrepareRename {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        position: Position,
+    },
+    /// A `rename` request: build the project-wide [`WorkspaceEdit`] renaming the
+    /// label/cite key under the cursor and every referencing command. Cross-file,
+    /// so the worker snapshots project membership when it dispatches, like
+    /// [`References`](Self::References).
+    Rename {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        position: Position,
+        new_name: String,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -376,6 +405,10 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_goto_definition(&connection, &state, &job_tx, req)
                             }
                             References::METHOD => on_references(&connection, &state, &job_tx, req),
+                            PrepareRenameRequest::METHOD => {
+                                on_prepare_rename(&connection, &state, &job_tx, req)
+                            }
+                            Rename::METHOD => on_rename(&connection, &state, &job_tx, req),
                             FoldingRangeRequest::METHOD => {
                                 on_folding_range(&connection, &state, &job_tx, req)
                             }
@@ -768,6 +801,90 @@ fn on_references(
     });
 }
 
+/// `textDocument/prepareRename`: build a prepare-rename job, or reply `null` when
+/// the document is unknown. The worker decides whether the cursor sits on a
+/// renameable key (and returns its range + placeholder) or declines with `null`.
+fn on_prepare_rename(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<TextDocumentPositionParams>(PrepareRenameRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid prepareRename params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    let position = params.position;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::PrepareRename {
+        id,
+        path,
+        text: doc.text.clone(),
+        position,
+    });
+}
+
+/// `textDocument/rename`: build a rename job, or reply `null` when the document is
+/// unknown. The worker resolves the key under the cursor and answers with a
+/// project-wide [`WorkspaceEdit`] (or `null` when the rename is declined).
+fn on_rename(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<RenameParams>(Rename::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid rename params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position.text_document.uri;
+    let position = params.text_document_position.position;
+    let new_name = params.new_name;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::Rename {
+        id,
+        path,
+        text: doc.text.clone(),
+        position,
+        new_name,
+    });
+}
+
 /// Forward a worker result to the client. Diagnostics are version-gated: a result
 /// is sent only when its document is still open at exactly that version, so a
 /// stale (superseded or post-close) analyze never repaints squiggles.
@@ -1070,6 +1187,39 @@ impl Worker {
                         members,
                         include_declaration,
                         &out_tx,
+                    )
+                });
+            }
+            WorkerJob::PrepareRename {
+                id,
+                path,
+                text,
+                position,
+            } => {
+                // prepareRename only inspects the cursor buffer, but still resolves
+                // the key against the cached model when current, so it shares a db
+                // snapshot like the other read jobs.
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_prepare_rename(&snapshot, id, &path, &text, position, &out_tx)
+                });
+            }
+            WorkerJob::Rename {
+                id,
+                path,
+                text,
+                position,
+                new_name,
+            } => {
+                // Rename is cross-file like find-references, so it captures the same
+                // membership snapshot on the write side before the read job runs.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_rename(
+                        &snapshot, id, &path, &text, position, &new_name, members, &out_tx,
                     )
                 });
             }
@@ -1777,6 +1927,46 @@ fn run_references(
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
+/// Resolve the label/cite key under the cursor and reply with its key-token range +
+/// placeholder, or `null` when the cursor isn't on a renameable key. The narrow
+/// `key_range` (not the whole-command range) is what anchors the client's rename UI.
+fn run_prepare_rename(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    out_tx: &Sender<Outbound>,
+) {
+    let result = compute_prepare_rename(snapshot, path, text, position)
+        .map(|(range, placeholder)| {
+            serde_json::to_value(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder })
+                .unwrap_or(serde_json::Value::Null)
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Resolve the label/cite key under the cursor and reply with the project-wide
+/// [`WorkspaceEdit`] renaming it (definition and every referencing command), or
+/// `null` when nothing resolves or the new name is rejected.
+#[allow(clippy::too_many_arguments)]
+fn run_rename(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    new_name: &str,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let result = compute_rename(snapshot, path, text, position, new_name, members)
+        .and_then(|edit| serde_json::to_value(edit).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
 /// What the cursor points at inside a `.tex` buffer: the keys whose command range
 /// covers the offset. Refs and citations are kept distinct so each resolves against
 /// its own namespace (labels vs. bibliography). A multi-key list command
@@ -1787,6 +1977,16 @@ fn run_references(
 enum CursorTarget {
     Labels(Vec<SmolStr>),
     Citations(Vec<SmolStr>),
+}
+
+/// The renameable key under the cursor: which name(s) to rewrite project-wide
+/// ([`target`](Self::target)), the precise key-token span the cursor sits on (for
+/// the `prepareRename` range), and the current key text as the rename placeholder.
+#[derive(Debug)]
+struct RenameTarget {
+    target: CursorTarget,
+    span: TextRange,
+    placeholder: SmolStr,
 }
 
 /// Compute the definition locations for a go-to-definition at `position`, preferring
@@ -1960,6 +2160,166 @@ fn references_target_under_cursor(model: &SemanticModel, offset: usize) -> Optio
         .map(|l| l.name.clone())
         .collect();
     (!label_names.is_empty()).then_some(CursorTarget::Labels(label_names))
+}
+
+/// The renameable key whose **key-token** range (not the whole-command range)
+/// covers `offset`: a `\ref`/`\cite` use or a `\label` definition. Keyed on
+/// `key_range` so the cursor must sit on the key itself — a position on the command
+/// word, the braces, or a sibling key in a `\cref{a,b}` resolves to `None`, which is
+/// what makes `prepareRename` decline outside a key. Precedence mirrors
+/// [`reference_under_cursor`] (refs, then citations, then label defs); the spans are
+/// disjoint, so at most one matches.
+fn rename_target_under_cursor(model: &SemanticModel, offset: usize) -> Option<RenameTarget> {
+    let at = TextSize::new(offset as u32);
+    if let Some(r) = model
+        .refs()
+        .iter()
+        .find(|r| r.key_range.contains_inclusive(at))
+    {
+        return Some(RenameTarget {
+            target: CursorTarget::Labels(vec![r.name.clone()]),
+            span: r.key_range,
+            placeholder: r.name.clone(),
+        });
+    }
+    if let Some(c) = model
+        .citations()
+        .iter()
+        .find(|c| c.key_range.contains_inclusive(at))
+    {
+        return Some(RenameTarget {
+            target: CursorTarget::Citations(vec![c.name.clone()]),
+            span: c.key_range,
+            placeholder: c.name.clone(),
+        });
+    }
+    let label = model
+        .labels()
+        .iter()
+        .find(|l| l.key_range.contains_inclusive(at))?;
+    Some(RenameTarget {
+        target: CursorTarget::Labels(vec![label.name.clone()]),
+        span: label.key_range,
+        placeholder: label.name.clone(),
+    })
+}
+
+/// Compute the `prepareRename` range + placeholder at `position`: the key-token span
+/// under the cursor and its current text. Reads the cached model when current, else a
+/// fresh parse (the same guard as [`compute_references`]); a `.bib` cursor resolves
+/// to its `@entry` key. `None` when the cursor isn't on a renameable key.
+fn compute_prepare_rename(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    position: Position,
+) -> Option<(Range, String)> {
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        // `.bib` origin: the `@entry` key under the cursor.
+        if file_kind_for(path) == FileKind::Bib {
+            let (key, key_range) = bib_entry_under_cursor(snapshot, path, text, offset)?;
+            return Some((lsp_range(&idx, text, key_range), key.to_string()));
+        }
+        // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition.
+        let target = match snapshot.lookup_file(path) {
+            Some(file) if snapshot.file_text(file) == text => {
+                rename_target_under_cursor(snapshot.semantic_model(file), offset)
+            }
+            _ => {
+                let root = SyntaxNode::new_root(parse(text).green);
+                let model = SemanticModel::build(&root);
+                rename_target_under_cursor(&model, offset)
+            }
+        }?;
+        Some((
+            lsp_range(&idx, text, target.span),
+            target.placeholder.to_string(),
+        ))
+    }));
+    computed.ok().flatten()
+}
+
+/// Compute the [`WorkspaceEdit`] renaming the key under the cursor to `new_name`
+/// across its namespace — the write mirror of [`compute_references`]. Rewrites only
+/// the per-key `key_range` of each occurrence (so a sibling key in `\cref{a,b}` is
+/// untouched), always including the definition. Best-effort: every occurrence in the
+/// *visible* namespace is rewritten (an unresolved/dynamic `\input` may hide a use we
+/// cannot see). `None` when `new_name` is not a syntactically safe key, or nothing
+/// resolves.
+fn compute_rename(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    position: Position,
+    new_name: &str,
+    members: Vec<ProjectMember>,
+) -> Option<WorkspaceEdit> {
+    if !is_valid_key(new_name) {
+        return None;
+    }
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let changes = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let (resolution, citations) = snapshot.resolve_project(members);
+
+        // `.bib` origin: the `@entry` key under the cursor → its `\cite` uses + the
+        // entry itself.
+        if file_kind_for(path) == FileKind::Bib {
+            let Some((key, _)) = bib_entry_under_cursor(snapshot, path, text, offset) else {
+                return HashMap::new();
+            };
+            let origin = snapshot
+                .lookup_file(path)
+                .map(|file| snapshot.file_path(file).to_path_buf())
+                .unwrap_or_else(|| path.to_path_buf());
+            return rename_citation_edits(
+                snapshot,
+                citations,
+                &origin,
+                FileKind::Bib,
+                &[key],
+                new_name,
+            );
+        }
+
+        // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition.
+        let (target, origin) = match snapshot.lookup_file(path) {
+            Some(file) if snapshot.file_text(file) == text => (
+                rename_target_under_cursor(snapshot.semantic_model(file), offset),
+                snapshot.file_path(file).to_path_buf(),
+            ),
+            _ => {
+                let root = SyntaxNode::new_root(parse(text).green);
+                let model = SemanticModel::build(&root);
+                (
+                    rename_target_under_cursor(&model, offset),
+                    path.to_path_buf(),
+                )
+            }
+        };
+        let Some(target) = target else {
+            return HashMap::new();
+        };
+        match target.target {
+            CursorTarget::Labels(names) => {
+                rename_label_edits(snapshot, resolution, &origin, &names, new_name)
+            }
+            CursorTarget::Citations(names) => rename_citation_edits(
+                snapshot,
+                citations,
+                &origin,
+                FileKind::Tex,
+                &names,
+                new_name,
+            ),
+        }
+    }))
+    .unwrap_or_default();
+    finalize_rename(changes)
 }
 
 /// The cite key of the `@entry` whose key range covers `offset` in a `.bib`
@@ -2141,6 +2501,168 @@ fn dedup_locations(locations: Vec<Option<Location>>) -> Vec<Location> {
         .flatten()
         .filter(|loc| seen.insert((loc.uri.as_str().to_owned(), loc.range.start, loc.range.end)))
         .collect()
+}
+
+/// Convert a byte [`TextRange`] (over `text`) to an LSP [`Range`] via `idx`.
+fn lsp_range(idx: &LineIndex, text: &str, range: TextRange) -> Range {
+    byte_range_to_lsp(
+        idx,
+        text,
+        usize::from(range.start()),
+        usize::from(range.end()),
+    )
+}
+
+/// Every `\ref`-family use of `names` across `origin`'s label namespace, plus every
+/// `\label` definition, each rewritten to `new_name` at its precise `key_range`. The
+/// rename mirror of [`reference_label_locations`] — `TextEdit`s grouped by URI
+/// instead of `Location`s, and the definition is *always* included (a rename rewrites
+/// the def, unlike find-references' optional declaration).
+fn rename_label_edits(
+    snapshot: &Analysis,
+    resolution: &ResolvedLabels,
+    origin: &Path,
+    names: &[SmolStr],
+    new_name: &str,
+) -> HashMap<Uri, Vec<TextEdit>> {
+    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
+    for member in resolution.namespace_members(origin) {
+        let Some(file) = snapshot.lookup_file(member) else {
+            continue;
+        };
+        let Some(uri) = path_to_uri(member) else {
+            continue;
+        };
+        let text = snapshot.file_text(file);
+        let idx = LineIndex::new(text);
+        let model = snapshot.semantic_model(file);
+        for r in model.refs() {
+            if names.contains(&r.name) {
+                push_edit(&mut changes, &uri, &idx, text, r.key_range, new_name);
+            }
+        }
+        for label in model.labels() {
+            if names.contains(&label.name) {
+                push_edit(&mut changes, &uri, &idx, text, label.key_range, new_name);
+            }
+        }
+    }
+    changes
+}
+
+/// Every `\cite`-family use of `names` across `origin`'s citation namespace, plus the
+/// bibliography `@entry` keys, rewritten to `new_name` at each precise `key_range`.
+/// The rename mirror of [`reference_citation_locations`]: `.tex` use sites come from
+/// `bib_citers` (a `.bib` origin) or `namespace_members` (a `.tex` origin); the
+/// definition sites are the origin bib itself (`.bib` origin) or `bib_definers` (a
+/// `.tex` origin). Matching is case-insensitive, as BibTeX folds key case.
+fn rename_citation_edits(
+    snapshot: &Analysis,
+    citations: &ResolvedCitations,
+    origin: &Path,
+    kind: FileKind,
+    names: &[SmolStr],
+    new_name: &str,
+) -> HashMap<Uri, Vec<TextEdit>> {
+    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
+    let tex_members = if kind == FileKind::Bib {
+        citations.bib_citers(origin)
+    } else {
+        citations.namespace_members(origin)
+    };
+    for member in tex_members {
+        let Some(file) = snapshot.lookup_file(member) else {
+            continue;
+        };
+        let Some(uri) = path_to_uri(member) else {
+            continue;
+        };
+        let text = snapshot.file_text(file);
+        let idx = LineIndex::new(text);
+        for c in snapshot.semantic_model(file).citations() {
+            if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
+                push_edit(&mut changes, &uri, &idx, text, c.key_range, new_name);
+            }
+        }
+    }
+    match kind {
+        // From a `.bib` cursor, rewrite the entry in the origin bibliography itself.
+        FileKind::Bib => push_bib_entry_edits(snapshot, &mut changes, origin, names, new_name),
+        _ => {
+            for bib_path in citations.bib_definers(origin) {
+                push_bib_entry_edits(snapshot, &mut changes, bib_path, names, new_name);
+            }
+        }
+    }
+    changes
+}
+
+/// Push the `@entry` key edits for `names` in the bibliography at `bib_path` (case-
+/// insensitive match), rewriting each `key_range` to `new_name`.
+fn push_bib_entry_edits(
+    snapshot: &Analysis,
+    changes: &mut HashMap<Uri, Vec<TextEdit>>,
+    bib_path: &Path,
+    names: &[SmolStr],
+    new_name: &str,
+) {
+    let Some(file) = snapshot.lookup_file(bib_path) else {
+        return;
+    };
+    let Some(uri) = path_to_uri(bib_path) else {
+        return;
+    };
+    let text = snapshot.file_text(file);
+    let idx = LineIndex::new(text);
+    for entry in snapshot.bib_semantic_model(file).entries() {
+        if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
+            push_edit(changes, &uri, &idx, text, entry.key_range, new_name);
+        }
+    }
+}
+
+/// Append a `key_range → new_name` [`TextEdit`] to `uri`'s edit list.
+fn push_edit(
+    changes: &mut HashMap<Uri, Vec<TextEdit>>,
+    uri: &Uri,
+    idx: &LineIndex,
+    text: &str,
+    range: TextRange,
+    new_name: &str,
+) {
+    changes.entry(uri.clone()).or_default().push(TextEdit {
+        range: lsp_range(idx, text, range),
+        new_text: new_name.to_owned(),
+    });
+}
+
+/// Sort and dedup each file's edits, drop empty files, and wrap the rest in a
+/// [`WorkspaceEdit`]. `None` when nothing is left to rewrite (so the handler replies
+/// `null`).
+fn finalize_rename(mut changes: HashMap<Uri, Vec<TextEdit>>) -> Option<WorkspaceEdit> {
+    changes.retain(|_, edits| {
+        edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
+        edits.dedup();
+        !edits.is_empty()
+    });
+    (!changes.is_empty()).then(|| WorkspaceEdit {
+        changes: Some(changes),
+        ..Default::default()
+    })
+}
+
+/// Whether `new_name` is a safe replacement key: non-empty after trimming and free of
+/// characters that would break the surface syntax or the comma key-list split (so an
+/// applied rename can never introduce a parse/format error). Conservative — a few
+/// exotic-but-legal key characters are rejected rather than risk a corrupt edit.
+fn is_valid_key(new_name: &str) -> bool {
+    !new_name.trim().is_empty()
+        && !new_name.chars().any(|c| {
+            matches!(
+                c,
+                '{' | '}' | '%' | '\\' | ',' | '#' | '~' | '$' | '^' | '&' | '\n' | '\r'
+            )
+        })
 }
 
 /// Turn a classified [`CompletionContext`] into LSP items. Name/label contexts go

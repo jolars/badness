@@ -34,6 +34,11 @@ pub struct LabelDef {
     /// greedy parser may have over-attached (`\label`'s arity is unknown at parse
     /// time; see `builder::label_range`).
     pub range: TextRange,
+    /// Range of just the key text inside the braces (`sec:intro` in
+    /// `\label{sec:intro}`), trimmed of surrounding whitespace. The precise span a
+    /// rename rewrites — narrower than [`range`](Self::range), which spans the whole
+    /// command.
+    pub key_range: TextRange,
     /// Set by the resolve pass when any reference in this file uses `name`.
     /// Per-file only — a label referenced solely from an `\input`-ed file looks
     /// unreferenced here until the (deferred) cross-file resolver lands.
@@ -80,10 +85,14 @@ impl RefCommand {
 pub struct LabelRef {
     pub name: SmolStr,
     pub command: RefCommand,
-    /// Range of the enclosing command. **Known limitation:** keys split from a
-    /// single `\cref{a,b,c}` share this command range; per-key sub-ranges are
-    /// deferred until go-to-def needs them (Phase 7).
+    /// Range of the enclosing command, shared by all keys split from one
+    /// `\cref{a,b,c}` — used for go-to-def / find-references navigation, which
+    /// jumps to the whole command.
     pub range: TextRange,
+    /// Range of just this key inside the braces (`b` in `\cref{a,b}`), trimmed of
+    /// surrounding whitespace. Unlike [`range`](Self::range), this *is* per-key, so
+    /// a rename rewrites exactly one key of a list command.
+    pub key_range: TextRange,
     /// Set by the resolve pass when `name` matches a `\label` in *this* file.
     pub resolved: bool,
 }
@@ -103,4 +112,7 @@ pub struct CitationRef {
     /// Range of the enclosing command (shared by keys split from one `\cite{a,b}`,
     /// like [`LabelRef::range`]).
     pub range: TextRange,
+    /// Range of just this key inside the braces (`b` in `\cite{a,b}`), trimmed of
+    /// surrounding whitespace — the precise span a rename rewrites.
+    pub key_range: TextRange,
 }

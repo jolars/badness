@@ -6,6 +6,11 @@
 //! diagnostics clear → `textDocument/formatting` → assert the edit equals the
 //! formatter's own output → `shutdown` → `exit`.
 
+// `lsp_types::Uri` carries an internal `Cell` that trips `clippy::mutable_key_type`
+// when used as a map key. Our URIs are owned + parsed and hash through `as_str()`,
+// so this is sound — allow it test-wide, as `src/lsp.rs` does module-wide.
+#![allow(clippy::mutable_key_type)]
+
 use std::time::Duration;
 
 use badness::formatter::{FormatStyle, format_with_style};
@@ -17,10 +22,11 @@ use lsp_types::{
     FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
     FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
     InitializeResult, InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf,
-    PartialResultParams, Position, PublishDiagnosticsParams, Range, ReferenceContext,
-    ReferenceParams, SymbolKind, TextDocumentContentChangeEvent, TextDocumentIdentifier,
-    TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
-    WorkDoneProgressParams,
+    PartialResultParams, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
+    ReferenceContext, ReferenceParams, RenameOptions, RenameParams, SymbolKind,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams, WorkspaceEdit,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -132,6 +138,16 @@ fn start_server(
             Some(OneOf::Left(true))
         ),
         "server must advertise referencesProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.rename_provider,
+            Some(OneOf::Right(RenameOptions {
+                prepare_provider: Some(true),
+                ..
+            }))
+        ),
+        "server must advertise renameProvider with prepare support"
     );
     assert!(
         matches!(
@@ -1106,6 +1122,224 @@ fn lsp_references_cross_file_cite_from_tex_and_bib() {
         bib_found,
         vec![(main_uri.clone(), 4), (part_uri.clone(), 0)],
         "cite uses resolved from the bib entry, got {from_bib:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a `textDocument/prepareRename` at `position` and return the raw response
+/// value (`null` when declined), draining stray diagnostics first.
+fn prepare_rename(
+    client: &Connection,
+    id: i32,
+    uri: &Uri,
+    position: Position,
+) -> serde_json::Value {
+    send_request(
+        client,
+        id,
+        "textDocument/prepareRename",
+        serde_json::to_value(TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position,
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    resp.result.unwrap()
+}
+
+/// Send a `textDocument/rename` at `position` and return the resulting per-URI
+/// edit map (empty when the server declined with `null`), draining stray
+/// diagnostics first.
+fn rename(
+    client: &Connection,
+    id: i32,
+    uri: &Uri,
+    position: Position,
+    new_name: &str,
+) -> std::collections::HashMap<Uri, Vec<TextEdit>> {
+    send_request(
+        client,
+        id,
+        "textDocument/rename",
+        serde_json::to_value(RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            new_name: new_name.to_owned(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    match resp.result.unwrap() {
+        serde_json::Value::Null => std::collections::HashMap::new(),
+        value => serde_json::from_value::<WorkspaceEdit>(value)
+            .unwrap()
+            .changes
+            .unwrap_or_default(),
+    }
+}
+
+/// Apply a single file's `TextEdit`s to `text` and return the result. Edits are
+/// applied last-to-first so earlier byte offsets stay valid.
+fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
+    let index = badness::text::LineIndex::new(text);
+    let mut spans: Vec<(usize, usize, &str)> = edits
+        .iter()
+        .map(|edit| {
+            let start = index.offset_at(text, edit.range.start.line, edit.range.start.character);
+            let end = index.offset_at(text, edit.range.end.line, edit.range.end.character);
+            (start, end, edit.new_text.as_str())
+        })
+        .collect();
+    spans.sort_by_key(|(start, _, _)| *start);
+    let mut out = text.to_owned();
+    for (start, end, new_text) in spans.into_iter().rev() {
+        out.replace_range(start..end, new_text);
+    }
+    out
+}
+
+#[test]
+fn lsp_prepare_rename_anchors_to_key_token() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\label{sec:intro}\n\\ref{sec:intro}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor inside the `\ref` key → the prepare range covers exactly `sec:intro`
+    // (line 1, characters 5..14), with the key as the placeholder.
+    let prepared = prepare_rename(&client, 2, &uri, Position::new(1, 6));
+    let response: PrepareRenameResponse = serde_json::from_value(prepared).unwrap();
+    match response {
+        PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } => {
+            assert_eq!(range, Range::new(Position::new(1, 5), Position::new(1, 14)));
+            assert_eq!(placeholder, "sec:intro");
+        }
+        other => panic!("expected RangeWithPlaceholder, got {other:?}"),
+    }
+
+    // Cursor on the `\ref` command word (not the key) → declined (`null`).
+    let on_command = prepare_rename(&client, 3, &uri, Position::new(1, 2));
+    assert!(on_command.is_null(), "the command word is not renameable");
+
+    // Cursor on an empty line → declined.
+    let on_nothing = prepare_rename(&client, 4, &uri, Position::new(2, 0));
+    assert!(on_nothing.is_null(), "no key under an empty position");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_label_rewrites_def_and_uses_cross_file() {
+    // A real on-disk project: the root `\input`s a chapter that defines the label,
+    // and references it from both files (one via a `\cref` list alongside a sibling
+    // key that must stay untouched).
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("part.tex"),
+        "\\label{sec:intro}\n\\cref{sec:intro,other}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\ref{sec:intro}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let part_uri = path_to_file_uri(&dir.path().join("part.tex"));
+
+    // Rename from the `\ref` in main (line 3) → edits in both files.
+    let changes = rename(&client, 2, &main_uri, Position::new(3, 6), "sec:overview");
+    assert_eq!(changes.len(), 2, "edits span both files, got {changes:?}");
+
+    // The chapter: the `\label` def and the matching `\cref` key are rewritten; the
+    // sibling key `other` is left alone.
+    let part_src = "\\label{sec:intro}\n\\cref{sec:intro,other}\n";
+    let part_out = apply_edits(part_src, &changes[&part_uri]);
+    assert_eq!(
+        part_out, "\\label{sec:overview}\n\\cref{sec:overview,other}\n",
+        "definition + list key renamed, sibling key untouched"
+    );
+
+    // The root: the `\ref` use is rewritten.
+    let main_out = apply_edits(main, &changes[&main_uri]);
+    assert!(
+        main_out.contains("\\ref{sec:overview}"),
+        "the \\ref use is renamed, got {main_out:?}"
+    );
+
+    // An invalid new name (contains a brace) is declined.
+    let declined = rename(&client, 3, &main_uri, Position::new(3, 6), "bad}name");
+    assert!(
+        declined.is_empty(),
+        "a syntactically unsafe key is declined"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_cite_key_rewrites_entry_and_uses() {
+    // The root `\addbibresource`s a `.bib` and cites its key; rename rewrites the
+    // `@entry` key and every `\cite` use, case-insensitively.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let bib_src = "@article{Knuth1984, title={The TeXbook}}\n";
+    std::fs::write(dir.path().join("refs.bib"), bib_src).unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\addbibresource{refs.bib}\n\
+        \\begin{document}\n\
+        \\cite{knuth1984}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let bib_uri = path_to_file_uri(&dir.path().join("refs.bib"));
+
+    // Rename from the `\cite` use (line 3) → the bib entry and the cite use.
+    let changes = rename(&client, 2, &main_uri, Position::new(3, 8), "knuth-texbook");
+    assert_eq!(changes.len(), 2, "edits span the .tex and the .bib");
+
+    let bib_out = apply_edits(bib_src, &changes[&bib_uri]);
+    assert_eq!(
+        bib_out, "@article{knuth-texbook, title={The TeXbook}}\n",
+        "the @entry key is rewritten despite the case mismatch"
+    );
+    let main_out = apply_edits(main, &changes[&main_uri]);
+    assert!(
+        main_out.contains("\\cite{knuth-texbook}"),
+        "the \\cite use is rewritten, got {main_out:?}"
     );
 
     shutdown(&client, server_thread);

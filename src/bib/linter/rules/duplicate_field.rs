@@ -8,13 +8,21 @@
 //! occurrence *after* the first, pointing the caret at the repeated name.
 //!
 //! A [`Severity::Warning`]: it is not a parse error, and the file still loads.
-//! Report-only — which occurrence wins is engine/style-dependent, and deleting a
-//! field is meaning-changing (Tenet 5), so we surface the finding without a fix.
+//!
+//! ## Autofix (only when the values are identical)
+//!
+//! When a duplicate's value is **byte-identical** to the kept (first) occurrence's,
+//! the result is the same field regardless of which copy the engine keeps, so
+//! deleting the redundant one is meaning-preserving — we offer a safe deletion via
+//! [`super::edits::field_deletion_fix`] (a duplicate never disturbs `=` alignment,
+//! since the kept occurrence has the same name width). When the values **differ**,
+//! which one wins is engine/style-dependent and dropping either changes meaning
+//! (Tenet 5), so the finding is report-only.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::bib::ast::{entry_type, field_name, fields};
+use crate::bib::ast::{entry_type, field_name, field_value, fields};
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
@@ -43,16 +51,36 @@ impl BibRule for DuplicateField {
         // Name the entry type in the message when we know it; not required.
         let ty = entry_type(entry);
 
-        // Walk fields in source order, flagging each name seen before.
-        let mut seen: HashSet<String> = HashSet::new();
+        // Walk fields in source order. The map keeps each name's *first* value text
+        // (lowercased name → first `VALUE` text), so a later occurrence is flagged and
+        // compared against the one that is kept. We never overwrite the first entry,
+        // so all repeats compare against the same retained value.
+        let mut first_value: HashMap<String, Option<String>> = HashMap::new();
         for field in fields(entry) {
             let Some(name) = field_name(&field) else {
                 continue;
             };
             let lower = name.to_lowercase();
-            if seen.insert(lower) {
-                continue; // First occurrence: fine.
-            }
+            // The value's content, trimmed of the surrounding trivia the CST absorbs
+            // (notably the last field's value swallows the newline before the closer),
+            // so identity compares the actual `{…}`/`"…"` text, not stray whitespace.
+            let value = field_value(&field).map(|v| v.to_string().trim().to_string());
+            let Some(kept) = first_value.get(&lower) else {
+                first_value.insert(lower, value);
+                continue; // First occurrence: retained.
+            };
+
+            // Identical value → deleting this redundant copy is meaning-preserving.
+            let identical = matches!((kept, &value), (Some(a), Some(b)) if a == b);
+            let fix = identical
+                .then(|| {
+                    super::edits::field_deletion_fix(
+                        &field,
+                        format!("remove duplicate field `{name}`"),
+                    )
+                })
+                .flatten();
+
             let range = field_name_range(&field).unwrap_or_else(|| field.text_range());
             let message = match &ty {
                 Some(ty) => format!("duplicate field `{name}` on `{ty}` entry"),
@@ -65,7 +93,7 @@ impl BibRule for DuplicateField {
                 start: usize::from(range.start()),
                 end: usize::from(range.end()),
                 message,
-                fix: None,
+                fix,
             });
         }
     }
@@ -142,5 +170,50 @@ mod tests {
         let start = src.find("author = {B}").unwrap();
         let end = start + "author".len();
         assert_eq!((out[0].start, out[0].end), (start, end));
+    }
+
+    #[test]
+    fn differing_values_are_report_only() {
+        // The two values disagree: which one wins is engine-dependent, so no fix.
+        let out = findings("@article{k, author = {A}, author = {B}}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
+    }
+
+    #[test]
+    fn identical_values_offer_a_deletion_fix() {
+        let out = findings("@misc{k, note = {x}, note = {x}}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_some());
+    }
+
+    /// Apply the single finding's fix to `src` and return the result.
+    fn fixed(src: &str) -> String {
+        let out = findings(src);
+        assert_eq!(out.len(), 1, "expected exactly one finding");
+        let fix = out[0].fix.as_ref().expect("a fix");
+        let mut s = src.to_string();
+        s.replace_range(fix.start..fix.end, &fix.content);
+        s
+    }
+
+    #[test]
+    fn fix_removes_redundant_last_field() {
+        let src = "@misc{k,\n  note = {x},\n  note = {x}\n}\n";
+        assert_eq!(fixed(src), "@misc{k,\n  note = {x}\n}\n");
+    }
+
+    #[test]
+    fn fix_removes_redundant_middle_field() {
+        let src = "@misc{k,\n  note = {x},\n  note = {x},\n  year = 2020\n}\n";
+        assert_eq!(fixed(src), "@misc{k,\n  note = {x},\n  year = 2020\n}\n");
+    }
+
+    #[test]
+    fn differing_delimiters_are_not_identical() {
+        // Same content, different delimiters: byte-different value text, so no fix.
+        let out = findings("@misc{k, note = {x}, note = \"x\"}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
     }
 }

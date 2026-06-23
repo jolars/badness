@@ -171,3 +171,33 @@ fn empty_field_fix_survives_format_roundtrip() {
         "empty-field should be cleared: {remaining:?}"
     );
 }
+
+#[test]
+fn duplicate_field_fix_survives_format_roundtrip() {
+    // Tenet 5: format → lint --fix → format --check stays green. A field repeated
+    // with an identical value gets a deletion fix; the result must be format-clean.
+    let messy = "@article{k, author = {A}, author = {A}, title = {T}, year = 2020}\n";
+    let formatted = format(messy).unwrap();
+
+    let fixes: Vec<_> = check_document(Path::new("refs.bib"), &formatted)
+        .into_iter()
+        .filter_map(|d| d.fix)
+        .collect();
+    assert!(!fixes.is_empty(), "expected a duplicate-field fix");
+    let fixed = apply_fixes(&formatted, &fixes, false).output;
+
+    // Exactly one `author` survives, and the fixed text is already format-clean.
+    assert_eq!(fixed.matches("author").count(), 1, "got: {fixed:?}");
+    assert_eq!(
+        format(&fixed).unwrap(),
+        fixed,
+        "fix output is not format-clean"
+    );
+
+    // And no duplicate-field finding remains.
+    let remaining = rules(&fixed);
+    assert!(
+        !remaining.contains(&"duplicate-field"),
+        "duplicate-field should be cleared: {remaining:?}"
+    );
+}

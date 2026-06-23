@@ -24,6 +24,7 @@ use crate::linter::diagnostic::{Diagnostic, Severity};
 
 pub mod duplicate_field;
 pub mod duplicate_key;
+pub mod edits;
 pub mod empty_field;
 pub mod encoding_hints;
 pub mod missing_required_field;

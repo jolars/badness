@@ -1,0 +1,39 @@
+---
+source: tests/bib_parser.rs
+expression: "tree(\"@misc{k, title = {a} author = {b}}\")"
+---
+ROOT@0..34
+  ENTRY@0..34
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..7
+      WORD@6..7 "k"
+    COMMA@7..8 ","
+    WHITESPACE@8..9 " "
+    FIELD@9..20
+      FIELD_NAME@9..14
+        WORD@9..14 "title"
+      WHITESPACE@14..15 " "
+      EQ@15..16 "="
+      WHITESPACE@16..17 " "
+      VALUE@17..20
+        BRACE_GROUP@17..20
+          L_BRACE@17..18 "{"
+          WORD@18..19 "a"
+          R_BRACE@19..20 "}"
+    WHITESPACE@20..21 " "
+    FIELD@21..33
+      FIELD_NAME@21..27
+        WORD@21..27 "author"
+      WHITESPACE@27..28 " "
+      EQ@28..29 "="
+      WHITESPACE@29..30 " "
+      VALUE@30..33
+        BRACE_GROUP@30..33
+          L_BRACE@30..31 "{"
+          WORD@31..32 "b"
+          R_BRACE@32..33 "}"
+    R_BRACE@33..34 "}"
+error @21..27: expected `,` between fields

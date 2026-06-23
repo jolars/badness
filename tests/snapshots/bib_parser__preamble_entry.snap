@@ -9,7 +9,7 @@ ROOT@0..38
       WORD@1..9 "preamble"
     L_BRACE@9..10 "{"
     WHITESPACE@10..11 " "
-    VALUE@11..37
+    VALUE@11..36
       QUOTED@11..36
         QUOTE@11..12 "\""
         WORD@12..23 "\\newcommand"
@@ -22,5 +22,5 @@ ROOT@0..38
           L_BRACE@33..34 "{"
           R_BRACE@34..35 "}"
         QUOTE@35..36 "\""
-      WHITESPACE@36..37 " "
+    WHITESPACE@36..37 " "
     R_BRACE@37..38 "}"

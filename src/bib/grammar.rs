@@ -76,6 +76,17 @@ impl<'t> Parser<'t> {
         matches!(self.kind(), Some(SyntaxKind::WORD | SyntaxKind::NUMBER))
     }
 
+    /// The kind of the next non-trivia token at or after the cursor, without
+    /// moving it. Used to probe for a `#` value continuation without pulling the
+    /// intervening trivia into the current node.
+    fn peek_past_trivia(&self) -> Option<SyntaxKind> {
+        let mut i = self.pos;
+        while self.tokens.get(i).is_some_and(|t| Self::is_trivia(t.kind)) {
+            i += 1;
+        }
+        self.tokens.get(i).map(|t| t.kind)
+    }
+
     // --- event emission ----------------------------------------------------
 
     fn bump(&mut self) {
@@ -213,6 +224,11 @@ impl<'t> Parser<'t> {
             self.close();
         }
 
+        // Fields must be `,`-separated. After parsing one, a comma is required
+        // before the next; a field that follows another with no comma between is
+        // a syntax error (biber rejects it) that we recover from by parsing it as
+        // a fresh field anyway.
+        let mut need_comma = false;
         loop {
             self.skip_trivia();
             match self.kind() {
@@ -230,8 +246,19 @@ impl<'t> Parser<'t> {
                     self.error("unterminated entry");
                     break;
                 }
-                Some(SyntaxKind::COMMA) => self.bump(), // separator / trailing comma
-                Some(_) => self.field(closer),
+                Some(SyntaxKind::COMMA) => {
+                    self.bump(); // separator / trailing comma
+                    need_comma = false;
+                }
+                Some(_) => {
+                    if need_comma {
+                        self.error("expected `,` between fields");
+                    }
+                    // Only a complete `name = value` field requires a separator
+                    // before the next; a malformed one already carries its own
+                    // diagnostic, so don't pile a spurious comma error on top.
+                    need_comma = self.field(closer);
+                }
             }
         }
     }
@@ -252,8 +279,10 @@ impl<'t> Parser<'t> {
         self.tokens.get(i).map(|t| t.kind) == Some(SyntaxKind::EQ)
     }
 
-    /// A `name = value` field. Always consumes at least one token.
-    fn field(&mut self, closer: SyntaxKind) {
+    /// A `name = value` field. Always consumes at least one token. Returns whether
+    /// it parsed a *complete* field (name, `=`, value); a malformed field carries
+    /// its own diagnostic, so the caller does not also demand a separator after it.
+    fn field(&mut self, closer: SyntaxKind) -> bool {
         self.open(SyntaxKind::FIELD);
         if !self.at_name() {
             // A stray token where a field name was expected: report and skip it
@@ -261,7 +290,7 @@ impl<'t> Parser<'t> {
             self.error("expected a field name");
             self.bump();
             self.close();
-            return;
+            return false;
         }
 
         self.open(SyntaxKind::FIELD_NAME);
@@ -271,14 +300,17 @@ impl<'t> Parser<'t> {
         self.close();
         self.skip_trivia();
 
-        if self.kind() == Some(SyntaxKind::EQ) {
+        let complete = if self.kind() == Some(SyntaxKind::EQ) {
             self.bump();
             self.skip_trivia();
             self.value(closer);
+            true
         } else {
             self.error("expected `=` after the field name");
-        }
+            false
+        };
         self.close();
+        complete
     }
 
     /// A field value: one or more pieces joined by `#`.
@@ -286,13 +318,17 @@ impl<'t> Parser<'t> {
         self.open(SyntaxKind::VALUE);
         loop {
             self.value_piece();
-            self.skip_trivia();
-            if self.kind() == Some(SyntaxKind::HASH) {
-                self.bump();
-                self.skip_trivia();
-            } else {
+            // Probe for a `#` continuation *past* trivia without consuming it: the
+            // trivia is intra-value only when a `#` actually follows. Otherwise it
+            // is trailing trivia that floats at the entry level (like inter-field
+            // trivia), so we leave it for the caller and the VALUE ends at the
+            // piece's last real token.
+            if self.peek_past_trivia() != Some(SyntaxKind::HASH) {
                 break;
             }
+            self.skip_trivia();
+            self.bump(); // `#`
+            self.skip_trivia();
             // Defend against a `#` with nothing after it before the closer/EOF.
             if self.at_end() || self.kind() == Some(closer) {
                 break;

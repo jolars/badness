@@ -133,6 +133,13 @@ fn missing_equals() {
 }
 
 #[test]
+fn missing_field_separator() {
+    // Two complete fields with no `,` between them: biber rejects this, so we
+    // recover by parsing both as fields and flag the missing separator.
+    insta::assert_snapshot!(tree("@misc{k, title = {a} author = {b}}"));
+}
+
+#[test]
 fn stray_at_starts_new_entry() {
     insta::assert_snapshot!(tree("@misc{a, title = {x}\n@misc{b}"));
 }

@@ -315,6 +315,26 @@ extraction stays a mechanical lift, not a merge.
   `cargo-show-asm`, `cargo-llvm-cov` are in the dev shell. Benchmark before
   optimizing; never regress losslessness for speed.
 - Task runner: `go-task` (`Taskfile.yml`, mirror arity's targets).
+- **Windows CI (line endings + URIs) — these bite repeatedly:**
+  - *Line endings.* The formatter always emits **LF**, and tests compare its
+    output byte-for-byte against checked-in `expected.*` fixtures. With Git's
+    `* text=auto`, any fixture extension not pinned to `eol=lf` in `.gitattributes`
+    is checked out **CRLF** on Windows, so the comparison fails there but passes on
+    Linux/macOS. **When you add a fixture in a new language (a new extension under
+    `tests/fixtures/**` or `tests/corpus/**`), add a matching `… eol=lf` line to
+    `.gitattributes`** (currently `.tex`, `.bib`, `.sty`, `.cls`, `.dtx`, `.ins`,
+    plus the corpus and snapshots). The deliberate exceptions are the
+    `*_crlf_*`/`*_lf_*`/`crlf_*`/`lf_*` line-ending fixtures, pinned `-text` so they
+    keep their bytes. Never normalize line endings *in code* to make a test pass —
+    fix the attribute.
+  - *URIs.* LSP document URIs are decoded to filesystem paths through
+    `uri_to_fs_path` (`lsp.rs`), which handles the Windows `file:///C:/…` form:
+    the leading `/` before a drive letter is URI syntax, not part of the path, and
+    is stripped (`strip_drive_letter_slash`); on Unix the leading `/` is the root
+    and stays. Keep both the Unix and Windows cases in
+    `uri_to_fs_path_handles_unix_and_windows` green when touching URI/path code, and
+    don't hand-roll `file://` parsing elsewhere — go through `uri_to_fs_path`/
+    `path_to_uri`. Paths in tests/snapshots must not assume `/` vs `\\`.
 - The bib field/entry DB (`data/bib_fields.json`) tracks **biblatex's canonical
   data model** (`blx-dm.def`). `scripts/gen_bib_fields.py` keeps the *mechanical*
   facts (entry-type set, field categories, `required` constraints) in sync with the

@@ -1,17 +1,19 @@
 //! Shared CST edits for bib lint autofixes.
 //!
-//! [`field_deletion_fix`] builds a single contiguous, format-clean deletion that
-//! removes one `FIELD` from its entry. Both `empty-field` (the field carries no
-//! data) and `duplicate-field` (an identical repeat) delete a whole field, and the
-//! byte-range arithmetic that keeps the result *already formatted* (Tenet 5) is the
-//! same, so it lives here once rather than in each rule.
+//! [`field_deletion_fix`] builds a single contiguous deletion that removes one
+//! `FIELD` from its entry. Both `empty-field` (the field carries no data) and
+//! `duplicate-field` (an identical repeat) delete a whole field, and the
+//! byte-range arithmetic is the same, so it lives here once rather than in each
+//! rule. The edit is judged on correctness (parses + lossless), not layout; it
+//! happens to leave already-formatted input formatted, but that is incidental,
+//! not required.
 
 use crate::bib::ast::{cite_key, field_name, fields};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 use crate::linter::Fix;
 
-/// Build a format-clean deletion [`Fix`] that removes `field` from its entry,
-/// labeled `description`, or `None` when the edit must be **withheld**:
+/// Build a deletion [`Fix`] that removes `field` from its entry, labeled
+/// `description`, or `None` when the edit must be **withheld**:
 ///
 /// - the field's parent is not an `ENTRY` (e.g. a `@string`'s `name = value` lives
 ///   in `STRING_ENTRY`), or the field is not among its siblings;
@@ -20,9 +22,8 @@ use crate::linter::Fix;
 ///   single contiguous edit cannot express. (A *duplicate* field never trips this:
 ///   the kept occurrence shares its name width, so the max is always tied.)
 ///
-/// The deletion is computed from real CST byte ranges, so it works on messy input
-/// and yields formatted output on already-formatted input (`format → lint --fix →
-/// format --check` stays green):
+/// The deletion is computed from real CST byte ranges, so it works on messy input;
+/// on already-formatted input it also leaves formatted output:
 /// - **only field:** delete from the key's end to the closing delimiter, collapsing
 ///   to the fieldless form `@type{key}`;
 /// - **last field:** delete from the previous field's end through this field

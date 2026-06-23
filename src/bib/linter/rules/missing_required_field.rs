@@ -6,7 +6,7 @@
 //! [`RequiredField::OneOf`] alternation (e.g. `date` *or* `year`) is satisfied by
 //! any one alternative. This is a [`Severity::Warning`]: a missing field degrades
 //! the bibliography but is not a parse error, and styles vary in what they enforce.
-//! Report-only — we cannot invent field content (Tenet 5).
+//! Report-only — we cannot invent field content.
 
 use std::collections::HashSet;
 use std::path::PathBuf;

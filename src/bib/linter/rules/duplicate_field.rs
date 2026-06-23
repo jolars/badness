@@ -16,8 +16,8 @@
 //! deleting the redundant one is meaning-preserving — we offer a safe deletion via
 //! [`super::edits::field_deletion_fix`] (a duplicate never disturbs `=` alignment,
 //! since the kept occurrence has the same name width). When the values **differ**,
-//! which one wins is engine/style-dependent and dropping either changes meaning
-//! (Tenet 5), so the finding is report-only.
+//! which one wins is engine/style-dependent and dropping either changes meaning,
+//! so the finding is report-only.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

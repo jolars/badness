@@ -10,12 +10,12 @@
 //! group or any value token counts as content, so the check never flags a field
 //! that carries data.
 //!
-//! ## Autofix (format-clean by construction, Tenet 5)
+//! ## Autofix
 //!
 //! A safe deletion via [`super::edits::field_deletion_fix`], which removes the field
-//! and its one separating comma from real CST byte ranges so the result stays
-//! formatted (`format → lint --fix → format --check` green), and withholds the fix
-//! when removing the field would change the entry's `=` alignment.
+//! and its one separating comma from real CST byte ranges (correct by
+//! construction: parses + lossless), and withholds the fix when removing the field
+//! would change the entry's `=` alignment.
 //!
 //! [`LITERAL`]: crate::bib::syntax::SyntaxKind::LITERAL
 

@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use badness::linter::{Severity, lint_document};
-use badness::parser::parse;
+use badness::parser::{parse, reconstruct};
 use badness::project::labels::{document_label_names, is_document_root};
 use badness::project::{FileFacts, IncludeGraph, ResolvedLabels, collect_include_edge_keys};
 use badness::semantic::SemanticModel;
@@ -354,9 +354,11 @@ fn fix_to_fixpoint(text: &str) -> String {
     content
 }
 
-/// Tenet 5: `format` → apply all fixes → the result must still parse cleanly and
-/// be format-idempotent (no fix introduces a formatting error).
-fn assert_fix_is_format_stable(input: &str) {
+/// Tenet 1: a fix is a textual edit judged on correctness, not formatting.
+/// Applying every fix to fixpoint must leave a tree that still parses cleanly
+/// and is still lossless. A fix does *not* owe line-width or format-idempotence
+/// (layout is the formatter's job; the pipeline is fix-then-format).
+fn assert_fix_is_correct(input: &str) {
     let style = FormatStyle::default();
     let clean = format_with_style(input, style).expect("input should format");
     let fixed = fix_to_fixpoint(&clean);
@@ -365,10 +367,10 @@ fn assert_fix_is_format_stable(input: &str) {
         parse(&fixed).errors.is_empty(),
         "fixed output must parse cleanly:\n{fixed:?}"
     );
-    let reformatted = format_with_style(&fixed, style).expect("fixed output should format");
     assert_eq!(
-        fixed, reformatted,
-        "a fix introduced a formatting error (tenet 5).\nfrom:\n{clean}\n--- after fixes ---\n{fixed}\n--- but format produces ---\n{reformatted}"
+        reconstruct(&fixed),
+        fixed,
+        "fix broke losslessness (tenet 1).\nfrom:\n{clean}\n--- after fixes ---\n{fixed}"
     );
 }
 
@@ -393,8 +395,8 @@ fn dollar_display_fix_clears_the_finding() {
 }
 
 #[test]
-fn dollar_display_fix_is_format_stable() {
+fn dollar_display_fix_is_correct() {
     for case in ["$$x = y$$\n", "$$\n  a + b\n$$\n", "\\[x = y\\]\n", "$x$\n"] {
-        assert_fix_is_format_stable(case);
+        assert_fix_is_correct(case);
     }
 }

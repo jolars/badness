@@ -4,7 +4,7 @@
 //! These are the classic `\bf`-style commands the LaTeX team has discouraged
 //! since 1994. The replacement is a plain declaration swap (`\bf` → `\bfseries`),
 //! so the message names the modern form — the seed of a later autofix (this
-//! slice reports only; see the plan / Tenet 5). `\em` is intentionally absent:
+//! slice reports only; see the plan). `\em` is intentionally absent:
 //! it is still the supported emphasis switch.
 //!
 //! The table lives here, not in `data/signatures.json`: deprecation is a lint

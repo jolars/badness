@@ -5,7 +5,7 @@
 //! decades ago (it mis-spaces relations and is a perennial l2tabu/chktex
 //! warning). As with [`deprecated_command`](super::deprecated_command), the
 //! replacement is a near-mechanical swap, so the message names the modern form —
-//! the seed of a later autofix (this slice reports only; see Tenet 5).
+//! the seed of a later autofix (this slice reports only).
 //!
 //! The table lives here, not in `data/signatures.json`: "this environment is
 //! obsolete" is a lint judgment, not the structural arity/math fact the signature

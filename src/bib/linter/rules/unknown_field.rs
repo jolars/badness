@@ -8,7 +8,7 @@
 //! field (e.g. a `Verbatim` `url`) is not flagged merely because a given entry
 //! type's optional list omits it. A [`Severity::Warning`]: BibLaTeX silently
 //! ignores unknown fields, but they are usually typos or misplaced data.
-//! Report-only — deleting a field is meaning-changing (Tenet 5).
+//! Report-only — deleting a field is meaning-changing.
 //!
 //! [`BibFieldDb::field`]: crate::bib::semantic::BibFieldDb::field
 

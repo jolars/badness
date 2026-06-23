@@ -118,8 +118,9 @@ registry) wired into the CLI and the LSP `publishDiagnostics` path;
 one `descendants_with_tokens` traversal; model/cross-file rules implement
 `check_file()`); the autofix infra (`linter/fix.rs`: `Fix` +
 `Applicability::{Safe, Unsafe}`, a pure `apply_fixes` engine, `check_document`
-fixpoint, `lint --fix`/`--unsafe-fixes`, with the
-`format → fix → format`-idempotent harness enforcing Tenet 5). Lints shipped:
+fixpoint, `lint --fix`/`--unsafe-fixes`, with the test harness checking that
+fixed output parses and stays lossless — the autofix-correctness bar, tenet 1).
+Lints shipped:
 `deprecated-command` (`\bf`-style), `obsolete-environment` (`eqnarray` → `align`),
 `dollar-display-math` (with a `\[…\]` autofix), `mismatched-delimiter`,
 single-file + cross-file `duplicate-label`, `undefined-ref`.
@@ -256,7 +257,8 @@ directly onto badness's existing semantic layer.
 ### Code actions (autofixes)
 
 - [ ] Code actions (`textDocument/codeAction`) surfacing linter autofixes
-  (Tenet 5: fixes must be format-clean by construction). `deprecated-command`'s
+  (tenet 1: fixes are textual edits, correct-by-construction, never owing
+  layout). `deprecated-command`'s
   `\bf → \bfseries` is the natural first quick-fix; wire
   `CodeActionKind::QUICKFIX` + a resolve path mirroring arity's
   `on_code_action`.

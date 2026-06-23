@@ -79,7 +79,7 @@ command+verbatim tokenization split.
 
 `malformed.tex` is `SkippedBadness` — by design the gauge never measures against
 its own parse errors. badness correctly diagnosed all three malformations and
-recovered losslessly without aborting (tenet 5, error recovery):
+recovered losslessly without aborting (core decision #5, error recovery):
 
 ```
 unclosed `[`                      (\cmd[option …)

@@ -139,9 +139,10 @@ fn file_directive_suppresses_all() {
 
 #[test]
 fn empty_field_fix_survives_format_roundtrip() {
-    // Tenet 5: format → lint --fix → format --check stays green. Start messy,
-    // format, apply the empty-field fix, then assert the result is already
-    // formatted (a second format is a no-op).
+    // The empty-field deletion isn't required to be format-clean (layout is the
+    // formatter's job), but this one is designed to be: it edits byte ranges so
+    // already-formatted input stays formatted. Start messy, format, apply the fix,
+    // then assert a second format is a no-op.
     let messy = "@article{k, title = {T}, note = {}, year = 2020}\n";
     let formatted = format(messy).unwrap();
 
@@ -174,8 +175,9 @@ fn empty_field_fix_survives_format_roundtrip() {
 
 #[test]
 fn duplicate_field_fix_survives_format_roundtrip() {
-    // Tenet 5: format → lint --fix → format --check stays green. A field repeated
-    // with an identical value gets a deletion fix; the result must be format-clean.
+    // A field repeated with an identical value gets a deletion fix. Like the
+    // empty-field deletion, it isn't required to be format-clean, but is designed
+    // to leave already-formatted input formatted.
     let messy = "@article{k, author = {A}, author = {A}, title = {T}, year = 2020}\n";
     let formatted = format(messy).unwrap();
 

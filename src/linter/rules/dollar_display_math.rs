@@ -5,8 +5,9 @@
 //! breaks `fleqn`/`\everydisplay`, so the LaTeX team and l2tabu steer users to
 //! `\[…\]`. The replacement is a pure delimiter swap, carried as a `Safe`
 //! autofix ([`delimiter_swap_fix`]) that `lint --fix` applies: a single
-//! whole-node replacement copying the body verbatim, so it is format-clean by
-//! construction (Tenet 5). Withheld when the display math is unclosed.
+//! whole-node replacement copying the body verbatim, so it is correct by
+//! construction (parses + lossless, tenet 1). Withheld when the display math is
+//! unclosed.
 //!
 //! The parser builds a `DISPLAY_MATH` node for *both* `$$…$$` and `\[…\]`
 //! (`grammar.rs`, `dollar_math` vs `delim_math`); the two are told apart by the
@@ -63,7 +64,7 @@ impl Rule for DollarDisplayMath {
 /// (unclosed display math / a parse error) — there is no closer to swap.
 ///
 /// Each `$$`→`\[`/`$$`→`\]` is a 2-byte→2-byte glyph swap and the body bytes are
-/// reproduced unchanged, so the fix is format-clean by construction (Tenet 5).
+/// reproduced unchanged, so the fix is correct by construction (tenet 1).
 /// It is `Safe`: the swap is the almost-always-wanted LaTeX form.
 fn delimiter_swap_fix(math: &SyntaxNode, opening: rowan::TextRange) -> Option<Fix> {
     let closing = closing_dollars_range(math)?;
@@ -178,7 +179,7 @@ mod tests {
 
     #[test]
     fn unclosed_display_math_reports_without_a_fix() {
-        // No closing `$$` to swap — report only, withhold the fix (Tenet 5).
+        // No closing `$$` to swap — report only, withhold the fix (tenet 1).
         let out = findings("$$x = y\n");
         assert_eq!(out.len(), 1);
         assert!(out[0].fix.is_none());

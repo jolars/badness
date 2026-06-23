@@ -27,7 +27,15 @@ arity. Module folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project
 
 1. **Deterministic, rule-based formatting.** Output is decided solely by the
    formatter's rules and the layout engine. Push back against hard-coding special
-   cases for specific constructs.
+   cases for specific constructs. Because the formatter is the **sole authority on
+   layout**, autofixes are textual edits that never invoke it: a fix decides
+   *what* to rewrite, never *how to lay it out*. A fix owes only correctness —
+   applying it must leave a tree that still parses and is still lossless — never
+   line-width or any other formatting property; producing well-formatted output
+   after a fix is a separate format pass's job (the pipeline is fix-then-format).
+   When an edit can't meet that parses-and-lossless bar for some shape, make it
+   correct by construction (tight span, atom-guarded) or withhold the fix for that
+   shape (the finding is still reported). Don't run the formatter inside `--fix`.
 2. **Incremental parsing is first-class**, not an afterthought. Parser/CST work must
    keep the salsa-based reparse path (`incremental.rs`) viable.
 3. **Parsing is the parser's job.** Never paper over parser mistakes in the
@@ -35,9 +43,6 @@ arity. Module folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project
    hits something the parser got wrong, fix it in the parser.
 4. **Losslessness is the parser's job.** The parser preserves all text so that
    `reconstruct(text) == text`, always. The formatter may assume a lossless CST.
-5. **Autofixes never introduce formatting errors.** `format → lint --fix →
-   format --check` must pass. Make fixes format-clean by construction, or withhold
-   the fix (still report the finding); don't run the formatter inside `--fix`.
 
 ## Core architectural decisions
 

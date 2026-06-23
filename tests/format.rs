@@ -217,6 +217,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // safely collapsible, so it keeps the indented block form.
     ("reflow_cite_collapses_and_flows", WrapMode::Reflow, 80),
     ("reflow_cite_comment_keeps_block", WrapMode::Reflow, 80),
+    // The cross-reference family (`\ref`, `\eqref`, `\cref`, `\nameref`, …) is
+    // flagged `inline` but *not* `collapse` (a ref key is a single token where
+    // interior spaces can matter). A ref isolated on its own source line flows
+    // into the paragraph fill as an atom instead of being kept as a command-only
+    // line, with its `{key}` left exactly as authored.
+    ("reflow_ref_flows", WrapMode::Reflow, 80),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts, and strip redundant
     // braces around a single-token script argument (only where the following

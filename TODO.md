@@ -92,10 +92,6 @@ losslessness asserted.
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on
   its own separators rather than the paragraph fill.
-- [ ] Mark `\ref`/`\eqref`/`\cref`/`\autoref`/`\nameref` `inline` so they flow
-  too (left out of this pass: their keys are single tokens where interior
-  spaces can matter, so they are *not* `collapse`, but they are still
-  inline).
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body

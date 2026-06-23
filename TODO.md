@@ -239,9 +239,6 @@ directly onto badness's existing semantic layer.
   the signature DB (built-in + scanned, via `document_signatures`), `\ref`-family
   keys, `\begin{…}`/`\end{…}` names (auto-`\end` snippet), and file paths in
   `\includegraphics`/`\input`/…/`\addbibresource`. (`src/completion.rs`.)
-  - [ ] `\cite` key completion --- classify a `\cite`-family argument cursor,
-    offer keys from the resolved bibliography (citation model + `.bib` ingest
-    already exist; needs the wiring in `completion.rs`).
   - [ ] `completionItem/resolve` to attach signature/doc detail lazily
     (`resolve_provider` is currently `false`).
 - [ ] Signature help (`textDocument/signatureHelp`) --- show the active argument

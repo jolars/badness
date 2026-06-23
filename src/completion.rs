@@ -20,7 +20,7 @@ use rowan::{TextSize, TokenAtOffset};
 use crate::ast::command_name;
 use crate::semantic::SemanticModel;
 use crate::semantic::builder::{is_cite_command, ref_command};
-use crate::semantic::signature::{SignatureDb, builtin};
+use crate::semantic::signature::{SignatureDb, builtin, cwl};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// What the cursor at a given offset is positioned to complete.
@@ -285,10 +285,15 @@ pub fn candidates(
     }
 }
 
-/// All command names (built-in ∪ scanned), prefix-filtered, deduped, sorted.
+/// All command names (built-in ∪ scanned ∪ bulk CWL), prefix-filtered, deduped,
+/// sorted. The CWL tier widens coverage to the long tail of package commands; the
+/// trailing `dedup` collapses any name shared with the built-in/scanned sets.
 fn command_candidates(user_sigs: &SignatureDb, prefix: &str) -> Vec<CompletionCandidate> {
     let mut names = union_names(
-        builtin().command_names().chain(user_sigs.command_names()),
+        builtin()
+            .command_names()
+            .chain(user_sigs.command_names())
+            .chain(cwl().command_names()),
         prefix,
     );
     names.sort();
@@ -315,7 +320,8 @@ fn environment_candidates(
     let mut names = union_names(
         builtin()
             .environment_names()
-            .chain(user_sigs.environment_names()),
+            .chain(user_sigs.environment_names())
+            .chain(cwl().environment_names()),
         prefix,
     );
     names.sort();
@@ -427,6 +433,28 @@ mod tests {
         let got = labels(src, at(src, "\n\\se"));
         assert!(got.contains(&"sefoo".to_string()), "{got:?}");
         assert!(got.contains(&"section".to_string()), "{got:?}");
+    }
+
+    #[test]
+    fn command_candidates_include_cwl_tier() {
+        // A command name only the bulk CWL tier knows still surfaces in completion,
+        // and exactly once (deduped against the built-in/scanned sets).
+        let name = cwl()
+            .command_names()
+            .find(|n| n.len() > 4 && n.chars().all(|c| c.is_ascii_alphabetic()))
+            .expect("an alphabetic CWL command name");
+        let prefix = &name[..3];
+        let src = format!("\\{prefix}\n");
+        let got = labels(&src, at(&src, &format!("\\{prefix}")));
+        assert!(
+            got.contains(&name.to_string()),
+            "{name} missing from {got:?}"
+        );
+        assert_eq!(
+            got.iter().filter(|n| n.as_str() == name).count(),
+            1,
+            "deduped"
+        );
     }
 
     #[test]

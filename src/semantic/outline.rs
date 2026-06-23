@@ -91,6 +91,9 @@ fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
         return;
     };
 
+    // Curated [`signature::builtin`] only — never the bulk CWL tier: the symbol
+    // outline is a curated judgment, and CWL's sectioning classifications are not
+    // trustworthy enough to drive it (the CWL tier carries no `sectioning` anyway).
     if let Some(level) = signature::builtin()
         .command(&name)
         .and_then(|c| c.sectioning)

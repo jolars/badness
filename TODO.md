@@ -152,8 +152,16 @@ two-pass parse; AGENTS.md decision #1); the `document_signatures` salsa query
 from open buffers + on-disk siblings, `resolved_labels`/`resolved_citations`,
 path-keyed salsa, `.bib` tracked as inputs).
 
-- [ ] CWL corpus ingest (an import format converted *into* the signature schema)
-  once ecosystem breadth (e.g. LSP completion) needs it.
+- [x] CWL corpus ingest (an import format converted *into* the signature schema):
+  `scripts/gen_cwl_signatures.py` harvests names + argument arity (shapes only, no
+  behavior flags) from a curated package subset of the TeXstudio CWL corpus at a
+  pinned SHA into `data/cwl_signatures.json` (gzipped at build time via `build.rs`,
+  `include_bytes!`-ed). Exposed by `signature::cwl()` as a third tier *under* the
+  curated built-in (`scanned > builtin > cwl`), feeding completion and the
+  formatter's arity lookup but kept out of the lexer/outline behavior paths.
+  `task cwl:sync`/`cwl:check`. Follow-ups: auto-mapping CWL classifications
+  (`#V`/`#\math`/`#L0-5`) to behavior flags, `#include`/keyvals expansion, and
+  document classes are out of scope for now.
 - [ ] How much of `\newcommand` / `xparse` to model for the signature DB. *(open
   decision)*
 

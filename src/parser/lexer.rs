@@ -147,6 +147,11 @@ impl VerbCtx {
     /// raw body begins) and the structural parser (`grammar.rs`) ask this question, so
     /// one lookup keeps them in lockstep. We read only static argument-shape data; no
     /// macro meaning is resolved, so this stays within decision #1's sanctioned modes.
+    ///
+    /// Deliberately consults [`builtin`] only, never the bulk CWL tier
+    /// ([`crate::semantic::signature::cwl`]): routing a body to the raw-verbatim
+    /// branch is lossy if wrong, so this behavior decision rests solely on curated
+    /// data (the CWL tier carries `verbatim_body == false` for every entry anyway).
     pub(crate) fn is_verbatim_environment(&self, name: &str) -> bool {
         self.environments.contains_key(name)
             || builtin()
@@ -160,7 +165,9 @@ impl VerbCtx {
 /// against the built-in signature database ([`builtin`]) only: the parser runs
 /// before any per-file `\newenvironment` scan, so (as with verbatim) user-defined
 /// block-ness is unknown at parse time and a user/unknown environment stays
-/// wrapped — the conservative, lossless-safe default.
+/// wrapped — the conservative, lossless-safe default. The bulk CWL tier is not
+/// consulted here (it carries no `block` flag, and parser layout decisions stay on
+/// curated data).
 pub(crate) fn is_block_environment(name: &str) -> bool {
     builtin().environment(name).is_some_and(|env| env.block)
 }

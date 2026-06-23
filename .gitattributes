@@ -15,6 +15,9 @@ tests/corpus/** eol=lf
 tests/**/snapshots/**/* eol=lf
 tests/snapshots/**/* eol=lf
 
+# Generated signature data is compared byte-for-byte by its generator's check mode.
+data/cwl_signatures.json eol=lf
+
 # Preserve line-ending fixtures as-is (CRLF/LF) once they exist.
 tests/fixtures/**/crlf_*/* -text
 tests/fixtures/**/lf_*/* -text

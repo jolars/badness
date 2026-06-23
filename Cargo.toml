@@ -31,6 +31,7 @@ path = "src/main.rs"
 annotate-snippets = "0.12.16"
 clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"
+flate2 = "1.0"
 ignore = "0.4.26"
 log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.7"
@@ -41,6 +42,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smol_str = "0.3.2"
 toml = "1"
+
+# build.rs gzips data/cwl_signatures.json into OUT_DIR so the bulk CWL signature
+# tier embeds ~56 KB instead of the ~400 KB raw JSON (see src/semantic/signature.rs).
+[build-dependencies]
+flate2 = "1.0"
 
 [dev-dependencies]
 insta = "1.47.2"

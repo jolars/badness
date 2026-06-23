@@ -23,12 +23,17 @@
 //!
 //! Lower-precision external sources layer *underneath* this, ingested into the
 //! same schema rather than replacing it (mirroring arity's `installed > base >
-//! bundled` precedence): the TeXstudio/Kile **CWL corpus** (arg shapes only, broad
-//! coverage) and, later, per-file `\newcommand`/`xparse` scanning. Both are
-//! deferred; when the CWL corpus is wanted, a converter merges it into this JSON
-//! shape — CWL is an import format, never the source of truth.
+//! bundled` precedence). The TeXstudio/Kile **CWL corpus** is one such tier: a
+//! converter (`scripts/gen_cwl_signatures.py`) harvests command/environment names
+//! and argument shapes from a curated package subset into `data/cwl_signatures.json`,
+//! exposed by [`cwl`] and consulted *under* [`builtin`]. CWL is an import format,
+//! never the source of truth: only names and arity cross over (every behavior flag
+//! stays default), so it widens completion and arity coverage without its
+//! low-confidence data reaching a lexer/formatter/outline behavior decision. The
+//! file is gzipped at build time (`build.rs`) and `include_bytes!`-ed.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
@@ -248,16 +253,26 @@ impl<'a> Signatures<'a> {
         Self { user }
     }
 
-    /// The signature of command `name`: scanned definition if any, else built-in.
+    /// The signature of command `name`: scanned definition first, then the curated
+    /// built-in, then the bulk CWL tier. CWL is consulted last and contributes only
+    /// argument arity (its behavior flags are all default), so a CWL-only command is
+    /// laid out like any unknown command, just with its argument count known.
     pub fn command(&self, name: &str) -> Option<&'a CommandSig> {
-        self.user.command(name).or_else(|| builtin().command(name))
+        self.user
+            .command(name)
+            .or_else(|| builtin().command(name))
+            .or_else(|| cwl().command(name))
     }
 
-    /// The signature of environment `name`: scanned definition if any, else built-in.
+    /// The signature of environment `name`: scanned, then built-in, then CWL. See
+    /// [`command`] for why the CWL tier is safe to consult here.
+    ///
+    /// [`command`]: Self::command
     pub fn environment(&self, name: &str) -> Option<&'a EnvironmentSig> {
         self.user
             .environment(name)
             .or_else(|| builtin().environment(name))
+            .or_else(|| cwl().environment(name))
     }
 }
 
@@ -270,6 +285,30 @@ static DB: LazyLock<SignatureDb> =
 /// The process-wide built-in signature database.
 pub fn builtin() -> &'static SignatureDb {
     &DB
+}
+
+/// The bulk CWL-derived signature data, gzipped by `build.rs` from
+/// `data/cwl_signatures.json` (see module docs). Decompressed and parsed once.
+const CWL_SIGNATURES_GZ: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/cwl_signatures.json.gz"));
+
+static CWL_DB: LazyLock<SignatureDb> = LazyLock::new(|| {
+    let mut json = String::new();
+    flate2::read::GzDecoder::new(CWL_SIGNATURES_GZ)
+        .read_to_string(&mut json)
+        .expect("bundled cwl_signatures.json.gz must decompress");
+    parse(&json).expect("bundled cwl_signatures.json must be valid")
+});
+
+/// The lower-precision **CWL tier**: a broad set of command/environment names plus
+/// argument shapes harvested from the TeXstudio CWL corpus (a curated package subset;
+/// see `scripts/gen_cwl_signatures.py`). It carries *names and arity only* — every
+/// behavior flag (`prose`/`verbatim`/`sectioning`/`math`/…) is left at its default —
+/// so it can widen completion and the formatter's arity lookup without its
+/// low-confidence data ever reaching a lexer/outline behavior decision. Consulted
+/// strictly *under* [`builtin`] (via [`Signatures`]); the curated tier always wins.
+pub fn cwl() -> &'static SignatureDb {
+    &CWL_DB
 }
 
 // --- On-disk schema (serde) ---------------------------------------------------
@@ -433,6 +472,11 @@ impl From<RawEnvironment> for EnvironmentSig {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RawDb {
+    /// An optional top-level provenance header (the generated `cwl_signatures.json`
+    /// carries one); accepted and discarded so `deny_unknown_fields` still rejects
+    /// genuine typos elsewhere.
+    #[serde(default, rename = "_comment")]
+    _comment: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     commands: HashMap<String, RawCommand>,
     #[serde(default)]
@@ -707,5 +751,65 @@ mod tests {
     fn empty_document_is_valid() {
         let db = parse("{}").expect("empty object is valid");
         assert!(db.command("anything").is_none());
+    }
+
+    #[test]
+    fn cwl_tier_loads_and_covers_long_tail() {
+        // Exercises the gzipped bundle through the real decompress+parse path, and
+        // confirms the curated package subset reached the tier (a command unlikely
+        // to be in the hand-curated built-in DB).
+        let db = cwl();
+        assert!(db.command("siunitx").is_some() || db.command("SI").is_some());
+        assert!(
+            db.command_names().count() > 1000,
+            "the CWL subset should contribute a broad name set"
+        );
+    }
+
+    #[test]
+    fn cwl_entries_carry_only_arity_no_behavior_flags() {
+        // The converter guard: every CWL command/environment is names+arity only, so
+        // none of its low-confidence data can flip a formatter/lexer/outline decision.
+        let db = cwl();
+        for sig in db.commands.values() {
+            assert!(sig.sectioning.is_none());
+            assert!(!sig.verbatim && !sig.rule && !sig.inline);
+            assert!(sig.args.iter().all(|a| !a.prose && !a.collapse));
+        }
+        for sig in db.environments.values() {
+            assert!(!sig.verbatim_body && !sig.math && !sig.code && !sig.align);
+            assert!(!sig.no_indent && !sig.list && !sig.block);
+            assert!(sig.outline.is_none());
+        }
+    }
+
+    #[test]
+    fn curated_builtin_wins_over_cwl_tier() {
+        // `Signatures` resolves a name present in both tiers to the curated entry,
+        // never the bulk CWL one — proven via a curated-only flag (`\section` is a
+        // sectioning command in the built-in DB; the CWL tier never sets that).
+        let empty = SignatureDb::default();
+        let sigs = Signatures::new(&empty);
+        assert!(
+            cwl().command("section").is_some(),
+            "test premise: in CWL tier"
+        );
+        assert_eq!(sigs.command("section").unwrap().sectioning, Some(2));
+    }
+
+    #[test]
+    fn cwl_only_name_resolves_through_signatures() {
+        // A name only the CWL tier knows still resolves (arity coverage win), with
+        // all behavior flags at their conservative defaults.
+        let empty = SignatureDb::default();
+        let sigs = Signatures::new(&empty);
+        let Some(name) = cwl()
+            .command_names()
+            .find(|n| builtin().command(n).is_none())
+        else {
+            panic!("expected at least one CWL-only command name");
+        };
+        let sig = sigs.command(name).expect("CWL-only name resolves");
+        assert!(sig.sectioning.is_none() && !sig.inline && !sig.verbatim);
     }
 }

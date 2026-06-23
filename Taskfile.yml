@@ -59,6 +59,16 @@ tasks:
     cmds:
       - python3 scripts/gen_bib_fields.py --write
 
+  cwl:check:
+    desc: Check data/cwl_signatures.json is in sync with the pinned TeXstudio CWL corpus
+    cmds:
+      - python3 scripts/gen_cwl_signatures.py
+
+  cwl:sync:
+    desc: Re-generate data/cwl_signatures.json from the pinned TeXstudio CWL corpus
+    cmds:
+      - python3 scripts/gen_cwl_signatures.py --write
+
   check:
     desc: Everything CI runs
     deps: [fmt-check, lint, test]

@@ -2,7 +2,7 @@
   "name": "badness",
   "displayName": "Badness",
   "description": "Language server, formatter, and linter for LaTeX",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "jolars",
   "license": "MIT",
   "icon": "icon.png",

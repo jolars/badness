@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/jolars/badness/compare/v0.3.0...v0.4.0) (2026-06-23)
+
+### Features
+- **semantic:** mark the cross-reference family inline ([`c7c77a7`](https://github.com/jolars/badness/commit/c7c77a7aa96123c51fafb0fe0bf6e3e9e1a07aef))
+- **semantic:** ingest CWL corpus as a bulk signature tier ([`4740bf5`](https://github.com/jolars/badness/commit/4740bf50d00fea3bdb5cd90e6c9de2924da051ec))
+- **lint:** don't withold lints that disturbs alignment ([`8ea1efc`](https://github.com/jolars/badness/commit/8ea1efccecda47fd2dc70324e5104356ca047505))
+- **bib:** diagnose missing field separator; fix value trivia attachment ([`e14751c`](https://github.com/jolars/badness/commit/e14751cfc096dd264eb29848511be21c4d13738d))
+- **bib:** autofix duplicate-field when values are identical ([`c34bd78`](https://github.com/jolars/badness/commit/c34bd780d2d19486ea3d99be61c9d409125148ce))
+- **bib:** duplicate-field lint rule ([`f2f6d60`](https://github.com/jolars/badness/commit/f2f6d60763077e165d292d416dd4171fbe60bad0))
+- **lsp:** rename labels and citation keys (textDocument/rename + prepareRename) ([`7b1d01b`](https://github.com/jolars/badness/commit/7b1d01b68e4c900a17402998919147594f0b235d))
+- **config:** badness.toml configuration (CLI) ([`8c68ca2`](https://github.com/jolars/badness/commit/8c68ca2fa47f3907bc98d8415c1246ac7a4755b7))
+- **project:** package load graph + package signatures into scope ([`f8e6bc7`](https://github.com/jolars/badness/commit/f8e6bc7f661c26be6fad15821bda09ce85168a43))
+- **semantic:** doc/ltxdoc prose↔code association query ([`a52f17c`](https://github.com/jolars/badness/commit/a52f17c5f4e22ea984ee92cd9cff9e8fc61ded4b))
+- **file-kind:** .ins installation-script support (plain code, Preserve) ([`85c9c7a`](https://github.com/jolars/badness/commit/85c9c7a73f7d208e1e1df909647229f04f5ec115))
+- **formatter:** .dtx two-layer formatting (foundation, Preserve) ([`6c7861f`](https://github.com/jolars/badness/commit/6c7861f1670f8222d36c87f645766c9ba3ef4a5b))
+- **semantic:** doc/ltxdoc signatures + DOC_COMMENT node (M3) ([`95ec2a2`](https://github.com/jolars/badness/commit/95ec2a24bbb88d28fc4394abc0137182b7780f5b))
+- **parser:** lex expl3 syntax mode (_/: as letters) ([`c98e2e8`](https://github.com/jolars/badness/commit/c98e2e84ad78cc3413db1ba0b0eb8bf13be53d86))
+- **parser:** lex .dtx docstrip guards as GUARD tokens (M2) ([`b09c507`](https://github.com/jolars/badness/commit/b09c507c3e3901f52e2d12c0c3c87976b0712c99))
+- **parser:** parse .dtx docstrip surface syntax (M0+M1) ([`8e54604`](https://github.com/jolars/badness/commit/8e54604fbd80fcfd0e585d927e54f1096a086e36))
+- **lsp:** add textDocument/foldingRange ([`f0ea513`](https://github.com/jolars/badness/commit/f0ea51356645dce2076ea23c55386e34e9979bac))
+
+### Bug Fixes
+- **cli:** fix file-detection in cli linter ([`7821b6a`](https://github.com/jolars/badness/commit/7821b6ae35cca242933d862b59206b5443261c8b))
+
 ## [0.3.0](https://github.com/jolars/badness/compare/v0.2.0...v0.3.0) (2026-06-21)
 
 ### Features

@@ -14,8 +14,8 @@
 //!
 //! A safe deletion via [`super::edits::field_deletion_fix`], which removes the field
 //! and its one separating comma from real CST byte ranges (correct by
-//! construction: parses + lossless), and withholds the fix when removing the field
-//! would change the entry's `=` alignment.
+//! construction: parses + lossless). It does not withhold to preserve `=`
+//! alignment — re-padding is the formatter's job (tenet 1, fix-then-format).
 //!
 //! [`LITERAL`]: crate::bib::syntax::SyntaxKind::LITERAL
 
@@ -210,12 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn fix_withheld_when_field_is_unique_longest() {
-        // `annotation` is strictly the longest name; deleting it would re-pad the
-        // others, so the fix is withheld (the finding still stands).
-        let out = findings("@misc{k,\n  a          = {x},\n  annotation = {}\n}\n");
-        assert_eq!(out.len(), 1);
-        assert!(out[0].fix.is_none());
+    fn fix_offered_when_field_is_unique_longest() {
+        // `annotation` is strictly the longest name, so deleting it leaves the kept
+        // field over-padded. The fix is still offered: the deletion is a correct
+        // byte-range edit (parses + lossless), and re-padding `=` is the formatter's
+        // job, not the fixer's (tenet 1, fix-then-format).
+        let src = "@misc{k,\n  a          = {x},\n  annotation = {}\n}\n";
+        assert_eq!(fixed(src), "@misc{k,\n  a          = {x}\n}\n");
     }
 
     #[test]

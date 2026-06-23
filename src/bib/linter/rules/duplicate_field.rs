@@ -14,8 +14,7 @@
 //! When a duplicate's value is **byte-identical** to the kept (first) occurrence's,
 //! the result is the same field regardless of which copy the engine keeps, so
 //! deleting the redundant one is meaning-preserving — we offer a safe deletion via
-//! [`super::edits::field_deletion_fix`] (a duplicate never disturbs `=` alignment,
-//! since the kept occurrence has the same name width). When the values **differ**,
+//! [`super::edits::field_deletion_fix`]. When the values **differ**,
 //! which one wins is engine/style-dependent and dropping either changes meaning,
 //! so the finding is report-only.
 

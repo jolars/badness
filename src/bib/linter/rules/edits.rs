@@ -4,26 +4,28 @@
 //! `FIELD` from its entry. Both `empty-field` (the field carries no data) and
 //! `duplicate-field` (an identical repeat) delete a whole field, and the
 //! byte-range arithmetic is the same, so it lives here once rather than in each
-//! rule. The edit is judged on correctness (parses + lossless), not layout; it
-//! happens to leave already-formatted input formatted, but that is incidental,
-//! not required.
+//! rule. The edit is judged on correctness (parses + lossless), not layout: it
+//! never withholds to preserve `=` alignment and never runs the formatter,
+//! leaving any re-padding to the formatter (tenet 1, fix-then-format).
 
-use crate::bib::ast::{cite_key, field_name, fields};
+use crate::bib::ast::{cite_key, fields};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 use crate::linter::Fix;
 
 /// Build a deletion [`Fix`] that removes `field` from its entry, labeled
-/// `description`, or `None` when the edit must be **withheld**:
+/// `description`, or `None` when the field's parent is not an `ENTRY` (e.g. a
+/// `@string`'s `name = value` lives in `STRING_ENTRY`), or the field is not among
+/// its siblings.
 ///
-/// - the field's parent is not an `ENTRY` (e.g. a `@string`'s `name = value` lives
-///   in `STRING_ENTRY`), or the field is not among its siblings;
-/// - removing the field would change the entry's `=` alignment — its name is the
-///   strict-unique longest, so the formatter would re-pad every sibling, which a
-///   single contiguous edit cannot express. (A *duplicate* field never trips this:
-///   the kept occurrence shares its name width, so the max is always tied.)
+/// Deleting the strict-unique-longest field shifts the entry's `=` alignment, but
+/// the fix does **not** withhold for that: layout is the formatter's job (tenet 1,
+/// fix-then-format), and the linter never runs the formatter. The deletion is a
+/// pure byte-range edit — correct (parses + lossless) by construction, even when
+/// it leaves `=` columns the formatter will re-pad.
 ///
 /// The deletion is computed from real CST byte ranges, so it works on messy input;
-/// on already-formatted input it also leaves formatted output:
+/// on already-formatted input that has no alignment to re-pad it also leaves
+/// formatted output:
 /// - **only field:** delete from the key's end to the closing delimiter, collapsing
 ///   to the fieldless form `@type{key}`;
 /// - **last field:** delete from the previous field's end through this field
@@ -38,23 +40,6 @@ pub fn field_deletion_fix(field: &SyntaxNode, description: String) -> Option<Fix
     }
     let siblings: Vec<SyntaxNode> = fields(&entry).collect();
     let index = siblings.iter().position(|f| f == field)?;
-
-    // Withhold when removing this field would change the `=` alignment: if its name
-    // is the strict-unique longest, every sibling's padding (and any wrapped value's
-    // hanging indent) shifts, which a single contiguous edit cannot express.
-    let this_len = field_name(field).unwrap_or_default().chars().count();
-    let others_max = siblings
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != index)
-        .filter_map(|(_, f)| field_name(f))
-        .map(|n| n.to_lowercase().chars().count())
-        .max();
-    if let Some(max) = others_max
-        && this_len > max
-    {
-        return None;
-    }
 
     let (start, end) = if siblings.len() == 1 {
         // Only field: collapse to the fieldless single-line form `@type{key}`. Delete

@@ -400,3 +400,38 @@ fn dollar_display_fix_is_correct() {
         assert_fix_is_correct(case);
     }
 }
+
+#[test]
+fn missing_nbsp_fix_is_correct() {
+    // The tie fix is `Unsafe` (it alters line-breaking); `fix_to_fixpoint`
+    // applies unsafe fixes, so this exercises parse-clean + losslessness on it.
+    for case in ["Figure \\ref{x}\n", "see \\cite{a}\n", "Eq. \\eqref{z}\n"] {
+        assert_fix_is_correct(case);
+    }
+}
+
+#[test]
+fn missing_nbsp_fix_clears_the_finding() {
+    let fixed = fix_to_fixpoint("Figure \\ref{x}\n");
+    assert_eq!(fixed, "Figure~\\ref{x}\n");
+    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed, LatexFlavor::Document)
+        .into_iter()
+        .filter(|d| d.rule == "missing-nonbreaking-space")
+        .collect();
+    assert!(
+        remaining.is_empty(),
+        "expected a clean re-lint, got: {remaining:?}"
+    );
+}
+
+#[test]
+fn missing_nbsp_skipped_without_unsafe_opt_in() {
+    // The CLI's plain `--fix` (no `--unsafe-fixes`) must not insert the tie.
+    let src = "Figure \\ref{x}\n";
+    let fixes: Vec<_> = check_document(Path::new("doc.tex"), src, LatexFlavor::Document)
+        .into_iter()
+        .filter_map(|d| d.fix)
+        .collect();
+    let out = apply_fixes(src, &fixes, false);
+    assert_eq!(out.output, src, "unsafe tie fix must be skipped");
+}

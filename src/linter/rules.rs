@@ -19,6 +19,7 @@ pub mod deprecated_command;
 pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod mismatched_delimiter;
+pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
 pub mod undefined_citation;
 pub mod undefined_ref;
@@ -27,6 +28,7 @@ pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use mismatched_delimiter::MismatchedDelimiter;
+pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
@@ -102,6 +104,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(DuplicateLabel),
         Box::new(DeprecatedCommand),
+        Box::new(MissingNonbreakingSpace),
         Box::new(ObsoleteEnvironment),
         Box::new(DollarDisplayMath),
         Box::new(MismatchedDelimiter),
@@ -116,6 +119,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
 pub const ALL_RULE_IDS: &[&str] = &[
     "duplicate-label",
     "deprecated-command",
+    "missing-nonbreaking-space",
     "obsolete-environment",
     "dollar-display-math",
     "mismatched-delimiter",

@@ -119,13 +119,20 @@ fixed output parses and stays lossless — the autofix-correctness bar, tenet 1)
 Lints shipped:
 `deprecated-command` (`\bf`-style), `obsolete-environment` (`eqnarray` → `align`),
 `dollar-display-math` (with a `\[…\]` autofix), `mismatched-delimiter`,
-single-file + cross-file `duplicate-label`, `undefined-ref`.
+single-file + cross-file `duplicate-label`, `undefined-ref`,
+`missing-nonbreaking-space` (tie before `\cite`/`\ref`, with the **first `Unsafe`
+autofix** — replaces a same-line space with `~`).
 
 - [~] Wire the remaining report-only fixes onto the autofix infra:
   `deprecated-command`'s `\bf → \bfseries` is **done** (a `Safe` control-word swap,
   consumed by `lint --fix` and the new LSP code actions); `obsolete-environment`'s
   `eqnarray → align` is still report-only.
-- [ ] More stylistic lints: missing `~` before `\cite`/`\ref`, typography.
+- [~] More stylistic lints. `missing-nonbreaking-space` (a tie before a cite/ref
+  command, broad curated family, `\nocite` excluded; `Unsafe` autofix) is **done**.
+  Remaining: general typography (quotes, dashes, …). *Follow-up:* the tie lint only
+  covers a same-line `WORD WHITESPACE \cmd` shape; a *source line break* before the
+  command (`Figure\n\ref{x}`) is also a breakable space but is left for a later pass
+  (replacing the newline with `~` reflows the source and overlaps the formatter).
 - [ ] `unused-label` (cross-file) --- deferred: can false-positive on labels
   referenced from outside the analyzed set.
 

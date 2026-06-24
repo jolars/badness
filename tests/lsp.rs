@@ -22,12 +22,13 @@ use lsp_types::{
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
-    InitializeResult, InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf,
-    PartialResultParams, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
-    ReferenceContext, ReferenceParams, RenameOptions, RenameParams, SymbolKind,
-    TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
-    TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
+    RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit,
 };
 
@@ -157,6 +158,13 @@ fn start_server(
             Some(FoldingRangeProviderCapability::Simple(true))
         ),
         "server must advertise foldingRangeProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.hover_provider,
+            Some(HoverProviderCapability::Simple(true))
+        ),
+        "server must advertise hoverProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     assert!(
@@ -778,6 +786,59 @@ fn complete(client: &Connection, id: i32, uri: &Uri, position: Position) -> Vec<
 
 fn labels(items: &[CompletionItem]) -> Vec<&str> {
     items.iter().map(|i| i.label.as_str()).collect()
+}
+
+/// Send `textDocument/hover` and return the rendered markdown, or `None` when the
+/// server replies with `null` (nothing to describe at the position).
+fn hover_markdown(client: &Connection, id: i32, uri: &Uri, position: Position) -> Option<String> {
+    send_request(
+        client,
+        id,
+        "textDocument/hover",
+        serde_json::to_value(HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(client);
+    assert_eq!(resp.id, RequestId::from(id));
+    let result = resp.result.unwrap();
+    if result.is_null() {
+        return None;
+    }
+    let hover: Hover = serde_json::from_value(result).unwrap();
+    match hover.contents {
+        HoverContents::Markup(m) => Some(m.value),
+        other => panic!("expected markup hover, got {other:?}"),
+    }
+}
+
+#[test]
+fn lsp_hover_command_signature_and_null() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///hover.tex".parse().unwrap();
+
+    let doc = "\\section{Intro}\n\nPlain words here.\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "{:?}", diags.diagnostics);
+
+    // Hover on `\section` (line 0, on the command name).
+    let md = hover_markdown(&client, 2, &uri, Position::new(0, 3)).expect("hover for \\section");
+    assert!(md.contains("\\section"), "prototype: {md}");
+    assert!(md.contains("sectioning level"), "facts: {md}");
+
+    // Hover on plain prose resolves to nothing → `null`.
+    assert!(
+        hover_markdown(&client, 3, &uri, Position::new(2, 2)).is_none(),
+        "prose hover should be null"
+    );
+
+    shutdown(&client, server_thread);
 }
 
 #[test]

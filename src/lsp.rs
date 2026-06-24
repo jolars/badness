@@ -56,6 +56,7 @@
 #![allow(clippy::mutable_key_type)]
 
 mod folding;
+mod hover;
 mod task_pool;
 
 use std::collections::{HashMap, HashSet};
@@ -71,7 +72,7 @@ use lsp_types::notification::{
 };
 use lsp_types::request::{
     Completion, DocumentDiagnosticRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
-    GotoDefinition, PrepareRenameRequest, References, Rename, Request as _,
+    GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename, Request as _,
     WorkspaceDiagnosticRefresh,
 };
 use lsp_types::{
@@ -82,12 +83,13 @@ use lsp_types::{
     DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
     DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FoldingRange, FoldingRangeParams,
     FoldingRangeProviderCapability, FormattingOptions, FullDocumentDiagnosticReport,
-    GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location, NumberOrString,
-    OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
-    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
-    RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit,
+    GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
+    InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, ReferenceParams, RelatedFullDocumentDiagnosticReport,
+    RelatedUnchangedDocumentDiagnosticReport, RenameOptions, RenameParams, ServerCapabilities,
+    SymbolKind, TextDocumentContentChangeEvent, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport,
+    Uri, WorkspaceEdit,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -159,6 +161,7 @@ fn server_capabilities() -> ServerCapabilities {
         })),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         // Rename a `\label`/`\cite` key and every referencing command across its
@@ -300,6 +303,17 @@ enum WorkerJob {
     Completion {
         id: RequestId,
         uri: Uri,
+        text: String,
+        position: Position,
+    },
+    /// A hover request: describe the command/environment signature or `\cite` entry
+    /// under the cursor on the read pool and reply to `id`. Cross-file (the signature
+    /// scope folds in loaded packages, and a `\cite` resolves against the project
+    /// bibliography), so the worker snapshots project membership when it dispatches,
+    /// like [`GotoDefinition`](Self::GotoDefinition).
+    Hover {
+        id: RequestId,
+        path: PathBuf,
         text: String,
         position: Position,
     },
@@ -469,6 +483,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_document_symbol(&connection, &state, &job_tx, req)
                             }
                             Completion::METHOD => on_completion(&connection, &state, &job_tx, req),
+                            HoverRequest::METHOD => on_hover(&connection, &state, &job_tx, req),
                             GotoDefinition::METHOD => {
                                 on_goto_definition(&connection, &state, &job_tx, req)
                             }
@@ -840,6 +855,48 @@ fn on_completion(
     let _ = job_tx.send(WorkerJob::Completion {
         id,
         uri,
+        text: doc.text.clone(),
+        position,
+    });
+}
+
+/// `textDocument/hover`: build a hover job for the worker, or reply `null` when the
+/// document is unknown. A `.bib` cursor is not rejected — `compute_hover` simply finds
+/// nothing there today (no bib-field hover yet), so it returns `null` on its own.
+fn on_hover(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<HoverParams>(HoverRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid hover params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: nothing to describe.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::Hover {
+        id,
+        path,
         text: doc.text.clone(),
         position,
     });
@@ -1306,6 +1363,21 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_completion(&snapshot, id, &uri, &text, position, members, &out_tx)
+                });
+            }
+            WorkerJob::Hover {
+                id,
+                path,
+                text,
+                position,
+            } => {
+                // Hover's signature scope and `\cite` resolution are both cross-file,
+                // so — like go-to-def — snapshot project membership on the write side.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_hover(&snapshot, id, &path, &text, position, members, &out_tx)
                 });
             }
             WorkerJob::GotoDefinition {
@@ -2204,6 +2276,23 @@ fn bib_candidate_to_item(candidate: BibCompletionCandidate) -> CompletionItem {
         kind: Some(kind),
         ..Default::default()
     }
+}
+
+/// Describe the command/environment or `\cite` key under the cursor and reply with a
+/// [`Hover`] (or `null` when nothing resolves).
+fn run_hover(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let result = hover::compute_hover(snapshot, path, text, position, members)
+        .and_then(|hover| serde_json::to_value(hover).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
 /// Resolve the `\ref`/`\cite` under the cursor and reply with the matching

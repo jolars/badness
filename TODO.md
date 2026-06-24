@@ -240,9 +240,19 @@ directly onto badness's existing semantic layer.
 
 ### IntelliSense (signature DB)
 
-- [ ] Hover (`textDocument/hover`) --- command/environment signature (arity, arg
-  kinds, sectioning level), the resolving `\label` for a ref, and the
-  `\newcommand`/`xparse` definition for user-defined macros.
+- [x] Hover (`textDocument/hover`) --- a command/environment **signature** (a
+  synthesized prototype plus a facts line: arity, argument kinds, sectioning/
+  float/theorem level, verbatim/math/list flags, and built-in vs. user/package-
+  defined provenance), looked up scope-first then built-in then CWL like
+  completion; and a `\cite`-family key's resolved **`.bib` entry** (type, key, and
+  author/title/year/journal pulled from the cached bib CST, cross-file via
+  `resolve_project`). Mirrors go-to-def's wiring (`WorkerJob::Hover` → read pool,
+  cached-or-reparse + `salsa::Cancelled::catch`) with the pure logic in
+  `src/lsp/hover.rs`. *Deferred:* the resolving `\label` for a `\ref` (the
+  cross-file label path exists; just not surfaced in hover yet), and the
+  `\newcommand`/`xparse` *definition body* for user macros --- user macros already
+  hover their scanned *signature*, but showing the body needs
+  `semantic::define::scan_definitions` to retain the replacement-body text.
 - [x] Completion (`textDocument/completion`) --- command/environment names from
   the signature DB (built-in + scanned, via `document_signatures`), `\ref`-family
   keys, `\begin{…}`/`\end{…}` names (auto-`\end` snippet), and file paths in

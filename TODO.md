@@ -121,9 +121,10 @@ Lints shipped:
 `dollar-display-math` (with a `\[…\]` autofix), `mismatched-delimiter`,
 single-file + cross-file `duplicate-label`, `undefined-ref`.
 
-- [ ] Wire the remaining report-only fixes onto the autofix infra:
-  `deprecated-command`'s `\bf → \bfseries` (the natural first one) and
-  `obsolete-environment`'s `eqnarray → align`.
+- [~] Wire the remaining report-only fixes onto the autofix infra:
+  `deprecated-command`'s `\bf → \bfseries` is **done** (a `Safe` control-word swap,
+  consumed by `lint --fix` and the new LSP code actions); `obsolete-environment`'s
+  `eqnarray → align` is still report-only.
 - [ ] More stylistic lints: missing `~` before `\cite`/`\ref`, typography.
 - [ ] `unused-label` (cross-file) --- deferred: can false-positive on labels
   referenced from outside the analyzed set.
@@ -266,12 +267,18 @@ directly onto badness's existing semantic layer.
 
 ### Code actions (autofixes)
 
-- [ ] Code actions (`textDocument/codeAction`) surfacing linter autofixes
+- [x] Code actions (`textDocument/codeAction`) surfacing linter autofixes
   (tenet 1: fixes are textual edits, correct-by-construction, never owing
-  layout). `deprecated-command`'s
-  `\bf → \bfseries` is the natural first quick-fix; wire
-  `CodeActionKind::QUICKFIX` + a resolve path mirroring arity's
-  `on_code_action`.
+  layout). A **rule-agnostic** handler re-lints the buffer off a fresh snapshot
+  (like the pull-diagnostics path: `WorkerJob::CodeAction` →
+  `compute_lint_findings` → `run_code_action`) and turns every fix-carrying
+  finding overlapping the requested range into a `CodeActionKind::QUICKFIX` with a
+  single-file `WorkspaceEdit` (`src/lsp/code_action.rs`, mirroring arity's
+  `code_actions_from_findings`). `CodeActionProviderCapability::Simple(true)` — no
+  `codeAction/resolve` step (fully-built actions). `deprecated-command`'s
+  `\bf → \bfseries` is the showcase first quick-fix; `dollar-display-math` and bib
+  `empty-field` are surfaced for free. *Follow-up:* gate `is_preferred`/offered set
+  on `Applicability` once an `Unsafe` fix exists (all current fixes are `Safe`).
 
 ### Infrastructure
 

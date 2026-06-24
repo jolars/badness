@@ -55,6 +55,7 @@
 // `Hash`/`Eq` go through `as_str()`, so this is sound. Allow it module-wide.
 #![allow(clippy::mutable_key_type)]
 
+mod code_action;
 mod completion_resolve;
 mod folding;
 mod hover;
@@ -72,25 +73,25 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, DocumentDiagnosticRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
-    GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename, Request as _,
-    ResolveCompletionItem, WorkspaceDiagnosticRefresh,
+    CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentSymbolRequest,
+    FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, PrepareRenameRequest,
+    References, Rename, Request as _, ResolveCompletionItem, WorkspaceDiagnosticRefresh,
 };
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
-    DiagnosticSeverity, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, FormattingOptions, FullDocumentDiagnosticReport,
-    GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
-    InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, ReferenceParams, RelatedFullDocumentDiagnosticReport,
-    RelatedUnchangedDocumentDiagnosticReport, RenameOptions, RenameParams, ServerCapabilities,
-    SymbolKind, TextDocumentContentChangeEvent, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport,
-    Uri, WorkspaceEdit,
+    CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
+    CompletionList, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
+    DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
+    FormattingOptions, FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse,
+    HoverParams, HoverProviderCapability, InsertTextFormat, Location, NumberOrString, OneOf,
+    Position, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
+    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
+    RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -162,6 +163,9 @@ fn server_capabilities() -> ServerCapabilities {
         })),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        // Surface linter autofixes as quick-fixes. `Simple(true)` returns
+        // fully-built actions (no `codeAction/resolve` step).
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
@@ -384,6 +388,19 @@ enum WorkerJob {
         kind: FileKind,
         previous_result_id: Option<String>,
     },
+    /// A `textDocument/codeAction` request: re-lint the buffer off a fresh snapshot
+    /// and reply with a quick-fix per fix-carrying finding overlapping `range`.
+    /// Cross-file (like a [`Diagnostic`](Self::Diagnostic) pull), so the worker
+    /// snapshots project membership when it dispatches; `uri` is needed to key the
+    /// resulting [`WorkspaceEdit`].
+    CodeAction {
+        id: RequestId,
+        uri: Uri,
+        path: PathBuf,
+        text: String,
+        kind: FileKind,
+        range: Range,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -510,6 +527,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             Rename::METHOD => on_rename(&connection, &state, &job_tx, req),
                             FoldingRangeRequest::METHOD => {
                                 on_folding_range(&connection, &state, &job_tx, req)
+                            }
+                            CodeActionRequest::METHOD => {
+                                on_code_action(&connection, &state, &job_tx, req)
                             }
                             DocumentDiagnosticRequest::METHOD => {
                                 on_document_diagnostic(&connection, &state, &job_tx, req)
@@ -938,6 +958,52 @@ fn on_hover(
         path,
         text: doc.text.clone(),
         position,
+    });
+}
+
+/// `textDocument/codeAction`: build a code-action job for the worker, or reply with
+/// an empty action list when the document is unknown. Surfaces linter autofixes as
+/// quick-fixes; a `.bib` cursor is handled too (its bib-lint fixes are surfaced the
+/// same way).
+fn on_code_action(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<CodeActionParams>(CodeActionRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid codeAction params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    let range = params.range;
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: no actions.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    let _ = job_tx.send(WorkerJob::CodeAction {
+        id,
+        uri,
+        path,
+        text: doc.text.clone(),
+        kind,
+        range,
     });
 }
 
@@ -1529,6 +1595,26 @@ impl Worker {
                     )
                 });
             }
+            WorkerJob::CodeAction {
+                id,
+                uri,
+                path,
+                text,
+                kind,
+                range,
+            } => {
+                // On-demand re-lint, like the pull-diagnostics path: snapshot the db
+                // + membership on the write side so the read job interns the latest
+                // project, then build quick-fixes off the read pool.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_code_action(
+                        &snapshot, id, &uri, &path, &text, kind, range, members, &out_tx,
+                    )
+                });
+            }
         }
     }
 
@@ -1860,6 +1946,99 @@ fn fallback_diagnostics(path: &Path, text: &str, kind: FileKind) -> Vec<Diagnost
         }
     }
     diags
+}
+
+/// Compute a `textDocument/codeAction` reply on the read pool: re-lint the buffer,
+/// then surface each fix-carrying finding overlapping `range` as a quick-fix.
+///
+/// Reuses the same on-demand lint the pull-diagnostics path runs (cached off the
+/// snapshot, single-file fallback on a racing write), but keeps the **raw** linter
+/// findings — with byte ranges and fixes — that the LSP diagnostic conversion drops.
+#[allow(clippy::too_many_arguments)]
+fn run_code_action(
+    snapshot: &Analysis,
+    id: RequestId,
+    uri: &Uri,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    range: Range,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let findings = compute_lint_findings(snapshot, path, text, kind, members);
+    let actions = code_action::code_actions_for_range(&findings, text, uri, range);
+    let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
+}
+
+/// The raw linter findings (byte ranges + fixes) for a pull/code-action, computed
+/// **on demand**. The fix-carrying analog of [`compute_diagnostics`]: fast path off
+/// the snapshot's salsa cache, single-file recompute on a racing write or cache miss.
+fn compute_lint_findings(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    members: Vec<ProjectMember>,
+) -> Vec<crate::linter::Diagnostic> {
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        lint_findings(snapshot, path, kind, members)
+    }));
+    match cached {
+        Ok(Some(items)) => items,
+        Ok(None) | Err(_) => fallback_lint_findings(path, text, kind),
+    }
+}
+
+/// Run the linter over the snapshot's cached tree + model, returning the raw
+/// findings (with their fixes). The lint half of [`analyze_tex`]/[`analyze_bib`]
+/// without the LSP conversion, so code actions can read each finding's `fix`.
+fn lint_findings(
+    snapshot: &Analysis,
+    path: &Path,
+    kind: FileKind,
+    members: Vec<ProjectMember>,
+) -> Option<Vec<crate::linter::Diagnostic>> {
+    let file = snapshot.lookup_file(path)?;
+    Some(match kind {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            let lint_path = snapshot.file_path(file).to_path_buf();
+            let root = snapshot.parsed_tree(file);
+            let model = snapshot.semantic_model(file);
+            let (resolution, citations) = snapshot.resolve_project(members);
+            lint_document(&lint_path, &root, model, Some(resolution), Some(citations))
+        }
+        FileKind::Bib => {
+            let root = snapshot.parsed_bib_tree(file);
+            let model = snapshot.bib_semantic_model(file);
+            crate::bib::linter::lint_document(path, &root, model)
+        }
+    })
+}
+
+/// Single-file raw findings computed directly from `text`, bypassing the salsa
+/// cache — the cancellation/cache-miss fallback for [`compute_lint_findings`] (no
+/// cross-file resolution, mirroring [`fallback_diagnostics`]).
+fn fallback_lint_findings(
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+) -> Vec<crate::linter::Diagnostic> {
+    match kind {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            let parsed = parse_with_flavor(text, kind.lex_config());
+            let root = parsed.syntax();
+            let model = SemanticModel::build(&root);
+            lint_document(path, &root, &model, None, None)
+        }
+        FileKind::Bib => {
+            let parsed = bib_parse(text);
+            let root = parsed.syntax();
+            let model = BibModel::build(&root);
+            crate::bib::linter::lint_document(path, &root, &model)
+        }
+    }
 }
 
 /// Derive a stable, content-addressed `result_id` from a diagnostic set, so a

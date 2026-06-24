@@ -16,8 +16,9 @@ use std::time::Duration;
 use badness::formatter::{FormatStyle, format_with_style};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    ClientCapabilities, CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
-    DiagnosticClientCapabilities, DiagnosticWorkspaceClientCapabilities,
+    ClientCapabilities, CodeActionContext, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CompletionItem, CompletionItemKind, CompletionParams,
+    CompletionResponse, DiagnosticClientCapabilities, DiagnosticWorkspaceClientCapabilities,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
@@ -165,6 +166,13 @@ fn start_server(
             Some(HoverProviderCapability::Simple(true))
         ),
         "server must advertise hoverProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.code_action_provider,
+            Some(CodeActionProviderCapability::Simple(true))
+        ),
+        "server must advertise codeActionProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     assert!(
@@ -515,6 +523,92 @@ fn lsp_folding_ranges() {
     assert!(
         triples.contains(&(4, 6, None)),
         "itemize fold, got {triples:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_code_action_quickfix() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///ca.tex".parse().unwrap();
+
+    // `\bf` is a deprecated font switch; the `deprecated-command` rule flags it and
+    // carries a `\bf` → `\bfseries` safe autofix.
+    let doc = "\\bf hi\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(
+        diags.diagnostics.iter().any(|d| d.message.contains("\\bf")),
+        "deprecated-command should flag \\bf, got {:?}",
+        diags.diagnostics
+    );
+
+    // A range over the `\bf` control word (line 0, chars 0..3).
+    let on_bf = Range {
+        start: Position::new(0, 0),
+        end: Position::new(0, 3),
+    };
+    send_request(
+        &client,
+        2,
+        "textDocument/codeAction",
+        serde_json::to_value(CodeActionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: on_bf,
+            context: CodeActionContext::default(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let actions: Vec<CodeActionOrCommand> =
+        serde_json::from_value(resp.result.unwrap()).expect("a codeAction response");
+    let CodeActionOrCommand::CodeAction(action) = actions
+        .iter()
+        .find(|a| matches!(a, CodeActionOrCommand::CodeAction(a) if a.title.contains("bfseries")))
+        .expect("a `\\bf` → `\\bfseries` quick-fix")
+    else {
+        unreachable!()
+    };
+    let edits = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.get(&uri))
+        .expect("a single-file edit on the document");
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].new_text, "\\bfseries");
+    assert_eq!(edits[0].range.start, Position::new(0, 0));
+    assert_eq!(edits[0].range.end, Position::new(0, 3));
+
+    // A range that misses the command (the trailing prose) yields no actions.
+    let off_bf = Range {
+        start: Position::new(0, 5),
+        end: Position::new(0, 5),
+    };
+    send_request(
+        &client,
+        3,
+        "textDocument/codeAction",
+        serde_json::to_value(CodeActionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: off_bf,
+            context: CodeActionContext::default(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(3));
+    let actions: Vec<CodeActionOrCommand> =
+        serde_json::from_value(resp.result.unwrap()).expect("a codeAction response");
+    assert!(
+        actions.is_empty(),
+        "a range off the command yields no quick-fix, got {actions:?}"
     );
 
     shutdown(&client, server_thread);

@@ -3,9 +3,10 @@
 //!
 //! These are the classic `\bf`-style commands the LaTeX team has discouraged
 //! since 1994. The replacement is a plain declaration swap (`\bf` → `\bfseries`),
-//! so the message names the modern form — the seed of a later autofix (this
-//! slice reports only; see the plan). `\em` is intentionally absent:
-//! it is still the supported emphasis switch.
+//! carried as a `Safe` autofix that replaces just the control word — correct by
+//! construction (tenet 1), withheld on the rare shape where the control word
+//! cannot be isolated. `\em` is intentionally absent: it is still the supported
+//! emphasis switch.
 //!
 //! The table lives here, not in `data/signatures.json`: deprecation is a lint
 //! judgment, not the structural arity/verbatim fact the signature DB carries
@@ -16,7 +17,7 @@ use std::path::PathBuf;
 use rowan::NodeOrToken;
 
 use crate::ast::command_name;
-use crate::linter::diagnostic::{Diagnostic, Severity};
+use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Rule, RuleContext};
@@ -59,7 +60,22 @@ impl Rule for DeprecatedCommand {
         };
         // Underline just the control word, not any greedily-attached group, so
         // the caret sits tightly on `\bf`.
-        let range = control_word_range(command).unwrap_or_else(|| command.text_range());
+        let control_word = control_word_range(command);
+        let range = control_word.unwrap_or_else(|| command.text_range());
+        // The fix is a tight control-word swap (`\bf` → `\bfseries`): the span
+        // covers exactly the `CONTROL_WORD` token (backslash included), the
+        // replacement copies in the modern declaration, so it stays correct by
+        // construction (tenet 1). Withheld on the fallback span, where the tight
+        // control word could not be isolated and a whole-node rewrite might drop
+        // a greedily-attached group.
+        let fix = control_word.map(|r| {
+            Fix::safe(
+                usize::from(r.start()),
+                usize::from(r.end()),
+                format!("\\{replacement}"),
+                format!("Replace `\\{name}` with `\\{replacement}`"),
+            )
+        });
         sink.push(Diagnostic {
             rule: self.id(),
             severity: self.default_severity(),
@@ -67,7 +83,7 @@ impl Rule for DeprecatedCommand {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: format!("`\\{name}` is deprecated; use `\\{replacement}`"),
-            fix: None,
+            fix,
         });
     }
 }
@@ -136,5 +152,24 @@ mod tests {
     #[test]
     fn flags_each_occurrence() {
         assert_eq!(findings("{\\bf a}{\\it b}\n").len(), 2);
+    }
+
+    #[test]
+    fn carries_safe_control_word_fix() {
+        use crate::linter::diagnostic::Applicability;
+        use crate::linter::fix::apply_fixes;
+
+        let src = "{\\bf hi}\n";
+        let out = findings(src);
+        let fix = out[0].fix.as_ref().expect("should carry a fix");
+        assert_eq!(fix.applicability, Applicability::Safe);
+        // The fix spans just the `\bf` control word (bytes 1..4), swapping it for
+        // the modern declaration while leaving the rest of the group untouched.
+        assert_eq!((fix.start, fix.end), (1, 4));
+        assert_eq!(fix.content, "\\bfseries");
+        assert_eq!(
+            apply_fixes(src, std::slice::from_ref(fix), false).output,
+            "{\\bfseries hi}\n"
+        );
     }
 }

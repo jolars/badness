@@ -14,69 +14,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 --------------------------------------------------------------------------------
 
-## Where we are
-
-The foundation is complete: a lossless, error-tolerant recursive-descent parser
-over a rowan CST; `badness format` (parse → Wadler IR → print) with whitespace
-normalization, environment + group/argument indentation, paragraph reflow, a
-structured math model with alignment-aware column formatting; salsa
-incrementality + a semantic layer (label/ref model, signature DB, project
-include graph); a minimal salsa-backed LSP; and a linter with a rule layer wired
-into both the CLI and LSP. A full BibTeX/BibLaTeX pipeline (parser, formatter,
-linter, LSP) ships alongside.
-
-Work below is organized **by area**. Use formatter ambiguities to drive parser
-fixes (AGENTS.md tenet 3). The differential oracle --- texlab (parse) --- remains
-available as a hardening track throughout.
-
---------------------------------------------------------------------------------
-
 ## Parser
 
-Done: event-stream recursive descent → green tree; side-channel diagnostics;
-paragraphs, control sequences, groups, comments, environments (with mismatch
-recovery), greedy argument grouping; `\verb`/verbatim lexer modes (incl.
-argument-taking `lstlisting`/`minted`/`Verbatim`, skipping `\begin` args via the
-signature DB); `\makeatletter` letter-mode; recovery anchors + progress
-guarantee; losslessness asserted; structured math model (`MATH` nodes, atoms,
-precedence-climbing `^`/`_`, `\left…\right` matching with a delimiter-isolation
-lexer mode); texlab differential parse oracle; block-vs-inline refinement (a
-lone block env is not `PARAGRAPH`-wrapped, via the signature DB `block` flag);
-trivia attachment per AGENTS.md decision #9 (rust-analyzer rule, grammar-local
-leading comment-bind, blank line breaks the bind).
-
-No open parser items; new parser work is driven by formatter ambiguities and the
-package-infrastructure section below.
-
 ## Formatter
-
-Done: `badness format` (parse → Wadler IR → print); **\[copy\]** IR + printer
-engine; whitespace normalization, environment + group/argument indentation
-(printer-owned, idempotent); paragraph reflow (`WrapMode`, `Ir::Fill`, default
-`Reflow`); prose-argument reflow (signature-DB `prose` flag --- commands with
-the signature-DB `inline` flag like `\footnote`/`\emph` flatten into the
-surrounding fill so the body wraps as running text with `{`/`}` glued to
-adjacent words; block-level prose commands `\section`/`\caption` block-break
-their braces via a soft `Ir::group`); aggressive math lowering (collapse
-spacing, tight scripts, strip redundant single-token script braces); display
-math (`\[…\]`/`$$…$$`) lowered as an indented block with delimiters on their own
-lines, breaking a too-wide body before its top-level binary/relation operators
-(amsmath style: the first relation anchors a hanging indent via `Ir::Align`,
-later operators start continuation lines aligned under the first term after it;
-a curated operator-name table classifies relations vs. binaries, unary `+`/`-`
-excluded, comment-bearing bodies take the plain path); `\left…\right` spacing;
-alignment-aware `align`/matrix column grids **and** text tables
-(`tabular`/`tabular*`/`array`), carrying interspersed comments and
-horizontal-rule commands (`\hline`/`\midrule`/… via a `rule` flag) as
-passthrough lines that never count toward column widths; list environments
-(signature-DB `list` flag --- `itemize`/`enumerate`/`description` --- one
-`\item` per line, each body reflowed with continuation lines hanging-indented
-under the item text via `Ir::Align`); collapsible token-list arguments
-(signature-DB `collapse` flag --- the cite family's key list folds a multi-line
-authored form to one line, never width-reflowed, with the `inline` flag flowing
-the command into the paragraph fill; bails to the block form on a blank line, a
-`%` comment, or force-break content). Protected regions untouched; idempotence +
-losslessness asserted.
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
   today. *Demoted, much later.*
@@ -106,23 +46,6 @@ losslessness asserted.
 
 ## Linter
 
-Done: `badness lint` + `linter/{diagnostic,render}` surfacing parse diagnostics
-(annotate-snippets render); rule layer (`linter/{rules,check}`, `Rule` trait +
-registry) wired into the CLI and the LSP `publishDiagnostics` path;
-`linter/suppression` (`% badness-ignore`); a **single shared walk** dispatch
-(arity's `run_rules` shape --- `by_kind` table from each rule's `interests()`,
-one `descendants_with_tokens` traversal; model/cross-file rules implement
-`check_file()`); the autofix infra (`linter/fix.rs`: `Fix` +
-`Applicability::{Safe, Unsafe}`, a pure `apply_fixes` engine, `check_document`
-fixpoint, `lint --fix`/`--unsafe-fixes`, with the test harness checking that
-fixed output parses and stays lossless — the autofix-correctness bar, tenet 1).
-Lints shipped:
-`deprecated-command` (`\bf`-style), `obsolete-environment` (`eqnarray` → `align`),
-`dollar-display-math` (with a `\[…\]` autofix), `mismatched-delimiter`,
-single-file + cross-file `duplicate-label`, `undefined-ref`,
-`missing-nonbreaking-space` (tie before `\cite`/`\ref`, with the **first `Unsafe`
-autofix** — replaces a same-line space with `~`).
-
 - [~] Wire the remaining report-only fixes onto the autofix infra:
   `deprecated-command`'s `\bf → \bfseries` is **done** (a `Safe` control-word swap,
   consumed by `lint --fix` and the new LSP code actions); `obsolete-environment`'s
@@ -138,44 +61,10 @@ autofix** — replaces a same-line space with `~`).
 
 ## Semantic layer & signatures
 
-Done: `semantic_model` (flat label/ref def-use model, `Eq`-backdating); built-in
-signature DB (`data/signatures.json`); project include graph
-(`\input`/`\include`/`\import`/`\subfile`, salsa firewall +
-reachability/cycles); `\newcommand`/`\newenvironment`/`xparse` signature
-scanning (`semantic/define.rs`, `semantic/xparse.rs`; scanned overlaid over
-built-in; consumed by the formatter's `\begin` arity glue), incl. the unbraced
-`\newcommand\foo…` form; **cross-file label + citation resolution**
-(`project/{labels,citations}.rs`, undirected-component namespace, root-gated
-`undefined-ref`/`undefined-citation`); **verbatim-argument commands and
-environments** (DB `verbatim`/`verbatim_body` flags driving lexer modes, plus
-**user-definition scanning** in `semantic/define.rs` --- a `\newcommand`/xparse/`\def`
-body that reassigns a special char's catcode to "other", directly or through a
-helper chain, flags the command/environment verbatim; consumed by a bounded
-two-pass parse; AGENTS.md decision #1); the `document_signatures` salsa query
-(consumed by completion); **LSP cross-file project assembly** (salsa `Project`
-from open buffers + on-disk siblings, `resolved_labels`/`resolved_citations`,
-path-keyed salsa, `.bib` tracked as inputs).
-
 - [ ] How much of `\newcommand` / `xparse` to model for the signature DB. *(open
   decision)*
 
 ## Language server
-
-Done: `src/lsp.rs` + `badness lsp` (single-threaded, salsa-backed `lsp-server`
-loop **\[diverge\]**); ra-style threading (main loop / sole-writer worker / read
-pool, `decide`-scheduled analyze with supersede-on-newer-edit); lifecycle,
-incremental text sync (`apply_content_changes` UTF-16 splice),
-`textDocument/formatting`, `publishDiagnostics` (parse + lint, version-gated);
-cached-tree reuse (`compute_format` → `format_node`); `EditorSettings` over
-`initializationOptions` + `didChangeConfiguration`; document symbols
-(`textDocument/documentSymbol`, nested outline from the signature DB's
-`sectioning` levels + float/theorem-like environments + labels, built by
-`semantic::outline`); stdio smoke test.
-
-arity (`../arity/src/lsp.rs`) is the feature template: it ships formatting,
-range formatting, code actions, hover, definition, references, document
-highlight, document symbol, and prepare-rename/rename. Most of these map
-directly onto badness's existing semantic layer.
 
 ### Configuration & sync
 
@@ -405,30 +294,6 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Formatting
 
-- [x] **`.sty`/`.cls` as code, not prose.** `FileKind::default_wrap` makes
-  `.sty`/`.cls` default to `WrapMode::Preserve` (a package body is code, not
-  running text) when no `--wrap` is given, with the existing group/argument
-  indentation and macro-definition lowering (definition bodies stay as
-  authored). `\ProvidesPackage`/option-processing boilerplate ordering is
-  preserved for free under `Preserve` (it never reorders). Letter-mode is
-  respected via the `Package` flavor. The expl3-mode freedom (whitespace
-  non-semantic inside `\ExplSyntaxOn`, `~` a literal space) is deferred with the
-  expl3 lexer mode above.
-- [x] **`.dtx` two-layer formatting (foundation, Preserve).** The formatter is now
-  `.dtx`-aware. A new `Ir::ColumnZero` leaf pins every `DOC_MARGIN` (`%`) and
-  `GUARD` (`%<…>`) to column 0 in the printer (the single layout authority), so
-  margins and guards stay byte-for-byte regardless of surrounding LaTeX nesting
-  (`lower_loose_token` in `formatter/core.rs`). A structural `is_margin_framed`
-  predicate (the env's `\begin` is preceded by a margin/guard on its line — a pure
-  CST-shape fact, no signature lookup) routes both `macrocode` *and* any
-  documentation-layer environment (`itemize`, `macro`, …) through
-  `lower_margin_framed_environment`: the body is never indented (frames are not a
-  real indentation scope) and `split_closing_frame` pulls the closing `%␣␣␣␣`
-  onto the `\end` line so the terminator stays one whole frame line. A `macrocode`
-  body thus formats as code at a column-0 base (interior groups/envs still indent);
-  prose margin lines stay pinned. Pinned by `DTX_FIXTURES` in `tests/format.rs`
-  (equality + idempotence + losslessness under the dtx config) plus `tests/dtx.rs`
-  and `tests/roundtrip.rs` coverage. Default wrap is `Preserve`.
 - [ ] **`.dtx` prose reflow (deferred).** Under `--wrap reflow`, reflow the
   documentation prose layer by re-emitting a `% ` margin on each *wrapped* line.
   Needs new printer machinery (per-line margin prefixes synthesized on a break) the
@@ -498,24 +363,6 @@ scope (the same boundary the include graph and CWL ingest keep).
   subcommand lives in `main.rs`; `build.rs` still deferred.
 
 ## BibTeX / BibLaTeX
-
-Done (Phases 0–4): a lossless bib parser (`src/bib/`, own `SyntaxKind`/`BibLang`,
-copied `events.rs`/`tree_builder.rs`, handling all entry/reserved forms +
-recovery); a texlab differential parse oracle (entry-recognition floor +
-soft Dice gauge, corpus incl. the vendored `biblatex-examples.bib`, fully
-skeleton-concordant); a semantic model + field/entry signature DB
-(`data/bib_fields.json`, `bib::semantic`); a deterministic formatter
-(`src/bib/formatter/`, shared Wadler IR --- one field per line, `=` alignment,
-quote→brace normalization, value reflow gated by field category, default-on
-field + entry sorting with a crossref/xdata guard); a parallel linter
-(`src/bib/linter/`, `BibRule` trait reusing the shared `Diagnostic`/`Fix`
-infra --- `duplicate-key`, `missing-required-field`, `unknown-field`,
-`empty-field` (with autofix), `duplicate-field`, `unused-string`,
-`undefined-string`, `title-capitalization`, `encoding-hints`; suppression via
-`@comment{badness-ignore …}`); and Phase 4 integration (salsa
-`parsed_bib_document`/`bib_semantic_model`, `.bib` routed through
-`format`/`--check`/LSP diagnostics+formatting+outline, cross-file
-`undefined-citation` via `ResolvedCitations`).
 
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today

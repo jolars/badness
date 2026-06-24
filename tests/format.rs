@@ -204,6 +204,21 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_prose_arg_joins_short", WrapMode::Reflow, 80),
     ("reflow_prose_arg_optional_omitted", WrapMode::Reflow, 30),
     ("reflow_non_prose_preserved", WrapMode::Reflow, 40),
+    // A multi-line brace-group body (a `\newcommand` definition body) is laid out as
+    // code-like *statements*: an over-long line wraps to the width — breaking before
+    // a trailing `{…}` atom — instead of forcing the printer to detonate the
+    // innermost nested prose group (`\textbf`'s argument), the only soft break a
+    // rigid body would expose. The continuation is flush (idempotent: it re-parses as
+    // a line already at the body indent).
+    ("reflow_brace_body_wraps", WrapMode::Reflow, 80),
+    // Statement reflow preserves the author's statement-per-line structure: two
+    // `\draw …;` lines (each carrying words, so *not* command-only) stay on their own
+    // lines rather than rejoining into one fill the way prose reflow would.
+    (
+        "reflow_brace_body_statements_preserved",
+        WrapMode::Reflow,
+        80,
+    ),
     ("reflow_prose_arg_blank_line", WrapMode::Reflow, 40),
     ("reflow_prose_arg_nested_in_paragraph", WrapMode::Reflow, 50),
     ("reflow_inline_prose_in_paragraph", WrapMode::Reflow, 50),

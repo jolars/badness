@@ -34,6 +34,27 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   its own separators rather than the paragraph fill.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
+- [x] **Brace-group body reflow (`ReflowKind::Statement`).** A multi-line brace
+  body (a `\newcommand` definition body) now reflows as code-like *statements*: each
+  source line stays its own logical line, but an over-long one wraps to the width
+  (breaking before a trailing `{…}` atom) instead of forcing the printer to detonate
+  the innermost nested prose group --- the only soft break a rigid
+  `lower_element_stream` body exposed. Continuation is **flush**, not hanging.
+- [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
+  blocked on structure).** A wrapped brace-body line ideally hangs its continuation
+  one step in (`\node[…] at (2,3)` / `····{…};`) to read as a continuation rather
+  than a sibling. This **cannot be idempotent** under the generic CST: the wrap
+  becomes a real source newline, and on re-parse the continuation is just a line at
+  the body indent (no marker says "continuation"), so the next pass flushes it ---
+  `fmt(fmt(x)) != fmt(x)`. Flush-B sidesteps this precisely because there is no
+  indent delta. The real fix needs a node that *owns the whole statement*, so layout
+  derives from structure (source newlines insignificant). For the motivating case
+  (`\node[…] at (2,3) {…};`) that node is a **TikZ path statement**: `at` keyword,
+  `(coord)`, `;` terminator, `{label}` --- none of which are TeX-surface facts
+  (`;`/`at`/`()` carry no special catcode in plain TeX), so grouping them is
+  package-specific grammar, out of scope for the generic parser (decisions #1, #2;
+  non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
+  corpus, and AGENTS.md amendment), not a formatter patch.
 - [ ] Join alignment-cell continuation lines (currently triggers the plain-body
   fallback).
 - [ ] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table

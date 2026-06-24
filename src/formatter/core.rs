@@ -306,7 +306,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// the line breaks; a fresh run continues after. The paragraph's lines are joined
 /// by [`Ir::hard_line`].
 fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    reflow_elements(node.children_with_tokens(), cx)
+    reflow_elements(node.children_with_tokens(), cx, ReflowKind::Prose)
 }
 
 /// Greedily reflow a stream of inline elements to the line width, the shared core
@@ -331,7 +331,28 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// Unlike a `PARAGRAPH` (which holds no blank lines by construction), an argument
 /// *group* body may contain blank-line paragraph breaks; a blank-line trivia run
 /// ends the current line and separates the next with an [`Ir::empty_line`].
-fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+///
+/// [`ReflowKind`] selects how a *lone* source newline is treated (see that type).
+/// `Prose` rejoins it into the surrounding fill (paragraphs, prose arguments);
+/// `Statement` preserves it, so a code-like brace-group body keeps one logical line
+/// per source line and only an *over-long* line wraps — never collapsing the author's
+/// statement-per-line structure (`\draw …;` / `\draw …;`) into a single run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReflowKind {
+    /// Running prose: a lone newline is a break opportunity the fill rejoins.
+    Prose,
+    /// Code-like statements (a `\newcommand` definition body): a lone newline ends
+    /// the line, so each source line stays its own logical line; only width forces a
+    /// wrap. Flush continuation keeps the wrap idempotent (a wrapped tail re-parses
+    /// as a line already at the body indent).
+    Statement,
+}
+
+fn reflow_elements(
+    elements: impl Iterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+    kind: ReflowKind,
+) -> Ir {
     // Collected up front so the single-newline arm can look ahead at the next
     // physical line ([`line_is_command_only`]). Inline prose commands (`\footnote`,
     // `\emph`, …) are flattened into the stream so their bodies reflow as running
@@ -396,13 +417,15 @@ fn reflow_elements(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                     line_all_commands = true;
                     line_has_content = false;
                 } else if newlines == 1 {
-                    // A single source newline. Normally just an atom boundary the
-                    // fill rejoins, but a line that is *only* command(s) — on either
-                    // side of the break — is kept on its own line: end the line so
-                    // the break survives instead of collapsing to a fill space.
+                    // A single source newline. Under `Statement` reflow every source
+                    // line is its own logical line, so the break always ends the line.
+                    // Under `Prose` it is normally just an atom boundary the fill
+                    // rejoins, except a line that is *only* command(s) — on either side
+                    // of the break — is kept on its own line: end the line so the break
+                    // survives instead of collapsing to a fill space.
                     let prev_is_command = line_has_content && line_all_commands;
                     let next_is_command = line_is_command_only(&elements, idx, cx);
-                    if prev_is_command || next_is_command {
+                    if kind == ReflowKind::Statement || prev_is_command || next_is_command {
                         end_line(&mut atom, &mut run, &mut lines, &mut seps, &mut pending_sep);
                     } else {
                         flush_atom(&mut atom, &mut run);
@@ -851,7 +874,7 @@ fn lower_node_dropping_leading_comment(node: &SyntaxNode, cx: LowerCtx<'_>) -> I
         children.drain(..=i);
     }
     if node.kind() == SyntaxKind::PARAGRAPH && cx.wrap == WrapMode::Reflow {
-        reflow_elements(children.into_iter(), cx)
+        reflow_elements(children.into_iter(), cx, ReflowKind::Prose)
     } else {
         Ir::concat(lower_element_stream(children.into_iter(), cx))
     }
@@ -1098,7 +1121,7 @@ fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
 fn reflow_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
     let parts = chunks
         .iter()
-        .map(|chunk| reflow_elements(chunk.iter().cloned(), cx))
+        .map(|chunk| reflow_elements(chunk.iter().cloned(), cx, ReflowKind::Prose))
         .filter(|ir| !matches!(ir, Ir::Nil));
     Ir::join(Ir::empty_line(), parts)
 }
@@ -1669,7 +1692,16 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
         open_ir
     };
 
-    let body = Ir::concat(lower_element_stream(body_elements.into_iter(), cx));
+    // A brace-group body under reflow is laid out as code-like statements: each
+    // source line stays its own logical line, but an over-long one wraps to the
+    // width instead of forcing the printer to break the innermost nested prose
+    // group (the only soft break a rigid `lower_element_stream` body would expose).
+    // Optional `[…]` bodies and the non-reflow modes keep the generic stream.
+    let body = if cx.wrap == WrapMode::Reflow && open == SyntaxKind::L_BRACE {
+        reflow_elements(body_elements.into_iter(), cx, ReflowKind::Statement)
+    } else {
+        Ir::concat(lower_element_stream(body_elements.into_iter(), cx))
+    };
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {
@@ -1936,7 +1968,7 @@ fn lower_prose_group(
         }
     }
 
-    let body = reflow_elements(body_elements.into_iter(), cx);
+    let body = reflow_elements(body_elements.into_iter(), cx, ReflowKind::Prose);
     if matches!(body, Ir::Nil) {
         Ir::concat([open_ir, close_ir])
     } else {

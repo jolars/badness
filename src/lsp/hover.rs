@@ -211,7 +211,10 @@ fn name_group_inner(group: &SyntaxNode) -> Option<(String, TextRange)> {
 
 /// A command signature, scope-first then built-in then CWL, with `true` when the hit
 /// came from the local/package scope (rendered as "user-defined").
-fn lookup_command<'a>(scope: &'a SignatureDb, name: &str) -> Option<(&'a CommandSig, bool)> {
+pub(super) fn lookup_command<'a>(
+    scope: &'a SignatureDb,
+    name: &str,
+) -> Option<(&'a CommandSig, bool)> {
     if let Some(sig) = scope.command(name) {
         return Some((sig, true));
     }
@@ -222,7 +225,7 @@ fn lookup_command<'a>(scope: &'a SignatureDb, name: &str) -> Option<(&'a Command
 }
 
 /// An environment signature, with the same tiering as [`lookup_command`].
-fn lookup_environment<'a>(
+pub(super) fn lookup_environment<'a>(
     scope: &'a SignatureDb,
     name: &str,
 ) -> Option<(&'a EnvironmentSig, bool)> {
@@ -236,7 +239,7 @@ fn lookup_environment<'a>(
 }
 
 /// `{}`/`[]` slot for an argument kind, for the synthesized prototype.
-fn arg_slot(kind: ArgKind) -> &'static str {
+pub(super) fn arg_slot(kind: ArgKind) -> &'static str {
     match kind {
         ArgKind::Brace => "{}",
         ArgKind::Bracket => "[]",
@@ -263,7 +266,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// `\name{}{}` prototype + a `·`-joined facts line.
-fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -> String {
+pub(super) fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -> String {
     let mut out = String::new();
     let _ = write!(out, "```latex\n\\{name}");
     for arg in &sig.args {
@@ -290,7 +293,7 @@ fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -> String {
 }
 
 /// `\begin{name} … \end{name}` prototype + a `·`-joined facts line.
-fn render_environment(name: &str, sig: &EnvironmentSig, user_defined: bool) -> String {
+pub(super) fn render_environment(name: &str, sig: &EnvironmentSig, user_defined: bool) -> String {
     let mut out = String::new();
     let _ = write!(out, "```latex\n\\begin{{{name}}}");
     for arg in &sig.args {
@@ -381,7 +384,7 @@ const HOVER_FIELDS: &[&str] = &["author", "editor", "title", "year", "journal", 
 
 /// Format a bib entry node: `@type · \`key\`` then bold field lines for the
 /// [`HOVER_FIELDS`] it carries.
-fn render_entry(entry_type: &str, key: &str, node: &BibSyntaxNode) -> String {
+pub(super) fn render_entry(entry_type: &str, key: &str, node: &BibSyntaxNode) -> String {
     let mut out = format!("@{entry_type} · `{key}`");
     for &want in HOVER_FIELDS {
         for field in bib_ast::fields(node) {
@@ -404,7 +407,7 @@ fn render_entry(entry_type: &str, key: &str, node: &BibSyntaxNode) -> String {
 
 /// A bib field value as plain display text: the node text, trimmed, with one layer of
 /// surrounding `{…}`/`"…"` removed and interior whitespace collapsed.
-fn clean_value(value: &BibSyntaxNode) -> String {
+pub(super) fn clean_value(value: &BibSyntaxNode) -> String {
     let raw = value.text().to_string();
     let trimmed = raw.trim();
     let inner = trimmed

@@ -55,6 +55,7 @@
 // `Hash`/`Eq` go through `as_str()`, so this is sound. Allow it module-wide.
 #![allow(clippy::mutable_key_type)]
 
+mod completion_resolve;
 mod folding;
 mod hover;
 mod task_pool;
@@ -73,7 +74,7 @@ use lsp_types::notification::{
 use lsp_types::request::{
     Completion, DocumentDiagnosticRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
     GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename, Request as _,
-    WorkspaceDiagnosticRefresh,
+    ResolveCompletionItem, WorkspaceDiagnosticRefresh,
 };
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
@@ -182,7 +183,9 @@ fn server_capabilities() -> ServerCapabilities {
                 "/".to_owned(),
                 "@".to_owned(),
             ]),
-            resolve_provider: Some(false),
+            // A highlighted item is sent back via `completionItem/resolve` to gain
+            // its signature/citation detail lazily (see [`completion_resolve`]).
+            resolve_provider: Some(true),
             ..Default::default()
         }),
         ..Default::default()
@@ -305,6 +308,16 @@ enum WorkerJob {
         uri: Uri,
         text: String,
         position: Position,
+    },
+    /// A completion-resolve request: attach lazy signature/citation detail to a
+    /// highlighted item on the read pool and reply to `id`. The item's `data`
+    /// payload is self-contained, so no document buffer is needed; but the lookup
+    /// is cross-file (signature scope, project bibliography), so the worker
+    /// snapshots project membership when it dispatches, like [`Hover`](Self::Hover).
+    ResolveCompletion {
+        id: RequestId,
+        // Boxed: a `CompletionItem` is large and would bloat every `WorkerJob`.
+        item: Box<CompletionItem>,
     },
     /// A hover request: describe the command/environment signature or `\cite` entry
     /// under the cursor on the read pool and reply to `id`. Cross-file (the signature
@@ -483,6 +496,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_document_symbol(&connection, &state, &job_tx, req)
                             }
                             Completion::METHOD => on_completion(&connection, &state, &job_tx, req),
+                            ResolveCompletionItem::METHOD => {
+                                on_completion_resolve(&connection, &job_tx, req)
+                            }
                             HoverRequest::METHOD => on_hover(&connection, &state, &job_tx, req),
                             GotoDefinition::METHOD => {
                                 on_goto_definition(&connection, &state, &job_tx, req)
@@ -857,6 +873,29 @@ fn on_completion(
         uri,
         text: doc.text.clone(),
         position,
+    });
+}
+
+/// `completionItem/resolve`: dispatch a resolve job for the worker. The item's
+/// `data` is self-contained (it carries everything needed to recompute detail),
+/// so there is no document to look up — only invalid params short-circuit here.
+fn on_completion_resolve(connection: &Connection, job_tx: &Sender<WorkerJob>, req: Request) {
+    let id = req.id.clone();
+    let item = match req.extract::<CompletionItem>(ResolveCompletionItem::METHOD) {
+        Ok((_, item)) => item,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid completion item".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+    let _ = job_tx.send(WorkerJob::ResolveCompletion {
+        id,
+        item: Box::new(item),
     });
 }
 
@@ -1364,6 +1403,15 @@ impl Worker {
                 self.read_spawner.spawn(move || {
                     run_completion(&snapshot, id, &uri, &text, position, members, &out_tx)
                 });
+            }
+            WorkerJob::ResolveCompletion { id, item } => {
+                // Resolve is cross-file (signature scope, project bibliography),
+                // so — like hover — snapshot project membership on the write side.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || run_completion_resolve(&snapshot, id, *item, members, &out_tx));
             }
             WorkerJob::Hover {
                 id,
@@ -2123,6 +2171,25 @@ fn run_completion(
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
+/// Resolve a highlighted [`CompletionItem`] on the read pool, attaching lazy
+/// signature/citation detail (see [`completion_resolve`]) and replying to `id`. A
+/// racing write (snapshot cancellation) replies with the item unchanged — the
+/// client keeps the un-enriched item, never an error.
+fn run_completion_resolve(
+    snapshot: &Analysis,
+    id: RequestId,
+    item: CompletionItem,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let resolved = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        completion_resolve::resolve(snapshot, item.clone(), members)
+    }))
+    .unwrap_or(item);
+    let result = serde_json::to_value(resolved).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
 /// Compute completion items at `position`. A `.bib` cursor goes through the bib
 /// classifier; a `.tex` cursor through the LaTeX one, preferring the snapshot's cached
 /// tree/queries and falling back to a direct reparse when unavailable or stale.
@@ -2257,6 +2324,13 @@ fn cite_completion_items(
     keys.dedup();
     keys.into_iter()
         .map(|key| CompletionItem {
+            // Carry the citing file + key so `completionItem/resolve` can re-walk
+            // the bibliography namespace and attach the entry card lazily.
+            data: completion_resolve::CompletionResolveData::Citation {
+                lint_path: lint_path.to_path_buf(),
+                key: key.to_string(),
+            }
+            .into_value(),
             label: key.to_string(),
             kind: Some(CompletionItemKind::REFERENCE),
             ..Default::default()
@@ -3081,25 +3155,47 @@ fn build_completion_items(
     match ctx {
         CompletionContext::FilePath { prefix, kind } => file_completion_items(uri, prefix, *kind),
         CompletionContext::None => Vec::new(),
-        _ => crate::completion::candidates(ctx, sigs, model)
-            .into_iter()
-            .map(candidate_to_item)
-            .collect(),
+        _ => {
+            // The document path keys the scope-first signature lookup that
+            // `completionItem/resolve` repeats; unsaved buffers have none.
+            let file = uri_to_fs_path(uri);
+            crate::completion::candidates(ctx, sigs, model)
+                .into_iter()
+                .map(|candidate| candidate_to_item(candidate, file.as_deref()))
+                .collect()
+        }
     }
 }
 
-/// Map a neutral [`CompletionCandidate`] onto an `lsp_types::CompletionItem`.
-fn candidate_to_item(candidate: CompletionCandidate) -> CompletionItem {
+/// Map a neutral [`CompletionCandidate`] onto an `lsp_types::CompletionItem`. A
+/// command/environment carries resolve `data` (its name + originating `file`) so
+/// its signature can be attached lazily; a label carries none.
+fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> CompletionItem {
     let kind = match candidate.kind {
         CandidateKind::Command => CompletionItemKind::FUNCTION,
         CandidateKind::Environment => CompletionItemKind::CLASS,
         CandidateKind::Label => CompletionItemKind::REFERENCE,
     };
+    let data = file.and_then(|file| {
+        let payload = match candidate.kind {
+            CandidateKind::Command => completion_resolve::CompletionResolveData::Command {
+                name: candidate.label.clone(),
+                file: file.to_path_buf(),
+            },
+            CandidateKind::Environment => completion_resolve::CompletionResolveData::Environment {
+                name: candidate.label.clone(),
+                file: file.to_path_buf(),
+            },
+            CandidateKind::Label => return None,
+        };
+        payload.into_value()
+    });
     CompletionItem {
         label: candidate.label,
         kind: Some(kind),
         insert_text: candidate.insert_text,
         insert_text_format: candidate.snippet.then_some(InsertTextFormat::SNIPPET),
+        data,
         ..Default::default()
     }
 }

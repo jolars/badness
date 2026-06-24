@@ -257,8 +257,10 @@ directly onto badness's existing semantic layer.
   the signature DB (built-in + scanned, via `document_signatures`), `\ref`-family
   keys, `\begin{…}`/`\end{…}` names (auto-`\end` snippet), and file paths in
   `\includegraphics`/`\input`/…/`\addbibresource`. (`src/completion.rs`.)
-  - [ ] `completionItem/resolve` to attach signature/doc detail lazily
-    (`resolve_provider` is currently `false`).
+  - [x] `completionItem/resolve` to attach signature/doc detail lazily ---
+    citation cards (author/title/year) and command/environment signature
+    prototypes + facts, reusing the hover renderers. (`src/lsp/completion_resolve.rs`.)
+    Bib field-name/entry-type items are not yet resolved.
 - [ ] Signature help (`textDocument/signatureHelp`) --- show the active argument
   while typing a command's `{…}`/`[…]` arguments.
 

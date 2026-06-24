@@ -178,8 +178,16 @@ directly onto badness's existing semantic layer.
   **not** yet discover `badness.toml` (the CLI does, via `src/config.rs`); mirror
   arity's per-document config discovery (cached by anchor dir, editor settings as
   fallback) so file config and editor settings compose.
-- [ ] Pull diagnostics (`textDocument/diagnostic` + `workspace/diagnostic`) as a
-  capability alongside the current push model, for clients that prefer it.
+- [x] Pull diagnostics: `textDocument/diagnostic` is offered alongside the push
+  model — a pull-capable client is served pull-only (push suppressed), computed
+  on demand off a fresh snapshot (FIFO after the edit, so always current), with a
+  content-addressed `result_id` for `unchanged` reports and a
+  `workspace/diagnostic/refresh` nudge when cross-file membership grows.
+- [ ] `workspace/diagnostic` (the workspace-wide pull) — deferred: it is a
+  streaming/long-poll protocol (held-open request, per-uri result ids, partial
+  results) that fits the one-shot id-bound read-job model poorly. Advertise
+  `workspace_diagnostics: true` and add it once that plumbing exists; editors
+  drive interactive diagnostics through `textDocument/diagnostic` meanwhile.
 - [ ] `workspace/didChangeWatchedFiles` + dynamic `client/registerCapability`
   for `**/*.{tex,bib}` so on-disk edits to non-open includes/`.bib` files (the
   project graph's leaves) reanalyze --- the deferred follow-up to LSP project

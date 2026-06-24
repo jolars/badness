@@ -70,20 +70,24 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition,
-    PrepareRenameRequest, References, Rename, Request as _,
+    Completion, DocumentDiagnosticRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
+    GotoDefinition, PrepareRenameRequest, References, Rename, Request as _,
+    WorkspaceDiagnosticRefresh,
 };
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DiagnosticSeverity, DidChangeConfigurationParams,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions,
+    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
+    DiagnosticSeverity, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FoldingRange, FoldingRangeParams,
+    FoldingRangeProviderCapability, FormattingOptions, FullDocumentDiagnosticReport,
     GotoDefinitionParams, GotoDefinitionResponse, InsertTextFormat, Location, NumberOrString,
     OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
-    RenameOptions, RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Uri,
-    WorkspaceEdit,
+    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
+    RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -103,7 +107,7 @@ use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_ki
 use crate::formatter::{FormatStyle, format_node_with_signatures, format_with_style_flavored};
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{Severity, lint_document};
-use crate::parser::parse;
+use crate::parser::{parse, parse_with_flavor};
 use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
 use crate::syntax::SyntaxNode;
@@ -132,13 +136,27 @@ pub fn serve(connection: Connection) -> Result<(), DynError> {
 }
 
 /// Advertise what we support: **incremental** text sync + whole-document
-/// formatting. Diagnostics are *pushed* via `publishDiagnostics`, which needs no
-/// capability flag.
+/// formatting. Diagnostics are offered both ways — *pushed* via
+/// `publishDiagnostics` (the default, needing no flag) and *pulled* via
+/// `textDocument/diagnostic` (the `diagnostic_provider` capability). A client that
+/// advertises pull support is served pull-only; everyone else keeps push (see
+/// `supports_pull_diagnostics`). `workspace/diagnostic` is deferred (see `TODO.md`).
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         )),
+        diagnostic_provider: Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
+            identifier: Some("badness".to_owned()),
+            // Editing an `\input` target / `.bib` changes this file's
+            // `undefined-ref` / `undefined-citation` set, so a pull in one file can
+            // depend on another's content.
+            inter_file_dependencies: true,
+            // Deferred: workspace pull is a streaming/long-poll protocol that fits
+            // the one-shot read-job model poorly (see `TODO.md`).
+            workspace_diagnostics: false,
+            work_done_progress_options: Default::default(),
+        })),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
@@ -179,6 +197,17 @@ struct Document {
 struct GlobalState {
     documents: HashMap<Uri, Document>,
     editor_settings: EditorSettings,
+    /// The client advertised `textDocument/diagnostic` pull support, so we serve
+    /// diagnostics pull-only and **suppress** the `publishDiagnostics` push (the two
+    /// are mutually exclusive, matching rust-analyzer/panache).
+    supports_pull_diagnostics: bool,
+    /// The client advertised `workspace.diagnostic.refreshSupport`, so a cross-file
+    /// change can nudge it to re-pull via `workspace/diagnostic/refresh` (the pull
+    /// analog of the push path's `RelintAll`).
+    supports_diagnostic_refresh: bool,
+    /// Monotonic id for server→client requests (e.g. `workspace/diagnostic/refresh`).
+    /// Namespaced from the client's request ids, so they never collide.
+    next_request_id: i32,
 }
 
 /// Formatting settings supplied by the editor, as `initializationOptions` at
@@ -315,6 +344,19 @@ enum WorkerJob {
         position: Position,
         new_name: String,
     },
+    /// A `textDocument/diagnostic` pull request: compute diagnostics **on demand**
+    /// off a fresh snapshot and reply to `id`. Cross-file (like an analyze), so the
+    /// worker snapshots project membership when it dispatches. Carries the live
+    /// `text` only as the cancellation fallback's source — currency comes from the
+    /// FIFO `job_tx`: the preceding `didChange`'s `Edit` upserts before this job is
+    /// handled, so the snapshot is already current (no debounce, no staleness).
+    Diagnostic {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        kind: FileKind,
+        previous_result_id: Option<String>,
+    },
 }
 
 /// A result from a worker (the lint thread or a read-pool job) back to the main
@@ -367,6 +409,27 @@ fn members_of(snapshot: &Analysis) -> Vec<ProjectMember> {
         .collect()
 }
 
+/// Read the client's diagnostic capabilities from the `initialize` params, as
+/// `(supports_pull, supports_refresh)`. Pointer-walks the JSON (like
+/// [`EditorSettings::from_client_value`]) rather than deserializing the whole
+/// `ClientCapabilities`: pull support is the mere presence of
+/// `capabilities.textDocument.diagnostic`; refresh support is
+/// `capabilities.workspace.diagnostic.refreshSupport == true`.
+fn client_diagnostic_support(init_params: &serde_json::Value) -> (bool, bool) {
+    let caps = init_params.get("capabilities");
+    let supports_pull = caps
+        .and_then(|c| c.get("textDocument"))
+        .and_then(|t| t.get("diagnostic"))
+        .is_some();
+    let supports_refresh = caps
+        .and_then(|c| c.get("workspace"))
+        .and_then(|w| w.get("diagnostic"))
+        .and_then(|d| d.get("refreshSupport"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    (supports_pull, supports_refresh)
+}
+
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
 /// the read pool, then shuttles messages between the client and the workers.
 fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(), DynError> {
@@ -374,9 +437,14 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
         .get("initializationOptions")
         .map(EditorSettings::from_client_value)
         .unwrap_or_default();
+    let (supports_pull_diagnostics, supports_diagnostic_refresh) =
+        client_diagnostic_support(&init_params);
     let mut state = GlobalState {
         documents: HashMap::new(),
         editor_settings,
+        supports_pull_diagnostics,
+        supports_diagnostic_refresh,
+        next_request_id: 1,
     };
 
     let read_pool = TaskPool::new("badness-lsp-read", read_pool_size());
@@ -412,6 +480,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             FoldingRangeRequest::METHOD => {
                                 on_folding_range(&connection, &state, &job_tx, req)
                             }
+                            DocumentDiagnosticRequest::METHOD => {
+                                on_document_diagnostic(&connection, &state, &job_tx, req)
+                            }
                             _ => respond_unhandled(&connection, req),
                         }
                     }
@@ -425,7 +496,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
             }
             recv(out_rx) -> outbound => {
                 let Ok(outbound) = outbound else { continue };
-                forward_outbound(&connection, &state, &job_tx, outbound);
+                forward_outbound(&connection, &mut state, &job_tx, outbound);
             }
         }
     }
@@ -505,7 +576,11 @@ fn on_notification(
                 path: uri_to_path(&uri),
             });
             // Clear stale squiggles immediately; the worker just evicts the file.
-            send_diagnostics(connection, uri, Vec::new(), None);
+            // In pull mode there is nothing to clear — the client drops a closed
+            // file's diagnostics itself by ceasing to pull — and we never push.
+            if !state.supports_pull_diagnostics {
+                send_diagnostics(connection, uri, Vec::new(), None);
+            }
         }
         DidChangeConfiguration::METHOD => {
             if let Ok(params) =
@@ -665,6 +740,69 @@ fn on_folding_range(
         text: doc.text.clone(),
         kind,
     });
+}
+
+/// `textDocument/diagnostic`: build an on-demand diagnostic job for the worker.
+///
+/// Always replies with a *report* (never `null`): an empty full report when the
+/// client is push-only (it should not be pulling) or the document is unknown,
+/// otherwise a [`WorkerJob::Diagnostic`] that computes off a fresh snapshot. The
+/// snapshot is current because the preceding edit's `Edit` job sits ahead of this
+/// one on the FIFO `job_tx` (see [`WorkerJob::Diagnostic`]).
+fn on_document_diagnostic(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<DocumentDiagnosticParams>(DocumentDiagnosticRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid diagnostic params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    // A push-only client should not be pulling; an unknown document has no buffer.
+    // Either way, answer with an empty full report rather than leaving the request
+    // hanging or replying `null`.
+    if !state.supports_pull_diagnostics {
+        reply_empty_diagnostic_report(connection, id);
+        return;
+    }
+    let Some(doc) = state.documents.get(&uri) else {
+        reply_empty_diagnostic_report(connection, id);
+        return;
+    };
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    let _ = job_tx.send(WorkerJob::Diagnostic {
+        id,
+        path,
+        text: doc.text.clone(),
+        kind,
+        previous_result_id: params.previous_result_id,
+    });
+}
+
+/// Reply to a `textDocument/diagnostic` request with an empty *full* report. Used
+/// when there is nothing to compute (push-only client, unknown buffer) — the pull
+/// protocol requires a report, so `null` is not an option.
+fn reply_empty_diagnostic_report(connection: &Connection, id: RequestId) {
+    let report = DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(
+        RelatedFullDocumentDiagnosticReport::default(),
+    ));
+    let value = serde_json::to_value(report).unwrap_or(serde_json::Value::Null);
+    let _ = connection
+        .sender
+        .send(Message::Response(Response::new_ok(id, value)));
 }
 
 /// `textDocument/completion`: build a completion job for the worker, or reply
@@ -890,7 +1028,7 @@ fn on_rename(
 /// stale (superseded or post-close) analyze never repaints squiggles.
 fn forward_outbound(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     outbound: Outbound,
 ) {
@@ -900,6 +1038,12 @@ fn forward_outbound(
             version,
             diags,
         } => {
+            // Pull and push are mutually exclusive: a pull-capable client is served
+            // exclusively via `textDocument/diagnostic`, so drop the push (the
+            // analyze still ran, warming the salsa memos the pull reads).
+            if state.supports_pull_diagnostics {
+                return;
+            }
             if state
                 .documents
                 .get(&uri)
@@ -912,10 +1056,25 @@ fn forward_outbound(
             let _ = connection.sender.send(Message::Response(resp));
         }
         Outbound::RelintAll => {
-            // Re-queue a fresh analyze for every open document at its current
-            // version. The worker coalesces per-URI, so this is cheap; salsa
-            // memos make the actual recompute incremental. A re-lint of a doc in
-            // an already-seeded directory discovers no new members, so it can't
+            // Membership grew, so cross-file resolution may have changed for every
+            // open document. A pull client learns this by re-pulling: nudge it with
+            // `workspace/diagnostic/refresh` (the pull analog of the re-queue below).
+            if state.supports_pull_diagnostics {
+                if state.supports_diagnostic_refresh {
+                    let id = state.next_request_id;
+                    state.next_request_id += 1;
+                    let _ = connection.sender.send(Message::Request(Request {
+                        id: RequestId::from(id),
+                        method: WorkspaceDiagnosticRefresh::METHOD.to_owned(),
+                        params: serde_json::Value::Null,
+                    }));
+                }
+                return;
+            }
+            // Push mode: re-queue a fresh analyze for every open document at its
+            // current version. The worker coalesces per-URI, so this is cheap; salsa
+            // memos make the actual recompute incremental. A re-lint of a doc in an
+            // already-seeded directory discovers no new members, so it can't
             // re-trigger `RelintAll` (no loop).
             for (uri, doc) in &state.documents {
                 let path = uri_to_path(uri);
@@ -1223,6 +1382,33 @@ impl Worker {
                     )
                 });
             }
+            WorkerJob::Diagnostic {
+                id,
+                path,
+                text,
+                kind,
+                previous_result_id,
+            } => {
+                // On-demand pull: snapshot the db + membership on the write side
+                // (like an analyze) so the read job interns the latest project. This
+                // is a free, id-bound read — not the coalesced analyze slot — so it
+                // never blocks or supersedes the push analyze.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_document_diagnostic(
+                        &snapshot,
+                        id,
+                        &path,
+                        &text,
+                        kind,
+                        members,
+                        previous_result_id,
+                        &out_tx,
+                    )
+                });
+            }
         }
     }
 
@@ -1439,6 +1625,135 @@ fn lint_to_lsp(idx: &LineIndex, text: &str, d: crate::linter::Diagnostic) -> Dia
         message: d.message,
         ..Default::default()
     }
+}
+
+/// Compute a `textDocument/diagnostic` pull report on the read pool and reply.
+///
+/// Reuses the same per-file diagnostics the push path computes, then derives a
+/// content-addressed `result_id` and returns either a `full` report (with items)
+/// or, when `previous_result_id` matches, an `unchanged` report. `related_documents`
+/// is always `None`: cross-file rules fire in the file that *holds* the reference,
+/// so a single file's report is self-contained (the dependency is expressed by
+/// `inter_file_dependencies`, not by foreign-file diagnostics).
+#[allow(clippy::too_many_arguments)]
+fn run_document_diagnostic(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    members: Vec<ProjectMember>,
+    previous_result_id: Option<String>,
+    out_tx: &Sender<Outbound>,
+) {
+    let items = compute_diagnostics(snapshot, path, text, kind, members);
+    let result_id = result_id_for(&items);
+    let report = if previous_result_id.as_deref() == Some(result_id.as_str()) {
+        DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
+            related_documents: None,
+            unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport { result_id },
+        })
+    } else {
+        DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+            related_documents: None,
+            full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                result_id: Some(result_id),
+                items,
+            },
+        })
+    };
+    let value = serde_json::to_value(DocumentDiagnosticReportResult::Report(report))
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
+}
+
+/// The diagnostics for a pull, computed **on demand**.
+///
+/// Fast path: reuse the snapshot's salsa-cached parse, model, and cross-file
+/// resolution via [`analyze_tex`]/[`analyze_bib`]. The snapshot already reflects the
+/// pulled buffer (the preceding `Edit` upserted ahead of this job on the FIFO
+/// channel). On a racing write (`salsa::Cancelled`) or a missing file, fall back to a
+/// single-file recompute from the captured `text` ([`fallback_diagnostics`]) so the
+/// reply stays current — never a stale or empty flash (the bug panache fixed).
+fn compute_diagnostics(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    members: Vec<ProjectMember>,
+) -> Vec<Diagnostic> {
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            analyze_tex(snapshot, path, members)
+        }
+        FileKind::Bib => analyze_bib(snapshot, path),
+    }));
+    match cached {
+        Ok(Some(items)) => items,
+        // `Ok(None)` = file not in the snapshot; `Err` = cancelled by a racing edit.
+        // Either way recompute from the captured buffer (single-file: cross-file
+        // findings, if any, arrive on the client's next pull after the edit settles).
+        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind),
+    }
+}
+
+/// Single-file diagnostics computed directly from `text`, bypassing the salsa cache.
+/// The cancellation/cache-miss fallback for a pull — parse diagnostics plus
+/// node-shape lint findings, with no cross-file resolution (`None` resolvers).
+fn fallback_diagnostics(path: &Path, text: &str, kind: FileKind) -> Vec<Diagnostic> {
+    let idx = LineIndex::new(text);
+    let mut diags: Vec<Diagnostic> = Vec::new();
+    match kind {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            let parsed = parse_with_flavor(text, kind.lex_config());
+            for err in &parsed.errors {
+                diags.push(Diagnostic {
+                    range: byte_range_to_lsp(&idx, text, err.start, err.end),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("badness".to_owned()),
+                    message: err.message.clone(),
+                    ..Default::default()
+                });
+            }
+            let root = parsed.syntax();
+            let model = SemanticModel::build(&root);
+            for d in lint_document(path, &root, &model, None, None) {
+                diags.push(lint_to_lsp(&idx, text, d));
+            }
+        }
+        FileKind::Bib => {
+            let parsed = bib_parse(text);
+            for err in &parsed.errors {
+                diags.push(Diagnostic {
+                    range: byte_range_to_lsp(&idx, text, err.start, err.end),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("badness".to_owned()),
+                    message: err.message.clone(),
+                    ..Default::default()
+                });
+            }
+            let root = parsed.syntax();
+            let model = BibModel::build(&root);
+            for d in crate::bib::linter::lint_document(path, &root, &model) {
+                diags.push(lint_to_lsp(&idx, text, d));
+            }
+        }
+    }
+    diags
+}
+
+/// Derive a stable, content-addressed `result_id` from a diagnostic set, so a
+/// re-pull with no change reports `unchanged`. Hashes the JSON encoding because
+/// [`Diagnostic`] is not `Hash`; the encoding is order-stable (serde field order +
+/// deterministic diagnostic ordering), so identical diagnostics hash identically.
+/// Mirrors panache's `result_id_for`.
+fn result_id_for(items: &[Diagnostic]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_vec(items)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish().to_string()
 }
 
 /// Format the buffer behind a [`WorkerJob::Format`] on the read pool and reply.

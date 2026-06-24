@@ -16,17 +16,19 @@ use std::time::Duration;
 use badness::formatter::{FormatStyle, format_with_style};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
+    ClientCapabilities, CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
+    DiagnosticClientCapabilities, DiagnosticWorkspaceClientCapabilities,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
     FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
     InitializeResult, InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf,
     PartialResultParams, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
     ReferenceContext, ReferenceParams, RenameOptions, RenameParams, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
-    WorkDoneProgressParams, WorkspaceEdit,
+    TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
+    TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -157,12 +159,135 @@ fn start_server(
         "server must advertise foldingRangeProvider"
     );
     assert!(init.capabilities.text_document_sync.is_some());
+    assert!(
+        init.capabilities.diagnostic_provider.is_some(),
+        "server must advertise diagnosticProvider (pull diagnostics)"
+    );
     send_notification(
         &client,
         "initialized",
         serde_json::to_value(InitializedParams {}).unwrap(),
     );
     (client, server_thread)
+}
+
+/// Spawn an in-process server and handshake as a **pull-capable** client (advertises
+/// `textDocument/diagnostic` and `workspace.diagnostic.refreshSupport`). Such a
+/// client is served diagnostics pull-only — the server suppresses `publishDiagnostics`.
+fn start_server_pull() -> (Connection, std::thread::JoinHandle<()>) {
+    let (server, client) = Connection::memory();
+    let server_thread = std::thread::spawn(move || badness::lsp::serve(server).unwrap());
+
+    let params = InitializeParams {
+        capabilities: ClientCapabilities {
+            text_document: Some(TextDocumentClientCapabilities {
+                diagnostic: Some(DiagnosticClientCapabilities::default()),
+                ..Default::default()
+            }),
+            workspace: Some(WorkspaceClientCapabilities {
+                diagnostic: Some(DiagnosticWorkspaceClientCapabilities {
+                    refresh_support: Some(true),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    send_request(
+        &client,
+        1,
+        "initialize",
+        serde_json::to_value(params).unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(1));
+    let init: InitializeResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert!(
+        init.capabilities.diagnostic_provider.is_some(),
+        "server must advertise diagnosticProvider (pull diagnostics)"
+    );
+    send_notification(
+        &client,
+        "initialized",
+        serde_json::to_value(InitializedParams {}).unwrap(),
+    );
+    (client, server_thread)
+}
+
+/// Send a `textDocument/diagnostic` pull request.
+fn pull_diagnostic(client: &Connection, id: i32, uri: &Uri, previous_result_id: Option<String>) {
+    send_request(
+        client,
+        id,
+        "textDocument/diagnostic",
+        serde_json::to_value(DocumentDiagnosticParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            identifier: None,
+            previous_result_id,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+}
+
+/// Receive the response to a pull request `id`, parsed as a report. Asserts that **no
+/// `publishDiagnostics` push** arrives first (pull and push are mutually exclusive);
+/// tolerates and acks any server-initiated request (e.g. `workspace/diagnostic/refresh`).
+fn recv_document_diagnostic_report(client: &Connection, id: i32) -> DocumentDiagnosticReport {
+    loop {
+        match recv(client) {
+            Message::Response(resp) => {
+                assert_eq!(resp.id, RequestId::from(id));
+                let result: DocumentDiagnosticReportResult =
+                    serde_json::from_value(resp.result.unwrap()).unwrap();
+                match result {
+                    DocumentDiagnosticReportResult::Report(report) => return report,
+                    DocumentDiagnosticReportResult::Partial(_) => {
+                        panic!("server returned a partial report; none was requested")
+                    }
+                }
+            }
+            Message::Notification(not) if not.method == "textDocument/publishDiagnostics" => {
+                panic!("pull-mode client must not receive a publishDiagnostics push")
+            }
+            Message::Notification(_) => continue,
+            // Ack a server→client request (e.g. workspace/diagnostic/refresh) and keep waiting.
+            Message::Request(req) => {
+                client
+                    .sender
+                    .send(Message::Response(Response::new_ok(
+                        req.id,
+                        serde_json::Value::Null,
+                    )))
+                    .unwrap();
+            }
+        }
+    }
+}
+
+/// Extract the items from a full report (or `None` if it is an `unchanged` report).
+fn report_items(report: &DocumentDiagnosticReport) -> Option<&[lsp_types::Diagnostic]> {
+    match report {
+        DocumentDiagnosticReport::Full(full) => Some(&full.full_document_diagnostic_report.items),
+        DocumentDiagnosticReport::Unchanged(_) => None,
+    }
+}
+
+/// The `result_id` carried by either report kind.
+fn report_result_id(report: &DocumentDiagnosticReport) -> Option<String> {
+    match report {
+        DocumentDiagnosticReport::Full(full) => {
+            full.full_document_diagnostic_report.result_id.clone()
+        }
+        DocumentDiagnosticReport::Unchanged(unchanged) => Some(
+            unchanged
+                .unchanged_document_diagnostic_report
+                .result_id
+                .clone(),
+        ),
+    }
 }
 
 fn did_open(client: &Connection, uri: &Uri, version: i32, text: &str) {
@@ -1480,6 +1605,110 @@ fn lsp_cite_completion_cross_file() {
     assert!(names.contains(&"knuth1984"), "{names:?}");
     let key = items.iter().find(|i| i.label == "knuth1984").unwrap();
     assert_eq!(key.kind, Some(CompletionItemKind::REFERENCE));
+
+    shutdown(&client, server_thread);
+}
+
+/// Helper: send a whole-buffer `didChange` (version `v`) replacing the document text.
+fn did_change_full(client: &Connection, uri: &Uri, v: i32, text: &str) {
+    send_notification(
+        client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: v,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: text.to_owned(),
+            }],
+        })
+        .unwrap(),
+    );
+}
+
+#[test]
+fn lsp_pull_diagnostics_suppress_push_and_report_full() {
+    let (client, server_thread) = start_server_pull();
+    let uri: Uri = "file:///pull.tex".parse().unwrap();
+
+    // didOpen a broken document. A pull-capable client must NOT receive a push.
+    did_open(&client, &uri, 1, "\\begin{itemize}\n\\item a\n");
+
+    // Pull on demand: the report carries the parse error.
+    pull_diagnostic(&client, 10, &uri, None);
+    let report = recv_document_diagnostic_report(&client, 10);
+    let items = report_items(&report).expect("a broken document yields a full report");
+    assert!(
+        !items.is_empty(),
+        "an unclosed environment must produce at least one pulled diagnostic"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_pull_diagnostics_current_right_after_change() {
+    // The regression guard mirroring panache's fix: a pull issued immediately after
+    // an edit (without waiting) must reflect the CURRENT buffer, never one behind.
+    let (client, server_thread) = start_server_pull();
+    let uri: Uri = "file:///pull_change.tex".parse().unwrap();
+
+    // Open broken, then change to a valid document and pull at once.
+    did_open(&client, &uri, 1, "\\begin{itemize}\n\\item a\n");
+    did_change_full(&client, &uri, 2, "\\section{Hi}\n\ntext.\n");
+    pull_diagnostic(&client, 11, &uri, None);
+
+    let report = recv_document_diagnostic_report(&client, 11);
+    let items = report_items(&report).expect("expected a full report");
+    assert!(
+        items.is_empty(),
+        "the pull must reflect the fixed buffer, got {items:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_pull_diagnostics_unchanged_result_id() {
+    let (client, server_thread) = start_server_pull();
+    let uri: Uri = "file:///pull_unchanged.tex".parse().unwrap();
+
+    did_open(&client, &uri, 1, "\\section{Hi}\n\ntext.\n");
+
+    // First pull: a full report with a result_id.
+    pull_diagnostic(&client, 12, &uri, None);
+    let first = recv_document_diagnostic_report(&client, 12);
+    assert!(matches!(first, DocumentDiagnosticReport::Full(_)));
+    let result_id = report_result_id(&first).expect("full report carries a result_id");
+
+    // Second pull with that result_id and no edit between: an unchanged report.
+    pull_diagnostic(&client, 13, &uri, Some(result_id.clone()));
+    let second = recv_document_diagnostic_report(&client, 13);
+    assert!(
+        matches!(second, DocumentDiagnosticReport::Unchanged(_)),
+        "an unchanged document must report `unchanged`, got {second:?}"
+    );
+    assert_eq!(report_result_id(&second), Some(result_id));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_push_client_still_receives_pushes() {
+    // A client that does NOT advertise pull support keeps the push model.
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///push.tex".parse().unwrap();
+
+    did_open(&client, &uri, 1, "\\begin{itemize}\n\\item a\n");
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    assert!(
+        !diags.diagnostics.is_empty(),
+        "push-mode client must still receive pushed diagnostics"
+    );
 
     shutdown(&client, server_thread);
 }

@@ -85,9 +85,9 @@ use lsp_types::{
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
     DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams,
     DocumentSymbolResponse, FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
-    FormattingOptions, FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse,
-    HoverParams, HoverProviderCapability, InsertTextFormat, Location, NumberOrString, OneOf,
-    Position, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
+    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, HoverParams,
+    HoverProviderCapability, InsertTextFormat, Location, NumberOrString, OneOf, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
     RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
@@ -107,10 +107,13 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
+use crate::config::{Config, LintConfig};
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
-use crate::formatter::{FormatStyle, format_node_with_signatures, format_with_style_flavored};
+use crate::formatter::{
+    FormatStyle, WrapMode, format_node_with_signatures, format_with_style_flavored,
+};
 use crate::incremental::{Analysis, IncrementalDatabase};
-use crate::linter::{Severity, lint_document};
+use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{parse, parse_with_flavor};
 use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
@@ -207,6 +210,11 @@ struct Document {
 struct GlobalState {
     documents: HashMap<Uri, Document>,
     editor_settings: EditorSettings,
+    /// Per-document config resolutions, keyed by the document's **anchor directory**
+    /// (its parent). A discovered `badness.toml` is authoritative; editor settings
+    /// are the fallback. Populated lazily by [`GlobalState::resolve_settings`] and
+    /// cleared wholesale on `didChangeConfiguration`. Mirrors arity's `config_cache`.
+    config_cache: HashMap<PathBuf, ResolvedSettings>,
     /// The client advertised `textDocument/diagnostic` pull support, so we serve
     /// diagnostics pull-only and **suppress** the `publishDiagnostics` push (the two
     /// are mutually exclusive, matching rust-analyzer/panache).
@@ -255,15 +263,87 @@ impl EditorSettings {
     }
 }
 
-/// Resolve the effective style for a format request: editor settings as the base,
-/// then the request's `tab_size` (when set) overrides the indent width — matching
-/// the MVP's original behavior.
-fn resolve_style(settings: &EditorSettings, options: &FormattingOptions) -> FormatStyle {
-    let mut style = settings.to_format_style();
-    if options.tab_size > 0 {
-        style.indent_width = options.tab_size as usize;
+/// A document's resolved configuration: the formatter [`FormatStyle`] (with `wrap`
+/// still a placeholder — the file kind decides it per request) plus the lint
+/// selection. Built from a discovered `badness.toml` (file-wins) or, absent one,
+/// from the editor settings. Cached per anchor dir in [`GlobalState::config_cache`].
+/// Mirrors arity's `ResolvedSettings`.
+#[derive(Debug, Clone)]
+struct ResolvedSettings {
+    /// Width knobs set; `wrap` is the [`WrapMode::default`] placeholder.
+    style: FormatStyle,
+    /// Configured paragraph wrap, if any. `None` ⇒ the file-kind default applies.
+    wrap_override: Option<WrapMode>,
+    /// Whether a `badness.toml` governed this resolution. When `true` the file
+    /// config wins outright and a request's `tab_size` is ignored (arity's rule).
+    config_present: bool,
+    /// The `[lint]` `select`/`ignore` selection (default — every rule — when no file).
+    lint: LintConfig,
+}
+
+impl ResolvedSettings {
+    /// Resolution from a discovered config (when `present`), else from the editor
+    /// settings. Mirrors arity's `resolve_format_style` file-wins rule.
+    fn from_config(config: &Config, present: bool, editor: &EditorSettings) -> Self {
+        if present {
+            Self {
+                style: FormatStyle::from(&config.format),
+                wrap_override: config.format.wrap.map(Into::into),
+                config_present: true,
+                lint: config.lint.clone(),
+            }
+        } else {
+            Self::from_editor(editor)
+        }
     }
-    style
+
+    /// Editor-settings-only resolution: width knobs over the built-in defaults, no
+    /// configured wrap, and the full default rule set.
+    fn from_editor(editor: &EditorSettings) -> Self {
+        Self {
+            style: editor.to_format_style(),
+            wrap_override: None,
+            config_present: false,
+            lint: LintConfig::default(),
+        }
+    }
+
+    /// The active lint-rule set this config implies (unknown ids are dropped; the
+    /// CLI surfaces them, the LSP has no good channel to yet).
+    fn rule_selection(&self) -> RuleSelection {
+        RuleSelection::resolve(self.lint.select.as_deref(), &self.lint.ignore).0
+    }
+}
+
+impl GlobalState {
+    /// Resolve (and cache) the [`ResolvedSettings`] for `uri`'s document: discover a
+    /// `badness.toml` from the document's anchor directory (its parent), falling back
+    /// to the editor settings when none is found. Cached by anchor dir, so repeated
+    /// format/lint requests in a workspace pay the filesystem walk once. Mirrors
+    /// arity's `GlobalState::resolve_settings`.
+    ///
+    /// A non-`file` buffer (untitled) or a directory-less / unreadable / malformed
+    /// config resolves to the editor settings and is **not** cached, so fixing a
+    /// broken `badness.toml` takes effect on the next request without a restart.
+    fn resolve_settings(&mut self, uri: &Uri) -> ResolvedSettings {
+        let Some(anchor) = uri_to_fs_path(uri).and_then(|p| p.parent().map(Path::to_path_buf))
+        else {
+            return ResolvedSettings::from_editor(&self.editor_settings);
+        };
+        if let Some(cached) = self.config_cache.get(&anchor) {
+            return cached.clone();
+        }
+        let resolved = match Config::resolve(None, false, &anchor) {
+            Ok((config, source)) => {
+                ResolvedSettings::from_config(&config, source.is_some(), &self.editor_settings)
+            }
+            // No good channel to report a bad/unreadable config; fall back without
+            // caching so a fix is picked up next time.
+            Err(_) => return ResolvedSettings::from_editor(&self.editor_settings),
+        };
+        self.config_cache.insert(anchor, resolved.clone());
+        resolved
+    }
 }
 
 /// A job from the main loop to the worker thread.
@@ -276,6 +356,8 @@ enum WorkerJob {
         text: String,
         version: i32,
         kind: FileKind,
+        /// The document's resolved lint-rule selection, applied to the analyze.
+        rules: RuleSelection,
     },
     /// `didClose`: evict the file from the db. Diagnostics are cleared directly by
     /// the main loop.
@@ -387,6 +469,8 @@ enum WorkerJob {
         text: String,
         kind: FileKind,
         previous_result_id: Option<String>,
+        /// The document's resolved lint-rule selection, applied to the report.
+        rules: RuleSelection,
     },
     /// A `textDocument/codeAction` request: re-lint the buffer off a fresh snapshot
     /// and reply with a quick-fix per fix-carrying finding overlapping `range`.
@@ -400,6 +484,8 @@ enum WorkerJob {
         text: String,
         kind: FileKind,
         range: Range,
+        /// The document's resolved lint-rule selection, applied to the findings.
+        rules: RuleSelection,
     },
 }
 
@@ -486,6 +572,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
     let mut state = GlobalState {
         documents: HashMap::new(),
         editor_settings,
+        config_cache: HashMap::new(),
         supports_pull_diagnostics,
         supports_diagnostic_refresh,
         next_request_id: 1,
@@ -508,7 +595,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             break;
                         }
                         match req.method.as_str() {
-                            Formatting::METHOD => on_formatting(&connection, &state, &job_tx, req),
+                            Formatting::METHOD => {
+                                on_formatting(&connection, &mut state, &job_tx, req)
+                            }
                             DocumentSymbolRequest::METHOD => {
                                 on_document_symbol(&connection, &state, &job_tx, req)
                             }
@@ -529,10 +618,10 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_folding_range(&connection, &state, &job_tx, req)
                             }
                             CodeActionRequest::METHOD => {
-                                on_code_action(&connection, &state, &job_tx, req)
+                                on_code_action(&connection, &mut state, &job_tx, req)
                             }
                             DocumentDiagnosticRequest::METHOD => {
-                                on_document_diagnostic(&connection, &state, &job_tx, req)
+                                on_document_diagnostic(&connection, &mut state, &job_tx, req)
                             }
                             _ => respond_unhandled(&connection, req),
                         }
@@ -583,12 +672,14 @@ fn on_notification(
             );
             let path = uri_to_path(&uri);
             let kind = file_kind_for(&path);
+            let rules = state.resolve_settings(&uri).rule_selection();
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
                 text: doc.text,
                 version: doc.version,
                 kind,
+                rules,
             });
         }
         DidChangeTextDocument::METHOD => {
@@ -607,12 +698,14 @@ fn on_notification(
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
             let kind = file_kind_for(&path);
+            let rules = state.resolve_settings(&uri).rule_selection();
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
                 text,
                 version,
                 kind,
+                rules,
             });
         }
         DidCloseTextDocument::METHOD => {
@@ -638,6 +731,10 @@ fn on_notification(
                 not.extract::<DidChangeConfigurationParams>(DidChangeConfiguration::METHOD)
             {
                 state.editor_settings = EditorSettings::from_client_value(&params.settings);
+                // Drop cached resolutions so the new fallback is picked up on the
+                // next request. A discovered `badness.toml` still wins, so docs in a
+                // configured workspace are unaffected. Mirrors arity.
+                state.config_cache.clear();
             }
         }
         _ => {}
@@ -669,7 +766,7 @@ fn apply_content_changes(text: &mut String, changes: Vec<TextDocumentContentChan
 /// when the document is unknown.
 fn on_formatting(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -688,24 +785,31 @@ fn on_formatting(
     };
 
     let uri = params.text_document.uri;
-    let Some(doc) = state.documents.get(&uri) else {
+    if !state.documents.contains_key(&uri) {
         // Unknown document: nothing to format.
         let _ = connection.sender.send(Message::Response(Response::new_ok(
             id,
             serde_json::Value::Null,
         )));
         return;
-    };
-    let mut style = resolve_style(&state.editor_settings, &params.options);
+    }
+    let resolved = state.resolve_settings(&uri);
+    let mut style = resolved.style;
+    // A discovered `badness.toml` wins outright (arity's rule); only when none
+    // governs does the request's `tab_size` override the indent width.
+    if !resolved.config_present && params.options.tab_size > 0 {
+        style.indent_width = params.options.tab_size as usize;
+    }
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    // `EditorSettings` carries no wrap mode yet (it is hardcoded `Reflow`), so the
-    // file kind decides it: a package/class body is code, defaulting to `Preserve`.
-    style.wrap = kind.default_wrap();
+    // `wrap` is decided per request: a configured `wrap` wins, else the file kind
+    // (a package/class body is code, defaulting to `Preserve`).
+    style.wrap = resolved.wrap_override.unwrap_or(kind.default_wrap());
+    let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::Format {
         id,
         path,
-        text: doc.text.clone(),
+        text,
         style,
         kind,
     });
@@ -802,7 +906,7 @@ fn on_folding_range(
 /// one on the FIFO `job_tx` (see [`WorkerJob::Diagnostic`]).
 fn on_document_diagnostic(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -832,14 +936,17 @@ fn on_document_diagnostic(
         reply_empty_diagnostic_report(connection, id);
         return;
     };
+    let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
+    let rules = state.resolve_settings(&uri).rule_selection();
     let _ = job_tx.send(WorkerJob::Diagnostic {
         id,
         path,
-        text: doc.text.clone(),
+        text,
         kind,
         previous_result_id: params.previous_result_id,
+        rules,
     });
 }
 
@@ -967,7 +1074,7 @@ fn on_hover(
 /// same way).
 fn on_code_action(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -995,15 +1102,18 @@ fn on_code_action(
         )));
         return;
     };
+    let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
+    let rules = state.resolve_settings(&uri).rule_selection();
     let _ = job_tx.send(WorkerJob::CodeAction {
         id,
         uri,
         path,
-        text: doc.text.clone(),
+        text,
         kind,
         range,
+        rules,
     });
 }
 
@@ -1237,16 +1347,25 @@ fn forward_outbound(
             // current version. The worker coalesces per-URI, so this is cheap; salsa
             // memos make the actual recompute incremental. A re-lint of a doc in an
             // already-seeded directory discovers no new members, so it can't
-            // re-trigger `RelintAll` (no loop).
-            for (uri, doc) in &state.documents {
-                let path = uri_to_path(uri);
+            // re-trigger `RelintAll` (no loop). Snapshot the buffers first so the
+            // per-document `resolve_settings` (`&mut self`) doesn't alias the
+            // `documents` borrow.
+            let snapshot: Vec<(Uri, String, i32)> = state
+                .documents
+                .iter()
+                .map(|(uri, doc)| (uri.clone(), doc.text.clone(), doc.version))
+                .collect();
+            for (uri, text, version) in snapshot {
+                let path = uri_to_path(&uri);
                 let kind = file_kind_for(&path);
+                let rules = state.resolve_settings(&uri).rule_selection();
                 let _ = job_tx.send(WorkerJob::Edit {
-                    uri: uri.clone(),
+                    uri,
                     path,
-                    text: doc.text.clone(),
-                    version: doc.version,
+                    text,
+                    version,
                     kind,
+                    rules,
                 });
             }
         }
@@ -1277,6 +1396,8 @@ struct AnalyzeRequest {
     path: PathBuf,
     version: i32,
     kind: FileKind,
+    /// The document's resolved lint-rule selection, applied to the analyze.
+    rules: RuleSelection,
 }
 
 /// What [`Worker::try_dispatch`] should do given the in-flight analyze and the
@@ -1391,6 +1512,7 @@ impl Worker {
                 text,
                 version,
                 kind,
+                rules,
             } => {
                 // Write-phase: push the live buffer into the db. Cheap — the parse
                 // is a lazy salsa query deferred to the analyze. Acquiring `&mut
@@ -1408,6 +1530,7 @@ impl Worker {
                     path,
                     version,
                     kind,
+                    rules,
                 });
             }
             WorkerJob::Close { path } => {
@@ -1574,6 +1697,7 @@ impl Worker {
                 text,
                 kind,
                 previous_result_id,
+                rules,
             } => {
                 // On-demand pull: snapshot the db + membership on the write side
                 // (like an analyze) so the read job interns the latest project. This
@@ -1591,6 +1715,7 @@ impl Worker {
                         kind,
                         members,
                         previous_result_id,
+                        &rules,
                         &out_tx,
                     )
                 });
@@ -1602,6 +1727,7 @@ impl Worker {
                 text,
                 kind,
                 range,
+                rules,
             } => {
                 // On-demand re-lint, like the pull-diagnostics path: snapshot the db
                 // + membership on the write side so the read job interns the latest
@@ -1611,7 +1737,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_code_action(
-                        &snapshot, id, &uri, &path, &text, kind, range, members, &out_tx,
+                        &snapshot, id, &uri, &path, &text, kind, range, members, &rules, &out_tx,
                     )
                 });
             }
@@ -1642,8 +1768,10 @@ impl Worker {
         if !self.seeded_dirs.insert(dir.clone()) {
             return false; // already walked
         }
-        // The LSP does its own scoping and does not read `badness.toml` yet, so
-        // sibling discovery applies no exclude filter.
+        // A discovered `badness.toml` now governs format/lint per document
+        // (`resolve_settings`), but sibling discovery here runs inside the worker —
+        // which holds no config — so it still applies no exclude filter. Honoring the
+        // config's `exclude`/`extend-exclude` is a recorded follow-up (see TODO.md).
         let Ok(files) = collect_lint_files(&[dir], &ExcludeFilter::none()) else {
             return false;
         };
@@ -1725,6 +1853,7 @@ impl Worker {
             path,
             version,
             kind,
+            rules,
         } = req;
         self.inflight = Some(InflightAnalyze {
             uri: uri.clone(),
@@ -1733,9 +1862,9 @@ impl Worker {
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
                 FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                    analyze_tex(&snapshot, &path, members)
+                    analyze_tex(&snapshot, &path, members, &rules)
                 }
-                FileKind::Bib => analyze_bib(&snapshot, &path),
+                FileKind::Bib => analyze_bib(&snapshot, &path, &rules),
             }));
             if let Ok(Some(diags)) = result {
                 let _ = out_tx.send(Outbound::Diagnostics {
@@ -1766,6 +1895,7 @@ fn analyze_tex(
     snapshot: &Analysis,
     path: &Path,
     members: Vec<ProjectMember>,
+    rules: &RuleSelection,
 ) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
     let text = snapshot.file_text(file).to_owned();
@@ -1788,7 +1918,9 @@ fn analyze_tex(
     let model = snapshot.semantic_model(file);
     let (resolution, citations) = snapshot.resolve_project(members);
     for d in lint_document(&lint_path, &root, model, Some(resolution), Some(citations)) {
-        diags.push(lint_to_lsp(&idx, &text, d));
+        if rules.is_active(d.rule) {
+            diags.push(lint_to_lsp(&idx, &text, d));
+        }
     }
     Some(diags)
 }
@@ -1797,7 +1929,7 @@ fn analyze_tex(
 /// plus bib lint-rule findings over the cached bib tree + model. The bib linter
 /// has no cross-file resolution argument (no bib rule is cross-file-sensitive
 /// yet).
-fn analyze_bib(snapshot: &Analysis, path: &Path) -> Option<Vec<Diagnostic>> {
+fn analyze_bib(snapshot: &Analysis, path: &Path, rules: &RuleSelection) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
     let text = snapshot.file_text(file).to_owned();
     let idx = LineIndex::new(&text);
@@ -1815,7 +1947,9 @@ fn analyze_bib(snapshot: &Analysis, path: &Path) -> Option<Vec<Diagnostic>> {
     let root = snapshot.parsed_bib_tree(file);
     let model = snapshot.bib_semantic_model(file);
     for d in crate::bib::linter::lint_document(path, &root, model) {
-        diags.push(lint_to_lsp(&idx, &text, d));
+        if rules.is_active(d.rule) {
+            diags.push(lint_to_lsp(&idx, &text, d));
+        }
     }
     Some(diags)
 }
@@ -1850,9 +1984,10 @@ fn run_document_diagnostic(
     kind: FileKind,
     members: Vec<ProjectMember>,
     previous_result_id: Option<String>,
+    rules: &RuleSelection,
     out_tx: &Sender<Outbound>,
 ) {
-    let items = compute_diagnostics(snapshot, path, text, kind, members);
+    let items = compute_diagnostics(snapshot, path, text, kind, members, rules);
     let result_id = result_id_for(&items);
     let report = if previous_result_id.as_deref() == Some(result_id.as_str()) {
         DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
@@ -1887,26 +2022,32 @@ fn compute_diagnostics(
     text: &str,
     kind: FileKind,
     members: Vec<ProjectMember>,
+    rules: &RuleSelection,
 ) -> Vec<Diagnostic> {
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            analyze_tex(snapshot, path, members)
+            analyze_tex(snapshot, path, members, rules)
         }
-        FileKind::Bib => analyze_bib(snapshot, path),
+        FileKind::Bib => analyze_bib(snapshot, path, rules),
     }));
     match cached {
         Ok(Some(items)) => items,
         // `Ok(None)` = file not in the snapshot; `Err` = cancelled by a racing edit.
         // Either way recompute from the captured buffer (single-file: cross-file
         // findings, if any, arrive on the client's next pull after the edit settles).
-        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind),
+        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind, rules),
     }
 }
 
 /// Single-file diagnostics computed directly from `text`, bypassing the salsa cache.
 /// The cancellation/cache-miss fallback for a pull — parse diagnostics plus
 /// node-shape lint findings, with no cross-file resolution (`None` resolvers).
-fn fallback_diagnostics(path: &Path, text: &str, kind: FileKind) -> Vec<Diagnostic> {
+fn fallback_diagnostics(
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    rules: &RuleSelection,
+) -> Vec<Diagnostic> {
     let idx = LineIndex::new(text);
     let mut diags: Vec<Diagnostic> = Vec::new();
     match kind {
@@ -1924,7 +2065,9 @@ fn fallback_diagnostics(path: &Path, text: &str, kind: FileKind) -> Vec<Diagnost
             let root = parsed.syntax();
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None) {
-                diags.push(lint_to_lsp(&idx, text, d));
+                if rules.is_active(d.rule) {
+                    diags.push(lint_to_lsp(&idx, text, d));
+                }
             }
         }
         FileKind::Bib => {
@@ -1941,7 +2084,9 @@ fn fallback_diagnostics(path: &Path, text: &str, kind: FileKind) -> Vec<Diagnost
             let root = parsed.syntax();
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
-                diags.push(lint_to_lsp(&idx, text, d));
+                if rules.is_active(d.rule) {
+                    diags.push(lint_to_lsp(&idx, text, d));
+                }
             }
         }
     }
@@ -1964,9 +2109,10 @@ fn run_code_action(
     kind: FileKind,
     range: Range,
     members: Vec<ProjectMember>,
+    rules: &RuleSelection,
     out_tx: &Sender<Outbound>,
 ) {
-    let findings = compute_lint_findings(snapshot, path, text, kind, members);
+    let findings = compute_lint_findings(snapshot, path, text, kind, members, rules);
     let actions = code_action::code_actions_for_range(&findings, text, uri, range);
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
@@ -1981,13 +2127,14 @@ fn compute_lint_findings(
     text: &str,
     kind: FileKind,
     members: Vec<ProjectMember>,
+    rules: &RuleSelection,
 ) -> Vec<crate::linter::Diagnostic> {
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        lint_findings(snapshot, path, kind, members)
+        lint_findings(snapshot, path, kind, members, rules)
     }));
     match cached {
         Ok(Some(items)) => items,
-        Ok(None) | Err(_) => fallback_lint_findings(path, text, kind),
+        Ok(None) | Err(_) => fallback_lint_findings(path, text, kind, rules),
     }
 }
 
@@ -1999,9 +2146,10 @@ fn lint_findings(
     path: &Path,
     kind: FileKind,
     members: Vec<ProjectMember>,
+    rules: &RuleSelection,
 ) -> Option<Vec<crate::linter::Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
-    Some(match kind {
+    let findings = match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
             let lint_path = snapshot.file_path(file).to_path_buf();
             let root = snapshot.parsed_tree(file);
@@ -2014,7 +2162,8 @@ fn lint_findings(
             let model = snapshot.bib_semantic_model(file);
             crate::bib::linter::lint_document(path, &root, model)
         }
-    })
+    };
+    Some(retain_active(findings, rules))
 }
 
 /// Single-file raw findings computed directly from `text`, bypassing the salsa
@@ -2024,8 +2173,9 @@ fn fallback_lint_findings(
     path: &Path,
     text: &str,
     kind: FileKind,
+    rules: &RuleSelection,
 ) -> Vec<crate::linter::Diagnostic> {
-    match kind {
+    let findings = match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
             let parsed = parse_with_flavor(text, kind.lex_config());
             let root = parsed.syntax();
@@ -2038,7 +2188,20 @@ fn fallback_lint_findings(
             let model = BibModel::build(&root);
             crate::bib::linter::lint_document(path, &root, &model)
         }
-    }
+    };
+    retain_active(findings, rules)
+}
+
+/// Drop findings whose rule the config deselected (parse diagnostics always
+/// survive — see [`RuleSelection::is_active`]). The raw-findings analog of the
+/// inline `is_active` filter in [`analyze_tex`]/[`analyze_bib`], shared by the
+/// code-action paths. Mirrors the CLI's `diagnostics.retain(|d| rules.is_active(..))`.
+fn retain_active(
+    mut findings: Vec<crate::linter::Diagnostic>,
+    rules: &RuleSelection,
+) -> Vec<crate::linter::Diagnostic> {
+    findings.retain(|d| rules.is_active(d.rule));
+    findings
 }
 
 /// Derive a stable, content-addressed `result_id` from a diagnostic set, so a
@@ -3704,6 +3867,121 @@ mod tests {
         let s = EditorSettings::from_client_value(&namespaced);
         assert_eq!(s.line_width, Some(72));
         assert_eq!(s.indent_width, None);
+    }
+
+    /// A bare [`GlobalState`] with the given editor settings and an empty cache, for
+    /// exercising [`GlobalState::resolve_settings`].
+    fn state_with_editor(editor: EditorSettings) -> GlobalState {
+        GlobalState {
+            documents: HashMap::new(),
+            editor_settings: editor,
+            config_cache: HashMap::new(),
+            supports_pull_diagnostics: false,
+            supports_diagnostic_refresh: false,
+            next_request_id: 1,
+        }
+    }
+
+    /// A `file://` URI for `main.tex` inside `dir`.
+    fn file_uri_in(dir: &Path) -> Uri {
+        uri(&format!("file://{}/main.tex", dir.display()))
+    }
+
+    #[test]
+    fn resolve_settings_prefers_file_config_over_editor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            "[format]\nline-width = 100\nindent-width = 8\n",
+        )
+        .expect("write config");
+        let mut state = state_with_editor(EditorSettings {
+            line_width: Some(40),
+            indent_width: Some(3),
+        });
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+        assert!(resolved.config_present);
+        assert_eq!(resolved.style.line_width, 100);
+        assert_eq!(resolved.style.indent_width, 8);
+    }
+
+    #[test]
+    fn resolve_settings_falls_back_to_editor_without_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = state_with_editor(EditorSettings {
+            line_width: Some(40),
+            indent_width: None,
+        });
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+        assert!(!resolved.config_present);
+        assert_eq!(resolved.style.line_width, 40);
+        // Unset editor knob keeps the built-in default.
+        assert_eq!(
+            resolved.style.indent_width,
+            FormatStyle::default().indent_width
+        );
+        assert!(resolved.wrap_override.is_none());
+    }
+
+    #[test]
+    fn resolve_settings_wrap_override_from_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            "[format]\nwrap = \"preserve\"\n",
+        )
+        .expect("write config");
+        let mut state = state_with_editor(EditorSettings::default());
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+        assert_eq!(resolved.wrap_override, Some(WrapMode::Preserve));
+    }
+
+    #[test]
+    fn resolve_settings_applies_lint_selection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            "[lint]\nselect = [\"duplicate-label\"]\n",
+        )
+        .expect("write config");
+        let mut state = state_with_editor(EditorSettings::default());
+        let rules = state
+            .resolve_settings(&file_uri_in(dir.path()))
+            .rule_selection();
+        assert!(rules.is_active("duplicate-label"));
+        assert!(!rules.is_active("deprecated-command"));
+        // Parse diagnostics are never filtered out.
+        assert!(rules.is_active("parse"));
+    }
+
+    #[test]
+    fn resolve_settings_caches_by_anchor_until_cleared() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = state_with_editor(EditorSettings {
+            line_width: Some(40),
+            indent_width: None,
+        });
+        let uri = file_uri_in(dir.path());
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+        // A later editor change is masked by the cache until it is cleared (the
+        // `didChangeConfiguration` handler clears it).
+        state.editor_settings.line_width = Some(72);
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+        state.config_cache.clear();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 72);
+    }
+
+    #[test]
+    fn resolve_settings_untitled_uses_editor_fallback_uncached() {
+        let mut state = state_with_editor(EditorSettings {
+            line_width: Some(55),
+            indent_width: None,
+        });
+        let resolved = state.resolve_settings(&uri("untitled:Untitled-1"));
+        assert!(!resolved.config_present);
+        assert_eq!(resolved.style.line_width, 55);
+        // A non-file buffer never joins the anchor-dir cache.
+        assert!(state.config_cache.is_empty());
     }
 
     /// The byte offset of the first occurrence of `needle` in `text`.

@@ -68,13 +68,23 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### Configuration & sync
 
-- [ ] config over LSP --- today `EditorSettings` carries only
-  `line_width`/`indent_width`; `wrap` is hardcoded `Reflow`. Plumb
-  `WrapMode` (and any future format knobs) through `EditorSettings` →
-  `FormatStyle`, keeping the namespaced/bare parsing. Separately, the LSP does
-  **not** yet discover `badness.toml` (the CLI does, via `src/config.rs`); mirror
-  arity's per-document config discovery (cached by anchor dir, editor settings as
-  fallback) so file config and editor settings compose.
+- [x] config over LSP --- the LSP now discovers `badness.toml` per document
+  (`GlobalState::resolve_settings`, cached by anchor dir, cleared on
+  `didChangeConfiguration`), mirroring arity. A discovered config wins outright
+  (file-wins); editor settings are the fallback. Both `[format]` (`line-width`,
+  `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
+  `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
+  follow-ups remain:
+  - Sibling discovery (`Worker::seed_dir`) still walks with no exclude filter: it
+    runs inside the worker, which holds no config. Honor the config's
+    `exclude`/`extend-exclude` by plumbing it into the worker.
+  - No on-disk config watching: the anchor-dir cache lives for the session and is
+    cleared only on `didChangeConfiguration`, so editing `badness.toml` needs a
+    config-change nudge (or restart) to take effect. Folds into the
+    `didChangeWatchedFiles` work below. (Matches arity.)
+  - Deliberately *not* done: plumbing `wrap` (or other knobs) through
+    `EditorSettings` itself. A discovered config's `wrap` flows via `FormatConfig`,
+    so no new editor knob was needed; `EditorSettings` stays `line_width`/`indent_width`.
 - [x] Pull diagnostics: `textDocument/diagnostic` is offered alongside the push
   model — a pull-capable client is served pull-only (push suppressed), computed
   on demand off a fresh snapshot (FIFO after the edit, so always current), with a

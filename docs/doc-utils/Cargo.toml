@@ -3,6 +3,10 @@ name = "doc-utils"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# The crate ships two binaries (the mdbook preprocessor `doc-utils` and the
+# post-build `sitemap` generator); pin the preprocessor as the `cargo run`
+# default so book.toml's `cargo run` invocation stays unambiguous.
+default-run = "doc-utils"
 
 [dependencies]
 mdbook-preprocessor = "0.5.2"

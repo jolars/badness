@@ -22,6 +22,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Full history so the sitemap can derive per-page <lastmod> from git.
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -51,6 +54,13 @@ jobs:
 
       - name: Build documentation
         run: mdbook build docs
+
+      # mdbook has no built-in sitemap; generate one from the rendered pages.
+      # `lastmod` is derived from git history, so this runs against full history.
+      - name: Generate sitemap
+        run: |
+          cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
+            --bin sitemap -- docs/book https://jolars.github.io/badness/
 
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

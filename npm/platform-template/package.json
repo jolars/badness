@@ -2,7 +2,7 @@
   "name": "@badness/__NAME__",
   "version": "__VERSION__",
   "description": "Prebuilt badness binary for __NAME__. Install badness instead.",
-  "homepage": "https://jolars.github.io/badness/",
+  "homepage": "https://badness.dev/",
   "bugs": "https://github.com/jolars/badness/issues",
   "repository": {
     "type": "git",

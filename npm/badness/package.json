@@ -8,7 +8,7 @@
     "linter",
     "language-server"
   ],
-  "homepage": "https://jolars.github.io/badness/",
+  "homepage": "https://badness.dev/",
   "bugs": "https://github.com/jolars/badness/issues",
   "repository": {
     "type": "git",

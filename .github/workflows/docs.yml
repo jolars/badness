@@ -60,14 +60,14 @@ jobs:
       - name: Inject canonical links
         run: |
           cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
-            --bin canonical -- docs/book https://jolars.github.io/badness/
+            --bin canonical -- docs/book https://badness.dev/
 
       # mdbook has no built-in sitemap; generate one from the rendered pages.
       # `lastmod` is derived from git history, so this runs against full history.
       - name: Generate sitemap
         run: |
           cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
-            --bin sitemap -- docs/book https://jolars.github.io/badness/
+            --bin sitemap -- docs/book https://badness.dev/
 
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

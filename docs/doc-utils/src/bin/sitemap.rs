@@ -8,8 +8,8 @@
 //! sitemap <book-dir> <base-url>
 //! ```
 //!
-//! e.g. `sitemap docs/book https://jolars.github.io/badness/`. The base URL is
-//! the public root the book is served from (the GitHub Pages project URL).
+//! e.g. `sitemap docs/book https://badness.dev/`. The base URL is the public
+//! root the book is served from (the custom domain apex).
 
 use std::path::Path;
 use std::process::Command;

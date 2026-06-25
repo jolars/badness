@@ -25,9 +25,9 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://jolars.github.io/badness/"
+Homepage = "https://badness.dev/"
 Repository = "https://github.com/jolars/badness"
-Documentation = "https://jolars.github.io/badness/"
+Documentation = "https://badness.dev/"
 
 [tool.maturin]
 # Package the existing `badness` binary (not a Python extension module) as a wheel.

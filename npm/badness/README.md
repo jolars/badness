@@ -1,6 +1,6 @@
 # badness
 
-[Badness](https://jolars.github.io/badness/) is an LSP, formatter, and linter
+[Badness](https://badness.dev/) is an LSP, formatter, and linter
 for LaTeX documents.
 
 ## Install
@@ -29,7 +29,7 @@ badness lint --fix document.tex # lint and apply auto-fixes
 badness lsp                     # start the language server
 ```
 
-See `badness --help` and the [documentation](https://jolars.github.io/badness/)
+See `badness --help` and the [documentation](https://badness.dev/)
 for the full feature list and configuration reference.
 
 ## Supported platforms
@@ -44,7 +44,7 @@ Prebuilt binaries are shipped for:
 If your platform isn't covered, install via
 [Cargo](https://crates.io/crates/badness),
 [PyPI](https://pypi.org/project/badness/), or one of the other methods listed at
-<https://jolars.github.io/badness/>.
+<https://badness.dev/>.
 
 ## License
 

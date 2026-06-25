@@ -10,7 +10,7 @@
 //! canonical <book-dir> <base-url>
 //! ```
 //!
-//! e.g. `canonical docs/book https://jolars.github.io/badness/`. The canonical
+//! e.g. `canonical docs/book https://badness.dev/`. The canonical
 //! URL of each page is derived exactly as the sitemap derives its `<loc>`, so a
 //! page's canonical link and its sitemap entry always agree.
 //!

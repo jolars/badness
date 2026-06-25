@@ -96,7 +96,7 @@ tasks:
     cmds:
       - >-
         cargo run --quiet --manifest-path doc-utils/Cargo.toml --bin canonical --
-        book https://jolars.github.io/badness/
+        book https://badness.dev/
 
   docs:sitemap:
     desc: Generate docs/book/sitemap.xml from the rendered book
@@ -104,7 +104,7 @@ tasks:
     cmds:
       - >-
         cargo run --quiet --manifest-path doc-utils/Cargo.toml --bin sitemap --
-        book https://jolars.github.io/badness/
+        book https://badness.dev/
 
   docs:serve:
     desc: Serve the docs locally with live reload

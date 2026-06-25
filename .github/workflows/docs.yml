@@ -55,6 +55,13 @@ jobs:
       - name: Build documentation
         run: mdbook build docs
 
+      # mdbook has no `canonical-site-url` setting (rust-lang/mdBook#2706), so
+      # inject a <link rel="canonical"> into every rendered page post-build.
+      - name: Inject canonical links
+        run: |
+          cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
+            --bin canonical -- docs/book https://jolars.github.io/badness/
+
       # mdbook has no built-in sitemap; generate one from the rendered pages.
       # `lastmod` is derived from git history, so this runs against full history.
       - name: Generate sitemap

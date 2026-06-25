@@ -1,4 +1,6 @@
-//! Preprocessor for the docs
+//! Preprocessor for the docs, plus shared post-build helpers (see [`postbuild`]).
+
+pub mod postbuild;
 
 use mdbook_preprocessor::book::Book;
 use mdbook_preprocessor::errors::Result;

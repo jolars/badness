@@ -11,8 +11,10 @@
 //! e.g. `sitemap docs/book https://jolars.github.io/badness/`. The base URL is
 //! the public root the book is served from (the GitHub Pages project URL).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+use doc_utils::postbuild::{collect_pages, normalize_base};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -21,13 +23,9 @@ fn main() {
         std::process::exit(1);
     };
 
-    let book_dir = PathBuf::from(book_dir);
-    // Normalize to exactly one trailing slash so joins are unambiguous.
-    let base = format!("{}/", base_url.trim_end_matches('/'));
-
-    let mut pages = Vec::new();
-    collect_html(&book_dir, &book_dir, &mut pages);
-    pages.sort();
+    let book_dir = Path::new(&book_dir);
+    let base = normalize_base(&base_url);
+    let pages = collect_pages(book_dir);
 
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -35,7 +33,7 @@ fn main() {
     for page in &pages {
         out.push_str("  <url>\n");
         out.push_str(&format!("    <loc>{base}{}</loc>\n", page.loc));
-        if let Some(lastmod) = &page.lastmod {
+        if let Some(lastmod) = source_lastmod(book_dir, &page.path) {
             out.push_str(&format!("    <lastmod>{lastmod}</lastmod>\n"));
         }
         out.push_str("  </url>\n");
@@ -48,64 +46,6 @@ fn main() {
         std::process::exit(1);
     }
     eprintln!("wrote {} ({} urls)", dest.display(), pages.len());
-}
-
-struct Page {
-    /// URL path relative to the base URL.
-    loc: String,
-    /// `YYYY-MM-DD` last-commit date of the source page, when resolvable.
-    lastmod: Option<String>,
-}
-
-// Sort by the URL path so the output is deterministic.
-impl PartialEq for Page {
-    fn eq(&self, other: &Self) -> bool {
-        self.loc == other.loc
-    }
-}
-impl Eq for Page {}
-impl PartialOrd for Page {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for Page {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.loc.cmp(&other.loc)
-    }
-}
-
-/// Recursively collect every public HTML page under `dir`, recording its URL
-/// path relative to `root`.
-fn collect_html(root: &Path, dir: &Path, pages: &mut Vec<Page>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_html(root, &path, pages);
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("html") {
-            continue;
-        }
-        let rel = path.strip_prefix(root).unwrap();
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        // mdbook ships these helpers; they are not content pages. `toc.html` is
-        // the sidebar iframe fragment, not a standalone page.
-        if matches!(rel.as_str(), "404.html" | "print.html" | "toc.html") {
-            continue;
-        }
-        // Map `index.html` to its directory so `/` and `/index.html` don't both
-        // appear: `index.html` -> ``, `guide/index.html` -> `guide/`.
-        let loc = match rel.strip_suffix("index.html") {
-            Some(prefix) => prefix.to_string(),
-            None => rel,
-        };
-        let lastmod = source_lastmod(root, &path);
-        pages.push(Page { loc, lastmod });
-    }
 }
 
 /// Best-effort last-modified date from git, derived from the page's source

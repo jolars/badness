@@ -87,7 +87,16 @@ tasks:
     dir: docs
     cmds:
       - mdbook build
+      - task: docs:canonical
       - task: docs:sitemap
+
+  docs:canonical:
+    desc: Inject <link rel="canonical"> into each rendered page
+    dir: docs
+    cmds:
+      - >-
+        cargo run --quiet --manifest-path doc-utils/Cargo.toml --bin canonical --
+        book https://jolars.github.io/badness/
 
   docs:sitemap:
     desc: Generate docs/book/sitemap.xml from the rendered book

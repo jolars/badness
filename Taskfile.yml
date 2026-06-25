@@ -88,6 +88,19 @@ tasks:
     cmds:
       - ./benches/documents/download.sh
 
+  bench:micro:
+    desc: In-process formatter micro-bench (parse vs format vs full, no startup floor)
+    cmds:
+      - cargo bench --bench formatting
+
+  bench:profile:
+    desc: Flamegraph the masters_dissertation per-byte hot paths (writes benches/flamegraph_masters.svg)
+    env:
+      BADNESS_BENCH_DOC: masters_dissertation.tex
+      BADNESS_BENCH_ITERATIONS: 60
+    cmds:
+      - cargo flamegraph --bench formatting -o benches/flamegraph_masters.svg
+
   docs:
     desc: Build the documentation book
     deps: [docs:build]

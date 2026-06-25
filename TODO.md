@@ -374,21 +374,30 @@ scope (the same boundary the include graph and CWL ingest keep).
 - [ ] Fuzzing (losslessness must hold on arbitrary input).
 - [~] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
   Formatter speed bench vs `tex-fmt`/`latexindent` landed (`benches/compare_format.sh`,
-  `task bench`, writes `BENCH.md` + JSON). Still pending: criterion in-process
-  parse/format micro-benchmarks, bib + lint benchmarks, flamegraph hot paths.
-- [ ] **Profile the formatter (separate startup floor from per-byte cost).** The
-  `task bench` CLI numbers show `badness` ~3× slower than `tex-fmt` on small docs but
-  ~7× on the 95 KB master's dissertation, and badness's small-doc times are nearly
-  flat (\~8 ms on both the 1.2 KB baseline and 6 KB cv) --- i.e. a fixed process
-  *startup floor* (binary load, allocator warmup, salsa/db setup) dominates small
-  inputs, while the CST→signature→`Doc` IR→print per-byte cost only shows on larger
-  ones. tex-fmt is line/regex-based and builds no lossless CST, so part of the gap is
-  architectural and *expected* (it buys badness the LSP, incremental reparse, and
-  losslessness). To attribute the split: (1) add criterion in-process micro-benches
-  (parse vs format vs print throughput, no startup floor --- the bullet above);
-  (2) `cargo flamegraph` on `benches/documents/masters_dissertation.tex` to find the
-  per-byte hot paths. Only the implementation-slack portion is worth chasing; the
-  architectural portion is by design. *(Speed-only; no correctness implication.)*
+  `task bench`, writes `BENCH.md` + JSON). In-process parse/format micro-bench +
+  flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
+  see the profiling item below). Still pending: bib + lint benchmarks.
+- [x] **Profile the formatter (separate startup floor from per-byte cost).** Done:
+  in-process micro-bench (`benches/formatting.rs`, `task bench:micro`, split
+  parse/format/full + throughput, with a single-doc flamegraph hook
+  `task bench:profile`; modeled on panache's `benches/formatting.rs` rather than
+  criterion so the flamegraph attaches to one hot doc). Findings (full writeup in
+  `benches/README.md`):
+  - **Startup floor is the one-time CWL signature-DB init, not binary load.** A
+    bare `--version` is ~0.8 ms, but the format path's floor is ~4.4 ms: `cwl()`
+    decompresses+parses the embedded `cwl_signatures.json.gz` once (~4.5 ms,
+    `LazyLock`) and is on the hot path (`Signatures::command`/`environment` fall
+    back to it; the lexer uses it for verbatim-env detection). The curated
+    `builtin` DB is ~0.09 ms. This dominates small-doc latency (the "flat ~8 ms"
+    the old note saw) and is the **implementation-slack** lever worth chasing —
+    faster-to-decode embedded format, or deferring/streaming the CWL tier.
+  - **Per-byte cost is mostly architectural.** masters_dissertation in-process:
+    parse ~25 %, lower+print ~70 %, ~10 MB/s. Flamegraph self-time is dominated by
+    rowan red-tree cursor traversal (~25–30 %) + allocator churn (~17 %) — inherent
+    to the lossless CST + `Doc` IR, by design. Printer itself is ~7 %. Minor slack:
+    `lower_node` runs up to four direct-children predicate scans per `ENVIRONMENT`
+    (`has_verbatim_body`/`is_margin_framed`/`is_alignment_env`/`is_list_env`) that
+    could share one pass. *(Speed-only; no correctness implication.)*
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine first),
   depended on by both badness and arity.

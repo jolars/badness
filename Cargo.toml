@@ -48,6 +48,13 @@ toml = "1"
 [build-dependencies]
 flate2 = "1.0"
 
+# In-process formatter micro-benchmarks (benches/formatting.rs). `harness =
+# false`: a plain main with fixed iteration counts (not criterion) so a
+# flamegraph attaches cleanly to a single hot document — see the bench's header.
+[[bench]]
+name = "formatting"
+harness = false
+
 [dev-dependencies]
 insta = "1.47.2"
 tempfile = "3"

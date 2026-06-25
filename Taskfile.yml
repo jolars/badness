@@ -74,9 +74,19 @@ tasks:
     deps: [fmt-check, lint, test]
 
   bench:
-    desc: Benchmarks (placeholder until Phase 7)
+    desc: Benchmark formatter speed vs tex-fmt & latexindent (writes BENCH.md)
     cmds:
-      - echo "no benchmarks yet"
+      - ./benches/compare_format.sh
+
+  bench:json:
+    desc: Re-run the formatter benchmark and write the JSON artifact
+    cmds:
+      - ./benches/compare_format.sh --json --out benches/benchmark_results.json
+
+  bench:download:
+    desc: Fetch the real-world LaTeX corpus for the formatter benchmark
+    cmds:
+      - ./benches/documents/download.sh
 
   docs:
     desc: Build the documentation book

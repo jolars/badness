@@ -11,6 +11,10 @@ tests/fixtures/**/*.dtx eol=lf
 tests/fixtures/**/*.ins eol=lf
 tests/corpus/** eol=lf
 
+# Committed benchmark baseline (formatted output is always LF; keep the input LF
+# too so the bench's losslessness path is platform-stable).
+benches/documents/small.tex eol=lf
+
 # Snapshot files should always use LF
 tests/**/snapshots/**/* eol=lf
 tests/snapshots/**/* eol=lf

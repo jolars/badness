@@ -1,0 +1,48 @@
+\documentclass{article}
+\usepackage{amsmath}
+
+\title{A Small Benchmark Document}
+\author{badness}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+This is a small, self-contained \LaTeX{} document used as the zero-network
+baseline for the formatter benchmark. It mixes a handful of common constructs so
+the benchmark exercises sectioning, inline and display math, lists, tables, and
+environments rather than one narrow shape.
+
+Inline math such as $a^2 + b^2 = c^2$ sits next to prose, and a display follows:
+\begin{equation}
+    \int_0^1 x^2 \, \mathrm{d}x = \frac{1}{3}.
+\end{equation}
+
+\section{Lists and Environments}
+
+\begin{itemize}
+    \item A first item with some text that runs on a little so the reflow logic
+          has something to wrap.
+    \item A second item.
+    \item A third item with nested content:
+        \begin{enumerate}
+            \item Nested one.
+            \item Nested two.
+        \end{enumerate}
+\end{itemize}
+
+\begin{quote}
+    A short block quotation, kept here to give the formatter an environment whose
+    body should be indented one step.
+\end{quote}
+
+\section{A Table}
+
+\begin{tabular}{lcr}
+    Left & Center & Right \\
+    a & b & c \\
+    aa & bb & cc \\
+\end{tabular}
+
+\end{document}

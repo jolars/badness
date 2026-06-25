@@ -372,7 +372,23 @@ scope (the same boundary the include graph and CWL ingest keep).
 ## Performance & hardening
 
 - [ ] Fuzzing (losslessness must hold on arbitrary input).
-- [ ] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
+- [~] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
+  Formatter speed bench vs `tex-fmt`/`latexindent` landed (`benches/compare_format.sh`,
+  `task bench`, writes `BENCH.md` + JSON). Still pending: criterion in-process
+  parse/format micro-benchmarks, bib + lint benchmarks, flamegraph hot paths.
+- [ ] **Profile the formatter (separate startup floor from per-byte cost).** The
+  `task bench` CLI numbers show `badness` ~3× slower than `tex-fmt` on small docs but
+  ~7× on the 95 KB master's dissertation, and badness's small-doc times are nearly
+  flat (\~8 ms on both the 1.2 KB baseline and 6 KB cv) --- i.e. a fixed process
+  *startup floor* (binary load, allocator warmup, salsa/db setup) dominates small
+  inputs, while the CST→signature→`Doc` IR→print per-byte cost only shows on larger
+  ones. tex-fmt is line/regex-based and builds no lossless CST, so part of the gap is
+  architectural and *expected* (it buys badness the LSP, incremental reparse, and
+  losslessness). To attribute the split: (1) add criterion in-process micro-benches
+  (parse vs format vs print throughput, no startup floor --- the bullet above);
+  (2) `cargo flamegraph` on `benches/documents/masters_dissertation.tex` to find the
+  per-byte hot paths. Only the implementation-slack portion is worth chasing; the
+  architectural portion is by design. *(Speed-only; no correctness implication.)*
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine first),
   depended on by both badness and arity.

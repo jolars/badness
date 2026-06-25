@@ -167,11 +167,13 @@ fn load_document(name: &str) -> Option<String> {
     fs::read_to_string(Path::new("benches/documents").join(name)).ok()
 }
 
-/// Measure the one-time signature-DB init: the builtin `data/signatures.json`
-/// parse and the CWL gz decompress+parse. Both are `LazyLock`s built once per process, so
-/// they are a fixed *startup-floor* component the CLI pays once and the timed
-/// per-byte loops below never see (warmup triggers them first). Must run before
-/// any other DB access in this process, or it measures a warm hit (~0).
+/// Measure the one-time signature-DB init. The builtin `data/signatures.json` is
+/// a `LazyLock` parsed once per process — a fixed *startup-floor* component the
+/// CLI pays once and the timed per-byte loops below never see (warmup triggers it
+/// first). The CWL tier is now a build-time `phf` map baked into the binary, so
+/// its "init" is ~0 (was a ~4.5 ms gz-decompress+JSON-parse `LazyLock`); the line
+/// is kept as a regression guard. Must run before any other DB access, or the
+/// builtin number is a warm hit (~0).
 fn report_signature_db_init() {
     let start = Instant::now();
     black_box(badness::semantic::signature::builtin());
@@ -181,8 +183,8 @@ fn report_signature_db_init() {
     let cwl = start.elapsed();
     println!(
         "\none-time signature-DB init (startup floor, paid once per process):\n  \
-         builtin (signatures.json): {:>8.2} µs\n  \
-         cwl (gz decompress+parse): {:>8.2} µs",
+         builtin (signatures.json):  {:>8.2} µs\n  \
+         cwl (static phf map, ~0):   {:>8.2} µs",
         builtin.as_nanos() as f64 / 1000.0,
         cwl.as_nanos() as f64 / 1000.0,
     );

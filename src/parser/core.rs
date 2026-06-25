@@ -88,12 +88,12 @@ fn verbatim_ctx(root: &SyntaxNode) -> VerbCtx {
     let mut ctx = VerbCtx::default();
     for name in db.command_names() {
         if let Some(sig) = db.command(name).filter(|sig| sig.verbatim) {
-            ctx.insert(SmolStr::new(name), sig.args.clone());
+            ctx.insert(SmolStr::new(name), sig.args.to_vec());
         }
     }
     for name in db.environment_names() {
         if let Some(sig) = db.environment(name).filter(|sig| sig.verbatim_body) {
-            ctx.insert_environment(SmolStr::new(name), sig.args.clone());
+            ctx.insert_environment(SmolStr::new(name), sig.args.to_vec());
         }
     }
     ctx

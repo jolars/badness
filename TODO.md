@@ -383,14 +383,18 @@ scope (the same boundary the include graph and CWL ingest keep).
   `task bench:profile`; modeled on panache's `benches/formatting.rs` rather than
   criterion so the flamegraph attaches to one hot doc). Findings (full writeup in
   `benches/README.md`):
-  - **Startup floor is the one-time CWL signature-DB init, not binary load.** A
-    bare `--version` is ~0.8 ms, but the format path's floor is ~4.4 ms: `cwl()`
-    decompresses+parses the embedded `cwl_signatures.json.gz` once (~4.5 ms,
+  - **Startup floor was the one-time CWL signature-DB init, not binary load — now
+    fixed.** A bare `--version` is ~0.8 ms, but the format path's floor was ~4.4 ms:
+    `cwl()` decompressed+parsed the embedded `cwl_signatures.json.gz` once (~4.5 ms,
     `LazyLock`) and is on the hot path (`Signatures::command`/`environment` fall
-    back to it; the lexer uses it for verbatim-env detection). The curated
-    `builtin` DB is ~0.09 ms. This dominates small-doc latency (the "flat ~8 ms"
-    the old note saw) and is the **implementation-slack** lever worth chasing —
-    faster-to-decode embedded format, or deferring/streaming the CWL tier.
+    back to it; the lexer uses it for verbatim-env detection). **Fixed:** the CWL
+    tier is now baked into the binary as a build-time `phf` perfect-hash map
+    (`build.rs` + `phf_codegen`, values are `const fn` constructor calls;
+    `CommandSig`/`EnvironmentSig` args became `Cow<'static,[ArgSpec]>`), so init is
+    ~0 — no decompress, no parse. CLI `small.tex` dropped ~4.5 ms → ~1.3 ms,
+    `cv.tex` ~5.1 ms → ~1.4 ms. Trade-off: larger binary (uncompressed statics) and
+    a build-time codegen step; `flate2` dropped, `phf`/`phf_codegen` added. The
+    curated `builtin` DB (~0.09 ms) stays a runtime JSON `LazyLock` — negligible.
   - **Per-byte cost is mostly architectural.** masters_dissertation in-process:
     parse ~25 %, lower+print ~70 %, ~10 MB/s. Flamegraph self-time is dominated by
     rowan red-tree cursor traversal (~25–30 %) + allocator churn (~17 %) — inherent

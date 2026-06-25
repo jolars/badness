@@ -30,10 +30,11 @@
 //! never the source of truth: only names and arity cross over (every behavior flag
 //! stays default), so it widens completion and arity coverage without its
 //! low-confidence data reaching a lexer/formatter/outline behavior decision. The
-//! file is gzipped at build time (`build.rs`) and `include_bytes!`-ed.
+//! file is compiled into a `phf` perfect-hash map at build time (`build.rs`) and
+//! `include!`-ed as read-only statics — zero runtime parse or decompress.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::Read;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
@@ -79,8 +80,10 @@ pub struct ArgSpec {
 /// The signature of a control sequence.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommandSig {
-    /// The ordered argument slots.
-    pub args: Vec<ArgSpec>,
+    /// The ordered argument slots. A [`Cow`] so the build-time CWL tier can hold a
+    /// `'static` slice baked into the binary (see [`command`]) while the runtime
+    /// builtin/scanned paths own a `Vec`.
+    pub args: Cow<'static, [ArgSpec]>,
     /// `Some(level)` for a sectioning command, where `0` is the outermost
     /// (`\part`) and larger numbers nest deeper. Relative depth only.
     pub sectioning: Option<u8>,
@@ -125,8 +128,10 @@ pub enum OutlineKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentSig {
     /// The ordered argument slots that follow `\begin{name}` (e.g. `tabular`'s
-    /// column spec), *excluding* the name group itself.
-    pub args: Vec<ArgSpec>,
+    /// column spec), *excluding* the name group itself. A [`Cow`] for the same
+    /// reason as [`CommandSig::args`]: a `'static` slice for the CWL tier, an owned
+    /// `Vec` for the runtime paths.
+    pub args: Cow<'static, [ArgSpec]>,
     /// `true` for environments whose body is raw text (`verbatim`, `lstlisting`,
     /// `minted`, …) and must never be reflowed.
     pub verbatim_body: bool,
@@ -169,6 +174,86 @@ pub struct EnvironmentSig {
     /// float or a theorem-like. `None` for everything else. Only meaningful to the
     /// language server's `documentSymbol`; the parser and formatter ignore it.
     pub outline: Option<OutlineKind>,
+}
+
+// --- const constructors (shared by the runtime JSON path and build-time codegen)
+//
+// The build script (`build.rs`) emits the CWL tier as a `phf` map whose values
+// are calls to these `const fn`s, so the static data is baked into the binary
+// with no runtime parse (see `cwl`). They are the single home of the `reflow`/
+// `block` *derivations*, reused by `From<RawEnvironment>` below so the JSON path
+// (builtin DB, scanned defs) and the codegen path can never derive them
+// differently.
+
+/// `reflow`: a body is reflowable prose unless it is verbatim, math, or code.
+pub(crate) const fn derive_reflow(verbatim_body: bool, math: bool, code: bool) -> bool {
+    !(verbatim_body || math || code)
+}
+
+/// `block`: math, lists, and no-indent containers are inherently block/display;
+/// the explicit flag covers the rest (figure, center, verbatim, theorem-likes, …).
+pub(crate) const fn derive_block(
+    block_explicit: bool,
+    math: bool,
+    list: bool,
+    no_indent: bool,
+) -> bool {
+    block_explicit || math || list || no_indent
+}
+
+/// One argument slot, const-constructible for the codegen path.
+pub(crate) const fn arg(required: bool, kind: ArgKind, prose: bool, collapse: bool) -> ArgSpec {
+    ArgSpec {
+        required,
+        kind,
+        prose,
+        collapse,
+    }
+}
+
+/// A command signature over a `'static` argument slice (the codegen path).
+pub(crate) const fn command(
+    args: &'static [ArgSpec],
+    sectioning: Option<u8>,
+    verbatim: bool,
+    rule: bool,
+    inline: bool,
+) -> CommandSig {
+    CommandSig {
+        args: Cow::Borrowed(args),
+        sectioning,
+        verbatim,
+        rule,
+        inline,
+    }
+}
+
+/// An environment signature over a `'static` argument slice (the codegen path),
+/// applying the same `reflow`/`block` derivations as the JSON path.
+#[allow(clippy::too_many_arguments)]
+pub(crate) const fn environment(
+    args: &'static [ArgSpec],
+    verbatim_body: bool,
+    math: bool,
+    code: bool,
+    align: bool,
+    no_indent: bool,
+    list: bool,
+    block_explicit: bool,
+    outline: Option<OutlineKind>,
+) -> EnvironmentSig {
+    EnvironmentSig {
+        args: Cow::Borrowed(args),
+        verbatim_body,
+        math,
+        code,
+        align,
+        reflow: derive_reflow(verbatim_body, math, code),
+        no_indent,
+        list,
+        block: derive_block(block_explicit, math, list, no_indent),
+        outline,
+    }
 }
 
 /// The built-in command and environment signatures, keyed by name (without the
@@ -287,28 +372,73 @@ pub fn builtin() -> &'static SignatureDb {
     &DB
 }
 
-/// The bulk CWL-derived signature data, gzipped by `build.rs` from
-/// `data/cwl_signatures.json` (see module docs). Decompressed and parsed once.
-const CWL_SIGNATURES_GZ: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/cwl_signatures.json.gz"));
+/// The type of the build-generated CWL maps: a name-keyed perfect-hash map. The
+/// generated `static`s are spelled with this alias, so the dependency on `phf` is
+/// visible in checked-in source (not only in the generated file).
+type CwlSigMap<V> = phf::Map<&'static str, V>;
 
-static CWL_DB: LazyLock<SignatureDb> = LazyLock::new(|| {
-    let mut json = String::new();
-    flate2::read::GzDecoder::new(CWL_SIGNATURES_GZ)
-        .read_to_string(&mut json)
-        .expect("bundled cwl_signatures.json.gz must decompress");
-    parse(&json).expect("bundled cwl_signatures.json must be valid")
-});
+// The bulk CWL tier is generated by `build.rs` from `data/cwl_signatures.json`
+// into two `CwlSigMap`s (`CWL_COMMANDS`, `CWL_ENVIRONMENTS`) whose values are
+// `command(...)`/`environment(...)`/`arg(...)` const-constructor calls — so the
+// data is baked into the binary as read-only statics with *zero* runtime parse
+// or decompress (it was a ~4.5 ms one-time `LazyLock` decompress+JSON-parse; now
+// ~0). The included file references the const constructors and `CwlSigMap` here.
+include!(concat!(env!("OUT_DIR"), "/cwl_signatures.rs"));
 
-/// The lower-precision **CWL tier**: a broad set of command/environment names plus
-/// argument shapes harvested from the TeXstudio CWL corpus (a curated package subset;
-/// see `scripts/gen_cwl_signatures.py`). It carries *names and arity only* — every
-/// behavior flag (`prose`/`verbatim`/`sectioning`/`math`/…) is left at its default —
-/// so it can widen completion and the formatter's arity lookup without its
-/// low-confidence data ever reaching a lexer/outline behavior decision. Consulted
-/// strictly *under* [`builtin`] (via [`Signatures`]); the curated tier always wins.
-pub fn cwl() -> &'static SignatureDb {
-    &CWL_DB
+/// Handle to the lower-precision **CWL tier**: a broad set of command/environment
+/// names plus argument shapes harvested from the TeXstudio CWL corpus (a curated
+/// package subset; see `scripts/gen_cwl_signatures.py`). It carries *names and
+/// arity only* — every behavior flag (`prose`/`verbatim`/`sectioning`/`math`/…) is
+/// left at its default — so it can widen completion and the formatter's arity
+/// lookup without its low-confidence data ever reaching a lexer/outline behavior
+/// decision. Consulted strictly *under* [`builtin`] (via [`Signatures`]); the
+/// curated tier always wins. A ZST over the generated `phf` statics, so its query
+/// methods mirror [`SignatureDb`]'s without owning a heap map.
+#[derive(Debug, Clone, Copy)]
+pub struct CwlDb;
+
+impl CwlDb {
+    /// The signature of command `name` (without the leading `\`), if in the tier.
+    pub fn command(&self, name: &str) -> Option<&'static CommandSig> {
+        CWL_COMMANDS.get(name)
+    }
+
+    /// The signature of environment `name`, if in the tier.
+    pub fn environment(&self, name: &str) -> Option<&'static EnvironmentSig> {
+        CWL_ENVIRONMENTS.get(name)
+    }
+
+    /// All CWL command names (without the leading `\`), in arbitrary order. The
+    /// `&str` lifetime is tied to `&self` (not `'static`) so it unifies with the
+    /// borrowed scanned-definition names in a completion `chain` (see
+    /// `completion::command_candidates`), exactly like [`SignatureDb::command_names`].
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        CWL_COMMANDS.keys().map(|name| &**name)
+    }
+
+    /// All CWL environment names, in arbitrary order. See [`command_names`].
+    ///
+    /// [`command_names`]: Self::command_names
+    pub fn environment_names(&self) -> impl Iterator<Item = &str> {
+        CWL_ENVIRONMENTS.keys().map(|name| &**name)
+    }
+
+    /// All CWL command signatures (introspection; backs the invariant tests).
+    pub fn command_sigs(&self) -> impl Iterator<Item = &'static CommandSig> {
+        CWL_COMMANDS.values()
+    }
+
+    /// All CWL environment signatures (introspection; backs the invariant tests).
+    pub fn environment_sigs(&self) -> impl Iterator<Item = &'static EnvironmentSig> {
+        CWL_ENVIRONMENTS.values()
+    }
+}
+
+static CWL: CwlDb = CwlDb;
+
+/// The process-wide CWL tier (see [`CwlDb`]).
+pub fn cwl() -> &'static CwlDb {
+    &CWL
 }
 
 // --- On-disk schema (serde) ---------------------------------------------------
@@ -399,7 +529,7 @@ struct RawCommand {
 impl From<RawCommand> for CommandSig {
     fn from(raw: RawCommand) -> Self {
         CommandSig {
-            args: raw.args.into_iter().map(ArgSpec::from).collect(),
+            args: Cow::Owned(raw.args.into_iter().map(ArgSpec::from).collect()),
             sectioning: raw.sectioning,
             verbatim: raw.verbatim,
             rule: raw.rule,
@@ -451,19 +581,18 @@ struct RawEnvironment {
 
 impl From<RawEnvironment> for EnvironmentSig {
     fn from(raw: RawEnvironment) -> Self {
+        // The `reflow`/`block` derivations live in `derive_reflow`/`derive_block`
+        // (shared with the codegen path); only `args` differs (owned here).
         EnvironmentSig {
-            args: raw.args.into_iter().map(ArgSpec::from).collect(),
+            args: Cow::Owned(raw.args.into_iter().map(ArgSpec::from).collect()),
             verbatim_body: raw.verbatim_body,
             math: raw.math,
             code: raw.code,
             align: raw.align,
-            // A body is reflowable prose unless it is verbatim, math, or code.
-            reflow: !(raw.verbatim_body || raw.math || raw.code),
+            reflow: derive_reflow(raw.verbatim_body, raw.math, raw.code),
             no_indent: raw.no_indent,
             list: raw.list,
-            // Math, lists, and `document` are inherently block/display; the explicit
-            // flag covers the rest (figure, center, verbatim, theorem-likes, …).
-            block: raw.block || raw.math || raw.list || raw.no_indent,
+            block: derive_block(raw.block, raw.math, raw.list, raw.no_indent),
             outline: raw.outline.map(OutlineKind::from),
         }
     }
@@ -771,12 +900,12 @@ mod tests {
         // The converter guard: every CWL command/environment is names+arity only, so
         // none of its low-confidence data can flip a formatter/lexer/outline decision.
         let db = cwl();
-        for sig in db.commands.values() {
+        for sig in db.command_sigs() {
             assert!(sig.sectioning.is_none());
             assert!(!sig.verbatim && !sig.rule && !sig.inline);
             assert!(sig.args.iter().all(|a| !a.prose && !a.collapse));
         }
-        for sig in db.environments.values() {
+        for sig in db.environment_sigs() {
             assert!(!sig.verbatim_body && !sig.math && !sig.code && !sig.align);
             assert!(!sig.no_indent && !sig.list && !sig.block);
             assert!(sig.outline.is_none());

@@ -75,15 +75,19 @@ formatting:
 | masters_dissertation.tex | 95 KB | ~14.9 ms | ~8.6 ms | ~6.3 ms |
 
 A bare `badness --version` is only ~0.8 ms, so the extra ~3.7 ms of the format
-floor is **the one-time CWL signature-DB init**: `cwl()` decompresses
-(`flate2`) and parses the embedded `cwl_signatures.json.gz` on first access
-(`~4.5 ms`), and it is on the format hot path (`Signatures::command`/
-`environment` fall back to `cwl()`, and the lexer consults it for verbatim-env
-detection). The curated `builtin` DB (`data/signatures.json`) is cheap by
-comparison (~0.09 ms). This is the biggest lever for small-doc latency and is
-*implementation slack worth chasing* (e.g. a faster-to-decode embedded format,
-or deferring/streaming the CWL tier) — distinct from the architectural per-byte
-cost below.
+floor *was* **the one-time CWL signature-DB init**: `cwl()` used to decompress
+and parse the embedded `cwl_signatures.json.gz` on first access (`~4.5 ms`), and
+it is on the format hot path (`Signatures::command`/`environment` fall back to
+`cwl()`, and the lexer consults it for verbatim-env detection).
+
+**Fixed (2026-06):** the CWL tier is now baked into the binary at build time as a
+`phf` perfect-hash map (`build.rs` → `phf_codegen`, values are `const fn`
+constructor calls in `src/semantic/signature.rs`), so init is **~0** (no
+decompress, no JSON parse, no map build). CLI latency on `small.tex` dropped from
+~4.5 ms to ~1.3 ms, and `cv.tex` from ~5.1 ms to ~1.4 ms. The trade-off is a
+larger binary (the data is now uncompressed read-only statics) and a one-time
+build-time codegen step. The curated `builtin` DB (`data/signatures.json`, ~8 KB,
+~0.09 ms) stays a runtime `LazyLock` JSON parse — negligible, not worth moving.
 
 ### Per-byte cost (masters dissertation, in-process)
 

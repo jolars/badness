@@ -31,11 +31,14 @@ path = "src/main.rs"
 annotate-snippets = "0.12.16"
 clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"
-flate2 = "1.0"
 ignore = "0.4.26"
 log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.7"
 lsp-types = "0.97"
+# The bulk CWL signature tier is baked into the binary as a `phf` map by build.rs
+# (perfect-hash, zero runtime parse/decompress); the runtime crate provides the
+# `phf::Map` lookup type. See `src/semantic/signature.rs`.
+phf = "0.11"
 rowan = "0.16.1"
 salsa = "0.27.0"
 serde = { version = "1", features = ["derive"] }
@@ -43,10 +46,13 @@ serde_json = "1"
 smol_str = "0.3.2"
 toml = "1"
 
-# build.rs gzips data/cwl_signatures.json into OUT_DIR so the bulk CWL signature
-# tier embeds ~56 KB instead of the ~400 KB raw JSON (see src/semantic/signature.rs).
+# build.rs generates a `phf::Map` of the bulk CWL signature tier from
+# data/cwl_signatures.json into OUT_DIR, baked into the binary as read-only
+# statics with zero runtime parse/decompress (see src/semantic/signature.rs).
 [build-dependencies]
-flate2 = "1.0"
+phf_codegen = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # In-process formatter micro-benchmarks (benches/formatting.rs). `harness =
 # false`: a plain main with fixed iteration counts (not criterion) so a

@@ -181,7 +181,7 @@ fn command_detail(
     let scope = scope_for(snapshot, members, file);
     let (sig, user) = super::hover::lookup_command(&scope, name)?;
     let mut detail = format!("\\{name}");
-    for arg in &sig.args {
+    for arg in sig.args.iter() {
         detail.push_str(super::hover::arg_slot(arg.kind));
     }
     Some((detail, super::hover::render_command(name, sig, user)))

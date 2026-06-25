@@ -110,7 +110,7 @@ fn apply_verbatim_flags(db: &mut SignatureDb, bodies: &HashMap<SmolStr, DefBody>
 
     for name in verbatim {
         if let Some(mut sig) = db.command(&name).cloned() {
-            sig.args.pop(); // the final argument is the implicit verbatim one
+            sig.args.to_mut().pop(); // the final argument is the implicit verbatim one
             sig.verbatim = true;
             db.insert_command(name, sig);
         }
@@ -270,7 +270,7 @@ fn scan_newcommand(
     db.insert_command(
         def.name,
         CommandSig {
-            args: latex2e_args(arity, first_optional),
+            args: latex2e_args(arity, first_optional).into(),
             sectioning: None,
             verbatim: false,
             rule: false,
@@ -301,7 +301,7 @@ fn scan_def(command: &SyntaxNode, db: &mut SignatureDb, bodies: &mut HashMap<Smo
             // `\def` parameters carry no brace/bracket distinction; model them as the same
             // all-mandatory-brace shape scanned `\newcommand`s use. `apply_verbatim_flags`
             // pops the final slot and sets `verbatim` if a catcode signal is reachable.
-            args: latex2e_args(arity, false),
+            args: latex2e_args(arity, false).into(),
             sectioning: None,
             verbatim: false,
             rule: false,
@@ -410,7 +410,7 @@ fn scan_xparse_command(
     db.insert_command(
         def.name,
         CommandSig {
-            args: xparse::parse_spec(&group_inner_source(&spec)),
+            args: xparse::parse_spec(&group_inner_source(&spec)).into(),
             sectioning: None,
             verbatim: false,
             rule: false,
@@ -570,7 +570,7 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
 /// definitions give us without package-specific knowledge).
 fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
     EnvironmentSig {
-        args,
+        args: args.into(),
         verbatim_body: false,
         math: false,
         code: false,

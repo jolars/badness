@@ -269,7 +269,7 @@ fn plural(n: usize) -> &'static str {
 pub(super) fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -> String {
     let mut out = String::new();
     let _ = write!(out, "```latex\n\\{name}");
-    for arg in &sig.args {
+    for arg in sig.args.iter() {
         out.push_str(arg_slot(arg.kind));
     }
     out.push_str("\n```\n");
@@ -296,7 +296,7 @@ pub(super) fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -
 pub(super) fn render_environment(name: &str, sig: &EnvironmentSig, user_defined: bool) -> String {
     let mut out = String::new();
     let _ = write!(out, "```latex\n\\begin{{{name}}}");
-    for arg in &sig.args {
+    for arg in sig.args.iter() {
         out.push_str(arg_slot(arg.kind));
     }
     let _ = write!(out, " … \\end{{{name}}}\n```\n");

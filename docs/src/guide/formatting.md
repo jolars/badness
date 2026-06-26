@@ -28,9 +28,9 @@ badness format --check paper.tex  # report, don't write; non-zero if unformatted
 The formatter is built around a small set of invariants that double as test
 oracles:
 
-- **Idempotence** — `format(format(x)) == format(x)`.
-- **Stability** — formatting does not change the parsed structure of a document.
-- **Protected regions** — verbatim-like content (`verbatim`, `lstlisting`,
+- **Idempotence**: `format(format(x)) == format(x)`.
+- **Stability**: formatting does not change the parsed structure of a document.
+- **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
   `\verb`, comments) is never altered.
 
 If the formatter ever produces output that violates one of these, that is a bug

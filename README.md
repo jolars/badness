@@ -54,7 +54,7 @@ extension](https://open-vsx.org/extension/jolars/badness). It bundles the
 # Format a file in place (or stdin → stdout with no path)
 badness format paper.tex
 
-# Verify formatting without writing — exits non-zero if anything would change
+# Verify formatting without writing—exits non-zero if anything would change
 badness format --check paper.tex
 
 # Lint, reporting parse diagnostics

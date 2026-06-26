@@ -17,9 +17,9 @@ reads standard input and writes the formatted result to standard output.
 badness format [OPTIONS] [PATHS]...
 ```
 
-  | Argument / option    | Default  | Description                                                                                                                          |
+  | Argument/option      | Default  | Description                                                                                                                          |
   | -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-  | `[PATHS]...`         | —        | Files to format. Omit to read from stdin.                                                                                            |
+  | `[PATHS]...`         |—       | Files to format. Omit to read from stdin.                                                                                            |
   | `--check`            | off      | Report which files would change without writing them. Exits non-zero if any file is not already formatted.                           |
   | `--line-width <N>`   | `80`     | Maximum line width before the formatter breaks a line.                                                                               |
   | `--indent-width <N>` | `2`      | Number of spaces per indent step.                                                                                                    |

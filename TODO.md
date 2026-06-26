@@ -1,4 +1,4 @@
-# badness --- Roadmap
+# badness—Roadmap
 
 A LaTeX formatter, linter, and language server on a lossless rowan CST,
 mirroring **arity** (`../arity`, the same tool for R). See `AGENTS.md` for
@@ -18,7 +18,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [ ] `Sentence`/`Semantic` (sembr) wrap modes --- both fall back to `Preserve`
+- [ ] `Sentence`/`Semantic` (sembr) wrap modes—both fall back to `Preserve`
   today. *Demoted, much later.*
 - [ ] **Argument content-kind taxonomy.** `prose`/`collapse` are two ad-hoc
   bools on `ArgSpec`; the real model is a per-argument *content kind*
@@ -26,7 +26,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   whitespace and break policy on. Generalize once a third case appears. The
   non-determinism fix (`spans_multiple_lines` deciding block-vs-inline from
   incidental source newlines) is sidestepped for collapse-flagged args but
-  still governs every *unflagged* multi-line group --- revisit when the
+  still governs every *unflagged* multi-line group—revisit when the
   taxonomy lands.
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
@@ -38,11 +38,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   body (a `\newcommand` definition body) now reflows as code-like *statements*: each
   source line stays its own logical line, but an over-long one wraps to the width
   (breaking before a trailing `{…}` atom) instead of forcing the printer to detonate
-  the innermost nested prose group --- the only soft break a rigid
+  the innermost nested prose group—the only soft break a rigid
   `lower_element_stream` body exposed. Continuation is **flush**, not hanging.
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
   blocked on structure).** A wrapped brace-body line ideally hangs its continuation
-  one step in (`\node[…] at (2,3)` / `····{…};`) to read as a continuation rather
+  one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather
   than a sibling. This **cannot be idempotent** under the generic CST: the wrap
   becomes a real source newline, and on re-parse the continuation is just a line at
   the body indent (no marker says "continuation"), so the next pass flushes it ---
@@ -50,7 +50,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   indent delta. The real fix needs a node that *owns the whole statement*, so layout
   derives from structure (source newlines insignificant). For the motivating case
   (`\node[…] at (2,3) {…};`) that node is a **TikZ path statement**: `at` keyword,
-  `(coord)`, `;` terminator, `{label}` --- none of which are TeX-surface facts
+  `(coord)`, `;` terminator, `{label}`—none of which are TeX-surface facts
   (`;`/`at`/`()` carry no special catcode in plain TeX), so grouping them is
   package-specific grammar, out of scope for the generic parser (decisions #1, #2;
   non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
@@ -77,19 +77,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   covers a same-line `WORD WHITESPACE \cmd` shape; a *source line break* before the
   command (`Figure\n\ref{x}`) is also a breakable space but is left for a later pass
   (replacing the newline with `~` reflows the source and overlaps the formatter).
-- [ ] `unused-label` (cross-file) --- deferred: can false-positive on labels
+- [ ] `unused-label` (cross-file)—deferred: can false-positive on labels
   referenced from outside the analyzed set.
 
 ## Semantic layer & signatures
 
-- [ ] How much of `\newcommand` / `xparse` to model for the signature DB. *(open
+- [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
   decision)*
 
 ## Language server
 
 ### Configuration & sync
 
-- [x] config over LSP --- the LSP now discovers `badness.toml` per document
+- [x] config over LSP—the LSP now discovers `badness.toml` per document
   (`GlobalState::resolve_settings`, cached by anchor dir, cleared on
   `didChangeConfiguration`), mirroring arity. A discovered config wins outright
   (file-wins); editor settings are the fallback. Both `[format]` (`line-width`,
@@ -107,23 +107,23 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `EditorSettings` itself. A discovered config's `wrap` flows via `FormatConfig`,
     so no new editor knob was needed; `EditorSettings` stays `line_width`/`indent_width`.
 - [x] Pull diagnostics: `textDocument/diagnostic` is offered alongside the push
-  model — a pull-capable client is served pull-only (push suppressed), computed
+  model—a pull-capable client is served pull-only (push suppressed), computed
   on demand off a fresh snapshot (FIFO after the edit, so always current), with a
   content-addressed `result_id` for `unchanged` reports and a
   `workspace/diagnostic/refresh` nudge when cross-file membership grows.
-- [ ] `workspace/diagnostic` (the workspace-wide pull) — deferred: it is a
+- [ ] `workspace/diagnostic` (the workspace-wide pull)—deferred: it is a
   streaming/long-poll protocol (held-open request, per-uri result ids, partial
   results) that fits the one-shot id-bound read-job model poorly. Advertise
   `workspace_diagnostics: true` and add it once that plumbing exists; editors
   drive interactive diagnostics through `textDocument/diagnostic` meanwhile.
 - [ ] `workspace/didChangeWatchedFiles` + dynamic `client/registerCapability`
   for `**/*.{tex,bib}` so on-disk edits to non-open includes/`.bib` files (the
-  project graph's leaves) reanalyze --- the deferred follow-up to LSP project
+  project graph's leaves) reanalyze—the deferred follow-up to LSP project
   assembly (re-read + re-upsert + `RelintAll`).
 
 ### Formatting
 
-- [ ] Range formatting (`textDocument/rangeFormatting`) --- format the smallest
+- [ ] Range formatting (`textDocument/rangeFormatting`)—format the smallest
   enclosing node(s) covering the selection; clamp to node boundaries so a
   partial selection never corrupts the tree. Mirror arity's
   `on_range_formatting`.
@@ -132,31 +132,31 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### Navigation & structure
 
-- [x] Folding ranges (`textDocument/foldingRange`) --- environments, sectioning
+- [x] Folding ranges (`textDocument/foldingRange`)—environments, sectioning
   spans, and long comment blocks.
-- [ ] Selection ranges (`textDocument/selectionRange`) --- expand-selection from
+- [ ] Selection ranges (`textDocument/selectionRange`)—expand-selection from
   the CST's node hierarchy (group → argument → command → environment).
-- [ ] Workspace symbols (`workspace/symbol`) --- labels and sectioning titles
+- [ ] Workspace symbols (`workspace/symbol`)—labels and sectioning titles
   across the project include graph.
 
 ### Labels & references (def-use model)
 
-- [x] Go-to-definition (`textDocument/definition`) --- refs jump to their
+- [x] Go-to-definition (`textDocument/definition`)—refs jump to their
   `\label`, cite-family commands to their `.bib` entry; cross-file via the
   include graph. *Note:* a multi-key list command (`\cref{a,b}`, `\cite{a,b}`)
   shares one command *navigation* range, so the cursor resolves *every* key —
   go-to-def deliberately jumps to the whole command. Per-key sub-ranges now exist
   (`LabelRef`/`CitationRef::key_range`, added for rename) if precise per-key
   go-to-def is ever wanted.
-- [x] Find references (`textDocument/references`) --- all uses of a label or
+- [x] Find references (`textDocument/references`)—all uses of a label or
   cite key across the namespace, invokable from a use site *or* a definition site
   (the `\label`, and an `@entry` key in a `.bib`); honors `includeDeclaration`.
   Inverts go-to-def via new `namespace_members`/`bib_citers` resolver accessors
   (`src/project/{labels,citations}.rs`). Reports the whole-command range per use;
   precise per-key spans now live in `key_range` (added for rename).
-- [ ] Document highlight (`textDocument/documentHighlight`) --- highlight a
+- [ ] Document highlight (`textDocument/documentHighlight`)—highlight a
   label and its refs within the file.
-- [x] Rename (`textDocument/rename` + `prepareRename`) --- renames a label or
+- [x] Rename (`textDocument/rename` + `prepareRename`)—renames a label or
   cite key and every referencing command atomically; project-wide via the include
   graph; best-effort across a non-closed namespace (mirrors find-references). The
   prepare range and every edit are anchored to the per-key token (`key_range`), so
@@ -168,7 +168,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### IntelliSense (signature DB)
 
-- [x] Hover (`textDocument/hover`) --- a command/environment **signature** (a
+- [x] Hover (`textDocument/hover`)—a command/environment **signature** (a
   synthesized prototype plus a facts line: arity, argument kinds, sectioning/
   float/theorem level, verbatim/math/list flags, and built-in vs. user/package-
   defined provenance), looked up scope-first then built-in then CWL like
@@ -178,10 +178,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   cached-or-reparse + `salsa::Cancelled::catch`) with the pure logic in
   `src/lsp/hover.rs`. *Deferred:* the resolving `\label` for a `\ref` (the
   cross-file label path exists; just not surfaced in hover yet), and the
-  `\newcommand`/`xparse` *definition body* for user macros --- user macros already
+  `\newcommand`/`xparse` *definition body* for user macros—user macros already
   hover their scanned *signature*, but showing the body needs
   `semantic::define::scan_definitions` to retain the replacement-body text.
-- [x] Completion (`textDocument/completion`) --- command/environment names from
+- [x] Completion (`textDocument/completion`)—command/environment names from
   the signature DB (built-in + scanned, via `document_signatures`), `\ref`-family
   keys, `\begin{…}`/`\end{…}` names (auto-`\end` snippet), and file paths in
   `\includegraphics`/`\input`/…/`\addbibresource`. (`src/completion.rs`.)
@@ -189,7 +189,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     citation cards (author/title/year) and command/environment signature
     prototypes + facts, reusing the hover renderers. (`src/lsp/completion_resolve.rs`.)
     Bib field-name/entry-type items are not yet resolved.
-- [ ] Signature help (`textDocument/signatureHelp`) --- show the active argument
+- [ ] Signature help (`textDocument/signatureHelp`)—show the active argument
   while typing a command's `{…}`/`[…]` arguments.
 
 ### Code actions (autofixes)
@@ -201,7 +201,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `compute_lint_findings` → `run_code_action`) and turns every fix-carrying
   finding overlapping the requested range into a `CodeActionKind::QUICKFIX` with a
   single-file `WorkspaceEdit` (`src/lsp/code_action.rs`, mirroring arity's
-  `code_actions_from_findings`). `CodeActionProviderCapability::Simple(true)` — no
+  `code_actions_from_findings`). `CodeActionProviderCapability::Simple(true)`—no
   `codeAction/resolve` step (fully-built actions). `deprecated-command`'s
   `\bf → \bfseries` is the showcase first quick-fix; `dollar-display-math` and bib
   `empty-field` are surfaced for free. *Follow-up:* gate `is_preferred`/offered set
@@ -209,19 +209,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### Infrastructure
 
-- [ ] Client capability negotiation --- gate advertised providers and
+- [ ] Client capability negotiation—gate advertised providers and
   UTF-8/UTF-16 position encoding on what `initialize` reports.
 - [ ] README editor-wiring docs (Neovim/VS Code `initializationOptions`,
   `badness lsp` invocation).
 
-## Package & class infrastructure (`.sty` / `.cls` / `.dtx` / `.ins`)
+## Package & class infrastructure (`.sty`/`.cls`/`.dtx`/`.ins`)
 
 The document-level tools are mature; the next frontier is the **package
-ecosystem** --- class and package sources, and the literate `.dtx` format they
+ecosystem**—class and package sources, and the literate `.dtx` format they
 ship in. This is a large, multi-area subproject (parser + formatter + semantic).
 It stays inside the AGENTS.md non-goals: bounded, statically-recognizable
 patterns only, signatures *extracted, never executed*, no docstrip run, no TeX
-engine. Local project files only --- a `texmf`/CTAN/`kpsewhich` search is out of
+engine. Local project files only—a `texmf`/CTAN/`kpsewhich` search is out of
 scope (the same boundary the include graph and CWL ingest keep).
 
 ### Parsing
@@ -234,21 +234,21 @@ scope (the same boundary the include graph and CWL ingest keep).
 - [x] **`@`-as-letter for `.sty`/`.cls`.** The package loader does
   `\makeatletter` implicitly, so `@` is a letter throughout these files. The
   lexer starts in letter-mode for these kinds via the `LatexFlavor::Package`
-  flavor (a static, extension-driven catcode fact --- sanctioned exactly like
+  flavor (a static, extension-driven catcode fact—sanctioned exactly like
   the explicit `\makeatletter` mode, decision #1); a trailing `\makeatother`
   still applies.
 - [x] **expl3 (LaTeX3) syntax mode (letters, explicit toggles).** `\ExplSyntaxOn`
   … `\ExplSyntaxOff` make `_` and `:` catcode-11 *letters*, so `\seq_new:N`,
   `\tl_set:Nn`, `\__module_internal:nn` lex as single control words (and a bare `_`
   is text, not a subscript). A sanctioned lexer mode like `\makeatletter`/`\verb`
-  (decision #1) --- it reads only the static fact "we are inside an expl3 region",
+  (decision #1)—it reads only the static fact "we are inside an expl3 region",
   resolves no macro meaning. An independent boolean flag threaded like `at_letter`;
   composes with the `@`-as-letter mode (the `@@` convention `\g_@@_x_tl` needs
   both). Opened for the rest of the file by `\ProvidesExplPackage`/
   `\ProvidesExplClass`/`\ProvidesExplFile` (handled left-to-right as an
   `\ExplSyntaxOn`). Without it every expl3 control word mis-lexes (the word stops at
   the first `_`/`:`), corrupting argument grouping and the downstream signature scan
-  --- a prerequisite for parsing modern packages.
+ —a prerequisite for parsing modern packages.
 - [ ] **expl3 full catcode model (deferred).** Model `~` as a literal space
   (catcode 10) and spaces/tabs as ignored (catcode 9) inside expl3 regions. Formatter
   territory (insignificant-whitespace reflow), beyond the letters-only mechanism above.
@@ -266,7 +266,7 @@ scope (the same boundary the include graph and CWL ingest keep).
   parsed + formatted **as plain `Document`-flavored code** (`WrapMode::Preserve`,
   `dtx = false`), never running the extraction. Contrary to the original wording,
   the docstrip guard syntax is *not* shared: a `.ins` is run **directly by TeX**
-  (not read by docstrip), so a leading `%` --- and a `%<…>` line --- is an ordinary
+  (not read by docstrip), so a leading `%`—and a `%<…>` line—is an ordinary
   comment, and reusing the `.dtx` mode would mis-lex a commented-out driver line as
   code, breaking comment protection. Guards stay comments (harmless under
   `Preserve`, where a column-0 comment stays put).
@@ -287,11 +287,11 @@ scope (the same boundary the include graph and CWL ingest keep).
     lines pair through the ordinary environment grammar; the body lexes as real
     code under the package regime (`@` a letter), a stray `%` line inside is a
     code comment, and a missing terminator recovers losslessly.
-  - [x] **M2 guards.** `%<*tag>` / `%</tag>` / inline `%<tag>` as a `GUARD`
-    token (flat floating leaf — *no* `GUARD_BLOCK` node; guard nesting is
+  - [x] **M2 guards.** `%<*tag>`, `%</tag>`, or inline `%<tag>` as a `GUARD`
+    token (flat floating leaf—*no* `GUARD_BLOCK` node; guard nesting is
     orthogonal to LaTeX nesting). A line-leading `%<…>` (through the closing
     `>`) lexes as a `GUARD` trivia leaf in *any* layer (`macrocode` bodies
-    included — docstrip processes guards line-by-line); an inline guard's
+    included—docstrip processes guards line-by-line); an inline guard's
     trailing code lexes normally, a malformed `%<` (no `>` before EOL) falls
     back to a comment. `GUARD` floats like `DOC_MARGIN` through every
     `grammar.rs` trivia scanner.
@@ -299,7 +299,7 @@ scope (the same boundary the include graph and CWL ingest keep).
     `\DocInput`, `\DescribeMacro`/`\DescribeEnv`, `\StopEventually` command sigs
     and `macro`/`environment` env sigs to `data/signatures.json`; classified
     `macrocode`/`macrocode*` as code-not-prose via a new `EnvironmentSig.code`
-    flag (real parsed code, *not* `verbatim_body` — folds into the `reflow`
+    flag (real parsed code, *not* `verbatim_body`—folds into the `reflow`
     derivation). Also implemented the "doc-comment binding": the bound
     leading-comment run is now grouped into a `DOC_COMMENT` node (the named-trivia
     enrichment AGENTS.md #9 reserved), grammar-local via `open`/`close`. The
@@ -318,9 +318,9 @@ scope (the same boundary the include graph and CWL ingest keep).
     `macrocode` (would reuse `semantic::define::scan_definitions`).
   - [ ] **Outline entries for `macro`/`environment` (deferred).** Give the doc
     envs (and `\DescribeMacro`/`\DescribeEnv`) `documentSymbol` entries so a
-    `.dtx`'s documented macros are navigable — needs a new `OutlineKind` variant
+    `.dtx`'s documented macros are navigable—needs a new `OutlineKind` variant
     and name extraction from the first arg.
-  - [ ] **M4 driver / `\iffalse` + `.ins`.** `\iffalse…\fi` stays
+  - [ ] **M4 driver and `\iffalse` + `.ins`.** `\iffalse…\fi` stays
     un-evaluated (already lossless as ordinary commands); `.ins` deferred.
 
 ### Formatting
@@ -331,7 +331,7 @@ scope (the same boundary the include graph and CWL ingest keep).
   current `newline`/`empty_line` path lacks; the column-0 pin already degrades a
   reflow run to preserve-like margins safely, so this is purely additive.
 
-### Semantic / integration
+### Semantic and integration
 
 - [x] **Package load graph.** `\usepackage`/`\RequirePackage`/`\LoadClass`/
   `\LoadClassWithOptions`/`\documentclass` are extracted as load edges in
@@ -344,17 +344,17 @@ scope (the same boundary the include graph and CWL ingest keep).
   `scope_signatures` (`incremental.rs`) merges a file's transitively-loaded
   package definitions (via the existing unmodified `scan_definitions`) under its
   own (document-wins, post-order so a package overrides its deps). Wired into the
-  formatter (`format_node_with_signatures` / `format_file_with_packages`, used by
+  formatter (`format_node_with_signatures`/`format_file_with_packages`, used by
   the CLI `format`/`--check` and the LSP) and LSP completion. The pure db-less
   collector is `semantic/load.rs` (`collect_package_signatures` + `PackageSource`,
   `DiskPackageSource` for the CLI). Tests: `src/project/package.rs`,
   `src/project/graph.rs`, `src/semantic/load.rs`, `tests/package.rs`,
   `tests/format_packages.rs`. *Follow-ups:* scope is per-file (a file + its
-  transitively-loaded packages), not namespace-wide — an `\input`-ed chapter does
+  transitively-loaded packages), not namespace-wide—an `\input`-ed chapter does
   not yet inherit the main preamble's packages (would reuse the include-graph
   connected-component machinery labels use); and a package-defined **verbatim**
   command is not protected by the lexer (the two-pass verbatim scan reads the
-  document, not packages) — only the formatter's signature-driven layout uses the
+  document, not packages)—only the formatter's signature-driven layout uses the
   package scope.
 - [ ] **Signature extraction from package sources.** Run the existing
   `semantic/define.rs` scanner across loaded `.sty`/`.cls` (and `macrocode`
@@ -383,7 +383,7 @@ scope (the same boundary the include graph and CWL ingest keep).
   `task bench:profile`; modeled on panache's `benches/formatting.rs` rather than
   criterion so the flamegraph attaches to one hot doc). Findings (full writeup in
   `benches/README.md`):
-  - **Startup floor was the one-time CWL signature-DB init, not binary load — now
+  - **Startup floor was the one-time CWL signature-DB init, not binary load—now
     fixed.** A bare `--version` is ~0.8 ms, but the format path's floor was ~4.4 ms:
     `cwl()` decompressed+parsed the embedded `cwl_signatures.json.gz` once (~4.5 ms,
     `LazyLock`) and is on the hot path (`Signatures::command`/`environment` fall
@@ -391,13 +391,13 @@ scope (the same boundary the include graph and CWL ingest keep).
     tier is now baked into the binary as a build-time `phf` perfect-hash map
     (`build.rs` + `phf_codegen`, values are `const fn` constructor calls;
     `CommandSig`/`EnvironmentSig` args became `Cow<'static,[ArgSpec]>`), so init is
-    ~0 — no decompress, no parse. CLI `small.tex` dropped ~4.5 ms → ~1.3 ms,
+    ~0—no decompress, no parse. CLI `small.tex` dropped ~4.5 ms → ~1.3 ms,
     `cv.tex` ~5.1 ms → ~1.4 ms. Trade-off: larger binary (uncompressed statics) and
     a build-time codegen step; `flate2` dropped, `phf`/`phf_codegen` added. The
-    curated `builtin` DB (~0.09 ms) stays a runtime JSON `LazyLock` — negligible.
+    curated `builtin` DB (~0.09 ms) stays a runtime JSON `LazyLock`—negligible.
   - **Per-byte cost is mostly architectural.** masters_dissertation in-process:
     parse ~25 %, lower+print ~70 %, ~10 MB/s. Flamegraph self-time is dominated by
-    rowan red-tree cursor traversal (~25–30 %) + allocator churn (~17 %) — inherent
+    rowan red-tree cursor traversal (~25–30 %) + allocator churn (~17 %)—inherent
     to the lossless CST + `Doc` IR, by design. Printer itself is ~7 %. Minor slack:
     `lower_node` runs up to four direct-children predicate scans per `ENVIRONMENT`
     (`has_verbatim_body`/`is_margin_framed`/`is_alignment_env`/`is_list_env`) that
@@ -415,14 +415,14 @@ scope (the same boundary the include graph and CWL ingest keep).
   (`line-width`/`indent-width`/`wrap`), and `[lint]` (`select`/`ignore`). Ancestor
   walk stopping at `.git`; `--config`/`--no-config` and additive
   `--exclude`/`--select`/`--ignore` CLI flags; `badness init` scaffolder.
-  **CLI-only for now** --- the LSP still reads `EditorSettings`, not `badness.toml`
+  **CLI-only for now**—the LSP still reads `EditorSettings`, not `badness.toml`
   (see *Configuration & sync* below). No `[index]` section and no `line-ending`
   key (the formatter has no `LineEnding` type yet).
 - [ ] `build.rs` man/completions/markdown
-  (clap_mangen/\_complete/clap-markdown). **\[copy\]** --- the `format`
+  (clap_mangen/\_complete/clap-markdown). **\[copy\]**—the `format`
   subcommand lives in `main.rs`; `build.rs` still deferred.
 
-## BibTeX / BibLaTeX
+## BibTeX/BibLaTeX
 
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
@@ -450,7 +450,7 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ## Open decisions to revisit
 
-- [ ] How much of `\newcommand` / `xparse` to model. *(Semantics)*
+- [ ] How much of `\newcommand`/`xparse` to model. *(Semantics)*
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
 - [ ] `.dtx` two-layer model: a preprocessor that splits doc/code layers, or a
   single lexer mode with margin-aware tokens? *(Package infrastructure)*

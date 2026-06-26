@@ -48,4 +48,4 @@ If your platform isn't covered, install via
 
 ## License
 
-MIT --- see [LICENSE](./LICENSE).
+MIT—see [LICENSE](./LICENSE).

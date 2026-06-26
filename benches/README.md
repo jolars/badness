@@ -50,12 +50,12 @@ perf report
 
 Env knobs for `benches/formatting.rs`:
 
-- `BADNESS_BENCH_DOC` — profile only this document under `benches/documents/`.
-- `BADNESS_BENCH_ITERATIONS` — iteration count for the selected document (10).
-- `BADNESS_BENCH_OUTPUT_JSON` — write a machine-readable report to this path.
+- `BADNESS_BENCH_DOC`: profile only this document under `benches/documents/`.
+- `BADNESS_BENCH_ITERATIONS`: iteration count for the selected document (10).
+- `BADNESS_BENCH_OUTPUT_JSON`: write a machine-readable report to this path.
 
 The micro-bench warms up before timing, so the one-time `LazyLock` signature-DB
-init (see below) is excluded from the timed loops — it is reported separately at
+init (see below) is excluded from the timed loops—it is reported separately at
 the top of the run as a startup-floor component.
 
 ## Findings (2026-06, attribution round)
@@ -87,7 +87,7 @@ decompress, no JSON parse, no map build). CLI latency on `small.tex` dropped fro
 ~4.5 ms to ~1.3 ms, and `cv.tex` from ~5.1 ms to ~1.4 ms. The trade-off is a
 larger binary (the data is now uncompressed read-only statics) and a one-time
 build-time codegen step. The curated `builtin` DB (`data/signatures.json`, ~8 KB,
-~0.09 ms) stays a runtime `LazyLock` JSON parse — negligible, not worth moving.
+~0.09 ms) stays a runtime `LazyLock` JSON parse—negligible, not worth moving.
 
 ### Per-byte cost (masters dissertation, in-process)
 
@@ -103,7 +103,7 @@ Pipeline split: parse ~25 %, lower+print ~70 % of the full pipeline; throughput
 | printing | ~7 % | `Printer::run_with_mode` + `flat_width` |
 
 Most of the per-byte cost is **inherent to the lossless-CST + Doc-IR
-architecture** (materializing/walking red cursors, allocating IR) — by design,
+architecture** (materializing/walking red cursors, allocating IR)—by design,
 and the price of the LSP, incremental reparse, and losslessness. The printer
 itself is modest. One concrete bit of *slack*: `lower_node` runs up to four
 direct-children predicate scans per `ENVIRONMENT`

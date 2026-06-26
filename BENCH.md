@@ -9,7 +9,7 @@ file-mutation and exit-code noise.
 **This is not a CI gate and not a parity target.** Timings are machine- and
 run-dependent, and this file measures *speed only*, never output equivalence.
 The tools also do different work: `latexindent` only indents by default and
-does no line reflow, while `badness` and `tex-fmt` wrap — so a raw speed
+does no line reflow, while `badness` and `tex-fmt` wrap—so a raw speed
 comparison is a snapshot of each tool at its defaults, not equal work.
 Regenerate with `task bench`.
 

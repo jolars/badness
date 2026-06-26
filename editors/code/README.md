@@ -21,7 +21,7 @@ restricted or offline networks.
 
 ## Commands
 
-- `Badness: Restart Server` --- stops and restarts the Badness language server
+- `Badness: Restart Server`: stops and restarts the Badness language server
   (re-reads settings and re-resolves the binary). Useful if the LSP gets wedged
   or after changing settings such as `badness.version` or
   `badness.executablePath`.
@@ -34,12 +34,12 @@ GitHub round-trip, and the language server starts on first activation even on
 restricted or offline networks. Behavior is controlled by
 `badness.executableStrategy`:
 
-- `bundled` (default) --- use the binary that ships inside the extension. If
+- `bundled` (default): use the binary that ships inside the extension. If
   you're on a platform without a platform-specific build (or you've installed
   the universal VSIX), the extension falls back to downloading a matching binary
   from GitHub releases.
-- `environment` --- look for `badness` on the system `PATH`.
-- `path` --- use the binary at `badness.executablePath`.
+- `environment`: look for `badness` on the system `PATH`.
+- `path`: use the binary at `badness.executablePath`.
 
 If you set `badness.version` or `badness.releaseTag` explicitly, the bundled
 binary is skipped and the requested version is downloaded from GitHub. When
@@ -87,9 +87,9 @@ Use `badness.releaseTag` only if you need an exact tag override:
 - **NixOS**: the bundled binary won't run because of the dynamic loader path.
   Set `badness.executableStrategy` to `path` (with `badness.executablePath`) or
   `environment` if `badness` is on your `PATH`.
-- **Offline / restricted networks / proxies**: the bundled-binary default works
+- **Offline, restricted networks, or proxies**: the bundled-binary default works
   without network access. Only the explicit-version download paths
-  (`badness.version` / `badness.releaseTag`) require GitHub connectivity.
+  (`badness.version`/`badness.releaseTag`) require GitHub connectivity.
 - If a download fall-through fails, the extension shows a warning and falls back
   to looking up `badness` on the system `PATH`.
 
@@ -97,7 +97,7 @@ Use `badness.releaseTag` only if you need an exact tag override:
 
 Badness registers itself as the default formatter for `[latex]` files.
 
-- `badness.executableStrategy`: how to locate the `badness` binary --- `bundled`
+- `badness.executableStrategy`: how to locate the `badness` binary—`bundled`
   (default), `environment`, or `path`.
 - `badness.executablePath`: path to the binary, used only when
   `executableStrategy` is `path`.
@@ -118,6 +118,6 @@ Badness registers itself as the default formatter for `[latex]` files.
 
 When `badness.executableStrategy` is `bundled` (the default), the extension
 prefers the binary that shipped inside the VSIX. If no bundled binary is
-available, or `badness.version` / `badness.releaseTag` is set explicitly, it
+available, or `badness.version`/`badness.releaseTag` is set explicitly, it
 downloads from GitHub releases configured by `badness.githubRepo` (default
 `jolars/badness`).

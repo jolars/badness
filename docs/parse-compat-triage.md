@@ -1,9 +1,9 @@
-# Parse-compat triage — vetting badness's CST shape against texlab
+# Parse-compat triage—vetting badness's CST shape against texlab
 
 Companion to the generated `PARSE_COMPAT.md` (do not hand-edit that file). This
 is a human-authored triage of the divergences surfaced by expanding the
 parse-compat corpus from 4 to 22 files, recording how each was classified and
-why. It is the "decide" input for the genuine modeling gap found — no parser
+why. It is the "decide" input for the genuine modeling gap found—no parser
 changes were made in this pass.
 
 Reproduce the per-file skeleton diffs with:
@@ -19,7 +19,7 @@ PARSE_COMPAT_DUMP=1 task parse-compat   # writes target/parse_compat_diffs.txt
   | Skeleton similarity           | 81.7%            | 79.5%                                       |
   | File concordance              | 25.0% (1/4)      | 27.3% (6/22)                                |
   | Intentional deviations        | 3                | 16                                          |
-  | Unexplained divergences       | 0                | **0** (the one gap found was fixed — below) |
+  | Unexplained divergences       | 0                | **0** (the one gap found was fixed—below) |
   | Skipped (badness parse error) | 0                | 1 (`malformed.tex`, expected)               |
 
 18 new probes were added (`tests/corpus/*.tex`), hand-authored MIT-clean and
@@ -33,14 +33,14 @@ deliberate and correct (and in several the *more* faithful surface reading); 1
 was a genuine shape inconsistency, **now fixed** (below). The single skipped
 file is correct error handling.
 
-## The one genuine modeling gap — fixed in this pass
+## The one genuine modeling gap—fixed in this pass
 
 ### Verbatim-argument commands emitted the `VERB` body as a *sibling*, not a child
 
 Originally, for a verbatim-argument command like `\url{…}` or `\lstinline{…}`,
 badness lexed the control word and the verbatim body as two flat tokens, and the
 parser's `attach_arguments` (which only attached `{…}`/`[…]`) left the `VERB`
-token unattached, so it landed as a *sibling* of the `COMMAND` — an empty
+token unattached, so it landed as a *sibling* of the `COMMAND`—an empty
 `COMMAND` node with the body floating beside it. That was inconsistent with
 badness's own greedy-attachment model (AGENTS.md decision #8: trailing arguments
 attach as *children*), and meant a downstream consumer could not ask "what is
@@ -71,13 +71,13 @@ losslessness on every input.
 
 After the fix, `verbatim_cmd.tex` is allowlisted (no longer unexplained):
 badness and texlab now agree the verbatim body is the command's *child*; the
-residual divergence is deliberate — badness keeps the body opaque (`(verbatim)`)
+residual divergence is deliberate—badness keeps the body opaque (`(verbatim)`)
 where texlab parses it as a `(group)`, plus the `\verb`/`\verb*` single-token vs
 command+verbatim tokenization split.
 
 ## The skipped file is correct behavior
 
-`malformed.tex` is `SkippedBadness` — by design the gauge never measures against
+`malformed.tex` is `SkippedBadness`—by design the gauge never measures against
 its own parse errors. badness correctly diagnosed all three malformations and
 recovered losslessly without aborting (core decision #5, error recovery):
 
@@ -101,7 +101,7 @@ patterns.
   keeps them flat generic `COMMAND`s (tenet 2: meaning never leaks into the
   parser). This *alone* accounts for the entire divergence in `sectioning.tex`,
   `citations.tex`, `comments_trivia.tex`, `nested_envs.tex`, and
-  `optional_args.tex` — in each, the constructs the probe was actually targeting
+  `optional_args.tex`—in each, the constructs the probe was actually targeting
   (citations, optional/bracketed args, trivia attachment) are **concordant**;
   only the scope nesting differs.
 - **Control-symbol argument attachment** (`accents.tex`): `\"{o}` keeps `{o}` a
@@ -134,7 +134,7 @@ one diverging:
 `tables.tex` (92.3%) diverges only because the **skeleton projector** drops
 `BEGIN` wholesale (`Cat::Drop`), hiding the `\begin{tabular}{lcr}` column-spec
 group that badness's CST *does* preserve as a `GROUP` child of `BEGIN`. texlab
-surfaces the spec, so the projection — not the parse — diverges. It is
+surfaces the spec, so the projection—not the parse—diverges. It is
 allowlisted with that reason.
 
 **Optional gauge improvement (not applied):** in

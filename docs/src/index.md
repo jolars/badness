@@ -21,14 +21,14 @@ equivalent to running a TeX engine—so anything it cannot statically recognize
 degrades to generic nodes rather than a crash. Two properties are guaranteed by
 construction and enforced as test oracles:
 
-- **Losslessness** — the parsed tree reconstructs the input byte-for-byte.
-- **Idempotence** — formatting an already-formatted file changes nothing.
+- **Losslessness**: the parsed tree reconstructs the input byte-for-byte.
+- **Idempotence**: formatting an already-formatted file changes nothing.
 
 > badness is early software (version `{{ badness-version }}`). The formatter is
 > still landing features; expect the surface described here to grow.
 
 ## Where to go next
 
-- [Installation](guide/installation.md) — get the `badness` binary.
-- [Getting Started](guide/getting-started.md) — format and lint your first file.
-- [Editor Setup](guide/editor-setup.md) — wire up the language server.
+- [Installation](guide/installation.md): get the `badness` binary.
+- [Getting Started](guide/getting-started.md): format and lint your first file.
+- [Editor Setup](guide/editor-setup.md): wire up the language server.

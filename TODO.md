@@ -374,7 +374,8 @@ scope (the same boundary the include graph and CWL ingest keep).
 - [ ] Fuzzing (losslessness must hold on arbitrary input).
 - [~] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
   Formatter speed bench vs `tex-fmt`/`latexindent` landed (`benches/compare_format.sh`,
-  `task bench`, writes `BENCH.md` + JSON). In-process parse/format micro-bench +
+  `task bench`, writes `benches/benchmark_results.json`, which feeds the docs
+  benchmark page `docs/src/reference/benchmarks.md`). In-process parse/format micro-bench +
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
 - [x] **Profile the formatter (separate startup floor from per-byte cost).** Done:

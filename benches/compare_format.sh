@@ -4,10 +4,14 @@
 # (tex-fmt, latexindent) on a corpus of real documents, using hyperfine.
 #
 # Usage:
-#   ./benches/compare_format.sh                      # human report → BENCH.md
-#   ./benches/compare_format.sh --json [--out PATH]  # structured JSON artifact
+#   ./benches/compare_format.sh             # → benches/benchmark_results.json
+#   ./benches/compare_format.sh --out PATH  # write the JSON artifact elsewhere
 #   BADNESS_BENCH_INPUT=path/to/file.tex ./benches/compare_format.sh
-#                                                    # benchmark one real file
+#                                           # benchmark one real file
+#
+# The JSON artifact feeds the docs benchmark page (docs/src/reference/benchmarks.md),
+# rendered at mdbook-build time by the doc-utils preprocessor. Regenerate it
+# manually with `task bench`; it is never rebuilt at site-generation time or in CI.
 #
 # This is a *visibility* tool, not a CI gate and not an output-parity target.
 # It measures wall-clock formatting speed only, never output equivalence — the
@@ -30,22 +34,18 @@ DOCS_DIR="benches/documents"
 BADNESS="$REPO_ROOT/target/release/badness"
 HYPERFINE_MIN_RUNS=3
 
-JSON_MODE=0
 JSON_OUT="benches/benchmark_results.json"
-BENCH_MD="BENCH.md"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --json) JSON_MODE=1; shift ;;
         --out)  JSON_OUT="$2"; shift 2 ;;
         -h|--help) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
-# Progress goes to stderr in JSON mode so stdout/JSON stays clean.
-if [ "$JSON_MODE" = "1" ]; then LOG_FD=2; else LOG_FD=1; fi
-log() { echo -e "$@" >&$LOG_FD; }
+# Progress goes to stderr so the JSON artifact path is the only thing on stdout.
+log() { echo -e "$@" >&2; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -185,21 +185,10 @@ done
 
 [ "${#DOC_ID[@]}" -gt 0 ] || { echo "error: no documents benchmarked (corpus missing or all gated out)" >&2; exit 1; }
 
-# Look up a result mean for (doc, tool); empty if not present.
-mean_of() {
-    local d="$1" t="$2" i
-    for i in "${!RES_DOC[@]}"; do
-        if [ "${RES_DOC[$i]}" = "$d" ] && [ "${RES_TOOL[$i]}" = "$t" ]; then
-            echo "${RES_MEAN[$i]}"; return
-        fi
-    done
-}
-
 # --- Render JSON -------------------------------------------------------------
 
-if [ "$JSON_MODE" = "1" ]; then
-    mkdir -p "$(dirname "$JSON_OUT")"
-    {
+mkdir -p "$(dirname "$JSON_OUT")"
+{
         printf '{\n'
         printf '  "schema_version": 1,\n'
         printf '  "meta": {\n'
@@ -235,79 +224,7 @@ if [ "$JSON_MODE" = "1" ]; then
         done
         printf '  ]\n'
         printf '}\n'
-    } > "$JSON_OUT"
-    log "JSON written to: $JSON_OUT"
-    exit 0
-fi
+} > "$JSON_OUT"
 
-# --- Render BENCH.md ---------------------------------------------------------
-
-ratio_cell() {
-    # "$tool_mean" relative to "$badness_mean" → human ratio string.
-    local tool_mean="$1" base_mean="$2"
-    awk -v t="$tool_mean" -v b="$base_mean" 'BEGIN {
-        if (b <= 0 || t <= 0) { print "—"; exit }
-        r = t / b
-        if (r >= 1) printf "%.1f× slower", r
-        else        printf "%.1f× faster", 1 / r
-    }'
-}
-
-{
-    echo "# Formatter benchmark: badness vs tex-fmt & latexindent"
-    echo
-    echo "Wall-clock formatting speed of \`badness\` against"
-    echo "[\`tex-fmt\`](https://github.com/wgunderwood/tex-fmt) and"
-    echo "[\`latexindent\`](https://github.com/cmhughes/latexindent.pl), measured with"
-    echo "[hyperfine]. Every tool formats stdin → stdout, so the comparison is free of"
-    echo "file-mutation and exit-code noise."
-    echo
-    echo "**This is not a CI gate and not a parity target.** Timings are machine- and"
-    echo "run-dependent, and this file measures *speed only*, never output equivalence."
-    echo "The tools also do different work: \`latexindent\` only indents by default and"
-    echo "does no line reflow, while \`badness\` and \`tex-fmt\` wrap — so a raw speed"
-    echo "comparison is a snapshot of each tool at its defaults, not equal work."
-    echo "Regenerate with \`task bench\`."
-    echo
-    echo "[hyperfine]: https://github.com/sharkdp/hyperfine"
-    echo
-    echo "## Setup"
-    echo
-    echo "- **badness**: \`$BADNESS_VER\`"
-    if [ "$HAVE_TEXFMT" = "yes" ]; then echo "- **tex-fmt**: \`$TEXFMT_VER\`"; else echo "- **tex-fmt**: not measured (not installed)"; fi
-    if [ "$HAVE_LATEXINDENT" = "yes" ]; then echo "- **latexindent**: \`$LATEXINDENT_VER\`"; else echo "- **latexindent**: not measured (not installed)"; fi
-    echo "- **backend**: $BACKEND (min runs: $HYPERFINE_MIN_RUNS)"
-    [ -n "$HOST_CPU" ] && echo "- **host**: $HOST_OS/$HOST_ARCH, $HOST_CPU"
-    echo
-    echo "Corpus is real LaTeX: a committed \`small.tex\` baseline plus documents fetched"
-    echo "by \`benches/documents/download.sh\` (gitignored). Documents \`badness\` cannot"
-    echo "yet format (parser diagnostics) are skipped."
-    echo
-    echo "## Results"
-    for i in "${!DOC_ID[@]}"; do
-        id="${DOC_ID[$i]}"
-        base="$(mean_of "$id" badness)"
-        echo
-        echo "### ${DOC_LABEL[$i]} (${DOC_SIZE[$i]} bytes, ${DOC_LINES[$i]} lines)"
-        echo
-        echo "| Tool | Mean (ms) | Min (ms) | Max (ms) | Relative |"
-        echo "| --- | ---: | ---: | ---: | --- |"
-        for tool in "${TOOLS[@]}"; do
-            m="$(mean_of "$id" "$tool")"
-            [ -n "$m" ] || continue
-            # Find the matching min/max for this (doc, tool).
-            mn=""; mx=""
-            for j in "${!RES_DOC[@]}"; do
-                if [ "${RES_DOC[$j]}" = "$id" ] && [ "${RES_TOOL[$j]}" = "$tool" ]; then
-                    mn="${RES_MIN[$j]}"; mx="${RES_MAX[$j]}"; break
-                fi
-            done
-            [ "$mn" = "null" ] && mn="—"
-            [ "$mx" = "null" ] && mx="—"
-            if [ "$tool" = "badness" ]; then rel="baseline"; else rel="$(ratio_cell "$m" "$base")"; fi
-            printf '| %s | %s | %s | %s | %s |\n' "$tool" "$m" "$mn" "$mx" "$rel"
-        done
-    done
-} > "$BENCH_MD"
-
-log "Report written to: $BENCH_MD"
+log "JSON written to: $JSON_OUT"
+echo "$JSON_OUT"

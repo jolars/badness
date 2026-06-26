@@ -18,7 +18,8 @@ cost** (the TODO's profiling task).
 # Fetch the larger corpus (small.tex is committed; the rest are gitignored)
 task bench:download
 
-# Wall-clock CLI comparison → BENCH.md
+# Wall-clock CLI comparison → benches/benchmark_results.json (feeds the docs
+# benchmark page, docs/src/reference/benchmarks.md)
 task bench
 
 # In-process micro-bench (parse vs format vs full pipeline, throughput)

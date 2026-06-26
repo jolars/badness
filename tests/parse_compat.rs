@@ -19,7 +19,8 @@
 //! shared skeleton, render each to indented S-expression lines, and score the Dice
 //! coefficient over those lines. Files badness cannot parse cleanly are skipped (we
 //! never measure against our own parse errors). The result is written to
-//! `PARSE_COMPAT.md` and is a triage queue, not a pass/fail signal.
+//! `.claude/skills/parse-compat/PARSE_COMPAT.md` and is a triage queue, not a
+//! pass/fail signal.
 
 #[path = "support/parse_skeleton.rs"]
 mod parse_skeleton;
@@ -141,7 +142,8 @@ fn parse_compat_report() {
     );
     print!("{report}");
 
-    let out_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("PARSE_COMPAT.md");
+    let out_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills/parse-compat/PARSE_COMPAT.md");
     fs::write(&out_path, &report).expect("write PARSE_COMPAT.md");
     eprintln!("parse-compat: wrote {}", out_path.display());
 }

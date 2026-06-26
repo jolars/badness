@@ -1,6 +1,7 @@
 # Parse-compat triage—vetting badness's CST shape against texlab
 
-Companion to the generated `PARSE_COMPAT.md` (do not hand-edit that file). This
+Companion to the generated `.claude/skills/parse-compat/PARSE_COMPAT.md` (do not
+hand-edit that file). This
 is a human-authored triage of the divergences surfaced by expanding the
 parse-compat corpus from 4 to 22 files, recording how each was classified and
 why. It is the "decide" input for the genuine modeling gap found—no parser

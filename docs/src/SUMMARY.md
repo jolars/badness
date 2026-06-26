@@ -14,6 +14,7 @@
 
 - [CLI Reference](reference/cli.md)
 - [Wrap Modes](reference/wrap-modes.md)
+- [Benchmarks](reference/benchmarks.md)
 
 # Project
 

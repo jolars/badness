@@ -33,12 +33,12 @@ clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"
 ignore = "0.4.26"
 log = { version = "0.4.32", features = ["release_max_level_info"] }
-lsp-server = "0.7"
+lsp-server = "0.8"
 lsp-types = "0.97"
 # The bulk CWL signature tier is baked into the binary as a `phf` map by build.rs
 # (perfect-hash, zero runtime parse/decompress); the runtime crate provides the
 # `phf::Map` lookup type. See `src/semantic/signature.rs`.
-phf = "0.11"
+phf = "0.14"
 rowan = "0.16.1"
 salsa = "0.27.0"
 serde = { version = "1", features = ["derive"] }
@@ -50,7 +50,7 @@ toml = "1"
 # data/cwl_signatures.json into OUT_DIR, baked into the binary as read-only
 # statics with zero runtime parse/decompress (see src/semantic/signature.rs).
 [build-dependencies]
-phf_codegen = "0.11"
+phf_codegen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

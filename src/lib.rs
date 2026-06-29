@@ -4,6 +4,7 @@
 
 pub mod ast;
 pub mod bib;
+pub mod cli;
 pub mod completion;
 pub mod config;
 pub mod file_discovery;

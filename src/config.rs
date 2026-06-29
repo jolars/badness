@@ -113,7 +113,7 @@ impl Default for FormatConfig {
 /// The `wrap` key under `[format]`. A thin, serde-named mirror of [`WrapMode`]
 /// (the formatter's own type), kept separate so the TOML spelling (`kebab-case`)
 /// is a config concern, not baked into the formatter API — the same split as the
-/// CLI's `WrapArg` in `main.rs`.
+/// CLI's `WrapArg` in `cli.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WrapModeConfig {

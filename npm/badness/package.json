@@ -1,7 +1,7 @@
 {
   "name": "badness",
   "version": "0.4.0",
-  "description": "An LSP, formatter, and linter for LaTeX",
+  "description": "A language, formatter, and linter for LaTeX",
   "keywords": [
     "latex",
     "formatter",

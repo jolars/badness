@@ -66,7 +66,7 @@ JSON
 # here. Set INCLUDE_MAIN=1 if `badness` does not yet exist on the registry.
 if [[ "${INCLUDE_MAIN:-0}" == "1" ]]; then
   publish_stub "badness" \
-    "An LSP, formatter, and linter for LaTeX (placeholder release; functional build ships via CI)."
+    "A language server, formatter, and linter for LaTeX (placeholder release; functional build ships via CI)."
 fi
 
 # Per-platform binary packages.

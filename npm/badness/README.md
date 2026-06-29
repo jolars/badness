@@ -1,6 +1,6 @@
 # badness
 
-[Badness](https://badness.dev/) is an LSP, formatter, and linter
+[Badness](https://badness.dev/) is a language server, formatter, and linter
 for LaTeX documents.
 
 ## Install

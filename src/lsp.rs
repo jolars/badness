@@ -4080,7 +4080,9 @@ mod tests {
 
     /// A `file://` URI for `main.tex` inside `dir`.
     fn file_uri_in(dir: &Path) -> Uri {
-        uri(&format!("file://{}/main.tex", dir.display()))
+        // Go through `path_to_uri` so the URI is well-formed on Windows too,
+        // where `dir.display()` yields `C:\…` (backslashes, no leading slash).
+        path_to_uri(&dir.join("main.tex")).expect("file uri")
     }
 
     #[test]

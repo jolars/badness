@@ -279,11 +279,19 @@ struct ResolvedSettings {
     config_present: bool,
     /// The `[lint]` `select`/`ignore` selection (default — every rule — when no file).
     lint: LintConfig,
+    /// The sibling-discovery exclude filter, rooted at the config's directory. The
+    /// exclude-nothing [`ExcludeFilter::none`] when no config governs (editor
+    /// fallback) — preserving the unfiltered walk that path always did.
+    exclude: ExcludeFilter,
 }
 
 impl ResolvedSettings {
     /// Resolution from a discovered config (when `present`), else from the editor
-    /// settings. Mirrors arity's `resolve_format_style` file-wins rule.
+    /// settings. Mirrors arity's `resolve_format_style` file-wins rule. The
+    /// `exclude` filter is left exclude-nothing here; [`resolve_settings`] compiles
+    /// and installs the real one (it holds the config's root directory).
+    ///
+    /// [`resolve_settings`]: GlobalState::resolve_settings
     fn from_config(config: &Config, present: bool, editor: &EditorSettings) -> Self {
         if present {
             Self {
@@ -291,6 +299,7 @@ impl ResolvedSettings {
                 wrap_override: config.format.wrap.map(Into::into),
                 config_present: true,
                 lint: config.lint.clone(),
+                exclude: ExcludeFilter::none(),
             }
         } else {
             Self::from_editor(editor)
@@ -298,13 +307,14 @@ impl ResolvedSettings {
     }
 
     /// Editor-settings-only resolution: width knobs over the built-in defaults, no
-    /// configured wrap, and the full default rule set.
+    /// configured wrap, the full default rule set, and no exclude filter.
     fn from_editor(editor: &EditorSettings) -> Self {
         Self {
             style: editor.to_format_style(),
             wrap_override: None,
             config_present: false,
             lint: LintConfig::default(),
+            exclude: ExcludeFilter::none(),
         }
     }
 
@@ -335,7 +345,21 @@ impl GlobalState {
         }
         let resolved = match Config::resolve(None, false, &anchor) {
             Ok((config, source)) => {
-                ResolvedSettings::from_config(&config, source.is_some(), &self.editor_settings)
+                let present = source.is_some();
+                let mut resolved =
+                    ResolvedSettings::from_config(&config, present, &self.editor_settings);
+                if present {
+                    // Compile the sibling-discovery exclude filter, rooted at the
+                    // config's directory (the same rule as the CLI's
+                    // `build_exclude_filter`; the LSP contributes no `--exclude`).
+                    // A malformed pattern leaves the exclude-nothing default rather
+                    // than failing resolution — there is no good channel to report it.
+                    let root = source.as_deref().and_then(Path::parent).unwrap_or(&anchor);
+                    if let Ok(filter) = ExcludeFilter::new(root, &config.exclude_patterns(&[])) {
+                        resolved.exclude = filter;
+                    }
+                }
+                resolved
             }
             // No good channel to report a bad/unreadable config; fall back without
             // caching so a fix is picked up next time.
@@ -358,6 +382,10 @@ enum WorkerJob {
         kind: FileKind,
         /// The document's resolved lint-rule selection, applied to the analyze.
         rules: RuleSelection,
+        /// The document's resolved exclude filter, applied to sibling discovery
+        /// ([`Worker::seed_dir`]). Built on the main side because the worker holds
+        /// no config; exclude-nothing when no `badness.toml` governs.
+        exclude: ExcludeFilter,
     },
     /// `didClose`: evict the file from the db. Diagnostics are cleared directly by
     /// the main loop.
@@ -672,14 +700,15 @@ fn on_notification(
             );
             let path = uri_to_path(&uri);
             let kind = file_kind_for(&path);
-            let rules = state.resolve_settings(&uri).rule_selection();
+            let resolved = state.resolve_settings(&uri);
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
                 text: doc.text,
                 version: doc.version,
                 kind,
-                rules,
+                rules: resolved.rule_selection(),
+                exclude: resolved.exclude,
             });
         }
         DidChangeTextDocument::METHOD => {
@@ -698,14 +727,15 @@ fn on_notification(
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
             let kind = file_kind_for(&path);
-            let rules = state.resolve_settings(&uri).rule_selection();
+            let resolved = state.resolve_settings(&uri);
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
                 text,
                 version,
                 kind,
-                rules,
+                rules: resolved.rule_selection(),
+                exclude: resolved.exclude,
             });
         }
         DidCloseTextDocument::METHOD => {
@@ -1358,14 +1388,15 @@ fn forward_outbound(
             for (uri, text, version) in snapshot {
                 let path = uri_to_path(&uri);
                 let kind = file_kind_for(&path);
-                let rules = state.resolve_settings(&uri).rule_selection();
+                let resolved = state.resolve_settings(&uri);
                 let _ = job_tx.send(WorkerJob::Edit {
                     uri,
                     path,
                     text,
                     version,
                     kind,
-                    rules,
+                    rules: resolved.rule_selection(),
+                    exclude: resolved.exclude,
                 });
             }
         }
@@ -1513,6 +1544,7 @@ impl Worker {
                 version,
                 kind,
                 rules,
+                exclude,
             } => {
                 // Write-phase: push the live buffer into the db. Cheap — the parse
                 // is a lazy salsa query deferred to the analyze. Acquiring `&mut
@@ -1522,7 +1554,7 @@ impl Worker {
                 // Lazily pull the rest of the project off disk so cross-file rules
                 // can fire. If this grows the member set, every open document's
                 // resolution may have changed — re-lint them all.
-                if self.seed_dir(&path) {
+                if self.seed_dir(&path, &exclude) {
                     let _ = self.out_tx.send(Outbound::RelintAll);
                 }
                 self.enqueue(AnalyzeRequest {
@@ -1753,7 +1785,12 @@ impl Worker {
     /// filesystem root, so we never walk `/`. A sibling that is already tracked —
     /// an open buffer, or one seeded earlier — keeps its live text (we never read
     /// it back from disk). Each directory is walked at most once (`seeded_dirs`).
-    fn seed_dir(&mut self, path: &Path) -> bool {
+    ///
+    /// `exclude` is the document's resolved [`ExcludeFilter`] (built on the main
+    /// side, where the config lives, and threaded through [`WorkerJob::Edit`]), so
+    /// a `badness.toml` `exclude`/`extend-exclude` prunes the same siblings here as
+    /// it does for the CLI. It is exclude-nothing when no config governs.
+    fn seed_dir(&mut self, path: &Path, exclude: &ExcludeFilter) -> bool {
         if !path.is_file() {
             return false;
         }
@@ -1768,11 +1805,11 @@ impl Worker {
         if !self.seeded_dirs.insert(dir.clone()) {
             return false; // already walked
         }
-        // A discovered `badness.toml` now governs format/lint per document
-        // (`resolve_settings`), but sibling discovery here runs inside the worker —
-        // which holds no config — so it still applies no exclude filter. Honoring the
-        // config's `exclude`/`extend-exclude` is a recorded follow-up (see TODO.md).
-        let Ok(files) = collect_lint_files(&[dir], &ExcludeFilter::none()) else {
+        // A discovered `badness.toml` governs sibling discovery here too: the
+        // document's resolved exclude filter is built on the main side (where the
+        // config lives) and threaded in via `WorkerJob::Edit`, so the same
+        // `exclude`/`extend-exclude` that scope the CLI's walk prune these siblings.
+        let Ok(files) = collect_lint_files(&[dir], exclude) else {
             return false;
         };
         let mut grew = false;
@@ -3952,6 +3989,58 @@ mod tests {
         assert!(!rules.is_active("deprecated-command"));
         // Parse diagnostics are never filtered out.
         assert!(rules.is_active("parse"));
+    }
+
+    #[test]
+    fn resolve_settings_builds_exclude_filter_for_sibling_discovery() {
+        // The resolved exclude filter is what `Worker::seed_dir` feeds to
+        // `collect_lint_files`, so verify it prunes a configured directory while
+        // keeping a normal sibling — the whole point of plumbing config into the
+        // worker.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("badness.toml"), "exclude = [\"vendor/\"]\n")
+            .expect("write config");
+        std::fs::write(dir.path().join("main.tex"), "").expect("write main");
+        std::fs::create_dir(dir.path().join("vendor")).expect("mkdir vendor");
+        std::fs::write(dir.path().join("vendor").join("lib.tex"), "").expect("write lib");
+
+        let mut state = state_with_editor(EditorSettings::default());
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+
+        let files =
+            collect_lint_files(&[dir.path().to_path_buf()], &resolved.exclude).expect("collect");
+        let names: Vec<_> = files
+            .iter()
+            .map(|(p, _)| p.strip_prefix(dir.path()).unwrap_or(p).to_path_buf())
+            .collect();
+        assert!(names.contains(&PathBuf::from("main.tex")));
+        assert!(
+            !names.iter().any(|p| p.starts_with("vendor")),
+            "excluded sibling should be pruned, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_settings_without_config_excludes_nothing() {
+        // The editor-fallback path keeps the historical unfiltered walk: a
+        // `vendor/` sibling is still discovered when no `badness.toml` governs.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.tex"), "").expect("write main");
+        std::fs::create_dir(dir.path().join("vendor")).expect("mkdir vendor");
+        std::fs::write(dir.path().join("vendor").join("lib.tex"), "").expect("write lib");
+
+        let mut state = state_with_editor(EditorSettings::default());
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+        assert!(!resolved.config_present);
+
+        let files =
+            collect_lint_files(&[dir.path().to_path_buf()], &resolved.exclude).expect("collect");
+        let names: Vec<_> = files
+            .iter()
+            .map(|(p, _)| p.strip_prefix(dir.path()).unwrap_or(p).to_path_buf())
+            .collect();
+        assert!(names.contains(&PathBuf::from("main.tex")));
+        assert!(names.contains(&PathBuf::from("vendor/lib.tex")));
     }
 
     #[test]

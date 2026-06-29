@@ -96,9 +96,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
   `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
   follow-ups remain:
-  - Sibling discovery (`Worker::seed_dir`) still walks with no exclude filter: it
-    runs inside the worker, which holds no config. Honor the config's
-    `exclude`/`extend-exclude` by plumbing it into the worker.
+  - [x] Sibling discovery (`Worker::seed_dir`) now honors the config's
+    `exclude`/`extend-exclude`. The filter is compiled on the main side in
+    `resolve_settings` (rooted at the config's directory, mirroring the CLI's
+    `build_exclude_filter`), carried on `ResolvedSettings`, and threaded through
+    `WorkerJob::Edit` into `seed_dir`. The editor-fallback path keeps the historical
+    exclude-nothing walk.
   - No on-disk config watching: the anchor-dir cache lives for the session and is
     cleared only on `didChangeConfiguration`, so editing `badness.toml` needs a
     config-change nudge (or restart) to take effect. Folds into the

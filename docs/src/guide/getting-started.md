@@ -1,10 +1,10 @@
 # Getting Started
 
-badness has three subcommands: `format`, `lint`, and `lsp`. This page walks
+Badness has three subcommands: `format`, `lint`, and `lsp`. This page walks
 through the first two from the command line. For editor integration, see [Editor
 Setup](editor-setup.md).
 
-## Formatting a file
+## Formatting a File
 
 Format a file in place:
 
@@ -25,7 +25,7 @@ to standard output—handy for piping or editor integrations:
 cat paper.tex | badness format
 ```
 
-## Checking without writing
+## Checking Without Writing
 
 In CI you usually want to *verify* that files are already formatted rather than
 rewrite them. The `--check` flag reports which files would change and exits
@@ -50,7 +50,7 @@ Like `format`, it reads standard input when given no paths:
 cat paper.tex | badness lint
 ```
 
-## Adjusting layout
+## Adjusting Layout
 
 The formatter takes a few style options on the command line:
 

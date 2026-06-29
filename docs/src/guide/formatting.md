@@ -1,10 +1,10 @@
 # Formatting
 
 `badness format` lays out LaTeX source deterministically. Output is decided
-solely by the formatter's rules and its layout engine—there are no per-construct
-special cases to memorize.
+solely by the formatter's rules and its layout engine---there are no
+per-construct special cases to memorize.
 
-## In place, stdin, or check
+## In Place, `stdin`, or check
 
 ```sh
 badness format paper.tex          # rewrite the file in place
@@ -12,7 +12,7 @@ cat paper.tex | badness format    # stdin → stdout
 badness format --check paper.tex  # report, don't write; non-zero if unformatted
 ```
 
-## Style options
+## Style Options
 
   | Flag                 | Default  | Meaning                                                                                        |
   | -------------------- | -------- | ---------------------------------------------------------------------------------------------- |
@@ -20,8 +20,8 @@ badness format --check paper.tex  # report, don't write; non-zero if unformatted
   | `--indent-width <N>` | `2`      | Spaces per indent step.                                                                        |
   | `--wrap <mode>`      | `reflow` | How line breaks inside a paragraph are laid out. See [Wrap Modes](../reference/wrap-modes.md). |
 
-> A configuration file is not yet read; style is set through these flags. This
-> is expected to change as badness matures.
+A configuration file is not yet read; style is set through these flags. This is
+expected to change as badness matures.
 
 ## Guarantees
 

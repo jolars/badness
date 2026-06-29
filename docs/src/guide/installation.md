@@ -1,11 +1,11 @@
 # Installation
 
-badness is distributed as a single binary, `badness`. The current version is
+Badness is distributed as a single binary, `badness`. The current version is
 `{{ badness-version }}`.
 
-## From source
+## From Source
 
-badness is written in Rust (edition 2024). With a Rust toolchain installed,
+Badness is written in Rust (edition 2024). With a Rust toolchain installed,
 build from a checkout:
 
 ```sh
@@ -23,7 +23,7 @@ To install it into Cargo's bin directory instead:
 cargo install --path .
 ```
 
-## Verifying the install
+## Verifying the Install
 
 ```sh
 badness --version

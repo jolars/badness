@@ -10,7 +10,7 @@ VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-v
 Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix)](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Badness** is a formatter, linter, and language server for LaTeX, built on a
+**Badness** is a language server, formatter, and linter for LaTeX, built on a
 lossless concrete syntax tree.
 
 It parses LaTeX once and serves three tools from that tree:

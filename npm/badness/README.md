@@ -10,8 +10,8 @@ npm install -g badness
 ```
 
 This installs the `badness` command globally. The package detects your platform
-at install time and pulls in a prebuilt binary via npm's optional dependencies
---- no Rust toolchain or postinstall download required.
+at install time and pulls in a prebuilt binary via npm's optional dependencies;
+no Rust toolchain or postinstall download required.
 
 You can also use it without a global install:
 
@@ -48,4 +48,4 @@ If your platform isn't covered, install via
 
 ## License
 
-MIT—see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

@@ -1,6 +1,6 @@
 # Editor Setup
 
-badness ships a language server. Start it with:
+Badness ships a language server. Start it with:
 
 ```sh
 badness lsp
@@ -38,7 +38,7 @@ bundled binary (`badness.executableStrategy: "bundled"`); set the strategy to
 `badness.executablePath` to point at a specific binary. See the extension's
 README for the full list of settings.
 
-## Other editors
+## Other Editors
 
 Any LSP-capable editor can drive badness: configure a server whose command is
 `badness lsp`, communicating over stdio, for LaTeX documents. Consult your

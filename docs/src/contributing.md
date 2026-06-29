@@ -1,20 +1,20 @@
 # Contributing
 
-badness is an open-source project. The authoritative guide for working in the
-codebase—architecture, tenets, and conventions—lives in
-[`AGENTS.md`](https://github.com/jolars/badness/blob/main/AGENTS.md) at the repo
-root, written for both human and AI contributors.
+Badness is an open-source project. The authoritative guide for working in the
+codebase---architecture, tenets, and conventions---lives in
+[`CONTRIBUTING.md`](https://github.com/jolars/badness/blob/main/CONTRIBUTING.md)
+at the repo root, written for both human and AI contributors.
 
-## Architecture in brief
+## Architecture
 
-badness follows the rust-analyzer model:
+Badness follows the rust-analyzer model:
 
 - A hand-written, error-tolerant **lexer and parser** turn LaTeX into a flat
   token stream, then an **event stream** (`Start`/`Tok`/`Finish`), which a tree
   builder re-attaches trivia to and feeds into
   [rowan](https://github.com/rust-analyzer/rowan) to produce a **lossless
   concrete syntax tree**.
-- A **semantic layer**—a signature database—assigns meaning (arity,
+- A **semantic layer**: a signature database—assigns meaning (arity,
   verbatim-ness, sectioning) on top of the generic tree. Meaning never leaks
   into the parser.
 - The **formatter** lowers the tree into a Wadler-style `Doc` IR, which a
@@ -29,5 +29,5 @@ badness follows the rust-analyzer model:
   assertion.
 - Keep code `rustfmt`-clean; `clippy` warnings are errors.
 
-See `AGENTS.md` for the full set of tenets and the architectural decisions
-behind them.
+See `CONTRIBUTING.md` for more details on the architecture, tenets, and
+conventions.

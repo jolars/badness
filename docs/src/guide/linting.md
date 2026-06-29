@@ -9,9 +9,9 @@ badness lint paper.tex
 cat paper.tex | badness lint   # stdin
 ```
 
-## What it reports today
+## What it Reports Today
 
-badness is early, and the linter currently surfaces **parse diagnostics**:
+Badness is early, and the linter currently surfaces **parse diagnostics**:
 places where the parser recovered from malformed input. Because the parser is
 error-tolerant, a single problem never aborts the parse—badness anchors recovery
 on clean LaTeX boundaries (`\end{…}`, `\begin`, a blank line, `}`, `$`, `&`,

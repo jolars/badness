@@ -185,11 +185,11 @@ fn main() {
 
     let mut commands = phf_codegen::Map::new();
     for (name, sig) in &db.commands {
-        commands.entry(name.as_str(), &sig.render());
+        commands.entry(name.as_str(), sig.render());
     }
     let mut environments = phf_codegen::Map::new();
     for (name, sig) in &db.environments {
-        environments.entry(name.as_str(), &sig.render());
+        environments.entry(name.as_str(), sig.render());
     }
 
     let mut out = String::new();

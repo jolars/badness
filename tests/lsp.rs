@@ -21,16 +21,17 @@ use lsp_types::{
     CompletionResponse, DiagnosticClientCapabilities, DiagnosticWorkspaceClientCapabilities,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
-    DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
-    RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
-    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit,
+    DocumentFormattingParams, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FoldingRange, FoldingRangeKind,
+    FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
+    NumberOrString, OneOf, PartialResultParams, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams, RenameOptions,
+    RenameParams, SymbolKind, TextDocumentClientCapabilities, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri,
+    VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceClientCapabilities,
+    WorkspaceEdit,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -1327,6 +1328,143 @@ fn lsp_references_same_file_label_uses() {
     // Cursor past the document content (the trailing newline) is on no label/ref.
     let none = references(&client, 5, &uri, Position::new(3, 0), true);
     assert!(none.is_empty(), "no reference under an empty position");
+
+    shutdown(&client, server_thread);
+}
+
+fn document_highlight(
+    client: &Connection,
+    id: i32,
+    uri: &Uri,
+    position: Position,
+) -> Vec<DocumentHighlight> {
+    send_request(
+        client,
+        id,
+        "textDocument/documentHighlight",
+        serde_json::to_value(DocumentHighlightParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    // An unknown document replies `null`; a resolved-but-empty highlight is `[]`.
+    match resp.result {
+        Some(serde_json::Value::Null) | None => Vec::new(),
+        Some(v) => serde_json::from_value(v).unwrap(),
+    }
+}
+
+/// Sort highlights by their start and pair each with its kind, so assertions don't
+/// depend on the label-then-ref emission order.
+fn highlight_starts(
+    mut hl: Vec<DocumentHighlight>,
+) -> Vec<(Position, Option<DocumentHighlightKind>)> {
+    hl.sort_by_key(|h| (h.range.start.line, h.range.start.character));
+    hl.into_iter().map(|h| (h.range.start, h.kind)).collect()
+}
+
+#[test]
+fn lsp_document_highlight_label_and_refs() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    // A label and two references to it in the same buffer.
+    let doc = "\\label{sec:intro}\n\\ref{sec:intro}\n\\ref{sec:intro}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor on the first `\ref` key → the key spans of the `\label` definition
+    // (WRITE) and both `\ref` uses (READ).
+    let expected = vec![
+        (Position::new(0, 7), Some(DocumentHighlightKind::WRITE)),
+        (Position::new(1, 5), Some(DocumentHighlightKind::READ)),
+        (Position::new(2, 5), Some(DocumentHighlightKind::READ)),
+    ];
+    let from_ref = document_highlight(&client, 2, &uri, Position::new(1, 6));
+    assert_eq!(
+        highlight_starts(from_ref),
+        expected,
+        "the \\label definition and both \\ref uses, by key span"
+    );
+
+    // The same set when invoked from the `\label` definition key.
+    let from_def = document_highlight(&client, 3, &uri, Position::new(0, 8));
+    assert_eq!(
+        highlight_starts(from_def),
+        expected,
+        "highlight resolves identically from the definition site"
+    );
+
+    // Strict key gating: the cursor on the command word `\ref` (not its key)
+    // highlights nothing.
+    let on_word = document_highlight(&client, 4, &uri, Position::new(1, 1));
+    assert!(on_word.is_empty(), "cursor on the command word, not a key");
+
+    // A position past the content is on no key.
+    let none = document_highlight(&client, 5, &uri, Position::new(3, 0));
+    assert!(none.is_empty(), "no key under an empty position");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_document_highlight_cref_isolates_each_key() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    // `\cref{a,b}` is a multi-key list command; `a` and `b` are independent keys.
+    let doc = "\\cref{a,b}\n\\ref{a}\n\\label{a}\n\\label{b}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor on `a` in `\cref{a,b}` → only the `a` family; the sibling `b` and
+    // `\label{b}` are untouched.
+    let on_a = document_highlight(&client, 2, &uri, Position::new(0, 6));
+    assert_eq!(
+        highlight_starts(on_a),
+        vec![
+            (Position::new(0, 6), Some(DocumentHighlightKind::READ)), // `\cref` key `a`
+            (Position::new(1, 5), Some(DocumentHighlightKind::READ)), // `\ref{a}`
+            (Position::new(2, 7), Some(DocumentHighlightKind::WRITE)), // `\label{a}`
+        ],
+        "only the `a` key family, the sibling `b` excluded"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_document_highlight_citation_keys() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\cite{foo}\n\\cite{foo}\n\\cite{bar}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor on a `\cite{foo}` key → both `foo` citations (READ); `bar` excluded.
+    let on_foo = document_highlight(&client, 2, &uri, Position::new(0, 7));
+    assert_eq!(
+        highlight_starts(on_foo),
+        vec![
+            (Position::new(0, 6), Some(DocumentHighlightKind::READ)),
+            (Position::new(1, 6), Some(DocumentHighlightKind::READ)),
+        ],
+        "both \\cite{{foo}} keys, the \\cite{{bar}} excluded"
+    );
 
     shutdown(&client, server_thread);
 }

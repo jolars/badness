@@ -157,8 +157,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   Inverts go-to-def via new `namespace_members`/`bib_citers` resolver accessors
   (`src/project/{labels,citations}.rs`). Reports the whole-command range per use;
   precise per-key spans now live in `key_range` (added for rename).
-- [ ] Document highlight (`textDocument/documentHighlight`)—highlight a
-  label and its refs within the file.
+- [x] Document highlight (`textDocument/documentHighlight`)—highlights a
+  cross-reference key and every same-key occurrence within the file: the `\label`
+  definition shades `Write`, each `\ref`/`\cite` use shades `Read`. Single-file (the
+  lightweight cousin of find-references), strict per-key gating via the shared
+  `rename_target_under_cursor` (a cursor on the command word or a sibling key in a
+  `\cref{a,b}` highlights nothing for that key). `.bib` buffers yield no highlights.
 - [x] Rename (`textDocument/rename` + `prepareRename`)—renames a label or
   cite key and every referencing command atomically; project-wide via the include
   graph; best-effort across a non-closed namespace (mirrors find-references). The

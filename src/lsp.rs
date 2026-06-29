@@ -73,9 +73,10 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentSymbolRequest,
-    FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, PrepareRenameRequest,
-    References, Rename, Request as _, ResolveCompletionItem, WorkspaceDiagnosticRefresh,
+    CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
+    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
+    PrepareRenameRequest, References, Rename, Request as _, ResolveCompletionItem,
+    WorkspaceDiagnosticRefresh,
 };
 use lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
@@ -83,7 +84,8 @@ use lsp_types::{
     DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
-    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentSymbol, DocumentSymbolParams,
     DocumentSymbolResponse, FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
     FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, HoverParams,
     HoverProviderCapability, InsertTextFormat, Location, NumberOrString, OneOf, Position,
@@ -172,6 +174,9 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        // Shade a cross-reference key and every same-key occurrence in the buffer.
+        // Single-file (the lightweight cousin of `references_provider`).
+        document_highlight_provider: Some(OneOf::Left(true)),
         // Rename a `\label`/`\cite` key and every referencing command across its
         // namespace. `prepare_provider` lets the client pre-validate the cursor and
         // anchor the prepare range to the key token.
@@ -464,6 +469,16 @@ enum WorkerJob {
         position: Position,
         include_declaration: bool,
     },
+    /// A `documentHighlight` request: shade the cross-reference key under the cursor
+    /// and every same-key occurrence in the *same* buffer. Single-file (the
+    /// lightweight cousin of [`References`](Self::References)); dispatched to the read
+    /// pool like the others to keep the threading model uniform.
+    DocumentHighlight {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        position: Position,
+    },
     /// A `prepareRename` request: confirm the cursor sits on a renameable label/cite
     /// key and reply with that key's range + placeholder. Resolved off a single
     /// parse of the cursor buffer; no cross-file work, but dispatched to the read
@@ -638,6 +653,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_goto_definition(&connection, &state, &job_tx, req)
                             }
                             References::METHOD => on_references(&connection, &state, &job_tx, req),
+                            DocumentHighlightRequest::METHOD => {
+                                on_document_highlight(&connection, &state, &job_tx, req)
+                            }
                             PrepareRenameRequest::METHOD => {
                                 on_prepare_rename(&connection, &state, &job_tx, req)
                             }
@@ -1241,6 +1259,49 @@ fn on_references(
     });
 }
 
+/// `textDocument/documentHighlight`: build a document-highlight job for the worker,
+/// or reply `null` when the document is unknown. Single-file, so no project membership
+/// is captured — the worker shades the key under the cursor against the cursor buffer
+/// alone.
+fn on_document_highlight(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<DocumentHighlightParams>(DocumentHighlightRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid document-highlight params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: nothing to highlight.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let _ = job_tx.send(WorkerJob::DocumentHighlight {
+        id,
+        path,
+        text: doc.text.clone(),
+        position,
+    });
+}
+
 /// `textDocument/prepareRename`: build a prepare-rename job, or reply `null` when
 /// the document is unknown. The worker decides whether the cursor sits on a
 /// renameable key (and returns its range + placeholder) or declines with `null`.
@@ -1688,6 +1749,20 @@ impl Worker {
                         include_declaration,
                         &out_tx,
                     )
+                });
+            }
+            WorkerJob::DocumentHighlight {
+                id,
+                path,
+                text,
+                position,
+            } => {
+                // Single-file like prepareRename: no project membership, just a db
+                // snapshot to reach the cached model when the buffer is current.
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_document_highlight(&snapshot, id, &path, &text, position, &out_tx)
                 });
             }
             WorkerJob::PrepareRename {
@@ -2787,6 +2862,22 @@ fn run_references(
 /// Resolve the label/cite key under the cursor and reply with its key-token range +
 /// placeholder, or `null` when the cursor isn't on a renameable key. The narrow
 /// `key_range` (not the whole-command range) is what anchors the client's rename UI.
+/// Resolve the cross-reference key under the cursor and reply with every same-key
+/// occurrence in the buffer as `DocumentHighlight`s (an empty array when nothing
+/// resolves), serialized to the read pool's outbound channel.
+fn run_document_highlight(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    out_tx: &Sender<Outbound>,
+) {
+    let highlights = compute_document_highlight(snapshot, path, text, position);
+    let result = serde_json::to_value(highlights).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
 fn run_prepare_rename(
     snapshot: &Analysis,
     id: RequestId,
@@ -3065,6 +3156,74 @@ fn rename_target_under_cursor(model: &SemanticModel, offset: usize) -> Option<Re
 /// under the cursor and its current text. Reads the cached model when current, else a
 /// fresh parse (the same guard as [`compute_references`]); a `.bib` cursor resolves
 /// to its `@entry` key. `None` when the cursor isn't on a renameable key.
+/// Compute the document highlights for `position`: the cross-reference key under the
+/// cursor (a `\ref`/`\cite` use or a `\label` definition) and every same-key occurrence
+/// in the *same* buffer. Single-file, so no project resolution — the `\label`
+/// definition shades as [`DocumentHighlightKind::WRITE`] and every `\ref`/`\cite` use
+/// as [`DocumentHighlightKind::READ`]. Strict key gating (via
+/// [`rename_target_under_cursor`]): a cursor on the command word, the braces, or a
+/// sibling key in `\cref{a,b}` highlights nothing for that key. `.bib` buffers yield no
+/// highlights (an `@entry` key has no in-file uses).
+fn compute_document_highlight(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    position: Position,
+) -> Vec<DocumentHighlight> {
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        if file_kind_for(path) == FileKind::Bib {
+            return Vec::new();
+        }
+        let collect = |model: &SemanticModel| -> Vec<DocumentHighlight> {
+            let Some(target) = rename_target_under_cursor(model, offset) else {
+                return Vec::new();
+            };
+            let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
+                range: lsp_range(&idx, text, range),
+                kind: Some(kind),
+            };
+            match &target.target {
+                CursorTarget::Labels(_) => {
+                    let name = &target.placeholder;
+                    let defs = model
+                        .labels()
+                        .iter()
+                        .filter(|l| &l.name == name)
+                        .map(|l| highlight(l.key_range, DocumentHighlightKind::WRITE));
+                    let uses = model
+                        .refs()
+                        .iter()
+                        .filter(|r| &r.name == name)
+                        .map(|r| highlight(r.key_range, DocumentHighlightKind::READ));
+                    defs.chain(uses).collect()
+                }
+                CursorTarget::Citations(_) => {
+                    let name = &target.placeholder;
+                    model
+                        .citations()
+                        .iter()
+                        .filter(|c| &c.name == name)
+                        .map(|c| highlight(c.key_range, DocumentHighlightKind::READ))
+                        .collect()
+                }
+            }
+        };
+        match snapshot.lookup_file(path) {
+            Some(file) if snapshot.file_text(file) == text => {
+                collect(snapshot.semantic_model(file))
+            }
+            _ => {
+                let root = SyntaxNode::new_root(parse(text).green);
+                collect(&SemanticModel::build(&root))
+            }
+        }
+    }));
+    computed.unwrap_or_default()
+}
+
 fn compute_prepare_rename(
     snapshot: &Analysis,
     path: &Path,

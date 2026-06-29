@@ -462,3 +462,117 @@ scope (the same boundary the include graph and CWL ingest keep).
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
 - [ ] `.dtx` two-layer model: a preprocessor that splits doc/code layers, or a
   single lexer mode with margin-aware tokens? *(Package infrastructure)*
+
+--------------------------------------------------------------------------------
+
+## Design notes
+
+Extended rationale for the load-bearing decisions in `AGENTS.md`. These are the
+*why* and the edge cases behind already-implemented sanctioned lexer modes; the
+crisp rule lives in `AGENTS.md` (core architectural decisions).
+
+### Why the parser stays a generic TeX surface lexer (decision #1)
+
+It never *requires* resolving macros or catcodes to succeed, because in full
+generality that is equivalent to running a TeX engine: catcodes are reassignable
+at runtime and tokenization is entangled with execution (e.g. `\makeatletter`
+changes whether `@` is part of a control word; a `\catcode` inside a conditional
+depends on a runtime value). The sanctioned patterns below all read only *static*
+facts—"we are inside region X", "the previous control word was Y"—and resolve no
+macro meaning.
+
+### expl3 syntax mode
+
+Between `\ExplSyntaxOn` and `\ExplSyntaxOff` (and after a
+`\ProvidesExplPackage`/`\ProvidesExplClass`/`\ProvidesExplFile` declaration, which
+opens it for the rest of the file), `_` and `:` are catcode-11 *letters*, so expl3
+names (`\seq_new:N`, `\__module_internal:nn`) lex as single control words and a
+bare `_` is text, not a subscript. It is an independent boolean flag that
+*composes* with `\makeatletter` (the `@@` module-prefix convention `\g_@@_x_tl`
+needs both), threaded through the lexer exactly like `at_letter`. Scope is
+deliberately letters-only: expl3's other catcode changes (`~`→space, spaces/tabs
+ignored) and *implicit* detection in toggle-less `.dtx` sources are recorded
+follow-ups, not yet modeled.
+
+### `\left`/`\right` delimiter isolation
+
+The single delimiter following `\left`/`\right` is emitted as its own token, so a
+word-character delimiter (`(`, `)`, `|`, `/`, `.`, `<`, `>`) does not glue into the
+following word run and become un-splittable downstream (the same surface-lexing
+problem `\verb` has). The mode reads only "the previous control word was
+`\left`/`\right`"; the matched `LEFT_RIGHT` pair is then built by the parser
+(decision #3).
+
+### Verbatim environments and commands
+
+For *argument-taking* verbatim environments (`lstlisting`, `minted`, `Verbatim`)
+the raw body begins only after the `\begin` arguments, so the lexer consults the
+built-in signature DB (`semantic::signature::builtin`) to read each environment's
+static arg shape and find where the opaque body starts. This is the single source
+of truth (`data/signatures.json`), kept in lockstep with `grammar.rs` via
+`is_verbatim_environment`. It reads only static argument-shape data—a recorded
+exception to "meaning never leaks into the parser" (decision #2), no macro meaning
+resolved. User-defined verbatim environments stay out of scope (their definitions
+aren't known until after parsing).
+
+Verbatim-argument *commands* (`\verb` generalized) flagged `verbatim` in the
+signature DB (`\verb`, `\lstinline`, `\url`, `\code`, …) have their final argument
+captured as a single `VERB` token—a balanced `{…}` group or a `\verb`-style
+delimiter run, chosen by the argument's first character, with any leading
+non-verbatim args read from the DB's static arg shape (e.g. `\mintinline`'s
+language). A curated set of well-known *class*-defined commands is allowed as
+built-ins (e.g. jss's `\code`, whose `\@makeother\$` makes `$` literal—a runtime
+catcode fact we cannot derive, so we record it as data).
+
+### User-defined verbatim-argument commands via definition scanning
+
+Beyond the curated built-ins, the definition scanner (`semantic::define`) flags an
+*arbitrary* command verbatim when its `\newcommand`/xparse/`\def` replacement
+**body** reassigns a special char's catcode to "other"—the static fingerprint
+`\@makeother`, `\catcode…12`, `\dospecials`, `\@sanitize`, possibly one or more
+hops away through a chained helper macro it calls (followed across the scanned
+definition set, with a cycle guard). The `\def`/`\edef`/`\gdef`/`\xdef` forms have
+no `[n]` arity optional, so their arity is counted from the `#1#2…` **parameter
+text** between the name and the body group (`scan_def`/`def_params_and_body`); a
+`\def` helper's body is scanned like any other, so chains resolve through it. Only
+the command's *own* arity gates it (it must take an argument to capture); the final
+argument becomes the implicit verbatim one.
+
+This **reads replacement-body surface text**—a deliberate step past "signatures
+only"—but executes nothing, expands nothing, and evaluates no catcode arithmetic;
+it matches static substrings. It is **conservative by construction**: a false
+positive *suppresses* real diagnostics (the worse failure), so we flag only on a
+clear catcode signal and prefer false negatives (e.g. a `\let`-aliased helper, or a
+definition visible only after re-tokenization, is not followed).
+
+Because the lexer must know a verbatim command *before* it tokenizes call sites,
+but such commands are only discoverable from the parsed tree, `parser::parse` runs
+a **bounded two-pass parse**: pass 1 with built-ins only, a definition scan, and—
+only when it finds a user verbatim command—pass 2 re-lexing with those names fed
+into the lexer (a lexer `pending_def` state keeps a command's own definition site
+from being mis-lexed as a call). Two passes is the bound; a definition visible only
+after re-tokenization is a tolerated false negative. Reparse cost is paid only when
+such a definition exists. `\def`-defined verbatim *environments* and
+delimited-parameter `\def` macros stay out of scope.
+
+### Trivia attachment (decision #9), full policy
+
+Trivia (`WHITESPACE`, `NEWLINE`, `COMMENT`) is never dropped—losslessness forces
+every trivia token to be a leaf under *some* node—so the only decision is *which*
+node owns it. Mirrors rust-analyzer's `n_attached_trivias`.
+
+- The leading-comment bind is exactly ra's rule (comments attach forward to
+  item-like nodes). The binding run is the *maximal blank-line-free suffix* of the
+  preceding trivia that starts at an own-line comment, so in `%a \n\n %b \foo`,
+  `%a` floats and `%b` binds. Mirrors ra's `"\n\n"` cutoff.
+- The bound run is grouped into a `DOC_COMMENT` node (the construct's first child)
+  so downstream (LSP/formatter) sees the doc comment as one unit; a margin/guard or
+  an unbound floating comment is never wrapped. Implemented **grammar-locally**
+  (`grammar.rs` `binding_run` + the `precede` idiom, the run wrapped via
+  `open(DOC_COMMENT)`/`close`), so `tree_builder` stays a mechanical replay; the
+  construct self-opens and its `Start` is pulled back over the `DOC_COMMENT`.
+- The doc/ltxdoc *semantic* association of a doc comment with the macro it
+  documents in a `.dtx` (where documentation lives behind floating `DOC_MARGIN`
+  trivia, not `COMMENT` tokens, so nothing binds) is a deferred semantic-layer
+  query, not a parser concern—keeping decision #2's no-meaning-in-the-parser rule
+  intact.

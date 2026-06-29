@@ -13,7 +13,7 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      github-actions:
+      cargo:
         patterns:
           - "*"
   - package-ecosystem: "npm"

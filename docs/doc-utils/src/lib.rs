@@ -44,6 +44,7 @@ impl Preprocessor for GuideHelper {
     fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
         insert_version(&mut book);
         insert_benchmarks(&mut book);
+        insert_changelog(&mut book);
         Ok(book)
     }
 }
@@ -72,6 +73,51 @@ fn insert_version(book: &mut Book) {
             ch.content = ch.content.replace(MARKER, version);
         }
     });
+}
+
+/// Substitute the `{{ changelog }}` marker with the body of the project's root
+/// `CHANGELOG.md`, so the docs changelog page is a build-time copy of the canonical
+/// (release-tooling-generated) changelog and never drifts. The file's leading
+/// `# Changelog` heading is stripped because the docs page supplies its own.
+fn insert_changelog(book: &mut Book) {
+    const MARKER: &str = "{{ changelog }}";
+    let needs_render = {
+        let mut found = false;
+        book.for_each_chapter_mut(|ch| {
+            if ch.content.contains(MARKER) {
+                found = true;
+            }
+        });
+        found
+    };
+    if !needs_render {
+        return;
+    }
+
+    let path = project_root().join("CHANGELOG.md");
+    let body = match std::fs::read_to_string(&path) {
+        Ok(s) => strip_changelog_heading(&s).to_string(),
+        Err(_) => format!(
+            "_Changelog unavailable (`{}` missing or unreadable)._",
+            path.display()
+        ),
+    };
+
+    book.for_each_chapter_mut(|ch| {
+        if ch.content.contains(MARKER) {
+            ch.content = ch.content.replace(MARKER, &body);
+        }
+    });
+}
+
+/// Drop a leading top-level `# Changelog` heading (and the blank lines after it)
+/// so the inlined body slots under the docs page's own title. Anything else is
+/// returned untouched.
+fn strip_changelog_heading(contents: &str) -> &str {
+    match contents.strip_prefix("# Changelog") {
+        Some(rest) => rest.trim_start_matches(['\n', '\r']),
+        None => contents,
+    }
 }
 
 // --- Benchmarks --------------------------------------------------------------

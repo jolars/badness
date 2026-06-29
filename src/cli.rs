@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// CLI surface for `formatter::WrapMode`. Kept here (not in the formatter) so the
-/// formatter API stays clap-free, mirroring arity's `cli.rs` convention.
+/// formatter API stays clap-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum WrapArg {
     /// Greedy fill: wrap words to the line width (default).

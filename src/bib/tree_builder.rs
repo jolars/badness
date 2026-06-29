@@ -1,8 +1,7 @@
 //! Builds a rowan green tree from a token stream and a list of parser events.
 //!
-//! **EXTRACTION CANDIDATE.** A copy of [`crate::parser::tree_builder`] over the
-//! bib [`SyntaxKind`]; identical except for the kind type. See
-//! [`super::events`] for the rationale.
+//! A copy of [`crate::parser::tree_builder`] over the bib [`SyntaxKind`];
+//! identical except for the kind type. See [`super::events`] for the rationale.
 
 use rowan::{GreenNode, GreenNodeBuilder};
 

@@ -2,9 +2,7 @@
 //!
 //! Shared by `lint --fix` (CLI) and (later) the LSP code-action path. The engine
 //! is a pure function over `(source, fixes, include_unsafe)`; it never reads or
-//! writes files. Copied near-verbatim from arity's `linter/fix.rs` — keep it
-//! close so the eventual shared-crate extraction stays a mechanical lift.
-//! **[copy shape]**
+//! writes files.
 
 use super::diagnostic::{Applicability, Fix};
 

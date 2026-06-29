@@ -1,17 +1,16 @@
 //! The badness language server (Phase 4 + the ra-style threading follow-up).
 //!
-//! Deliberately diverges from arity: badness uses **`lsp-server` + `lsp-types`**
-//! (rust-analyzer's synchronous stack), *not* tower-lsp-server — see the LSP note
-//! in `AGENTS.md`. salsa's single-writer / snapshot-readers model composes cleanly
-//! with `lsp-server`'s sync main loop.
+//! badness uses **`lsp-server` + `lsp-types`** (rust-analyzer's synchronous
+//! stack), *not* tower-lsp-server — see the LSP note in `AGENTS.md`. salsa's
+//! single-writer / snapshot-readers model composes cleanly with `lsp-server`'s
+//! sync main loop.
 //!
 //! Scope: full-document **formatting**, a **document-symbol** outline,
 //! **completion** (command/environment names, `\ref` keys, file paths), and
 //! pushed parser **diagnostics**. Further features (hover, go-to-def, range
 //! formatting) are deferred.
 //!
-//! ## Architecture (mirrors arity's `src/lsp.rs`, so the eventual shared-crate
-//! extraction stays a mechanical lift)
+//! ## Architecture
 //!
 //! Three roles, message-passing between them:
 //!
@@ -218,7 +217,7 @@ struct GlobalState {
     /// Per-document config resolutions, keyed by the document's **anchor directory**
     /// (its parent). A discovered `badness.toml` is authoritative; editor settings
     /// are the fallback. Populated lazily by [`GlobalState::resolve_settings`] and
-    /// cleared wholesale on `didChangeConfiguration`. Mirrors arity's `config_cache`.
+    /// cleared wholesale on `didChangeConfiguration`.
     config_cache: HashMap<PathBuf, ResolvedSettings>,
     /// The client advertised `textDocument/diagnostic` pull support, so we serve
     /// diagnostics pull-only and **suppress** the `publishDiagnostics` push (the two
@@ -235,7 +234,7 @@ struct GlobalState {
 
 /// Formatting settings supplied by the editor, as `initializationOptions` at
 /// startup or via `workspace/didChangeConfiguration`. A fallback beneath the
-/// per-request [`FormattingOptions`]. Mirrors arity's `EditorSettings`.
+/// per-request [`FormattingOptions`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct EditorSettings {
@@ -272,7 +271,6 @@ impl EditorSettings {
 /// still a placeholder — the file kind decides it per request) plus the lint
 /// selection. Built from a discovered `badness.toml` (file-wins) or, absent one,
 /// from the editor settings. Cached per anchor dir in [`GlobalState::config_cache`].
-/// Mirrors arity's `ResolvedSettings`.
 #[derive(Debug, Clone)]
 struct ResolvedSettings {
     /// Width knobs set; `wrap` is the [`WrapMode::default`] placeholder.
@@ -280,7 +278,7 @@ struct ResolvedSettings {
     /// Configured paragraph wrap, if any. `None` ⇒ the file-kind default applies.
     wrap_override: Option<WrapMode>,
     /// Whether a `badness.toml` governed this resolution. When `true` the file
-    /// config wins outright and a request's `tab_size` is ignored (arity's rule).
+    /// config wins outright and a request's `tab_size` is ignored.
     config_present: bool,
     /// The `[lint]` `select`/`ignore` selection (default — every rule — when no file).
     lint: LintConfig,
@@ -292,9 +290,9 @@ struct ResolvedSettings {
 
 impl ResolvedSettings {
     /// Resolution from a discovered config (when `present`), else from the editor
-    /// settings. Mirrors arity's `resolve_format_style` file-wins rule. The
-    /// `exclude` filter is left exclude-nothing here; [`resolve_settings`] compiles
-    /// and installs the real one (it holds the config's root directory).
+    /// settings, applying the file-wins rule. The `exclude` filter is left
+    /// exclude-nothing here; [`resolve_settings`] compiles and installs the real
+    /// one (it holds the config's root directory).
     ///
     /// [`resolve_settings`]: GlobalState::resolve_settings
     fn from_config(config: &Config, present: bool, editor: &EditorSettings) -> Self {
@@ -334,8 +332,7 @@ impl GlobalState {
     /// Resolve (and cache) the [`ResolvedSettings`] for `uri`'s document: discover a
     /// `badness.toml` from the document's anchor directory (its parent), falling back
     /// to the editor settings when none is found. Cached by anchor dir, so repeated
-    /// format/lint requests in a workspace pay the filesystem walk once. Mirrors
-    /// arity's `GlobalState::resolve_settings`.
+    /// format/lint requests in a workspace pay the filesystem walk once.
     ///
     /// A non-`file` buffer (untitled) or a directory-less / unreadable / malformed
     /// config resolves to the editor settings and is **not** cached, so fixing a
@@ -545,7 +542,7 @@ enum Outbound {
     Response(Response),
     /// Project membership grew (the worker discovered on-disk siblings), so the
     /// cross-file resolution may have changed for *every* open document. Re-lint
-    /// them all. Mirrors arity's `Outbound::RelintAll`.
+    /// them all.
     RelintAll,
 }
 
@@ -781,7 +778,7 @@ fn on_notification(
                 state.editor_settings = EditorSettings::from_client_value(&params.settings);
                 // Drop cached resolutions so the new fallback is picked up on the
                 // next request. A discovered `badness.toml` still wins, so docs in a
-                // configured workspace are unaffected. Mirrors arity.
+                // configured workspace are unaffected.
                 state.config_cache.clear();
             }
         }
@@ -843,7 +840,7 @@ fn on_formatting(
     }
     let resolved = state.resolve_settings(&uri);
     let mut style = resolved.style;
-    // A discovered `badness.toml` wins outright (arity's rule); only when none
+    // A discovered `badness.toml` wins outright; only when none
     // governs does the request's `tab_size` override the indent width.
     if !resolved.config_present && params.options.tab_size > 0 {
         style.indent_width = params.options.tab_size as usize;
@@ -1465,7 +1462,7 @@ fn forward_outbound(
 }
 
 // ---------------------------------------------------------------------------
-// Worker thread (sole database writer) — mirrors arity's lint thread.
+// Worker thread (sole database writer).
 // ---------------------------------------------------------------------------
 
 /// Signal from a finished analyze read-phase back to the worker: the analyze for
@@ -1853,8 +1850,7 @@ impl Worker {
 
     /// Walk the active file's directory once for `.tex`/`.bib` siblings, reading
     /// and upserting any not already tracked, so the cross-file resolvers see the
-    /// whole project. Returns whether the member set grew. Mirrors arity's
-    /// `seed_workspace_for`.
+    /// whole project. Returns whether the member set grew.
     ///
     /// Skips unsaved/synthetic buffers (whose path isn't a real file) and the
     /// filesystem root, so we never walk `/`. A sibling that is already tracked —
@@ -2616,7 +2612,7 @@ fn run_completion(
     let path = uri_to_path(uri);
     let items = compute_completion(snapshot, uri, &path, text, position, members);
     // `is_incomplete`: command/label/key universes are prefix-filtered server-side, so
-    // the client re-queries as the typed prefix narrows (matches arity).
+    // the client re-queries as the typed prefix narrows.
     let result = serde_json::to_value(CompletionResponse::List(CompletionList {
         is_incomplete: true,
         items,

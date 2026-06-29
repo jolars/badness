@@ -27,8 +27,7 @@ use clap_mangen::Man;
 use serde::Deserialize;
 
 // Pull in the clap command definition directly (it references only `std` and
-// `clap`, so it compiles standalone in the build-script crate). This mirrors
-// arity's `build.rs`, the source of the generation logic below.
+// `clap`, so it compiles standalone in the build-script crate).
 #[path = "src/cli.rs"]
 mod cli;
 
@@ -266,7 +265,7 @@ fn format_see_also(refs: &[String]) -> String {
 }
 
 /// Generate `target/man/badness.1` plus a `badness-<sub>.1` page per subcommand,
-/// like git/cargo (ported from arity's `build.rs`).
+/// like git/cargo.
 fn generate_man_pages() -> std::io::Result<()> {
     let out_dir = PathBuf::from("target/man");
     std::fs::create_dir_all(&out_dir)?;

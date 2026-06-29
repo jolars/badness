@@ -3,10 +3,10 @@
 Guidance for AI agents working with Badness, a formatter, linter, and
 language server for LaTeX.
 
-Badness mirrors **arity** (`../arity`), the same kind of tool for R: rowan CST +
-event-stream parser + salsa + Wadler formatter IR. arity is the mature reference for
-the language-agnostic skeleton—**when in doubt, read arity.** Extended rationale for
-the decisions below lives in TODO.md ("Design notes").
+Badness follows **rust-analyzer's** architecture: rowan CST + event-stream parser
++ salsa + a Wadler-style formatter IR. (We were also inspired by
+[arity](https://github.com/jolars/arity), the same kind of tool for R.) Extended
+rationale for the decisions below lives in TODO.md ("Design notes").
 
 ## What this project is
 
@@ -71,20 +71,19 @@ for the sanctioned lexer modes is in TODO.md ("Design notes").
 2. **Two layers: syntactic vs. semantic.** The *syntactic* layer is the generic CST
    and knows nothing about what a command means. The *semantic* layer is a
    **signature database** (built-in table + CWL-style data + `\newcommand`/
-   `\newenvironment` scanning) assigning arity, verbatim-ness, and sectioning—the
-   analog of arity's `rindex/`. **Meaning never leaks into the parser** (the
-   verbatim-body exception in decision #1 reads static argument-shape data only).
+   `\newenvironment` scanning) assigning arity, verbatim-ness, and sectioning.
+   **Meaning never leaks into the parser** (the verbatim-body exception in
+   decision #1 reads static argument-shape data only).
 
 3. **Hand-written recursive descent is the spine; Pratt is local to math.** Use
    precedence-climbing *only* for sub/superscript binding (`^`, `_`) and `\left…\right`
-   matching. The text-level parser has no precedence. (Contrast arity, whose R
-   `parser/expr.rs` is a full Pratt grammar.)
+   matching. The text-level parser has no precedence.
 
 4. **Parser emits an event stream, not a tree directly.** `lexer → flat token stream →
    parser emits events (Start/Tok(idx)/Finish) → tree_builder re-attaches trivia and
    feeds rowan's GreenNodeBuilder`. Tokens are referenced by index; there is **no
-   `Error` event**—diagnostics ride a side channel keyed by byte range (copy arity's
-   `parser/events.rs`).
+   `Error` event**—diagnostics ride a side channel keyed by byte range (the
+   rust-analyzer event-stream pattern).
 
 5. **Errors travel alongside the tree, never abort it.** A single syntactic error
    never fails the whole parse. Recovery anchors: `\end{…}`, `\begin`, blank line, `}`,
@@ -95,7 +94,7 @@ for the sanctioned lexer modes is in TODO.md ("Design notes").
    *later optimization*—a whole-file reparse of a typical `.tex` is sub-ms.
 
 7. **Store green nodes in salsa, never red (`SyntaxNode`).** Red trees aren't
-   `Send`/`Eq`/`salsa::Update`. Copy arity's `incremental.rs`: `#[salsa::input]
+   `Send`/`Eq`/`salsa::Update`. See `incremental.rs`: `#[salsa::input]
    SourceFile { text }`, a `parsed_document` query returning `rowan::GreenNode` +
    diagnostics under `no_eq, unsafe(non_update_types)` (sound because the tree is a
    pure function of the text), materializing red cursors on demand.
@@ -136,23 +135,22 @@ input. The formatter is intentionally used to stress the parser—any formatter
 ambiguity should surface a parser modeling gap.
 
 **Differential oracle:** use **texlab's parser** as a differential *parse* oracle over
-a corpus (arity's `air_compat` pattern). It is a reference we measure against, never
-match.
+a corpus—skeletonize both trees and compare. It is a reference we measure against,
+never match.
 
-## Technology choices (aligned with arity's Cargo.toml)
+## Technology choices
 
 - **rowan** (`0.16`) for the CST; **salsa** (`0.26`) for incremental queries;
   **smol_str** for interned token text; **insta** for snapshot tests;
   **annotate-snippets** for diagnostics rendering.
 - **LSP:** `lsp-server` + `lsp-types` (rust-analyzer's stack), **not**
-  `tower-lsp-server`—the one deliberate divergence from arity. salsa cancellation is a
-  synchronous unwind (`salsa::Cancelled`) that composes with `lsp-server`'s sync main
-  loop + threadpool and fights tower-lsp's async `&self` model. Reuse arity's
-  `text/line_index.rs`, swapping its `Position` type for `lsp_types::Position`.
+  `tower-lsp-server`. salsa cancellation is a synchronous unwind
+  (`salsa::Cancelled`) that composes with `lsp-server`'s sync main loop + threadpool
+  and fights tower-lsp's async `&self` model. `text/line_index.rs` uses
+  `lsp_types::Position`.
 - **Formatter engine:** a Wadler/Prettier-style `Doc` IR
-  (`Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent`)—copy arity's
-  `formatter/ir.rs` + `printer.rs` nearly wholesale. **Addition over arity:** an
-  `Ir::Fill` node (per-gap greedy break decisions) for paragraph reflow.
+  (`Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent`), plus an `Ir::Fill`
+  node (per-gap greedy break decisions) for paragraph reflow.
 - **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
   `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling **panache**
   formatter and mechanized through the `Doc` IR (`Fill`), not a separate line-filler.
@@ -161,19 +159,6 @@ match.
   *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
 - **CLI:** `clap` + `build.rs` generating man pages, completions, and markdown
   (`clap_mangen`, `clap_complete`, `clap-markdown`).
-
-## Relationship to arity
-
-badness mirrors arity's architecture; **when in doubt, read arity.** Some modules are
-copied ~wholesale and marked **EXTRACTION CANDIDATE** (the eventual shared crate):
-`formatter/ir.rs` + `printer.rs`, `text/line_index.rs`, `parser/events.rs` +
-`tree_builder.rs`, the `incremental.rs` salsa harness, and `config`/`file_discovery`/
-`linter/suppression`/diagnostic rendering/`build.rs`. **Keep copied files close to
-arity's version** so the eventual extraction stays a mechanical lift, not a merge. The
-LaTeX-specific parts are rewrites: `parser/lexer.rs`, `parser/expr.rs` +
-`structural.rs`, `syntax.rs` kinds, `ast/`, `semantic/` scoping, and the signature DB.
-`lsp.rs` deliberately diverges (see the LSP note); do *not* copy arity's
-tower-lsp-server loop.
 
 ## Non-goals
 
@@ -191,7 +176,7 @@ tower-lsp-server loop.
 - **Run `cargo fmt` before committing**—the rustfmt git hook rewrites unformatted
   files and aborts the commit otherwise. `clippy` warnings are errors:
   `cargo clippy --all-targets --all-features -- -D warnings`.
-- Task runner is `go-task` (`Taskfile.yml`, mirroring arity's targets). Performance is
+- Task runner is `go-task` (`Taskfile.yml`). Performance is
   first-class (`perf`, `cargo-flamegraph`, `hyperfine`, `cargo-show-asm`,
   `cargo-llvm-cov` are in the dev shell)—benchmark before optimizing, never regress
   losslessness for speed.

@@ -72,7 +72,7 @@ fn main() -> ExitCode {
             exclude,
         } => {
             // Discover/load `badness.toml` from the working directory (one config
-            // per invocation, like arity's CLI). The exclude filter is rooted at
+            // per invocation). The exclude filter is rooted at
             // the config's directory so its patterns resolve relative to it.
             let anchor = match cwd_anchor() {
                 Ok(anchor) => anchor,
@@ -279,7 +279,7 @@ fn run_lint(
     rules: &RuleSelection,
 ) -> ExitCode {
     // Apply fixes in place first; the reporting pass below then re-reads from
-    // disk and shows whatever findings remain. Mirrors arity's two-pass flow.
+    // disk and shows whatever findings remain. This is a two-pass flow.
     // Stdin (no paths) has nowhere to write back, so `--fix` only acts on files.
     if fix
         && !paths.is_empty()
@@ -335,8 +335,8 @@ fn run_lint(
     // linted. `.bib` files have no cross-file resolution yet (Phase 4), so each is
     // linted standalone via the bib driver and its findings folded straight in.
     // Lint rules run off these parses — no salsa needed on the CLI path (the salsa
-    // firewall is an editor-incrementality concern; mirrors arity's
-    // `check_document`). The resolver reuses the *same* pure helpers the salsa
+    // firewall is an editor-incrementality concern). The resolver reuses the
+    // *same* pure helpers the salsa
     // queries do (`document_label_names`, `is_document_root`,
     // `collect_include_edge_keys`, `ResolvedLabels::build`), so CLI and LSP agree.
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -448,8 +448,7 @@ fn run_lint(
 
 /// Discover lintable files under `paths` and apply autofixes in place. Returns
 /// `Some(exit_code)` only on a hard error (discovery / IO); on success returns
-/// `None` so the caller falls through to the normal reporting pass. Mirrors
-/// arity's `apply_fixes_to_paths`.
+/// `None` so the caller falls through to the normal reporting pass.
 ///
 /// Both `.tex` and `.bib` files are fixed, each through its own linter; rules that
 /// emit no autofix (the report-only majority) leave their findings for the
@@ -486,8 +485,8 @@ fn apply_fixes_to_paths(
 
 /// Run the fixpoint loop on a single file and write it back if anything changed.
 /// Returns the number of individual fixes applied. Re-lints after each round so
-/// fixes can cascade; bounded by [`MAX_FIX_ITERATIONS`]. Mirrors arity's
-/// `fix_file`. Routes to the LaTeX or BibTeX linter by [`FileKind`]. `rules` gates
+/// fixes can cascade; bounded by [`MAX_FIX_ITERATIONS`].
+/// Routes to the LaTeX or BibTeX linter by [`FileKind`]. `rules` gates
 /// which findings contribute fixes, so a deselected rule's autofix never applies.
 fn fix_file(
     path: &Path,

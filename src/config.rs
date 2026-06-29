@@ -1,17 +1,15 @@
 //! `badness.toml` configuration: schema, file loading, and ancestor-walk
 //! discovery.
 //!
-//! Adapted from arity's `src/config.rs` (an EXTRACTION CANDIDATE) — keep close to
-//! arity's version so the eventual shared-crate extraction stays a mechanical
-//! lift. The CLI is the only consumer; the library API (`format_with_style`,
+//! The CLI is the only consumer; the library API (`format_with_style`,
 //! `check_paths_with_style`, the linter) continues to take a fully-resolved
 //! [`FormatStyle`] / [`ExcludeFilter`](crate::file_discovery::ExcludeFilter) /
 //! rule selection.
 //!
-//! Two deliberate divergences from arity:
+//! Two deliberate design choices:
 //!
-//! - **Excludes use the Ruff model** (`exclude` + `extend-exclude`), not arity's
-//!   `exclude` + `default-exclude`: a present `exclude` *replaces* the built-in
+//! - **Excludes use the Ruff model** (`exclude` + `extend-exclude`): a present
+//!   `exclude` *replaces* the built-in
 //!   [`DEFAULT_EXCLUDE`] set; `extend-exclude` is always *additive* on top.
 //! - **`[format]` carries `wrap`, not `line-ending`** (the LaTeX paragraph
 //!   line-break policy). `wrap` is optional: when omitted the formatter falls back

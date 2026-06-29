@@ -4,9 +4,7 @@
 //! channel), the linter owns a small set of rules of its own ([`rules`]),
 //! comment suppression (`% badness-ignore` style — [`suppression`]), a driver
 //! ([`check::lint_document`]) that both the CLI and the language server call, and
-//! an autofix engine ([`fix::apply_fixes`]) backing `lint --fix`. The module is
-//! kept close to arity's `src/linter/` shape so the eventual shared-crate
-//! extraction stays a mechanical lift (see `AGENTS.md`). **[copy shape]**
+//! an autofix engine ([`fix::apply_fixes`]) backing `lint --fix`.
 
 pub mod check;
 pub mod diagnostic;

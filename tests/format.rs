@@ -1,7 +1,7 @@
 //! Phase 2 formatter tests. The first real rule is whitespace normalization, so
 //! the output is no longer identical to the input. Behavior is pinned by
-//! `tests/fixtures/formatter/<name>/{input,expected}.tex` pairs (mirroring
-//! arity's fixture layout). The `AGENTS.md` invariants — idempotence and
+//! `tests/fixtures/formatter/<name>/{input,expected}.tex` pairs (a conventional
+//! fixture layout). The `AGENTS.md` invariants — idempotence and
 //! losslessness of the formatted text — are asserted on the formatted output for
 //! every case.
 

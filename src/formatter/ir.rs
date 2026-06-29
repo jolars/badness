@@ -7,13 +7,11 @@
 //! where each construct rendered directly to a `String` and width was measured
 //! retrospectively.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from arity's
-//! `src/formatter/ir.rs` (language-agnostic Wadler engine). Keep close to
-//! arity's version so the eventual shared-crate extraction stays mechanical.
+//! This is a language-agnostic Wadler/Prettier-style layout engine.
 
 // The IR exposes a complete primitive vocabulary. A number of builders are not
-// yet exercised by badness's identity lowering; they are kept so the engine
-// stays a faithful copy of arity's and is ready for real format rules.
+// yet exercised by badness's identity lowering; they are kept so the engine is
+// ready for real format rules.
 #![allow(dead_code)]
 
 use std::rc::Rc;

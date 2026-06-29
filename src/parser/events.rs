@@ -1,7 +1,7 @@
 //! Flat parser events.
 //!
 //! The parser emits a flat `Vec<Event>` rather than building the tree directly
-//! (the rust-analyzer / arity shape). Tokens are referenced by index into the
+//! (the rust-analyzer shape). Tokens are referenced by index into the
 //! token stream, and there is deliberately **no** `Error` event — syntax errors
 //! ride a side channel keyed by byte range (see [`super::core::SyntaxError`]).
 

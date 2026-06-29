@@ -2,9 +2,8 @@
 //!
 //! The bib analog of [`crate::formatter::core`]. It reuses the shared,
 //! language-agnostic Wadler engine ([`crate::formatter::ir`] +
-//! [`crate::formatter::printer`], both EXTRACTION CANDIDATEs) and supplies a
-//! bib-specific lowering — the only genuinely different part, exactly as on the
-//! LaTeX side.
+//! [`crate::formatter::printer`]) and supplies a bib-specific lowering, the only
+//! genuinely different part, exactly as on the LaTeX side.
 //!
 //! The style is deterministic (Tenet 1) and currently fixed (no bib-specific
 //! options):

@@ -1,10 +1,6 @@
 //! A minimal fixed-size worker thread pool, modeled on rust-analyzer's
 //! `TaskPool`.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from arity's `src/lsp/task_pool.rs`.
-//! Keep close to arity's version so the eventual shared-crate extraction stays
-//! mechanical.
-//!
 //! The LSP keeps latency-sensitive reads (formatting, the parse-diagnostics
 //! read-phase) on a dedicated [`TaskPool`] sized to the machine's parallelism,
 //! off the single-writer worker thread.

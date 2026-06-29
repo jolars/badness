@@ -1,6 +1,6 @@
 //! Differential parse oracle — the **hard acceptance gate** (runs in `cargo test`).
 //!
-//! The analog of arity's `air_parser_harness`: a one-way soundness check. For every
+//! A one-way soundness check. For every
 //! curated corpus file that *badness itself parses cleanly* (no syntax errors), the
 //! external reference parser (texlab) must also parse it without an `ERROR` node. We
 //! never compare tree shapes here — that is the soft `parse_compat.rs` gauge's job

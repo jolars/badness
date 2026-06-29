@@ -5,7 +5,7 @@
 //! module is rule-agnostic: any finding whose [`crate::linter::Diagnostic::fix`] is
 //! populated and whose caret overlaps the requested range becomes a `QUICKFIX`.
 //!
-//! Mirrors arity's `src/lsp/code_actions.rs`. Fully-built actions are returned (no
+//! Fully-built actions are returned (no
 //! `codeAction/resolve` step), and a fix's byte span maps straight to a `TextEdit`
 //! via the shared [`super::byte_range_to_lsp`] — the fix owns *what* to rewrite,
 //! never *how* to lay it out (tenet 1).
@@ -67,8 +67,7 @@ pub(crate) fn code_actions_for_range(
 }
 
 /// Whether two byte ranges overlap, inclusive at the edges (a zero-width cursor at a
-/// range boundary counts as touching it). The byte-space analog of arity's
-/// `ranges_overlap`.
+/// range boundary counts as touching it).
 fn byte_ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
     a_start <= b_end && b_start <= a_end
 }

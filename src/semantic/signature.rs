@@ -1,12 +1,10 @@
 //! The built-in **signature database**: command/environment argument shapes plus
 //! the semantic metadata a formatter/linter needs (sectioning level,
-//! verbatim-ness, math-ness). This is the structural analog of arity's `rindex/`
-//! — the place where *meaning* is assigned to names, kept strictly out of the
-//! parser (AGENTS.md decision #2).
+//! verbatim-ness, math-ness). This is the place where *meaning* is assigned to
+//! names, kept strictly out of the parser (AGENTS.md decision #2).
 //!
-//! The data is fully static, so — like arity's `BASE_R`/`BUNDLED` statics, and
-//! unlike its harvested `LibraryIndex` salsa input — it lives in a process-wide
-//! [`LazyLock`], consulted directly. Per-file `\newcommand`/`\newenvironment`/xparse
+//! The data is fully static, so it lives in a process-wide [`LazyLock`],
+//! consulted directly. Per-file `\newcommand`/`\newenvironment`/xparse
 //! signatures are scanned by [`super::define`] into a separate, per-document
 //! [`SignatureDb`] and overlaid via [`Signatures`] (scanned-first, built-in
 //! fallback); the greedy parser's argument attachment is unaffected either way. A
@@ -19,11 +17,11 @@
 //! [`include_str!`]-ed, [`serde`]-deserialized) holding *all* the metadata in one
 //! typed place — argument shapes *and* sectioning level / verbatim-ness /
 //! math-ness together, keyed by name. This is the high-precision tier we maintain
-//! by hand, the analog of arity's `PackageIndex` schema.
+//! by hand.
 //!
 //! Lower-precision external sources layer *underneath* this, ingested into the
-//! same schema rather than replacing it (mirroring arity's `installed > base >
-//! bundled` precedence). The TeXstudio/Kile **CWL corpus** is one such tier: a
+//! same schema rather than replacing it. The TeXstudio/Kile **CWL corpus** is one
+//! such tier: a
 //! converter (`scripts/gen_cwl_signatures.py`) harvests command/environment names
 //! and argument shapes from a curated package subset into `data/cwl_signatures.json`,
 //! exposed by [`cwl`] and consulted *under* [`builtin`]. CWL is an import format,

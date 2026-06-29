@@ -1,7 +1,7 @@
 //! `badness format --check`: format each file and report which ones would change,
 //! without writing anything.
 //!
-//! Adapted from arity's `src/formatter/check.rs`: the input paths are resolved to
+//! The input paths are resolved to
 //! the concrete `.tex`/`.bib` files via [`collect_lint_files`] (explicit files
 //! and/or recursively-walked directories) before checking, then each file is
 //! checked through its own formatter (LaTeX or BibTeX) by [`FileKind`].

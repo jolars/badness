@@ -4,7 +4,7 @@
 //! collects `\label{…}` definitions and the reference-command family, then a
 //! flat `resolve` pass matches refs to defs by name. Labels live in one
 //! document-global namespace, so there is no scope walk — resolution is a flat
-//! name match (contrast arity's scope-chain `resolve_reads`).
+//! name match, not a scope-chain resolution.
 
 use smol_str::SmolStr;
 

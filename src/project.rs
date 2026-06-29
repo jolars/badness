@@ -7,9 +7,8 @@
 //! model — so it lands ahead of those Phase 3 items (AGENTS.md decision #2:
 //! meaning never leaks into the syntactic layer).
 //!
-//! This is the LaTeX analog of arity's `project/` module; the file shapes track
-//! arity's (`source.rs` ↔ `include.rs`, `scope.rs`/`graph.rs` ↔ `graph.rs`) so a
-//! later shared-crate extraction stays a mechanical lift.
+//! `include.rs` handles inclusion extraction; `graph.rs` builds the cross-file
+//! graph.
 
 pub mod citations;
 pub mod graph;

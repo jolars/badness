@@ -1,6 +1,6 @@
 //! The diagnostic model shared by every lint finding.
 //!
-//! Mirrors arity's `linter/diagnostic.rs`, but byte ranges are stored as plain
+//! Byte ranges are stored as plain
 //! `usize` offsets (matching the parser's [`SyntaxError`] and the salsa layer's
 //! `ParseDiagnosticData`) rather than a rowan `TextRange`.
 
@@ -20,7 +20,7 @@ pub enum Severity {
 /// Whether a [`Fix`] preserves the document's meaning. `Safe` fixes are applied
 /// by `lint --fix`; `Unsafe` fixes (those that could change typeset output, e.g.
 /// a rewrite that alters spacing) require `--unsafe-fixes` or an explicit editor
-/// action. Mirrors arity's `Applicability`.
+/// action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Applicability {
     Safe,
@@ -29,7 +29,7 @@ pub enum Applicability {
 
 /// A code edit that, if applied, fixes the diagnostic in question. A fix is a
 /// single contiguous replacement: substitute `content` for the source bytes in
-/// `start..end`. Mirrors arity's `Fix`.
+/// `start..end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fix {
     /// Replacement text to substitute in.

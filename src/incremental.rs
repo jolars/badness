@@ -8,11 +8,9 @@
 //!
 //! This is the Phase 3 foundation (TODO.md): the salsa harness only. The
 //! per-file semantic-model query, the cross-file firewall queries, and the
-//! project graph that the sibling project `arity` layers on top of this same
-//! harness arrive with later Phase 3 items, once their consumers (linter, LSP)
-//! and the `semantic`/`project` modules exist. Keep this file close to arity's
-//! `incremental.rs` so the eventual shared-crate extraction stays a mechanical
-//! lift.
+//! project graph that layers on top of this same harness arrive with later
+//! Phase 3 items, once their consumers (linter, LSP) and the `semantic`/`project`
+//! modules exist.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -102,7 +100,7 @@ pub enum QueryKind {
 pub struct QueryLogEntry {
     pub kind: QueryKind,
     /// The per-file query subject, or `None` for project-level queries (none
-    /// exist yet; the field mirrors arity so later items slot in mechanically).
+    /// exist yet; the field is reserved so later items slot in mechanically).
     pub file: Option<SourceFile>,
 }
 
@@ -313,8 +311,8 @@ pub fn package_edges(db: &dyn IncrementalDb, file: SourceFile) -> Vec<PackageEdg
 /// projection of [`semantic_model`].
 ///
 /// This is the per-file firewall the cross-file
-/// [`crate::project::resolved_labels`] resolver consumes (the LaTeX analog of
-/// arity's `file_exports`). Stripping ranges and refs means a prose edit, or a
+/// [`crate::project::resolved_labels`] resolver consumes. Stripping ranges and
+/// refs means a prose edit, or a
 /// `\ref` edit, or a body edit that shifts a `\label`'s offset, leaves this
 /// `Vec` *equal* — salsa backdates and the project-level union is not rebuilt.
 /// Unlike [`project_graph`](crate::project::project_graph) it is **not** `no_eq`:
@@ -501,7 +499,7 @@ impl std::fmt::Debug for IncrementalDatabase {
 /// check — so it is stable for not-yet-saved buffers and never blocks on I/O.
 /// `a.tex`, `./a.tex`, and a sibling resolved as `dir/../a.tex` all map to one
 /// key, so the language server's `\input`-resolved siblings collapse onto the
-/// same input as the buffer the editor opened. Copied from arity's `normalize_path`.
+/// same input as the buffer the editor opened.
 pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     use std::path::Component;
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());

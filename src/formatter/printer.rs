@@ -1,13 +1,10 @@
 //! The layout engine: walks an [`Ir`] tree and renders it to a string, deciding
 //! for each [`Ir::Group`] whether it fits flat on the current line or must break.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from arity's
-//! `src/formatter/printer.rs` (language-agnostic Wadler layout engine). Keep
-//! close to arity's version so the eventual shared-crate extraction stays
-//! mechanical.
+//! This is a language-agnostic Wadler/Prettier-style layout engine.
 
-// `print_at` is part of the copied engine but unused by the identity lowering;
-// keep it so the printer stays a faithful copy of arity's, ready for real rules.
+// `print_at` is part of the engine but unused by the identity lowering;
+// keep it ready for real rules.
 #![allow(dead_code)]
 
 use super::ir::Ir;

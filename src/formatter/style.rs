@@ -1,10 +1,7 @@
 //! Formatter configuration.
 //!
-//! EXTRACTION CANDIDATE: copied ~wholesale from arity's
-//! `src/formatter/style.rs`. Keep close to arity's version so the eventual
-//! shared-crate extraction stays mechanical. The LaTeX-specific [`WrapMode`]
-//! (paragraph line-break policy, modeled on the `panache` formatter) is the one
-//! field that diverges.
+//! The LaTeX-specific [`WrapMode`] (paragraph line-break policy, modeled on the
+//! `panache` formatter) is the one field specific to badness.
 
 /// How the formatter lays out the line breaks *inside* a paragraph. Modeled on
 /// panache's `WrapMode` (`crates/panache-formatter/src/config.rs`).

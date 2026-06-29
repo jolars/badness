@@ -1,6 +1,6 @@
 //! The lint driver: run every rule over one file, drop suppressed findings,
 //! stamp paths, and sort. The single entry point both `badness lint` (CLI) and
-//! the language server call — the analog of arity's `check_document`.
+//! the language server call.
 
 use std::path::Path;
 
@@ -18,7 +18,7 @@ use super::suppression::SuppressionMap;
 /// [`lint_document`] for callers that hold only text — notably the `lint --fix`
 /// fixpoint loop, which re-parses after each round. Cross-file rules run with no
 /// project view (`resolution: None`); none of them produce fixes, so the fix
-/// path loses nothing. Mirrors arity's `check_document`. `config` fixes the
+/// path loses nothing. `config` fixes the
 /// lexer's initial catcode regime so a `.sty`/`.cls` parses under the implicit
 /// `\makeatletter` ([`Package`](crate::parser::LatexFlavor::Package)) and a
 /// `.dtx` runs the docstrip mode; a bare

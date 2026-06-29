@@ -4,7 +4,7 @@
 //! A sibling of [`crate::parser`], built on the same lossless rowan CST + flat
 //! event-stream architecture but for `.bib` files, which are a distinct grammar
 //! with their own [`syntax::SyntaxKind`] and [`syntax::BibLang`] marker. The
-//! pipeline mirrors arity / rust-analyzer: `lex` produces a flat token stream,
+//! pipeline follows rust-analyzer: `lex` produces a flat token stream,
 //! the parser emits a flat list of [`events::Event`]s, and
 //! [`tree_builder::build_tree`] turns tokens + events into a rowan green tree.
 //!

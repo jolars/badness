@@ -1,8 +1,8 @@
 //! Diagnostic rendering for the CLI: pretty (annotate-snippets) and concise.
 //!
-//! Mirrors arity's `linter/render.rs`, trimmed to the two text modes that
-//! matter today (JSON is deferred). Diagnostics are grouped by file so each
-//! file's source is fetched at most once.
+//! Only the two text modes that matter today are implemented (JSON is
+//! deferred). Diagnostics are grouped by file so each file's source is fetched
+//! at most once.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

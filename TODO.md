@@ -1,14 +1,11 @@
 # badness—Roadmap
 
 A LaTeX formatter, linter, and language server on a lossless rowan CST,
-mirroring **arity** (`../arity`, the same tool for R). See `AGENTS.md` for
-load-bearing design decisions, invariants, and the copy-from-arity strategy.
+following **rust-analyzer's** architecture. See `AGENTS.md` for load-bearing
+design decisions and invariants.
 
 Single-crate package (not a workspace). Parser and formatter are **intentionally
 interleaved**: the formatter is the primary tool for stress-testing the parser.
-
-Files marked **[copy]** are lifted \~wholesale from arity; **[rewrite]** are
-LaTeX-specific; **[diverge]** intentionally differs from arity.
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
@@ -91,7 +88,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 - [x] config over LSP—the LSP now discovers `badness.toml` per document
   (`GlobalState::resolve_settings`, cached by anchor dir, cleared on
-  `didChangeConfiguration`), mirroring arity. A discovered config wins outright
+  `didChangeConfiguration`). A discovered config wins outright
   (file-wins); editor settings are the fallback. Both `[format]` (`line-width`,
   `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
   `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
@@ -105,7 +102,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   - No on-disk config watching: the anchor-dir cache lives for the session and is
     cleared only on `didChangeConfiguration`, so editing `badness.toml` needs a
     config-change nudge (or restart) to take effect. Folds into the
-    `didChangeWatchedFiles` work below. (Matches arity.)
+    `didChangeWatchedFiles` work below.
   - Deliberately *not* done: plumbing `wrap` (or other knobs) through
     `EditorSettings` itself. A discovered config's `wrap` flows via `FormatConfig`,
     so no new editor knob was needed; `EditorSettings` stays `line_width`/`indent_width`.
@@ -128,8 +125,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 - [ ] Range formatting (`textDocument/rangeFormatting`)—format the smallest
   enclosing node(s) covering the selection; clamp to node boundaries so a
-  partial selection never corrupts the tree. Mirror arity's
-  `on_range_formatting`.
+  partial selection never corrupts the tree.
 - [ ] On-type formatting (`textDocument/onTypeFormatting`), e.g. re-indent on
   `}`/`\end{…}` close. *Lower priority; opt-in trigger characters.*
 
@@ -207,8 +203,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   (like the pull-diagnostics path: `WorkerJob::CodeAction` →
   `compute_lint_findings` → `run_code_action`) and turns every fix-carrying
   finding overlapping the requested range into a `CodeActionKind::QUICKFIX` with a
-  single-file `WorkspaceEdit` (`src/lsp/code_action.rs`, mirroring arity's
-  `code_actions_from_findings`). `CodeActionProviderCapability::Simple(true)`—no
+  single-file `WorkspaceEdit` (`src/lsp/code_action.rs`).
+  `CodeActionProviderCapability::Simple(true)`—no
   `codeAction/resolve` step (fully-built actions). `deprecated-command`'s
   `\bf → \bfseries` is the showcase first quick-fix; `dollar-display-math` and bib
   `empty-field` are surfaced for free. *Follow-up:* gate `is_preferred`/offered set
@@ -411,13 +407,11 @@ scope (the same boundary the include graph and CWL ingest keep).
     (`has_verbatim_body`/`is_margin_framed`/`is_alignment_env`/`is_list_env`) that
     could share one pass. *(Speed-only; no correctness implication.)*
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
-- [ ] Extract shared crate(s) from the **\[copy\]** files (IR engine first),
-  depended on by both badness and arity.
 - [ ] `wasm32` build for a web playground.
 
 ## Tooling & infrastructure
 
-- [x] `badness.toml` configuration (`src/config.rs`, modeled on arity). Top-level
+- [x] `badness.toml` configuration (`src/config.rs`). Top-level
   `exclude`/`extend-exclude` (Ruff model: `exclude` replaces the built-in
   `DEFAULT_EXCLUDE`, `extend-exclude` adds on top), `[format]`
   (`line-width`/`indent-width`/`wrap`), and `[lint]` (`select`/`ignore`). Ancestor
@@ -451,8 +445,8 @@ scope (the same boundary the include graph and CWL ingest keep).
   capitals, so CamelCase names (`McDonald`, `DeForest`) are false positives ---
   a curated name-particle allowlist or a smarter word model would tighten it.
 - [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
-  component assignment from `ResolvedLabels` (marked EXTRACTION CANDIDATE in
-  `project/citations.rs`); factor one helper when a third consumer appears.
+  component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
+  helper when a third consumer appears.
 
 --------------------------------------------------------------------------------
 

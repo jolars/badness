@@ -1,11 +1,10 @@
 //! The rule abstraction: the [`Rule`] trait every lint implements, the
 //! [`RuleContext`] handed to it, and the registry of built-in rules.
 //!
-//! Mirrors arity's `linter/rules.rs`. Every rule is on by default; the
+//! Every rule is on by default; the
 //! `badness.toml` `[lint]` `select`/`ignore` keys (and the CLI's matching flags)
-//! narrow the active set via [`RuleSelection`] — the id-based analog of arity's
-//! `ResolvedRules`, applied as a post-filter so the shared `lint_document` driver
-//! stays config-unaware.
+//! narrow the active set via [`RuleSelection`], applied as a post-filter so the
+//! shared `lint_document` driver stays config-unaware.
 
 use std::path::Path;
 
@@ -150,7 +149,7 @@ pub const PARSE_RULE_ID: &str = "parse";
 ///
 /// Resolution by rule id (not by constructing the rule objects) so it can filter
 /// the diagnostics `lint_document` already produced without changing that shared
-/// entry point's signature. Semantics mirror arity's `ResolvedRules`:
+/// entry point's signature. The semantics are:
 ///
 /// 1. Base set = the ids in `select` when it is `Some`, else every built-in rule.
 /// 2. Subtract anything in `ignore`.

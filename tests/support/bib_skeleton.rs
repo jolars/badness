@@ -191,7 +191,7 @@ fn render_atom(atom: &BibAtom, depth: usize, out: &mut Vec<String>) {
 }
 
 /// Length of the longest common subsequence of two line slices. Copied from
-/// `parse_skeleton.rs` / arity's `air_compat.rs`.
+/// `parse_skeleton.rs`.
 pub fn lcs_len(a: &[String], b: &[String]) -> usize {
     if a.is_empty() || b.is_empty() {
         return 0;

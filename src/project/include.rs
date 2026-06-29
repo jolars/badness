@@ -7,9 +7,7 @@
 //! (e.g. built from another macro) becomes [`IncludeTarget::Dynamic`] so the
 //! cross-file graph stays conservative.
 //!
-//! This is the LaTeX analog of arity's `project/source.rs` (`source("file.R")`
-//! extraction); keep it close so the eventual shared-crate extraction stays a
-//! mechanical lift. Resolution here is **pure path arithmetic** — `.tex`
+//! Resolution here is **pure path arithmetic** — `.tex`
 //! extension defaulting and `base_dir` joining — and never touches the disk; the
 //! resolved-vs-unresolved decision against the analyzed file set happens in
 //! [`crate::project::graph::IncludeGraph::build`].
@@ -86,7 +84,7 @@ impl IncludeEdge {
 /// Collect inclusion-command edges in `root`. `base_dir` is the directory of the
 /// file being scanned; relative literal targets are resolved against it.
 ///
-/// Unlike arity's top-level-only `source()` scan, this walks the whole tree:
+/// This walks the whole tree rather than only the top level:
 /// `\input` is valid anywhere (inside a group, an environment, …), so any
 /// recognized command in the CST is a candidate edge.
 pub fn collect_include_edges(root: &SyntaxNode, base_dir: Option<&Path>) -> Vec<IncludeEdge> {

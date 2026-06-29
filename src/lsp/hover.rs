@@ -1,7 +1,6 @@
-//! `textDocument/hover` computation. Mirrors arity's `src/lsp/hover.rs` shape so
-//! the eventual shared-crate extraction stays a lift, but the *content* is
-//! LaTeX-specific: the cursor's command/environment **signature** (from the
-//! package-merged signature scope) or its `\cite` key's resolved **`.bib` entry**.
+//! `textDocument/hover` computation. The content is LaTeX-specific: the cursor's
+//! command/environment **signature** (from the package-merged signature scope) or
+//! its `\cite` key's resolved **`.bib` entry**.
 //!
 //! Two targets, tried in order (they sit at disjoint offsets, so order is only a
 //! tie-break):

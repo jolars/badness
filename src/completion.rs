@@ -1,9 +1,9 @@
 //! Code completion: command/environment names, `\ref`-family keys, and file
 //! paths, classified from the cursor's position in the CST.
 //!
-//! Mirrors arity's `lsp/completion.rs` in shape — a pure [`classify_context`]
-//! over the parse tree + a byte offset, then [`candidates`] turns the context
-//! into a neutral candidate list — so the LSP layer (`crate::lsp`) only maps
+//! The logic is a pure [`classify_context`] over the parse tree + a byte offset,
+//! then [`candidates`] turns the context into a neutral candidate list, so the
+//! LSP layer (`crate::lsp`) only maps
 //! candidates onto `lsp_types::CompletionItem`s and does the one impure bit
 //! (reading a directory for [`CompletionContext::FilePath`]). Keeping the logic
 //! here, free of LSP types, makes it unit-testable straight off `parse`.

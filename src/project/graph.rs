@@ -2,8 +2,7 @@
 //! per-file [`crate::incremental::include_edges`] firewall and wrapped as a
 //! tracked salsa query so a body edit doesn't rebuild the whole graph.
 //!
-//! This is the LaTeX analog of arity's `project/{scope,graph}.rs`. The layering,
-//! from the per-file firewall up:
+//! The layering, from the per-file firewall up:
 //!
 //! - [`crate::incremental::include_edges`] — a per-file projection (range-free
 //!   [`IncludeEdgeKey`]s) that stays *equal* across a body edit (salsa backdates).
@@ -13,9 +12,9 @@
 //!
 //! [`IncludeGraph::build`] is the **pure** algorithm (no salsa, no disk); the
 //! salsa query is a thin wrapper. The pure layer is where the future consumers
-//! (label/ref resolution, cross-file `\newcommand` scope) will plug in — like
-//! arity, the graph lands "harness + graph only," directly testable, awaiting a
-//! consumer to designate the document root.
+//! (label/ref resolution, cross-file `\newcommand` scope) will plug in: the
+//! graph lands "harness + graph only," directly testable, awaiting a consumer to
+//! designate the document root.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

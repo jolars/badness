@@ -8,9 +8,9 @@
 //! % badness-ignore-file: <reason>          suppress ALL rules file-wide
 //! ```
 //!
-//! Mirror of arity's `linter/suppression.rs`, adapted to badness's `usize` byte
-//! ranges (its [`Diagnostic`](super::Diagnostic) stores plain offsets, not a
-//! rowan `TextRange`) and LaTeX comment syntax. The comment-to-node attachment
+//! Byte ranges are plain `usize` offsets (the
+//! [`Diagnostic`](super::Diagnostic) stores plain offsets, not a rowan
+//! `TextRange`), matched against LaTeX comment syntax. The comment-to-node attachment
 //! for a node-level suppression is "next non-trivia sibling", computed during the
 //! walk — no `place_comment` indirection.
 

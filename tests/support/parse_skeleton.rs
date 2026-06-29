@@ -194,8 +194,8 @@ fn render_atom(atom: &Atom, depth: usize, out: &mut Vec<String>) {
     }
 }
 
-/// Length of the longest common subsequence of two line slices. Copied from
-/// arity's `air_compat.rs`.
+/// Length of the longest common subsequence of two line slices. Used by
+/// the differential parse gauge.
 pub fn lcs_len(a: &[String], b: &[String]) -> usize {
     if a.is_empty() || b.is_empty() {
         return 0;

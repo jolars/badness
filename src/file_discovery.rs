@@ -1,11 +1,8 @@
 //! Resolving CLI input paths into the concrete `.tex` files to process.
 //!
-//! Ported from arity's `src/file_discovery.rs` (an EXTRACTION CANDIDATE),
-//! swapping `.R` for `.tex`: explicit file arguments must be `.tex` files, while
-//! directories are walked recursively via the `ignore` crate (respecting
-//! `.gitignore`) to collect every `.tex` file beneath them. Keep this close to
-//! arity's version so the eventual shared-crate extraction stays a mechanical
-//! lift.
+//! Explicit file arguments must be `.tex` files, while directories are walked
+//! recursively via the `ignore` crate (respecting `.gitignore`) to collect every
+//! `.tex` file beneath them.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -24,7 +21,7 @@ use crate::parser::{LatexFlavor, LexConfig};
 /// does **not** affect paths a user names explicitly on the command line (those
 /// are always processed, matching ruff's default, non-`force-exclude` behavior).
 ///
-/// Ported from arity's `ExcludeFilter`, minus its `use_defaults` flag: badness
+/// There is no `use_defaults` flag: badness
 /// folds the built-in [`DEFAULT_EXCLUDE`](crate::config::DEFAULT_EXCLUDE) set into
 /// the pattern list at the call site (see
 /// [`Config::exclude_patterns`](crate::config::Config::exclude_patterns)), because

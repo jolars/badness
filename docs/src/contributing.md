@@ -1,7 +1,7 @@
 # Contributing
 
 Badness is an open-source project. The authoritative guide for working in the
-codebase---architecture, tenets, and conventions---lives in
+codebase (architecture, tenets, and conventions) lives in
 [`CONTRIBUTING.md`](https://github.com/jolars/badness/blob/main/CONTRIBUTING.md)
 at the repo root, written for both human and AI contributors.
 

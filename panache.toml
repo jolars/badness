@@ -11,4 +11,8 @@ extend-exclude = [
   "BIB_PARSE_COMPAT.md",
   "npm/platform-template/README.md",
   "docs/parse-compat-triage.md",
+  "docs/src/reference/cli.md",
 ]
+
+[flavor-overrides]
+"docs/src/**/*.md" = "gfm"

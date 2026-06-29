@@ -1,4 +1,4 @@
-# badness
+# Badness
 
 [Badness](https://badness.dev/) is a language server, formatter, and linter
 for LaTeX documents.

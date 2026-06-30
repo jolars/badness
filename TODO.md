@@ -236,10 +236,6 @@ scope (the same boundary the include graph and CWL ingest keep).
   types after `@` (`src/bib/completion.rs`); plus `\cite` key completion on the
   `.tex` side, resolved cross-file via `ResolvedCitations` (`src/lsp.rs`
   `cite_completion_items`).
-- [ ] Enrich `\cite` completion items: today they carry only `label` (the key) +
-  `REFERENCE` kind. Populate `detail`/`documentation` from the resolved entry —
-  `entry_type` is already on `Entry` (free), and title/author can be read from the
-  entry's fields (`crate::bib::ast`). Purely additive in `cite_completion_items`.
 - [ ] Bib document-symbol outline completeness: `src/bib/outline.rs` surfaces
   regular entries only; consider `@string`/`@preamble`/`@comment` blocks (and a
   richer `SymbolKind`/detail).

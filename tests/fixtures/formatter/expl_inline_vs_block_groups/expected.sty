@@ -1,0 +1,9 @@
+\ExplSyntaxOn
+\cs_new:Npn \mypkg_set:nn #1#2 { \tl_set:cn { #1 } { #2 } }
+\cs_new:Npn \mypkg_cond:nTF #1
+{
+  \bool_if:nTF { #1 }
+  { \mypkg_yes: }
+  { \mypkg_no: }
+}
+\ExplSyntaxOff

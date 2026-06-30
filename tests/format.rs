@@ -289,6 +289,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("tabular_hline", WrapMode::Preserve, 80),
     ("tabular_booktabs", WrapMode::Preserve, 80),
     ("array_columns", WrapMode::Preserve, 80),
+    // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal
+    // space and breaks like an ordinary (breakable) space when a line overflows,
+    // staying at the line end. An inline `\ExplSyntaxOn … \ExplSyntaxOff` island
+    // amid running prose is split out and laid out as code, the surrounding prose
+    // still reflowing.
+    ("reflow_expl_tilde_breaks", WrapMode::Reflow, 40),
+    ("reflow_expl_straddle", WrapMode::Reflow, 80),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {
@@ -307,6 +314,13 @@ fn fixture_path(name: &str, file: &str) -> PathBuf {
 const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     ("package_at_letter_command", "sty"),
     ("class_provides_preserve", "cls"),
+    // expl3 code formatting under the package flavor's default `Preserve` wrap:
+    // inside an expl3 region (catcode-9 whitespace / catcode-10 `~`) the formatter
+    // owns layout regardless of wrap mode — messy indentation is normalized, a
+    // function body becomes an indented block, short brace arguments stay inline
+    // (`{ #1 }`), and `#1#2` parameters glue tight.
+    ("expl_function_def", "sty"),
+    ("expl_inline_vs_block_groups", "sty"),
 ];
 
 #[test]

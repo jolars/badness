@@ -154,9 +154,15 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Parsing
 
-- [ ] **expl3 full catcode model (deferred).** Model `~` as a literal space
-  (catcode 10) and spaces/tabs as ignored (catcode 9) inside expl3 regions. Formatter
-  territory (insignificant-whitespace reflow), beyond the letters-only mechanism above.
+- [x] **expl3 full catcode model.** `~` is a literal space (catcode 10) and spaces/tabs
+  are ignored (catcode 9) inside expl3 regions, so the formatter owns in-region layout
+  regardless of `WrapMode`: one statement per source line, brace-group code blocks indent,
+  inter-token whitespace collapses to a single space, and `~` is a breakable space. The
+  formatter recomputes region membership read-only (`formatter::core::expl3_regions`, sharing
+  the lexer's `expl_toggle` set); the CST/lexer are untouched, so losslessness holds and the
+  layout is idempotent by construction (catcode-9 whitespace is insignificant, so it supersedes
+  the flush-B deferral for expl3 — see "Hanging continuation indent" above). See the expl3
+  code-formatting note in `AGENTS.md` decision #1.
 - [ ] **expl3 implicit detection in toggle-less `.dtx` (deferred).** Real expl3
   package sources (e.g. `ltx-talk-structure.dtx`) carry no in-file `\ExplSyntaxOn`/
   `\ProvidesExpl*`; expl3 is declared in the parent `.dtx`/build, and `@@` is a

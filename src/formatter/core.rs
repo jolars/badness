@@ -25,6 +25,14 @@
 //!   forces a line break. Commands keep their authored form (their arguments may
 //!   be text).
 //!
+//! - **expl3 code** (inside `\ExplSyntaxOn`…`\ExplSyntaxOff`, or `\ProvidesExpl*`
+//!   to EOF): source spaces/tabs are catcode-9 (ignored) and `~` is catcode-10 (a
+//!   literal space), so the formatter owns the layout *regardless of [`WrapMode`]*.
+//!   In-region code lays out one statement per source line ([`lower_expl_code`]),
+//!   brace groups holding code indent as blocks ([`lower_expl_group`]), inter-token
+//!   whitespace collapses to a single space, and `~` is a breakable space. Region
+//!   membership is recomputed read-only by [`expl3_regions`] (the CST is untouched).
+//!
 //! Everything else is emitted verbatim: paragraph structure, intra-line spacing,
 //! and protected regions (`\verb`, verbatim bodies, comments) are preserved.
 //!
@@ -40,7 +48,10 @@
 
 use std::iter::Peekable;
 
+use rowan::{TextRange, TextSize};
+
 use crate::ast::{command_name, environment_name};
+use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
 use crate::semantic::{ArgKind, ArgSpec, SignatureDb, Signatures, scan_definitions};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
@@ -218,12 +229,59 @@ fn format_root(root: &SyntaxNode, ctx: FormatContext, external: &SignatureDb) ->
     // whole lowering.
     let mut user = external.clone();
     user.merge_from(&scan_definitions(root));
+    // The expl3 source regions, recomputed read-only from the same toggle set the
+    // lexer uses ([`expl_toggle`]). Inside them source whitespace is catcode-9
+    // (ignored) and `~` is catcode-10 (a literal space), so the formatter fully owns
+    // layout. Held by value for the whole lowering, like `user`.
+    let regions = expl3_regions(root);
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
         signatures: Signatures::new(&user),
+        expl3_regions: &regions,
     };
     let ir = lower_node(root, cx);
     Printer::new(ctx.style()).print(&ir)
+}
+
+/// The byte ranges of the document's expl3 regions, in document order. A region
+/// runs from an opener (`\ExplSyntaxOn`, or a `\ProvidesExpl*` declaration, which
+/// opens expl3 for the rest of the file) through the matching `\ExplSyntaxOff`
+/// (inclusive of both toggle commands), or to end of input when unclosed. The
+/// toggle set is read from [`expl_toggle`] — the *same* fixed set the lexer flips
+/// its `expl_syntax` flag on — so the two never drift.
+///
+/// Matches only [`SyntaxKind::CONTROL_WORD`] tokens, so a `\ExplSyntaxOn` written
+/// inside `\verb`/a comment (a `VERB`/`COMMENT` token, never a `CONTROL_WORD`) is
+/// not a toggle, exactly as in the lexer. The CST is untouched; this is a pure
+/// read-only side channel (the sanctioned byte-range pattern, `AGENTS.md` #4).
+fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
+    let mut regions = Vec::new();
+    let mut open: Option<TextSize> = None;
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| t.kind() == SyntaxKind::CONTROL_WORD)
+    {
+        match expl_toggle(token.text()) {
+            // A redundant inner `\ExplSyntaxOn` does not restart the region (the
+            // lexer's flag is an idempotent set-true).
+            Some(ExplToggle::On) if open.is_none() => open = Some(token.text_range().start()),
+            Some(ExplToggle::Off) => {
+                if let Some(start) = open.take() {
+                    regions.push(TextRange::new(start, token.text_range().end()));
+                }
+                // A stray `\ExplSyntaxOff` with no open region is ignored (toggling
+                // an already-false flag is a no-op), matching the lexer.
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = open.take() {
+        // An unclosed region runs to end of input (the lexer's flag simply stays
+        // true to EOF).
+        regions.push(TextRange::new(start, root.text_range().end()));
+    }
+    regions
 }
 
 /// The state threaded through every lowering call: the active [`WrapMode`] plus the
@@ -234,6 +292,45 @@ fn format_root(root: &SyntaxNode, ctx: FormatContext, external: &SignatureDb) ->
 struct LowerCtx<'a> {
     wrap: WrapMode,
     signatures: Signatures<'a>,
+    /// Sorted, non-overlapping byte ranges of the document's expl3 regions (see
+    /// [`expl3_regions`]). Inside these, source whitespace is catcode-9 (ignored)
+    /// and `~` is catcode-10 (a literal space), so the formatter lays out the code
+    /// itself — regardless of [`WrapMode`]. Borrowed from a `Vec` owned by
+    /// [`format_root`], exactly like `signatures`.
+    expl3_regions: &'a [TextRange],
+}
+
+impl<'a> LowerCtx<'a> {
+    /// Whether the document has any expl3 region at all — the cheap short-circuit
+    /// for the no-expl3 majority (the slice is empty, so every query is free).
+    fn any_expl3(self) -> bool {
+        !self.expl3_regions.is_empty()
+    }
+
+    /// Whether byte offset `at` falls inside some expl3 region. O(log n) over the
+    /// sorted, disjoint range list.
+    fn in_expl3_region(self, at: TextSize) -> bool {
+        self.expl3_regions
+            .binary_search_by(|r| {
+                use std::cmp::Ordering;
+                if at < r.start() {
+                    Ordering::Greater
+                } else if at >= r.end() {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .is_ok()
+    }
+
+    /// Whether `range` intersects some expl3 region (used to route a paragraph that
+    /// is wholly or partly in-region).
+    fn overlaps_expl3(self, range: TextRange) -> bool {
+        self.expl3_regions
+            .iter()
+            .any(|r| r.start() < range.end() && range.start() < r.end())
+    }
 }
 
 /// Lower a CST node to IR. Most nodes lower generically (see
@@ -244,6 +341,30 @@ struct LowerCtx<'a> {
 /// threaded through so it reaches every nested paragraph (including environment and
 /// group bodies).
 fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    // expl3 code layout (catcode-9 whitespace / catcode-10 `~`) applies regardless
+    // of `WrapMode`, so it is checked before the wrap-gated arms below. A paragraph
+    // overlapping a region is split at the toggles; a brace/optional group inside a
+    // region lays out its body as expl3 code.
+    if cx.any_expl3() {
+        match node.kind() {
+            SyntaxKind::PARAGRAPH if cx.overlaps_expl3(node.text_range()) => {
+                return lower_expl_paragraph(node, cx);
+            }
+            SyntaxKind::GROUP if cx.in_expl3_region(node.text_range().start()) => {
+                return lower_expl_group(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+            }
+            SyntaxKind::OPTIONAL if cx.in_expl3_region(node.text_range().start()) => {
+                return lower_expl_group(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
+            }
+            // A command and its greedily-attached `{…}`/`[…]` arguments lay out as a
+            // fill so the arguments break independently (only an over-long one
+            // detonates) rather than the generic concat breaking every group.
+            SyntaxKind::COMMAND if cx.in_expl3_region(node.text_range().start()) => {
+                return lower_expl_code(node.children_with_tokens(), cx);
+            }
+            _ => {}
+        }
+    }
     match node.kind() {
         // A `.dtx` documentation-layer prose paragraph (its first content token is
         // a `DOC_MARGIN`): reflow the bare prose and re-emit a `% ` margin on each
@@ -710,6 +831,250 @@ fn reflow_elements(
         result.push(line);
     }
     Ir::concat(result)
+}
+
+/// Lower a `PARAGRAPH` that overlaps an expl3 region. The paragraph is split at the
+/// `\ExplSyntaxOn`/`Off` toggles into maximal in-region and out-of-region runs;
+/// each in-region run lays out as expl3 code ([`lower_expl_code`]), each out-of-region
+/// run keeps the ordinary prose/stream treatment. The common case — a whole
+/// paragraph inside a region (a `.sty`/`.dtx` body, or a blank-line-separated
+/// `\ExplSyntaxOn…Off` block) — is a single in-region run. Runs are joined by a hard
+/// line break (a region boundary always begins a fresh line).
+fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
+    let mut segments: Vec<Ir> = Vec::new();
+    let mut i = 0;
+    while i < elements.len() {
+        let in_region = cx.in_expl3_region(elements[i].text_range().start());
+        let start = i;
+        while i < elements.len()
+            && cx.in_expl3_region(elements[i].text_range().start()) == in_region
+        {
+            i += 1;
+        }
+        let run = elements[start..i].iter().cloned();
+        let ir = if in_region {
+            lower_expl_code(run, cx)
+        } else if cx.wrap == WrapMode::Reflow {
+            reflow_elements(run, cx, ReflowKind::Prose)
+        } else {
+            Ir::concat(lower_element_stream(run, cx))
+        };
+        if !matches!(ir, Ir::Nil) {
+            segments.push(ir);
+        }
+    }
+    Ir::join(Ir::hard_line(), segments)
+}
+
+/// Lay out a stream of elements known to be inside an expl3 region as expl3 code.
+///
+/// In an expl3 region TeX catcodes change: source spaces/tabs are **ignored**
+/// (catcode 9) and `~` is a **literal space** (catcode 10). Source whitespace is
+/// therefore insignificant and the formatter owns layout:
+/// - **Statements** are split on source newlines — each source line is its own
+///   logical line (the expl3 convention is one call per line). This sidesteps the
+///   unsolvable problem of grouping a multi-token call (`\cs_new:Npn \foo:n #1 {…}`
+///   is several sibling CST nodes, not one) and stays idempotent: a flushed
+///   continuation re-parses to a line already at the same indent.
+/// - **Inter-token spacing** collapses to a single space (any catcode-9 run is
+///   inert, and one space keeps the token boundary so re-lexing never merges two
+///   tokens).
+/// - **`~`** renders verbatim and introduces a *soft* break (flat: nothing; broken:
+///   newline) — a line carrying a tie is wrapped in a group so its ties break
+///   together only when the line overflows. A following newline is catcode-9
+///   ignored, so the break preserves meaning.
+/// - **Brace/optional groups** recurse through [`lower_node`] → [`lower_expl_group`]
+///   (an inner block indents; a fitting one stays inline). A multi-line block lands
+///   on its own line(s) (Allman), like the block-amid-prose rule in
+///   [`reflow_elements`].
+fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+    let elements: Vec<SyntaxElement> = elements.collect();
+    let mut lines: Vec<Ir> = Vec::new();
+    let mut seps: Vec<Ir> = Vec::new();
+    let mut pending_sep = Ir::hard_line();
+
+    // The current logical line is built as a Wadler *fill*: `atom` accumulates the
+    // glued pieces of the atom in progress; `parts` is the alternating
+    // `[atom, sep, atom, …]` the printer fills greedily. `sep_before_next` is the
+    // separator to emit before the next atom — `Line` for an inter-token space
+    // (flat: one space, keeping the token boundary), `SoftLine` after a `~` (flat:
+    // nothing, since the `~` is itself the space).
+    let mut atom: Vec<Ir> = Vec::new();
+    let mut parts: Vec<Ir> = Vec::new();
+    let mut sep_before_next: Option<Ir> = None;
+
+    /// Commit the glued atom in progress as one fill atom, prefixing the pending
+    /// separator when it is not the first atom of the line.
+    fn flush_atom(atom: &mut Vec<Ir>, parts: &mut Vec<Ir>, sep_before_next: &mut Option<Ir>) {
+        if atom.is_empty() {
+            return;
+        }
+        if !parts.is_empty() {
+            parts.push(sep_before_next.take().unwrap_or(Ir::Line));
+        }
+        parts.push(Ir::concat(atom.drain(..)));
+        *sep_before_next = None;
+    }
+
+    /// Commit the in-progress line (if any) as the next logical line, recording the
+    /// pending line separator before it and resetting line state.
+    fn commit_line(
+        atom: &mut Vec<Ir>,
+        parts: &mut Vec<Ir>,
+        sep_before_next: &mut Option<Ir>,
+        lines: &mut Vec<Ir>,
+        seps: &mut Vec<Ir>,
+        pending_sep: &mut Ir,
+    ) {
+        flush_atom(atom, parts, sep_before_next);
+        if !parts.is_empty() {
+            // A multi-atom line is a fill (greedy independent breaks); a single
+            // atom needs no fill.
+            let line = if parts.len() == 1 {
+                parts.drain(..).next().unwrap()
+            } else {
+                Ir::Fill(std::mem::take(parts).into())
+            };
+            seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
+            lines.push(line);
+        }
+        parts.clear();
+        *sep_before_next = None;
+    }
+
+    let mut idx = 0;
+    while idx < elements.len() {
+        match &elements[idx] {
+            // Insignificant whitespace: a single newline ends the statement line, a
+            // blank line promotes the next line separator, an inline run is a single
+            // (breakable) space before the next atom.
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let newlines = consume_trivia_run_slice(&elements, &mut idx);
+                if newlines >= 1 {
+                    commit_line(
+                        &mut atom,
+                        &mut parts,
+                        &mut sep_before_next,
+                        &mut lines,
+                        &mut seps,
+                        &mut pending_sep,
+                    );
+                    if newlines >= 2 {
+                        pending_sep = Ir::empty_line();
+                    }
+                } else {
+                    flush_atom(&mut atom, &mut parts, &mut sep_before_next);
+                    // Keep a tie's soft break if one is already pending.
+                    if sep_before_next.is_none() {
+                        sep_before_next = Some(Ir::Line);
+                    }
+                }
+                continue;
+            }
+            // `~`: a literal space. Glue it to the end of the current atom, then
+            // close the atom with a soft break (flat: nothing; broken: newline).
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::TILDE => {
+                atom.push(Ir::verbatim(token.text()));
+                flush_atom(&mut atom, &mut parts, &mut sep_before_next);
+                sep_before_next = Some(Ir::SoftLine);
+            }
+            // A comment ends its line (it must terminate the source line).
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
+                atom.push(Ir::verbatim(token.text()));
+                commit_line(
+                    &mut atom,
+                    &mut parts,
+                    &mut sep_before_next,
+                    &mut lines,
+                    &mut seps,
+                    &mut pending_sep,
+                );
+            }
+            SyntaxElement::Token(token) => atom.push(lower_loose_token(token)),
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(child, cx);
+                if ir.contains_forced_break() {
+                    // A multi-line block (group, environment, display math): end the
+                    // current line and place the block on its own line(s) (Allman).
+                    commit_line(
+                        &mut atom,
+                        &mut parts,
+                        &mut sep_before_next,
+                        &mut lines,
+                        &mut seps,
+                        &mut pending_sep,
+                    );
+                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                    lines.push(ir);
+                } else {
+                    atom.push(ir);
+                }
+            }
+        }
+        idx += 1;
+    }
+    commit_line(
+        &mut atom,
+        &mut parts,
+        &mut sep_before_next,
+        &mut lines,
+        &mut seps,
+        &mut pending_sep,
+    );
+
+    let mut result: Vec<Ir> = Vec::with_capacity(lines.len().saturating_mul(2));
+    for (i, line) in lines.into_iter().enumerate() {
+        if i > 0 {
+            result.push(seps[i].clone());
+        }
+        result.push(line);
+    }
+    Ir::concat(result)
+}
+
+/// Lower a brace `{…}` or optional `[…]` group inside an expl3 region as a code
+/// block: the body lays out as expl3 code ([`lower_expl_code`]) indented one step,
+/// the whole wrapped in a soft [`Ir::group`] so it stays inline (`{ body }`, with
+/// canonical inner spaces) when it fits and detonates to an indented block when the
+/// body spans lines or overflows. The inline-vs-block decision is width/structure
+/// driven (never source newlines), keeping reformatting idempotent. Mirrors
+/// [`lower_prose_group`] but recurses into expl3 code and uses [`Ir::line`] so the
+/// inline form carries spaces.
+fn lower_expl_group(
+    node: &SyntaxNode,
+    open: SyntaxKind,
+    close: SyntaxKind,
+    cx: LowerCtx<'_>,
+) -> Ir {
+    let mut open_ir = Ir::Nil;
+    let mut close_ir = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Token(t) if t.kind() == open && matches!(open_ir, Ir::Nil) => {
+                open_ir = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == close => {
+                close_ir = Ir::verbatim(t.text());
+            }
+            _ => body_elements.push(element),
+        }
+    }
+    let body = trim_trailing_break(trim_leading_break(lower_expl_code(
+        body_elements.into_iter(),
+        cx,
+    )));
+    if matches!(body, Ir::Nil) {
+        Ir::concat([open_ir, close_ir])
+    } else {
+        Ir::group(Ir::concat([
+            open_ir,
+            Ir::indent(Ir::concat([Ir::line(), body])),
+            Ir::line(),
+            close_ir,
+        ]))
+    }
 }
 
 /// Lower a single loose token (one not collapsed into a trivia run) to inline IR.
@@ -2974,4 +3339,65 @@ fn trim_leading_break(ir: Ir) -> Ir {
 /// [`peel_trailing_break`]).
 fn trim_trailing_break(ir: Ir) -> Ir {
     peel_trailing_break(ir).1
+}
+
+#[cfg(test)]
+mod expl3_region_tests {
+    use super::*;
+    use crate::parser::parse;
+
+    /// The expl3 regions of `input`, as `(start, end)` byte pairs.
+    fn regions(input: &str) -> Vec<(usize, usize)> {
+        let parsed = parse(input);
+        assert!(parsed.errors.is_empty(), "test input should parse cleanly");
+        expl3_regions(&parsed.syntax())
+            .into_iter()
+            .map(|r| (r.start().into(), r.end().into()))
+            .collect()
+    }
+
+    #[test]
+    fn on_off_pair_spans_both_toggles() {
+        let input = r"a \ExplSyntaxOn b \ExplSyntaxOff c";
+        let start = input.find(r"\ExplSyntaxOn").unwrap();
+        let end = input.find(r"\ExplSyntaxOff").unwrap() + r"\ExplSyntaxOff".len();
+        assert_eq!(regions(input), vec![(start, end)]);
+    }
+
+    #[test]
+    fn unclosed_region_runs_to_eof() {
+        let input = r"x \ExplSyntaxOn y z";
+        let start = input.find(r"\ExplSyntaxOn").unwrap();
+        assert_eq!(regions(input), vec![(start, input.len())]);
+    }
+
+    #[test]
+    fn provides_expl_opens_to_eof() {
+        let input = "\\ProvidesExplPackage\n\\cs_new:N \\foo:";
+        assert_eq!(regions(input), vec![(0, input.len())]);
+    }
+
+    #[test]
+    fn stray_off_is_ignored() {
+        assert!(regions(r"a \ExplSyntaxOff b").is_empty());
+    }
+
+    #[test]
+    fn redundant_inner_on_does_not_restart() {
+        let input = r"\ExplSyntaxOn a \ExplSyntaxOn b \ExplSyntaxOff";
+        let end = input.find(r"\ExplSyntaxOff").unwrap() + r"\ExplSyntaxOff".len();
+        assert_eq!(regions(input), vec![(0, end)]);
+    }
+
+    #[test]
+    fn toggle_inside_verb_is_not_a_region() {
+        // `\ExplSyntaxOn` inside a `\verb` argument lexes as a `VERB` token, never a
+        // `CONTROL_WORD`, so it must not open a region (mirrors the lexer).
+        assert!(regions(r"\verb|\ExplSyntaxOn| text").is_empty());
+    }
+
+    #[test]
+    fn toggle_inside_comment_is_not_a_region() {
+        assert!(regions("% \\ExplSyntaxOn\ntext").is_empty());
+    }
 }

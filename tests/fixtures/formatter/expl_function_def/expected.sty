@@ -1,0 +1,7 @@
+\ProvidesExplPackage{ mypkg }{ 2024/01/01 }{ 1.0 }{ My~package }
+
+\cs_new:Npn \mypkg_greet:n #1
+{
+  \tl_set:Nn \l_mypkg_name_tl { #1 }
+  \msg_info:nn { mypkg } { greeting }
+}

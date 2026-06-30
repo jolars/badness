@@ -68,6 +68,27 @@ for the sanctioned lexer modes is in TODO.md ("Design notes").
    - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
      DB, never executed.
 
+   **expl3 code formatting (formatter-side, sanctioned).** The expl3 letter mode above is
+   a *lexer* fact. The matching *whitespace* catcodes—inside an expl3 region (`\ExplSyntaxOn`
+   …`\ExplSyntaxOff`, or `\ProvidesExpl*` to EOF) source spaces/tabs are catcode 9 (ignored)
+   and `~` is catcode 10 (a literal space)—are a **formatter** concern: since inter-token
+   whitespace is provably insignificant, the formatter owns the layout of in-region code
+   (indentation + line breaks), **regardless of `WrapMode`**. This is **idempotent by
+   construction**: the inserted whitespace is itself catcode-insignificant, so re-lexing the
+   output yields the same token sequence and the deterministic layout is a fixed point. It is
+   the property the generic "hanging continuation indent" (TODO.md, the flush-B/TikZ problem)
+   could not get, supplied here at the catcode level. Region membership is **not** recorded in
+   the CST: the lexer's expl3 toggle stays transient, and the formatter recomputes in-region
+   byte ranges in a read-only pre-pass (`formatter::core::expl3_regions`) over the same fixed
+   toggle set the lexer uses (`parser::lexer::expl_toggle`, shared so the two never drift),
+   stored as a `Vec<TextRange>` side channel in `LowerCtx`—the same byte-range pattern as
+   parser diagnostics (decision #4). The CST, lexer, events, and tree_builder are untouched, so
+   losslessness is unaffected; the reformatted output is a different valid text with the same
+   meaning. Statement boundaries follow *source newlines* (the expl3 one-call-per-line
+   convention; a multi-token call like `\cs_new:Npn \foo:n #1 {…}` is several sibling CST
+   nodes, not one structural unit), and a single inserted space at any preserved token boundary
+   keeps re-lexing from merging two tokens.
+
 2. **Two layers: syntactic vs. semantic.** The *syntactic* layer is the generic CST
    and knows nothing about what a command means. The *semantic* layer is a
    **signature database** (built-in table + CWL-style data + `\newcommand`/

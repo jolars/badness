@@ -196,6 +196,33 @@ fn is_definition_keyword(text: &str) -> bool {
     )
 }
 
+/// An expl3 catcode-mode toggle recognized purely by its control-word spelling.
+/// Shared by the lexer (which flips its `expl_syntax` flag) and the formatter's
+/// region pre-pass ([`crate::formatter`] recomputes in-region byte spans), so the
+/// two read the *same* fixed toggle set and can never drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExplToggle {
+    /// `\ExplSyntaxOn`, or `\ProvidesExplPackage`/`Class`/`File` (which open expl3
+    /// syntax for the rest of the file).
+    On,
+    /// `\ExplSyntaxOff`.
+    Off,
+}
+
+/// Classify a control word's text as an expl3 catcode-mode toggle, if any. Only
+/// meaningful on [`SyntaxKind::CONTROL_WORD`] text: a `\ExplSyntaxOn` inside a
+/// `\verb`/comment lexes as a `VERB`/`COMMENT` token and so never reaches here.
+pub(crate) fn expl_toggle(text: &str) -> Option<ExplToggle> {
+    match text {
+        "\\ExplSyntaxOn"
+        | "\\ProvidesExplPackage"
+        | "\\ProvidesExplClass"
+        | "\\ProvidesExplFile" => Some(ExplToggle::On),
+        "\\ExplSyntaxOff" => Some(ExplToggle::Off),
+        _ => None,
+    }
+}
+
 /// Lex `input` into a flat, lossless token stream, consulting only the built-in
 /// signature DB for verbatim commands/environments. The entry used by the first
 /// parse pass; [`lex_with`] adds user-defined verbatim commands. Uses the
@@ -359,15 +386,14 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             match text {
                 "\\makeatletter" => at_letter = true,
                 "\\makeatother" => at_letter = false,
-                "\\ExplSyntaxOn" => expl_syntax = true,
-                "\\ExplSyntaxOff" => expl_syntax = false,
-                // The `\ProvidesExpl*` declarations open expl3 syntax for the rest
-                // of the file (they appear at the top of an expl3 package/class),
-                // so left-to-right they act as an `\ExplSyntaxOn`.
-                "\\ProvidesExplPackage" | "\\ProvidesExplClass" | "\\ProvidesExplFile" => {
-                    expl_syntax = true;
+                // `\ExplSyntaxOn`/`Off`, and the `\ProvidesExpl*` declarations which
+                // open expl3 syntax for the rest of the file (they appear at the top
+                // of an expl3 package/class) so left-to-right they act as an On.
+                _ => {
+                    if let Some(toggle) = expl_toggle(text) {
+                        expl_syntax = matches!(toggle, ExplToggle::On);
+                    }
                 }
-                _ => {}
             }
         }
         pending_delim = match kind {

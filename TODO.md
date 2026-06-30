@@ -93,10 +93,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
   `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
   follow-ups remain:
-  - No on-disk config watching: the anchor-dir cache lives for the session and is
-    cleared only on `didChangeConfiguration`, so editing `badness.toml` needs a
-    config-change nudge (or restart) to take effect. Folds into the
-    `didChangeWatchedFiles` work below.
   - Deliberately *not* done: plumbing `wrap` (or other knobs) through
     `EditorSettings` itself. A discovered config's `wrap` flows via `FormatConfig`,
     so no new editor knob was needed; `EditorSettings` stays `line_width`/`indent_width`.
@@ -105,10 +101,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   results) that fits the one-shot id-bound read-job model poorly. Advertise
   `workspace_diagnostics: true` and add it once that plumbing exists; editors
   drive interactive diagnostics through `textDocument/diagnostic` meanwhile.
-- [ ] `workspace/didChangeWatchedFiles` + dynamic `client/registerCapability`
-  for `**/*.{tex,bib}` so on-disk edits to non-open includes/`.bib` files (the
-  project graph's leaves) reanalyze—the deferred follow-up to LSP project
-  assembly (re-read + re-upsert + `RelintAll`).
+- [x] `workspace/didChangeWatchedFiles` + dynamic `client/registerCapability`
+  for `**/*.{tex,bib}` and `badness.toml` so on-disk edits to non-open
+  includes/`.bib` files (the project graph's leaves) and the config reanalyze.
+  Watchers are registered post-handshake (`register_file_watchers`) when the client
+  advertises `didChangeWatchedFiles.dynamicRegistration`; no `notify`-crate fallback
+  otherwise. A `.tex`/`.bib` change re-reads + re-upserts the non-open file
+  (`Worker::apply_watched_change`, scoped to seeded project dirs) and re-lints via
+  `RelintAll`; a `badness.toml` change clears the config cache and re-lints
+  (`relint_all_open`). Open buffers are skipped (the editor overlay is authoritative).
 
 ### Formatting
 

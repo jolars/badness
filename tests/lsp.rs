@@ -19,19 +19,20 @@ use lsp_types::{
     ClientCapabilities, CodeActionContext, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CompletionItem, CompletionItemKind, CompletionParams,
     CompletionResponse, DiagnosticClientCapabilities, DiagnosticWorkspaceClientCapabilities,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesClientCapabilities,
+    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FoldingRange, FoldingRangeKind,
-    FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
-    NumberOrString, OneOf, PartialResultParams, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams, RenameOptions,
-    RenameParams, SymbolKind, TextDocumentClientCapabilities, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri,
-    VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceClientCapabilities,
-    WorkspaceEdit,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent,
+    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
+    RegistrationParams, RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -2050,6 +2051,305 @@ fn lsp_push_client_still_receives_pushes() {
     assert!(
         !diags.diagnostics.is_empty(),
         "push-mode client must still receive pushed diagnostics"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+/// Handshake as a client that advertises dynamic file-watcher registration. After
+/// `initialized` the server registers watchers via a `client/registerCapability`
+/// request; capture and ack it, returning its [`RegistrationParams`].
+fn start_server_watching() -> (Connection, std::thread::JoinHandle<()>, RegistrationParams) {
+    let (server, client) = Connection::memory();
+    let server_thread = std::thread::spawn(move || badness::lsp::serve(server).unwrap());
+
+    let params = InitializeParams {
+        capabilities: ClientCapabilities {
+            workspace: Some(WorkspaceClientCapabilities {
+                did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
+                    dynamic_registration: Some(true),
+                    relative_pattern_support: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    send_request(
+        &client,
+        1,
+        "initialize",
+        serde_json::to_value(params).unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(1));
+    send_notification(
+        &client,
+        "initialized",
+        serde_json::to_value(InitializedParams {}).unwrap(),
+    );
+    let reg = match recv(&client) {
+        Message::Request(req) if req.method == "client/registerCapability" => {
+            client
+                .sender
+                .send(Message::Response(Response::new_ok(
+                    req.id,
+                    serde_json::Value::Null,
+                )))
+                .unwrap();
+            serde_json::from_value::<RegistrationParams>(req.params)
+                .expect("valid RegistrationParams")
+        }
+        other => panic!("expected client/registerCapability, got {other:?}"),
+    };
+    (client, server_thread, reg)
+}
+
+/// Send a `workspace/didChangeWatchedFiles` notification for the given `(uri, type)`
+/// events.
+fn did_change_watched_files(client: &Connection, events: &[(Uri, FileChangeType)]) {
+    let changes = events
+        .iter()
+        .map(|(uri, typ)| FileEvent::new(uri.clone(), *typ))
+        .collect();
+    send_notification(
+        client,
+        "workspace/didChangeWatchedFiles",
+        serde_json::to_value(DidChangeWatchedFilesParams { changes }).unwrap(),
+    );
+}
+
+/// Drain server messages until a `publishDiagnostics` for `uri` whose rule codes
+/// satisfy `want`, acking any server→client request along the way. Panics on timeout.
+fn recv_diagnostics_matching(
+    client: &Connection,
+    uri: &Uri,
+    want: impl Fn(&[String]) -> bool,
+) -> PublishDiagnosticsParams {
+    loop {
+        match recv(client) {
+            Message::Notification(not) if not.method == "textDocument/publishDiagnostics" => {
+                let diags: PublishDiagnosticsParams =
+                    serde_json::from_value(not.params).expect("valid PublishDiagnosticsParams");
+                if &diags.uri == uri && want(&rule_codes(&diags)) {
+                    return diags;
+                }
+            }
+            Message::Notification(_) => {}
+            Message::Request(req) => {
+                client
+                    .sender
+                    .send(Message::Response(Response::new_ok(
+                        req.id,
+                        serde_json::Value::Null,
+                    )))
+                    .unwrap();
+            }
+            Message::Response(_) => {}
+        }
+    }
+}
+
+#[test]
+fn lsp_registers_file_watchers_on_initialized() {
+    // A watcher-capable client receives a `client/registerCapability` for
+    // `workspace/didChangeWatchedFiles` covering both the project leaves and the config.
+    let (client, server_thread, reg) = start_server_watching();
+    assert_eq!(reg.registrations.len(), 1, "one registration: {reg:?}");
+    let r = &reg.registrations[0];
+    assert_eq!(r.method, "workspace/didChangeWatchedFiles");
+    let opts = r.register_options.as_ref().expect("watcher options");
+    let globs: Vec<String> = opts["watchers"]
+        .as_array()
+        .expect("watchers array")
+        .iter()
+        .map(|w| w["globPattern"].as_str().expect("string glob").to_owned())
+        .collect();
+    assert!(
+        globs.contains(&"**/*.{tex,bib}".to_owned()),
+        "expected the tex/bib glob, got {globs:?}"
+    );
+    assert!(
+        globs.contains(&"**/badness.toml".to_owned()),
+        "expected the config glob, got {globs:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_no_watcher_registration_without_capability() {
+    // The default client advertises no dynamic registration, so the server must not
+    // send a `client/registerCapability`. `initialized` is processed before `didOpen`,
+    // so a stray registration would arrive ahead of the diagnostics push — asserting
+    // the first message is `publishDiagnostics` is sufficient.
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///nowatch.tex".parse().unwrap();
+    did_open(&client, &uri, 1, "\\bf hi\n");
+    let diags = recv_diagnostics(&client); // panics if a register request comes first
+    assert_eq!(diags.uri, uri);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_watched_tex_change_reanalyzes_open_doc() {
+    // A root references a label defined in a non-open `\input` sibling. Editing that
+    // sibling on disk (out of editor) and signalling the watcher makes the now-dangling
+    // `\ref` fire `undefined-ref` in the still-open root.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let part_path = dir.path().join("part.tex");
+    std::fs::write(&part_path, "\\label{sec:intro}\n").unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\ref{sec:intro}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    // Initially the label resolves cross-file: no `undefined-ref`.
+    recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes.iter().any(|c| c == "undefined-ref")
+    });
+
+    // Drop the label on disk, then notify the watcher.
+    std::fs::write(&part_path, "% the label is gone now\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&part_path), FileChangeType::CHANGED)],
+    );
+
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        codes.iter().any(|c| c == "undefined-ref")
+    });
+    assert!(
+        rule_codes(&diags).iter().any(|c| c == "undefined-ref"),
+        "expected undefined-ref after the label was removed on disk, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_watched_bib_change_reanalyzes_open_doc() {
+    // The same shape over a `.bib` resource: rewriting the bibliography on disk to drop
+    // the cited key makes `undefined-citation` fire in the open root.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let bib_path = dir.path().join("refs.bib");
+    std::fs::write(&bib_path, "@article{knuth1984, title={The TeXbook}}\n").unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\addbibresource{refs.bib}\n\
+        \\begin{document}\n\
+        \\cite{knuth1984}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes.iter().any(|c| c == "undefined-citation")
+    });
+
+    std::fs::write(&bib_path, "@article{lamport1986, title={LaTeX}}\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&bib_path), FileChangeType::CHANGED)],
+    );
+
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        codes.iter().any(|c| c == "undefined-citation")
+    });
+    assert!(
+        rule_codes(&diags).iter().any(|c| c == "undefined-citation"),
+        "expected undefined-citation after the key was removed on disk, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_watched_config_change_reanalyzes_open_doc() {
+    // Dropping a `badness.toml` beside an open doc (out of editor) and signalling the
+    // watcher re-resolves settings: a rule disabled in the new config stops firing.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let main_path = dir.path().join("main.tex");
+    let main = "\\bf hi\n"; // `\bf` trips the `deprecated-command` rule
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        codes.iter().any(|c| c == "deprecated-command")
+    });
+    assert!(
+        rule_codes(&diags).iter().any(|c| c == "deprecated-command"),
+        "expected deprecated-command before the config ignores it, got {:?}",
+        diags.diagnostics
+    );
+
+    // Write a config that ignores the rule, then notify the watcher.
+    let config_path = dir.path().join("badness.toml");
+    std::fs::write(&config_path, "[lint]\nignore = [\"deprecated-command\"]\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&config_path), FileChangeType::CREATED)],
+    );
+
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes.iter().any(|c| c == "deprecated-command")
+    });
+    assert!(
+        !rule_codes(&diags).iter().any(|c| c == "deprecated-command"),
+        "deprecated-command must stop firing once the config ignores it, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_watched_change_for_open_buffer_is_ignored() {
+    // A watcher event for a file open in the editor must not clobber the live buffer
+    // with disk text: the editor overlay is authoritative. Open a clean buffer, change
+    // the file on disk to something dirty, and assert no new diagnostics fire for it.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("open.tex");
+    std::fs::write(&path, "\\bf on disk\n").unwrap(); // dirty on disk
+    let uri = path_to_file_uri(&path);
+
+    let (client, server_thread) = start_server(None);
+    // The editor buffer is clean (no deprecated command), unlike the disk.
+    did_open(&client, &uri, 1, "clean buffer\n");
+    let diags = recv_diagnostics(&client);
+    assert_eq!(diags.uri, uri);
+    assert!(
+        !rule_codes(&diags).iter().any(|c| c == "deprecated-command"),
+        "the clean buffer must not report the disk's deprecated command, got {:?}",
+        diags.diagnostics
+    );
+
+    // A watcher event for the open file must be ignored (no re-read of the dirty disk).
+    did_change_watched_files(&client, &[(uri.clone(), FileChangeType::CHANGED)]);
+
+    // The buffer is still clean. Round-trip a real edit to flush the pipeline: if the
+    // watcher event had wrongly re-read disk, a deprecated-command push would be queued
+    // ahead of this edit's push. We assert the next push for the buffer stays clean.
+    did_change_full(&client, &uri, 2, "still clean\n");
+    let diags = recv_diagnostics_matching(&client, &uri, |_| true);
+    assert!(
+        !rule_codes(&diags).iter().any(|c| c == "deprecated-command"),
+        "an open buffer's diagnostics must track the overlay, not disk, got {:?}",
+        diags.diagnostics
     );
 
     shutdown(&client, server_thread);

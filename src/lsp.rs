@@ -68,27 +68,29 @@ use std::thread::JoinHandle;
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
-    DidChangeConfiguration, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument,
-    Notification as _, PublishDiagnostics,
+    DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument,
+    DidOpenTextDocument, Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, References, Rename, Request as _, ResolveCompletionItem,
-    WorkspaceDiagnosticRefresh,
+    PrepareRenameRequest, References, RegisterCapability, Rename, Request as _,
+    ResolveCompletionItem, WorkspaceDiagnosticRefresh,
 };
 use lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
     CompletionList, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
     DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
     DocumentHighlightKind, DocumentHighlightParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
-    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, HoverParams,
-    HoverProviderCapability, InsertTextFormat, Location, NumberOrString, OneOf, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
+    DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
+    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
+    InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, ReferenceParams, Registration, RegistrationParams,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
     RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
@@ -227,8 +229,13 @@ struct GlobalState {
     /// change can nudge it to re-pull via `workspace/diagnostic/refresh` (the pull
     /// analog of the push path's `RelintAll`).
     supports_diagnostic_refresh: bool,
-    /// Monotonic id for server→client requests (e.g. `workspace/diagnostic/refresh`).
-    /// Namespaced from the client's request ids, so they never collide.
+    /// The client advertised `workspace.didChangeWatchedFiles.dynamicRegistration`, so
+    /// on `initialized` we register watchers for `**/*.{tex,bib}` and `badness.toml`
+    /// and reanalyze on on-disk edits to non-open project files.
+    supports_dynamic_watchers: bool,
+    /// Monotonic id for server→client requests (e.g. `workspace/diagnostic/refresh`,
+    /// `client/registerCapability`). Namespaced from the client's request ids, so they
+    /// never collide.
     next_request_id: i32,
 }
 
@@ -392,6 +399,12 @@ enum WorkerJob {
     /// `didClose`: evict the file from the db. Diagnostics are cleared directly by
     /// the main loop.
     Close { path: PathBuf },
+    /// A `workspace/didChangeWatchedFiles` event for a **non-open** `.tex`/`.bib`
+    /// project file: re-read it from disk (or evict it on delete) and re-lint every
+    /// open document, since a sibling's labels/cites may have changed. The main loop
+    /// has already confirmed the path is not an open editor buffer (whose overlay text
+    /// is authoritative), so this path deliberately re-reads disk.
+    WatchedChange { path: PathBuf, deleted: bool },
     /// A formatting request: format on the read pool and reply to `id`.
     Format {
         id: RequestId,
@@ -600,6 +613,21 @@ fn client_diagnostic_support(init_params: &serde_json::Value) -> (bool, bool) {
     (supports_pull, supports_refresh)
 }
 
+/// Whether the client supports dynamically registered file watchers, i.e.
+/// `capabilities.workspace.didChangeWatchedFiles.dynamicRegistration == true`.
+/// Pointer-walks the JSON like [`client_diagnostic_support`]. When `false` we skip
+/// registration and fall back to seed-on-open: on-disk edits to non-open includes go
+/// unnoticed until something re-seeds the directory.
+fn client_watched_files_support(init_params: &serde_json::Value) -> bool {
+    init_params
+        .get("capabilities")
+        .and_then(|c| c.get("workspace"))
+        .and_then(|w| w.get("didChangeWatchedFiles"))
+        .and_then(|d| d.get("dynamicRegistration"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
 /// the read pool, then shuttles messages between the client and the workers.
 fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(), DynError> {
@@ -609,14 +637,22 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
         .unwrap_or_default();
     let (supports_pull_diagnostics, supports_diagnostic_refresh) =
         client_diagnostic_support(&init_params);
+    let supports_dynamic_watchers = client_watched_files_support(&init_params);
     let mut state = GlobalState {
         documents: HashMap::new(),
         editor_settings,
         config_cache: HashMap::new(),
         supports_pull_diagnostics,
         supports_diagnostic_refresh,
+        supports_dynamic_watchers,
         next_request_id: 1,
     };
+
+    // Register on-disk watchers now: `lsp-server`'s `Connection::initialize` already
+    // consumed the client's `initialized` notification, so we never see it as a
+    // notification — the post-handshake point here is the LSP-legal place to fire
+    // dynamic registrations.
+    register_file_watchers(&connection, &mut state);
 
     let read_pool = TaskPool::new("badness-lsp-read", read_pool_size());
     let (job_tx, job_rx) = unbounded::<WorkerJob>();
@@ -782,7 +818,96 @@ fn on_notification(
                 state.config_cache.clear();
             }
         }
+        DidChangeWatchedFiles::METHOD => {
+            if let Ok(params) =
+                not.extract::<DidChangeWatchedFilesParams>(DidChangeWatchedFiles::METHOD)
+            {
+                on_watched_files_change(connection, state, job_tx, params);
+            }
+        }
         _ => {}
+    }
+}
+
+/// The id under which we register the watched-files capability, reused to deregister.
+const WATCHED_FILES_REGISTRATION_ID: &str = "badness-watched-files";
+
+/// Dynamically register file watchers for the project's on-disk leaves
+/// (`**/*.{tex,bib}`) and the config file (`badness.toml`), so out-of-editor edits to
+/// non-open includes reanalyze open documents. Called once right after the initialize
+/// handshake. A no-op when the client lacks
+/// `didChangeWatchedFiles.dynamicRegistration` (we then rely on seed-on-open). The
+/// client's response is fire-and-forget — the main loop ignores it.
+fn register_file_watchers(connection: &Connection, state: &mut GlobalState) {
+    if !state.supports_dynamic_watchers {
+        return;
+    }
+    let options = DidChangeWatchedFilesRegistrationOptions {
+        watchers: vec![
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/*.{tex,bib}".to_owned()),
+                kind: None,
+            },
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/badness.toml".to_owned()),
+                kind: None,
+            },
+        ],
+    };
+    let registration = Registration {
+        id: WATCHED_FILES_REGISTRATION_ID.to_owned(),
+        method: DidChangeWatchedFiles::METHOD.to_owned(),
+        register_options: serde_json::to_value(options).ok(),
+    };
+    let params = RegistrationParams {
+        registrations: vec![registration],
+    };
+    let Ok(params) = serde_json::to_value(params) else {
+        return;
+    };
+    let id = state.next_request_id;
+    state.next_request_id += 1;
+    let _ = connection.sender.send(Message::Request(Request {
+        id: RequestId::from(id),
+        method: RegisterCapability::METHOD.to_owned(),
+        params,
+    }));
+}
+
+/// Handle a `workspace/didChangeWatchedFiles` batch. For each event on a **non-open**
+/// file (an open buffer's overlay text is authoritative, so it is skipped — `didChange`
+/// keeps it current): a `badness.toml` change clears the config cache and re-lints open
+/// docs; a `.tex`/`.bib` change is forwarded to the worker to re-read/evict and re-lint.
+fn on_watched_files_change(
+    connection: &Connection,
+    state: &mut GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    params: DidChangeWatchedFilesParams,
+) {
+    let mut config_changed = false;
+    for event in params.changes {
+        let path = uri_to_path(&event.uri);
+        // An open buffer's truth is the editor overlay, not disk — leave it to
+        // `didChange`. Compare by normalized path, since a watcher URI may be encoded
+        // differently than the `didOpen` URI.
+        if state.documents.keys().any(|open| uri_to_path(open) == path) {
+            continue;
+        }
+        if path.file_name().is_some_and(|name| name == "badness.toml") {
+            config_changed = true;
+        } else {
+            let _ = job_tx.send(WorkerJob::WatchedChange {
+                path,
+                deleted: event.typ == FileChangeType::DELETED,
+            });
+        }
+    }
+    if config_changed {
+        // A discovered `badness.toml` changed on disk: drop cached resolutions so the
+        // next analyze re-reads it, then re-lint open docs (mirrors
+        // `didChangeConfiguration`, plus the relint a fresh config implies).
+        state.config_cache.clear();
+        relint_all_open(connection, state, job_tx);
     }
 }
 
@@ -1415,49 +1540,53 @@ fn forward_outbound(
         Outbound::Response(resp) => {
             let _ = connection.sender.send(Message::Response(resp));
         }
-        Outbound::RelintAll => {
-            // Membership grew, so cross-file resolution may have changed for every
-            // open document. A pull client learns this by re-pulling: nudge it with
-            // `workspace/diagnostic/refresh` (the pull analog of the re-queue below).
-            if state.supports_pull_diagnostics {
-                if state.supports_diagnostic_refresh {
-                    let id = state.next_request_id;
-                    state.next_request_id += 1;
-                    let _ = connection.sender.send(Message::Request(Request {
-                        id: RequestId::from(id),
-                        method: WorkspaceDiagnosticRefresh::METHOD.to_owned(),
-                        params: serde_json::Value::Null,
-                    }));
-                }
-                return;
-            }
-            // Push mode: re-queue a fresh analyze for every open document at its
-            // current version. The worker coalesces per-URI, so this is cheap; salsa
-            // memos make the actual recompute incremental. A re-lint of a doc in an
-            // already-seeded directory discovers no new members, so it can't
-            // re-trigger `RelintAll` (no loop). Snapshot the buffers first so the
-            // per-document `resolve_settings` (`&mut self`) doesn't alias the
-            // `documents` borrow.
-            let snapshot: Vec<(Uri, String, i32)> = state
-                .documents
-                .iter()
-                .map(|(uri, doc)| (uri.clone(), doc.text.clone(), doc.version))
-                .collect();
-            for (uri, text, version) in snapshot {
-                let path = uri_to_path(&uri);
-                let kind = file_kind_for(&path);
-                let resolved = state.resolve_settings(&uri);
-                let _ = job_tx.send(WorkerJob::Edit {
-                    uri,
-                    path,
-                    text,
-                    version,
-                    kind,
-                    rules: resolved.rule_selection(),
-                    exclude: resolved.exclude,
-                });
-            }
+        Outbound::RelintAll => relint_all_open(connection, state, job_tx),
+    }
+}
+
+/// Re-lint every open document, because cross-file resolution may have changed for all
+/// of them (a project member's content changed, membership grew, or the governing
+/// config changed). A pull client learns this by re-pulling: nudge it with
+/// `workspace/diagnostic/refresh`. A push client gets a fresh analyze re-queued per
+/// open document at its current version. Shared by [`Outbound::RelintAll`] and the
+/// `badness.toml` watched-change path.
+fn relint_all_open(connection: &Connection, state: &mut GlobalState, job_tx: &Sender<WorkerJob>) {
+    if state.supports_pull_diagnostics {
+        if state.supports_diagnostic_refresh {
+            let id = state.next_request_id;
+            state.next_request_id += 1;
+            let _ = connection.sender.send(Message::Request(Request {
+                id: RequestId::from(id),
+                method: WorkspaceDiagnosticRefresh::METHOD.to_owned(),
+                params: serde_json::Value::Null,
+            }));
         }
+        return;
+    }
+    // Push mode: re-queue a fresh analyze for every open document at its current
+    // version. The worker coalesces per-URI, so this is cheap; salsa memos make the
+    // actual recompute incremental. A re-lint of a doc in an already-seeded directory
+    // discovers no new members, so it can't re-trigger `RelintAll` (no loop). Snapshot
+    // the buffers first so the per-document `resolve_settings` (`&mut self`) doesn't
+    // alias the `documents` borrow.
+    let snapshot: Vec<(Uri, String, i32)> = state
+        .documents
+        .iter()
+        .map(|(uri, doc)| (uri.clone(), doc.text.clone(), doc.version))
+        .collect();
+    for (uri, text, version) in snapshot {
+        let path = uri_to_path(&uri);
+        let kind = file_kind_for(&path);
+        let resolved = state.resolve_settings(&uri);
+        let _ = job_tx.send(WorkerJob::Edit {
+            uri,
+            path,
+            text,
+            version,
+            kind,
+            rules: resolved.rule_selection(),
+            exclude: resolved.exclude,
+        });
     }
 }
 
@@ -1625,6 +1754,11 @@ impl Worker {
             }
             WorkerJob::Close { path } => {
                 self.db.remove_file(&path);
+            }
+            WorkerJob::WatchedChange { path, deleted } => {
+                if self.apply_watched_change(&path, deleted) {
+                    let _ = self.out_tx.send(Outbound::RelintAll);
+                }
             }
             WorkerJob::Format {
                 id,
@@ -1894,6 +2028,44 @@ impl Worker {
             }
         }
         grew
+    }
+
+    /// Apply an on-disk change to a non-open `.tex`/`.bib` file (from a watched-files
+    /// event): re-read and re-upsert it, or evict it on delete. Returns `true` when the
+    /// db actually changed, so the caller can re-lint open documents only when it
+    /// matters.
+    ///
+    /// Scoped to known projects: a change is acted on only when the file is already a
+    /// tracked member, or it is a freshly-created sibling in a directory we have already
+    /// seeded. The broad `**/*.{tex,bib}` glob also matches files in directories with no
+    /// open document, and re-linting every open buffer for those would be pure waste.
+    ///
+    /// Unlike [`seed_dir`](Self::seed_dir), this deliberately re-reads a tracked file:
+    /// the seed path keeps a tracked file's text precisely to avoid clobbering a live
+    /// buffer, but the main loop has already excluded open buffers before dispatching
+    /// here, so the file's truth is the disk.
+    fn apply_watched_change(&mut self, path: &Path, deleted: bool) -> bool {
+        let tracked = self.db.lookup_file(path);
+        let in_seeded_dir = path
+            .parent()
+            .is_some_and(|dir| self.seeded_dirs.contains(dir));
+        if tracked.is_none() && !in_seeded_dir {
+            return false; // not part of any assembled project
+        }
+        if deleted {
+            return self.db.remove_file(path).is_some();
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return false; // unreadable (e.g. a delete racing the event) — leave as-is
+        };
+        // Skip the relint when the content is identical to what we already track
+        // (a `touch` or a metadata-only event), so we don't re-lint every open doc for
+        // nothing. `upsert_file` itself also no-ops the salsa write on equal text.
+        if tracked.is_some_and(|file| self.db.file_text(file) == text) {
+            return false;
+        }
+        self.db.upsert_file(path, text);
+        true
     }
 
     /// Snapshot the current project membership as sorted [`ProjectMember`]s, so a
@@ -4081,6 +4253,7 @@ mod tests {
             config_cache: HashMap::new(),
             supports_pull_diagnostics: false,
             supports_diagnostic_refresh: false,
+            supports_dynamic_watchers: false,
             next_request_id: 1,
         }
     }

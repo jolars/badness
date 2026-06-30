@@ -75,7 +75,7 @@ use lsp_types::request::{
     CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
     PrepareRenameRequest, References, RegisterCapability, Rename, Request as _,
-    ResolveCompletionItem, WorkspaceDiagnosticRefresh,
+    ResolveCompletionItem, WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
@@ -94,7 +94,8 @@ use lsp_types::{
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
     RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit,
+    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -169,6 +170,10 @@ fn server_capabilities() -> ServerCapabilities {
         })),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        // Aggregate the per-file outline (sections, labels, floats, theorems,
+        // macros, environments) across every tracked project file. No lazy
+        // `resolve`, so each result carries its full `Location`.
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         // Surface linter autofixes as quick-fixes. `Simple(true)` returns
         // fully-built actions (no `codeAction/resolve` step).
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
@@ -421,6 +426,11 @@ enum WorkerJob {
         text: String,
         kind: FileKind,
     },
+    /// A `workspace/symbol` request: aggregate every tracked file's outline on the
+    /// read pool and reply to `id` with the matches for `query`. Cross-file (it
+    /// scans the whole project), so the worker snapshots project membership when it
+    /// dispatches, like [`References`](Self::References).
+    WorkspaceSymbols { id: RequestId, query: String },
     /// A folding-range request: compute foldable regions on the read pool and reply
     /// to `id`. Single-file like [`Symbols`](Self::Symbols), with no project snapshot.
     FoldingRange {
@@ -676,6 +686,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             }
                             DocumentSymbolRequest::METHOD => {
                                 on_document_symbol(&connection, &state, &job_tx, req)
+                            }
+                            WorkspaceSymbolRequest::METHOD => {
+                                on_workspace_symbol(&connection, &job_tx, req)
                             }
                             Completion::METHOD => on_completion(&connection, &state, &job_tx, req),
                             ResolveCompletionItem::METHOD => {
@@ -1023,6 +1036,28 @@ fn on_document_symbol(
         path,
         text: doc.text.clone(),
         kind,
+    });
+}
+
+/// `workspace/symbol`: forward the query to the worker, which scans every tracked
+/// project file. Unlike [`on_document_symbol`], it is not tied to an open buffer.
+fn on_workspace_symbol(connection: &Connection, job_tx: &Sender<WorkerJob>, req: Request) {
+    let id = req.id.clone();
+    let params = match req.extract::<WorkspaceSymbolParams>(WorkspaceSymbolRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid workspace/symbol params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+    let _ = job_tx.send(WorkerJob::WorkspaceSymbols {
+        id,
+        query: params.query,
     });
 }
 
@@ -1786,6 +1821,16 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
                     .spawn(move || run_symbols(&snapshot, id, &path, &text, kind, &out_tx));
+            }
+            WorkerJob::WorkspaceSymbols { id, query } => {
+                // Workspace symbols scan every tracked file, so — like
+                // find-references — capture the membership snapshot on the write
+                // side before the read job runs.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || run_workspace_symbols(&snapshot, id, &query, members, &out_tx));
             }
             WorkerJob::FoldingRange {
                 id,
@@ -2664,6 +2709,80 @@ fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<Docu
         .collect()
 }
 
+/// Aggregate every tracked LaTeX file's outline into a flat `workspace/symbol`
+/// reply, keeping only entries whose name contains `query` (case-insensitive; an
+/// empty query matches everything). `.bib` members are skipped — their cite keys
+/// are reachable via go-to-def/references. A cancelled per-file read omits that
+/// file rather than failing the whole response.
+fn run_workspace_symbols(
+    snapshot: &Analysis,
+    id: RequestId,
+    query: &str,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let needle = query.to_ascii_lowercase();
+    let mut symbols = Vec::new();
+    for member in members {
+        if member.kind == FileKind::Bib {
+            continue;
+        }
+        let collected = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+            let text = snapshot.file_text(member.file);
+            let idx = LineIndex::new(text);
+            let items = outline(&snapshot.parsed_tree(member.file));
+            // Group the picker by file via `container_name`.
+            let container = member.path.file_stem().and_then(|s| s.to_str());
+            let mut file_symbols = Vec::new();
+            collect_workspace_symbols(
+                &items,
+                &member.path,
+                &idx,
+                text,
+                &needle,
+                container,
+                &mut file_symbols,
+            );
+            file_symbols
+        }));
+        if let Ok(mut file_symbols) = collected {
+            symbols.append(&mut file_symbols);
+        }
+    }
+    let result = serde_json::to_value(WorkspaceSymbolResponse::Nested(symbols))
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Recursively flatten an [`OutlineItem`] tree into [`WorkspaceSymbol`]s, keeping
+/// entries whose name contains `needle`. Children are always visited so a matching
+/// label nested under a non-matching section still surfaces.
+fn collect_workspace_symbols(
+    items: &[OutlineItem],
+    path: &Path,
+    idx: &LineIndex,
+    text: &str,
+    needle: &str,
+    container: Option<&str>,
+    out: &mut Vec<WorkspaceSymbol>,
+) {
+    for item in items {
+        let matches = needle.is_empty() || item.name.to_ascii_lowercase().contains(needle);
+        if matches && let Some(location) = location_for(path, idx, text, item.selection_range) {
+            out.push(WorkspaceSymbol {
+                name: item.name.clone(),
+                kind: outline_symbol_kind(item.kind),
+                tags: None,
+                container_name: container.map(str::to_owned),
+                location: OneOf::Left(location),
+                data: None,
+            });
+        }
+        // Always recurse: a matching label can nest under a non-matching section.
+        collect_workspace_symbols(&item.children, path, idx, text, needle, container, out);
+    }
+}
+
 /// Compute folding ranges for a [`WorkerJob::FoldingRange`] on the read pool and
 /// reply with a `Vec<FoldingRange>`. Same snapshot fast-path / reparse fallback as
 /// [`run_symbols`].
@@ -2715,16 +2834,23 @@ fn compute_folding(
 
 /// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte
 /// ranges through the (UTF-16-aware) [`LineIndex`].
-#[allow(deprecated)] // `DocumentSymbol::deprecated` is a required struct field.
-fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> DocumentSymbol {
-    let kind = match item.kind {
+/// Map an [`OutlineSymbol`] to its LSP [`SymbolKind`]. Shared by the per-file
+/// `documentSymbol` ([`to_document_symbol`]) and project-wide `workspace/symbol`
+/// ([`run_workspace_symbols`]) outputs so the two never drift.
+fn outline_symbol_kind(kind: OutlineSymbol) -> SymbolKind {
+    match kind {
         OutlineSymbol::Section => SymbolKind::MODULE,
         OutlineSymbol::Float => SymbolKind::OBJECT,
         OutlineSymbol::Theorem => SymbolKind::CLASS,
         OutlineSymbol::Label => SymbolKind::CONSTANT,
         OutlineSymbol::Macro => SymbolKind::FUNCTION,
         OutlineSymbol::Environment => SymbolKind::INTERFACE,
-    };
+    }
+}
+
+#[allow(deprecated)] // `DocumentSymbol::deprecated` is a required struct field.
+fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> DocumentSymbol {
+    let kind = outline_symbol_kind(item.kind);
     let range = item.range;
     let selection = item.selection_range;
     let children: Vec<DocumentSymbol> = item

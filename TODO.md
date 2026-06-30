@@ -123,8 +123,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 - [ ] Selection ranges (`textDocument/selectionRange`)—expand-selection from
   the CST's node hierarchy (group → argument → command → environment).
-- [ ] Workspace symbols (`workspace/symbol`)—labels and sectioning titles
-  across the project include graph.
+- [x] Workspace symbols (`workspace/symbol`)—the per-file outline (sections,
+  labels, floats, theorems, macros, environments) aggregated across every tracked
+  project file, filtered by the query string. LaTeX members only.
 
 ### Labels & references
 

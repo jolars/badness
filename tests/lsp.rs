@@ -32,7 +32,8 @@ use lsp_types::{
     RegistrationParams, RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
-    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit,
+    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -126,6 +127,13 @@ fn start_server(
             Some(OneOf::Left(true))
         ),
         "server must advertise documentSymbolProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.workspace_symbol_provider,
+            Some(OneOf::Left(true))
+        ),
+        "server must advertise workspaceSymbolProvider"
     );
     assert!(
         init.capabilities.completion_provider.is_some(),
@@ -1289,6 +1297,104 @@ fn lsp_definition_cross_file_ref_and_cite() {
         path_to_file_uri(&dir.path().join("refs.bib"))
     );
     assert_eq!(cite_locs[0].range.start.line, 0);
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a `workspace/symbol` request and return the matched symbols as
+/// `(name, kind, uri)`, draining any stray diagnostics (a freshly-seeded project
+/// re-lints) before the response. The server replies with the modern
+/// [`WorkspaceSymbol`] shape, but its `location` is a bare `Location` on the wire,
+/// so the untagged [`WorkspaceSymbolResponse`] can deserialize as either variant;
+/// normalize both to the fields the assertions care about.
+fn workspace_symbols(client: &Connection, id: i32, query: &str) -> Vec<(String, SymbolKind, Uri)> {
+    send_request(
+        client,
+        id,
+        "workspace/symbol",
+        serde_json::to_value(WorkspaceSymbolParams {
+            query: query.to_owned(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(id));
+    match serde_json::from_value::<WorkspaceSymbolResponse>(resp.result.unwrap())
+        .expect("a workspace/symbol response")
+    {
+        WorkspaceSymbolResponse::Nested(symbols) => symbols
+            .into_iter()
+            .map(|s| {
+                let uri = match s.location {
+                    OneOf::Left(loc) => loc.uri,
+                    OneOf::Right(loc) => loc.uri,
+                };
+                (s.name, s.kind, uri)
+            })
+            .collect(),
+        WorkspaceSymbolResponse::Flat(symbols) => symbols
+            .into_iter()
+            .map(|s| (s.name, s.kind, s.location.uri))
+            .collect(),
+    }
+}
+
+#[test]
+fn lsp_workspace_symbol_cross_file() {
+    // A real on-disk project: the root `\input`s a chapter that defines a section
+    // and a label. `workspace/symbol` aggregates the chapter's outline even though
+    // only the root buffer is open (the sibling is seeded off disk).
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("part.tex"),
+        "\\section{Chapter One}\n\\label{sec:intro}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let part_uri = path_to_file_uri(&dir.path().join("part.tex"));
+
+    // A query matching the section title finds it in the seeded sibling.
+    let secs = workspace_symbols(&client, 2, "Chapter");
+    assert_eq!(secs.len(), 1, "one section match, got {secs:?}");
+    assert_eq!(secs[0].0, "Chapter One");
+    assert_eq!(secs[0].1, SymbolKind::MODULE);
+    assert_eq!(
+        secs[0].2, part_uri,
+        "the section lives in the included file"
+    );
+
+    // A query matching the label finds it (also in the sibling).
+    let labels = workspace_symbols(&client, 3, "sec:intro");
+    assert_eq!(labels.len(), 1, "one label match, got {labels:?}");
+    assert_eq!(labels[0].0, "sec:intro");
+    assert_eq!(labels[0].1, SymbolKind::CONSTANT);
+
+    // Matching is case-insensitive.
+    let lower = workspace_symbols(&client, 4, "chapter one");
+    assert_eq!(lower.len(), 1, "case-insensitive match, got {lower:?}");
+
+    // A query matching nothing yields an empty result.
+    let none = workspace_symbols(&client, 5, "zzz-no-such-symbol");
+    assert!(none.is_empty(), "no matches → empty, got {none:?}");
 
     shutdown(&client, server_thread);
 }

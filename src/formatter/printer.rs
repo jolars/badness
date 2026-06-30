@@ -26,11 +26,16 @@ enum Cmd<'a> {
         indent: usize,
         mode: Mode,
         node: &'a Ir,
+        /// The active margin prefix (see [`Ir::MarginPrefix`]), re-emitted at
+        /// column 0 on every line break this command's subtree produces.
+        /// Inherited by child commands; `None` outside any `MarginPrefix`.
+        prefix: Option<&'a str>,
     },
     Fill {
         indent: usize,
         mode: Mode,
         parts: &'a [Ir],
+        prefix: Option<&'a str>,
     },
 }
 
@@ -90,21 +95,40 @@ impl Writer {
         self.col += s.chars().count();
     }
 
-    /// Move to a fresh line indented to `indent`.
-    fn newline(&mut self, indent: usize) {
+    /// Move to a fresh line. With no `prefix`, indentation is deferred to `indent`
+    /// columns (the default path). With a `prefix` (a [`Ir::MarginPrefix`] margin),
+    /// the prefix is written eagerly flush at column 0 right after the newline and
+    /// no indent is queued, so the prefix re-appears on every wrapped line.
+    fn newline(&mut self, indent: usize, prefix: Option<&str>) {
         self.out.push('\n');
         self.col = 0;
-        self.pending_indent = indent;
-        self.needs_indent = true;
+        self.start_line(indent, prefix);
     }
 
-    /// Emit a blank line, then position on a fresh line indented to `indent`.
-    fn empty_line(&mut self, indent: usize) {
+    /// Emit a blank line, then position on a fresh line. The empty middle line
+    /// never carries the `prefix` (no trailing whitespace); the fresh line does.
+    fn empty_line(&mut self, indent: usize, prefix: Option<&str>) {
         self.out.push('\n');
         self.out.push('\n');
         self.col = 0;
-        self.pending_indent = indent;
-        self.needs_indent = true;
+        self.start_line(indent, prefix);
+    }
+
+    /// Position at the start of a fresh line: write an eager margin `prefix` at
+    /// column 0 if active, else queue `indent` spaces (deferred until content).
+    fn start_line(&mut self, indent: usize, prefix: Option<&str>) {
+        match prefix {
+            Some(p) => {
+                self.out.push_str(p);
+                self.col = p.chars().count();
+                self.pending_indent = 0;
+                self.needs_indent = false;
+            }
+            None => {
+                self.pending_indent = indent;
+                self.needs_indent = true;
+            }
+        }
     }
 
     /// Splice a possibly multi-line string verbatim. The string is assumed to
@@ -187,18 +211,25 @@ impl Printer {
             indent: base_indent,
             mode,
             node: ir,
+            prefix: None,
         }];
         while let Some(cmd) = stack.pop() {
-            let (indent, mode, node) = match cmd {
-                Cmd::Node { indent, mode, node } => (indent, mode, node),
+            let (indent, mode, node, prefix) = match cmd {
+                Cmd::Node {
+                    indent,
+                    mode,
+                    node,
+                    prefix,
+                } => (indent, mode, node, prefix),
                 // A fill continuation: lay out the next word/separator pair (see
                 // `step_fill`), pushing the remainder back for the next iteration.
                 Cmd::Fill {
                     indent,
                     mode,
                     parts,
+                    prefix,
                 } => {
-                    self.step_fill(&w, indent, mode, parts, &mut stack);
+                    self.step_fill(&w, indent, mode, parts, prefix, &mut stack);
                     continue;
                 }
             };
@@ -213,6 +244,7 @@ impl Printer {
                             indent,
                             mode,
                             node: item,
+                            prefix,
                         });
                     }
                 }
@@ -220,12 +252,14 @@ impl Printer {
                     indent,
                     mode,
                     parts: &parts[..],
+                    prefix,
                 }),
                 Ir::Indent(inner) => {
                     stack.push(Cmd::Node {
                         indent: indent + self.indent_unit,
                         mode,
                         node: inner,
+                        prefix,
                     });
                 }
                 Ir::Align(width, inner) => {
@@ -233,25 +267,43 @@ impl Printer {
                         indent: indent + width,
                         mode,
                         node: inner,
+                        prefix,
+                    });
+                }
+                // Activate the margin prefix for `inner`: emit it now for the
+                // first line (the leading break that put us here came from the
+                // parent, outside this scope) via the column-0 pin, then print
+                // `inner` with the prefix active so every later break re-emits it.
+                Ir::MarginPrefix {
+                    prefix: margin,
+                    inner,
+                } => {
+                    w.write_column_zero(margin);
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode,
+                        node: inner,
+                        prefix: Some(margin),
                     });
                 }
                 Ir::Line => match mode {
                     Mode::Flat => w.write_text(" "),
-                    Mode::Break => w.newline(indent),
+                    Mode::Break => w.newline(indent, prefix),
                 },
                 Ir::SoftLine => {
                     if mode == Mode::Break {
-                        w.newline(indent);
+                        w.newline(indent, prefix);
                     }
                 }
-                Ir::HardLine => w.newline(indent),
-                Ir::EmptyLine => w.empty_line(indent),
+                Ir::HardLine => w.newline(indent, prefix),
+                Ir::EmptyLine => w.empty_line(indent, prefix),
                 Ir::IfBreak { flat, broken } => {
                     let chosen = if mode == Mode::Break { broken } else { flat };
                     stack.push(Cmd::Node {
                         indent,
                         mode,
                         node: chosen,
+                        prefix,
                     });
                 }
                 Ir::Group {
@@ -280,6 +332,7 @@ impl Printer {
                         indent,
                         mode: m,
                         node: inner,
+                        prefix,
                     });
                 }
                 Ir::ConditionalGroup(cands) => {
@@ -288,6 +341,7 @@ impl Printer {
                         indent,
                         mode: m,
                         node: chosen,
+                        prefix,
                     });
                 }
                 Ir::ConditionalGroupAllLines(cands) => {
@@ -296,6 +350,7 @@ impl Printer {
                         indent,
                         mode: m,
                         node: chosen,
+                        prefix,
                     });
                 }
             }
@@ -317,6 +372,7 @@ impl Printer {
         indent: usize,
         mode: Mode,
         parts: &'a [Ir],
+        prefix: Option<&'a str>,
         stack: &mut Vec<Cmd<'a>>,
     ) {
         if parts.is_empty() {
@@ -328,6 +384,7 @@ impl Printer {
                     indent,
                     mode: Mode::Flat,
                     node: part,
+                    prefix,
                 });
             }
             return;
@@ -347,6 +404,7 @@ impl Printer {
                     Mode::Break
                 },
                 node: content,
+                prefix,
             });
             return;
         }
@@ -364,11 +422,13 @@ impl Printer {
             indent,
             mode: Mode::Break,
             parts: &parts[2..],
+            prefix,
         });
         stack.push(Cmd::Node {
             indent,
             mode: if pair_fits { Mode::Flat } else { Mode::Break },
             node: sep,
+            prefix,
         });
         stack.push(Cmd::Node {
             indent,
@@ -378,6 +438,7 @@ impl Printer {
                 Mode::Break
             },
             node: content,
+            prefix,
         });
     }
 
@@ -404,6 +465,7 @@ impl Printer {
                 Ir::Concat(items) => stack.extend(items.iter()),
                 Ir::Fill(parts) => stack.extend(parts.iter()),
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
+                Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
                 Ir::Group { inner, expand, .. } => {
                     if *expand {
@@ -545,6 +607,7 @@ impl Printer {
                     }
                 }
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
+                Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::Line => {
                     if remaining == 0 {
                         return false;
@@ -617,6 +680,7 @@ impl Printer {
                     }
                 }
                 Ir::Indent(i) | Ir::Align(_, i) => stack.push(i),
+                Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::Line => {
                     col += 1;
                     if col > self.line_width {
@@ -708,6 +772,7 @@ impl Printer {
                     }
                 }
                 Ir::Indent(i) | Ir::Align(_, i) => work.push((mode, i)),
+                Ir::MarginPrefix { inner, .. } => work.push((mode, inner)),
                 Ir::IfBreak { flat, broken } => {
                     work.push((mode, if mode == Mode::Break { broken } else { flat }));
                 }
@@ -774,6 +839,7 @@ impl Printer {
                     }
                 }
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push((mode, inner)),
+                Ir::MarginPrefix { inner, .. } => stack.push((mode, inner)),
                 Ir::Line => match mode {
                     Mode::Flat => {
                         col += 1;
@@ -891,6 +957,40 @@ mod tests {
         ]));
         // Expanded: the comment lands on its own line and the block is indented.
         assert_eq!(printer.print(&ir), "f(\n  # c\n  a,\n  {\n    body\n  }\n)");
+    }
+
+    #[test]
+    fn margin_prefix_re_emits_on_every_wrapped_line() {
+        // An opaque `> ` prefix (the engine attaches no LaTeX meaning): a fill of
+        // four words at width 8 wraps to two-per-line, each line re-opening with
+        // the prefix flush at column 0, content measured from after it.
+        let style = FormatStyle {
+            line_width: 8,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        let fill = Ir::fill([
+            Ir::text("aa"),
+            Ir::text("bb"),
+            Ir::text("cc"),
+            Ir::text("dd"),
+        ]);
+        let ir = Ir::margin_prefix("> ", fill);
+        assert_eq!(printer.print(&ir), "> aa bb\n> cc dd");
+    }
+
+    #[test]
+    fn margin_prefix_emits_first_line_after_a_leading_break() {
+        // The leading break is emitted by the parent (outside the MarginPrefix
+        // scope); entering the scope still flushes the prefix for the first line.
+        let printer = Printer::new(FormatStyle::default());
+        let ir = Ir::concat([
+            Ir::text("head"),
+            Ir::hard_line(),
+            Ir::margin_prefix("% ", Ir::text("body")),
+        ]);
+        assert_eq!(printer.print(&ir), "head\n% body");
     }
 
     /// A nested group whose flat form overflows the line but whose own break

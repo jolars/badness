@@ -107,6 +107,15 @@ pub(crate) enum Ir {
     /// (every `Line` flat or every `Line` broken), and a conditional group picks
     /// among whole-layout candidates — neither wraps word-by-word.
     Fill(Rc<[Ir]>),
+    /// Re-emit `prefix` at column 0 on every line `inner` produces. While the
+    /// printer lays out `inner`, each line break (and the first line) writes
+    /// `prefix` flush at the left margin immediately after the newline, and
+    /// subsequent width decisions on that line measure from after the prefix.
+    /// `prefix` is opaque text the engine attaches no meaning to (the `.dtx`
+    /// lowering uses `"% "` to re-emit a documentation margin on each *wrapped*
+    /// line); it must never contain a newline. A blank line never carries the
+    /// prefix on its empty line. Build via [`Ir::margin_prefix`].
+    MarginPrefix { prefix: Rc<str>, inner: Rc<Ir> },
     /// Nothing.
     Nil,
 }
@@ -274,6 +283,18 @@ impl Ir {
         Ir::ColumnZero(s.into())
     }
 
+    /// Re-emit `prefix` at column 0 on every line `inner` produces; see
+    /// [`Ir::MarginPrefix`]. A [`Ir::Nil`] body degenerates to `Nil`.
+    pub(crate) fn margin_prefix(prefix: impl Into<Rc<str>>, inner: Ir) -> Ir {
+        if matches!(inner, Ir::Nil) {
+            return Ir::Nil;
+        }
+        Ir::MarginPrefix {
+            prefix: prefix.into(),
+            inner: Rc::new(inner),
+        }
+    }
+
     pub(crate) fn line() -> Ir {
         Ir::Line
     }
@@ -292,6 +313,7 @@ impl Ir {
             Ir::Concat(items) => items.iter().any(Ir::contains_group),
             Ir::Fill(parts) => parts.iter().any(Ir::contains_group),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
+            Ir::MarginPrefix { inner, .. } => inner.contains_group(),
             Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
             Ir::Text(_)
             | Ir::Verbatim { .. }
@@ -331,6 +353,7 @@ impl Ir {
             // forced break (none do under reflow lowering, but stay correct).
             Ir::Fill(parts) => parts.iter().any(Ir::contains_forced_break),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
+            Ir::MarginPrefix { inner, .. } => inner.contains_forced_break(),
             Ir::Group { inner, expand, .. } => *expand || inner.contains_forced_break(),
             // The flat-most candidate decides: if even it forces a break, the
             // conditional group always breaks; otherwise some layout is flat-able.

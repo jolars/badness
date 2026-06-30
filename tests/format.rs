@@ -419,6 +419,75 @@ fn dtx_fixtures_match_expected() {
     }
 }
 
+/// `.dtx` reflow fixtures: `(name, line_width)`. Formatted under the docstrip
+/// [`LexConfig`] like [`DTX_FIXTURES`] but with [`WrapMode::Reflow`] and a narrow
+/// width, so the documentation *prose* layer rewraps while a canonical `% ` margin
+/// is re-emitted on every wrapped line. Structured content (margin-framed lists,
+/// `macrocode` frames) and the `%`-only paragraph separator must round-trip
+/// byte-for-byte; only running prose reflows.
+const DTX_REFLOW_FIXTURES: &[(&str, usize)] = &[
+    // A single long doc line wrapped onto several `% ` lines.
+    ("dtx_reflow_prose_wrap", 50),
+    // Short lines join; a `%no-space` margin normalizes to `% `.
+    ("dtx_reflow_prose_joins", 80),
+    // The `%`-only separator round-trips; the two paragraphs rewrap independently
+    // (the second one's leading margin floats out of its paragraph).
+    ("dtx_reflow_margin_blank_line", 80),
+    // A margin-framed `itemize` stays byte-identical (no item-line reflow).
+    ("dtx_reflow_itemize", 50),
+];
+
+#[test]
+fn dtx_reflow_fixtures_match_expected() {
+    for &(name, line_width) in DTX_REFLOW_FIXTURES {
+        let style = FormatStyle {
+            wrap: WrapMode::Reflow,
+            line_width,
+            ..FormatStyle::default()
+        };
+        let input = fs::read_to_string(fixture_path(name, "input.dtx"))
+            .unwrap_or_else(|e| panic!("read {name}/input.dtx: {e}"));
+        let expected = fs::read_to_string(fixture_path(name, "expected.dtx"))
+            .unwrap_or_else(|e| panic!("read {name}/expected.dtx: {e}"));
+
+        // Under the docstrip config the input must parse cleanly.
+        assert!(
+            parse_with_flavor(&input, dtx_config()).errors.is_empty(),
+            "fixture {name} input must parse cleanly under the dtx config"
+        );
+
+        let formatted = format_with_style_flavored(&input, style, dtx_config())
+            .unwrap_or_else(|e| panic!("format {name}: {e}"));
+        assert_eq!(formatted, expected, "fixture {name} output mismatch");
+
+        // No reflowed line exceeds the width (a fill never overflows except an
+        // unbreakable atom wider than the line, which these fixtures avoid).
+        for line in formatted.lines() {
+            assert!(
+                line.chars().count() <= line_width,
+                "fixture {name} line exceeds width {line_width}: {line:?}"
+            );
+        }
+
+        // Idempotent (same config + style), clean, and lossless.
+        assert_eq!(
+            format_with_style_flavored(&formatted, style, dtx_config()).expect("reformat"),
+            formatted,
+            "fixture {name} is not idempotent"
+        );
+        let reparsed = parse_with_flavor(&formatted, dtx_config());
+        assert!(
+            reparsed.errors.is_empty(),
+            "fixture {name} formatted output must parse cleanly"
+        );
+        assert_eq!(
+            reparsed.syntax().to_string(),
+            formatted,
+            "fixture {name} formatted output must round-trip losslessly"
+        );
+    }
+}
+
 /// `.ins` (docstrip installation script) fixtures under
 /// `tests/fixtures/formatter/<name>/`, each an `input.ins` + `expected.ins` pair.
 /// A `.ins` is a driver TeX runs directly, so — unlike a `.dtx` — it is parsed as

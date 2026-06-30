@@ -337,11 +337,18 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Formatting
 
-- [ ] **`.dtx` prose reflow (deferred).** Under `--wrap reflow`, reflow the
-  documentation prose layer by re-emitting a `% ` margin on each *wrapped* line.
-  Needs new printer machinery (per-line margin prefixes synthesized on a break) the
-  current `newline`/`empty_line` path lacks; the column-0 pin already degrades a
-  reflow run to preserve-like margins safely, so this is purely additive.
+- [x] **`.dtx` prose reflow.** Under `--wrap reflow`, the documentation prose layer
+  rewraps with a canonical `% ` margin re-emitted on every *wrapped* line. New
+  printer primitive `Ir::MarginPrefix { prefix, inner }` (an opaque column-0 prefix
+  re-emitted on each break the engine decides, kept language-agnostic like
+  `ColumnZero`); lowering recognizes a doc-prose paragraph (`is_dtx_doc_paragraph`,
+  margin inside *or* floated out after a `%` blank line), strips per-line margins,
+  and reflows in `ReflowKind::DtxProse`. Scope is *running prose only*: a paragraph
+  containing or sitting inside an environment (`% \begin{itemize}` lists, `macrocode`
+  frames, `macro`/`environment` doc blocks) stays on the byte-faithful preserve
+  path, and the `%`-only paragraph separator round-trips. Fixtures
+  `dtx_reflow_*` + `dtx_reflow_fixtures_match_expected`. Future: reflow item/list
+  text and prose inside margin-framed doc environments.
 
 ### Semantic and integration
 

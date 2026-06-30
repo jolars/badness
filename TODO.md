@@ -324,8 +324,16 @@ scope (the same boundary the include graph and CWL ingest keep).
     existing `doc_associations` query into `outline()`, mapping macros to
     `SymbolKind::FUNCTION` and environments to `INTERFACE`; they nest under the
     section hierarchy like floats and labels.
-  - [ ] **M4 driver and `\iffalse` + `.ins`.** `\iffalse…\fi` stays
-    un-evaluated (already lossless as ordinary commands); `.ins` deferred.
+  - [x] **M4 driver and `\iffalse` + `.ins`.** Closed as a verify-and-confirm
+    milestone: the driver block needs **no** driver-specific machinery. The
+    `%<*driver>…%</driver>` delimiters are already flat `GUARD` trivia (M2), the
+    un-margined driver body parses as ordinary code, and `\iffalse…\fi` stays
+    un-evaluated as ordinary commands on margin lines (no TeX execution, a
+    non-goal)—all lossless and idempotent. A higher-level semantic "driver
+    region" is intentionally **out of scope** (guards stay flat, orthogonal to
+    LaTeX nesting). `.ins` shipped separately (the `[x]` item above). Coverage:
+    `tests/dtx.rs::full_self_extracting_dtx_needs_no_driver_machinery` (combined
+    shape) and the `dtx_driver` formatter fixture (idempotent under `Preserve`).
 
 ### Formatting
 

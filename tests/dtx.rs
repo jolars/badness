@@ -307,3 +307,41 @@ fn meta_comment_header_parses_as_documentation() {
     assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\fi".to_string())));
     assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 2);
 }
+
+#[test]
+fn full_self_extracting_dtx_needs_no_driver_machinery() {
+    // The whole self-extracting shape in one file: a `% \iffalse … % \fi` meta
+    // comment wrapping a `%<*driver> … %</driver>` block of real driver code, then
+    // a documented `%<*package>` body with a `macrocode` block. None of it gets
+    // special handling — `\iffalse`/`\fi` are ordinary commands on margin lines,
+    // the guards are flat trivia, and every layer stays lossless (asserted in
+    // `parse_dtx`). This pins "the driver block needs no driver-specific model."
+    let root = parse_dtx(
+        "% \\iffalse meta-comment\n\
+         %<*driver>\n\
+         \\documentclass{ltxdoc}\n\
+         \\DocInput{foo.dtx}\n\
+         %</driver>\n\
+         % \\fi\n\
+         % \\section{The \\foo macro}\n\
+         %<*package>\n\
+         %    \\begin{macrocode}\n\
+         \\newcommand\\foo[1]{\\bar@baz{#1}}\n\
+         %    \\end{macrocode}\n\
+         %</package>\n",
+    );
+    let toks = tokens(&root);
+    // The `\iffalse`/`\fi` guard ride margin lines as ordinary commands.
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\iffalse".to_string())));
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\fi".to_string())));
+    // The driver block delimiters and the package guards are flat `GUARD` trivia.
+    for guard in ["%<*driver>", "%</driver>", "%<*package>", "%</package>"] {
+        assert!(toks.contains(&(SyntaxKind::GUARD, guard.to_string())));
+    }
+    // The un-margined driver body parses as ordinary code.
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\documentclass".to_string())));
+    // The `macrocode` body lexes as code under the package regime (`@` a letter).
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\bar@baz".to_string())));
+    assert_eq!(count_token(&root, SyntaxKind::VERBATIM_BODY), 0);
+}

@@ -366,6 +366,7 @@ const DTX_FIXTURES: &[&str] = &[
     "dtx_macrocode_nested_groups",
     "dtx_prose_itemize",
     "dtx_guards",
+    "dtx_driver",
     "dtx_margin_blank_line",
 ];
 

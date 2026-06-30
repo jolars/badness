@@ -226,21 +226,6 @@ scope (the same boundary the include graph and CWL ingest keep).
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] `wasm32` build for a web playground.
 
-## Tooling & infrastructure
-
-- [x] `badness.toml` configuration (`src/config.rs`). Top-level
-  `exclude`/`extend-exclude` (Ruff model: `exclude` replaces the built-in
-  `DEFAULT_EXCLUDE`, `extend-exclude` adds on top), `[format]`
-  (`line-width`/`indent-width`/`wrap`), and `[lint]` (`select`/`ignore`). Ancestor
-  walk stopping at `.git`; `--config`/`--no-config` and additive
-  `--exclude`/`--select`/`--ignore` CLI flags; `badness init` scaffolder.
-  **CLI-only for now**—the LSP still reads `EditorSettings`, not `badness.toml`
-  (see *Configuration & sync* below). No `[index]` section and no `line-ending`
-  key (the formatter has no `LineEnding` type yet).
-- [ ] `build.rs` man/completions/markdown
-  (clap_mangen/\_complete/clap-markdown). **\[copy\]**—the `format`
-  subcommand lives in `main.rs`; `build.rs` still deferred.
-
 ## BibTeX/BibLaTeX
 
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used

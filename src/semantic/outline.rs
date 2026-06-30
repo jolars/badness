@@ -1,6 +1,7 @@
 //! Build a document-symbol outline from the CST: the sectioning hierarchy
-//! (`\part` … `\subparagraph`), with float/theorem environments and `\label`s as
-//! leaves. LSP-agnostic by design (byte ranges, no `lsp_types`) so it is
+//! (`\part` … `\subparagraph`), with float/theorem environments, `\label`s, and a
+//! `.dtx`'s documented macros/environments (via [`doc_associations`]) as leaves.
+//! LSP-agnostic by design (byte ranges, no `lsp_types`) so it is
 //! unit-testable without the language server; the `lsp` module converts the
 //! [`OutlineItem`] tree into `lsp_types::DocumentSymbol`.
 //!
@@ -27,6 +28,7 @@ use crate::ast::{
     command_name, environment_name, first_group_range, group_inner_source, nth_group,
     nth_group_text,
 };
+use crate::semantic::doc::{DocAssociation, DocKind, doc_associations};
 use crate::semantic::signature::{self, OutlineKind};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -41,6 +43,11 @@ pub enum OutlineSymbol {
     Theorem,
     /// A `\label{…}` definition.
     Label,
+    /// A documented `.dtx` macro: a `macro` environment or `\DescribeMacro`.
+    Macro,
+    /// A documented `.dtx` environment: an `environment` environment or
+    /// `\DescribeEnv`.
+    Environment,
 }
 
 /// One node in the document-symbol outline tree.
@@ -57,8 +64,39 @@ pub struct OutlineItem {
 }
 
 /// Build the outline tree for `root`.
+///
+/// The sectioning/float/label stream from [`collect`] is merged with the `.dtx`
+/// documentation constructs from [`doc_associations`], re-sorted into document
+/// order, then folded into the hierarchy by [`nest_sections`] — so a documented
+/// macro nests under its enclosing section like any other leaf. (A doc construct
+/// nested *inside* a float surfaces as a top-level sibling rather than under that
+/// float, since [`collect_environment`] pre-nests float children from its own walk;
+/// real `.dtx` files don't put doc constructs inside floats.)
 pub fn outline(root: &SyntaxNode) -> Vec<OutlineItem> {
-    nest_sections(collect(root), root.text_range().end())
+    let mut raws = collect(root);
+    raws.extend(doc_associations(root).into_iter().map(doc_raw));
+    // Stable sort keeps co-located items (e.g. a section and a label at the same
+    // offset) in their original relative order.
+    raws.sort_by_key(|raw| raw.item.range.start());
+    nest_sections(raws, root.text_range().end())
+}
+
+/// Convert a `.dtx` [`DocAssociation`] into a leaf `Raw` (never a section, so
+/// `level: None`); [`nest_sections`] then attaches it to the deepest open section.
+fn doc_raw(assoc: DocAssociation) -> Raw {
+    Raw {
+        level: None,
+        item: OutlineItem {
+            name: assoc.name,
+            kind: match assoc.kind {
+                DocKind::Macro | DocKind::DescribeMacro => OutlineSymbol::Macro,
+                DocKind::Environment | DocKind::DescribeEnv => OutlineSymbol::Environment,
+            },
+            range: assoc.range,
+            selection_range: assoc.name_range,
+            children: Vec::new(),
+        },
+    }
 }
 
 /// A collected item plus, for a sectioning command, its nesting level.
@@ -231,10 +269,22 @@ fn section_title(command: &SyntaxNode) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor};
 
     fn outline_of(src: &str) -> Vec<OutlineItem> {
         outline(&SyntaxNode::new_root(parse(src).green))
+    }
+
+    /// Parse in `.dtx` (docstrip) mode so the leading-`%` ltxdoc lines become real
+    /// `macro`/`environment`/`\DescribeMacro` constructs, then build the outline.
+    fn outline_of_dtx(src: &str) -> Vec<OutlineItem> {
+        let config = LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        };
+        let parsed = parse_with_flavor(src, config);
+        assert_eq!(parsed.syntax().to_string(), src, "losslessness violated");
+        outline(&parsed.syntax())
     }
 
     #[test]
@@ -330,5 +380,58 @@ mod tests {
         let items = outline_of("\\section{\\textsc{Intro}}\n");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "\\textsc{Intro}");
+    }
+
+    #[test]
+    fn dtx_macro_env_is_a_macro_symbol() {
+        let items = outline_of_dtx("% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "\\foo");
+        assert_eq!(items[0].kind, OutlineSymbol::Macro);
+    }
+
+    #[test]
+    fn dtx_describe_macro_braced_and_braceless() {
+        let braced = outline_of_dtx("% \\DescribeMacro{\\foo} does foo.\n");
+        assert_eq!(braced.len(), 1);
+        assert_eq!(braced[0].name, "\\foo");
+        assert_eq!(braced[0].kind, OutlineSymbol::Macro);
+
+        let braceless = outline_of_dtx("% \\DescribeMacro\\foo does foo.\n");
+        assert_eq!(braceless.len(), 1);
+        assert_eq!(braceless[0].name, "\\foo");
+        assert_eq!(braceless[0].kind, OutlineSymbol::Macro);
+    }
+
+    #[test]
+    fn dtx_environment_constructs_are_environment_symbols() {
+        let env = outline_of_dtx("% \\begin{environment}{myenv}\n% docs.\n% \\end{environment}\n");
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].name, "myenv");
+        assert_eq!(env[0].kind, OutlineSymbol::Environment);
+
+        let describe = outline_of_dtx("% \\DescribeEnv{myenv} is an env.\n");
+        assert_eq!(describe.len(), 1);
+        assert_eq!(describe[0].name, "myenv");
+        assert_eq!(describe[0].kind, OutlineSymbol::Environment);
+    }
+
+    #[test]
+    fn dtx_macro_nests_under_preceding_section() {
+        let items =
+            outline_of_dtx("\\section{Impl}\n% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Impl");
+        assert_eq!(items[0].children.len(), 1);
+        assert_eq!(items[0].children[0].name, "\\foo");
+        assert_eq!(items[0].children[0].kind, OutlineSymbol::Macro);
+    }
+
+    #[test]
+    fn dtx_constructs_without_sections_are_roots_in_order() {
+        let items =
+            outline_of_dtx("% \\DescribeMacro\\foo\n% \\begin{macro}{\\bar}\n% \\end{macro}\n");
+        let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, vec!["\\foo", "\\bar"]);
     }
 }

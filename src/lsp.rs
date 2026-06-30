@@ -2429,7 +2429,7 @@ fn run_symbols(
 ) {
     let symbols = match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            compute_symbols(snapshot, path, text)
+            compute_symbols(snapshot, path, text, kind)
         }
         FileKind::Bib => compute_bib_symbols(snapshot, path, text),
     };
@@ -2440,7 +2440,12 @@ fn run_symbols(
 
 /// Compute the LaTeX outline for `text`, preferring the snapshot's cached tree and
 /// falling back to a direct reparse when it is unavailable or stale.
-fn compute_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<DocumentSymbol> {
+fn compute_symbols(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+) -> Vec<DocumentSymbol> {
     let idx = LineIndex::new(text);
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
@@ -2451,8 +2456,12 @@ fn compute_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<Document
     }));
     let items = match cached {
         Ok(Some(items)) => items,
-        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
-        Ok(None) | Err(_) => outline(&SyntaxNode::new_root(parse(text).green)),
+        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer. Flavor
+        // by file kind so a `.dtx`'s docstrip vocabulary (and thus its documented
+        // macros) still surfaces off the fallback path.
+        Ok(None) | Err(_) => outline(&SyntaxNode::new_root(
+            parse_with_flavor(text, kind.lex_config()).green,
+        )),
     };
     items
         .iter()
@@ -2541,6 +2550,8 @@ fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> Docume
         OutlineSymbol::Float => SymbolKind::OBJECT,
         OutlineSymbol::Theorem => SymbolKind::CLASS,
         OutlineSymbol::Label => SymbolKind::CONSTANT,
+        OutlineSymbol::Macro => SymbolKind::FUNCTION,
+        OutlineSymbol::Environment => SymbolKind::INTERFACE,
     };
     let range = item.range;
     let selection = item.selection_range;

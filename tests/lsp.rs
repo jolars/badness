@@ -473,6 +473,55 @@ fn lsp_document_symbol_outline() {
 }
 
 #[test]
+fn lsp_document_symbol_dtx_documented_macros() {
+    let (client, server_thread) = start_server(None);
+    // A `.dtx` is parsed in docstrip mode, so the leading-`%` ltxdoc lines become
+    // real `macro`/`\DescribeMacro` constructs surfaced as document symbols.
+    let uri: Uri = "file:///pkg.dtx".parse().unwrap();
+
+    let doc = "\\section{Implementation}\n\
+        % \\DescribeMacro{\\foo}\n\
+        % \\begin{macro}{\\bar}\n\
+        %    \\begin{macrocode}\n\
+        \\def\\bar{b}\n\
+        %    \\end{macrocode}\n\
+        % \\end{macro}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    send_request(
+        &client,
+        2,
+        "textDocument/documentSymbol",
+        serde_json::to_value(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let response: DocumentSymbolResponse =
+        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response");
+    let DocumentSymbolResponse::Nested(symbols) = response else {
+        panic!("expected a nested documentSymbol response");
+    };
+
+    // One root section; the documented macros nest under it as FUNCTION symbols.
+    assert_eq!(symbols.len(), 1);
+    let section = &symbols[0];
+    assert_eq!(section.name, "Implementation");
+    assert_eq!(section.kind, SymbolKind::MODULE);
+    let children = section.children.as_deref().unwrap_or_default();
+    let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["\\foo", "\\bar"]);
+    assert!(children.iter().all(|c| c.kind == SymbolKind::FUNCTION));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_folding_ranges() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///fold.tex".parse().unwrap();

@@ -319,10 +319,11 @@ scope (the same boundary the include graph and CWL ingest keep).
     braceless `\DescribeMacro\foo` (next-sibling command). Follow-up: file-wide
     def-site linking for `\DescribeMacro` whose definition lives in a separate
     `macrocode` (would reuse `semantic::define::scan_definitions`).
-  - [ ] **Outline entries for `macro`/`environment` (deferred).** Give the doc
-    envs (and `\DescribeMacro`/`\DescribeEnv`) `documentSymbol` entries so a
-    `.dtx`'s documented macros are navigable—needs a new `OutlineKind` variant
-    and name extraction from the first arg.
+  - [x] **Outline entries for `macro`/`environment`.** The doc envs (and
+    `\DescribeMacro`/`\DescribeEnv`) get `documentSymbol` entries by merging the
+    existing `doc_associations` query into `outline()`, mapping macros to
+    `SymbolKind::FUNCTION` and environments to `INTERFACE`; they nest under the
+    section hierarchy like floats and labels.
   - [ ] **M4 driver and `\iffalse` + `.ins`.** `\iffalse…\fi` stays
     un-evaluated (already lossless as ordinary commands); `.ins` deferred.
 

@@ -271,14 +271,18 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_left_right_nested_scripted", WrapMode::Preserve, 80),
     // Alignment-aware formatting: an `align`/matrix-family environment lays its `&`
     // columns into a grid (left-aligned, single space around `&`, last cell never
-    // padded), preserving the row break (with its `[len]`). A cell that cannot sit
-    // on one aligned line (a nested block) falls back to the plain indented body —
-    // while a nested alignment environment is still aligned in its own right.
+    // padded), preserving the row break (with its `[len]`). A lone interior newline
+    // in a cell is a continuation line and joins onto its aligned row; a cell that
+    // still cannot sit on one aligned line (a nested block, or a blank line inside
+    // the cell) falls back to the plain indented body — while a nested alignment
+    // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
     ("align_columns_uneven_rows", WrapMode::Preserve, 80),
     ("align_columns_linebreak_optional", WrapMode::Preserve, 80),
+    ("align_continuation_join", WrapMode::Preserve, 80),
     ("pmatrix_columns", WrapMode::Preserve, 80),
     ("align_nested_block_fallback", WrapMode::Preserve, 80),
+    ("align_blank_line_in_cell_fallback", WrapMode::Preserve, 80),
     // Comments and rule lines in an alignment grid: a comment-only line is kept as
     // a passthrough between rows (not counted toward column widths); an end-of-line
     // comment trails its row after the `\\`; a mid-row comment (more cells follow)

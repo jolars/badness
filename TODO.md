@@ -53,8 +53,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   package-specific grammar, out of scope for the generic parser (decisions #1, #2;
   non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
   corpus, and AGENTS.md amendment), not a formatter patch.
-- [ ] Join alignment-cell continuation lines (currently triggers the plain-body
-  fallback).
 - [ ] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table
   environments (`tabular`/`array` are now grid-aligned, but every column is
   left-aligned regardless of its `{lcr}` spec). Also: `\cmidrule(lr){2-3}`

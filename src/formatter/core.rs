@@ -1937,8 +1937,9 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// of line, commenting out the rest — so it returns `None` and falls back.
 ///
 /// Returns `None` when [`flatten_alignment_body`] rejects the body (a blank-line
-/// break), when a cell carries a forced break (a nested block or a continuation
-/// line), or on a mid-row comment.
+/// break), when a cell carries a forced break that cannot collapse to one line (a
+/// nested block, or a blank line inside the cell — a lone continuation newline is
+/// joined, not a fallback), or on a mid-row comment.
 fn build_alignment_grid(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
@@ -1953,8 +1954,11 @@ fn build_alignment_grid(
     /// newline after `\begin`/each `\\` and the indentation before the next cell
     /// are *boundary* whitespace, not cell content; left in, the leading newline
     /// would lower to a forced break (an [`Ir::hard_line`]) and spuriously trip the
-    /// fallback. A newline *inside* a cell still lowers to a forced break and so
-    /// (correctly) falls back — a continuation line cannot sit on one aligned row.
+    /// fallback. A lone newline *inside* a cell is a continuation line; it lowers to
+    /// a top-level [`Ir::HardLine`], which we collapse to a space so the cell stays
+    /// on one aligned row. A blank line (`\par`, an [`Ir::EmptyLine`]) in a cell, or
+    /// a forced break nested inside a child block (`\begin{cases}…`), is *not*
+    /// collapsed and still (correctly) falls back — it cannot sit on one aligned row.
     fn finish_cell(
         cell: &mut Vec<SyntaxElement>,
         cells: &mut Vec<String>,
@@ -1980,7 +1984,22 @@ fn build_alignment_grid(
         }) {
             return None;
         }
-        let ir = Ir::concat(lower_element_stream(cell.drain(..), cx));
+        // A lone interior newline classifies to a top-level `Ir::HardLine`
+        // (`classify_trivia`); collapse it to a space so a continuation line joins
+        // onto its aligned row. A blank line inside a cell is an `Ir::EmptyLine`
+        // (untouched here), and a nested block's breaks live inside a child `Ir`, so
+        // both keep tripping `contains_forced_break` below and fall back.
+        let joined = lower_element_stream(cell.drain(..), cx)
+            .into_iter()
+            .map(|ir| {
+                if matches!(ir, Ir::HardLine) {
+                    Ir::line()
+                } else {
+                    ir
+                }
+            })
+            .collect::<Vec<_>>();
+        let ir = Ir::concat(joined);
         if ir.contains_forced_break() {
             return None;
         }

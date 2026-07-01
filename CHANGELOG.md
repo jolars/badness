@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0](https://github.com/jolars/badness/compare/v0.4.0...v0.5.0) (2026-07-01)
+
+### Features
+- **lsp:** add range formatting support ([`5ad2827`](https://github.com/jolars/badness/commit/5ad2827e9ecd7046bd9465ee965fb5666d1ffe28))
+- **lsp:** add workspace symbols support ([`eb8a111`](https://github.com/jolars/badness/commit/eb8a111c18d346f73e34dcec39201ad28bf51da4))
+- **formatter:** format expl3 code (catcode 9/10 model) ([`ac4ff31`](https://github.com/jolars/badness/commit/ac4ff313fdad326bd0bf854b1f268c4d7d4b580a))
+- **lsp:** watch on-disk tex/bib/config and reanalyze ([`b551c01`](https://github.com/jolars/badness/commit/b551c0123d8a0cc174cbb8f3612c04ef883af371))
+- **dtx:** reflow documentation prose under reflow ([`be57646`](https://github.com/jolars/badness/commit/be576463c1bb4c32972dc47fc306065c43a991c1))
+- **lsp:** outline entries for dtx documented macros ([`cba0b01`](https://github.com/jolars/badness/commit/cba0b01003f5056ccfca0f2c5e9297bd3247969c))
+- **lsp:** add `textDocument/documentHighlight` ([`404069b`](https://github.com/jolars/badness/commit/404069b84ad75450f500378c842efe38fa7e3ba3))
+- **bench:** add formatter speed bench vs tex-fmt & latexindent ([`82ddeb5`](https://github.com/jolars/badness/commit/82ddeb54ff218882ad3e1a1fd6228af1cd3a8081))
+- **format:** reflow brace-group bodies as statements ([`bb976e0`](https://github.com/jolars/badness/commit/bb976e09cd701e315767cdcbd0b0bae6b536c1bc))
+- **lsp:** discover and apply badness.toml per document ([`e56a8af`](https://github.com/jolars/badness/commit/e56a8afc7621cd8e37df5848ab1a382739991e3e))
+- **lint:** add missing-nonbreaking-space (tie before cite/ref) ([`4d75da4`](https://github.com/jolars/badness/commit/4d75da4b9459361569f6d2407e5bdb675163c4ea))
+- **lsp:** surface linter autofixes as code actions ([`13c727e`](https://github.com/jolars/badness/commit/13c727e339d5e4c1f8e848caaf307b1fe9c9eb27))
+- **lsp:** resolve completion items with signature and citation detail ([`f9892e6`](https://github.com/jolars/badness/commit/f9892e62fb6ca1c804bc6f2912ea581a37d6b0bc))
+- **lsp:** add hover for commands, environments and citations ([`3c6047c`](https://github.com/jolars/badness/commit/3c6047cdae637bd18fb6216a8c1f52ec06460157))
+- **lsp:** add pull diagnostics ([`a73fd7b`](https://github.com/jolars/badness/commit/a73fd7b8f677b8fdca27be2d68bc3701beaaffc1))
+
+### Bug Fixes
+- **lsp:** honor excludes for siblings ([`7a50529`](https://github.com/jolars/badness/commit/7a5052953c3ef58174fa0f7f55f640a216c23428))
+
+### Performance Improvements
+- **signature:** bake CWL tier into a build-time phf map ([`a920d4a`](https://github.com/jolars/badness/commit/a920d4a803dcd89ab97e7dd7945148c95958de2c))
+
 ## [0.4.0](https://github.com/jolars/badness/compare/v0.3.0...v0.4.0) (2026-06-23)
 
 ### Features

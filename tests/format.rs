@@ -221,6 +221,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         WrapMode::Reflow,
         80,
     ),
+    // A class redefines `\section` via `\renewcommand{\section}{\secdef …}` (jss's
+    // idiom). The static scanner reads that body as arity 0, but the trust gate
+    // (`semantic::define`) refuses to let a delegating redefinition downgrade the
+    // curated built-in, so `\section` keeps its `prose` title: padding collapses and
+    // an over-width heading still hangs and reflows.
+    ("reflow_secdef_redef_keeps_prose", WrapMode::Reflow, 40),
     ("reflow_prose_arg_blank_line", WrapMode::Reflow, 40),
     ("reflow_prose_arg_nested_in_paragraph", WrapMode::Reflow, 50),
     ("reflow_inline_prose_in_paragraph", WrapMode::Reflow, 50),

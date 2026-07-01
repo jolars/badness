@@ -216,6 +216,38 @@ fn called_macros(body: &str) -> Vec<SmolStr> {
         .collect()
 }
 
+/// Kernel sectioning primitives that themselves scan a `(*/[toc]/{title})` argument
+/// the static scanner cannot see from a redefinition body. A `\renewcommand{\cs}{…}`
+/// whose body is `\secdef …`/`\@startsection …` carries no `#` parameter and no `[n]`,
+/// so [`newcommand_arity`] reads it as arity 0 — but `\cs` really does consume a prose
+/// title at expansion time (jss's `\renewcommand{\section}{\secdef …}` is the canonical
+/// case). Curated and deliberately narrow: a *missed* name falls back to the safe status
+/// quo (the redefinition wins and the argument is left un-reflowed), while a *false*
+/// match is the only way to over-trust a built-in, so we keep the set tight and match
+/// only these kernel primitives.
+const DELEGATING_PRIMITIVES: &[&str] = &["secdef", "@startsection", "@dblarg", "@sect", "@ssect"];
+
+/// The **trust gate** for a `\newcommand`/`\def` the static scanner reads as taking no
+/// arguments. When the body *delegates* to a token-consuming kernel primitive
+/// ([`DELEGATING_PRIMITIVES`]), the arity-0 reading is provably unreliable, so it must
+/// not overwrite a curated built-in with a strictly less informative 0-arg signature
+/// (which would drop, e.g., a sectioning command's `prose` title and its reflow — the
+/// jss-class bug). The caller keeps the built-in showing through the overlay instead.
+///
+/// Narrow by construction (AGENTS.md conservatism): fires only when arity is 0, the body
+/// delegates, *and* a built-in exists to preserve. A genuine 0-arg redefinition has a
+/// self-contained body (no delegation) and is left to win, so it correctly loses prose.
+fn keeps_builtin_over_arity0(name: &str, arity: usize, body: &DefBody) -> bool {
+    arity == 0
+        && body
+            .called
+            .iter()
+            .any(|callee| DELEGATING_PRIMITIVES.contains(&callee.as_str()))
+        && crate::semantic::signature::builtin()
+            .command(name)
+            .is_some()
+}
+
 /// Which definition family a control word names, if any.
 enum DefKind {
     Command,
@@ -269,6 +301,15 @@ fn scan_newcommand(
         &def.name,
         nth_group(&def.host, def.first_arg_group).as_ref(),
     );
+    // Trust gate: a `\secdef`/`\@startsection`-style body reads as arity 0 but really
+    // consumes a title, so don't let it downgrade a curated built-in (keep the overlay
+    // falling through to the built-in). See [`keeps_builtin_over_arity0`].
+    if bodies
+        .get(def.name.as_str())
+        .is_some_and(|body| keeps_builtin_over_arity0(&def.name, arity, body))
+    {
+        return;
+    }
     db.insert_command(
         def.name,
         CommandSig {
@@ -297,6 +338,14 @@ fn scan_def(command: &SyntaxNode, db: &mut SignatureDb, bodies: &mut HashMap<Smo
     };
     let (arity, body) = def_params_and_body(&name_node);
     record_body(bodies, &name, body.as_ref());
+    // Trust gate: same as `scan_newcommand` — a delegating `\def\section{\secdef …}`
+    // must not downgrade a curated built-in. See [`keeps_builtin_over_arity0`].
+    if bodies
+        .get(name.as_str())
+        .is_some_and(|body| keeps_builtin_over_arity0(&name, arity, body))
+    {
+        return;
+    }
     db.insert_command(
         name,
         CommandSig {
@@ -633,6 +682,52 @@ mod tests {
         let db = db_of("\\renewcommand{\\a}[1]{x}\\providecommand{\\b}[1]{y}\n");
         assert_eq!(db.command("a").unwrap().args.len(), 1);
         assert_eq!(db.command("b").unwrap().args.len(), 1);
+    }
+
+    #[test]
+    fn secdef_redefinition_keeps_builtin_prose() {
+        // jss.cls does `\renewcommand{\section}{\secdef \jsssimplesec \jsssimplesecnn}`.
+        // The static scanner reads this as arity 0, but `\secdef` consumes the title at
+        // expansion time, so the trust gate must *not* record a 0-arg override — the
+        // curated built-in prose signature has to survive through the overlay.
+        let db = db_of("\\renewcommand{\\section}{\\secdef \\a \\b}\n");
+        assert!(
+            db.command("section").is_none(),
+            "the delegating redefinition must not be recorded as a scanned override"
+        );
+        let sigs = crate::semantic::signature::Signatures::new(&db);
+        let sig = sigs.command("section").expect("built-in section survives");
+        let last = sig.args.last().expect("section keeps its title argument");
+        assert_eq!(
+            last.content,
+            crate::semantic::signature::ContentKind::Prose,
+            "the title argument stays prose (reflowable)"
+        );
+    }
+
+    #[test]
+    fn genuine_zero_arg_redefinition_downgrades_builtin() {
+        // A self-contained body with no delegation genuinely drops the argument, so the
+        // 0-arg reading is trustworthy and *must* override the built-in — the gate must
+        // not fire here (the failure mode the trust gate is careful to avoid).
+        let db = db_of("\\renewcommand{\\section}{\\textbf{Fixed}}\n");
+        let sig = db
+            .command("section")
+            .expect("genuine 0-arg redefinition is recorded");
+        assert!(
+            sig.args.is_empty(),
+            "no delegation means the scanned 0-arg signature wins"
+        );
+    }
+
+    #[test]
+    fn secdef_redefinition_of_unknown_still_records() {
+        // The gate only protects a *curated built-in*: a delegating redefinition of a
+        // name with no built-in has nothing to preserve, so it records as normal (arity
+        // 0), keeping the name available to completion.
+        let db = db_of("\\renewcommand{\\mysec}{\\secdef \\a \\b}\n");
+        let sig = db.command("mysec").expect("unknown name is still recorded");
+        assert!(sig.args.is_empty());
     }
 
     #[test]

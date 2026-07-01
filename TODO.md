@@ -209,31 +209,6 @@ scope (the same boundary the include graph and CWL ingest keep).
   benchmark page `docs/src/reference/benchmarks.md`). In-process parse/format micro-bench +
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
-- [x] **Profile the formatter (separate startup floor from per-byte cost).** Done:
-  in-process micro-bench (`benches/formatting.rs`, `task bench:micro`, split
-  parse/format/full + throughput, with a single-doc flamegraph hook
-  `task bench:profile`; modeled on panache's `benches/formatting.rs` rather than
-  criterion so the flamegraph attaches to one hot doc). Findings (full writeup in
-  `benches/README.md`):
-  - **Startup floor was the one-time CWL signature-DB init, not binary load—now
-    fixed.** A bare `--version` is ~0.8 ms, but the format path's floor was ~4.4 ms:
-    `cwl()` decompressed+parsed the embedded `cwl_signatures.json.gz` once (~4.5 ms,
-    `LazyLock`) and is on the hot path (`Signatures::command`/`environment` fall
-    back to it; the lexer uses it for verbatim-env detection). **Fixed:** the CWL
-    tier is now baked into the binary as a build-time `phf` perfect-hash map
-    (`build.rs` + `phf_codegen`, values are `const fn` constructor calls;
-    `CommandSig`/`EnvironmentSig` args became `Cow<'static,[ArgSpec]>`), so init is
-    ~0—no decompress, no parse. CLI `small.tex` dropped ~4.5 ms → ~1.3 ms,
-    `cv.tex` ~5.1 ms → ~1.4 ms. Trade-off: larger binary (uncompressed statics) and
-    a build-time codegen step; `flate2` dropped, `phf`/`phf_codegen` added. The
-    curated `builtin` DB (~0.09 ms) stays a runtime JSON `LazyLock`—negligible.
-  - **Per-byte cost is mostly architectural.** masters_dissertation in-process:
-    parse ~25 %, lower+print ~70 %, ~10 MB/s. Flamegraph self-time is dominated by
-    rowan red-tree cursor traversal (~25–30 %) + allocator churn (~17 %)—inherent
-    to the lossless CST + `Doc` IR, by design. Printer itself is ~7 %. Minor slack:
-    `lower_node` runs up to four direct-children predicate scans per `ENVIRONMENT`
-    (`has_verbatim_body`/`is_margin_framed`/`is_alignment_env`/`is_list_env`) that
-    could share one pass. *(Speed-only; no correctness implication.)*
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] `wasm32` build for a web playground.
 

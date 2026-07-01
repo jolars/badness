@@ -258,14 +258,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_display_dollars", WrapMode::Preserve, 80),
     // A display equation too wide for the line breaks before its top-level
     // binary/relation operators (amsmath style): the first relation stays on the
-    // opening line and anchors a hanging indent, and each `+` term starts a fresh
-    // continuation line aligned under the first term after `=`. Whatever fits
-    // still stays on one line.
+    // opening line and anchors a single alignment column, and each later break
+    // point (`+` term or a further relation) starts a fresh continuation line
+    // aligned under that first relation. Whatever fits still stays on one line.
     ("math_display_break_operators", WrapMode::Preserve, 80),
-    // A chain of relations aligns in a column: the second `=` starts a fresh
-    // continuation line under the first `=`, not under the first right-hand-side
-    // term (the two-level rule — relations align, binaries hang one relation-width
-    // deeper).
+    // A chain of relations aligns in that same column: the second `=` starts a
+    // fresh continuation line directly under the first `=`.
     ("math_display_break_relations", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A

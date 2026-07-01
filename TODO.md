@@ -63,18 +63,110 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+Ships today: `duplicate-label`, `deprecated-command` (`\bf`→`\bfseries`),
+`missing-nonbreaking-space` (tie before cite/ref), `obsolete-environment`
+(`eqnarray`→`align`), `dollar-display-math` (`$$`→`\[…\]`), `mismatched-delimiter`
+(`\left…\right` orientation), `undefined-ref`, `undefined-citation`.
+
+A new rule is a unit struct implementing `Rule` (`src/linter/rules.rs`), added in
+four spots there (`mod`, `pub use`, `all_rules()`, `ALL_RULE_IDS`, kept in lockstep
+by `registry_and_id_list_agree`) plus a new `src/linter/rules/<name>.rs`. Node-shape
+rules declare `interests(&[SyntaxKind])` + `check`; whole-file/semantic rules use
+`check_file` (reading `ctx.model`, `ctx.resolution`, `ctx.citations`, signature DB).
+An optional `Fix::safe`/`Fix::unsafe_` is picked up by `--fix`, LSP code actions, and
+`select`/`ignore` for free. The candidates below are all **type-(B)** lints
+(content/semantic/typographic) a deterministic formatter would never make — type-(A)
+layout items (whitespace, indentation, brace-on-scripts) are the formatter's job and
+excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
+
 - [~] Wire the remaining report-only fixes onto the autofix infra:
   `deprecated-command`'s `\bf → \bfseries` is **done** (a `Safe` control-word swap,
   consumed by `lint --fix` and the new LSP code actions); `obsolete-environment`'s
   `eqnarray → align` is still report-only.
-- [~] More stylistic lints. `missing-nonbreaking-space` (a tie before a cite/ref
-  command, broad curated family, `\nocite` excluded; `Unsafe` autofix) is **done**.
-  Remaining: general typography (quotes, dashes, …). *Follow-up:* the tie lint only
-  covers a same-line `WORD WHITESPACE \cmd` shape; a *source line break* before the
-  command (`Figure\n\ref{x}`) is also a breakable space but is left for a later pass
-  (replacing the newline with `~` reflows the source and overlaps the formatter).
-- [ ] `unused-label` (cross-file)—deferred: can false-positive on labels
-  referenced from outside the analyzed set.
+- [~] `missing-nonbreaking-space` (a tie before a cite/ref command, broad curated
+  family, `\nocite` excluded; `Unsafe` autofix) is **done**. *Follow-up:* the tie lint
+  only covers a same-line `WORD WHITESPACE \cmd` shape; a *source line break* before
+  the command (`Figure\n\ref{x}`) is also a breakable space but is left for a later
+  pass (replacing the newline with `~` reflows the source and overlaps the formatter).
+
+### Tier 1 — typographic & math substitutions (node-shape, clear autofix)
+
+- [ ] `ellipsis`—`...` → `\dots` (text) or `\ldots`/`\cdots` by math context
+  (ChkTeX 11, lacheck). `Safe` for the unambiguous text `\dots`; `Unsafe` in math
+  where `\ldots` vs `\cdots` depends on neighbors.
+- [ ] `straight-quotes`—ASCII `"` → `` `` ``/`''`; plus quote-direction and mixing
+  checks (ChkTeX 18/32-34, lacheck). `Unsafe` (open/close direction inferred from
+  context).
+- [ ] `dash-length`—classify `-`/`--`/`---` by neighbors: number--number → en dash,
+  word---word → em dash (ChkTeX 8). `Unsafe`; needs a curated exception list
+  (hyphenated compounds, option flags).
+- [ ] `times-variable`—literal `x` between digits (`640x200`) → `\times` (ChkTeX 29).
+  `Unsafe` (intent heuristic).
+- [ ] `math-operator-name`—bare `sin`/`cos`/`log`/`lim`… in math typeset as italic
+  variables → `\sin` etc. (ChkTeX 35). `Safe` (control-word swap, same shape as the
+  `\bf`→`\bfseries` fix).
+- [ ] `primitive-command`—raw TeX primitives discouraged in LaTeX: `\over`→`\frac`,
+  `\centerline`→`center`/`\centering`, `\eqno`, `\bgroup`… (ChkTeX 41, lacheck).
+  Extends the `deprecated-command` family (merge vs. sibling rule: open). Report-only
+  where the rewrite restructures arguments (`\over`); `Safe` control-word swaps where a
+  1:1 replacement exists.
+
+### Tier 2 — spacing/correctness semantics (not layout)
+
+These edit *significant* whitespace or command shape, so they do not overlap the
+formatter (which only normalizes redundant layout whitespace). Verify the overlap
+notes when implementing.
+
+- [ ] `swallowed-space`—control word directly followed by a space TeX eats before
+  text (`\LaTeX is` renders "LaTeXis") (ChkTeX 1). `Unsafe` (insert `{}` or `\ `).
+- [ ] `abbreviation-spacing`—inter-word `\ ` after `e.g.`/`i.e.`/`et al.`, and
+  forgotten `\@` before sentence-final punctuation after a capital (`UFO.` → `UFO\@.`)
+  unless `\frenchspacing` (ChkTeX 12/13, lacheck, textidote sh:010/011). `Unsafe`.
+  *Overlap note:* verify the formatter does not touch this.
+- [ ] `space-before-command`—spurious space before `\footnote`/`\index`/`\label`
+  where the space is semantically wrong, not layout (ChkTeX 24/42). `Safe` (delete the
+  space). *Overlap note:* confirm the formatter preserves this inter-token space; if it
+  already strips it, drop this rule.
+- [ ] `makeat-macro`—`@` inside a macro name used outside a
+  `\makeatletter`/`\makeatother` (or expl3) region (lacheck). badness can decide this
+  **exactly** from its letter-mode tracking rather than heuristically. Report-only.
+
+### Tier 3 — structural / semantic / project-layer (curated subset)
+
+Whole-file or cross-file (`check_file`), using the semantic model, signature DB, and
+project resolution. Pure prose-opinion textidote rules (title capitalization, caption
+period, section length) are skipped as grammar-tool territory.
+
+- [ ] `missing-required-argument`—command invoked with fewer `{…}` groups than its
+  signature-DB arity (ChkTeX 14, done precisely via the tree + DB, not line
+  heuristics). Report-only.
+- [ ] `verbatim-trailing-text`—text after `\end{verbatim}` on the same line, silently
+  dropped (ChkTeX 31). Report-only.
+- [ ] `unbalanced-left-right`—`\left` with no matching `\right` (complements the
+  orientation-only `mismatched-delimiter`); likely surfaceable from the parser's
+  `LEFT_RIGHT` recovery. Report-only.
+- [ ] `unreferenced-label`—a `\label` never targeted by any `\ref`-family command,
+  project-aware behind the same closed+rooted namespace gate as `undefined-ref`
+  (**supersedes the old `unused-label` deferral**, whose open-namespace false-positive
+  risk is exactly what that gate handles). Report-only.
+- [ ] `sectioning-level-jump`—a heading that skips a level (`\section` →
+  `\subsubsection`), read from the semantic sectioning tree (textidote sh:secskip).
+  Report-only.
+- [ ] `hard-coded-reference`—literal "Figure 3"/"Section 2"/"Table 1" in prose
+  instead of `\ref`/`\cref` (textidote sh:hcfig/hctab/hcsec). Report-only, heuristic.
+
+### Deferred / out of scope
+
+- Italic-correction cluster (ChkTeX 4/5/6/28)—legacy font-command era, needs brittle
+  font-state tracking, low modern value.
+- Pure-whitespace items (ChkTeX 30/36/37/39, lacheck double-space, paren spacing)—the
+  formatter's job (type A), never lint findings.
+- Brace-on-scripts (ChkTeX 25)—already normalized by the formatter.
+- ChkTeX 19 (acute-accent-as-quote)—obsolete per ChkTeX's own author.
+- ConTeXt `\start…/\stop…` matching (ChkTeX 47/48)—not a badness target.
+- Prose-opinion rules (title caps, caption-ends-with-period, section length,
+  cite-command-mixing)—grammar-checker territory.
+- *(Note only)* a user-defined regex escape hatch (ChkTeX 44) as possible future infra.
 
 ## Semantic layer & signatures
 

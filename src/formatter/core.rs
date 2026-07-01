@@ -2903,11 +2903,17 @@ const MATH_BINARY_COMMANDS: &[&str] = &[
     "triangleright",
 ];
 
-/// Classify a bare operator token by its literal text.
+/// Classify a bare operator token by its literal text. The parser splits math
+/// `WORD`s at operator boundaries (`AGENTS.md`, decision #3), so an operator like
+/// `+` or a coalesced relation like `<=` arrives as its own token here.
 fn classify_math_op_text(text: &str) -> MathRole {
+    // A coalesced relation run (`=`, `<=`, `>=`, `==`, `<`, `>`, …): every char
+    // is a comparison char.
+    if !text.is_empty() && text.chars().all(|c| matches!(c, '=' | '<' | '>')) {
+        return MathRole::Relation;
+    }
     match text {
-        "=" | "<" | ">" => MathRole::Relation,
-        "+" | "-" => MathRole::Binary,
+        "+" | "-" | "*" | "/" => MathRole::Binary,
         _ => MathRole::Operand,
     }
 }
@@ -2945,7 +2951,9 @@ fn math_atom_role(el: &SyntaxElement, prev: MathRole) -> MathRole {
 /// the operator-break layout) or has fewer than two atoms (nothing to break).
 fn collect_math_pieces(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<MathPiece>> {
     let mut pieces: Vec<MathPiece> = Vec::new();
-    let mut prev_role = MathRole::Operand;
+    // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
+    // and glues to its operand rather than becoming a break point — e.g. `-x`.
+    let mut prev_role = MathRole::Relation;
     let mut iter = node.children_with_tokens().peekable();
     while let Some(el) = iter.next() {
         match el {
@@ -3068,55 +3076,64 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::group(Ir::align(rel_col, Ir::concat(parts)))
 }
 
-/// The separator owed before the next math atom.
-#[derive(PartialEq)]
-enum MathSep {
-    /// Nothing yet (start of body) or just emitted an atom with no following gap.
-    None,
-    /// A collapsed whitespace/newline run: one space.
-    Space,
-    /// A comment forced a line break: a [`Ir::hard_line`].
-    Break,
-}
-
-/// The shared math-atom sequencer (see [`lower_math_body`]). A trailing `Break`
-/// (owed by a comment at the body's end) is emitted rather than trimmed, so the
-/// caller's closing delimiter lands on its own line; a trailing `Space` is
-/// dropped.
+/// The shared math-atom sequencer (see [`lower_math_body`]). Spacing is
+/// *role-aware*: a single space is placed around every binary/relation operator
+/// (`a+b` → `a + b`, `x=-b` → `x = -b`), reusing [`math_atom_role`]'s unary
+/// detection so a `+`/`-` with no left operand stays glued to its operand
+/// (`-x`, `2^{-5}`). Plain operand juxtaposition keeps its authored spacing (a
+/// gap collapses to one space, no gap stays tight). A `%` comment forces a hard
+/// line break; a trailing break (a comment at the body's end) is emitted rather
+/// than trimmed so the caller's closing delimiter lands on its own line, while a
+/// trailing space is dropped.
 fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
     let mut out: Vec<Ir> = Vec::new();
-    let mut sep = MathSep::None;
     let mut started = false;
+    // Start as a non-operand so a leading `+`/`-` reads as unary (see
+    // [`collect_math_pieces`]).
+    let mut prev_role = MathRole::Relation;
+    let mut pending_space = false; // authored whitespace since the last atom
+    let mut pending_break = false; // a comment forced a hard line break
     let mut iter = elements.peekable();
     while let Some(el) = iter.next() {
         match el {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
                 consume_trivia_run(&t, &mut iter);
-                if started && sep == MathSep::None {
-                    sep = MathSep::Space;
+                if started {
+                    pending_space = true;
                 }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
-                if sep == MathSep::Space {
+                if pending_space {
                     out.push(Ir::verbatim(" "));
                 }
                 out.push(Ir::verbatim(t.text()));
                 started = true;
-                sep = MathSep::Break;
+                pending_space = false;
+                pending_break = true;
             }
             other => {
-                match sep {
-                    MathSep::Space => out.push(Ir::verbatim(" ")),
-                    MathSep::Break => out.push(Ir::hard_line()),
-                    MathSep::None => {}
+                let role = math_atom_role(&other, prev_role);
+                if !started {
+                    // no separator before the first atom
+                } else if pending_break {
+                    out.push(Ir::hard_line());
+                } else if role != MathRole::Operand
+                    || prev_role != MathRole::Operand
+                    || pending_space
+                {
+                    // Space around a binary/relation operator (either side), or a
+                    // collapsed authored gap between operands.
+                    out.push(Ir::verbatim(" "));
                 }
                 out.push(lower_math_element(other, cx));
                 started = true;
-                sep = MathSep::None;
+                pending_space = false;
+                pending_break = false;
+                prev_role = role;
             }
         }
     }
-    if sep == MathSep::Break {
+    if pending_break {
         out.push(Ir::hard_line());
     }
     Ir::concat(out)

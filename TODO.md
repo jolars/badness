@@ -12,7 +12,18 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
+- [x] **Math operator atoms.** In math mode a `WORD` glued around `+ - * / = < >`
+  is split into flat operator/operand atoms (byte-range `split_math_word`, trailing
+  operand is the scriptable base). Needed a `SubTok` event. See `AGENTS.md`
+  decisions #3/#4.
+
 ## Formatter
+
+- [x] **Math operator spacing.** A single space around each binary/relation atom
+  (`a+2*1^5` -> `a + 2 * 1^5`, `x=-b` -> `x = -b`); unary signs and `^`/`_` scripts
+  stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.
+  Group bodies normalized (`x^{a+b}` -> `x^{a + b}`). Scientific notation (`1e-5`)
+  is a known non-special-cased limitation.
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes—both fall back to `Preserve`
   today. *Demoted, much later.*

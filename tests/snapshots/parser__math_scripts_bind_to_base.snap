@@ -13,7 +13,9 @@ ROOT@0..61
             CARET@2..3 "^"
             GROUP@3..8
               L_BRACE@3..4 "{"
-              WORD@4..7 "n+1"
+              WORD@4..5 "n"
+              WORD@5..6 "+"
+              WORD@6..7 "1"
               R_BRACE@7..8 "}"
         WHITESPACE@8..9 " "
         CONTROL_SYMBOL@9..11 "\\,"
@@ -43,7 +45,9 @@ ROOT@0..61
         SCRIPTED@30..37
           GROUP@30..35
             L_BRACE@30..31 "{"
-            WORD@31..34 "a+b"
+            WORD@31..32 "a"
+            WORD@32..33 "+"
+            WORD@33..34 "b"
             R_BRACE@34..35 "}"
           SUPERSCRIPT@35..37
             CARET@35..36 "^"

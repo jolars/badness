@@ -18,6 +18,9 @@ pub(crate) fn build_tree(tokens: &[Token], events: &[Event]) -> GreenNode {
                 let tok = &tokens[idx];
                 builder.token(tok.kind.into(), &tok.text);
             }
+            Event::SubTok { idx, start, end } => {
+                builder.token(SyntaxKind::WORD.into(), &tokens[idx].text[start..end]);
+            }
             Event::Finish => builder.finish_node(),
         }
     }

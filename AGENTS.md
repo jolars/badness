@@ -100,11 +100,31 @@ for the sanctioned lexer modes is in TODO.md ("Design notes").
    precedence-climbing *only* for sub/superscript binding (`^`, `_`) and `\left…\right`
    matching. The text-level parser has no precedence.
 
+   **Math operator atoms (sanctioned).** Arithmetic operators (`+ - * / = < >`) are
+   catcode-12 "other" characters, so the catcode-faithful lexer globs them into `WORD`
+   runs (`a+2*1` is one token); operator-ness is a *math-semantic* fact assigned after
+   catcode lexing, so it is the parser's job, not the lexer's. Inside math mode
+   (`math_scripted`, `grammar.rs`) a `WORD` glued around operators is split at operator
+   boundaries into flat sibling atoms via a **byte-range split of its text** (not a
+   re-lex—no catcode machinery; see `split_math_word`). Only the *trailing* operand
+   piece is the scriptable base, so `a+2*1^5` binds `^5` to `1` (matching TeX). This is
+   a bounded widening of "Pratt is local to math": operators become atoms so the
+   formatter can space them and the display breaker can break long chains—there is **no
+   arithmetic-precedence expression tree**. The split rule: `+ - * /` each stand alone
+   (so a leading `+`/`-` reads as unary), `= < >` coalesce into one relation piece
+   (`<=`), never merging with a sign (`=-` → `=`,`-`). Bare unbraced script arguments
+   (`x_i+y`) are left glued (a pre-existing whole-`WORD` script-binding behavior). The
+   resulting operator *spacing* is a formatter concern (tenet #1): a single space
+   around each binary/relation atom, unary signs and scripts tight.
+
 4. **Parser emits an event stream, not a tree directly.** `lexer → flat token stream →
    parser emits events (Start/Tok(idx)/Finish) → tree_builder re-attaches trivia and
    feeds rowan's GreenNodeBuilder`. Tokens are referenced by index; there is **no
    `Error` event**—diagnostics ride a side channel keyed by byte range (the
-   rust-analyzer event-stream pattern).
+   rust-analyzer event-stream pattern). One extra event, `SubTok { idx, start, end }`,
+   attaches a `WORD` sub-slice of `tokens[idx]` (the math operator split, decision #3);
+   losslessness holds because a token's `SubTok` pieces cover its full byte range
+   contiguously.
 
 5. **Errors travel alongside the tree, never abort it.** A single syntactic error
    never fails the whole parse. Recovery anchors: `\end{…}`, `\begin`, blank line, `}`,

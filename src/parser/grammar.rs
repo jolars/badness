@@ -737,8 +737,40 @@ impl<'t> Parser<'t> {
     /// event in front of it — the event-stream analog of rust-analyzer's
     /// `precede`, done locally without touching the event layer.
     fn math_scripted(&mut self) {
+        // A math `WORD` glued around operators (`a+2*1`) splits into separate
+        // operand/operator atoms (`AGENTS.md`, decision #3). Only the trailing
+        // piece is the scriptable base, so `a+2*1^5` binds `^5` to `1` (matching
+        // TeX); the leading pieces are flat sibling atoms of the math body. This
+        // is a byte-range split of the WORD's text, not a re-lex — see
+        // [`split_math_word`].
+        if self.kind() == Some(SyntaxKind::WORD)
+            && let Some(pieces) = split_math_word(self.text())
+        {
+            let idx = self.pos;
+            let (last, lead) = pieces.split_last().expect("split yields >= 2 pieces");
+            for &(start, end) in lead {
+                self.events.push(Event::SubTok { idx, start, end });
+            }
+            let checkpoint = self.events.len();
+            self.events.push(Event::SubTok {
+                idx,
+                start: last.0,
+                end: last.1,
+            });
+            self.pos += 1; // the whole WORD is consumed by its pieces
+            self.math_scripts(checkpoint);
+            return;
+        }
         let checkpoint = self.events.len();
         self.math_atom();
+        self.math_scripts(checkpoint);
+    }
+
+    /// Attach any `^`/`_` scripts that follow the base atom emitted since
+    /// `checkpoint`, retro-splicing a `SCRIPTED` wrapper in front of it (the
+    /// event-stream analog of rust-analyzer's `precede`, done locally without
+    /// touching the event layer). No script → the base stays a bare atom.
+    fn math_scripts(&mut self, checkpoint: usize) {
         if !self.at_script() {
             return; // bare atom, no wrapper
         }
@@ -1064,6 +1096,53 @@ impl<'t> Parser<'t> {
         self.close();
         Some(name.trim().to_owned())
     }
+}
+
+/// Split a math `WORD`'s text at operator boundaries into `[start, end)` byte
+/// ranges covering the whole text, or `None` when it holds no operator (a single
+/// operand run needs no split). Operators are catcode-12 "other" characters that
+/// glue into `WORD` (`a+2*1`); isolating them lets the math-aware parser and
+/// formatter treat them as atoms (spacing, line breaks) without a catcode-carrying
+/// lexer. The rule:
+///
+/// - `+ - * /`: each is its own single-char piece (so `2*-1` → `2`,`*`,`-`,`1`,
+///   letting the formatter read a leading `-`/`+` as unary).
+/// - `= < >`: a maximal run coalesces into one piece (`<=`, `>=`, `==` stay
+///   together), but never merges with an adjacent sign (`=-` → `=`,`-`).
+/// - anything else: a maximal operand run.
+///
+/// The pieces concatenate back to the input, preserving losslessness.
+fn split_math_word(text: &str) -> Option<Vec<(usize, usize)>> {
+    #[derive(PartialEq, Clone, Copy)]
+    enum Cls {
+        Operand,
+        /// `+ - * /`: always its own single-char piece.
+        Sign,
+        /// `= < >`: coalescing relation run.
+        Rel,
+    }
+    let classify = |c: char| match c {
+        '+' | '-' | '*' | '/' => Cls::Sign,
+        '=' | '<' | '>' => Cls::Rel,
+        _ => Cls::Operand,
+    };
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    let mut prev: Option<Cls> = None;
+    for (i, c) in text.char_indices() {
+        let cls = classify(c);
+        // Break before this char when the class changed, or when either side is a
+        // sign (each sign stands alone). A same-class run (operand/operand or
+        // rel/rel) coalesces.
+        let boundary = prev.is_some_and(|p| p != cls || cls == Cls::Sign);
+        if boundary {
+            pieces.push((start, i));
+            start = i;
+        }
+        prev = Some(cls);
+    }
+    pieces.push((start, text.len()));
+    (pieces.len() >= 2).then_some(pieces)
 }
 
 /// Read the environment name from a `\begin{…}` at `begin_pos` without consuming.

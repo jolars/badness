@@ -13,6 +13,17 @@ pub(crate) enum Event {
     Start(SyntaxKind),
     /// Attach the token at this index in the token stream.
     Tok(usize),
+    /// Attach a `WORD` sub-token: the `start..end` byte slice of the token at
+    /// `idx`. Used to split a math `WORD` glued around operators (`a+2*1`) into
+    /// separate operand/operator atoms (`a`, `+`, `2`, `*`, `1`) inside math
+    /// mode, without touching the catcode-faithful lexer. Losslessness is
+    /// preserved because the `SubTok` slices emitted for one token cover its full
+    /// byte range contiguously (see [`super::grammar`]).
+    SubTok {
+        idx: usize,
+        start: usize,
+        end: usize,
+    },
     /// Close the most recently opened node.
     Finish,
 }

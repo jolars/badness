@@ -49,6 +49,10 @@ const CLEAN_CASES: &[&str] = &[
     // braced script, a group base, and display math — the new lowering must keep
     // all invariants (idempotent, clean, lossless).
     r"$x^{2} + a_i^{n+1} + {a+b}^2$",
+    // Operators glued into a `WORD` are split into atoms and spaced (`a+2*1^5` ->
+    // `a + 2 * 1^5`), unary signs stay tight (`-x`, `x=-b`), and the split must
+    // stay idempotent, clean, and lossless.
+    r"$a+2*1^5$ and $x=-b$ and $-x+1$ and $2*-1$ and $a<=b$",
     r"\[ x ^ 2 \quad y_\alpha \]",
     // `\left … \right` matched pairs: nested, scripted, and a control-word
     // delimiter — the new lowering must stay idempotent, clean, and lossless.
@@ -254,6 +258,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_collapse_spaces", WrapMode::Preserve, 80),
     ("math_trim_delims", WrapMode::Preserve, 80),
     ("math_tight_scripts", WrapMode::Preserve, 80),
+    // A single space is placed around every binary/relation operator (the parser
+    // splits a `WORD` glued around `+ - * / = < >` into atoms; command operators
+    // like `\cdot` join them via the role model). A unary `+`/`-` with no left
+    // operand stays glued (`-x`, `x=-b`, `2^{-5}`), scripts stay tight, and group
+    // bodies are normalized too (`x^{a+b}` -> `x^{a + b}`). Scientific notation
+    // (`1e-5`) is deliberately not special-cased.
+    ("math_op_spacing", WrapMode::Preserve, 80),
     ("math_strip_single_token_braces", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),

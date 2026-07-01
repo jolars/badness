@@ -14,7 +14,8 @@ pub mod style;
 
 pub use check::{CheckError, CheckResult, check_paths, check_paths_with_style};
 pub use core::{
-    FormatError, format, format_file_with_packages, format_node, format_node_with_signatures,
-    format_with_style, format_with_style_flavored, format_with_style_flavored_with_signatures,
+    FormatError, format, format_file_with_packages, format_node, format_node_range_with_signatures,
+    format_node_with_signatures, format_with_style, format_with_style_flavored,
+    format_with_style_flavored_with_signatures,
 };
 pub use style::{FormatStyle, WrapMode};

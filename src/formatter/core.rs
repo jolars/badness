@@ -189,7 +189,7 @@ pub fn format_node_with_signatures(
     validate_supported_tokens(root)?;
 
     let ctx = FormatContext::new(style);
-    let mut formatted = format_root(root, ctx, external);
+    let mut formatted = format_root(root, ctx, external, None);
     // Normalize the document's trailing edge: drop any trailing blank lines and
     // per-line trailing whitespace at EOF, then guarantee exactly one final
     // newline. Empty output stays empty. Only ASCII whitespace/newlines are
@@ -199,6 +199,34 @@ pub fn format_node_with_signatures(
     if !formatted.is_empty() {
         formatted.push('\n');
     }
+    Ok(formatted)
+}
+
+/// Range formatting: lay out only the top-level blocks overlapping `range`,
+/// returning the formatted text for the `[first block start, last block end]`
+/// span. The caller ([`crate::lsp`]) expands the editor selection to whole
+/// top-level-block boundaries before calling, so `range` is already block-aligned.
+///
+/// The whole document is still scanned for `\newcommand` signatures and expl3
+/// regions ([`format_root`]), so a selected block depending on an earlier
+/// definition or sitting inside an ancestor `\ExplSyntaxOn` is laid out exactly as
+/// in a full format; only *emission* is filtered (see [`LowerCtx::range`]). Unlike
+/// [`format_node_with_signatures`], the document-level trailing-edge normalization
+/// is **not** applied — this is a mid-document fragment, so no final newline is
+/// forced. Trailing whitespace is trimmed (the slice it replaces ends at a block
+/// boundary), keeping the diff against the original slice clean.
+pub fn format_node_range_with_signatures(
+    root: &SyntaxNode,
+    style: FormatStyle,
+    external: &SignatureDb,
+    range: TextRange,
+) -> Result<String, FormatError> {
+    validate_supported_tokens(root)?;
+
+    let ctx = FormatContext::new(style);
+    let mut formatted = format_root(root, ctx, external, Some(range));
+    let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
+    formatted.truncate(trimmed_len);
     Ok(formatted)
 }
 
@@ -219,7 +247,12 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
     Ok(())
 }
 
-fn format_root(root: &SyntaxNode, ctx: FormatContext, external: &SignatureDb) -> String {
+fn format_root(
+    root: &SyntaxNode,
+    ctx: FormatContext,
+    external: &SignatureDb,
+    range: Option<TextRange>,
+) -> String {
     // Scan the document's own `\newcommand`/`\newenvironment`/xparse definitions
     // once, so the lowering resolves a locally-defined construct's arity (not just
     // the built-in DB's). They are overlaid on top of `external` — the merged
@@ -238,9 +271,19 @@ fn format_root(root: &SyntaxNode, ctx: FormatContext, external: &SignatureDb) ->
         wrap: ctx.style().wrap,
         signatures: Signatures::new(&user),
         expl3_regions: &regions,
+        range,
     };
     let ir = lower_node(root, cx);
     Printer::new(ctx.style()).print(&ir)
+}
+
+/// Whether two byte ranges overlap (share at least one byte). Half-open, so ranges
+/// that merely touch at a boundary (`a.end == b.start`) do not overlap — used by
+/// the range-formatting emission filter to keep a top-level block's leading/trailing
+/// trivia (which abuts but does not overlap the block-aligned range) out of the
+/// fragment.
+fn ranges_overlap(a: TextRange, b: TextRange) -> bool {
+    a.start() < b.end() && b.start() < a.end()
 }
 
 /// The byte ranges of the document's expl3 regions, in document order. A region
@@ -298,6 +341,13 @@ struct LowerCtx<'a> {
     /// itself — regardless of [`WrapMode`]. Borrowed from a `Vec` owned by
     /// [`format_root`], exactly like `signatures`.
     expl3_regions: &'a [TextRange],
+    /// Range-formatting emission filter. When `Some`, only the [`SyntaxKind::ROOT`]
+    /// children overlapping this byte range are lowered (the in-range top-level
+    /// blocks); the rest are skipped and never produce IR (see [`lower_node`]).
+    /// `None` (the default) lowers the whole document. The filter applies *only* at
+    /// `ROOT` — every selected block still lowers in full, at its real indent-0
+    /// context, so the formatter stays the sole authority on layout.
+    range: Option<TextRange>,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -341,6 +391,19 @@ impl<'a> LowerCtx<'a> {
 /// threaded through so it reaches every nested paragraph (including environment and
 /// group bodies).
 fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    // Range-formatting emission filter: at the document root, lower only the
+    // children (top-level blocks plus the trivia between them) overlapping the
+    // requested range; skip the rest entirely. The filter lives at `ROOT` so each
+    // emitted block still lowers in full below — see [`LowerCtx::range`]. A `None`
+    // range (the whole-document default) never reaches here.
+    if let Some(range) = cx.range
+        && node.kind() == SyntaxKind::ROOT
+    {
+        let filtered = node
+            .children_with_tokens()
+            .filter(move |el| ranges_overlap(range, el.text_range()));
+        return Ir::concat(lower_element_stream(filtered, cx));
+    }
     // expl3 code layout (catcode-9 whitespace / catcode-10 `~`) applies regardless
     // of `WrapMode`, so it is checked before the wrap-gated arms below. A paragraph
     // overlapping a region is split at the toggles; a brace/optional group inside a

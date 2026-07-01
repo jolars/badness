@@ -23,13 +23,14 @@ use lsp_types::{
     DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent,
-    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
-    RegistrationParams, RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
+    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FileChangeType, FileEvent, FoldingRange, FoldingRangeKind, FoldingRangeParams,
+    FoldingRangeProviderCapability, FormattingOptions, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
+    NumberOrString, OneOf, PartialResultParams, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams, RegistrationParams,
+    RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams,
@@ -120,6 +121,12 @@ fn start_server(
     assert!(
         init.capabilities.document_formatting_provider.is_some(),
         "server must advertise documentFormattingProvider"
+    );
+    assert!(
+        init.capabilities
+            .document_range_formatting_provider
+            .is_some(),
+        "server must advertise documentRangeFormattingProvider"
     );
     assert!(
         matches!(
@@ -419,6 +426,137 @@ fn lsp_formatting_and_diagnostics_transcript() {
     )
     .unwrap();
     assert_eq!(edits[0].new_text, expected);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_range_formatting_formats_only_the_selected_block() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///range.tex".parse().unwrap();
+
+    // Two messy top-level paragraphs (extra inter-word spaces). Range formatting
+    // the first must collapse only its spaces, leaving the second untouched — the
+    // distinguishing property versus whole-document formatting.
+    let doc = "first    paragraph.\n\nsecond    paragraph.\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    // A *partial* selection inside the first paragraph: it must clamp out to the
+    // whole block.
+    let select_first = Range {
+        start: Position::new(0, 2),
+        end: Position::new(0, 5),
+    };
+    let range_params = |range: Range| {
+        serde_json::to_value(DocumentRangeFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range,
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap()
+    };
+
+    send_request(
+        &client,
+        2,
+        "textDocument/rangeFormatting",
+        range_params(select_first),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let formatted = apply_edits(doc, &edits);
+    assert_eq!(
+        formatted, "first paragraph.\n\nsecond    paragraph.\n",
+        "only the selected block is formatted; the second paragraph is untouched"
+    );
+
+    // Seam idempotence: with the buffer now holding the post-edit text, the same
+    // selection yields no edits.
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: formatted.clone(),
+            }],
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    send_request(
+        &client,
+        3,
+        "textDocument/rangeFormatting",
+        range_params(select_first),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(3));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert!(
+        edits.is_empty(),
+        "an already-formatted selection yields no edits, got {edits:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_range_formatting_reindents_multiline_environment() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///range_env.tex".parse().unwrap();
+
+    // A poorly-indented multi-line environment followed by a messy paragraph.
+    let doc = "\\begin{itemize}\n\\item one\n\\item two\n\\end{itemize}\n\nsecond    paragraph.\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    // Cursor inside the environment body (line 1). It clamps out to the whole
+    // environment block.
+    send_request(
+        &client,
+        2,
+        "textDocument/rangeFormatting",
+        serde_json::to_value(DocumentRangeFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: Range {
+                start: Position::new(1, 3),
+                end: Position::new(1, 3),
+            },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let formatted = apply_edits(doc, &edits);
+    assert_eq!(
+        formatted,
+        "\\begin{itemize}\n  \\item one\n  \\item two\n\\end{itemize}\n\nsecond    paragraph.\n",
+        "the environment body is reindented; the trailing paragraph is untouched"
+    );
 
     shutdown(&client, server_thread);
 }

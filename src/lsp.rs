@@ -74,7 +74,7 @@ use lsp_types::notification::{
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, References, RegisterCapability, Rename, Request as _,
+    PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename, Request as _,
     ResolveCompletionItem, WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
 };
 use lsp_types::{
@@ -85,9 +85,9 @@ use lsp_types::{
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
     DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentRangeFormattingParams, DocumentSymbol,
+    DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRange,
+    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
     PublishDiagnosticsParams, Range, ReferenceParams, Registration, RegistrationParams,
@@ -114,7 +114,8 @@ use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, F
 use crate::config::{Config, LintConfig};
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::{
-    FormatStyle, WrapMode, format_node_with_signatures, format_with_style_flavored,
+    FormatStyle, WrapMode, format_node_range_with_signatures, format_node_with_signatures,
+    format_with_style_flavored,
 };
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
@@ -169,6 +170,9 @@ fn server_capabilities() -> ServerCapabilities {
             work_done_progress_options: Default::default(),
         })),
         document_formatting_provider: Some(OneOf::Left(true)),
+        // Format the editor selection, expanded to whole top-level blocks (see
+        // `compute_range_format`).
+        document_range_formatting_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         // Aggregate the per-file outline (sections, labels, floats, theorems,
         // macros, environments) across every tracked project file. No lazy
@@ -417,6 +421,16 @@ enum WorkerJob {
         text: String,
         style: FormatStyle,
         kind: FileKind,
+    },
+    /// A range-formatting request: like [`WorkerJob::Format`] but bounded to the
+    /// editor selection (expanded to whole top-level blocks on the read pool).
+    RangeFormat {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        style: FormatStyle,
+        kind: FileKind,
+        range: Range,
     },
     /// A document-symbol request: build the outline on the read pool and reply to
     /// `id`.
@@ -683,6 +697,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                         match req.method.as_str() {
                             Formatting::METHOD => {
                                 on_formatting(&connection, &mut state, &job_tx, req)
+                            }
+                            RangeFormatting::METHOD => {
+                                on_range_formatting(&connection, &mut state, &job_tx, req)
                             }
                             DocumentSymbolRequest::METHOD => {
                                 on_document_symbol(&connection, &state, &job_tx, req)
@@ -995,6 +1012,58 @@ fn on_formatting(
         text,
         style,
         kind,
+    });
+}
+
+/// `textDocument/rangeFormatting`: build a range-format job for the worker, or
+/// reply `null` when the document is unknown. Mirrors [`on_formatting`]; the only
+/// extra input is the selection `range`, resolved against the buffer on the read
+/// pool.
+fn on_range_formatting(
+    connection: &Connection,
+    state: &mut GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<DocumentRangeFormattingParams>(RangeFormatting::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid range formatting params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    if !state.documents.contains_key(&uri) {
+        // Unknown document: nothing to format.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    }
+    let resolved = state.resolve_settings(&uri);
+    let mut style = resolved.style;
+    if !resolved.config_present && params.options.tab_size > 0 {
+        style.indent_width = params.options.tab_size as usize;
+    }
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    style.wrap = resolved.wrap_override.unwrap_or(kind.default_wrap());
+    let text = state.documents[&uri].text.clone();
+    let _ = job_tx.send(WorkerJob::RangeFormat {
+        id,
+        path,
+        text,
+        style,
+        kind,
+        range: params.range,
     });
 }
 
@@ -1808,6 +1877,22 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
                     .spawn(move || run_format(&snapshot, id, &path, &text, style, kind, &out_tx));
+            }
+            WorkerJob::RangeFormat {
+                id,
+                path,
+                text,
+                style,
+                kind,
+                range,
+            } => {
+                // Range formatting runs on the read pool against a snapshot, exactly
+                // like `Format` (an id-bound response, not coalesced).
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_range_format(&snapshot, id, &path, &text, style, kind, range, &out_tx)
+                });
             }
             WorkerJob::Symbols {
                 id,
@@ -2627,6 +2712,119 @@ fn compute_format(
         },
         new_text: formatted,
     })
+}
+
+/// Range-format the buffer behind a [`WorkerJob::RangeFormat`] on the read pool and
+/// reply with the (possibly empty) edit array, or `null` on refusal / unknown
+/// buffer. Mirrors [`run_format`]'s cancellation/fallback contract.
+#[allow(clippy::too_many_arguments)]
+fn run_range_format(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    style: FormatStyle,
+    kind: FileKind,
+    range: Range,
+    out_tx: &Sender<Outbound>,
+) {
+    let result = match compute_range_format(snapshot, path, text, style, kind, range) {
+        Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    };
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Produce the minimal edits that range-format `sel_range`, `Some(vec![])` for a
+/// no-op, or `None` for a refusal (parse errors), an unsupported kind, or a
+/// selection touching no block. LaTeX-only for now; BibTeX returns `None`.
+///
+/// The whole document is formatted with an emission filter so only the in-range
+/// top-level blocks are laid out (see [`format_node_range_with_signatures`]); the
+/// formatted fragment is then diffed against the original block slice so the edits
+/// are minimal. Shares [`compute_format`]'s salsa fast-path / reparse-fallback
+/// shape.
+fn compute_range_format(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    style: FormatStyle,
+    kind: FileKind,
+    sel_range: Range,
+) -> Option<Vec<TextEdit>> {
+    // Range formatting is LaTeX-only for now; bib falls back to no edits.
+    match kind {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {}
+        FileKind::Bib => return None,
+    }
+
+    let idx = LineIndex::new(text);
+    let start = idx.offset_at(text, sel_range.start.line, sel_range.start.character);
+    let end = idx.offset_at(text, sel_range.end.line, sel_range.end.character);
+    let (lo, hi) = (start.min(end), start.max(end));
+    let sel = TextRange::new(
+        TextSize::new(lo.min(u32::MAX as usize) as u32),
+        TextSize::new(hi.min(u32::MAX as usize) as u32),
+    );
+
+    // `Some(Some(e))` = computed edits (possibly empty); `Some(None)` = clean
+    // refusal (parse errors); `None` = cache miss / stale snapshot / cancellation
+    // → reparse from the captured text.
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        if !snapshot.parse_diagnostics(file).is_empty() {
+            return Some(None);
+        }
+        let root = snapshot.parsed_tree(file);
+        let sigs = snapshot.scope_signatures(members_of(snapshot), file);
+        Some(Some(range_edits_for_root(
+            &root, text, &idx, sel, style, sigs,
+        )))
+    }));
+
+    match cached {
+        Ok(Some(Some(edits))) => edits,
+        Ok(Some(None)) => None,
+        Ok(None) | Err(_) => {
+            let parsed = parse_with_flavor(text, kind.lex_config());
+            if !parsed.errors.is_empty() {
+                return None;
+            }
+            range_edits_for_root(
+                &parsed.syntax(),
+                text,
+                &idx,
+                sel,
+                style,
+                &SignatureDb::default(),
+            )
+        }
+    }
+}
+
+/// Expand `sel` to top-level-block boundaries, format those blocks, and diff the
+/// result against the original slice into minimal edits. `None` when the selection
+/// touches no block or the formatter refuses; `Some(vec![])` when already
+/// formatted.
+fn range_edits_for_root(
+    root: &SyntaxNode,
+    text: &str,
+    idx: &LineIndex,
+    sel: TextRange,
+    style: FormatStyle,
+    external: &SignatureDb,
+) -> Option<Vec<TextEdit>> {
+    let block_range = expand_to_top_level_blocks(root, sel)?;
+    let fragment = format_node_range_with_signatures(root, style, external, block_range).ok()?;
+    let base = usize::from(block_range.start());
+    let end = usize::from(block_range.end());
+    if fragment == text[base..end] {
+        return Some(Vec::new());
+    }
+    Some(diff_to_edits(idx, text, block_range, &fragment))
 }
 
 /// Build the document-symbol outline for a [`WorkerJob::Symbols`] on the read pool
@@ -4252,6 +4450,123 @@ fn byte_range_to_lsp(idx: &LineIndex, text: &str, start: usize, end: usize) -> R
         start: Position::new(sl, sc),
         end: Position::new(el, ec),
     }
+}
+
+/// Expand a selection to whole top-level-block boundaries: the cover of every
+/// `ROOT` child *node* overlapping `sel`. This is range formatting's safe zone — a
+/// partial selection always pulls in the whole structural units it touches, so the
+/// formatter never lays out a fragment of a block. `root.children()` yields only
+/// nodes (the top-level blocks), so inter-block trivia is naturally skipped.
+/// Returns `None` when the selection touches no block (e.g. a cursor in blank space
+/// between blocks), meaning there is nothing to format.
+fn expand_to_top_level_blocks(root: &SyntaxNode, sel: TextRange) -> Option<TextRange> {
+    let mut acc: Option<TextRange> = None;
+    for child in root.children() {
+        let r = child.text_range();
+        // A cursor (empty selection) hits the block whose range contains it
+        // (touch-inclusive, so a cursor at a block edge still selects it); a
+        // non-empty selection hits any block it genuinely overlaps.
+        let hit = if sel.is_empty() {
+            r.contains_inclusive(sel.start())
+        } else {
+            sel.start() < r.end() && r.start() < sel.end()
+        };
+        if hit {
+            acc = Some(acc.map_or(r, |a| a.cover(r)));
+        }
+    }
+    acc
+}
+
+/// Diff the formatted `fragment` against the original `text[block_range]` slice and
+/// emit one [`TextEdit`] per changed line hunk, mapped back into document
+/// coordinates. A line-level LCS keeps the edits minimal (better editor
+/// undo/cursor behavior than one wholesale block replacement). For a pathologically
+/// large block the `O(n*m)` table is skipped in favor of a single replace.
+fn diff_to_edits(
+    idx: &LineIndex,
+    text: &str,
+    block_range: TextRange,
+    fragment: &str,
+) -> Vec<TextEdit> {
+    let base = usize::from(block_range.start());
+    let end = usize::from(block_range.end());
+    let original = &text[base..end];
+
+    // Lines keep their trailing `\n` (`split_inclusive`), so equality compares whole
+    // lines and the byte offsets stay exact.
+    let a: Vec<&str> = original.split_inclusive('\n').collect();
+    let b: Vec<&str> = fragment.split_inclusive('\n').collect();
+    let (n, m) = (a.len(), b.len());
+
+    // Safety valve: cap the LCS table so a huge block cannot blow up; fall back to
+    // one wholesale replace of the block range.
+    if n.saturating_mul(m) > 4_000_000 {
+        return vec![TextEdit {
+            range: byte_range_to_lsp(idx, text, base, end),
+            new_text: fragment.to_owned(),
+        }];
+    }
+
+    // lcs[i][j] = length of the longest common subsequence of a[i..] and b[j..].
+    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[i][j] = if a[i] == b[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+
+    // Walk the table, coalescing each run of deletes/inserts into one replace edit.
+    let mut edits = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut a_off = base; // byte offset of a[i] within `text`
+    let mut del_start = base;
+    let mut del_end = base;
+    let mut ins = String::new();
+    let mut in_hunk = false;
+    while i < n || j < m {
+        if i < n && j < m && a[i] == b[j] {
+            if in_hunk {
+                edits.push(TextEdit {
+                    range: byte_range_to_lsp(idx, text, del_start, del_end),
+                    new_text: std::mem::take(&mut ins),
+                });
+                in_hunk = false;
+            }
+            a_off += a[i].len();
+            i += 1;
+            j += 1;
+        } else if j == m || (i < n && lcs[i + 1][j] >= lcs[i][j + 1]) {
+            // delete a[i]
+            if !in_hunk {
+                del_start = a_off;
+                in_hunk = true;
+            }
+            a_off += a[i].len();
+            del_end = a_off;
+            i += 1;
+        } else {
+            // insert b[j]
+            if !in_hunk {
+                del_start = a_off;
+                del_end = a_off;
+                in_hunk = true;
+            }
+            ins.push_str(b[j]);
+            j += 1;
+        }
+    }
+    if in_hunk {
+        edits.push(TextEdit {
+            range: byte_range_to_lsp(idx, text, del_start, del_end),
+            new_text: ins,
+        });
+    }
+    edits
 }
 
 #[cfg(test)]

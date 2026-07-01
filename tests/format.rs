@@ -9,9 +9,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use badness::formatter::{
-    FormatStyle, WrapMode, format, format_with_style, format_with_style_flavored,
+    FormatStyle, WrapMode, format, format_node_range_with_signatures, format_with_style,
+    format_with_style_flavored,
 };
 use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
+use badness::semantic::SignatureDb;
 
 /// Assert the formatter invariants for a single clean-parsing input. Inputs the
 /// parser rejects are out of scope for the formatter (it refuses them), so the
@@ -745,4 +747,55 @@ fn format_output_snapshot() {
     // join into one.
     let input = "\\section{Intro}   \n\n\n\nSome text with trailing space   \nmore text.";
     insta::assert_snapshot!(format(input).expect("formats"));
+}
+
+/// Range formatting lays out a single top-level block at its real (indent-0)
+/// context: the formatted fragment equals that block's source formatted
+/// standalone, and—being a mid-document fragment—it carries no forced trailing
+/// newline.
+#[test]
+fn range_format_block_equals_standalone_without_trailing_newline() {
+    let style = FormatStyle::default();
+    let input = "first    paragraph.\n\nsecond    paragraph.\n";
+    let root = parse(input).syntax();
+    let first = root.children().next().expect("a first top-level block");
+    let r = first.text_range();
+
+    let fragment =
+        format_node_range_with_signatures(&root, style, &SignatureDb::default(), r).unwrap();
+
+    let slice = &input[usize::from(r.start())..usize::from(r.end())];
+    let standalone = format_with_style(slice, style).unwrap();
+    assert_eq!(fragment, standalone.trim_end_matches('\n'));
+    assert!(
+        !fragment.ends_with('\n'),
+        "fragment must not force a newline"
+    );
+    assert_eq!(fragment, "first paragraph.");
+}
+
+/// Range formatting a multi-line environment block reindents its body at the
+/// real indent-0 context, matching a standalone format of the same source and
+/// carrying no forced trailing newline.
+#[test]
+fn range_format_multiline_environment_block() {
+    let style = FormatStyle::default();
+    let input =
+        "\\begin{itemize}\n\\item one\n\\item two\n\\end{itemize}\n\nsecond    paragraph.\n";
+    let root = parse(input).syntax();
+    let env = root.children().next().expect("the environment block");
+    let r = env.text_range();
+
+    let fragment =
+        format_node_range_with_signatures(&root, style, &SignatureDb::default(), r).unwrap();
+
+    let slice = &input[usize::from(r.start())..usize::from(r.end())];
+    let standalone = format_with_style(slice, style).unwrap();
+    assert_eq!(fragment, standalone.trim_end_matches('\n'));
+    assert!(fragment.starts_with("\\begin{itemize}"));
+    assert!(fragment.ends_with("\\end{itemize}"));
+    assert!(
+        fragment.contains('\n'),
+        "a multi-line block stays multi-line"
+    );
 }

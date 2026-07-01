@@ -112,9 +112,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### Formatting
 
-- [ ] Range formatting (`textDocument/rangeFormatting`)—format the smallest
-  enclosing node(s) covering the selection; clamp to node boundaries so a
-  partial selection never corrupts the tree.
+- [x] Range formatting (`textDocument/rangeFormatting`)—expand the selection to
+  whole top-level blocks (children of `ROOT`), lower only those (a byte-range
+  emission filter in `format_node_range_with_signatures`, so the formatter stays
+  the sole layout authority and out-of-range blocks are never laid out), then
+  diff the fragment against the original slice into minimal edits. LaTeX only;
+  bib is a no-op for now.
 - [ ] On-type formatting (`textDocument/onTypeFormatting`), e.g. re-indent on
   `}`/`\end{…}` close. *Lower priority; opt-in trigger characters.*
 

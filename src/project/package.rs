@@ -11,11 +11,14 @@
 //! As with includes, resolution here is **pure path arithmetic** (`.sty`/`.cls`
 //! extension defaulting + `base_dir` joining) and never touches the disk; the
 //! resolved-vs-unresolved decision against the analyzed file set happens in
-//! [`crate::project::graph::PackageGraph::build`]. Options
+//! [`crate::project::graph::PackageGraph::build`]. When no generated `.sty`/`.cls`
+//! is a member, resolution falls back to the package's literate `.dtx` source (see
+//! [`dtx_source_of`]); the generated file is preferred when both exist. Options
 //! (`\usepackage[opt]{name}`) are not modeled here — `nth_group_text` reads the
 //! `{name}` group and skips the `[opt]` optional, and the load graph never needs
 //! them.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use rowan::TextRange;
@@ -182,6 +185,19 @@ fn package_kind(name: &str) -> Option<PackageKind> {
         "LoadClassWithOptions" => PackageKind::LoadClassWithOptions,
         _ => return None,
     })
+}
+
+/// The `.dtx` literate source a `.sty`/`.cls` target would be generated from, used
+/// as a resolution fallback when the generated file is absent from the analyzed set.
+/// Returns `None` unless `target` ends in a `.sty`/`.cls` extension (an explicit
+/// other extension, or an already-`.dtx` target, has no fallback). Pure path
+/// arithmetic; membership is decided by the caller.
+pub fn dtx_source_of(target: &Path) -> Option<PathBuf> {
+    matches!(
+        target.extension().and_then(OsStr::to_str),
+        Some("sty" | "cls")
+    )
+    .then(|| target.with_extension("dtx"))
 }
 
 /// Resolve one load target: default the `.sty`/`.cls` extension when the name has

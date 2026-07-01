@@ -178,11 +178,18 @@ scope (the same boundary the include graph and CWL ingest keep).
 
 ### Semantic and integration
 
-- [ ] **Signature extraction from package sources.** Run the existing
-  `semantic/define.rs` scanner across loaded `.sty`/`.cls` (and `macrocode`
-  blocks of a `.dtx` when no generated `.sty` is present), extending it to
-  `\DeclareRobustCommand`/`\DeclareDocumentCommand` and friends. Prefer a
-  generated `.sty` over its `.dtx` source when both exist.
+- [x] **Signature extraction from package sources.** The `semantic/define.rs`
+  scanner already runs across loaded `.sty`/`.cls` (via `scope_signatures` and its
+  db-less CLI mirror `collect_package_signatures`), and already recognizes
+  `\DeclareRobustCommand` (`DefKind::Command`) and `\DeclareDocumentCommand` + the
+  `\New/Renew/Provide...DocumentCommand/Environment` family (`DefKind::Xparse*`).
+  Added: package resolution now falls back to a package's `.dtx` literate source
+  when no generated `.sty`/`.cls` is a member (preferring the generated file when
+  both exist), in both `PackageGraph::build` and the CLI `collect_loaded`
+  (`project::package::dtx_source_of`). The `.dtx` is scanned whole-tree by the
+  existing per-file `document_signatures` (its `macrocode` bodies already lex as
+  real code). Broadening the definer set beyond the above (`\DeclareMathOperator`,
+  etoolbox `\newrobustcmd`/`\csdef`, ...) is deferred.
 - [ ] **Package metadata & options (recognize, never execute).**
   `\ProvidesPackage`/`\ProvidesClass` (name/date/version),
   `\NeedsTeXFormat`, `\DeclareOption`/`\ProcessOptions`/`\ExecuteOptions` ---

@@ -28,5 +28,5 @@ pub use include::{
 pub use labels::{ResolvedLabels, resolved_labels};
 pub use package::{
     PackageEdge, PackageEdgeKey, PackageKind, PackageTarget, collect_package_edge_keys,
-    collect_package_edges,
+    collect_package_edges, dtx_source_of,
 };

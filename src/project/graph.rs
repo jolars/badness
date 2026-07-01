@@ -24,7 +24,7 @@ use crate::incremental::{
     IncrementalDb, QueryKind, QueryLogEntry, SourceFile, include_edges, package_edges,
 };
 use crate::project::include::{IncludeEdgeKey, IncludeKind, IncludeTarget};
-use crate::project::package::{PackageEdgeKey, PackageKind, PackageTarget};
+use crate::project::package::{PackageEdgeKey, PackageKind, PackageTarget, dtx_source_of};
 
 /// One file's contribution to the inclusion graph: its path and the range-free
 /// inclusion edges it declares.
@@ -270,9 +270,9 @@ pub struct ResolvedLoad {
 }
 
 /// A load edge that could not be resolved to an analyzed member: a dynamic
-/// target, or a literal name with no local `.sty`/`.cls` in the set (the common
-/// case for a TEXMF package like `amsmath`, which we do not search for). The
-/// load-graph analog of [`UnresolvedInclude`].
+/// target, or a literal name with no local `.sty`/`.cls`/`.dtx` in the set (the
+/// common case for a TEXMF package like `amsmath`, which we do not search for).
+/// The load-graph analog of [`UnresolvedInclude`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedLoad {
     pub from: PathBuf,
@@ -281,7 +281,8 @@ pub struct UnresolvedLoad {
 }
 
 /// The package-load graph over a set of files: which files load which local
-/// `.sty`/`.cls`. The load-graph analog of [`IncludeGraph`]; like it, holds
+/// `.sty`/`.cls` (falling back to a package's `.dtx` source when no generated file
+/// is a member). The load-graph analog of [`IncludeGraph`]; like it, holds
 /// `HashMap`s (so [`package_graph`] is `no_eq`) and is built by the pure
 /// [`PackageGraph::build`]. Reachability is left to the caller — different open
 /// files have different scopes — via [`transitively_loaded`](Self::transitively_loaded).
@@ -310,21 +311,30 @@ impl PackageGraph {
         for file in files {
             let mut outgoing = Vec::new();
             for edge in &file.package_edges {
-                match &edge.target {
-                    PackageTarget::Path(to) if members.contains(to.as_path()) => {
-                        outgoing.push(ResolvedLoad {
-                            from: file.path.clone(),
-                            to: to.clone(),
-                            kind: edge.kind,
-                        });
+                // Prefer the literal `.sty`/`.cls` target; when it isn't a member,
+                // fall back to the package's `.dtx` literate source.
+                let resolved = match &edge.target {
+                    PackageTarget::Path(to) if members.contains(to.as_path()) => Some(to.clone()),
+                    PackageTarget::Path(to) => {
+                        dtx_source_of(to).filter(|d| members.contains(d.as_path()))
+                    }
+                    PackageTarget::Dynamic => None,
+                };
+                match resolved {
+                    Some(to) => {
                         loaded_by
                             .entry(to.clone())
                             .or_default()
                             .push(file.path.clone());
+                        outgoing.push(ResolvedLoad {
+                            from: file.path.clone(),
+                            to,
+                            kind: edge.kind,
+                        });
                     }
-                    // A name with no local `.sty`/`.cls` (e.g. a TEXMF package) is
-                    // just as opaque as a dynamic target — we resolve local only.
-                    _ => unresolved.push(UnresolvedLoad {
+                    // A name with no local `.sty`/`.cls`/`.dtx` (e.g. a TEXMF package)
+                    // is just as opaque as a dynamic target — we resolve local only.
+                    None => unresolved.push(UnresolvedLoad {
                         from: file.path.clone(),
                         target: edge.target.clone(),
                         kind: edge.kind,
@@ -655,6 +665,50 @@ mod tests {
         let g = PackageGraph::build(&files);
         assert!(g.loads(Path::new("/p/main.tex")).is_empty());
         assert_eq!(g.unresolved().len(), 1);
+    }
+
+    #[test]
+    fn load_falls_back_to_dtx_when_no_sty() {
+        // `mypkg.sty` isn't a member, but its `.dtx` source is — resolve to the `.dtx`.
+        let files = vec![
+            pkg_facts("/p/main.tex", &[(PackageKind::UsePackage, "/p/mypkg.sty")]),
+            pkg_facts("/p/mypkg.dtx", &[]),
+        ];
+        let g = PackageGraph::build(&files);
+        assert_eq!(
+            g.loads(Path::new("/p/main.tex")),
+            &[ResolvedLoad {
+                from: PathBuf::from("/p/main.tex"),
+                to: PathBuf::from("/p/mypkg.dtx"),
+                kind: PackageKind::UsePackage,
+            }]
+        );
+        assert_eq!(
+            g.loaded_by(Path::new("/p/mypkg.dtx")),
+            &[PathBuf::from("/p/main.tex")]
+        );
+        assert!(g.unresolved().is_empty());
+    }
+
+    #[test]
+    fn load_prefers_sty_over_dtx_when_both_present() {
+        // Both the generated `mypkg.sty` and its `mypkg.dtx` are members — the
+        // generated file wins; the `.dtx` fallback only fires when it is absent.
+        let files = vec![
+            pkg_facts("/p/main.tex", &[(PackageKind::UsePackage, "/p/mypkg.sty")]),
+            pkg_facts("/p/mypkg.sty", &[]),
+            pkg_facts("/p/mypkg.dtx", &[]),
+        ];
+        let g = PackageGraph::build(&files);
+        assert_eq!(
+            g.loads(Path::new("/p/main.tex")),
+            &[ResolvedLoad {
+                from: PathBuf::from("/p/main.tex"),
+                to: PathBuf::from("/p/mypkg.sty"),
+                kind: PackageKind::UsePackage,
+            }]
+        );
+        assert!(g.loaded_by(Path::new("/p/mypkg.dtx")).is_empty());
     }
 
     #[test]

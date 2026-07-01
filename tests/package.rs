@@ -141,6 +141,84 @@ fn scope_signatures_document_definition_wins() {
     assert_eq!(scope.command("dup").unwrap().args.len(), 2);
 }
 
+/// Intern a project from an explicit `(SourceFile, FileKind)` membership, sorting
+/// by path as a real consumer would.
+fn project_of<'db>(
+    db: &'db IncrementalDatabase,
+    members: &[(SourceFile, FileKind)],
+) -> Project<'db> {
+    let mut members: Vec<ProjectMember> = members
+        .iter()
+        .map(|&(file, kind)| ProjectMember {
+            file,
+            path: fpath(db, file),
+            kind,
+        })
+        .collect();
+    members.sort_by(|a, b| a.path.cmp(&b.path));
+    Project::new(db, members)
+}
+
+#[test]
+fn scope_signatures_falls_back_to_dtx_source() {
+    // `\usepackage{mypkg}` has no generated `mypkg.sty`, only the `.dtx` literate
+    // source — resolution falls back to it and scans the def in its `macrocode`.
+    let mut db = IncrementalDatabase::default();
+    let main = db.upsert_file(
+        Path::new("/proj/main.tex"),
+        "\\usepackage{mypkg}\n\\myfoo{a}{b}\n".to_string(),
+    );
+    let dtx = db.upsert_file(
+        Path::new("/proj/mypkg.dtx"),
+        "%    \\begin{macrocode}\n\\newcommand{\\myfoo}[2]{#1#2}\n%    \\end{macrocode}\n"
+            .to_string(),
+    );
+    let project = project_of(&db, &[(main, FileKind::Tex), (dtx, FileKind::Dtx)]);
+
+    // The load graph resolves to the `.dtx`.
+    let graph = package_graph(&db, project);
+    assert_eq!(graph.loads(&fpath(&db, main))[0].to, fpath(&db, dtx));
+
+    // ...and its definition lands in the document scope.
+    let scope = scope_signatures(&db, project, main);
+    assert_eq!(scope.command("myfoo").unwrap().args.len(), 2);
+}
+
+#[test]
+fn scope_signatures_prefers_sty_over_dtx() {
+    // Both a generated `mypkg.sty` and its `mypkg.dtx` are members — the generated
+    // file wins, so the document sees the `.sty`'s 1-arg \myfoo.
+    let mut db = IncrementalDatabase::default();
+    let main = db.upsert_file(
+        Path::new("/proj/main.tex"),
+        "\\usepackage{mypkg}\n".to_string(),
+    );
+    let sty = db.upsert_file(
+        Path::new("/proj/mypkg.sty"),
+        "\\newcommand{\\myfoo}[1]{#1}\n".to_string(),
+    );
+    let dtx = db.upsert_file(
+        Path::new("/proj/mypkg.dtx"),
+        "%    \\begin{macrocode}\n\\newcommand{\\myfoo}[2]{#1#2}\n%    \\end{macrocode}\n"
+            .to_string(),
+    );
+    let project = project_of(
+        &db,
+        &[
+            (main, FileKind::Tex),
+            (sty, FileKind::Sty),
+            (dtx, FileKind::Dtx),
+        ],
+    );
+
+    assert_eq!(
+        package_graph(&db, project).loads(&fpath(&db, main))[0].to,
+        fpath(&db, sty)
+    );
+    let scope = scope_signatures(&db, project, main);
+    assert_eq!(scope.command("myfoo").unwrap().args.len(), 1);
+}
+
 #[test]
 fn scope_signatures_backdates_on_prose_edit() {
     // Editing main's prose changes neither its loads nor its definitions, so

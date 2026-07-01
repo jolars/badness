@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::file_discovery::file_kind_or_tex;
 use crate::parser::parse_with_flavor;
-use crate::project::{PackageTarget, collect_package_edge_keys};
+use crate::project::{PackageTarget, collect_package_edge_keys, dtx_source_of};
 use crate::semantic::{SignatureDb, scan_definitions};
 use crate::syntax::SyntaxNode;
 
@@ -66,11 +66,20 @@ fn collect_loaded(
         if !visited.insert(path.clone()) {
             continue;
         }
-        if let Some((pkg_root, pkg_base)) = src.load(&path) {
+        if let Some((pkg_root, pkg_base)) = load_pkg(&path, src) {
             collect_loaded(&pkg_root, Some(&pkg_base), src, visited, merged);
             merged.merge_from(&scan_definitions(&pkg_root));
         }
     }
+}
+
+/// Load a resolved package path, preferring the literal `.sty`/`.cls` target and
+/// falling back to the package's `.dtx` literate source when the generated file is
+/// absent. Mirrors the `.dtx` fallback in
+/// [`PackageGraph::build`](crate::project::PackageGraph).
+fn load_pkg(path: &Path, src: &impl PackageSource) -> Option<(SyntaxNode, PathBuf)> {
+    src.load(path)
+        .or_else(|| dtx_source_of(path).and_then(|dtx| src.load(&dtx)))
 }
 
 /// A [`PackageSource`] that reads local `.sty`/`.cls` files from disk, parsing
@@ -120,9 +129,11 @@ mod tests {
     impl PackageSource for MapSource {
         fn load(&self, path: &Path) -> Option<(SyntaxNode, PathBuf)> {
             let text = self.files.get(path)?;
-            let root = SyntaxNode::new_root(parse(text).green);
+            // Parse under the path's file-kind flavor, matching `DiskPackageSource`,
+            // so a `.dtx` entry lexes its `macrocode` bodies as real code.
+            let parsed = parse_with_flavor(text, file_kind_or_tex(path).lex_config());
             let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
-            Some((root, base))
+            Some((parsed.syntax(), base))
         }
     }
 
@@ -176,6 +187,44 @@ mod tests {
         );
         // The document's 2-arg \dup overrides the package's 1-arg one.
         assert_eq!(db.command("dup").unwrap().args.len(), 2);
+    }
+
+    #[test]
+    fn falls_back_to_dtx_when_no_sty() {
+        // `\usepackage{mypkg}` resolves `mypkg.sty` first; with only `mypkg.dtx`
+        // present, resolution falls back to the literate source and scans the
+        // definition inside its `macrocode` block.
+        let db = scope(
+            "\\usepackage{mypkg}\n\\myfoo{a}{b}\n",
+            "/proj",
+            &[(
+                "/proj/mypkg.dtx",
+                "%    \\begin{macrocode}\n\\newcommand{\\myfoo}[2]{#1#2}\n%    \\end{macrocode}\n",
+            )],
+        );
+        let sig = db
+            .command("myfoo")
+            .expect("package command from .dtx in scope");
+        assert_eq!(sig.args.len(), 2);
+    }
+
+    #[test]
+    fn prefers_sty_over_dtx_when_both_present() {
+        // With both a generated `mypkg.sty` and its `mypkg.dtx` source, the
+        // generated file wins (the `.dtx` fallback only fires when it is absent).
+        let db = scope(
+            "\\usepackage{mypkg}\n",
+            "/proj",
+            &[
+                ("/proj/mypkg.sty", "\\newcommand{\\myfoo}[1]{#1}\n"),
+                (
+                    "/proj/mypkg.dtx",
+                    "%    \\begin{macrocode}\n\\newcommand{\\myfoo}[2]{#1#2}\n%    \\end{macrocode}\n",
+                ),
+            ],
+        );
+        // The `.sty`'s 1-arg \myfoo wins over the `.dtx`'s 2-arg one.
+        assert_eq!(db.command("myfoo").unwrap().args.len(), 1);
     }
 
     #[test]

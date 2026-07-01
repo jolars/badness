@@ -1944,7 +1944,7 @@ fn build_alignment_grid(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
 ) -> Option<Vec<GridItem>> {
-    let inline = flatten_alignment_body(body_elements)?;
+    let inline = flatten_alignment_body(body_elements, cx)?;
     let printer = Printer::new(FormatStyle::default());
 
     /// Render the accumulated cell elements flat and trimmed, pushing the result
@@ -2143,6 +2143,15 @@ fn non_row_line(
                 content_end = i;
                 continue;
             }
+            // A bare rule control word — the peeled prefix of an over-attaching rule
+            // command ([`rule_overattaches_cell`]), whose trailing `{…}` cell now
+            // follows as its own element.
+            SyntaxElement::Token(t) if token_is_rule_word(t, cx) => {
+                has_rule = true;
+                i += 1;
+                content_end = i;
+                continue;
+            }
             _ => return None,
         }
         i += 1;
@@ -2178,9 +2187,21 @@ fn non_row_line(
 /// signature DB flags as a horizontal rule (`\hline`, `\midrule`, …).
 fn is_comment_or_rule_start(element: &SyntaxElement, cx: LowerCtx<'_>) -> bool {
     match element {
-        SyntaxElement::Token(t) => t.kind() == SyntaxKind::COMMENT,
+        SyntaxElement::Token(t) => t.kind() == SyntaxKind::COMMENT || token_is_rule_word(t, cx),
         SyntaxElement::Node(n) => n.kind() == SyntaxKind::COMMAND && is_rule_command(n, cx),
     }
+}
+
+/// Whether `token` is a bare control word naming a horizontal-rule command per the
+/// signature DB — the peeled prefix of an over-attaching rule command (see
+/// [`rule_overattaches_cell`]), recognized as a rule the same way an intact rule
+/// `COMMAND` node is ([`is_rule_command`]).
+fn token_is_rule_word(token: &SyntaxToken, cx: LowerCtx<'_>) -> bool {
+    token.kind() == SyntaxKind::CONTROL_WORD
+        && cx
+            .signatures
+            .command(token.text().trim_start_matches('\\'))
+            .is_some_and(|sig| sig.rule)
 }
 
 /// Whether `node` (a `COMMAND`) is a horizontal-rule command per the signature DB.
@@ -2225,7 +2246,15 @@ fn rest_is_only_trivia(inline: &[SyntaxElement], from: usize) -> bool {
 ///
 /// Returns `None` when the body holds more than one paragraph — a blank-line
 /// break, which the single grid does not model — so the caller falls back.
-fn flatten_alignment_body(body_elements: &[SyntaxElement]) -> Option<Vec<SyntaxElement>> {
+///
+/// A rule command that the greedy parser saddled with the next line's first cell
+/// as a bogus `{…}` argument ([`rule_overattaches_cell`]) is expanded into its own
+/// children, so the rule lands on its own passthrough line and the `{…}` is handed
+/// back to the grid as cell content.
+fn flatten_alignment_body(
+    body_elements: &[SyntaxElement],
+    cx: LowerCtx<'_>,
+) -> Option<Vec<SyntaxElement>> {
     let mut inline: Vec<SyntaxElement> = Vec::new();
     let mut paragraphs = 0;
     for element in body_elements {
@@ -2235,13 +2264,62 @@ fn flatten_alignment_body(body_elements: &[SyntaxElement]) -> Option<Vec<SyntaxE
                 if paragraphs > 1 {
                     return None;
                 }
-                inline.extend(child.children_with_tokens());
+                for grandchild in child.children_with_tokens() {
+                    push_alignment_element(&mut inline, grandchild, cx);
+                }
             }
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
-            other => inline.push(other.clone()),
+            other => push_alignment_element(&mut inline, other.clone(), cx),
         }
     }
     Some(inline)
+}
+
+/// Push one flattened-body element, expanding an over-attaching rule command
+/// ([`rule_overattaches_cell`]) into its children so its trailing `{…}` cell is
+/// exposed to the grid rather than glued to the rule.
+fn push_alignment_element(
+    inline: &mut Vec<SyntaxElement>,
+    element: SyntaxElement,
+    cx: LowerCtx<'_>,
+) {
+    if let SyntaxElement::Node(node) = &element
+        && rule_overattaches_cell(node, cx)
+    {
+        inline.extend(node.children_with_tokens());
+    } else {
+        inline.push(element);
+    }
+}
+
+/// Whether `node` is a horizontal-rule `COMMAND` (`\midrule`, `\toprule`, …) onto
+/// which the greedy parser (AGENTS.md decision #8) glued the next line's first
+/// cell as a spurious `{…}` argument. Booktabs rules take at most an optional
+/// `[width]`, never a mandatory brace argument, so a leading `{…}` is never a real
+/// argument — it is cell content the arity refinement peels back off.
+///
+/// Restricted to a *leading* `{…}` (no real argument consumed first): the rare
+/// `\toprule[2pt]{…}` shape keeps the generic fallback rather than being split.
+fn rule_overattaches_cell(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    if node.kind() != SyntaxKind::COMMAND || !is_rule_command(node, cx) {
+        return false;
+    }
+    let Some(first_arg) = node
+        .children()
+        .find(|child| matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+    else {
+        return false;
+    };
+    if first_arg.kind() != SyntaxKind::GROUP {
+        return false;
+    }
+    // A leading `{…}` is a real argument only when the signature's first slot is a
+    // mandatory brace argument (`\cline{2-3}`, `\specialrule{…}`).
+    let first_slot_is_brace = command_name(node)
+        .and_then(|name| cx.signatures.command(&name))
+        .and_then(|sig| sig.args.first())
+        .is_some_and(|arg| arg.kind == ArgKind::Brace);
+    !first_slot_is_brace
 }
 
 /// Render the grid to IR: pad every non-last cell in a row to its column width

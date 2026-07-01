@@ -316,6 +316,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("align_comment_mid_row_fallback", WrapMode::Preserve, 80),
     ("tabular_hline", WrapMode::Preserve, 80),
     ("tabular_booktabs", WrapMode::Preserve, 80),
+    // A rule command (`\toprule`) on its own line whose next line opens with a
+    // braced cell (`{Scenario}`): the greedy parser glues the `{…}` onto the rule
+    // as a bogus argument, but arity refinement peels it back so the rule stays a
+    // passthrough line and the cell rejoins its row and grid-aligns.
+    ("align_rule_overattached_cell", WrapMode::Preserve, 80),
     ("array_columns", WrapMode::Preserve, 80),
     // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal
     // space and breaks like an ordinary (breakable) space when a line overflows,

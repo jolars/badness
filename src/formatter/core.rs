@@ -53,7 +53,7 @@ use rowan::{TextRange, TextSize};
 use crate::ast::{command_name, environment_name};
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
-use crate::semantic::{ArgKind, ArgSpec, SignatureDb, Signatures, scan_definitions};
+use crate::semantic::{ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, scan_definitions};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::context::FormatContext;
@@ -2360,14 +2360,19 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
 }
 
 /// Whether `command`'s signature marks any argument the [`lower_command`] path
-/// must handle specially — reflowable [`prose`](ArgSpec::prose) or a collapsible
-/// token list ([`collapse`](ArgSpec::collapse)). The cheap guard that gates the
+/// must handle specially — a non-[`Opaque`](ContentKind::Opaque) content kind
+/// ([`Prose`](ContentKind::Prose) or a [`TokenList`](ContentKind::TokenList)).
+/// The cheap guard that gates the
 /// [`lower_command`] path in [`lower_node`]: a command with no such argument (the
 /// overwhelming common case) lowers generically, so nothing regresses.
 fn command_has_managed_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
-        .is_some_and(|sig| sig.args.iter().any(|spec| spec.prose || spec.collapse))
+        .is_some_and(|sig| {
+            sig.args
+                .iter()
+                .any(|spec| spec.content != ContentKind::Opaque)
+        })
 }
 
 /// Whether `command` is an *inline* prose command — one whose prose argument sits
@@ -2383,7 +2388,13 @@ fn command_has_managed_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 fn command_is_inline_prose(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
-        .is_some_and(|sig| sig.inline && sig.args.iter().any(|spec| spec.prose))
+        .is_some_and(|sig| {
+            sig.inline
+                && sig
+                    .args
+                    .iter()
+                    .any(|spec| spec.content == ContentKind::Prose)
+        })
 }
 
 /// Whether `command` is an *inline* command that sits in running text (`\citep`,
@@ -2436,8 +2447,8 @@ fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<Syntax
                 if matches!(group.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
                 let is_bracket = group.kind() == SyntaxKind::OPTIONAL;
-                let prose =
-                    match_arg_slot(&sig.args, &mut slot, is_bracket).is_some_and(|spec| spec.prose);
+                let prose = match_arg_slot(&sig.args, &mut slot, is_bracket)
+                    .is_some_and(|spec| spec.content == ContentKind::Prose);
                 if prose {
                     splice_prose_group(&group, cx, out);
                 } else {
@@ -2496,8 +2507,8 @@ fn is_collapsible_trivia_element(element: &SyntaxElement) -> bool {
     matches!(element, SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()))
 }
 
-/// Lower a `COMMAND` whose signature marks an argument as prose (see
-/// [`command_has_prose_arg`], which gates this path). Each attached `{…}`/`[…]`
+/// Lower a `COMMAND` whose signature marks an argument's content kind (see
+/// [`command_has_managed_arg`], which gates this path). Each attached `{…}`/`[…]`
 /// group is matched to its signature slot — kind-aware, so an omitted optional does
 /// not misalign positions (`\section{Title}` binds the `{title}` slot, not a
 /// leading `[short]`) — and a group filling a prose slot is reflowed via
@@ -2525,18 +2536,20 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                     (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
                 };
                 let spec = match_arg_slot(&sig.args, &mut slot, is_bracket);
-                if spec.is_some_and(|s| s.prose) {
-                    out.push(lower_prose_group(&child, open, close, cx));
-                } else if spec.is_some_and(|s| s.collapse) {
-                    // A collapsible token list (e.g. a `\citep` key list): fold a
-                    // multi-line authored form to one line, falling back to the
-                    // generic block form when the body is not safely collapsible.
-                    out.push(
-                        collapse_arg_group(&child, open, close, cx)
-                            .unwrap_or_else(|| lower_node(&child, cx)),
-                    );
-                } else {
-                    out.push(lower_node(&child, cx));
+                match spec.map(|s| s.content) {
+                    Some(ContentKind::Prose) => {
+                        out.push(lower_prose_group(&child, open, close, cx));
+                    }
+                    Some(ContentKind::TokenList) => {
+                        // A collapsible token list (e.g. a `\citep` key list): fold a
+                        // multi-line authored form to one line, falling back to the
+                        // generic block form when the body is not safely collapsible.
+                        out.push(
+                            collapse_arg_group(&child, open, close, cx)
+                                .unwrap_or_else(|| lower_node(&child, cx)),
+                        );
+                    }
+                    _ => out.push(lower_node(&child, cx)),
                 }
             }
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
@@ -2616,7 +2629,7 @@ fn lower_prose_group(
     }
 }
 
-/// Lower a signature-marked *collapsible* argument group (see [`ArgSpec::collapse`])
+/// Lower a signature-marked *collapsible* argument group (see [`ContentKind::TokenList`])
 /// as a single inline atom: interior newlines collapse to spaces, so a citation list
 /// written across lines (`\citep{\n  a,\n  b\n}`) formats identically to its one-line
 /// form (`\citep{a, b}`) — an incidental source line break inside such an argument

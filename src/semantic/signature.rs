@@ -48,31 +48,38 @@ pub enum ArgKind {
     Bracket,
 }
 
+/// How the formatter treats an argument's *content* — its whitespace and break
+/// policy. Exactly one kind per slot (replaces the former mutually-exclusive
+/// `prose`/`collapse` bools). Only meaningful for the formatter; the parser
+/// ignores it (AGENTS.md decision #2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentKind {
+    /// Left exactly as authored: names, identifiers, code, or option lists
+    /// (`\label`, the `\newcommand` body). The default, so an unmarked argument
+    /// never reflows — for most arguments interior whitespace can matter (a
+    /// `minipage`/`\parbox` body, a label key).
+    #[default]
+    Opaque,
+    /// Running prose the formatter may reflow to the line width (e.g. a
+    /// `\footnote`/`\caption` body, a sectioning title).
+    Prose,
+    /// A comma-separated token list whose interior whitespace is *insignificant*,
+    /// so the formatter may collapse a multi-line authored form to a single line
+    /// (a `\citep`/`\cite` key list). Unlike [`Prose`](ContentKind::Prose), the
+    /// content is *not* reflowed to the width: the keys stay together as one atom;
+    /// only incidental source line breaks inside the braces are normalized away,
+    /// so `\citep{\n a,\n b\n}` formats identically to `\citep{a, b}` (determinism).
+    TokenList,
+}
+
 /// One argument slot in a command/environment signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArgSpec {
     /// `true` for a mandatory `{…}` argument, `false` for an optional `[…]` one.
     pub required: bool,
     pub kind: ArgKind,
-    /// `true` when this argument holds running prose the formatter may reflow to
-    /// the line width (e.g. a `\footnote`/`\caption` body, a sectioning title).
-    /// `false` for names, identifiers, code, or option lists (`\label`, the
-    /// `\newcommand` body), which must be left exactly as authored. Default
-    /// `false`, so an unmarked argument never reflows. Only meaningful for the
-    /// formatter; the parser ignores it (AGENTS.md decision #2).
-    pub prose: bool,
-    /// `true` when this argument's interior whitespace is *insignificant*, so the
-    /// formatter may collapse a multi-line authored form to a single line — a
-    /// comma-separated token list whose breaks TeX (or the command's own argument
-    /// parser) ignores, e.g. a `\citep`/`\cite` key list. Unlike [`prose`], the
-    /// content is *not* reflowed to the width: the keys stay together as one atom;
-    /// only incidental source line breaks inside the braces are normalized away, so
-    /// `\citep{\n a,\n b\n}` formats identically to `\citep{a, b}` (determinism).
-    /// Default `false` — an unmarked argument is left exactly as authored — since
-    /// for most arguments interior whitespace can matter (a `minipage`/`\parbox`
-    /// body, a label key). Mutually exclusive with [`prose`] in practice. Only
-    /// meaningful for the formatter; the parser ignores it (AGENTS.md decision #2).
-    pub collapse: bool,
+    /// How the formatter treats this argument's content. See [`ContentKind`].
+    pub content: ContentKind,
 }
 
 /// The signature of a control sequence.
@@ -200,12 +207,11 @@ pub(crate) const fn derive_block(
 }
 
 /// One argument slot, const-constructible for the codegen path.
-pub(crate) const fn arg(required: bool, kind: ArgKind, prose: bool, collapse: bool) -> ArgSpec {
+pub(crate) const fn arg(required: bool, kind: ArgKind, content: ContentKind) -> ArgSpec {
     ArgSpec {
         required,
         kind,
-        prose,
-        collapse,
+        content,
     }
 }
 
@@ -386,7 +392,7 @@ include!(concat!(env!("OUT_DIR"), "/cwl_signatures.rs"));
 /// Handle to the lower-precision **CWL tier**: a broad set of command/environment
 /// names plus argument shapes harvested from the TeXstudio CWL corpus (a curated
 /// package subset; see `scripts/gen_cwl_signatures.py`). It carries *names and
-/// arity only* — every behavior flag (`prose`/`verbatim`/`sectioning`/`math`/…) is
+/// arity only* — every behavior flag (`content`/`verbatim`/`sectioning`/`math`/…) is
 /// left at its default — so it can widen completion and the formatter's arity
 /// lookup without its low-confidence data ever reaching a lexer/outline behavior
 /// decision. Consulted strictly *under* [`builtin`] (via [`Signatures`]); the
@@ -468,11 +474,32 @@ impl RawArgKind {
     }
 }
 
+/// An argument's content kind as written in the JSON: `"opaque"` (default),
+/// `"prose"`, or `"tokenList"`. Mirrors [`ContentKind`].
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "camelCase")]
+enum RawContentKind {
+    #[default]
+    Opaque,
+    Prose,
+    TokenList,
+}
+
+impl From<RawContentKind> for ContentKind {
+    fn from(raw: RawContentKind) -> Self {
+        match raw {
+            RawContentKind::Opaque => ContentKind::Opaque,
+            RawContentKind::Prose => ContentKind::Prose,
+            RawContentKind::TokenList => ContentKind::TokenList,
+        }
+    }
+}
+
 /// One argument as written in the JSON. Either the compact string shorthand
-/// (`"req"` / `"opt"`, the common case, flags defaulting to `false`) or an object
-/// form `{ "kind": "req", "prose": true }` / `{ "kind": "req", "collapse": true }`
-/// that additionally marks the argument as reflowable prose (see [`ArgSpec::prose`])
-/// or a collapsible token list (see [`ArgSpec::collapse`]).
+/// (`"req"` / `"opt"`, the common case, content defaulting to `"opaque"`) or an
+/// object form `{ "kind": "req", "content": "prose" }` / `{ "kind": "req",
+/// "content": "tokenList" }` that additionally marks the argument's content kind
+/// (see [`ContentKind`]).
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawArg {
@@ -480,9 +507,7 @@ enum RawArg {
     Full {
         kind: RawArgKind,
         #[serde(default)]
-        prose: bool,
-        #[serde(default)]
-        collapse: bool,
+        content: RawContentKind,
     },
 }
 
@@ -492,18 +517,12 @@ impl From<RawArg> for ArgSpec {
             RawArg::Short(kind) => ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
-                prose: false,
-                collapse: false,
+                content: ContentKind::Opaque,
             },
-            RawArg::Full {
-                kind,
-                prose,
-                collapse,
-            } => ArgSpec {
+            RawArg::Full { kind, content } => ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
-                prose,
-                collapse,
+                content: content.into(),
             },
         }
     }
@@ -706,32 +725,33 @@ mod tests {
     }
 
     #[test]
-    fn prose_arg_parses_from_both_forms() {
-        // The string shorthand defaults `prose` to false; the object form sets it.
+    fn content_kind_parses_from_both_forms() {
+        // The string shorthand defaults content to `Opaque`; the object form's
+        // `content` discriminant sets it.
         let db = parse(
             r#"{ "commands": {
                 "short": { "args": ["req"] },
-                "full":  { "args": ["opt", { "kind": "req", "prose": true }] }
+                "full":  { "args": ["opt", { "kind": "req", "content": "prose" }] }
             } }"#,
         )
-        .expect("valid prose schema");
+        .expect("valid content schema");
         let short = &db.command("short").unwrap().args;
-        assert!(!short[0].prose);
+        assert_eq!(short[0].content, ContentKind::Opaque);
         let full = &db.command("full").unwrap().args;
         assert_eq!(full[0].kind, ArgKind::Bracket);
-        assert!(!full[0].prose); // object form omitted → default false
+        assert_eq!(full[0].content, ContentKind::Opaque); // no `content` → default
         assert_eq!(full[1].kind, ArgKind::Brace);
-        assert!(full[1].prose);
+        assert_eq!(full[1].content, ContentKind::Prose);
     }
 
     #[test]
     fn bundled_prose_args_flagged() {
         // A representative prose-bearing command marks its mandatory body slot,
-        // while a name-bearing command leaves every slot non-prose.
+        // while a name-bearing command leaves every slot opaque.
         let footnote = &builtin().command("footnote").unwrap().args;
-        assert!(footnote.iter().any(|a| a.prose));
+        assert!(footnote.iter().any(|a| a.content == ContentKind::Prose));
         let label = &builtin().command("label").unwrap().args;
-        assert!(label.iter().all(|a| !a.prose));
+        assert!(label.iter().all(|a| a.content == ContentKind::Opaque));
     }
 
     #[test]
@@ -901,7 +921,7 @@ mod tests {
         for sig in db.command_sigs() {
             assert!(sig.sectioning.is_none());
             assert!(!sig.verbatim && !sig.rule && !sig.inline);
-            assert!(sig.args.iter().all(|a| !a.prose && !a.collapse));
+            assert!(sig.args.iter().all(|a| a.content == ContentKind::Opaque));
         }
         for sig in db.environment_sigs() {
             assert!(!sig.verbatim_body && !sig.math && !sig.code && !sig.align);

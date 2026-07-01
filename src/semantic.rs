@@ -30,7 +30,9 @@ pub use load::{
     DiskPackageSource, PackageSource, collect_package_signatures, disk_scope_signatures,
 };
 pub use outline::{OutlineItem, OutlineSymbol, outline};
-pub use signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb, Signatures};
+pub use signature::{
+    ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, Signatures,
+};
 
 use crate::syntax::SyntaxNode;
 

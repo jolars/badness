@@ -16,14 +16,16 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 - [ ] `Sentence`/`Semantic` (sembr) wrap modes—both fall back to `Preserve`
   today. *Demoted, much later.*
-- [ ] **Argument content-kind taxonomy.** `prose`/`collapse` are two ad-hoc
-  bools on `ArgSpec`; the real model is a per-argument *content kind*
-  (opaque, token-list, prose, document-body) the formatter dispatches
-  whitespace and break policy on. Generalize once a third case appears. The
-  non-determinism fix (`spans_multiple_lines` deciding block-vs-inline from
-  incidental source newlines) is sidestepped for collapse-flagged args but
-  still governs every *unflagged* multi-line group—revisit when the
-  taxonomy lands.
+- [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
+  landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
+  `TokenList`) the formatter dispatches whitespace and break policy on
+  (`DocumentBody` stays an environment-body concept via
+  `EnvironmentSig::no_indent`; add it when a command-arg case appears). What
+  remains is the non-determinism fix: `spans_multiple_lines` decides
+  block-vs-inline from incidental source newlines, sidestepped for the
+  `TokenList` kind but still governing every `Opaque` multi-line group. Give
+  `Opaque` groups a deterministic layout policy that does not depend on
+  incidental whitespace.
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on

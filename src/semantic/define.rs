@@ -28,7 +28,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{command_name, group_command_name, group_inner_source, nth_group, nth_group_text};
-use crate::semantic::signature::{ArgKind, ArgSpec, CommandSig, EnvironmentSig, SignatureDb};
+use crate::semantic::signature::{
+    ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb,
+};
 use crate::semantic::xparse;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 use rowan::NodeOrToken;
@@ -550,15 +552,13 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
                 ArgSpec {
                     required: false,
                     kind: ArgKind::Bracket,
-                    prose: false,
-                    collapse: false,
+                    content: ContentKind::Opaque,
                 }
             } else {
                 ArgSpec {
                     required: true,
                     kind: ArgKind::Brace,
-                    prose: false,
-                    collapse: false,
+                    content: ContentKind::Opaque,
                 }
             }
         })

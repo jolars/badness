@@ -41,7 +41,28 @@ enum RawArgKind {
     Opt,
 }
 
-/// Compact (`"req"`/`"opt"`) or object (`{ "kind": …, "prose": …, "collapse": … }`).
+/// An argument's content kind as written in the JSON: `"opaque"` (default),
+/// `"prose"`, or `"tokenList"`. Mirrors `ContentKind`.
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "camelCase")]
+enum RawContentKind {
+    #[default]
+    Opaque,
+    Prose,
+    TokenList,
+}
+
+impl RawContentKind {
+    fn variant(self) -> &'static str {
+        match self {
+            RawContentKind::Opaque => "ContentKind::Opaque",
+            RawContentKind::Prose => "ContentKind::Prose",
+            RawContentKind::TokenList => "ContentKind::TokenList",
+        }
+    }
+}
+
+/// Compact (`"req"`/`"opt"`) or object (`{ "kind": …, "content": … }`).
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawArg {
@@ -49,28 +70,22 @@ enum RawArg {
     Full {
         kind: RawArgKind,
         #[serde(default)]
-        prose: bool,
-        #[serde(default)]
-        collapse: bool,
+        content: RawContentKind,
     },
 }
 
 impl RawArg {
-    /// Render as an `arg(required, ArgKind::…, prose, collapse)` const-fn call.
+    /// Render as an `arg(required, ArgKind::…, ContentKind::…)` const-fn call.
     fn render(&self) -> String {
-        let (kind, prose, collapse) = match self {
-            RawArg::Short(kind) => (*kind, false, false),
-            RawArg::Full {
-                kind,
-                prose,
-                collapse,
-            } => (*kind, *prose, *collapse),
+        let (kind, content) = match self {
+            RawArg::Short(kind) => (*kind, RawContentKind::Opaque),
+            RawArg::Full { kind, content } => (*kind, *content),
         };
         let (required, kind) = match kind {
             RawArgKind::Req => (true, "ArgKind::Brace"),
             RawArgKind::Opt => (false, "ArgKind::Bracket"),
         };
-        format!("arg({required}, {kind}, {prose}, {collapse})")
+        format!("arg({required}, {kind}, {})", content.variant())
     }
 }
 

@@ -24,7 +24,7 @@
 //! (`+`, `!`) and argument processors (`>{…}`) are skipped. Unknown type letters
 //! stop the scan (conservative: never panic, never invent slots).
 
-use super::signature::{ArgKind, ArgSpec};
+use super::signature::{ArgKind, ArgSpec, ContentKind};
 
 /// Parse an xparse argument-spec string into the `{…}`/`[…]` argument slots it
 /// declares, in order. See the module docs for the type-by-type mapping.
@@ -60,8 +60,7 @@ pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
                     args.push(ArgSpec {
                         required,
                         kind,
-                        prose: false,
-                        collapse: false,
+                        content: ContentKind::Opaque,
                     });
                 }
             }
@@ -89,8 +88,7 @@ fn brace(required: bool) -> ArgSpec {
     ArgSpec {
         required,
         kind: ArgKind::Brace,
-        prose: false,
-        collapse: false,
+        content: ContentKind::Opaque,
     }
 }
 
@@ -98,8 +96,7 @@ fn bracket(required: bool) -> ArgSpec {
     ArgSpec {
         required,
         kind: ArgKind::Bracket,
-        prose: false,
-        collapse: false,
+        content: ContentKind::Opaque,
     }
 }
 

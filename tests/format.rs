@@ -262,6 +262,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // continuation line aligned under the first term after `=`. Whatever fits
     // still stays on one line.
     ("math_display_break_operators", WrapMode::Preserve, 80),
+    // A chain of relations aligns in a column: the second `=` starts a fresh
+    // continuation line under the first `=`, not under the first right-hand-side
+    // term (the two-level rule — relations align, binaries hang one relation-width
+    // deeper).
+    ("math_display_break_relations", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A
     // control-word delimiter (`\langle`) keeps one space so the body cannot glue

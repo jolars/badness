@@ -2967,53 +2967,105 @@ fn collect_math_pieces(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<MathPi
 }
 
 /// Lower a display-math `MATH` body, additionally letting a too-long body *break*
-/// before its top-level binary/relation operators (amsmath style): the first
-/// relation stays on the opening line and anchors a hanging indent, and each
-/// later operator starts a fresh continuation line aligned under the first term
-/// after that relation. The whole body is one [`Ir::group`], so it stays on a
-/// single line whenever it fits — degrading to [`lower_math_body`] otherwise.
+/// before its top-level binary/relation operators (amsmath style). The layout is
+/// two-level: every top-level *relation* aligns in a single column (a chain of
+/// `=` reads as a stack, the second `=` under the first), and a *binary* operator
+/// hangs one relation-width deeper, under the first term of its right-hand side (a
+/// `+`-chain tucks under the first summand). The left-hand side and the first
+/// relation stay flat on the opening line. The whole body is one [`Ir::group`], so
+/// it stays on a single line whenever it fits — degrading to [`lower_math_body`]
+/// otherwise.
 fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let Some(pieces) = collect_math_pieces(node, cx) else {
         return lower_math_body(node, cx);
     };
 
-    // The first relation anchors alignment; continuation lines hang under the
-    // first term following it. With no relation, they hang at the base indent.
-    let anchor = pieces.iter().position(|p| p.role == MathRole::Relation);
-    let offset = match anchor {
-        Some(a) => {
-            let head = Ir::join(Ir::text(" "), pieces[..=a].iter().map(|p| p.ir.clone()));
-            Printer::new(FormatStyle::default())
-                .print_flat(&head)
-                .chars()
-                .count()
-                + 1
-        }
-        None => 0,
+    let flat_width = |ir: &Ir| {
+        Printer::new(FormatStyle::default())
+            .print_flat(ir)
+            .chars()
+            .count()
     };
 
-    let mut parts: Vec<Ir> = Vec::with_capacity(pieces.len() * 2);
-    for (i, piece) in pieces.iter().enumerate() {
+    // With no top-level relation, continuation lines hang at the base indent: the
+    // body simply breaks before each top-level binary operator.
+    let Some(anchor) = pieces.iter().position(|p| p.role == MathRole::Relation) else {
+        let mut parts: Vec<Ir> = Vec::with_capacity(pieces.len() * 2);
+        for (i, piece) in pieces.iter().enumerate() {
+            if i > 0 {
+                let break_here =
+                    piece.role == MathRole::Binary && pieces[i - 1].role == MathRole::Operand;
+                parts.push(if break_here {
+                    Ir::line()
+                } else {
+                    Ir::text(" ")
+                });
+            }
+            parts.push(piece.ir.clone());
+        }
+        return Ir::group(Ir::concat(parts));
+    };
+
+    // The relation column: the left-hand side (atoms before the first relation)
+    // sits flat on the opening line, and the first relation follows one space
+    // later. Every top-level relation aligns here.
+    let rel_col = if anchor == 0 {
+        0
+    } else {
+        let head = Ir::join(Ir::text(" "), pieces[..anchor].iter().map(|p| p.ir.clone()));
+        flat_width(&head) + 1
+    };
+
+    let mut parts: Vec<Ir> = Vec::new();
+    // Left-hand side, flat on the opening line.
+    for (i, piece) in pieces[..anchor].iter().enumerate() {
         if i > 0 {
-            // Only break inside the relation's right-hand side; the head (up to
-            // and including the anchor relation) stays flat on the opening line.
-            let after_anchor = anchor.is_none_or(|a| i > a);
-            let break_here = after_anchor
-                && match piece.role {
-                    MathRole::Binary => pieces[i - 1].role == MathRole::Operand,
-                    MathRole::Relation => true,
-                    MathRole::Operand => false,
-                };
-            parts.push(if break_here {
-                Ir::line()
-            } else {
-                Ir::text(" ")
-            });
+            parts.push(Ir::text(" "));
         }
         parts.push(piece.ir.clone());
     }
 
-    Ir::group(Ir::align(offset, Ir::concat(parts)))
+    // Each relation opens a segment running to the next relation. The first
+    // segment's relation stays on the opening line (one space after the LHS);
+    // every later relation starts a fresh continuation line at `rel_col`. Inside a
+    // segment, a break before a binary operator hangs one relation-width deeper,
+    // under the first right-hand-side term.
+    let mut i = anchor;
+    let mut first_segment = true;
+    while i < pieces.len() {
+        if first_segment {
+            if anchor > 0 {
+                parts.push(Ir::text(" "));
+            }
+        } else {
+            parts.push(Ir::line());
+        }
+        parts.push(pieces[i].ir.clone());
+        let relw = flat_width(&pieces[i].ir);
+
+        let start = i + 1;
+        let mut j = start;
+        while j < pieces.len() && pieces[j].role != MathRole::Relation {
+            j += 1;
+        }
+        let mut rhs: Vec<Ir> = Vec::with_capacity((j - start) * 2);
+        for k in start..j {
+            let break_here =
+                pieces[k].role == MathRole::Binary && pieces[k - 1].role == MathRole::Operand;
+            rhs.push(if break_here {
+                Ir::line()
+            } else {
+                Ir::text(" ")
+            });
+            rhs.push(pieces[k].ir.clone());
+        }
+        parts.push(Ir::align(relw + 1, Ir::concat(rhs)));
+
+        first_segment = false;
+        i = j;
+    }
+
+    Ir::group(Ir::align(rel_col, Ir::concat(parts)))
 }
 
 /// The separator owed before the next math atom.

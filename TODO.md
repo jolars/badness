@@ -167,7 +167,7 @@ period, section length) are skipped as grammar-tool territory.
   project-aware behind the same closed+rooted namespace gate as `undefined-ref`
   (**supersedes the old `unused-label` deferral**, whose open-namespace false-positive
   risk is exactly what that gate handles). Report-only.
-- [ ] `sectioning-level-jump`—a heading that skips a level (`\section` →
+- [x] `sectioning-level-jump`—a heading that skips a level (`\section` →
   `\subsubsection`), read from the semantic sectioning tree (textidote sh:secskip).
   Report-only.
 - [ ] `hard-coded-reference`—literal "Figure 3"/"Section 2"/"Table 1" in prose

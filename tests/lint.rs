@@ -622,3 +622,20 @@ fn straight_quotes_fix_is_unsafe_and_correct() {
         assert_fix_is_correct(case);
     }
 }
+
+#[test]
+fn sectioning_level_jump_flags_skipped_level() {
+    let out = lint("\\section{Intro}\n\\subsubsection{Deep}\n");
+    let hits: Vec<_> = out
+        .iter()
+        .filter(|(r, _)| *r == "sectioning-level-jump")
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].1, Severity::Warning);
+    // A well-formed outline draws no finding.
+    assert!(
+        lint("\\section{A}\n\\subsection{B}\n\\subsubsection{C}\n")
+            .iter()
+            .all(|(r, _)| *r != "sectioning-level-jump")
+    );
+}

@@ -26,6 +26,7 @@ pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
 pub mod primitive_command;
+pub mod sectioning_level_jump;
 pub mod space_before_command;
 pub mod straight_quotes;
 pub mod swallowed_space;
@@ -45,6 +46,7 @@ pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use primitive_command::PrimitiveCommand;
+pub use sectioning_level_jump::SectioningLevelJump;
 pub use space_before_command::SpaceBeforeCommand;
 pub use straight_quotes::StraightQuotes;
 pub use swallowed_space::SwallowedSpace;
@@ -167,6 +169,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(TimesVariable),
         Box::new(MathOperatorName),
         Box::new(MakeatMacro),
+        Box::new(SectioningLevelJump),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
     ]
@@ -192,6 +195,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "times-variable",
     "math-operator-name",
     "makeat-macro",
+    "sectioning-level-jump",
     "undefined-ref",
     "undefined-citation",
 ];

@@ -1,0 +1,22 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `sectioning-level-jump`
+
+Flag a heading that descends more than one sectioning level below the preceding heading -- `\section` straight to `\subsubsection`, skipping `\subsection` (textidote's `sh:secskip`). Standard sectioning commands form a fixed ladder (`\part`, `\chapter`, `\section`, `\subsection`, `\subsubsection`, `\paragraph`, `\subparagraph`); descending it a rung at a time keeps the outline sound, and a jump usually signals the wrong command. Only *downward* jumps between consecutive headings are flagged -- climbing back up to close sections is normal, as are repeated headings at one level. The comparison is relative to the previous heading, never an absolute top level, so an `article` opening with `\section` is fine. Report-only: repairing a skip (promote the heading or insert an intermediate one) is a structural choice for the author, not a correct-by-construction edit.
+
+A heading that drops two levels at once (skipping `\subsection`):
+
+```tex
+\section{Introduction}
+\subsubsection{Details}
+```
+
+```text
+warning: sectioning-level-jump
+ --> example.tex:2:1
+  |
+2 | \subsubsection{Details}
+  | ^^^^^^^^^^^^^^ `\subsubsection` skips a sectioning level after `\section` (expected `\subsection`)
+```

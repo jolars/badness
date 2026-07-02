@@ -461,3 +461,28 @@ fn ellipsis_fix_is_correct() {
         assert_fix_is_correct(case);
     }
 }
+
+#[test]
+fn straight_quotes_flags_open_and_close() {
+    let out = lint("He said \"hello\" today.\n");
+    let hits: Vec<_> = out
+        .iter()
+        .filter(|(r, _)| *r == "straight-quotes")
+        .collect();
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().all(|(_, sev)| *sev == Severity::Warning));
+}
+
+#[test]
+fn straight_quotes_fix_is_unsafe_and_correct() {
+    // The direction-inferring fix is Unsafe, so `--fix` (unsafe = false) is a
+    // no-op; `--unsafe-fixes` rewrites to the ligatures.
+    assert_eq!(fix_to_fixpoint("say \"hi\"\n"), "say ``hi''\n");
+    for case in [
+        "He said \"hello world\" today.\n",
+        "(\"quoted\")\n",
+        "\"Start.\n",
+    ] {
+        assert_fix_is_correct(case);
+    }
+}

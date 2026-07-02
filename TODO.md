@@ -105,7 +105,7 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
 - [x] `ellipsis`—`...` → `\dots` (text) or `\ldots`/`\cdots` by math context
   (ChkTeX 11, lacheck). `Safe` for the unambiguous text `\dots`; `Unsafe` in math
   where `\ldots` vs `\cdots` depends on neighbors.
-- [ ] `straight-quotes`—ASCII `"` → `` `` ``/`''`; plus quote-direction and mixing
+- [x] `straight-quotes`—ASCII `"` → `` `` ``/`''`; plus quote-direction and mixing
   checks (ChkTeX 18/32-34, lacheck). `Unsafe` (open/close direction inferred from
   context).
 - [ ] `dash-length`—classify `-`/`--`/`---` by neighbors: number--number → en dash,

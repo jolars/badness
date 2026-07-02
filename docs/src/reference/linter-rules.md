@@ -165,6 +165,48 @@ warning: ellipsis
   |        ^^^ literal `...` ellipsis; use `\cdots` in math (`\ldots` for lists, `\cdots` for operator chains)
 ```
 
+## `straight-quotes`
+
+Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight `"` always sets a *closing* double quote, so an opening one comes out backwards; the correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. The fix is **unsafe**: it infers direction from context -- a quote preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document opens, anything else closes -- and applies only under `--unsafe-fixes` or as an editor code action, since the guess can flip the typeset glyph. Single straight quotes (`'`) are left alone (they are legitimately apostrophes), and comments, verbatim, and math are never touched.
+
+Straight ASCII double quotes around a phrase:
+
+```tex
+He said "hello world" to me.
+```
+
+```text
+warning: straight-quotes
+ --> example.tex:1:9
+  |
+1 | He said "hello world" to me.
+  |         ^ straight double quote; use `` `` `` (opening) or `''` (closing) -- inferred opening here
+warning: straight-quotes
+ --> example.tex:1:21
+  |
+1 | He said "hello world" to me.
+  |                     ^ straight double quote; use `` `` `` (opening) or `''` (closing) -- inferred closing here
+```
+
+An opening quote after a parenthesis:
+
+```tex
+("quoted")
+```
+
+```text
+warning: straight-quotes
+ --> example.tex:1:2
+  |
+1 | ("quoted")
+  |  ^ straight double quote; use `` `` `` (opening) or `''` (closing) -- inferred opening here
+warning: straight-quotes
+ --> example.tex:1:9
+  |
+1 | ("quoted")
+  |         ^ straight double quote; use `` `` `` (opening) or `''` (closing) -- inferred closing here
+```
+
 ## `mismatched-delimiter`
 
 Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.

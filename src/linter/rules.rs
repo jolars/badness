@@ -21,6 +21,7 @@ pub mod ellipsis;
 pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
+pub mod straight_quotes;
 pub mod undefined_citation;
 pub mod undefined_ref;
 
@@ -31,6 +32,7 @@ pub use ellipsis::Ellipsis;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
+pub use straight_quotes::StraightQuotes;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
 
@@ -139,6 +141,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(ObsoleteEnvironment),
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
+        Box::new(StraightQuotes),
         Box::new(MismatchedDelimiter),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
@@ -155,6 +158,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "obsolete-environment",
     "dollar-display-math",
     "ellipsis",
+    "straight-quotes",
     "mismatched-delimiter",
     "undefined-ref",
     "undefined-citation",

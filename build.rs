@@ -364,10 +364,11 @@ fn generate_cli_markdown() -> std::io::Result<()> {
     }
 
     let cmd = Cli::command();
-    let opts = clap_markdown::MarkdownOptions::default()
-        .show_footer(false)
-        .show_table_of_contents(false);
-    let markdown = clap_markdown::help_markdown_command_custom(&cmd, &opts);
+    let opts = clapdown::Options::new()
+        .title("Command-line reference")
+        .footer(false)
+        .table_of_contents(false);
+    let markdown = opts.render(&cmd);
 
     std::fs::write(docs_dir.join("cli.md"), &markdown)?;
 

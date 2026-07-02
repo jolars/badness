@@ -9,7 +9,7 @@
 //!
 //! Man pages, shell completions, and the markdown CLI reference are generated
 //! from the [`badness::cli`] definitions by `build.rs` (via `clap_mangen` /
-//! `clap_complete` / `clap-markdown`).
+//! `clap_complete` / `clapdown`).
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

@@ -199,7 +199,7 @@ never match.
   `Preserve`. The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
   *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
 - **CLI:** `clap` + `build.rs` generating man pages, completions, and markdown
-  (`clap_mangen`, `clap_complete`, `clap-markdown`).
+  (`clap_mangen`, `clap_complete`, `clapdown`).
 
 ## Non-goals
 

@@ -42,7 +42,7 @@ toml = "1"
 
 [build-dependencies]
 clap = { version = "4.5.51", features = ["derive"] }
-clap-markdown = "0.1.5"
+clapdown = "0.1.0"
 clap_complete = "4.6.5"
 clap_mangen = "0.3.0"
 phf_codegen = "0.14"

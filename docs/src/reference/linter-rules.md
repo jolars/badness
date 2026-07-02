@@ -294,6 +294,43 @@ warning: times-variable
   |                 ^ literal `x` as a multiplication sign between numbers; use `\times` for a cross
 ```
 
+## `math-operator-name`
+
+Flag a bare log-like function name (`sin`, `cos`, `log`, `lim`, and the rest of the LaTeX/amsmath set) written in math mode without its backslash, so TeX sets it as italic variables instead of the upright `\sin` operator with correct spacing (ChkTeX 35). It fires when the name starts a `WORD` and ends at a word boundary, catching both `$sin x$` and the glued `$sin(x)$`, while leaving words that merely begin with one (`since`) alone and preferring the longest match (`sinh` over `sin`). To stay conservative it only fires inside math mode and never inside a subscript or superscript, where `max` in `x_{max}` is almost always a label rather than the operator. The fix inserts the backslash (`sin` -> `\sin`); it is **unsafe** because it changes the typeset output (upright glyph and operator spacing) and a bare `sin` is occasionally a real product, so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it.
+
+A bare function name typesets as italic variables:
+
+```tex
+$sin x + cos x = 1$
+```
+
+```text
+warning: math-operator-name
+ --> example.tex:1:2
+  |
+1 | $sin x + cos x = 1$
+  |  ^^^ bare `sin` in math typesets as italic variables; use `\sin`
+warning: math-operator-name
+ --> example.tex:1:10
+  |
+1 | $sin x + cos x = 1$
+  |          ^^^ bare `cos` in math typesets as italic variables; use `\cos`
+```
+
+It fires through the glued `f(x)` form too:
+
+```tex
+The limit $lim(x)$ diverges.
+```
+
+```text
+warning: math-operator-name
+ --> example.tex:1:12
+  |
+1 | The limit $lim(x)$ diverges.
+  |            ^^^ bare `lim` in math typesets as italic variables; use `\lim`
+```
+
 ## `undefined-ref`
 
 Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.

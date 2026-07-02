@@ -19,6 +19,7 @@ pub mod deprecated_command;
 pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod ellipsis;
+pub mod math_operator_name;
 pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
@@ -32,6 +33,7 @@ pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use ellipsis::Ellipsis;
+pub use math_operator_name::MathOperatorName;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
@@ -149,6 +151,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(MismatchedDelimiter),
         Box::new(DashLength),
         Box::new(TimesVariable),
+        Box::new(MathOperatorName),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
     ]
@@ -168,6 +171,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "mismatched-delimiter",
     "dash-length",
     "times-variable",
+    "math-operator-name",
     "undefined-ref",
     "undefined-citation",
 ];

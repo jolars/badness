@@ -266,6 +266,26 @@ fn times_variable_fires_end_to_end_and_its_fix_is_correct() {
     );
 }
 
+#[test]
+fn math_operator_name_fires_end_to_end_and_its_fix_is_correct() {
+    // Bare `sin`/`cos` in math trip the rule; `\tan` (already a command) and the
+    // subscript label `x_{max}` do not.
+    let src = "$sin x + \\tan y$ with $x_{max}$ and bare $cos z$.\n";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("math-operator-name", Severity::Warning),
+            ("math-operator-name", Severity::Warning),
+        ]
+    );
+    // The unsafe fix inserts the backslash; it stays lossless and parses.
+    assert_fix_is_correct(src);
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "$\\sin x + \\tan y$ with $x_{max}$ and bare $\\cos z$.\n"
+    );
+}
+
 // --- Cross-file lints (driver + resolver) -------------------------------------
 
 #[test]

@@ -113,9 +113,12 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
   (hyphenated compounds, option flags).
 - [x] `times-variable`—literal `x` between digits (`640x200`) → `\times` (ChkTeX 29).
   `Unsafe` (intent heuristic).
-- [ ] `math-operator-name`—bare `sin`/`cos`/`log`/`lim`… in math typeset as italic
-  variables → `\sin` etc. (ChkTeX 35). `Safe` (control-word swap, same shape as the
-  `\bf`→`\bfseries` fix).
+- [x] `math-operator-name`—bare `sin`/`cos`/`log`/`lim`… in math typeset as italic
+  variables → `\sin` etc. (ChkTeX 35). `Unsafe` (changes typeset glyph and operator
+  spacing, and a bare `sin` is occasionally a real product—same reasoning as
+  `times-variable`, unlike the truly output-identical `\bf`→`\bfseries` swap). Matches an
+  operator-name prefix at a word boundary (so `sin(x)` too), only in math mode, and never
+  inside a sub/superscript (the `x_{max}` label case).
 - [ ] `primitive-command`—raw TeX primitives discouraged in LaTeX: `\over`→`\frac`,
   `\centerline`→`center`/`\centering`, `\eqno`, `\bgroup`… (ChkTeX 41, lacheck).
   Extends the `deprecated-command` family (merge vs. sibling rule: open). Report-only

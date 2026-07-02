@@ -275,6 +275,26 @@ fn abbreviation_spacing_fires_end_to_end_and_its_fix_is_correct() {
 }
 
 #[test]
+fn space_before_command_fires_end_to_end_and_its_fix_is_correct() {
+    // A space before `\footnote` and before `\label` trip the rule; the tight
+    // `\emph` does not.
+    let src = "See \\emph{this} word \\footnote{n} and here \\label{s}.\n";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("space-before-command", Severity::Warning),
+            ("space-before-command", Severity::Warning),
+        ]
+    );
+    // The unsafe delete fix stays lossless and parses (tenet 1).
+    assert_fix_is_correct(src);
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "See \\emph{this} word\\footnote{n} and here\\label{s}.\n"
+    );
+}
+
+#[test]
 fn times_variable_fires_end_to_end_and_its_fix_is_correct() {
     // A `digits x digits` product trips the rule; `matrix` and the hex mask do not.
     let src = "A 640x200 matrix with mask 0xFF.\n";

@@ -1,0 +1,21 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `space-before-command`
+
+Flag a plain space directly before a command that should hug the preceding word -- `\footnote`, `\footnotemark`, `\index`, `\label` (ChkTeX 24/42). A space before `\footnote` sets a spurious space before the footnote mark (`word \footnote{x}` -> "word ¹"); a space before a zero-width `\index`/`\label` leaves a stray inter-word gap that can shift the recorded page. The fix deletes the space. It is **unsafe** -- removing the space changes the typeset spacing -- so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it. To stay conservative only the same-line `WORD SPACE \cmd` shape is flagged (a space at line start or after a brace is left alone), and math is skipped (an inter-token space is insignificant there), covering both `$…$` and math environments like `equation`/`align`.
+
+A space before a footnote sets a spurious space before the mark:
+
+```tex
+This is important \footnote{See the appendix.}
+```
+
+```text
+warning: space-before-command
+ --> example.tex:1:18
+  |
+1 | This is important \footnote{See the appendix.}
+  |                  ^ spurious space before `\footnote`; delete it so no stray space is typeset before the command
+```

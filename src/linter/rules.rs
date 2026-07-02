@@ -25,6 +25,7 @@ pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
 pub mod primitive_command;
+pub mod space_before_command;
 pub mod straight_quotes;
 pub mod swallowed_space;
 pub mod times_variable;
@@ -42,6 +43,7 @@ pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use primitive_command::PrimitiveCommand;
+pub use space_before_command::SpaceBeforeCommand;
 pub use straight_quotes::StraightQuotes;
 pub use swallowed_space::SwallowedSpace;
 pub use times_variable::TimesVariable;
@@ -157,6 +159,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(Ellipsis),
         Box::new(StraightQuotes),
         Box::new(SwallowedSpace),
+        Box::new(SpaceBeforeCommand),
         Box::new(MismatchedDelimiter),
         Box::new(DashLength),
         Box::new(TimesVariable),
@@ -180,6 +183,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "ellipsis",
     "straight-quotes",
     "swallowed-space",
+    "space-before-command",
     "mismatched-delimiter",
     "dash-length",
     "times-variable",

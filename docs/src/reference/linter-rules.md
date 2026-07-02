@@ -295,6 +295,24 @@ warning: swallowed-space
   |               ^ `\LaTeX` swallows the following space; add `{}` (`\LaTeX{}`) or `\ ` so it prints
 ```
 
+## `space-before-command`
+
+Flag a plain space directly before a command that should hug the preceding word -- `\footnote`, `\footnotemark`, `\index`, `\label` (ChkTeX 24/42). A space before `\footnote` sets a spurious space before the footnote mark (`word \footnote{x}` -> "word ¹"); a space before a zero-width `\index`/`\label` leaves a stray inter-word gap that can shift the recorded page. The fix deletes the space. It is **unsafe** -- removing the space changes the typeset spacing -- so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it. To stay conservative only the same-line `WORD SPACE \cmd` shape is flagged (a space at line start or after a brace is left alone), and math is skipped (an inter-token space is insignificant there), covering both `$…$` and math environments like `equation`/`align`.
+
+A space before a footnote sets a spurious space before the mark:
+
+```tex
+This is important \footnote{See the appendix.}
+```
+
+```text
+warning: space-before-command
+ --> example.tex:1:18
+  |
+1 | This is important \footnote{See the appendix.}
+  |                  ^ spurious space before `\footnote`; delete it so no stray space is typeset before the command
+```
+
 ## `mismatched-delimiter`
 
 Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.

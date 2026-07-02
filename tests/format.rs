@@ -286,6 +286,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // term (the two-level rule — relations align, binaries hang one relation-width
     // deeper).
     ("math_display_break_relations", WrapMode::Preserve, 80),
+    // A break before a top-level binary operator does not gain a spurious space at
+    // a tight command boundary (`\gamma)`, `}.` stay tight, role-aware like the
+    // inline seq path), and an operator nested in parentheses is not a top-level
+    // break point (the `-` of `(1 - \gamma)` must not split across lines).
+    ("math_display_break_paren_tight", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A
     // control-word delimiter (`\langle`) keeps one space so the body cannot glue

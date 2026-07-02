@@ -3024,6 +3024,31 @@ enum MathRole {
 struct MathPiece {
     ir: Ir,
     role: MathRole,
+    /// Whether authored whitespace preceded this atom. Drives operand-operand
+    /// spacing exactly as [`lower_math_seq`] does, so a tight command boundary
+    /// (`\gamma)`, `}.`) stays tight rather than gaining a spurious space.
+    space_before: bool,
+    /// Net change in bracket nesting (`(`/`[` vs `)`/`]`) contributed by this
+    /// atom's own text — nonzero only for the bare `WORD` atoms the math split
+    /// leaves (`(1`, `c)`). Used to suppress operator breaks inside a
+    /// parenthesized subexpression (`(1 - \gamma)` must not break at `-`).
+    bracket_delta: i32,
+}
+
+/// Net bracket-nesting change of a math atom's surface text: `(`/`[` open, `)`/`]`
+/// close. A stray delimiter can ride inside a node atom too (a bare script binds
+/// the whole following `WORD`, so the `)` of `f(x, y_i)` glues into the `y_i)`
+/// script), so count over the atom's full source text, not just bare tokens.
+fn bracket_delta(el: &SyntaxElement) -> i32 {
+    let count = |acc: i32, c: char| match c {
+        '(' | '[' => acc + 1,
+        ')' | ']' => acc - 1,
+        _ => acc,
+    };
+    match el {
+        SyntaxElement::Token(t) => t.text().chars().fold(0, count),
+        SyntaxElement::Node(n) => n.text().to_string().chars().fold(0, count),
+    }
 }
 
 /// Relation control words (the `\` stripped) that anchor alignment / break a long
@@ -3184,20 +3209,28 @@ fn collect_math_pieces(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<MathPi
     // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
     // and glues to its operand rather than becoming a break point — e.g. `-x`.
     let mut prev_role = MathRole::Relation;
+    let mut pending_space = false;
     let mut iter = node.children_with_tokens().peekable();
     while let Some(el) = iter.next() {
         match el {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
                 consume_trivia_run(&t, &mut iter);
+                if !pieces.is_empty() {
+                    pending_space = true;
+                }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             other => {
                 let role = math_atom_role(&other, prev_role);
                 prev_role = role;
+                let delta = bracket_delta(&other);
                 pieces.push(MathPiece {
                     ir: lower_math_element(other, cx),
                     role,
+                    space_before: pending_space,
+                    bracket_delta: delta,
                 });
+                pending_space = false;
             }
         }
     }
@@ -3225,18 +3258,54 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             .count()
     };
 
+    // Bracket depth entering each atom (running sum of the preceding atoms'
+    // deltas). A top-level break/relation is one seen at depth 0; operators
+    // inside a parenthesized subexpression are structurally interior.
+    let depth_before: Vec<i32> = {
+        let mut acc = 0;
+        let mut v = Vec::with_capacity(pieces.len());
+        for p in &pieces {
+            v.push(acc);
+            acc += p.bracket_delta;
+        }
+        v
+    };
+
+    // Non-breaking separator between atoms `k-1` and `k`, mirroring
+    // [`lower_math_seq`]: a space around any operator (either side) or across an
+    // authored gap, nothing between two operands authored tight.
+    let space_sep = |k: usize| -> Ir {
+        if pieces[k].role != MathRole::Operand
+            || pieces[k - 1].role != MathRole::Operand
+            || pieces[k].space_before
+        {
+            Ir::text(" ")
+        } else {
+            Ir::Nil
+        }
+    };
+    // Whether a break may be inserted before atom `k`: a top-level binary
+    // operator with an operand to its left (a genuine infix `+`, not a unary
+    // sign, and not one nested in parentheses).
+    let breakable = |k: usize| -> bool {
+        pieces[k].role == MathRole::Binary
+            && pieces[k - 1].role == MathRole::Operand
+            && depth_before[k] == 0
+    };
+    // The first top-level relation (a relation nested in parentheses does not
+    // anchor the alignment or split a segment).
+    let is_anchor = |k: usize| pieces[k].role == MathRole::Relation && depth_before[k] == 0;
+
     // With no top-level relation, continuation lines hang at the base indent: the
     // body simply breaks before each top-level binary operator.
-    let Some(anchor) = pieces.iter().position(|p| p.role == MathRole::Relation) else {
+    let Some(anchor) = (0..pieces.len()).find(|&k| is_anchor(k)) else {
         let mut parts: Vec<Ir> = Vec::with_capacity(pieces.len() * 2);
         for (i, piece) in pieces.iter().enumerate() {
             if i > 0 {
-                let break_here =
-                    piece.role == MathRole::Binary && pieces[i - 1].role == MathRole::Operand;
-                parts.push(if break_here {
+                parts.push(if breakable(i) {
                     Ir::line()
                 } else {
-                    Ir::text(" ")
+                    space_sep(i)
                 });
             }
             parts.push(piece.ir.clone());
@@ -3244,24 +3313,22 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return Ir::group(Ir::concat(parts));
     };
 
-    // The relation column: the left-hand side (atoms before the first relation)
-    // sits flat on the opening line, and the first relation follows one space
-    // later. Every top-level relation aligns here.
-    let rel_col = if anchor == 0 {
-        0
-    } else {
-        let head = Ir::join(Ir::text(" "), pieces[..anchor].iter().map(|p| p.ir.clone()));
-        flat_width(&head) + 1
-    };
-
     let mut parts: Vec<Ir> = Vec::new();
     // Left-hand side, flat on the opening line.
     for (i, piece) in pieces[..anchor].iter().enumerate() {
         if i > 0 {
-            parts.push(Ir::text(" "));
+            parts.push(space_sep(i));
         }
         parts.push(piece.ir.clone());
     }
+    // The relation column: the left-hand side sits flat on the opening line, and
+    // the first relation follows one space later. Every top-level relation aligns
+    // here.
+    let rel_col = if anchor == 0 {
+        0
+    } else {
+        flat_width(&Ir::concat(parts.clone())) + 1
+    };
 
     // Each relation opens a segment running to the next relation. The first
     // segment's relation stays on the opening line (one space after the LHS);
@@ -3273,7 +3340,7 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     while i < pieces.len() {
         if first_segment {
             if anchor > 0 {
-                parts.push(Ir::text(" "));
+                parts.push(space_sep(anchor));
             }
         } else {
             parts.push(Ir::line());
@@ -3283,19 +3350,18 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 
         let start = i + 1;
         let mut j = start;
-        while j < pieces.len() && pieces[j].role != MathRole::Relation {
+        while j < pieces.len() && !is_anchor(j) {
             j += 1;
         }
         let mut rhs: Vec<Ir> = Vec::with_capacity((j - start) * 2);
-        for k in start..j {
-            let break_here =
-                pieces[k].role == MathRole::Binary && pieces[k - 1].role == MathRole::Operand;
-            rhs.push(if break_here {
+        for (offset, piece) in pieces[start..j].iter().enumerate() {
+            let k = start + offset;
+            rhs.push(if breakable(k) {
                 Ir::line()
             } else {
-                Ir::text(" ")
+                space_sep(k)
             });
-            rhs.push(pieces[k].ir.clone());
+            rhs.push(piece.ir.clone());
         }
         parts.push(Ir::align(relw + 1, Ir::concat(rhs)));
 

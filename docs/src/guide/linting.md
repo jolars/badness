@@ -16,15 +16,16 @@ parser recovered from malformed input. Because the parser is error-tolerant, a
 single problem never aborts the parse—badness anchors recovery on clean LaTeX
 boundaries (`\end{…}`, `\begin`, a blank line, `}`, `$`, `&`, `\\`) and keeps
 going, so one file can report several independent diagnostics in one run. Parse
-diagnostics carry the rule id `parse` and are never silenced by `select`/`ignore`.
+diagnostics carry the rule id `parse` and are never silenced by
+`select`/`ignore`.
 
 ## Rules
 
 Beyond parse recovery, badness ships a growing set of built-in rules
 (`deprecated-command`, `dollar-display-math`, `undefined-ref`, and more). Each
 has a stable id used in diagnostics, config, and suppression comments. See the
-[Linter Rules](../reference/linter-rules.md) reference for the full catalogue, or
-print a single rule's description and examples from the terminal:
+[Linter Rules](../reference/linter-rules.md) reference for the full catalogue,
+or print a single rule's description and examples from the terminal:
 
 ```sh
 badness lint --explain deprecated-command
@@ -46,8 +47,9 @@ Suppress a rule at one site with a comment directive:
 {\bf here}
 ```
 
-Some rules ship an **auto-fix**. `badness lint --fix` applies the meaning-preserving
-(Safe) ones; `--unsafe-fixes` also applies fixes that may change output, such as
-`missing-nonbreaking-space` (inserting a tie changes line breaking),
-`abbreviation-spacing` (inserting `\ ` or `\@` changes sentence spacing), or
-`space-before-command` (deleting a space before `\footnote` changes spacing).
+Some rules ship an **auto-fix**. `badness lint --fix` applies the
+meaning-preserving (Safe) ones; `--unsafe-fixes` also applies fixes that may
+change output, such as `missing-nonbreaking-space` (inserting a tie changes line
+breaking), `abbreviation-spacing` (inserting `\` or `\@` changes sentence
+spacing), or `space-before-command` (deleting a space before `\footnote` changes
+spacing).

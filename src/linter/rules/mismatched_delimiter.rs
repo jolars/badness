@@ -23,7 +23,12 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A `\\left`/`\\right` pair whose glyphs point the wrong way:",
+    source: "$\\left) x \\right($\n",
+}];
 
 /// Glyphs that conventionally open a delimited pair.
 const OPENERS: &[&str] = &[
@@ -46,6 +51,20 @@ impl Rule for MismatchedDelimiter {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a `\\left ... \\right` pair whose delimiter glyphs point the wrong \
+         way -- a closing glyph opening the pair, or an opening glyph closing it \
+         (`\\left) ... \\right(`). Deliberately conservative: only an \
+         *orientation* error is flagged, never a mere opener/closer mismatch, \
+         since half-open intervals like `\\left( ... \\right]` are legitimate. \
+         Structural faults (a missing `\\right`) are reported by the parser, not \
+         this rule. No autofix: the intended glyphs are ambiguous."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

@@ -15,7 +15,12 @@ use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "The same key defined twice in one file:",
+    source: "\\section{One}\\label{sec:x}\n\\section{Two}\\label{sec:x}\n",
+}];
 
 pub struct DuplicateLabel;
 
@@ -26,6 +31,18 @@ impl Rule for DuplicateLabel {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a `\\label{key}` defined more than once in the same label \
+         namespace -- within one file, or across files that share a document \
+         when a project view is available. LaTeX itself only warns and silently \
+         keeps the last definition. No autofix: resolving a collision (rename \
+         vs delete) is the author's call."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {

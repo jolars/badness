@@ -31,7 +31,12 @@ use crate::ast::command_name;
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::syntax::{SyntaxElement, SyntaxKind};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A plain space where a tie belongs before a cross-reference:",
+    source: "see Figure \\ref{fig:plot}\n",
+}];
 
 /// Cross-reference and citation commands whose visible output should be tied to
 /// the preceding word. Excludes `\nocite` (no output → no tie).
@@ -81,6 +86,19 @@ impl Rule for MissingNonbreakingSpace {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a plain space where a TeX tie (`~`) belongs, between a word and a \
+         cross-reference or citation command (`Figure \\ref{x}`, `see \\cite{a}`). \
+         A tie keeps the word and its number from splitting across a line break. \
+         Only the same-line `WORD SPACE \\cmd` shape is flagged. The fix is \
+         **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves \
+         it alone; `--unsafe-fixes` and the editor code action apply it."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

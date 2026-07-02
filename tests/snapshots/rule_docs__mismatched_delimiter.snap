@@ -1,0 +1,26 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `mismatched-delimiter`
+
+Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.
+
+A `\left`/`\right` pair whose glyphs point the wrong way:
+
+```tex
+$\left) x \right($
+```
+
+```text
+warning: mismatched-delimiter
+ --> example.tex:1:7
+  |
+1 | $\left) x \right($
+  |       ^ `\left)` uses a closing delimiter where an opening one is expected
+warning: mismatched-delimiter
+ --> example.tex:1:17
+  |
+1 | $\left) x \right($
+  |                 ^ `\right(` uses an opening delimiter where a closing one is expected
+```

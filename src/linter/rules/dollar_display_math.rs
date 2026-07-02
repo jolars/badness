@@ -21,7 +21,12 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "Plain-TeX display math:",
+    source: "$$a + b = c$$\n",
+}];
 
 pub struct DollarDisplayMath;
 
@@ -32,6 +37,18 @@ impl Rule for DollarDisplayMath {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that \
+         bypasses `amsmath` spacing hooks and breaks `fleqn`/`\\everydisplay`, so \
+         LaTeX steers users to `\\[...\\]`. The autofix swaps the delimiters and \
+         copies the body verbatim, so it parses and stays lossless; it is \
+         withheld when the display math is unclosed."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

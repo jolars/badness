@@ -1,0 +1,21 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `undefined-ref`
+
+Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.
+
+A reference to a label defined nowhere in the document:
+
+```tex
+\ref{sec:intro}
+```
+
+```text
+warning: undefined-ref
+ --> example.tex:1:1
+  |
+1 | \ref{sec:intro}
+  | ^^^^^^^^^^^^^^^ reference to undefined label `sec:intro`
+```

@@ -18,10 +18,15 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
 
 /// Obsolete environment name → its modern replacement.
 const OBSOLETE: &[(&str, &str)] = &[("eqnarray", "align"), ("eqnarray*", "align*")];
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "The superseded `eqnarray` environment:",
+    source: "\\begin{eqnarray}\n  a &=& b\n\\end{eqnarray}\n",
+}];
 
 pub struct ObsoleteEnvironment;
 
@@ -32,6 +37,18 @@ impl Rule for ObsoleteEnvironment {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag math environments the community has superseded, naming the modern \
+         replacement in the message. The canonical case is `eqnarray`, which \
+         `amsmath` replaced with `align` decades ago (it mis-spaces relations and \
+         is a perennial l2tabu warning). Reports only; the swap is left for a \
+         later autofix."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

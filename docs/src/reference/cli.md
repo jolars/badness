@@ -85,6 +85,9 @@ With paths, lints each file. With no paths, reads stdin. Exits non-zero if any d
 `--ignore <RULE>`
 :   Disable these rules (repeatable). Overrides `[lint] ignore` from `badness.toml` when given
 
+`--explain <RULE>`
+:   Print the description and examples for a rule id, then exit. Ignores paths, config, and fixes
+
 ## `badness parse`
 
 Parse LaTeX source and print its concrete syntax tree (CST).

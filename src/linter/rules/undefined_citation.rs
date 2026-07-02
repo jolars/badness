@@ -20,7 +20,12 @@ use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A citation of a key that matches no bibliography entry:",
+    source: "\\cite{knuth:1984}\n",
+}];
 
 pub struct UndefinedCitation;
 
@@ -31,6 +36,19 @@ impl Rule for UndefinedCitation {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a `\\cite`-family key matching no entry in the document's \
+         bibliography -- the bibliographic analog of `undefined-ref`. Sound only \
+         over a **closed, rooted** namespace where every `.bib` resource \
+         resolves to an analyzed file, and suppressed entirely by a `\\nocite{*}` \
+         wildcard (which marks every key as used). Inert without cross-file \
+         citation resolution. No autofix."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {

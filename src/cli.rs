@@ -105,6 +105,10 @@ pub enum Command {
         /// `badness.toml` when given.
         #[arg(long, value_name = "RULE")]
         ignore: Vec<String>,
+        /// Print the description and examples for a rule id, then exit. Ignores
+        /// paths, config, and fixes.
+        #[arg(long, value_name = "RULE")]
+        explain: Option<String>,
     },
     /// Parse LaTeX source and print its concrete syntax tree (CST).
     ///

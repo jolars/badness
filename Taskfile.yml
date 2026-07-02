@@ -102,11 +102,17 @@ tasks:
 
   docs:build:
     desc: Build the mdBook docs into docs/book
+    deps: [docs:rules]
     dir: docs
     cmds:
       - mdbook build
       - task: docs:canonical
       - task: docs:sitemap
+
+  docs:rules:
+    desc: Regenerate the linter-rules reference from rule metadata
+    cmds:
+      - cargo run --quiet --example docgen
 
   docs:canonical:
     desc: Inject <link rel="canonical"> into each rendered page

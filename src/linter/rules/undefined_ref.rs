@@ -24,7 +24,12 @@ use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A reference to a label defined nowhere in the document:",
+    source: "\\ref{sec:intro}\n",
+}];
 
 pub struct UndefinedRef;
 
@@ -35,6 +40,18 @@ impl Rule for UndefinedRef {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a `\\ref`-family reference to a label defined nowhere in the \
+         document. Sound only when the label namespace is complete, so it stays \
+         silent unless the project view is **closed** (every include resolves to \
+         an analyzed file) and **rooted**. Inert on stdin or wherever no \
+         cross-file label resolution is available. No autofix."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {

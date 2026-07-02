@@ -1,0 +1,27 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `deprecated-command`
+
+Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`, `\sc`, `\sl`) that LaTeX 2e superseded with the `\...series`/`\...shape`/`\...family` declarations. `\em` is not flagged; it is still the supported emphasis switch. The autofix swaps just the control word (`\bf` -> `\bfseries`), leaving any following text untouched, so it is correct by construction.
+
+An obsolete two-letter font switch:
+
+```tex
+{\bf important}
+```
+
+```text
+warning: deprecated-command
+ --> example.tex:1:2
+  |
+1 | {\bf important}
+  |  ^^^ `\bf` is deprecated; use `\bfseries`
+```
+
+After applying the fix:
+
+```tex
+{\bfseries important}
+```

@@ -1,0 +1,21 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `undefined-citation`
+
+Flag a `\cite`-family key matching no entry in the document's bibliography -- the bibliographic analog of `undefined-ref`. Sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file, and suppressed entirely by a `\nocite{*}` wildcard (which marks every key as used). Inert without cross-file citation resolution. No autofix.
+
+A citation of a key that matches no bibliography entry:
+
+```tex
+\cite{knuth:1984}
+```
+
+```text
+warning: undefined-citation
+ --> example.tex:1:1
+  |
+1 | \cite{knuth:1984}
+  | ^^^^^^^^^^^^^^^^^ citation of undefined key `knuth:1984`
+```

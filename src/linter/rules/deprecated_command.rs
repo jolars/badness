@@ -20,7 +20,12 @@ use crate::ast::command_name;
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
-use super::{Rule, RuleContext};
+use super::{Example, Rule, RuleContext};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "An obsolete two-letter font switch:",
+    source: "{\\bf important}\n",
+}];
 
 /// Deprecated control word → its modern replacement.
 const DEPRECATED: &[(&str, &str)] = &[
@@ -42,6 +47,19 @@ impl Rule for DeprecatedCommand {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag the obsolete two-letter font *switches* (`\\bf`, `\\it`, `\\rm`, \
+         `\\sf`, `\\tt`, `\\sc`, `\\sl`) that LaTeX 2e superseded with the \
+         `\\...series`/`\\...shape`/`\\...family` declarations. `\\em` is not \
+         flagged; it is still the supported emphasis switch. The autofix swaps \
+         just the control word (`\\bf` -> `\\bfseries`), leaving any following \
+         text untouched, so it is correct by construction."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

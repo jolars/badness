@@ -1,0 +1,21 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `missing-nonbreaking-space`
+
+Flag a plain space where a TeX tie (`~`) belongs, between a word and a cross-reference or citation command (`Figure \ref{x}`, `see \cite{a}`). A tie keeps the word and its number from splitting across a line break. Only the same-line `WORD SPACE \cmd` shape is flagged. The fix is **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it.
+
+A plain space where a tie belongs before a cross-reference:
+
+```tex
+see Figure \ref{fig:plot}
+```
+
+```text
+warning: missing-nonbreaking-space
+ --> example.tex:1:11
+  |
+1 | see Figure \ref{fig:plot}
+  |           ^ missing non-breaking space before `\ref`; use a tie `~` so the reference stays on the same line
+```

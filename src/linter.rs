@@ -8,6 +8,7 @@
 
 pub mod check;
 pub mod diagnostic;
+pub mod docs;
 pub mod fix;
 pub mod render;
 pub mod rules;

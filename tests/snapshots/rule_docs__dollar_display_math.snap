@@ -1,0 +1,27 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `dollar-display-math`
+
+Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses `amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers users to `\[...\]`. The autofix swaps the delimiters and copies the body verbatim, so it parses and stays lossless; it is withheld when the display math is unclosed.
+
+Plain-TeX display math:
+
+```tex
+$$a + b = c$$
+```
+
+```text
+warning: dollar-display-math
+ --> example.tex:1:1
+  |
+1 | $$a + b = c$$
+  | ^^ `$$…$$` is plain-TeX display math; use `\[…\]`
+```
+
+After applying the fix:
+
+```tex
+\[a + b = c\]
+```

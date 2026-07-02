@@ -119,7 +119,11 @@ fn main() -> ExitCode {
             exclude,
             select,
             ignore,
+            explain,
         } => {
+            if let Some(rule) = explain {
+                return run_explain(&rule);
+            }
             let anchor = match cwd_anchor() {
                 Ok(anchor) => anchor,
                 Err(code) => return code,
@@ -265,6 +269,25 @@ fn run_lsp() -> ExitCode {
 /// Cap on fixpoint iterations per file, guarding against a fix that fails to
 /// clear its own diagnostic.
 const MAX_FIX_ITERATIONS: usize = 10;
+
+/// Print a rule's description and examples (`lint --explain <rule>`), then exit.
+/// Unknown ids exit `2` after listing the known built-in rule ids.
+fn run_explain(id: &str) -> ExitCode {
+    match badness::linter::docs::explain_rule(id) {
+        Some(doc) => {
+            print!("{doc}");
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("badness: unknown lint rule `{id}`");
+            eprintln!(
+                "known rules: {}",
+                badness::linter::rules::ALL_RULE_IDS.join(", ")
+            );
+            ExitCode::from(2)
+        }
+    }
+}
 
 /// Lint each path (or stdin), rendering parse diagnostics. Exits non-zero if
 /// any diagnostics are reported or any file fails to read. With `fix`, safe

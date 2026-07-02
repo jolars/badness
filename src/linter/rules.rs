@@ -14,6 +14,7 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::diagnostic::{Diagnostic, Severity};
 
+pub mod dash_length;
 pub mod deprecated_command;
 pub mod dollar_display_math;
 pub mod duplicate_label;
@@ -25,6 +26,7 @@ pub mod straight_quotes;
 pub mod undefined_citation;
 pub mod undefined_ref;
 
+pub use dash_length::DashLength;
 pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
@@ -143,6 +145,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(Ellipsis),
         Box::new(StraightQuotes),
         Box::new(MismatchedDelimiter),
+        Box::new(DashLength),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
     ]
@@ -160,6 +163,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "ellipsis",
     "straight-quotes",
     "mismatched-delimiter",
+    "dash-length",
     "undefined-ref",
     "undefined-citation",
 ];

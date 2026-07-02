@@ -108,7 +108,7 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
 - [x] `straight-quotes`—ASCII `"` → `` `` ``/`''`; plus quote-direction and mixing
   checks (ChkTeX 18/32-34, lacheck). `Unsafe` (open/close direction inferred from
   context).
-- [ ] `dash-length`—classify `-`/`--`/`---` by neighbors: number--number → en dash,
+- [x] `dash-length`—classify `-`/`--`/`---` by neighbors: number--number → en dash,
   word---word → em dash (ChkTeX 8). `Unsafe`; needs a curated exception list
   (hyphenated compounds, option flags).
 - [ ] `times-variable`—literal `x` between digits (`640x200`) → `\times` (ChkTeX 29).

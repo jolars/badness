@@ -230,6 +230,38 @@ warning: mismatched-delimiter
   |                 ^ `\right(` uses an opening delimiter where a closing one is expected
 ```
 
+## `dash-length`
+
+Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a hyphen from `-`, an en dash from `--`, and an em dash from `---`. Between two numbers a range takes an en dash, so `5-10` or `5---10` is flagged with an **unsafe** fix to `--` (unsafe because it changes the typeset glyph and a hyphen between numbers is occasionally intentional). Between two words an en dash (`--`) is almost always a mistake, but whether a hyphen or an em dash was meant is ambiguous, so it is reported **without** a fix. To stay conservative the rule only inspects a dash run that sits inside a single word with content on both sides and is the only dash run in that word, so dates (`2020-01-15`), ISBNs, spaced dashes, and option flags (`--verbose`) are left alone. Comments, verbatim, and math are never touched.
+
+A hyphen where a number range wants an en dash:
+
+```tex
+See pages 5-10 for the proof.
+```
+
+```text
+warning: dash-length
+ --> example.tex:1:12
+  |
+1 | See pages 5-10 for the proof.
+  |            ^ hyphen between numbers; use an en dash `--` for a number range
+```
+
+An en dash between words (ambiguous, so reported without a fix):
+
+```tex
+A well--known result.
+```
+
+```text
+warning: dash-length
+ --> example.tex:1:7
+  |
+1 | A well--known result.
+  |       ^^ en dash `--` between words; use a hyphen `-` for a compound or an em dash `---` for a break
+```
+
 ## `undefined-ref`
 
 Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.

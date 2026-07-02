@@ -239,6 +239,20 @@ $$x = y$$
     assert!(lint(src).is_empty(), "got: {:?}", lint(src));
 }
 
+#[test]
+fn dash_length_fires_end_to_end_and_its_fix_is_correct() {
+    // A hyphenated number range trips the rule; the compound `well-known` and the
+    // ISO date do not.
+    let src = "See pages 5-10 of the well-known text dated 2020-01-15.\n";
+    assert_eq!(lint(src), vec![("dash-length", Severity::Warning)]);
+    // The unsafe en-dash fix stays lossless and parses (tenet 1).
+    assert_fix_is_correct(src);
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "See pages 5--10 of the well-known text dated 2020-01-15.\n"
+    );
+}
+
 // --- Cross-file lints (driver + resolver) -------------------------------------
 
 #[test]

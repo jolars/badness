@@ -175,19 +175,6 @@ period, section length) are skipped as grammar-tool territory.
 - [x] `hard-coded-reference`—literal "Figure 3"/"Section 2"/"Table 1" in prose
   instead of `\ref`/`\cref` (textidote sh:hcfig/hctab/hcsec). Report-only, heuristic.
 
-### Deferred / out of scope
-
-- Italic-correction cluster (ChkTeX 4/5/6/28)—legacy font-command era, needs brittle
-  font-state tracking, low modern value.
-- Pure-whitespace items (ChkTeX 30/36/37/39, lacheck double-space, paren spacing)—the
-  formatter's job (type A), never lint findings.
-- Brace-on-scripts (ChkTeX 25)—already normalized by the formatter.
-- ChkTeX 19 (acute-accent-as-quote)—obsolete per ChkTeX's own author.
-- ConTeXt `\start…/\stop…` matching (ChkTeX 47/48)—not a badness target.
-- Prose-opinion rules (title caps, caption-ends-with-period, section length,
-  cite-command-mixing)—grammar-checker territory.
-- *(Note only)* a user-defined regex escape hatch (ChkTeX 44) as possible future infra.
-
 ## Semantic layer & signatures
 
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open

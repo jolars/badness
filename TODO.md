@@ -145,7 +145,7 @@ notes when implementing.
   codebase convention that a spacing-altering fix is `Unsafe` (`diagnostic.rs`) and
   its sibling spacing rules. *Overlap note (resolved):* the formatter preserves this
   inter-token space, so the rule is warranted.
-- [ ] `makeat-macro`—`@` inside a macro name used outside a
+- [x] `makeat-macro`—`@` inside a macro name used outside a
   `\makeatletter`/`\makeatother` (or expl3) region (lacheck). badness can decide this
   **exactly** from its letter-mode tracking rather than heuristically. Report-only.
 

@@ -437,6 +437,38 @@ warning: math-operator-name
   |            ^^^ bare `lim` in math typesets as italic variables; use `\lim`
 ```
 
+## `makeat-macro`
+
+Flag a macro whose name contains `@` (`\foo@bar`, `\p@`, `\@ifnextchar`) used outside a `\makeatletter`/`\makeatother` region. There `@` has its ordinary catcode, so it cannot be part of a control word: `\foo@bar` is read as `\foo` followed by the text `@bar`, not as a call to the internal macro `\foo@bar`. Usually the enclosing `\makeatletter`/`\makeatother` was forgotten. Because the formatter's lexer already tracks `\makeatletter` state, this is decided exactly -- an in-region name lexes as one token and is never flagged; only the split out-of-region form (control word abutting an `@`-word, or `\@` abutting a letter-word) is. Report-only: a correct fix would mean wrapping the use in `\makeatletter`/`\makeatother`, not a tight local edit, so no autofix is offered. The end-of-sentence `\@` (as in `NASA\@.`) is not flagged.
+
+An internal `@` macro used without `\makeatletter`:
+
+```tex
+\my@command
+```
+
+```text
+warning: makeat-macro
+ --> example.tex:1:1
+  |
+1 | \my@command
+  | ^^^^^^^^^^^ `\my@command` uses `@` in a macro name outside a `\makeatletter` region; `@` is not a letter here, so this reads as `\my` followed by the text `@command`
+```
+
+A leading-`@` macro (a `\@`-prefixed internal) outside a region:
+
+```tex
+\@ifstar{\StarredForm}{\PlainForm}
+```
+
+```text
+warning: makeat-macro
+ --> example.tex:1:1
+  |
+1 | \@ifstar{\StarredForm}{\PlainForm}
+  | ^^^^^^^^ `\@ifstar` uses `@` in a macro name outside a `\makeatletter` region; `@` is not a letter here, so this reads as `\@` followed by the text `ifstar`
+```
+
 ## `undefined-ref`
 
 Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.

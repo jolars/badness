@@ -520,6 +520,24 @@ fn dollar_display_fix_is_correct() {
 }
 
 #[test]
+fn makeat_macro_flags_at_names_outside_regions_only() {
+    // An `@`-in-name macro in the body splits into a control word + `@`-word and is
+    // flagged; wrapping it in `\makeatletter`…`\makeatother` lexes it as one control
+    // word, so it stays quiet.
+    let body: Vec<_> = lint("\\my@command\n")
+        .into_iter()
+        .filter(|(rule, _)| *rule == "makeat-macro")
+        .collect();
+    assert_eq!(body.len(), 1);
+
+    let in_region: Vec<_> = lint("\\makeatletter\\my@command\\makeatother\n")
+        .into_iter()
+        .filter(|(rule, _)| *rule == "makeat-macro")
+        .collect();
+    assert!(in_region.is_empty(), "in-region use must not flag");
+}
+
+#[test]
 fn missing_nbsp_fix_is_correct() {
     // The tie fix is `Unsafe` (it alters line-breaking); `fix_to_fixpoint`
     // applies unsafe fixes, so this exercises parse-clean + losslessness on it.

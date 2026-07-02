@@ -25,6 +25,7 @@ pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
 pub mod primitive_command;
 pub mod straight_quotes;
+pub mod swallowed_space;
 pub mod times_variable;
 pub mod undefined_citation;
 pub mod undefined_ref;
@@ -40,6 +41,7 @@ pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use primitive_command::PrimitiveCommand;
 pub use straight_quotes::StraightQuotes;
+pub use swallowed_space::SwallowedSpace;
 pub use times_variable::TimesVariable;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
@@ -151,6 +153,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
         Box::new(StraightQuotes),
+        Box::new(SwallowedSpace),
         Box::new(MismatchedDelimiter),
         Box::new(DashLength),
         Box::new(TimesVariable),
@@ -172,6 +175,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "dollar-display-math",
     "ellipsis",
     "straight-quotes",
+    "swallowed-space",
     "mismatched-delimiter",
     "dash-length",
     "times-variable",

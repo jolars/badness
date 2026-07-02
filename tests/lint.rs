@@ -303,6 +303,19 @@ fn primitive_command_reports_and_swaps_end_to_end() {
     assert_eq!(fix_to_fixpoint(src), "$a \\over b$ and $x_2$.\n");
 }
 
+#[test]
+fn swallowed_space_fires_end_to_end_and_its_fix_is_correct() {
+    // `\LaTeX is` glues to "LaTeXis"; the already-braced `\TeX{}` does not fire.
+    let src = "We use \\LaTeX is nice and \\TeX{} too.\n";
+    assert_eq!(lint(src), vec![("swallowed-space", Severity::Warning)]);
+    // The unsafe `{}` insertion stays lossless and parses, and clears the finding.
+    assert_fix_is_correct(src);
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "We use \\LaTeX{} is nice and \\TeX{} too.\n"
+    );
+}
+
 // --- Cross-file lints (driver + resolver) -------------------------------------
 
 #[test]

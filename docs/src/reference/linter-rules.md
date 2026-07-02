@@ -245,6 +245,24 @@ warning: straight-quotes
   |         ^ straight double quote; use `` `` `` (opening) or `''` (closing) -- inferred closing here
 ```
 
+## `swallowed-space`
+
+Flag a text-producing control word directly followed by a space that TeX eats, gluing the macro's output to the next word (`\LaTeX is` renders "LaTeXis") (ChkTeX 1). When TeX tokenizes a control word it discards following spaces, so the space never reaches the output. To stay conservative the rule fires only for a curated set of argument-less TeX-family logos (`\LaTeX`, `\TeX`, `\BibTeX`, ...), only in text mode, and only when the next token is a word beginning with an alphanumeric character -- a following period (`\LaTeX .` -> "LaTeX.") is what the author wanted. The fix inserts `{}` after the control word (`\LaTeX{} is`), ending the macro name so the space survives; it is **unsafe** because it changes the typeset output, so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it.
+
+A logo swallows the following space, gluing it to the next word:
+
+```tex
+We used \LaTeX to typeset this.
+```
+
+```text
+warning: swallowed-space
+ --> example.tex:1:15
+  |
+1 | We used \LaTeX to typeset this.
+  |               ^ `\LaTeX` swallows the following space; add `{}` (`\LaTeX{}`) or `\ ` so it prints
+```
+
 ## `mismatched-delimiter`
 
 Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.

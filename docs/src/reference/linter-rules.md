@@ -103,6 +103,44 @@ warning: obsolete-environment
   |       ^^^^^^^^^^ `eqnarray` is obsolete; use `align`
 ```
 
+## `primitive-command`
+
+Flag raw plain-TeX primitives discouraged in LaTeX source, naming the LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A sibling of `deprecated-command`, which covers the obsolete font switches. Most primitives are reported only: their LaTeX replacement restructures arguments (`a \over b` becomes `\frac{a}{b}`, `\centerline{x}` becomes a `\centering` declaration or a `center` environment), so no single textual edit can rewrite them correctly by construction. A few carry a `Safe` autofix — a 1:1 control-word swap for a primitive whose LaTeX form is a single meaning-identical token (`\sb`/`\sp` become `_`/`^`); the swap replaces just the control word, so it stays lossless and meaning-preserving.
+
+A plain-TeX fraction primitive (report-only; the LaTeX form restructures its operands):
+
+```tex
+$a \over b$
+```
+
+```text
+warning: primitive-command
+ --> example.tex:1:4
+  |
+1 | $a \over b$
+  |    ^^^^^ `\over` is a raw TeX primitive; use `\frac{...}{...}`
+```
+
+The plain-TeX subscript alias, carrying a safe swap to `_`:
+
+```tex
+$x\sb2$
+```
+
+```text
+warning: primitive-command
+ --> example.tex:1:3
+  |
+1 | $x\sb2$
+  |   ^^^ `\sb` is a raw TeX primitive; use `_`
+```
+
+After applying the fix:
+
+```tex
+$x_2$
+```
+
 ## `dollar-display-math`
 
 Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses `amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers users to `\[...\]`. The autofix swaps the delimiters and copies the body verbatim, so it parses and stays lossless; it is withheld when the display math is unclosed.

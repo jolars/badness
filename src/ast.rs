@@ -21,6 +21,19 @@ pub fn command_name(command: &SyntaxNode) -> Option<String> {
         .map(|token| token.text().trim_start_matches('\\').to_string())
 }
 
+/// The range of a `COMMAND` node's leading `CONTROL_WORD` token (the `\foo`
+/// itself, backslash included), or `None` for a control symbol. Rules use this
+/// to underline just the control word and to scope a control-word swap fix,
+/// rather than the whole node (which may carry greedily-attached argument
+/// groups).
+pub fn control_word_range(command: &SyntaxNode) -> Option<TextRange> {
+    command
+        .children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .find(|token| token.kind() == SyntaxKind::CONTROL_WORD)
+        .map(|token| token.text_range())
+}
+
 /// The literal text inside the `n`-th `GROUP` argument of `command`, with the
 /// enclosing braces dropped. Concatenates the group's inner token text so
 /// content split across `WORD`/`.`/`/`/`UNDERSCORE` tokens (e.g.

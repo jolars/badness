@@ -14,11 +14,9 @@
 
 use std::path::PathBuf;
 
-use rowan::NodeOrToken;
-
-use crate::ast::command_name;
+use crate::ast::{command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxElement, SyntaxKind};
 
 use super::{Example, Rule, RuleContext};
 
@@ -106,23 +104,12 @@ impl Rule for DeprecatedCommand {
     }
 }
 
-/// The range of a `COMMAND` node's leading `CONTROL_WORD` token.
-fn control_word_range(command: &SyntaxNode) -> Option<rowan::TextRange> {
-    command
-        .children_with_tokens()
-        .find_map(|element| match element {
-            NodeOrToken::Token(token) if token.kind() == SyntaxKind::CONTROL_WORD => {
-                Some(token.text_range())
-            }
-            _ => None,
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::parse;
     use crate::semantic::SemanticModel;
+    use crate::syntax::SyntaxNode;
 
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);

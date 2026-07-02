@@ -23,6 +23,7 @@ pub mod math_operator_name;
 pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
+pub mod primitive_command;
 pub mod straight_quotes;
 pub mod times_variable;
 pub mod undefined_citation;
@@ -37,6 +38,7 @@ pub use math_operator_name::MathOperatorName;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
+pub use primitive_command::PrimitiveCommand;
 pub use straight_quotes::StraightQuotes;
 pub use times_variable::TimesVariable;
 pub use undefined_citation::UndefinedCitation;
@@ -145,6 +147,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DeprecatedCommand),
         Box::new(MissingNonbreakingSpace),
         Box::new(ObsoleteEnvironment),
+        Box::new(PrimitiveCommand),
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
         Box::new(StraightQuotes),
@@ -165,6 +168,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "deprecated-command",
     "missing-nonbreaking-space",
     "obsolete-environment",
+    "primitive-command",
     "dollar-display-math",
     "ellipsis",
     "straight-quotes",

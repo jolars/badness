@@ -286,6 +286,23 @@ fn math_operator_name_fires_end_to_end_and_its_fix_is_correct() {
     );
 }
 
+#[test]
+fn primitive_command_reports_and_swaps_end_to_end() {
+    // `\over` restructures its operands, so it is report-only (no fix); the
+    // plain-TeX subscript alias `\sb` carries a safe 1:1 swap to `_`.
+    let src = "$a \\over b$ and $x\\sb2$.\n";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("primitive-command", Severity::Warning),
+            ("primitive-command", Severity::Warning),
+        ]
+    );
+    // Only the `\sb` swap fires as a safe fix; `\over` is left untouched.
+    assert_fix_is_correct(src);
+    assert_eq!(fix_to_fixpoint(src), "$a \\over b$ and $x_2$.\n");
+}
+
 // --- Cross-file lints (driver + resolver) -------------------------------------
 
 #[test]

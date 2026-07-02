@@ -119,7 +119,7 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
   `times-variable`, unlike the truly output-identical `\bf`→`\bfseries` swap). Matches an
   operator-name prefix at a word boundary (so `sin(x)` too), only in math mode, and never
   inside a sub/superscript (the `x_{max}` label case).
-- [ ] `primitive-command`—raw TeX primitives discouraged in LaTeX: `\over`→`\frac`,
+- [x] `primitive-command`—raw TeX primitives discouraged in LaTeX: `\over`→`\frac`,
   `\centerline`→`center`/`\centering`, `\eqno`, `\bgroup`… (ChkTeX 41, lacheck).
   Extends the `deprecated-command` family (merge vs. sibling rule: open). Report-only
   where the rewrite restructures arguments (`\over`); `Safe` control-word swaps where a

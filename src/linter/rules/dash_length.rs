@@ -15,7 +15,12 @@
 //!   joins a compound (`well-known`) and an em dash (`---`) sets a break -- but
 //!   *which* correct form was meant is genuinely ambiguous, so the finding is
 //!   reported **without** a fix (tenet 1: withhold the ambiguous rewrite, still
-//!   report).
+//!   report). One exception is carved out: an en dash joining coordinate proper
+//!   names of equal standing (`Barzilai--Borwein`, `Newton--Raphson`,
+//!   `Cauchy--Schwarz`) is correct typography, so the finding is suppressed when
+//!   the first letter of *either* flanking segment is uppercase. That leans toward
+//!   false negatives, catching the common lowercase-compound slip (`well--known`)
+//!   while never nagging a legitimate name pairing.
 //!
 //! To keep false positives out, the rule only inspects a dash run that sits
 //! *inside* a single `WORD` with content on both sides **and** is the only dash
@@ -63,7 +68,10 @@ impl Rule for DashLength {
          glyph and a hyphen between numbers is occasionally intentional). Between \
          two words an en dash (`--`) is almost always a mistake, but whether a \
          hyphen or an em dash was meant is ambiguous, so it is reported **without** \
-         a fix. To stay conservative the rule only inspects a dash run that sits \
+         a fix -- except when it joins coordinate proper names (`Barzilai--Borwein`, \
+         `Newton--Raphson`), detected by an uppercase first letter on either flank, \
+         where the en dash is correct and the finding is suppressed. To stay \
+         conservative the rule only inspects a dash run that sits \
          inside a single word with content on both sides and is the only dash run \
          in that word, so dates (`2020-01-15`), ISBNs, spaced dashes, and option \
          flags (`--verbose`) are left alone. Comments, verbatim, and math are never \
@@ -126,6 +134,16 @@ impl Rule for DashLength {
                 )),
             });
         } else if is_letter(before) && is_letter(after) && len == 2 {
+            // En dash between capitalized names is a real convention -- an en dash
+            // joins coordinate proper names of equal standing (`Barzilai--Borwein`,
+            // `Newton--Raphson`, `Cauchy--Schwarz`). Suppress when the first letter of
+            // *either* flanking segment is uppercase; that keeps the finding for genuine
+            // lowercase-compound mistakes (`well--known`) while staying conservative
+            // (we prefer false negatives here).
+            let before_first = text[..run_start].chars().next();
+            if is_upper(before_first) || is_upper(after) {
+                return;
+            }
             // En dash between words: usually a mistake, but a hyphen (compound) and
             // an em dash (break) are both plausible, so report without a fix.
             sink.push(Diagnostic {
@@ -180,6 +198,10 @@ fn is_digit(c: Option<char>) -> bool {
 
 fn is_letter(c: Option<char>) -> bool {
     c.is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+fn is_upper(c: Option<char>) -> bool {
+    c.is_some_and(|c| c.is_ascii_uppercase())
 }
 
 #[cfg(test)]
@@ -252,6 +274,20 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert!(out[0].fix.is_none());
         assert!(out[0].message.contains("between words"));
+    }
+
+    #[test]
+    fn en_dash_between_proper_names_is_left_alone() {
+        // An en dash joining coordinate proper names is correct typography.
+        assert!(findings("the Barzilai--Borwein step size\n").is_empty());
+        assert!(findings("a Newton--Raphson iteration\n").is_empty());
+    }
+
+    #[test]
+    fn en_dash_suppressed_when_either_side_capitalized() {
+        // Suppression is an OR: either flank being capitalized is enough.
+        assert!(findings("a Foo--bar thing\n").is_empty());
+        assert!(findings("a foo--Bar thing\n").is_empty());
     }
 
     #[test]

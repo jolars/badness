@@ -17,6 +17,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   operand is the scriptable base). Needed a `SubTok` event. See `AGENTS.md`
   decisions #3/#4.
 
+- [x] **Math environments parse in math mode.** An environment the built-in DB flags
+  `math` (`equation`, `align`, `gather`, matrix, …) has its body wrapped in a `MATH`
+  node (`math_environment_body`, gated by `is_math_environment`), so it enjoys the same
+  math-aware layout as `\[…\]` instead of formatting as prose. No lexer changes. See
+  `AGENTS.md` decision #1 ("Math environments").
+
 ## Formatter
 
 - [x] **Math operator spacing.** A single space around each binary/relation atom
@@ -24,6 +30,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.
   Group bodies normalized (`x^{a+b}` -> `x^{a + b}`). Scientific notation (`1e-5`)
   is a known non-special-cased limitation.
+
+- [x] **Math environment layout.** `lower_math_environment` routes a `math`-flagged
+  environment's `MATH` body: a single formula (`equation`) through the relation-aware
+  display breaker (`lower_display_math_body`); a grid (`align`/matrix, or a `gather`
+  row stack) through `build_alignment_grid` in math mode (cells lower via
+  `lower_math_seq`). A top-level `\\` is a hard break in a math body, so row stacks and
+  grid-fallbacks keep each row on its own line. Long align rows stay flat (parity with
+  the prior grid); per-cell relation breaking is a possible later refinement.
 
 - [x] `Sentence`/`Semantic` (sembr) wrap modes. One sentence per line (width
   ignored); `Semantic` additionally preserves authored soft breaks. Boundary

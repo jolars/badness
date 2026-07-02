@@ -15,7 +15,7 @@
 
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
-use crate::parser::lexer::{Token, VerbCtx, is_block_environment};
+use crate::parser::lexer::{Token, VerbCtx, is_block_environment, is_math_environment};
 use crate::syntax::SyntaxKind;
 
 const BEGIN_CMD: &str = "\\begin";
@@ -999,6 +999,8 @@ impl<'t> Parser<'t> {
             .is_some_and(|n| self.ctx.is_verbatim_environment(n))
         {
             self.verbatim_body(name.as_deref().expect("verbatim name"));
+        } else if name.as_deref().is_some_and(is_math_environment) {
+            self.math_environment_body();
         } else {
             self.parse_block(Block::Environment);
         }
@@ -1038,6 +1040,27 @@ impl<'t> Parser<'t> {
             }
         }
         self.close(); // ENVIRONMENT
+    }
+
+    /// The body of a named math environment (`equation`, `align`, `gather`, …): its
+    /// atoms wrapped in a `MATH` node and parsed in math mode, exactly as `\[…\]`
+    /// (see [`Self::delim_math`]) — so `^`/`_` build `SCRIPTED` nodes, the operator
+    /// split fires, and `\left…\right` pair. Routed here for environments the
+    /// built-in signature DB flags `math` ([`is_math_environment`]).
+    ///
+    /// The terminator is the matching `\end` (or EOF), read via [`Self::at_block_end`]
+    /// just like [`Self::parse_block`]; [`Self::finish_environment`] then consumes and
+    /// name-checks it. Unlike `$`-math (where a `\end` is an *unclosed*-recovery
+    /// anchor), `\end` is the normal, expected terminator here. A blank line inside the
+    /// body stays trivia within the `MATH` node — no paragraph split — so losslessness
+    /// holds. Progress is guaranteed: [`Self::math_element`] bumps trivia or descends
+    /// into [`Self::math_scripted`], whose atom parser always consumes a token.
+    fn math_environment_body(&mut self) {
+        self.open(SyntaxKind::MATH);
+        while !self.at_block_end(Block::Environment) {
+            self.math_element();
+        }
+        self.close(); // MATH
     }
 
     /// The raw body of a verbatim-like environment: consume tokens unstructured

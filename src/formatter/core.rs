@@ -535,6 +535,14 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_margin_framed(node) => {
             return lower_margin_framed_environment(node, cx);
         }
+        // A named math environment (`equation`, `align`, `gather`, matrix, …) — its
+        // body is a `MATH` node (the parser entered math mode). Checked before the
+        // generic alignment arm so a math *grid* (`align`/`pmatrix`, both `math` and
+        // `align`) takes the math-aware path; a non-math grid (`tabular`/`array`,
+        // `align` but not `math`) still falls through to `lower_aligned_environment`.
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_math_env(node, cx) => {
+            return lower_math_environment(node, cx);
+        }
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_alignment_env(node, cx) => {
             return lower_aligned_environment(node, cx);
         }
@@ -1998,6 +2006,18 @@ fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.align)
 }
 
+/// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks
+/// `math` — `equation`, `align`, `gather`, matrix, … The parser wraps such a body
+/// in a `MATH` node (it entered math mode); [`lower_math_environment`] lays it out
+/// with the math-aware paths.
+fn is_math_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    node.children()
+        .find(|child| child.kind() == SyntaxKind::BEGIN)
+        .and_then(|begin| environment_name(&begin))
+        .and_then(|name| cx.signatures.environment(&name))
+        .is_some_and(|sig| sig.math)
+}
+
 /// One row of an alignment grid: its rendered, trimmed cell strings, the flat text
 /// of the `\\` that terminated the row (`None` for a final row written without a
 /// trailing line break), and an optional end-of-line comment that trails the row
@@ -2050,7 +2070,7 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
     }
 
-    let Some(items) = build_alignment_grid(&body_elements, cx) else {
+    let Some(items) = build_alignment_grid(&body_elements, cx, false) else {
         return lower_environment(node, cx);
     };
     if !items.iter().any(|item| matches!(item, GridItem::Row(_))) {
@@ -2060,6 +2080,82 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
 
     let body = render_alignment_rows(&items);
+    Ir::concat([
+        leading,
+        begin,
+        Ir::indent(Ir::concat([Ir::hard_line(), body])),
+        Ir::hard_line(),
+        end,
+    ])
+}
+
+/// Lower a named **math** environment (`equation`, `align`, `gather`, matrix, …),
+/// whose body the parser wrapped in a `MATH` node. Two layouts, chosen by the body's
+/// shape:
+///
+/// - **Grid** (a top-level `&` or `\\`): `align`/matrix column-and-row grids, and
+///   `gather`/`multline` row stacks (a single column). Reuses [`build_alignment_grid`]
+///   in `math` mode, so cells get role-aware math spacing.
+/// - **Single formula** (neither): `equation`/`displaymath`. Routes the `MATH` body
+///   through [`lower_display_math_body`], the relation-aware amsmath-style breaker,
+///   so a too-long formula breaks at its top-level relations/operators.
+///
+/// Framing (leading, `\begin` header, indented body, `\end`) mirrors
+/// [`lower_display_math`] and [`lower_aligned_environment`]. If the body is not a
+/// `MATH` node — which only happens if the formatter's `math` signature view diverges
+/// from the parser's built-in one — it falls back to [`lower_environment`] rather than
+/// mislaying the body.
+fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let leading = lower_environment_leading(node, cx);
+    let mut begin = Ir::Nil;
+    let mut end = Ir::Nil;
+    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    let mut seen_begin = false;
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
+                seen_begin = true;
+                begin = lower_begin(child, cx);
+            }
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
+                end = lower_node(child, cx);
+            }
+            _ if !seen_begin => {}
+            _ => body_elements.push(element),
+        }
+    }
+
+    let Some(math_node) = body_elements
+        .iter()
+        .filter_map(|e| e.as_node())
+        .find(|n| n.kind() == SyntaxKind::MATH)
+    else {
+        // The parser did not enter math mode for this environment (its built-in
+        // signature is not `math`); render it generically.
+        return lower_environment(node, cx);
+    };
+
+    // A top-level `&` or `\\` inside the `MATH` body means a grid; otherwise it is a
+    // single formula.
+    let is_grid = math_node
+        .children_with_tokens()
+        .any(|e| matches!(e.kind(), SyntaxKind::AMPERSAND | SyntaxKind::LINE_BREAK));
+
+    let body = if is_grid {
+        match build_alignment_grid(&body_elements, cx, true) {
+            Some(items) if items.iter().any(|item| matches!(item, GridItem::Row(_))) => {
+                render_alignment_rows(&items)
+            }
+            // A grid we cannot lay out on aligned rows (a nested block, a mid-row
+            // comment, a blank line): fall back to the generic environment lowering,
+            // exactly as [`lower_aligned_environment`] does — the nested block keeps
+            // its own structured layout rather than being flattened.
+            _ => return lower_environment(node, cx),
+        }
+    } else {
+        trim_trailing_break(lower_display_math_body(math_node, cx))
+    };
+
     Ir::concat([
         leading,
         begin,
@@ -2092,11 +2188,19 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// break), when a cell carries a forced break that cannot collapse to one line (a
 /// nested block, or a blank line inside the cell — a lone continuation newline is
 /// joined, not a fallback), or on a mid-row comment.
+///
+/// `math` is `true` for math grids (`align`, `pmatrix`, …) whose body the parser
+/// wrapped in a `MATH` node: the flattener descends that node and each cell lowers
+/// through the role-aware math sequencer ([`lower_math_seq`]) so operator spacing
+/// and tight scripts apply. It is `false` for a non-math grid (`tabular`/`array`),
+/// where the body is a prose block and cells lower through [`lower_element_stream`]
+/// exactly as before.
 fn build_alignment_grid(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
+    math: bool,
 ) -> Option<Vec<GridItem>> {
-    let inline = flatten_alignment_body(body_elements, cx)?;
+    let inline = flatten_alignment_body(body_elements, cx, math)?;
     let printer = Printer::new(FormatStyle::default());
 
     /// Render the accumulated cell elements flat and trimmed, pushing the result
@@ -2116,6 +2220,7 @@ fn build_alignment_grid(
         cells: &mut Vec<String>,
         printer: &Printer,
         cx: LowerCtx<'_>,
+        math: bool,
     ) -> Option<()> {
         let is_edge_trivia = |e: &SyntaxElement| {
             e.as_token()
@@ -2141,17 +2246,26 @@ fn build_alignment_grid(
         // onto its aligned row. A blank line inside a cell is an `Ir::EmptyLine`
         // (untouched here), and a nested block's breaks live inside a child `Ir`, so
         // both keep tripping `contains_forced_break` below and fall back.
-        let joined = lower_element_stream(cell.drain(..), cx)
-            .into_iter()
-            .map(|ir| {
-                if matches!(ir, Ir::HardLine) {
-                    Ir::line()
-                } else {
-                    ir
-                }
-            })
-            .collect::<Vec<_>>();
-        let ir = Ir::concat(joined);
+        //
+        // A math cell lowers through the role-aware sequencer, which already collapses
+        // an interior whitespace/newline run to a single space (so a continuation line
+        // joins) and applies operator spacing; a blank line or a nested block's break
+        // still surfaces as a forced break and (correctly) falls back below.
+        let ir = if math {
+            lower_math_seq(cell.drain(..), cx)
+        } else {
+            let joined = lower_element_stream(cell.drain(..), cx)
+                .into_iter()
+                .map(|ir| {
+                    if matches!(ir, Ir::HardLine) {
+                        Ir::line()
+                    } else {
+                        ir
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ir::concat(joined)
+        };
         if ir.contains_forced_break() {
             return None;
         }
@@ -2200,10 +2314,10 @@ fn build_alignment_grid(
 
         match &inline[idx] {
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::AMPERSAND => {
-                finish_cell(&mut cell, &mut cells, &printer, cx)?;
+                finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
-                finish_cell(&mut cell, &mut cells, &printer, cx)?;
+                finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
                 let line_break = printer
                     .print_flat(&lower_node(child, cx))
                     .trim()
@@ -2222,7 +2336,7 @@ fn build_alignment_grid(
                     return None;
                 }
                 let text = token.text().trim_end().to_string();
-                finish_cell(&mut cell, &mut cells, &printer, cx)?;
+                finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
                 items.push(GridItem::Row(AlignRow {
                     cells: std::mem::take(&mut cells),
                     line_break: None,
@@ -2240,7 +2354,7 @@ fn build_alignment_grid(
     // empty cell — the "body ended in `\\`" case — so the trailing break stays on
     // the prior row without adding a blank line; otherwise it is a real last row.
     if !final_pushed {
-        finish_cell(&mut cell, &mut cells, &printer, cx)?;
+        finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
         let final_is_empty = cells.len() == 1 && cells[0].is_empty();
         if !final_is_empty {
             items.push(GridItem::Row(AlignRow {
@@ -2392,11 +2506,13 @@ fn rest_is_only_trivia(inline: &[SyntaxElement], from: usize) -> bool {
 }
 
 /// Flatten an alignment environment's body into a single stream of inline
-/// elements, descending one level into the lone body `PARAGRAPH` (where the `&`
-/// and `\\` separators live). Inter-paragraph trivia is dropped (it is just the
-/// body's own leading/trailing break, which the indenter re-supplies).
+/// elements, descending one level into the lone body wrapper node (where the `&`
+/// and `\\` separators live) — a `PARAGRAPH` for a prose grid (`tabular`), or a
+/// `MATH` node for a `math` grid (`align`/matrix, parsed in math mode). Trivia
+/// outside the wrapper is dropped (it is just the body's own leading/trailing break,
+/// which the indenter re-supplies).
 ///
-/// Returns `None` when the body holds more than one paragraph — a blank-line
+/// Returns `None` when the body holds more than one wrapper node — a blank-line
 /// break, which the single grid does not model — so the caller falls back.
 ///
 /// A rule command that the greedy parser saddled with the next line's first cell
@@ -2406,12 +2522,18 @@ fn rest_is_only_trivia(inline: &[SyntaxElement], from: usize) -> bool {
 fn flatten_alignment_body(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
+    math: bool,
 ) -> Option<Vec<SyntaxElement>> {
+    let wrapper = if math {
+        SyntaxKind::MATH
+    } else {
+        SyntaxKind::PARAGRAPH
+    };
     let mut inline: Vec<SyntaxElement> = Vec::new();
     let mut paragraphs = 0;
     for element in body_elements {
         match element {
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::PARAGRAPH => {
+            SyntaxElement::Node(child) if child.kind() == wrapper => {
                 paragraphs += 1;
                 if paragraphs > 1 {
                     return None;
@@ -3409,6 +3531,15 @@ fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_
             }
             other => {
                 let role = math_atom_role(&other, prev_role);
+                // A top-level `\\` (a `LINE_BREAK` node) ends its line: emit it, then
+                // force a hard break before the next atom. This is how a row stack
+                // (`\[ a \\ b \]`, or an aligned body that fell back off the grid)
+                // keeps each row on its own line. A `&` in a cell never reaches here,
+                // so cells are unaffected.
+                let is_line_break = matches!(
+                    &other,
+                    SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK
+                );
                 if !started {
                     // no separator before the first atom
                 } else if pending_break {
@@ -3424,7 +3555,7 @@ fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_
                 out.push(lower_math_element(other, cx));
                 started = true;
                 pending_space = false;
-                pending_break = false;
+                pending_break = is_line_break;
                 prev_role = role;
             }
         }

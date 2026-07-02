@@ -65,6 +65,19 @@ for the sanctioned lexer modes is in TODO.md ("Design notes").
      negatives.
    - **`\left`/`\right` delimiter isolation.** The following delimiter is emitted as
      its own token; the `LEFT_RIGHT` pair is then built by the parser.
+   - **Math environments.** An environment the *built-in* signature DB flags `math`
+     (`equation`, `align`, `gather`, matrix, …) has its body parsed in **math mode**,
+     wrapped in a `MATH` node exactly as `\[…\]`—so `^`/`_` build `SCRIPTED` nodes, the
+     math operator split fires, and `\left…\right` pair. This is a *grammar* decision
+     (`parser::grammar::math_environment_body`, gated by
+     `parser::lexer::is_math_environment`), needing **no lexer math state**: the
+     math-relevant tokens (`&`, `\\`, `^`/`_`, `\left`/`\right` isolation) are already
+     emitted regardless of mode; only *which grammar function runs* changes. Reads the
+     curated `math` flag only (never CWL/user tiers), mirroring `is_block_environment`/
+     `is_verbatim_environment`: a wrong route is a structural change, so it rests on
+     curated data, and a user/unknown environment stays in text mode. A blank line
+     inside such a body stays trivia in the `MATH` node (no paragraph split); the
+     matching `\end` is the terminator.
    - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
      DB, never executed.
 

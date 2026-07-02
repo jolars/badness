@@ -130,4 +130,86 @@ mod tests {
         );
         assert!(parse.errors.is_empty());
     }
+
+    /// A named math environment (`equation`, flagged `math` in the built-in DB)
+    /// parses its body in math mode: a `MATH` node whose scripts become `SCRIPTED`,
+    /// exactly as `\[…\]`. Previously the body was a prose `PARAGRAPH` of loose
+    /// tokens.
+    #[test]
+    fn math_environment_body_is_a_math_node() {
+        use crate::syntax::SyntaxKind;
+        let input = "\\begin{equation}\n  x_i^2 = y\n\\end{equation}\n";
+        let root = parse(input).syntax();
+        let math = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::MATH)
+            .expect("the equation body is wrapped in a MATH node");
+        assert!(
+            math.descendants().any(|n| n.kind() == SyntaxKind::SCRIPTED),
+            "scripts inside the math environment build SCRIPTED nodes"
+        );
+        assert!(
+            !root
+                .descendants()
+                .any(|n| n.kind() == SyntaxKind::PARAGRAPH),
+            "the body is math, not a prose PARAGRAPH"
+        );
+        assert_eq!(reconstruct(input), input);
+    }
+
+    /// An alignment math environment keeps its `&` columns and `\\` rows as
+    /// `AMPERSAND` / `LINE_BREAK` inside the `MATH` node, so the formatter's grid
+    /// builder still sees them.
+    #[test]
+    fn align_environment_keeps_grid_tokens_inside_math() {
+        use crate::syntax::SyntaxKind;
+        let input = "\\begin{align}\n  a &= b \\\\\n  c &= d\n\\end{align}\n";
+        let root = parse(input).syntax();
+        let math = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::MATH)
+            .expect("the align body is wrapped in a MATH node");
+        assert!(
+            math.children_with_tokens()
+                .any(|e| e.kind() == SyntaxKind::AMPERSAND),
+            "top-level `&` stays a direct MATH child"
+        );
+        assert!(
+            math.children().any(|n| n.kind() == SyntaxKind::LINE_BREAK),
+            "top-level `\\\\` stays a LINE_BREAK child of MATH"
+        );
+        assert_eq!(reconstruct(input), input);
+    }
+
+    /// A non-math environment (`itemize`, not flagged `math`) is unchanged: its body
+    /// stays a prose block with no `MATH` node.
+    #[test]
+    fn non_math_environment_body_is_unchanged() {
+        use crate::syntax::SyntaxKind;
+        let input = "\\begin{itemize}\n  \\item a\n\\end{itemize}\n";
+        let root = parse(input).syntax();
+        assert!(
+            !root.descendants().any(|n| n.kind() == SyntaxKind::MATH),
+            "a text environment never enters math mode"
+        );
+        assert_eq!(reconstruct(input), input);
+    }
+
+    /// An unclosed math environment recovers at EOF (the `MATH` body ends, the
+    /// `ENVIRONMENT` closes) rather than looping or corrupting; losslessness holds.
+    #[test]
+    fn unclosed_math_environment_recovers() {
+        use crate::syntax::SyntaxKind;
+        let input = "\\begin{equation}\n  a = b\n";
+        let parse = parse(input);
+        assert!(
+            parse
+                .syntax()
+                .descendants()
+                .any(|n| n.kind() == SyntaxKind::MATH),
+            "the body still parses as math"
+        );
+        assert!(!parse.errors.is_empty(), "an unclosed environment reports");
+        assert_eq!(reconstruct(input), input);
+    }
 }

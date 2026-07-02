@@ -172,6 +172,20 @@ pub(crate) fn is_block_environment(name: &str) -> bool {
     builtin().environment(name).is_some_and(|env| env.block)
 }
 
+/// Is `name` a math environment — one whose body the parser should parse in math
+/// mode, wrapping it in a `MATH` node exactly as `\[…\]` does (so scripts become
+/// `SCRIPTED`, operators split, and `\left…\right` pair)? Resolved against the
+/// built-in signature database ([`builtin`]) only, for the same reason as
+/// [`is_block_environment`] and [`VerbCtx::is_verbatim_environment`]: routing a body
+/// into math mode is a structural (lossless-preserving but shape-changing) decision,
+/// so it rests solely on curated data. The bulk CWL tier carries `math == false` for
+/// every entry, and a user/unknown environment stays in text mode — the
+/// conservative default. This is a sanctioned static-fact mode (AGENTS.md, Core
+/// decision #1): no macro meaning is resolved, only the curated `math` flag is read.
+pub(crate) fn is_math_environment(name: &str) -> bool {
+    builtin().environment(name).is_some_and(|env| env.math)
+}
+
 /// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a command-definition
 /// keyword whose immediately-following name must not be lexed as a verbatim call.
 /// Covers the LaTeX2e and xparse families the definition scanner recognizes plus the

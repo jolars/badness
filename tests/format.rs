@@ -329,6 +329,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // passthrough line and the cell rejoins its row and grid-aligns.
     ("align_rule_overattached_cell", WrapMode::Preserve, 80),
     ("array_columns", WrapMode::Preserve, 80),
+    // Named math environments parse in math mode (their body is a `MATH` node), so
+    // they format math-aware like `\[…\]`: a single-formula `equation` breaks at its
+    // top-level relations (the relation column aligns the continuation lines); a
+    // `gather` stacks its `\\` rows; an `align` grid lays its `&` columns with
+    // role-aware cell spacing (`x&=a+b` normalizes to `x & = a + b`).
+    ("math_env_equation", WrapMode::Preserve, 80),
+    ("math_env_gather", WrapMode::Preserve, 80),
+    ("math_env_align_spacing", WrapMode::Preserve, 80),
     // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal
     // space and breaks like an ordinary (breakable) space when a line overflows,
     // staying at the line end. An inline `\ExplSyntaxOn … \ExplSyntaxOff` island

@@ -25,8 +25,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   Group bodies normalized (`x^{a+b}` -> `x^{a + b}`). Scientific notation (`1e-5`)
   is a known non-special-cased limitation.
 
-- [ ] `Sentence`/`Semantic` (sembr) wrap modes—both fall back to `Preserve`
-  today. *Demoted, much later.*
+- [x] `Sentence`/`Semantic` (sembr) wrap modes. One sentence per line (width
+  ignored); `Semantic` additionally preserves authored soft breaks. Boundary
+  detection is a per-language abbreviation profile (`formatter::sentence`, ported
+  from panache) driven by `[format] lang` + `[format.no-break-abbreviations]`.
+  Babel/polyglossia language auto-detection is deferred (config-only for now).
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on

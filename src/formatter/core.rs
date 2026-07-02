@@ -59,6 +59,7 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::context::FormatContext;
 use super::ir::Ir;
 use super::printer::Printer;
+use super::sentence::{ResolvedProfile, SentenceOptions, is_sentence_boundary_text};
 use super::style::{FormatStyle, WrapMode};
 
 /// Why a document could not be formatted. The formatter only operates on a clean
@@ -121,6 +122,26 @@ pub fn format_with_style_flavored(
     format_with_style_flavored_with_signatures(input, style, config, &SignatureDb::default())
 }
 
+/// Like [`format_with_style_flavored`] but with explicit
+/// [`SentenceOptions`](crate::formatter::SentenceOptions) for the
+/// `sentence`/`semantic` wrap modes (the document language and user no-break
+/// abbreviations). The CLI resolves these from `badness.toml`; other wrap modes
+/// ignore them.
+pub fn format_with_style_flavored_sentence(
+    input: &str,
+    style: FormatStyle,
+    config: impl Into<crate::parser::LexConfig>,
+    sentence: SentenceOptions<'_>,
+) -> Result<String, FormatError> {
+    let parsed = parse_with_flavor(input, config);
+    if !parsed.errors.is_empty() {
+        return Err(FormatError::ParseErrors {
+            count: parsed.errors.len(),
+        });
+    }
+    format_node_with_signatures_sentence(&parsed.syntax(), style, &SignatureDb::default(), sentence)
+}
+
 /// Like [`format_with_style_flavored`] but additionally folds an `external`
 /// signature scope — the merged definitions of the document's loaded local
 /// packages ([`crate::semantic::collect_package_signatures`] /
@@ -156,6 +177,19 @@ pub fn format_file_with_packages(
     style: FormatStyle,
     config: impl Into<crate::parser::LexConfig>,
 ) -> Result<String, FormatError> {
+    format_file_with_packages_sentence(content, path, style, config, SentenceOptions::default())
+}
+
+/// Like [`format_file_with_packages`] but with explicit
+/// [`SentenceOptions`](crate::formatter::SentenceOptions) for the
+/// `sentence`/`semantic` wrap modes.
+pub fn format_file_with_packages_sentence(
+    content: &str,
+    path: &std::path::Path,
+    style: FormatStyle,
+    config: impl Into<crate::parser::LexConfig>,
+    sentence: SentenceOptions<'_>,
+) -> Result<String, FormatError> {
     let parsed = parse_with_flavor(content, config);
     if !parsed.errors.is_empty() {
         return Err(FormatError::ParseErrors {
@@ -164,7 +198,7 @@ pub fn format_file_with_packages(
     }
     let root = parsed.syntax();
     let external = crate::semantic::disk_scope_signatures(&root, path);
-    format_node_with_signatures(&root, style, &external)
+    format_node_with_signatures_sentence(&root, style, &external, sentence)
 }
 
 /// Format an already-parsed CST `root` under `style`. This is the
@@ -186,9 +220,21 @@ pub fn format_node_with_signatures(
     style: FormatStyle,
     external: &SignatureDb,
 ) -> Result<String, FormatError> {
+    format_node_with_signatures_sentence(root, style, external, SentenceOptions::default())
+}
+
+/// Like [`format_node_with_signatures`] but with explicit
+/// [`SentenceOptions`](crate::formatter::SentenceOptions) for the
+/// `sentence`/`semantic` wrap modes.
+pub fn format_node_with_signatures_sentence(
+    root: &SyntaxNode,
+    style: FormatStyle,
+    external: &SignatureDb,
+    sentence: SentenceOptions<'_>,
+) -> Result<String, FormatError> {
     validate_supported_tokens(root)?;
 
-    let ctx = FormatContext::new(style);
+    let ctx = FormatContext::with_sentence(style, sentence);
     let mut formatted = format_root(root, ctx, external, None);
     // Normalize the document's trailing edge: drop any trailing blank lines and
     // per-line trailing whitespace at EOF, then guarantee exactly one final
@@ -221,9 +267,28 @@ pub fn format_node_range_with_signatures(
     external: &SignatureDb,
     range: TextRange,
 ) -> Result<String, FormatError> {
+    format_node_range_with_signatures_sentence(
+        root,
+        style,
+        external,
+        range,
+        SentenceOptions::default(),
+    )
+}
+
+/// Like [`format_node_range_with_signatures`] but with explicit
+/// [`SentenceOptions`](crate::formatter::SentenceOptions) for the
+/// `sentence`/`semantic` wrap modes.
+pub fn format_node_range_with_signatures_sentence(
+    root: &SyntaxNode,
+    style: FormatStyle,
+    external: &SignatureDb,
+    range: TextRange,
+    sentence: SentenceOptions<'_>,
+) -> Result<String, FormatError> {
     validate_supported_tokens(root)?;
 
-    let ctx = FormatContext::new(style);
+    let ctx = FormatContext::with_sentence(style, sentence);
     let mut formatted = format_root(root, ctx, external, Some(range));
     let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
     formatted.truncate(trimmed_len);
@@ -267,10 +332,16 @@ fn format_root(
     // (ignored) and `~` is catcode-10 (a literal space), so the formatter fully owns
     // layout. Held by value for the whole lowering, like `user`.
     let regions = expl3_regions(root);
+    // The sentence-boundary profile for the `sentence`/`semantic` wrap modes,
+    // resolved from the run's [`SentenceOptions`]. `Copy`, borrowing the merged
+    // no-break slice `ctx` still owns for the whole call, so it rides `LowerCtx`
+    // like the bare `wrap` mode. Never consulted under `reflow`/`preserve`.
+    let profile = ctx.sentence().resolved();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
         signatures: Signatures::new(&user),
         expl3_regions: &regions,
+        profile,
         range,
     };
     let ir = lower_node(root, cx);
@@ -341,6 +412,12 @@ struct LowerCtx<'a> {
     /// itself — regardless of [`WrapMode`]. Borrowed from a `Vec` owned by
     /// [`format_root`], exactly like `signatures`.
     expl3_regions: &'a [TextRange],
+    /// The sentence-boundary profile (built-in language plus user no-break
+    /// abbreviations) for the [`WrapMode::Sentence`]/[`WrapMode::Semantic`] modes.
+    /// `Copy`, borrowing the merged slice owned by [`format_root`]. Never consulted
+    /// under [`WrapMode::Reflow`]/[`WrapMode::Preserve`], so an English default
+    /// (see [`SentenceOptions::default`]) is harmless there.
+    profile: ResolvedProfile<'a>,
     /// Range-formatting emission filter. When `Some`, only the [`SyntaxKind::ROOT`]
     /// children overlapping this byte range are lowered (the in-range top-level
     /// blocks); the rest are skipped and never produce IR (see [`lower_node`]).
@@ -351,6 +428,17 @@ struct LowerCtx<'a> {
 }
 
 impl<'a> LowerCtx<'a> {
+    /// Whether the active wrap mode lays out prose paragraphs at all (as opposed to
+    /// [`WrapMode::Preserve`], which leaves authored breaks untouched). Reflow,
+    /// sentence, and semantic all route prose through [`reflow_elements`]; the mode
+    /// then decides how a completed run is rendered (width fill vs. sentences).
+    fn wraps_prose(self) -> bool {
+        matches!(
+            self.wrap,
+            WrapMode::Reflow | WrapMode::Sentence | WrapMode::Semantic
+        )
+    }
+
     /// Whether the document has any expl3 region at all — the cheap short-circuit
     /// for the no-expl3 majority (the slice is empty, so every query is free).
     fn any_expl3(self) -> bool {
@@ -433,10 +521,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // a `DOC_MARGIN`): reflow the bare prose and re-emit a `% ` margin on each
         // wrapped line. Checked before the generic paragraph reflow so the margin
         // is stripped and re-synthesized rather than glued into the fill.
-        SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Reflow && is_dtx_doc_paragraph(node) => {
+        SyntaxKind::PARAGRAPH if cx.wraps_prose() && is_dtx_doc_paragraph(node) => {
             return lower_dtx_doc_paragraph(node, cx);
         }
-        SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Reflow => {
+        SyntaxKind::PARAGRAPH if cx.wraps_prose() => {
             return lower_paragraph_reflow(node, cx);
         }
         // A `.dtx` docstrip frame (`%␣␣␣␣\begin{macrocode}`, a documentation-layer
@@ -451,14 +539,14 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             return lower_aligned_environment(node, cx);
         }
         SyntaxKind::ENVIRONMENT
-            if cx.wrap == WrapMode::Reflow && !has_verbatim_body(node) && is_list_env(node, cx) =>
+            if cx.wraps_prose() && !has_verbatim_body(node) && is_list_env(node, cx) =>
         {
             return lower_list_environment(node, cx);
         }
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
             return lower_environment(node, cx);
         }
-        SyntaxKind::COMMAND if cx.wrap == WrapMode::Reflow && command_has_managed_arg(node, cx) => {
+        SyntaxKind::COMMAND if cx.wraps_prose() && command_has_managed_arg(node, cx) => {
             return lower_command(node, cx);
         }
         SyntaxKind::INLINE_MATH => {
@@ -646,6 +734,166 @@ enum ReflowKind {
 /// line under [`ReflowKind::DtxProse`]: a `%` plus one space.
 const DTX_DOC_MARGIN: &str = "% ";
 
+/// One committed atom of a logical-line run: the printed [`Ir`] plus the atom's
+/// source `text`, retained so the [`WrapMode::Sentence`]/[`WrapMode::Semantic`]
+/// renderer can run sentence-boundary detection over the words. Under
+/// [`WrapMode::Reflow`] only the `ir` is used.
+struct RunAtom {
+    ir: Ir,
+    text: String,
+}
+
+/// How a completed logical-line run is rendered into a single segment.
+#[derive(Clone, Copy)]
+enum RunRender<'a> {
+    /// Greedy width fill (reflow): one [`Ir::fill`] over the run's atoms, the
+    /// printer breaking word-by-word at the line width.
+    Fill,
+    /// One sentence per line (sentence/semantic): cut the run at sentence
+    /// boundaries and lay each sentence flat (space-joined), separating sentences
+    /// with a hard break. Width is ignored — a long sentence stays on one line.
+    Sentence(ResolvedProfile<'a>),
+}
+
+/// Split a logical-line run into sentences and lay each one flat. Adjacent atoms
+/// within a run are always whitespace-separated (a glued no-whitespace span is a
+/// single atom), so the inter-atom separator is a single literal space and the
+/// boundary detector always sees `has_whitespace_after = true`; the final atom
+/// closes the last sentence regardless. A single inserted space keeps every
+/// preserved token boundary from re-lexing into a merged token, so the result
+/// reparses to the same tokens (idempotent).
+fn render_sentences(run: Vec<RunAtom>, profile: ResolvedProfile<'_>) -> Ir {
+    let n = run.len();
+    // Break decisions for the n-1 internal gaps, read before the run is consumed.
+    let break_after: Vec<bool> = (0..n)
+        .map(|i| {
+            i + 1 < n
+                && is_sentence_boundary_text(
+                    &run[i].text,
+                    Some(run[i + 1].text.as_str()),
+                    true,
+                    false,
+                    profile,
+                )
+        })
+        .collect();
+
+    let mut sentences: Vec<Ir> = Vec::new();
+    let mut current: Vec<Ir> = Vec::new();
+    for (i, atom) in run.into_iter().enumerate() {
+        if !current.is_empty() {
+            current.push(Ir::text(" "));
+        }
+        current.push(atom.ir);
+        if break_after[i] {
+            sentences.push(Ir::concat(std::mem::take(&mut current)));
+        }
+    }
+    if !current.is_empty() {
+        sentences.push(Ir::concat(current));
+    }
+    Ir::join(Ir::hard_line(), sentences)
+}
+
+/// Accumulator for [`reflow_elements`]: glues atom pieces, collects them into the
+/// current logical-line run, and commits completed lines (with their preceding
+/// separators). Bundles the state the former nested `flush_atom`/`end_line`/
+/// `push_segment` helpers shared so the retained atom text and the render policy
+/// ride along without threading extra parameters through every call site.
+struct LineBuilder<'a> {
+    /// Glued pieces of the atom in progress (its [`Ir`] and its source text).
+    atom: Vec<Ir>,
+    atom_text: String,
+    /// Atoms of the current run (the current logical line).
+    run: Vec<RunAtom>,
+    /// Completed lines (fills/sentences and blocks), interleaved with `seps` at the
+    /// end.
+    lines: Vec<Ir>,
+    /// The separator *preceding* each committed line (`seps[0]` is unused). A blank
+    /// line in the source promotes the next separator to an [`Ir::empty_line`].
+    seps: Vec<Ir>,
+    /// The separator to record before the next committed line. Default: one break.
+    pending_sep: Ir,
+    /// Under `.dtx` prose reflow, the `% ` margin re-emitted on each line; `None`
+    /// otherwise.
+    margin: Option<&'static str>,
+    /// How a completed run is turned into a segment (fill vs. sentences).
+    render: RunRender<'a>,
+}
+
+impl<'a> LineBuilder<'a> {
+    fn new(margin: Option<&'static str>, render: RunRender<'a>) -> Self {
+        Self {
+            atom: Vec::new(),
+            atom_text: String::new(),
+            run: Vec::new(),
+            lines: Vec::new(),
+            seps: Vec::new(),
+            pending_sep: Ir::hard_line(),
+            margin,
+            render,
+        }
+    }
+
+    /// Glue one piece (its [`Ir`] and source `text`) onto the atom in progress.
+    fn push_atom_piece(&mut self, ir: Ir, text: &str) {
+        self.atom.push(ir);
+        self.atom_text.push_str(text);
+    }
+
+    /// Commit the atom in progress (if any) as one atom of the current run.
+    fn flush_atom(&mut self) {
+        if !self.atom.is_empty() {
+            self.run.push(RunAtom {
+                ir: Ir::concat(self.atom.drain(..)),
+                text: std::mem::take(&mut self.atom_text),
+            });
+        }
+    }
+
+    /// Commit `content` as the next logical line, recording the separator before it
+    /// and resetting `pending_sep` to a single break.
+    fn push_segment(&mut self, content: Ir) {
+        self.seps
+            .push(std::mem::replace(&mut self.pending_sep, Ir::hard_line()));
+        self.lines.push(content);
+    }
+
+    /// End the current logical line: flush the atom and, when the run is non-empty,
+    /// render it (a fill under reflow, sentences under sentence/semantic) and commit
+    /// it. Under `.dtx` prose reflow (`margin` set) the segment is wrapped in an
+    /// [`Ir::margin_prefix`] so a `% ` margin is re-emitted on every line.
+    fn end_line(&mut self) {
+        self.flush_atom();
+        if self.run.is_empty() {
+            return;
+        }
+        let run = std::mem::take(&mut self.run);
+        let body = match self.render {
+            RunRender::Fill => Ir::fill(run.into_iter().map(|a| a.ir)),
+            RunRender::Sentence(profile) => render_sentences(run, profile),
+        };
+        let segment = match self.margin {
+            Some(m) => Ir::margin_prefix(m, body),
+            None => body,
+        };
+        self.push_segment(segment);
+    }
+
+    /// Emit the accumulated lines, interleaving the recorded separators.
+    fn finish(mut self) -> Ir {
+        self.end_line();
+        let mut result: Vec<Ir> = Vec::with_capacity(self.lines.len().saturating_mul(2));
+        for (i, line) in self.lines.into_iter().enumerate() {
+            if i > 0 {
+                result.push(self.seps[i].clone());
+            }
+            result.push(line);
+        }
+        Ir::concat(result)
+    }
+}
+
 fn reflow_elements(
     elements: impl Iterator<Item = SyntaxElement>,
     cx: LowerCtx<'_>,
@@ -657,62 +905,26 @@ fn reflow_elements(
     // text rather than block-breaking their braces (see [`flatten_inline_prose`]).
     let elements: Vec<SyntaxElement> = flatten_inline_prose(elements.collect(), cx);
 
-    // Under `.dtx` prose reflow each fill segment is wrapped in a `% ` margin
-    // prefix and the per-line `DOC_MARGIN` tokens are dropped; `None` otherwise.
-    let margin: Option<&str> = (kind == ReflowKind::DtxProse).then_some(DTX_DOC_MARGIN);
+    // Under `.dtx` prose reflow each segment is wrapped in a `% ` margin prefix and
+    // the per-line `DOC_MARGIN` tokens are dropped; `None` otherwise.
+    let margin: Option<&'static str> = (kind == ReflowKind::DtxProse).then_some(DTX_DOC_MARGIN);
 
-    // Glued pieces of the atom in progress.
-    let mut atom: Vec<Ir> = Vec::new();
-    // Atoms of the current fill run (the current logical line).
-    let mut run: Vec<Ir> = Vec::new();
-    // Completed lines (fills and blocks), interleaved with `seps` at the end.
-    let mut lines: Vec<Ir> = Vec::new();
-    // The separator *preceding* each committed line (`seps[0]` is unused). A blank
-    // line in the source promotes the next separator to an [`Ir::empty_line`].
-    let mut seps: Vec<Ir> = Vec::new();
-    // The separator to record before the next committed line. Default: one break.
-    let mut pending_sep: Ir = Ir::hard_line();
+    // Sentence/semantic segmentation applies to *prose* runs; a `Statement` run is
+    // code (a `\newcommand` body), so it keeps the width fill regardless of mode.
+    let render = match cx.wrap {
+        WrapMode::Sentence | WrapMode::Semantic if kind != ReflowKind::Statement => {
+            RunRender::Sentence(cx.profile)
+        }
+        _ => RunRender::Fill,
+    };
+
+    let mut b = LineBuilder::new(margin, render);
     // Whether the current *physical* source line so far consists solely of
     // command(s) (and inline whitespace). Such a line is kept on its own line
     // rather than reflowed into its neighbours (see the single-newline arm). Both
     // reset at every physical-line boundary.
     let mut line_all_commands = true;
     let mut line_has_content = false;
-
-    /// Commit the atom in progress (if any) as one atom of the current run.
-    fn flush_atom(atom: &mut Vec<Ir>, run: &mut Vec<Ir>) {
-        if !atom.is_empty() {
-            run.push(Ir::concat(atom.drain(..)));
-        }
-    }
-    /// Commit `content` as the next logical line, recording the separator before
-    /// it and resetting `pending_sep` to a single break.
-    fn push_segment(content: Ir, lines: &mut Vec<Ir>, seps: &mut Vec<Ir>, pending_sep: &mut Ir) {
-        seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
-        lines.push(content);
-    }
-    /// End the current logical line: flush the atom and, when non-empty, commit the
-    /// run as a fill segment. Under `.dtx` prose reflow (`margin` set) the fill is
-    /// wrapped in an [`Ir::margin_prefix`] so a `% ` margin is re-emitted on every
-    /// reflowed line.
-    fn end_line(
-        atom: &mut Vec<Ir>,
-        run: &mut Vec<Ir>,
-        lines: &mut Vec<Ir>,
-        seps: &mut Vec<Ir>,
-        pending_sep: &mut Ir,
-        margin: Option<&str>,
-    ) {
-        flush_atom(atom, run);
-        if !run.is_empty() {
-            let fill = Ir::fill(run.drain(..));
-            let segment = match margin {
-                Some(m) => Ir::margin_prefix(m, fill),
-                None => fill,
-            };
-            push_segment(segment, lines, seps, pending_sep);
-        }
-    }
 
     let mut idx = 0;
     while idx < elements.len() {
@@ -722,43 +934,35 @@ fn reflow_elements(
                 let newlines = consume_trivia_run_slice(&elements, &mut idx);
                 if newlines >= 2 {
                     // A blank line ends the line and promotes the next separator.
-                    end_line(
-                        &mut atom,
-                        &mut run,
-                        &mut lines,
-                        &mut seps,
-                        &mut pending_sep,
-                        margin,
-                    );
-                    pending_sep = Ir::empty_line();
+                    b.end_line();
+                    b.pending_sep = Ir::empty_line();
                     line_all_commands = true;
                     line_has_content = false;
                 } else if newlines == 1 {
                     // A single source newline. Under `Statement` reflow every source
                     // line is its own logical line, so the break always ends the line.
-                    // Under `Prose` it is normally just an atom boundary the fill
-                    // rejoins, except a line that is *only* command(s) — on either side
-                    // of the break — is kept on its own line: end the line so the break
-                    // survives instead of collapsing to a fill space.
+                    // Under `Semantic` an authored soft break is likewise preserved
+                    // (sembr keeps the writer's clause breaks). Under `Prose`/`Sentence`
+                    // it is normally just an atom boundary the run rejoins, except a
+                    // line that is *only* command(s) — on either side of the break — is
+                    // kept on its own line: end the line so the break survives instead
+                    // of collapsing to a space.
                     let prev_is_command = line_has_content && line_all_commands;
                     let next_is_command = line_is_command_only(&elements, idx, cx);
-                    if kind == ReflowKind::Statement || prev_is_command || next_is_command {
-                        end_line(
-                            &mut atom,
-                            &mut run,
-                            &mut lines,
-                            &mut seps,
-                            &mut pending_sep,
-                            margin,
-                        );
+                    if kind == ReflowKind::Statement
+                        || cx.wrap == WrapMode::Semantic
+                        || prev_is_command
+                        || next_is_command
+                    {
+                        b.end_line();
                     } else {
-                        flush_atom(&mut atom, &mut run);
+                        b.flush_atom();
                     }
                     line_all_commands = true;
                     line_has_content = false;
                 } else {
                     // Pure inline whitespace: an atom boundary within the line.
-                    flush_atom(&mut atom, &mut run);
+                    b.flush_atom();
                 }
                 continue;
             }
@@ -768,24 +972,10 @@ fn reflow_elements(
             // separately, instead of reflowing the bare `%` up into that run.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 if !line_has_content {
-                    end_line(
-                        &mut atom,
-                        &mut run,
-                        &mut lines,
-                        &mut seps,
-                        &mut pending_sep,
-                        margin,
-                    );
+                    b.end_line();
                 }
-                atom.push(Ir::verbatim(token.text()));
-                end_line(
-                    &mut atom,
-                    &mut run,
-                    &mut lines,
-                    &mut seps,
-                    &mut pending_sep,
-                    margin,
-                );
+                b.push_atom_piece(Ir::verbatim(token.text()), token.text());
+                b.end_line();
                 line_all_commands = true;
                 line_has_content = false;
             }
@@ -794,7 +984,7 @@ fn reflow_elements(
             // ends the line: emit the part before the break as a flat atom and let
             // the line break supply the newline, so the result reparses to the same
             // token (idempotent) instead of leaving an unbreakable multi-line atom
-            // inside the fill. Restricted to control symbols: a multi-line `VERB`
+            // inside the run. Restricted to control symbols: a multi-line `VERB`
             // token (a brace-verbatim argument spanning lines) has real content
             // after its newline and must be emitted whole by the arm below.
             SyntaxElement::Token(token)
@@ -802,24 +992,17 @@ fn reflow_elements(
             {
                 let before = token.text().split_once('\n').map(|(b, _)| b).unwrap_or("");
                 if !before.is_empty() {
-                    atom.push(Ir::verbatim(before));
+                    b.push_atom_piece(Ir::verbatim(before), before);
                 }
-                end_line(
-                    &mut atom,
-                    &mut run,
-                    &mut lines,
-                    &mut seps,
-                    &mut pending_sep,
-                    margin,
-                );
+                b.end_line();
                 line_all_commands = true;
                 line_has_content = false;
             }
             // Under `.dtx` prose reflow, a per-line `%` documentation margin
             // (`DOC_MARGIN`) is dropped: the canonical `% ` margin is re-emitted on
             // every reflowed line by the enclosing [`Ir::margin_prefix`] (see
-            // `end_line`), so gluing the source `%` into the fill would double it.
-            // The single space following it is inter-word whitespace the fill
+            // `end_line`), so gluing the source `%` into the run would double it.
+            // The single space following it is inter-word whitespace the run
             // re-derives. A `GUARD` is *not* dropped (guards keep their column-0 pin).
             SyntaxElement::Token(token)
                 if margin.is_some() && token.kind() == SyntaxKind::DOC_MARGIN => {}
@@ -828,22 +1011,15 @@ fn reflow_elements(
             // so this physical line is no longer command-only. A `.dtx` margin/guard
             // (only under the dtx config) pins to column 0 instead of reflowing.
             SyntaxElement::Token(token) => {
-                atom.push(lower_loose_token(token));
+                b.push_atom_piece(lower_loose_token(token), token.text());
                 line_has_content = true;
                 line_all_commands = false;
             }
             // An explicit `\\` line break (with its `*` / `[len]`, grouped by the
             // parser into one node) rides the end of the current line, then breaks.
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
-                atom.push(lower_node(child, cx));
-                end_line(
-                    &mut atom,
-                    &mut run,
-                    &mut lines,
-                    &mut seps,
-                    &mut pending_sep,
-                    margin,
-                );
+                b.push_atom_piece(lower_node(child, cx), &child.text().to_string());
+                b.end_line();
                 line_all_commands = true;
                 line_has_content = false;
             }
@@ -852,22 +1028,15 @@ fn reflow_elements(
                 if ir.contains_forced_break() {
                     // A block amid prose: end the current line, then place the
                     // block on its own line(s); a fresh run continues after.
-                    end_line(
-                        &mut atom,
-                        &mut run,
-                        &mut lines,
-                        &mut seps,
-                        &mut pending_sep,
-                        margin,
-                    );
-                    push_segment(ir, &mut lines, &mut seps, &mut pending_sep);
+                    b.end_line();
+                    b.push_segment(ir);
                     line_all_commands = true;
                     line_has_content = false;
                 } else {
                     // A block-level `COMMAND` keeps the line command-only; an inline
                     // command (`\citep`, `\ref`, …) is running-text content, as is any
                     // other inline node (math, an inline group), and disqualifies it.
-                    atom.push(ir);
+                    b.push_atom_piece(ir, &child.text().to_string());
                     line_has_content = true;
                     line_all_commands &=
                         child.kind() == SyntaxKind::COMMAND && !command_is_inline(child, cx);
@@ -876,24 +1045,7 @@ fn reflow_elements(
         }
         idx += 1;
     }
-    end_line(
-        &mut atom,
-        &mut run,
-        &mut lines,
-        &mut seps,
-        &mut pending_sep,
-        margin,
-    );
-
-    // Interleave the recorded separators between committed lines.
-    let mut result: Vec<Ir> = Vec::with_capacity(lines.len().saturating_mul(2));
-    for (i, line) in lines.into_iter().enumerate() {
-        if i > 0 {
-            result.push(seps[i].clone());
-        }
-        result.push(line);
-    }
-    Ir::concat(result)
+    b.finish()
 }
 
 /// Lower a `PARAGRAPH` that overlaps an expl3 region. The paragraph is split at the
@@ -918,7 +1070,7 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         let run = elements[start..i].iter().cloned();
         let ir = if in_region {
             lower_expl_code(run, cx)
-        } else if cx.wrap == WrapMode::Reflow {
+        } else if cx.wraps_prose() {
             reflow_elements(run, cx, ReflowKind::Prose)
         } else {
             Ir::concat(lower_element_stream(run, cx))
@@ -1177,7 +1329,7 @@ fn lower_element_stream(
             // since the paragraph's own [`Ir::margin_prefix`] re-emits a canonical
             // `% ` on every reflowed line. Without this the margin would double up.
             SyntaxElement::Token(token)
-                if cx.wrap == WrapMode::Reflow
+                if cx.wraps_prose()
                     && token.kind() == SyntaxKind::DOC_MARGIN
                     && margin_floats_into_paragraph(&token) =>
             {
@@ -1508,7 +1660,7 @@ fn lower_node_dropping_leading_comment(node: &SyntaxNode, cx: LowerCtx<'_>) -> I
     ) {
         children.drain(..=i);
     }
-    if node.kind() == SyntaxKind::PARAGRAPH && cx.wrap == WrapMode::Reflow {
+    if node.kind() == SyntaxKind::PARAGRAPH && cx.wraps_prose() {
         reflow_elements(children.into_iter(), cx, ReflowKind::Prose)
     } else {
         Ir::concat(lower_element_stream(children.into_iter(), cx))

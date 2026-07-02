@@ -10,7 +10,9 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{FormatError, FormatStyle, WrapMode, format_file_with_packages};
+use super::{
+    FormatError, FormatStyle, SentenceOptions, WrapMode, format_file_with_packages_sentence,
+};
 use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,17 +99,26 @@ impl From<FileDiscoveryError> for CheckError {
 }
 
 pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
-    check_paths_with_style(paths, FormatStyle::default(), None, &ExcludeFilter::none())
+    check_paths_with_style(
+        paths,
+        FormatStyle::default(),
+        None,
+        SentenceOptions::default(),
+        &ExcludeFilter::none(),
+    )
 }
 
 /// Check `paths` under `style`. `wrap_override` is the global `--wrap` value: when
 /// `None`, each file uses its kind's default wrap ([`FileKind::default_wrap`], so
-/// `.sty`/`.cls` default to `Preserve`), resolved per file below. `exclude` prunes
-/// directory discovery (explicitly-named files are never pruned).
+/// `.sty`/`.cls` default to `Preserve`), resolved per file below. `sentence`
+/// carries the `sentence`/`semantic` language options (ignored by other modes), so
+/// `--check` matches what `format` would produce. `exclude` prunes directory
+/// discovery (explicitly-named files are never pruned).
 pub fn check_paths_with_style(
     paths: &[PathBuf],
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
 ) -> Result<CheckResult, CheckError> {
     if paths.is_empty() {
@@ -131,12 +142,17 @@ pub fn check_paths_with_style(
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
             FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_file_with_packages(&content, &path, style, kind.lex_config()).map_err(
-                    |err| CheckError::FormatError {
-                        path: path.clone(),
-                        source: err,
-                    },
-                )?
+                format_file_with_packages_sentence(
+                    &content,
+                    &path,
+                    style,
+                    kind.lex_config(),
+                    sentence,
+                )
+                .map_err(|err| CheckError::FormatError {
+                    path: path.clone(),
+                    source: err,
+                })?
             }
             FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {
                 CheckError::BibFormatError {

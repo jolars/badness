@@ -8,9 +8,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeMap;
+
 use badness::formatter::{
-    FormatStyle, WrapMode, format, format_node_range_with_signatures, format_with_style,
-    format_with_style_flavored,
+    FormatStyle, SentenceOptions, WrapMode, format, format_node_range_with_signatures,
+    format_with_style, format_with_style_flavored, format_with_style_flavored_sentence,
 };
 use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness::semantic::SignatureDb;
@@ -329,6 +331,30 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // still reflowing.
     ("reflow_expl_tilde_breaks", WrapMode::Reflow, 40),
     ("reflow_expl_straddle", WrapMode::Reflow, 80),
+    // Sentence wrap (`WrapMode::Sentence`): one sentence per line, line width
+    // ignored. Boundary detection is the English abbreviation profile
+    // (`formatter::sentence`): a `.`/`!`/`?` ends a sentence unless the word is a
+    // known abbreviation (`e.g.`, `Dr.`, `Fig.~`), an ellipsis (`...`/`…`), or a
+    // contextual abbreviation whose following word signals the sentence continues
+    // (`U.S. Government` stays; `u.s. However` splits). Inline math ending in `.`
+    // (`$x$.`) breaks; a `.` *inside* math (`$a.b$`) does not. `sentence` reaches
+    // every prose context reflow does — list items keep their hanging indent, a
+    // `\caption{…}` prose argument sentence-wraps inside its block. Width is
+    // ignored even at width 20 (`sentence_long_no_width_break`).
+    ("sentence_basic", WrapMode::Sentence, 80),
+    ("sentence_abbreviations", WrapMode::Sentence, 80),
+    ("sentence_ellipsis", WrapMode::Sentence, 80),
+    ("sentence_contextual_abbrev", WrapMode::Sentence, 80),
+    ("sentence_inline_math", WrapMode::Sentence, 80),
+    ("sentence_list_items", WrapMode::Sentence, 80),
+    ("sentence_caption", WrapMode::Sentence, 80),
+    ("sentence_long_no_width_break", WrapMode::Sentence, 20),
+    // Semantic wrap (`WrapMode::Semantic`, sembr): the sentence breaks above *plus*
+    // preserving the author's own soft line breaks. An authored break after a comma
+    // clause survives (`semantic_preserve_authored_break`), and a run-on sentence on
+    // one source line is still sentence-split (`semantic_adds_sentence_break`).
+    ("semantic_preserve_authored_break", WrapMode::Semantic, 80),
+    ("semantic_adds_sentence_break", WrapMode::Semantic, 80),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {
@@ -630,6 +656,58 @@ fn formatter_fixtures_match_expected() {
             "fixture {name} formatted output must round-trip"
         );
     }
+}
+
+/// The `sentence`/`semantic` language profile is config-driven: the German profile
+/// keeps `bzw.` from ending a sentence, while the default English profile does not
+/// know it and splits there. User `no-break-abbreviations` merge on top of the
+/// built-in list. Exercises the [`SentenceOptions`] plumbing the fixture table
+/// (English default) cannot reach.
+#[test]
+fn sentence_wrap_language_and_user_abbreviations() {
+    let style = FormatStyle {
+        wrap: WrapMode::Sentence,
+        line_width: 80,
+        ..FormatStyle::default()
+    };
+    let input = "Das ist eins bzw. zwei. Und drei.\n";
+
+    // English (the default) does not know `bzw.`, so it ends a sentence there.
+    let english = format_with_style_flavored_sentence(
+        input,
+        style,
+        LatexFlavor::Document,
+        SentenceOptions::default(),
+    )
+    .expect("format");
+    assert_eq!(english, "Das ist eins bzw.\nzwei.\nUnd drei.\n");
+
+    // The German profile suppresses the break after `bzw.`.
+    let de = SentenceOptions::from_lang(Some("de"));
+    let german = format_with_style_flavored_sentence(input, style, LatexFlavor::Document, de)
+        .expect("format");
+    assert_eq!(german, "Das ist eins bzw. zwei.\nUnd drei.\n");
+    // Idempotent under the same options.
+    assert_eq!(
+        format_with_style_flavored_sentence(&german, style, LatexFlavor::Document, de)
+            .expect("reformat"),
+        german,
+    );
+
+    // A user `no-break-abbreviations` entry (the `default` bucket) suppresses a
+    // break after an otherwise-unknown abbreviation (`foo.`).
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    map.insert("default".to_string(), vec!["foo.".to_string()]);
+    let mut scratch = Vec::new();
+    let opts = SentenceOptions::resolve(None, &map, &mut scratch);
+    let user = format_with_style_flavored_sentence(
+        "See foo. Then more here. Done.\n",
+        style,
+        LatexFlavor::Document,
+        opts,
+    )
+    .expect("format");
+    assert_eq!(user, "See foo. Then more here.\nDone.\n");
 }
 
 /// `WrapMode::Preserve` leaves authored intra-paragraph line breaks untouched —

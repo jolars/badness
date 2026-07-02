@@ -20,8 +20,8 @@ use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
 use badness::formatter::{
-    FormatStyle, WrapMode, check_paths_with_style, format_file_with_packages,
-    format_with_style_flavored,
+    FormatStyle, SentenceOptions, WrapMode, check_paths_with_style,
+    format_file_with_packages_sentence, format_with_style_flavored_sentence,
 };
 use badness::linter::{
     Diagnostic, OutputMode, RuleSelection, apply_fixes, check_document, lint_document,
@@ -102,12 +102,22 @@ fn main() -> ExitCode {
             // Reflow), resolved per file at dispatch.
             let wrap_override: Option<WrapMode> =
                 wrap.map(wrap_mode).or(config.format.wrap.map(Into::into));
+            // The `sentence`/`semantic` language profile, resolved once from
+            // `[format] lang` + `[format.no-break-abbreviations]`; `scratch` owns the
+            // merged entries for the whole format run. Ignored by other wrap modes.
+            let mut abbrev_scratch = Vec::new();
+            let sentence = SentenceOptions::resolve(
+                config.format.lang.as_deref(),
+                &config.format.no_break_abbreviations,
+                &mut abbrev_scratch,
+            );
             run_format(
                 &paths,
                 check,
                 stdin_filepath.as_deref(),
                 style,
                 wrap_override,
+                sentence,
                 &exclude_filter,
             )
         }
@@ -622,16 +632,17 @@ fn run_format(
     stdin_filepath: Option<&Path>,
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
     if check {
-        return run_check(paths, style, wrap_override, exclude);
+        return run_check(paths, style, wrap_override, sentence, exclude);
     }
     if paths.is_empty() {
         // Stdin has no directory to walk, so the exclude filter never applies.
-        run_format_stdin(stdin_filepath, style, wrap_override)
+        run_format_stdin(stdin_filepath, style, wrap_override, sentence)
     } else {
-        run_format_paths(paths, style, wrap_override, exclude)
+        run_format_paths(paths, style, wrap_override, sentence, exclude)
     }
 }
 
@@ -640,9 +651,10 @@ fn run_check(
     paths: &[PathBuf],
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
-    match check_paths_with_style(paths, style, wrap_override, exclude) {
+    match check_paths_with_style(paths, style, wrap_override, sentence, exclude) {
         Ok(result) => {
             if result.changed_files.is_empty() {
                 ExitCode::SUCCESS
@@ -672,6 +684,7 @@ fn run_format_stdin(
     stdin_filepath: Option<&Path>,
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
 ) -> ExitCode {
     let mut input = String::new();
     if let Err(err) = std::io::stdin().read_to_string(&mut input) {
@@ -682,7 +695,8 @@ fn run_format_stdin(
     style.wrap = wrap_override.unwrap_or(kind.default_wrap());
     let formatted = match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            format_with_style_flavored(&input, style, kind.lex_config()).map_err(|e| e.to_string())
+            format_with_style_flavored_sentence(&input, style, kind.lex_config(), sentence)
+                .map_err(|e| e.to_string())
         }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
     };
@@ -732,6 +746,7 @@ fn run_format_paths(
     paths: &[PathBuf],
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
     let files = match collect_lint_files(paths, exclude) {
@@ -761,8 +776,14 @@ fn run_format_paths(
         style.wrap = wrap_override.unwrap_or(kind.default_wrap());
         let formatted = match kind {
             FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_file_with_packages(&content, path, style, kind.lex_config())
-                    .map_err(|e| e.to_string())
+                format_file_with_packages_sentence(
+                    &content,
+                    path,
+                    style,
+                    kind.lex_config(),
+                    sentence,
+                )
+                .map_err(|e| e.to_string())
             }
             FileKind::Bib => {
                 badness::bib::format_with_style(&content, style).map_err(|e| e.to_string())

@@ -113,9 +113,10 @@ use crate::bib::{
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
 use crate::config::{Config, LintConfig};
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
+use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
-    FormatStyle, WrapMode, format_node_range_with_signatures, format_node_with_signatures,
-    format_with_style_flavored,
+    FormatStyle, SentenceOptions, WrapMode, format_node_range_with_signatures_sentence,
+    format_node_with_signatures_sentence, format_with_style_flavored_sentence,
 };
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
@@ -302,6 +303,13 @@ struct ResolvedSettings {
     /// exclude-nothing [`ExcludeFilter::none`] when no config governs (editor
     /// fallback) — preserving the unfiltered walk that path always did.
     exclude: ExcludeFilter,
+    /// The `sentence`/`semantic` language, resolved once from `[format] lang`.
+    /// English (the default) when no config governs; ignored by other wrap modes.
+    sentence_lang: SentenceLanguage,
+    /// The merged, normalized user no-break abbreviations from
+    /// `[format.no-break-abbreviations]`. Held owned so a worker job can borrow it
+    /// when building a [`SentenceOptions`] at format time.
+    sentence_no_break: Vec<String>,
 }
 
 impl ResolvedSettings {
@@ -313,12 +321,18 @@ impl ResolvedSettings {
     /// [`resolve_settings`]: GlobalState::resolve_settings
     fn from_config(config: &Config, present: bool, editor: &EditorSettings) -> Self {
         if present {
+            let (sentence_lang, sentence_no_break) = resolve_owned(
+                config.format.lang.as_deref(),
+                &config.format.no_break_abbreviations,
+            );
             Self {
                 style: FormatStyle::from(&config.format),
                 wrap_override: config.format.wrap.map(Into::into),
                 config_present: true,
                 lint: config.lint.clone(),
                 exclude: ExcludeFilter::none(),
+                sentence_lang,
+                sentence_no_break,
             }
         } else {
             Self::from_editor(editor)
@@ -334,6 +348,8 @@ impl ResolvedSettings {
             config_present: false,
             lint: LintConfig::default(),
             exclude: ExcludeFilter::none(),
+            sentence_lang: SentenceLanguage::default(),
+            sentence_no_break: Vec::new(),
         }
     }
 
@@ -421,6 +437,10 @@ enum WorkerJob {
         text: String,
         style: FormatStyle,
         kind: FileKind,
+        /// The `sentence`/`semantic` language and merged no-break abbreviations,
+        /// resolved from the document's config (see [`ResolvedSettings`]).
+        sentence_lang: SentenceLanguage,
+        sentence_no_break: Vec<String>,
     },
     /// A range-formatting request: like [`WorkerJob::Format`] but bounded to the
     /// editor selection (expanded to whole top-level blocks on the read pool).
@@ -431,6 +451,8 @@ enum WorkerJob {
         style: FormatStyle,
         kind: FileKind,
         range: Range,
+        sentence_lang: SentenceLanguage,
+        sentence_no_break: Vec<String>,
     },
     /// A document-symbol request: build the outline on the read pool and reply to
     /// `id`.
@@ -1012,6 +1034,8 @@ fn on_formatting(
         text,
         style,
         kind,
+        sentence_lang: resolved.sentence_lang,
+        sentence_no_break: resolved.sentence_no_break,
     });
 }
 
@@ -1064,6 +1088,8 @@ fn on_range_formatting(
         style,
         kind,
         range: params.range,
+        sentence_lang: resolved.sentence_lang,
+        sentence_no_break: resolved.sentence_no_break,
     });
 }
 
@@ -1870,13 +1896,18 @@ impl Worker {
                 text,
                 style,
                 kind,
+                sentence_lang,
+                sentence_no_break,
             } => {
                 // Format reads run on the read pool against a snapshot, concurrent
                 // with the analyze slot (they are id-bound responses, not coalesced).
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
-                self.read_spawner
-                    .spawn(move || run_format(&snapshot, id, &path, &text, style, kind, &out_tx));
+                self.read_spawner.spawn(move || {
+                    let sentence =
+                        SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
+                    run_format(&snapshot, id, &path, &text, style, kind, sentence, &out_tx)
+                });
             }
             WorkerJob::RangeFormat {
                 id,
@@ -1885,13 +1916,19 @@ impl Worker {
                 style,
                 kind,
                 range,
+                sentence_lang,
+                sentence_no_break,
             } => {
                 // Range formatting runs on the read pool against a snapshot, exactly
                 // like `Format` (an id-bound response, not coalesced).
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_range_format(&snapshot, id, &path, &text, style, kind, range, &out_tx)
+                    let sentence =
+                        SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
+                    run_range_format(
+                        &snapshot, id, &path, &text, style, kind, range, sentence, &out_tx,
+                    )
                 });
             }
             WorkerJob::Symbols {
@@ -2634,6 +2671,7 @@ fn result_id_for(items: &[Diagnostic]) -> String {
 /// (`salsa::Cancelled`), a stale snapshot (`file_text != text`), or a cache miss,
 /// recompute from the captured `text` via [`format_with_style`] (which itself
 /// guards parse errors) so the client always gets a correct response.
+#[allow(clippy::too_many_arguments)]
 fn run_format(
     snapshot: &Analysis,
     id: RequestId,
@@ -2641,9 +2679,10 @@ fn run_format(
     text: &str,
     style: FormatStyle,
     kind: FileKind,
+    sentence: SentenceOptions<'_>,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_format(snapshot, path, text, style, kind) {
+    let result = match compute_format(snapshot, path, text, style, kind, sentence) {
         Some(edit) => serde_json::to_value(vec![edit]).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -2659,6 +2698,7 @@ fn compute_format(
     text: &str,
     style: FormatStyle,
     kind: FileKind,
+    sentence: SentenceOptions<'_>,
 ) -> Option<TextEdit> {
     // `Some(Some(s))` = formatted; `Some(None)` = clean refusal (parse/format
     // error); `None` = cache miss / stale snapshot (fall back to the captured text).
@@ -2678,7 +2718,7 @@ fn compute_format(
                 // local packages (those tracked as project members).
                 let root = snapshot.parsed_tree(file);
                 let sigs = snapshot.scope_signatures(members_of(snapshot), file);
-                Some(format_node_with_signatures(&root, style, sigs).ok())
+                Some(format_node_with_signatures_sentence(&root, style, sigs, sentence).ok())
             }
             FileKind::Bib => {
                 if !snapshot.bib_parse_diagnostics(file).is_empty() {
@@ -2694,7 +2734,7 @@ fn compute_format(
         Ok(Some(opt)) => opt,
         Ok(None) | Err(_) => match kind {
             FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_with_style_flavored(text, style, kind.lex_config()).ok()
+                format_with_style_flavored_sentence(text, style, kind.lex_config(), sentence).ok()
             }
             FileKind::Bib => bib_format_with_style(text, style).ok(),
         },
@@ -2726,9 +2766,10 @@ fn run_range_format(
     style: FormatStyle,
     kind: FileKind,
     range: Range,
+    sentence: SentenceOptions<'_>,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_range_format(snapshot, path, text, style, kind, range) {
+    let result = match compute_range_format(snapshot, path, text, style, kind, range, sentence) {
         Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -2751,6 +2792,7 @@ fn compute_range_format(
     style: FormatStyle,
     kind: FileKind,
     sel_range: Range,
+    sentence: SentenceOptions<'_>,
 ) -> Option<Vec<TextEdit>> {
     // Range formatting is LaTeX-only for now; bib falls back to no edits.
     match kind {
@@ -2781,7 +2823,7 @@ fn compute_range_format(
         let root = snapshot.parsed_tree(file);
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, &idx, sel, style, sigs,
+            &root, text, &idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -2800,6 +2842,7 @@ fn compute_range_format(
                 sel,
                 style,
                 &SignatureDb::default(),
+                sentence,
             )
         }
     }
@@ -2809,6 +2852,7 @@ fn compute_range_format(
 /// result against the original slice into minimal edits. `None` when the selection
 /// touches no block or the formatter refuses; `Some(vec![])` when already
 /// formatted.
+#[allow(clippy::too_many_arguments)]
 fn range_edits_for_root(
     root: &SyntaxNode,
     text: &str,
@@ -2816,9 +2860,12 @@ fn range_edits_for_root(
     sel: TextRange,
     style: FormatStyle,
     external: &SignatureDb,
+    sentence: SentenceOptions<'_>,
 ) -> Option<Vec<TextEdit>> {
     let block_range = expand_to_top_level_blocks(root, sel)?;
-    let fragment = format_node_range_with_signatures(root, style, external, block_range).ok()?;
+    let fragment =
+        format_node_range_with_signatures_sentence(root, style, external, block_range, sentence)
+            .ok()?;
     let base = usize::from(block_range.start());
     let end = usize::from(block_range.end());
     if fragment == text[base..end] {

@@ -19,6 +19,7 @@
 //! There is no `[index]` section (badness has no R-package index) and no
 //! `[lint]`-driven network egress key.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,6 +97,18 @@ pub struct FormatConfig {
     /// `.sty`/`.cls`/`.dtx`/`.ins` → `preserve`, `.tex` → `reflow`.
     #[serde(default)]
     pub wrap: Option<WrapModeConfig>,
+    /// Document language (a BCP-47-style code, e.g. `en`, `de`, `pt-BR`), used by
+    /// the `sentence`/`semantic` wrap modes to pick the sentence-boundary
+    /// abbreviation profile. Unknown or absent languages fall back to English.
+    /// (Auto-detection from babel/polyglossia is not yet implemented.)
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// User-supplied no-break abbreviations for the `sentence`/`semantic` wrap
+    /// modes, keyed by language code or the literal `default` bucket (applied to
+    /// every document). An abbreviation here never ends a sentence, so a line is
+    /// not broken after it. Merged on top of the built-in per-language lists.
+    #[serde(default)]
+    pub no_break_abbreviations: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for FormatConfig {
@@ -104,6 +117,8 @@ impl Default for FormatConfig {
             line_width: DEFAULT_LINE_WIDTH,
             indent_width: DEFAULT_INDENT_WIDTH,
             wrap: None,
+            lang: None,
+            no_break_abbreviations: BTreeMap::new(),
         }
     }
 }
@@ -117,9 +132,10 @@ impl Default for FormatConfig {
 pub enum WrapModeConfig {
     /// Greedy fill: wrap words to the line width.
     Reflow,
-    /// One sentence per line. (Not yet implemented — behaves like `preserve`.)
+    /// One sentence per line (width ignored).
     Sentence,
-    /// Semantic line breaks (sembr.org). (Not yet implemented — like `preserve`.)
+    /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at
+    /// sentence boundaries.
     Semantic,
     /// Leave authored line breaks untouched.
     Preserve,
@@ -439,6 +455,31 @@ mod tests {
         // a clear error instead of silent fallthrough to defaults.
         let err = parse("[format]\nline_width = 80\n").expect_err("snake_case");
         assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn lang_defaults_to_none_and_abbreviations_empty() {
+        let config = parse("[format]\n").expect("parse");
+        assert_eq!(config.format.lang, None);
+        assert!(config.format.no_break_abbreviations.is_empty());
+    }
+
+    #[test]
+    fn parses_lang_and_no_break_abbreviations() {
+        let text = "[format]\nwrap = \"sentence\"\nlang = \"de\"\n\n\
+                    [format.no-break-abbreviations]\n\
+                    default = [\"ibid.\"]\n\
+                    de = [\"bzw.\", \"Abb.\"]\n";
+        let config = parse(text).expect("parse");
+        assert_eq!(config.format.lang.as_deref(), Some("de"));
+        assert_eq!(
+            config.format.no_break_abbreviations.get("default"),
+            Some(&vec!["ibid.".to_string()])
+        );
+        assert_eq!(
+            config.format.no_break_abbreviations.get("de"),
+            Some(&vec!["bzw.".to_string(), "Abb.".to_string()])
+        );
     }
 
     #[test]

@@ -195,8 +195,15 @@ never match.
 - **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
   `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling **panache**
   formatter and mechanized through the `Doc` IR (`Fill`), not a separate line-filler.
-  `Reflow` and `Preserve` are implemented; `Sentence`/`Semantic` fall back to
-  `Preserve`. The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
+  All four are implemented: `Reflow` width-fills, `Preserve` keeps authored breaks,
+  and `Sentence`/`Semantic` split one sentence per line (width ignored) through the
+  shared `reflow_elements` engine—each completed prose run is rendered as a `Fill`
+  (reflow) or as space-joined sentences (sentence/semantic). `Semantic` additionally
+  ends a line at every authored newline (sembr; no clause detection). Sentence-boundary
+  detection is a per-language abbreviation profile (`formatter::sentence`, ported from
+  panache) resolved from `[format] lang` + `[format.no-break-abbreviations]` into a
+  `SentenceOptions` threaded on `FormatContext`; babel/polyglossia auto-detection is
+  deferred. The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
   *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
 - **CLI:** `clap` + `build.rs` generating man pages, completions, and markdown
   (`clap_mangen`, `clap_complete`, `clapdown`).

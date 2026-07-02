@@ -1,0 +1,35 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `abbreviation-spacing`
+
+Flag TeX's sentence-vs-interword spacing going wrong around abbreviations and acronyms (ChkTeX 12/13). Outside `\frenchspacing`, TeX widens the space after `.`/`?`/`!` unless the punctuation follows an uppercase letter. Two shapes defeat that: a lowercase abbreviation (`e.g.`, `i.e.`, `etc.`, `et al.`) gets a too-wide space, fixed with `\ ` (`e.g.\ foo`); and an uppercase acronym ending a sentence (`USA.`) gets a too-narrow space, fixed with `\@` (`USA\@.`). To stay conservative the first fires only before a lowercase word (the sentence clearly continues) and the second only for a run of two or more capitals before the period and before an uppercase word (a new sentence), so initials (`J.`), dotted forms (`U.S.A.`), and mid-sentence acronyms are left alone. Both fixes are **unsafe** -- they change the typeset spacing -- so `--fix` leaves them alone while `--unsafe-fixes` and the editor code action apply them. The rule is silent under `\frenchspacing`, and never touches comments, verbatim, or math.
+
+A lowercase abbreviation followed by more text takes an interword space:
+
+```tex
+We tried several methods, e.g. gradient descent.
+```
+
+```text
+warning: abbreviation-spacing
+ --> example.tex:1:31
+  |
+1 | We tried several methods, e.g. gradient descent.
+  |                               ^ `e.g.` is an abbreviation, not a sentence end; use an interword space `\ ` (`e.g.\ `) so TeX does not widen the gap
+```
+
+An acronym ending a sentence takes intersentence spacing:
+
+```tex
+The rover reached the USA. Then it stopped.
+```
+
+```text
+warning: abbreviation-spacing
+ --> example.tex:1:26
+  |
+1 | The rover reached the USA. Then it stopped.
+  |                          ^ capital before sentence-ending punctuation suppresses intersentence spacing; use `\@` (`Word\@.`) to restore it
+```

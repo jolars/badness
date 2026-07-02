@@ -14,6 +14,7 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::diagnostic::{Diagnostic, Severity};
 
+pub mod abbreviation_spacing;
 pub mod dash_length;
 pub mod deprecated_command;
 pub mod dollar_display_math;
@@ -30,6 +31,7 @@ pub mod times_variable;
 pub mod undefined_citation;
 pub mod undefined_ref;
 
+pub use abbreviation_spacing::AbbreviationSpacing;
 pub use dash_length::DashLength;
 pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
@@ -145,6 +147,7 @@ pub trait Rule: Send + Sync {
 /// Every built-in rule, in registry order.
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
+        Box::new(AbbreviationSpacing),
         Box::new(DuplicateLabel),
         Box::new(DeprecatedCommand),
         Box::new(MissingNonbreakingSpace),
@@ -167,6 +170,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
 /// The bib rules live in [`crate::bib::linter::ALL_BIB_RULE_IDS`]; the selectable
 /// universe is the union of the two (see [`all_known_rule_ids`]).
 pub const ALL_RULE_IDS: &[&str] = &[
+    "abbreviation-spacing",
     "duplicate-label",
     "deprecated-command",
     "missing-nonbreaking-space",

@@ -48,4 +48,5 @@ Suppress a rule at one site with a comment directive:
 
 Some rules ship an **auto-fix**. `badness lint --fix` applies the meaning-preserving
 (Safe) ones; `--unsafe-fixes` also applies fixes that may change output, such as
-`missing-nonbreaking-space` (inserting a tie changes line breaking).
+`missing-nonbreaking-space` (inserting a tie changes line breaking) or
+`abbreviation-spacing` (inserting `\ ` or `\@` changes sentence spacing).

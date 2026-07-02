@@ -135,7 +135,7 @@ notes when implementing.
   text (`\LaTeX is` renders "LaTeXis") (ChkTeX 1). `Unsafe` (insert `{}` or `\ `).
   Scoped to a curated set of argument-less TeX-family logos, text mode only, and a
   following alphanumeric word (a trailing `.` is desired, not flagged).
-- [ ] `abbreviation-spacing`—inter-word `\ ` after `e.g.`/`i.e.`/`et al.`, and
+- [x] `abbreviation-spacing`—inter-word `\ ` after `e.g.`/`i.e.`/`et al.`, and
   forgotten `\@` before sentence-final punctuation after a capital (`UFO.` → `UFO\@.`)
   unless `\frenchspacing` (ChkTeX 12/13, lacheck, textidote sh:010/011). `Unsafe`.
   *Overlap note:* verify the formatter does not touch this.

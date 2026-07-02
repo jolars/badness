@@ -254,6 +254,27 @@ fn dash_length_fires_end_to_end_and_its_fix_is_correct() {
 }
 
 #[test]
+fn abbreviation_spacing_fires_end_to_end_and_its_fix_is_correct() {
+    // The lowercase abbreviation `e.g.` (before a lowercase word) and the acronym
+    // `USA.` (ending a sentence, before a capital) both trip the rule; the trailing
+    // `home.` does not.
+    let src = "see e.g. foo and the USA. Then go home.\n";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("abbreviation-spacing", Severity::Warning),
+            ("abbreviation-spacing", Severity::Warning),
+        ]
+    );
+    // The unsafe spacing fixes stay lossless and parse (tenet 1).
+    assert_fix_is_correct(src);
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "see e.g.\\ foo and the USA\\@. Then go home.\n"
+    );
+}
+
+#[test]
 fn times_variable_fires_end_to_end_and_its_fix_is_correct() {
     // A `digits x digits` product trips the rule; `matrix` and the hex mask do not.
     let src = "A 640x200 matrix with mask 0xFF.\n";

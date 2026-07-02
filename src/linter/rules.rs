@@ -20,6 +20,7 @@ pub mod deprecated_command;
 pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod ellipsis;
+pub mod hard_coded_reference;
 pub mod makeat_macro;
 pub mod math_operator_name;
 pub mod mismatched_delimiter;
@@ -40,6 +41,7 @@ pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use ellipsis::Ellipsis;
+pub use hard_coded_reference::HardCodedReference;
 pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
 pub use mismatched_delimiter::MismatchedDelimiter;
@@ -161,6 +163,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PrimitiveCommand),
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
+        Box::new(HardCodedReference),
         Box::new(StraightQuotes),
         Box::new(SwallowedSpace),
         Box::new(SpaceBeforeCommand),
@@ -187,6 +190,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "primitive-command",
     "dollar-display-math",
     "ellipsis",
+    "hard-coded-reference",
     "straight-quotes",
     "swallowed-space",
     "space-before-command",

@@ -1,0 +1,35 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `hard-coded-reference`
+
+Flag a literal cross-reference written in prose -- `Figure 3`, `Table~1`, `Section 2` -- instead of `\ref`/`\cref` to a `\label` (textidote sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic numbering: renumbering a float or reordering sections silently breaks the reference and drops the hyperlink. The rule is **report-only** -- the correct rewrite needs the label the number refers to, which is not in the text, so no autofix is offered. To stay conservative it fires only for a capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole word and directly followed, across one space or a tie `~`, by an arabic number; plurals, lowercase, `Figure~\ref{x}`, and `Figure three` are left alone. It never touches math, comments, or verbatim.
+
+A hard-coded figure number instead of a cross-reference:
+
+```tex
+See Figure 3 for the results.
+```
+
+```text
+warning: hard-coded-reference
+ --> example.tex:1:5
+  |
+1 | See Figure 3 for the results.
+  |     ^^^^^^^^ hard-coded reference `Figure 3`; use `\ref`/`\cref` to a `\label` so the number stays in sync
+```
+
+Even tied with `~`, the number is still hard-coded:
+
+```tex
+Table~1 lists the parameters.
+```
+
+```text
+warning: hard-coded-reference
+ --> example.tex:1:1
+  |
+1 | Table~1 lists the parameters.
+  | ^^^^^^^ hard-coded reference `Table~1`; use `\ref`/`\cref` to a `\label` so the number stays in sync
+```

@@ -170,7 +170,7 @@ period, section length) are skipped as grammar-tool territory.
 - [x] `sectioning-level-jump`—a heading that skips a level (`\section` →
   `\subsubsection`), read from the semantic sectioning tree (textidote sh:secskip).
   Report-only.
-- [ ] `hard-coded-reference`—literal "Figure 3"/"Section 2"/"Table 1" in prose
+- [x] `hard-coded-reference`—literal "Figure 3"/"Section 2"/"Table 1" in prose
   instead of `\ref`/`\cref` (textidote sh:hcfig/hctab/hcsec). Report-only, heuristic.
 
 ### Deferred / out of scope

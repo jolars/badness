@@ -231,6 +231,20 @@ $\\left( a \\right] $
 }
 
 #[test]
+fn hard_coded_reference_fires_end_to_end() {
+    // A hard-coded `Figure 3` and a tied `Table~1` both surface; the genuine
+    // `\ref` and a spelled-out number stay silent. Report-only: no fix.
+    let src = "See Figure 3 and Table~1, but Section~\\ref{s} and Figure three are fine.\n";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("hard-coded-reference", Severity::Warning),
+            ("hard-coded-reference", Severity::Warning),
+        ]
+    );
+}
+
+#[test]
 fn node_ignore_silences_a_stylistic_rule() {
     let src = "\
 % badness-ignore dollar-display-math: legacy snippet

@@ -12,6 +12,7 @@ extend-exclude = [
   "npm/platform-template/README.md",
   "docs/parse-compat-triage.md",
   "docs/src/reference/cli.md",
+  "docs/src/reference/linter-rules.md",
 ]
 
 [flavor-overrides]

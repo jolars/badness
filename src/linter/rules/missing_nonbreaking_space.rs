@@ -21,9 +21,33 @@
 //!
 //! The command table lives here, not in `data/signatures.json`: which commands
 //! want a tie is a lint judgment, not the structural arity/verbatim fact the
-//! signature DB carries (AGENTS.md core decision #2). `\nocite` and friends are
-//! excluded — they produce no visible output, so a tie before them is
-//! meaningless.
+//! signature DB carries (AGENTS.md core decision #2).
+//!
+//! **What earns a tie: an orphanable unit.** The tie convention exists so a line
+//! break cannot strand a self-contained blob—a bare number/label, or a
+//! bracketed/parenthetical/superscript citation—alone at a line edge. We flag a
+//! command only when its *rendered output* is such a unit:
+//!
+//! - **Bare-number references** (`\ref`, `\eqref`, `\pageref`, `\labelcref`): the
+//!   author writes the noun (`Figure \ref{x}` → "Figure 2"), so a break orphans a
+//!   lone number. The canonical case.
+//! - **Bracketed/parenthetical/superscript citations** (`\cite`, `\citep`,
+//!   `\parencite`, `\autocite`, `\footcite`, `\supercite`, …): the whole citation
+//!   is a self-contained blob (`(Smith 2020)`, `[3]`, a footnote mark) that can
+//!   orphan at line start.
+//!
+//! Deliberately **not** flagged, because a break there orphans nothing:
+//!
+//! - **Self-describing references** (`\autoref`, `\cref`, `\Cref`, `\nameref`,
+//!   `\vref`, `\Vref`, `\cpageref`, `\crefrange`, `\Crefrange`): these emit the
+//!   noun themselves (`\autoref{x}` → "Figure 2"), so the space before them is
+//!   ordinary prose ("in Figure 2"). cleveref also ties the noun to its number
+//!   internally, so the only meaningful tie is one we cannot see.
+//! - **Textual citations** (`\textcite`, `\citet`, `\citeauthor`, `\citeyear`,
+//!   `\citealt`, `\citealp`, `\fullcite`): these weave an author name into the
+//!   running prose (`\textcite{x}` → "Smith (2020)"), so there is no bracketed
+//!   unit to strand.
+//! - **`\nocite` and friends**: no visible output, so a tie is meaningless.
 
 use std::path::PathBuf;
 
@@ -38,43 +62,31 @@ const EXAMPLES: &[Example] = &[Example {
     source: "see Figure \\ref{fig:plot}\n",
 }];
 
-/// Cross-reference and citation commands whose visible output should be tied to
-/// the preceding word. Excludes `\nocite` (no output → no tie).
+/// Commands whose rendered output is an orphanable unit—a bare number/label or a
+/// bracketed/parenthetical/superscript citation blob—that should be tied to the
+/// preceding word. See the module docs for what is excluded and why: this omits
+/// self-describing references (`\autoref`, `\cref`, …), textual citations
+/// (`\textcite`, `\citet`, …), and `\nocite`.
 const TIE_COMMANDS: &[&str] = &[
-    // Citation family (natbib + biblatex).
+    // Bare-number / parenthetical-number references. The author supplies the
+    // noun (`Figure \ref{x}` → "Figure 2"), so a break strands a lone number.
+    "ref",
+    "eqref",
+    "pageref",
+    "labelcref",
+    // Bracketed / parenthetical / superscript citations (natbib + biblatex).
+    // The whole citation is a self-contained blob a break can orphan.
     "cite",
     "citep",
-    "citet",
-    "citealp",
-    "citealt",
-    "citeauthor",
-    "citeyear",
     "citeyearpar",
     "parencite",
     "Parencite",
-    "textcite",
-    "Textcite",
     "autocite",
     "Autocite",
     "footcite",
     "smartcite",
     "Smartcite",
     "supercite",
-    "fullcite",
-    // Cross-reference family (latex + amsmath + cleveref + varioref).
-    "ref",
-    "eqref",
-    "cref",
-    "Cref",
-    "autoref",
-    "nameref",
-    "pageref",
-    "vref",
-    "Vref",
-    "cpageref",
-    "labelcref",
-    "crefrange",
-    "Crefrange",
 ];
 
 pub struct MissingNonbreakingSpace;
@@ -89,12 +101,16 @@ impl Rule for MissingNonbreakingSpace {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a plain space where a TeX tie (`~`) belongs, between a word and a \
-         cross-reference or citation command (`Figure \\ref{x}`, `see \\cite{a}`). \
-         A tie keeps the word and its number from splitting across a line break. \
-         Only the same-line `WORD SPACE \\cmd` shape is flagged. The fix is \
-         **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves \
-         it alone; `--unsafe-fixes` and the editor code action apply it."
+        "Flag a plain space where a TeX tie (`~`) belongs, before a command whose \
+         output a line break would orphan: a bare-number reference (`Figure \
+         \\ref{x}`, `\\eqref`, `\\pageref`) or a bracketed citation (`see \
+         \\cite{a}`, `\\parencite`, `\\autocite`). A tie keeps the reference on \
+         the same line. Self-describing references (`\\autoref`, `\\cref`) and \
+         textual citations (`\\textcite`, `\\citet`) are not flagged -- they emit \
+         their own noun, so a break orphans nothing. Only the same-line `WORD \
+         SPACE \\cmd` shape is flagged. The fix is **unsafe** -- inserting a tie \
+         changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and \
+         the editor code action apply it."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -227,6 +243,42 @@ mod tests {
     #[test]
     fn nocite_is_not_flagged() {
         assert!(findings("foo \\nocite{x}\n").is_empty());
+    }
+
+    #[test]
+    fn self_describing_refs_are_not_flagged() {
+        // These emit the reference noun themselves ("Figure 2"), so the space
+        // before them is ordinary prose, not an orphanable number.
+        for cmd in ["autoref", "cref", "Cref", "nameref", "vref", "cpageref"] {
+            assert!(
+                findings(&format!("in \\{cmd}{{x}}\n")).is_empty(),
+                "\\{cmd} should not be flagged"
+            );
+        }
+    }
+
+    #[test]
+    fn textual_citations_are_not_flagged() {
+        // These weave an author name into the prose ("Smith (2020)"), so there
+        // is no bracketed unit to strand.
+        for cmd in ["textcite", "Textcite", "citet", "citeauthor", "citeyear"] {
+            assert!(
+                findings(&format!("shown by \\{cmd}{{x}}\n")).is_empty(),
+                "\\{cmd} should not be flagged"
+            );
+        }
+    }
+
+    #[test]
+    fn parenthetical_citations_are_flagged() {
+        // Self-contained citation blobs that a break can orphan.
+        for cmd in ["parencite", "autocite", "footcite", "supercite", "citep"] {
+            assert_eq!(
+                findings(&format!("result \\{cmd}{{x}}\n")).len(),
+                1,
+                "\\{cmd} should be flagged"
+            );
+        }
     }
 
     #[test]

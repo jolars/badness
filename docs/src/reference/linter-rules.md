@@ -8,12 +8,12 @@ per rule, keyed by its stable **rule id**. That id is what appears in a
 diagnostic, what `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target,
 and what a `% badness-ignore <id>` comment suppresses.
 
-Every rule is **on by default**; narrowing happens only through
-`select`/`ignore` (see [Configuration](#configuration)). Where a rewrite is
-unambiguous a rule carries an **auto-fix**: a *safe* fix (shown below as "After
-applying the fix") is applied by `badness lint --fix`; an *unsafe* fix, one that
-may change output such as inserting a line-breaking tie, is applied only with
-`--unsafe-fixes` or as an editor code action, so it has no "after" block here.
+Every rule is **on by default**; narrowing happens only through `select`/`ignore`
+(see [Configuration](#configuration)). Where a rewrite is unambiguous a rule
+carries an **auto-fix**: a *safe* fix (shown below as "After applying the fix")
+is applied by `badness lint --fix`; an *unsafe* fix, one that may change output
+such as inserting a line-breaking tie, is applied only with `--unsafe-fixes` or
+as an editor code action, so it has no "after" block here.
 
 Each example below is linted live to produce its diagnostic and fixed output, so
 this page never drifts from the rules' actual behavior.
@@ -24,19 +24,7 @@ same `[lint]` config but not yet catalogued here.
 
 ## `abbreviation-spacing`
 
-Flag TeX's sentence-vs-interword spacing going wrong around abbreviations and
-acronyms (ChkTeX 12/13). Outside `\frenchspacing`, TeX widens the space after
-`.`/`?`/`!` unless the punctuation follows an uppercase letter. Two shapes
-defeat that: a lowercase abbreviation (`e.g.`, `i.e.`, `etc.`, `et al.`) gets a
-too-wide space, fixed with `\` (`e.g.\ foo`); and an uppercase acronym ending a
-sentence (`USA.`) gets a too-narrow space, fixed with `\@` (`USA\@.`). To stay
-conservative the first fires only before a lowercase word (the sentence clearly
-continues) and the second only for a run of two or more capitals before the
-period and before an uppercase word (a new sentence), so initials (`J.`), dotted
-forms (`U.S.A.`), and mid-sentence acronyms are left alone. Both fixes are
-**unsafe** -- they change the typeset spacing -- so `--fix` leaves them alone
-while `--unsafe-fixes` and the editor code action apply them. The rule is silent
-under `\frenchspacing`, and never touches comments, verbatim, or math.
+Flag TeX's sentence-vs-interword spacing going wrong around abbreviations and acronyms (ChkTeX 12/13). Outside `\frenchspacing`, TeX widens the space after `.`/`?`/`!` unless the punctuation follows an uppercase letter. Two shapes defeat that: a lowercase abbreviation (`e.g.`, `i.e.`, `etc.`, `et al.`) gets a too-wide space, fixed with `\ ` (`e.g.\ foo`); and an uppercase acronym ending a sentence (`USA.`) gets a too-narrow space, fixed with `\@` (`USA\@.`). To stay conservative the first fires only before a lowercase word (the sentence clearly continues) and the second only for a run of two or more capitals before the period and before an uppercase word (a new sentence), so initials (`J.`), dotted forms (`U.S.A.`), and mid-sentence acronyms are left alone. Both fixes are **unsafe** -- they change the typeset spacing -- so `--fix` leaves them alone while `--unsafe-fixes` and the editor code action apply them. The rule is silent under `\frenchspacing`, and never touches comments, verbatim, or math.
 
 A lowercase abbreviation followed by more text takes an interword space:
 
@@ -68,10 +56,7 @@ warning: abbreviation-spacing
 
 ## `duplicate-label`
 
-Flag a `\label{key}` defined more than once in the same label namespace --
-within one file, or across files that share a document when a project view is
-available. LaTeX itself only warns and silently keeps the last definition. No
-autofix: resolving a collision (rename vs delete) is the author's call.
+Flag a `\label{key}` defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. No autofix: resolving a collision (rename vs delete) is the author's call.
 
 The same key defined twice in one file:
 
@@ -90,12 +75,7 @@ warning: duplicate-label
 
 ## `deprecated-command`
 
-Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`,
-`\sc`, `\sl`) that LaTeX 2e superseded with the
-`\...series`/`\...shape`/`\...family` declarations. `\em` is not flagged; it is
-still the supported emphasis switch. The autofix swaps just the control word
-(`\bf` -> `\bfseries`), leaving any following text untouched, so it is correct
-by construction.
+Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`, `\sc`, `\sl`) that LaTeX 2e superseded with the `\...series`/`\...shape`/`\...family` declarations. `\em` is not flagged; it is still the supported emphasis switch. The autofix swaps just the control word (`\bf` -> `\bfseries`), leaving any following text untouched, so it is correct by construction.
 
 An obsolete two-letter font switch:
 
@@ -119,12 +99,7 @@ After applying the fix:
 
 ## `missing-nonbreaking-space`
 
-Flag a plain space where a TeX tie (`~`) belongs, between a word and a
-cross-reference or citation command (`Figure \ref{x}`, `see \cite{a}`). A tie
-keeps the word and its number from splitting across a line break. Only the
-same-line `WORD SPACE \cmd` shape is flagged. The fix is **unsafe** -- inserting
-a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and
-the editor code action apply it.
+Flag a plain space where a TeX tie (`~`) belongs, before a command whose output a line break would orphan: a bare-number reference (`Figure \ref{x}`, `\eqref`, `\pageref`) or a bracketed citation (`see \cite{a}`, `\parencite`, `\autocite`). A tie keeps the reference on the same line. Self-describing references (`\autoref`, `\cref`) and textual citations (`\textcite`, `\citet`) are not flagged -- they emit their own noun, so a break orphans nothing. Only the same-line `WORD SPACE \cmd` shape is flagged. The fix is **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it.
 
 A plain space where a tie belongs before a cross-reference:
 
@@ -142,10 +117,7 @@ warning: missing-nonbreaking-space
 
 ## `obsolete-environment`
 
-Flag math environments the community has superseded, naming the modern
-replacement in the message. The canonical case is `eqnarray`, which `amsmath`
-replaced with `align` decades ago (it mis-spaces relations and is a perennial
-l2tabu warning). Reports only; the swap is left for a later autofix.
+Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). Reports only; the swap is left for a later autofix.
 
 The superseded `eqnarray` environment:
 
@@ -165,19 +137,9 @@ warning: obsolete-environment
 
 ## `primitive-command`
 
-Flag raw plain-TeX primitives discouraged in LaTeX source, naming the LaTeX
-construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A sibling of
-`deprecated-command`, which covers the obsolete font switches. Most primitives
-are reported only: their LaTeX replacement restructures arguments (`a \over b`
-becomes `\frac{a}{b}`, `\centerline{x}` becomes a `\centering` declaration or a
-`center` environment), so no single textual edit can rewrite them correctly by
-construction. A few carry a `Safe` autofix — a 1:1 control-word swap for a
-primitive whose LaTeX form is a single meaning-identical token (`\sb`/`\sp`
-become `_`/`^`); the swap replaces just the control word, so it stays lossless
-and meaning-preserving.
+Flag raw plain-TeX primitives discouraged in LaTeX source, naming the LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A sibling of `deprecated-command`, which covers the obsolete font switches. Most primitives are reported only: their LaTeX replacement restructures arguments (`a \over b` becomes `\frac{a}{b}`, `\centerline{x}` becomes a `\centering` declaration or a `center` environment), so no single textual edit can rewrite them correctly by construction. A few carry a `Safe` autofix — a 1:1 control-word swap for a primitive whose LaTeX form is a single meaning-identical token (`\sb`/`\sp` become `_`/`^`); the swap replaces just the control word, so it stays lossless and meaning-preserving.
 
-A plain-TeX fraction primitive (report-only; the LaTeX form restructures its
-operands):
+A plain-TeX fraction primitive (report-only; the LaTeX form restructures its operands):
 
 ```tex
 $a \over b$
@@ -213,11 +175,7 @@ $x_2$
 
 ## `dollar-display-math`
 
-Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses
-`amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers
-users to `\[...\]`. The autofix swaps the delimiters and copies the body
-verbatim, so it parses and stays lossless; it is withheld when the display math
-is unclosed.
+Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses `amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers users to `\[...\]`. The autofix swaps the delimiters and copies the body verbatim, so it parses and stays lossless; it is withheld when the display math is unclosed.
 
 Plain-TeX display math:
 
@@ -241,15 +199,7 @@ After applying the fix:
 
 ## `ellipsis`
 
-Flag a literal run of three or more periods (`...`) where a real ellipsis
-command belongs. `...` sets three tight full stops; LaTeX's ellipsis commands
-set correctly spaced dots. In text the fix is a **safe** swap to `\dots` (a
-space is added before a following letter so the control word cannot glue onto
-the next word). In math `\ldots` (baseline, for comma lists) and `\cdots`
-(centered, for operator chains) are not interchangeable, so the fix is
-**unsafe**: it guesses from the neighboring atoms -- an operator or relation
-picks `\cdots`, otherwise `\ldots` -- and applies only under `--unsafe-fixes` or
-as an editor code action. Comments and verbatim are never touched.
+Flag a literal run of three or more periods (`...`) where a real ellipsis command belongs. `...` sets three tight full stops; LaTeX's ellipsis commands set correctly spaced dots. In text the fix is a **safe** swap to `\dots` (a space is added before a following letter so the control word cannot glue onto the next word). In math `\ldots` (baseline, for comma lists) and `\cdots` (centered, for operator chains) are not interchangeable, so the fix is **unsafe**: it guesses from the neighboring atoms -- an operator or relation picks `\cdots`, otherwise `\ldots` -- and applies only under `--unsafe-fixes` or as an editor code action. Comments and verbatim are never touched.
 
 Literal dots in text:
 
@@ -287,17 +237,7 @@ warning: ellipsis
 
 ## `hard-coded-reference`
 
-Flag a literal cross-reference written in prose -- `Figure 3`, `Table~1`,
-`Section 2` -- instead of `\ref`/`\cref` to a `\label` (textidote
-sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic
-numbering: renumbering a float or reordering sections silently breaks the
-reference and drops the hyperlink. The rule is **report-only** -- the correct
-rewrite needs the label the number refers to, which is not in the text, so no
-autofix is offered. To stay conservative it fires only for a capitalized
-reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole
-word and directly followed, across one space or a tie `~`, by an arabic number;
-plurals, lowercase, `Figure~\ref{x}`, and `Figure three` are left alone. It
-never touches math, comments, or verbatim.
+Flag a literal cross-reference written in prose -- `Figure 3`, `Table~1`, `Section 2` -- instead of `\ref`/`\cref` to a `\label` (textidote sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic numbering: renumbering a float or reordering sections silently breaks the reference and drops the hyperlink. The rule is **report-only** -- the correct rewrite needs the label the number refers to, which is not in the text, so no autofix is offered. To stay conservative it fires only for a capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole word and directly followed, across one space or a tie `~`, by an arabic number; plurals, lowercase, `Figure~\ref{x}`, and `Figure three` are left alone. It never touches math, comments, or verbatim.
 
 A hard-coded figure number instead of a cross-reference:
 
@@ -329,16 +269,7 @@ warning: hard-coded-reference
 
 ## `straight-quotes`
 
-Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight
-`"` always sets a *closing* double quote, so an opening one comes out backwards;
-the correct forms are ``  `` \`\` (two backticks) to open and `''` (two
-apostrophes) to close. The fix is \*\*unsafe\*\*: it infers direction from
-context -- a quote preceded by whitespace, a line break, an opening delimiter
-(`(`, `[`, `{`), a backtick, or the start of the document opens, anything else
-closes -- and applies only under `--unsafe-fixes` or as an editor code action,
-since the guess can flip the typeset glyph. Single straight quotes (`'`) are
-left alone (they are legitimately apostrophes), and comments, verbatim, and math
-are never touched.
+Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight `"` always sets a *closing* double quote, so an opening one comes out backwards; the correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. The fix is **unsafe**: it infers direction from context -- a quote preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document opens, anything else closes -- and applies only under `--unsafe-fixes` or as an editor code action, since the guess can flip the typeset glyph. Single straight quotes (`'`) are left alone (they are legitimately apostrophes), and comments, verbatim, and math are never touched.
 
 Straight ASCII double quotes around a phrase:
 
@@ -380,17 +311,7 @@ warning: straight-quotes
 
 ## `swallowed-space`
 
-Flag a text-producing control word directly followed by a space that TeX eats,
-gluing the macro's output to the next word (`\LaTeX is` renders "LaTeXis")
-(ChkTeX 1). When TeX tokenizes a control word it discards following spaces, so
-the space never reaches the output. To stay conservative the rule fires only for
-a curated set of argument-less TeX-family logos (`\LaTeX`, `\TeX`, `\BibTeX`,
-...), only in text mode, and only when the next token is a word beginning with
-an alphanumeric character -- a following period (`\LaTeX .` -> "LaTeX.") is what
-the author wanted. The fix inserts `{}` after the control word (`\LaTeX{} is`),
-ending the macro name so the space survives; it is **unsafe** because it changes
-the typeset output, so `--fix` leaves it alone while `--unsafe-fixes` and the
-editor code action apply it.
+Flag a text-producing control word directly followed by a space that TeX eats, gluing the macro's output to the next word (`\LaTeX is` renders "LaTeXis") (ChkTeX 1). When TeX tokenizes a control word it discards following spaces, so the space never reaches the output. To stay conservative the rule fires only for a curated set of argument-less TeX-family logos (`\LaTeX`, `\TeX`, `\BibTeX`, ...), only in text mode, and only when the next token is a word beginning with an alphanumeric character -- a following period (`\LaTeX .` -> "LaTeX.") is what the author wanted. The fix inserts `{}` after the control word (`\LaTeX{} is`), ending the macro name so the space survives; it is **unsafe** because it changes the typeset output, so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it.
 
 A logo swallows the following space, gluing it to the next word:
 
@@ -408,17 +329,7 @@ warning: swallowed-space
 
 ## `space-before-command`
 
-Flag a plain space directly before a command that should hug the preceding word
--- `\footnote`, `\footnotemark`, `\index`, `\label` (ChkTeX 24/42). A space
-before `\footnote` sets a spurious space before the footnote mark
-(`word \footnote{x}` -> "word ¹"); a space before a zero-width `\index`/`\label`
-leaves a stray inter-word gap that can shift the recorded page. The fix deletes
-the space. It is **unsafe** -- removing the space changes the typeset spacing --
-so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action
-apply it. To stay conservative only the same-line `WORD SPACE \cmd` shape is
-flagged (a space at line start or after a brace is left alone), and math is
-skipped (an inter-token space is insignificant there), covering both `$…$` and
-math environments like `equation`/`align`.
+Flag a plain space directly before a command that should hug the preceding word -- `\footnote`, `\footnotemark`, `\index`, `\label` (ChkTeX 24/42). A space before `\footnote` sets a spurious space before the footnote mark (`word \footnote{x}` -> "word ¹"); a space before a zero-width `\index`/`\label` leaves a stray inter-word gap that can shift the recorded page. The fix deletes the space. It is **unsafe** -- removing the space changes the typeset spacing -- so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it. To stay conservative only the same-line `WORD SPACE \cmd` shape is flagged (a space at line start or after a brace is left alone), and math is skipped (an inter-token space is insignificant there), covering both `$…$` and math environments like `equation`/`align`.
 
 A space before a footnote sets a spurious space before the mark:
 
@@ -436,13 +347,7 @@ warning: space-before-command
 
 ## `mismatched-delimiter`
 
-Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a
-closing glyph opening the pair, or an opening glyph closing it
-(`\left) ... \right(`). Deliberately conservative: only an *orientation* error
-is flagged, never a mere opener/closer mismatch, since half-open intervals like
-`\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are
-reported by the parser, not this rule. No autofix: the intended glyphs are
-ambiguous.
+Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.
 
 A `\left`/`\right` pair whose glyphs point the wrong way:
 
@@ -465,17 +370,7 @@ warning: mismatched-delimiter
 
 ## `dash-length`
 
-Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a hyphen
-from `-`, an en dash from `--`, and an em dash from `---`. Between two numbers a
-range takes an en dash, so `5-10` or `5---10` is flagged with an **unsafe** fix
-to `--` (unsafe because it changes the typeset glyph and a hyphen between
-numbers is occasionally intentional). Between two words an en dash (`--`) is
-almost always a mistake, but whether a hyphen or an em dash was meant is
-ambiguous, so it is reported **without** a fix. To stay conservative the rule
-only inspects a dash run that sits inside a single word with content on both
-sides and is the only dash run in that word, so dates (`2020-01-15`), ISBNs,
-spaced dashes, and option flags (`--verbose`) are left alone. Comments,
-verbatim, and math are never touched.
+Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a hyphen from `-`, an en dash from `--`, and an em dash from `---`. Between two numbers a range takes an en dash, so `5-10` or `5---10` is flagged with an **unsafe** fix to `--` (unsafe because it changes the typeset glyph and a hyphen between numbers is occasionally intentional). Between two words an en dash (`--`) is almost always a mistake, but whether a hyphen or an em dash was meant is ambiguous, so it is reported **without** a fix. To stay conservative the rule only inspects a dash run that sits inside a single word with content on both sides and is the only dash run in that word, so dates (`2020-01-15`), ISBNs, spaced dashes, and option flags (`--verbose`) are left alone. Comments, verbatim, and math are never touched.
 
 A hyphen where a number range wants an en dash:
 
@@ -507,16 +402,7 @@ warning: dash-length
 
 ## `times-variable`
 
-Flag a literal `x` used as a multiplication sign between two numbers, such as
-`640x200` or `3x3` (ChkTeX 29). TeX sets that `x` as an italic letter rather
-than the `\times` cross, so it reads wrong. The rule only fires when the whole
-word is `digits x digits` -- one lowercase `x` with ASCII digits on both sides
-and nothing else -- so ordinary words (`matrix`), spaced products (`n x m`), and
-hex literals (`0xFF`, `0x12`) are left alone. The fix is **unsafe** (a bare `x`
-between numbers is usually a cross but occasionally a real variable): inside
-math it rewrites the `x` to `\times`, and in text it wraps it as `$\times$` so
-the result still compiles. So `--fix` leaves it alone; `--unsafe-fixes` and the
-editor code action apply it.
+Flag a literal `x` used as a multiplication sign between two numbers, such as `640x200` or `3x3` (ChkTeX 29). TeX sets that `x` as an italic letter rather than the `\times` cross, so it reads wrong. The rule only fires when the whole word is `digits x digits` -- one lowercase `x` with ASCII digits on both sides and nothing else -- so ordinary words (`matrix`), spaced products (`n x m`), and hex literals (`0xFF`, `0x12`) are left alone. The fix is **unsafe** (a bare `x` between numbers is usually a cross but occasionally a real variable): inside math it rewrites the `x` to `\times`, and in text it wraps it as `$\times$` so the result still compiles. So `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it.
 
 A literal `x` as a multiplication sign in text (fixed to `$\times$`):
 
@@ -548,19 +434,7 @@ warning: times-variable
 
 ## `math-operator-name`
 
-Flag a bare log-like function name (`sin`, `cos`, `log`, `lim`, and the rest of
-the LaTeX/amsmath set) written in math mode without its backslash, so TeX sets
-it as italic variables instead of the upright `\sin` operator with correct
-spacing (ChkTeX 35). It fires when the name starts a `WORD` and ends at a word
-boundary, catching both `$sin x$` and the glued `$sin(x)$`, while leaving words
-that merely begin with one (`since`) alone and preferring the longest match
-(`sinh` over `sin`). To stay conservative it only fires inside math mode and
-never inside a subscript or superscript, where `max` in `x_{max}` is almost
-always a label rather than the operator. The fix inserts the backslash (`sin` ->
-`\sin`); it is **unsafe** because it changes the typeset output (upright glyph
-and operator spacing) and a bare `sin` is occasionally a real product, so
-`--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply
-it.
+Flag a bare log-like function name (`sin`, `cos`, `log`, `lim`, and the rest of the LaTeX/amsmath set) written in math mode without its backslash, so TeX sets it as italic variables instead of the upright `\sin` operator with correct spacing (ChkTeX 35). It fires when the name starts a `WORD` and ends at a word boundary, catching both `$sin x$` and the glued `$sin(x)$`, while leaving words that merely begin with one (`since`) alone and preferring the longest match (`sinh` over `sin`). To stay conservative it only fires inside math mode and never inside a subscript or superscript, where `max` in `x_{max}` is almost always a label rather than the operator. The fix inserts the backslash (`sin` -> `\sin`); it is **unsafe** because it changes the typeset output (upright glyph and operator spacing) and a bare `sin` is occasionally a real product, so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it.
 
 A bare function name typesets as italic variables:
 
@@ -597,17 +471,7 @@ warning: math-operator-name
 
 ## `makeat-macro`
 
-Flag a macro whose name contains `@` (`\foo@bar`, `\p@`, `\@ifnextchar`) used
-outside a `\makeatletter`/`\makeatother` region. There `@` has its ordinary
-catcode, so it cannot be part of a control word: `\foo@bar` is read as `\foo`
-followed by the text `@bar`, not as a call to the internal macro `\foo@bar`.
-Usually the enclosing `\makeatletter`/`\makeatother` was forgotten. Because the
-formatter's lexer already tracks `\makeatletter` state, this is decided exactly
--- an in-region name lexes as one token and is never flagged; only the split
-out-of-region form (control word abutting an `@`-word, or `\@` abutting a
-letter-word) is. Report-only: a correct fix would mean wrapping the use in
-`\makeatletter`/`\makeatother`, not a tight local edit, so no autofix is
-offered. The end-of-sentence `\@` (as in `NASA\@.`) is not flagged.
+Flag a macro whose name contains `@` (`\foo@bar`, `\p@`, `\@ifnextchar`) used outside a `\makeatletter`/`\makeatother` region. There `@` has its ordinary catcode, so it cannot be part of a control word: `\foo@bar` is read as `\foo` followed by the text `@bar`, not as a call to the internal macro `\foo@bar`. Usually the enclosing `\makeatletter`/`\makeatother` was forgotten. Because the formatter's lexer already tracks `\makeatletter` state, this is decided exactly -- an in-region name lexes as one token and is never flagged; only the split out-of-region form (control word abutting an `@`-word, or `\@` abutting a letter-word) is. Report-only: a correct fix would mean wrapping the use in `\makeatletter`/`\makeatother`, not a tight local edit, so no autofix is offered. The end-of-sentence `\@` (as in `NASA\@.`) is not flagged.
 
 An internal `@` macro used without `\makeatletter`:
 
@@ -639,18 +503,7 @@ warning: makeat-macro
 
 ## `sectioning-level-jump`
 
-Flag a heading that descends more than one sectioning level below the preceding
-heading -- `\section` straight to `\subsubsection`, skipping `\subsection`
-(textidote's `sh:secskip`). Standard sectioning commands form a fixed ladder
-(`\part`, `\chapter`, `\section`, `\subsection`, `\subsubsection`, `\paragraph`,
-`\subparagraph`); descending it a rung at a time keeps the outline sound, and a
-jump usually signals the wrong command. Only *downward* jumps between
-consecutive headings are flagged -- climbing back up to close sections is
-normal, as are repeated headings at one level. The comparison is relative to the
-previous heading, never an absolute top level, so an `article` opening with
-`\section` is fine. Report-only: repairing a skip (promote the heading or insert
-an intermediate one) is a structural choice for the author, not a
-correct-by-construction edit.
+Flag a heading that descends more than one sectioning level below the preceding heading -- `\section` straight to `\subsubsection`, skipping `\subsection` (textidote's `sh:secskip`). Standard sectioning commands form a fixed ladder (`\part`, `\chapter`, `\section`, `\subsection`, `\subsubsection`, `\paragraph`, `\subparagraph`); descending it a rung at a time keeps the outline sound, and a jump usually signals the wrong command. Only *downward* jumps between consecutive headings are flagged -- climbing back up to close sections is normal, as are repeated headings at one level. The comparison is relative to the previous heading, never an absolute top level, so an `article` opening with `\section` is fine. Report-only: repairing a skip (promote the heading or insert an intermediate one) is a structural choice for the author, not a correct-by-construction edit.
 
 A heading that drops two levels at once (skipping `\subsection`):
 
@@ -669,11 +522,7 @@ warning: sectioning-level-jump
 
 ## `undefined-ref`
 
-Flag a `\ref`-family reference to a label defined nowhere in the document. Sound
-only when the label namespace is complete, so it stays silent unless the project
-view is **closed** (every include resolves to an analyzed file) and **rooted**.
-Inert on stdin or wherever no cross-file label resolution is available. No
-autofix.
+Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.
 
 A reference to a label defined nowhere in the document:
 
@@ -691,11 +540,7 @@ warning: undefined-ref
 
 ## `undefined-citation`
 
-Flag a `\cite`-family key matching no entry in the document's bibliography --
-the bibliographic analog of `undefined-ref`. Sound only over a **closed,
-rooted** namespace where every `.bib` resource resolves to an analyzed file, and
-suppressed entirely by a `\nocite{*}` wildcard (which marks every key as used).
-Inert without cross-file citation resolution. No autofix.
+Flag a `\cite`-family key matching no entry in the document's bibliography -- the bibliographic analog of `undefined-ref`. Sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file, and suppressed entirely by a `\nocite{*}` wildcard (which marks every key as used). Inert without cross-file citation resolution. No autofix.
 
 A citation of a key that matches no bibliography entry:
 

@@ -23,6 +23,7 @@ pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
 pub mod straight_quotes;
+pub mod times_variable;
 pub mod undefined_citation;
 pub mod undefined_ref;
 
@@ -35,6 +36,7 @@ pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use straight_quotes::StraightQuotes;
+pub use times_variable::TimesVariable;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
 
@@ -146,6 +148,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(StraightQuotes),
         Box::new(MismatchedDelimiter),
         Box::new(DashLength),
+        Box::new(TimesVariable),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
     ]
@@ -164,6 +167,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "straight-quotes",
     "mismatched-delimiter",
     "dash-length",
+    "times-variable",
     "undefined-ref",
     "undefined-citation",
 ];

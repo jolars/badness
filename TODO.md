@@ -111,7 +111,7 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
 - [x] `dash-length`—classify `-`/`--`/`---` by neighbors: number--number → en dash,
   word---word → em dash (ChkTeX 8). `Unsafe`; needs a curated exception list
   (hyphenated compounds, option flags).
-- [ ] `times-variable`—literal `x` between digits (`640x200`) → `\times` (ChkTeX 29).
+- [x] `times-variable`—literal `x` between digits (`640x200`) → `\times` (ChkTeX 29).
   `Unsafe` (intent heuristic).
 - [ ] `math-operator-name`—bare `sin`/`cos`/`log`/`lim`… in math typeset as italic
   variables → `\sin` etc. (ChkTeX 35). `Safe` (control-word swap, same shape as the

@@ -262,6 +262,38 @@ warning: dash-length
   |       ^^ en dash `--` between words; use a hyphen `-` for a compound or an em dash `---` for a break
 ```
 
+## `times-variable`
+
+Flag a literal `x` used as a multiplication sign between two numbers, such as `640x200` or `3x3` (ChkTeX 29). TeX sets that `x` as an italic letter rather than the `\times` cross, so it reads wrong. The rule only fires when the whole word is `digits x digits` -- one lowercase `x` with ASCII digits on both sides and nothing else -- so ordinary words (`matrix`), spaced products (`n x m`), and hex literals (`0xFF`, `0x12`) are left alone. The fix is **unsafe** (a bare `x` between numbers is usually a cross but occasionally a real variable): inside math it rewrites the `x` to `\times`, and in text it wraps it as `$\times$` so the result still compiles. So `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it.
+
+A literal `x` as a multiplication sign in text (fixed to `$\times$`):
+
+```tex
+A 640x200 pixel image.
+```
+
+```text
+warning: times-variable
+ --> example.tex:1:6
+  |
+1 | A 640x200 pixel image.
+  |      ^ literal `x` as a multiplication sign between numbers; use `\times` for a cross
+```
+
+The same inside math mode (fixed to `\times`):
+
+```tex
+The grid is $640x200$ cells.
+```
+
+```text
+warning: times-variable
+ --> example.tex:1:17
+  |
+1 | The grid is $640x200$ cells.
+  |                 ^ literal `x` as a multiplication sign between numbers; use `\times` for a cross
+```
+
 ## `undefined-ref`
 
 Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.

@@ -160,9 +160,11 @@ period, section length) are skipped as grammar-tool territory.
   heuristics). Report-only.
 - [ ] `verbatim-trailing-text`—text after `\end{verbatim}` on the same line, silently
   dropped (ChkTeX 31). Report-only.
-- [ ] `unbalanced-left-right`—`\left` with no matching `\right` (complements the
-  orientation-only `mismatched-delimiter`); likely surfaceable from the parser's
-  `LEFT_RIGHT` recovery. Report-only.
+- [x] `unbalanced-left-right`—`\left` with no matching `\right`. **Already covered by
+  the parser:** `left_right` recovery emits an `unclosed \left` parse diagnostic on
+  every unbalanced-`\left` path (EOF, `}`, `$`, `\]`, `\end`, paragraph break), so a
+  dedicated lint rule would only duplicate the existing `parse` finding on the same
+  span. No separate rule added.
 - [ ] `unreferenced-label`—a `\label` never targeted by any `\ref`-family command,
   project-aware behind the same closed+rooted namespace gate as `undefined-ref`
   (**supersedes the old `unused-label` deferral**, whose open-namespace false-positive

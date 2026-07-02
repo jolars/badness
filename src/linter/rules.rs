@@ -17,6 +17,7 @@ use super::diagnostic::{Diagnostic, Severity};
 pub mod deprecated_command;
 pub mod dollar_display_math;
 pub mod duplicate_label;
+pub mod ellipsis;
 pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod obsolete_environment;
@@ -26,6 +27,7 @@ pub mod undefined_ref;
 pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
+pub use ellipsis::Ellipsis;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use obsolete_environment::ObsoleteEnvironment;
@@ -136,6 +138,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(MissingNonbreakingSpace),
         Box::new(ObsoleteEnvironment),
         Box::new(DollarDisplayMath),
+        Box::new(Ellipsis),
         Box::new(MismatchedDelimiter),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
@@ -151,6 +154,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "missing-nonbreaking-space",
     "obsolete-environment",
     "dollar-display-math",
+    "ellipsis",
     "mismatched-delimiter",
     "undefined-ref",
     "undefined-citation",

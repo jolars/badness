@@ -127,6 +127,44 @@ After applying the fix:
 \[a + b = c\]
 ```
 
+## `ellipsis`
+
+Flag a literal run of three or more periods (`...`) where a real ellipsis command belongs. `...` sets three tight full stops; LaTeX's ellipsis commands set correctly spaced dots. In text the fix is a **safe** swap to `\dots` (a space is added before a following letter so the control word cannot glue onto the next word). In math `\ldots` (baseline, for comma lists) and `\cdots` (centered, for operator chains) are not interchangeable, so the fix is **unsafe**: it guesses from the neighboring atoms -- an operator or relation picks `\cdots`, otherwise `\ldots` -- and applies only under `--unsafe-fixes` or as an editor code action. Comments and verbatim are never touched.
+
+Literal dots in text:
+
+```tex
+See Chapter 2, 3, ... for details.
+```
+
+```text
+warning: ellipsis
+ --> example.tex:1:19
+  |
+1 | See Chapter 2, 3, ... for details.
+  |                   ^^^ literal `...` ellipsis; use `\dots`
+```
+
+After applying the fix:
+
+```tex
+See Chapter 2, 3, \dots for details.
+```
+
+Literal dots in a math sum (an operator neighbor picks `\cdots`):
+
+```tex
+$a_1 + ... + a_n$
+```
+
+```text
+warning: ellipsis
+ --> example.tex:1:8
+  |
+1 | $a_1 + ... + a_n$
+  |        ^^^ literal `...` ellipsis; use `\cdots` in math (`\ldots` for lists, `\cdots` for operator chains)
+```
+
 ## `mismatched-delimiter`
 
 Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.

@@ -102,7 +102,7 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
 
 ### Tier 1 — typographic & math substitutions (node-shape, clear autofix)
 
-- [ ] `ellipsis`—`...` → `\dots` (text) or `\ldots`/`\cdots` by math context
+- [x] `ellipsis`—`...` → `\dots` (text) or `\ldots`/`\cdots` by math context
   (ChkTeX 11, lacheck). `Safe` for the unambiguous text `\dots`; `Unsafe` in math
   where `\ldots` vs `\cdots` depends on neighbors.
 - [ ] `straight-quotes`—ASCII `"` → `` `` ``/`''`; plus quote-direction and mixing

@@ -435,3 +435,29 @@ fn missing_nbsp_skipped_without_unsafe_opt_in() {
     let out = apply_fixes(src, &fixes, false);
     assert_eq!(out.output, src, "unsafe tie fix must be skipped");
 }
+
+#[test]
+fn ellipsis_flags_text_and_math() {
+    let out = lint("An ellipsis... and $a + ... + b$.\n");
+    let hits: Vec<_> = out.iter().filter(|(r, _)| *r == "ellipsis").collect();
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().all(|(_, sev)| *sev == Severity::Warning));
+}
+
+#[test]
+fn ellipsis_text_fix_rewrites_to_dots() {
+    // The text fix is Safe, so plain `--fix` (unsafe = false) applies it.
+    assert_eq!(fix_to_fixpoint("done...\n"), "done\\dots\n");
+}
+
+#[test]
+fn ellipsis_fix_is_correct() {
+    for case in [
+        "foo...bar\n",
+        "one, two, ...\n",
+        "$a + ... + b$\n",
+        "$a_1,...,a_n$\n",
+    ] {
+        assert_fix_is_correct(case);
+    }
+}

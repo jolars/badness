@@ -1,4 +1,4 @@
-# Badness <img src="./images/logo.svg" alt="badness logo" class="right" style="width: 160px;" />
+# Badness <img src="./images/logo.svg" alt="" class="right" style="width: 160px;" />
 
 **Badness** is a language server, formatter, and linter for LaTeX.
 

@@ -1,7 +1,7 @@
 [book]
-title = "badness Documentation"
+title = "Badness"
 authors = ["Johan Larsson"]
-description = "A formatter, linter, and language server for LaTeX"
+description = "Badness is a formatter, linter, and language server for LaTeX."
 language = "en"
 
 [output.html]

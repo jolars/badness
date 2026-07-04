@@ -23,14 +23,14 @@ use lsp_types::{
     DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
-    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FileChangeType, FileEvent, FoldingRange, FoldingRangeKind, FoldingRangeParams,
-    FoldingRangeProviderCapability, FormattingOptions, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
-    NumberOrString, OneOf, PartialResultParams, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams, RegistrationParams,
-    RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
+    DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams, DocumentRangeFormattingParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent,
+    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
+    RegistrationParams, RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams,
@@ -127,6 +127,14 @@ fn start_server(
             .document_range_formatting_provider
             .is_some(),
         "server must advertise documentRangeFormattingProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.document_on_type_formatting_provider,
+            Some(DocumentOnTypeFormattingOptions { ref first_trigger_character, .. })
+                if first_trigger_character == "}"
+        ),
+        "server must advertise documentOnTypeFormattingProvider triggered by `}}`"
     );
     assert!(
         matches!(
@@ -556,6 +564,158 @@ fn lsp_range_formatting_reindents_multiline_environment() {
         formatted,
         "\\begin{itemize}\n  \\item one\n  \\item two\n\\end{itemize}\n\nsecond    paragraph.\n",
         "the environment body is reindented; the trailing paragraph is untouched"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+/// Build `textDocument/onTypeFormatting` params for a `}` typed at `position`
+/// (the cursor sits just past the brace).
+fn on_type_params(uri: &Uri, position: Position) -> serde_json::Value {
+    serde_json::to_value(DocumentOnTypeFormattingParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position,
+        },
+        ch: "}".to_owned(),
+        options: FormattingOptions {
+            tab_size: 2,
+            insert_spaces: true,
+            ..Default::default()
+        },
+    })
+    .unwrap()
+}
+
+#[test]
+fn lsp_on_type_formatting_reindents_on_environment_close() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///ontype_env.tex".parse().unwrap();
+
+    // A poorly-indented multi-line environment followed by a messy paragraph.
+    let doc = "\\begin{itemize}\n\\item one\n\\item two\n\\end{itemize}\n\nsecond    paragraph.\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    // The user just typed the `}` closing `\end{itemize}` on line 3 (13 columns:
+    // `\end{itemize}`), so the cursor is at column 13.
+    send_request(
+        &client,
+        2,
+        "textDocument/onTypeFormatting",
+        on_type_params(&uri, Position::new(3, 13)),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let formatted = apply_edits(doc, &edits);
+    assert_eq!(
+        formatted,
+        "\\begin{itemize}\n  \\item one\n  \\item two\n\\end{itemize}\n\nsecond    paragraph.\n",
+        "closing `\\end{{itemize}}` reindents the environment; the paragraph is untouched"
+    );
+
+    // Idempotence at the seam: with the buffer now holding the reindented text,
+    // typing the same `}` again yields no edits.
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: formatted.clone(),
+            }],
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    send_request(
+        &client,
+        3,
+        "textDocument/onTypeFormatting",
+        on_type_params(&uri, Position::new(3, 13)),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(3));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert!(
+        edits.is_empty(),
+        "an already-reindented environment yields no edits, got {edits:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_on_type_formatting_ignores_inline_group_close() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///ontype_inline.tex".parse().unwrap();
+
+    // An inline `\textbf{x}` inside a paragraph with messy spacing. Closing its
+    // single-line group must NOT trigger a reformat (no prose reflow on `}`).
+    let doc = "a    \\textbf{x} and    more.\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    // `a    \textbf{x}`: `a`(0) + 4 spaces + `\textbf`(5-11) + `{`(12) + `x`(13)
+    // + `}`(14), so the cursor just past the `}` is at column 15.
+    send_request(
+        &client,
+        2,
+        "textDocument/onTypeFormatting",
+        on_type_params(&uri, Position::new(0, 15)),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert!(
+        edits.is_empty(),
+        "closing an inline single-line group yields no edits, got {edits:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_on_type_formatting_refuses_when_buffer_has_parse_errors() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///ontype_broken.tex".parse().unwrap();
+
+    // A multi-line environment (whose `\end{itemize}` close would normally fire)
+    // followed by a stray `\end{extra}` that makes the buffer fail to parse
+    // cleanly. On-type formatting must refuse: no edits.
+    let doc = "\\begin{itemize}\n\\item one\n\\end{itemize}\n\\end{extra}\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(
+        !diags.diagnostics.is_empty(),
+        "the stray `\\end` must produce a parse diagnostic"
+    );
+
+    // Cursor just past the `}` of the (well-formed) `\end{itemize}` on line 2.
+    send_request(
+        &client,
+        2,
+        "textDocument/onTypeFormatting",
+        on_type_params(&uri, Position::new(2, 13)),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    // A refusal serializes to JSON `null`; either that or an empty array means
+    // "no change".
+    let edits: Option<Vec<TextEdit>> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert!(
+        edits.unwrap_or_default().is_empty(),
+        "a buffer with parse errors yields no on-type edits"
     );
 
     shutdown(&client, server_thread);

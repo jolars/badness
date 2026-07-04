@@ -185,8 +185,12 @@ period, section length) are skipped as grammar-tool territory.
   the sole layout authority and out-of-range blocks are never laid out), then
   diff the fragment against the original slice into minimal edits. LaTeX only;
   bib is a no-op for now.
-- [ ] On-type formatting (`textDocument/onTypeFormatting`), e.g. re-indent on
-  `}`/`\end{…}` close. *Lower priority; opt-in trigger characters.*
+- [x] On-type formatting (`textDocument/onTypeFormatting`): typing `}` re-indents
+  the containing top-level block, but only when the `}` structurally closes a
+  multi-line group or an `\end{…}` (a `closes_multiline_construct` guard);
+  inline `\textbf{x}` and `\begin{…}` opens are skipped. Reuses the range path
+  (`range_edits_for_root` with an empty selection at the cursor). Trigger `}`;
+  client opt-in (e.g. `editor.formatOnType`).
 
 ### Navigation & structure
 

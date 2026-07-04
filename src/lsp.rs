@@ -74,8 +74,9 @@ use lsp_types::notification::{
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename, Request as _,
-    ResolveCompletionItem, WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
+    OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References, RegisterCapability,
+    Rename, Request as _, ResolveCompletionItem, WorkspaceDiagnosticRefresh,
+    WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
@@ -85,7 +86,8 @@ use lsp_types::{
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
     DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentRangeFormattingParams, DocumentSymbol,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentOnTypeFormattingOptions,
+    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
     DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRange,
     FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
@@ -123,7 +125,7 @@ use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{parse, parse_with_flavor};
 use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
-use crate::syntax::SyntaxNode;
+use crate::syntax::{SyntaxKind, SyntaxNode};
 use crate::text::LineIndex;
 
 use task_pool::{Spawner, TaskPool, read_pool_size};
@@ -174,6 +176,13 @@ fn server_capabilities() -> ServerCapabilities {
         // Format the editor selection, expanded to whole top-level blocks (see
         // `compute_range_format`).
         document_range_formatting_provider: Some(OneOf::Left(true)),
+        // Re-indent on close: typing `}` re-indents the containing block when that
+        // `}` structurally closes a multi-line group or an `\end{…}` (see
+        // `compute_on_type_format`). Client opt-in (e.g. `editor.formatOnType`).
+        document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
+            first_trigger_character: "}".to_owned(),
+            more_trigger_character: None,
+        }),
         document_symbol_provider: Some(OneOf::Left(true)),
         // Aggregate the per-file outline (sections, labels, floats, theorems,
         // macros, environments) across every tracked project file. No lazy
@@ -454,6 +463,21 @@ enum WorkerJob {
         sentence_lang: SentenceLanguage,
         sentence_no_break: Vec<String>,
     },
+    /// An on-type-formatting request (`textDocument/onTypeFormatting`): the user
+    /// typed `}`. Re-indents the containing top-level block, but only when the `}`
+    /// structurally closes a multi-line group or an `\end{…}` (see
+    /// [`compute_on_type_format`]); otherwise no edits. `position` is the cursor
+    /// just after the typed `}`.
+    OnTypeFormat {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        style: FormatStyle,
+        kind: FileKind,
+        position: Position,
+        sentence_lang: SentenceLanguage,
+        sentence_no_break: Vec<String>,
+    },
     /// A document-symbol request: build the outline on the read pool and reply to
     /// `id`.
     Symbols {
@@ -722,6 +746,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             }
                             RangeFormatting::METHOD => {
                                 on_range_formatting(&connection, &mut state, &job_tx, req)
+                            }
+                            OnTypeFormatting::METHOD => {
+                                on_type_formatting(&connection, &mut state, &job_tx, req)
                             }
                             DocumentSymbolRequest::METHOD => {
                                 on_document_symbol(&connection, &state, &job_tx, req)
@@ -1088,6 +1115,60 @@ fn on_range_formatting(
         style,
         kind,
         range: params.range,
+        sentence_lang: resolved.sentence_lang,
+        sentence_no_break: resolved.sentence_no_break,
+    });
+}
+
+/// Handle `textDocument/onTypeFormatting`. The client fires this only on a
+/// registered trigger (`}`); we re-check the character and dispatch a read-pool
+/// job that re-indents the containing block when the `}` structurally closes a
+/// multi-line construct. Mirrors [`on_range_formatting`]'s settings resolution.
+fn on_type_formatting(
+    connection: &Connection,
+    state: &mut GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<DocumentOnTypeFormattingParams>(OnTypeFormatting::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid on-type formatting params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    // We only re-indent on `}`. Any other trigger is a no-op (reply `null`).
+    let uri = params.text_document_position.text_document.uri;
+    if params.ch != "}" || !state.documents.contains_key(&uri) {
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    }
+    let resolved = state.resolve_settings(&uri);
+    let mut style = resolved.style;
+    if !resolved.config_present && params.options.tab_size > 0 {
+        style.indent_width = params.options.tab_size as usize;
+    }
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    style.wrap = resolved.wrap_override.unwrap_or(kind.default_wrap());
+    let text = state.documents[&uri].text.clone();
+    let _ = job_tx.send(WorkerJob::OnTypeFormat {
+        id,
+        path,
+        text,
+        style,
+        kind,
+        position: params.text_document_position.position,
         sentence_lang: resolved.sentence_lang,
         sentence_no_break: resolved.sentence_no_break,
     });
@@ -1928,6 +2009,28 @@ impl Worker {
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
                     run_range_format(
                         &snapshot, id, &path, &text, style, kind, range, sentence, &out_tx,
+                    )
+                });
+            }
+            WorkerJob::OnTypeFormat {
+                id,
+                path,
+                text,
+                style,
+                kind,
+                position,
+                sentence_lang,
+                sentence_no_break,
+            } => {
+                // On-type formatting reads on the read pool against a snapshot,
+                // exactly like `RangeFormat` (an id-bound response, not coalesced).
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    let sentence =
+                        SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
+                    run_on_type_format(
+                        &snapshot, id, &path, &text, style, kind, position, sentence, &out_tx,
                     )
                 });
             }
@@ -2872,6 +2975,138 @@ fn range_edits_for_root(
         return Some(Vec::new());
     }
     Some(diff_to_edits(idx, text, block_range, &fragment))
+}
+
+/// On-type-format the buffer behind a [`WorkerJob::OnTypeFormat`] on the read pool
+/// and reply with the (possibly empty) edit array, or `null` on refusal / unknown
+/// buffer. Mirrors [`run_range_format`]'s cancellation/fallback contract.
+#[allow(clippy::too_many_arguments)]
+fn run_on_type_format(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    style: FormatStyle,
+    kind: FileKind,
+    position: Position,
+    sentence: SentenceOptions<'_>,
+    out_tx: &Sender<Outbound>,
+) {
+    let result = match compute_on_type_format(snapshot, path, text, style, kind, position, sentence)
+    {
+        Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    };
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Produce the minimal edits that re-indent the block around a just-typed `}`, an
+/// empty vec when nothing should change (the `}` doesn't close a multi-line
+/// construct, or the block is already formatted), or `None` on refusal (parse
+/// errors), an unsupported kind, or a cursor touching no block. LaTeX-only.
+///
+/// This is [`compute_range_format`] with an **empty selection** at the cursor and
+/// a [`closes_multiline_construct`] guard: the guard decides *whether* to fire,
+/// and the shared range machinery ([`range_edits_for_root`]) computes the edit
+/// against the containing top-level block. Shares the salsa fast-path / reparse-
+/// fallback shape.
+fn compute_on_type_format(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    style: FormatStyle,
+    kind: FileKind,
+    position: Position,
+    sentence: SentenceOptions<'_>,
+) -> Option<Vec<TextEdit>> {
+    match kind {
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {}
+        FileKind::Bib => return None,
+    }
+
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+    let off = offset.min(u32::MAX as usize) as u32;
+    let sel = TextRange::empty(TextSize::new(off));
+
+    // Nesting mirrors `compute_range_format`: `Some(Some(e))` = computed edits;
+    // `Some(None)` = clean refusal (parse errors); `None` = cache miss / stale
+    // snapshot / cancellation → reparse from the captured text.
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        if !snapshot.parse_diagnostics(file).is_empty() {
+            return Some(None);
+        }
+        let root = snapshot.parsed_tree(file);
+        if !closes_multiline_construct(&root, text, off) {
+            return Some(Some(Some(Vec::new())));
+        }
+        let sigs = snapshot.scope_signatures(members_of(snapshot), file);
+        Some(Some(range_edits_for_root(
+            &root, text, &idx, sel, style, sigs, sentence,
+        )))
+    }));
+
+    match cached {
+        Ok(Some(Some(edits))) => edits,
+        Ok(Some(None)) => None,
+        Ok(None) | Err(_) => {
+            let parsed = parse_with_flavor(text, kind.lex_config());
+            if !parsed.errors.is_empty() {
+                return None;
+            }
+            let root = parsed.syntax();
+            if !closes_multiline_construct(&root, text, off) {
+                return Some(Vec::new());
+            }
+            range_edits_for_root(
+                &root,
+                text,
+                &idx,
+                sel,
+                style,
+                &SignatureDb::default(),
+                sentence,
+            )
+        }
+    }
+}
+
+/// Decide whether a `}` typed at byte `offset` (cursor just past the brace)
+/// structurally closes a *multi-line* construct that warrants a re-indent: a plain
+/// multi-line group, or an `\end{…}` terminating a multi-line environment. A `}`
+/// that closes an inline group (e.g. `\textbf{x}`) or that *opens* an environment
+/// (`\begin{…}`) returns `false`.
+fn closes_multiline_construct(root: &SyntaxNode, text: &str, offset: u32) -> bool {
+    let Some(brace) = root.token_at_offset(TextSize::new(offset)).left_biased() else {
+        return false;
+    };
+    if brace.kind() != SyntaxKind::R_BRACE {
+        return false;
+    }
+    // The node this brace closes: a `GROUP`, or the `NAME_GROUP` of a
+    // `\begin`/`\end`.
+    let Some(close_node) = brace.parent() else {
+        return false;
+    };
+    // The structural unit to (potentially) re-indent.
+    let unit = match close_node.parent() {
+        // Closing `\end{…}` → re-indent the whole environment.
+        Some(p) if p.kind() == SyntaxKind::END => p
+            .parent()
+            .filter(|e| e.kind() == SyntaxKind::ENVIRONMENT)
+            .unwrap_or(p),
+        // This `}` *opens* an environment; nothing is closed yet.
+        Some(p) if p.kind() == SyntaxKind::BEGIN => return false,
+        // A plain group (command body, brace group, …).
+        _ => close_node,
+    };
+    let range = unit.text_range();
+    let (lo, hi) = (usize::from(range.start()), usize::from(range.end()));
+    text.get(lo..hi).is_some_and(|s| s.contains('\n'))
 }
 
 /// Build the document-symbol outline for a [`WorkerJob::Symbols`] on the read pool

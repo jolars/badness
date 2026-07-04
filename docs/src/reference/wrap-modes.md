@@ -7,11 +7,11 @@ paragraph*. It does not affect structure—only where soft line breaks fall.
 badness format --wrap preserve paper.tex
 ```
 
-  | Mode       | Behavior                                                                                                     |
-  | ---------- | ------------------------------------------------------------------------------------------------------------ |
-  | `reflow`   | **Default.** Greedy fill: pack words up to `--line-width`, breaking only where the next word would overflow. |
-  | `preserve` | Leave the authored line breaks untouched.                                                                    |
-  | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                              |
+  | Mode       | Behavior                                                                                                        |
+  | ---------- | --------------------------------------------------------------------------------------------------------------- |
+  | `reflow`   | **Default.** Greedy fill: pack words up to `--line-width`, breaking only where the next word would overflow.    |
+  | `preserve` | Leave the authored line breaks untouched.                                                                       |
+  | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                 |
   | `semantic` | [Semantic line breaks](https://sembr.org): keep the author's soft breaks *and* add a break after each sentence. |
 
 ## How reflow works

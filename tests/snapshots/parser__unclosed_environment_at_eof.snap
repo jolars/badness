@@ -1,5 +1,6 @@
 ---
 source: tests/parser.rs
+assertion_line: 470
 expression: "tree(r\"\\begin{proof} text\")"
 ---
 ROOT@0..18
@@ -13,4 +14,4 @@ ROOT@0..18
     PARAGRAPH@13..18
       WHITESPACE@13..14 " "
       WORD@14..18 "text"
-error @18..18: unclosed environment `proof`
+error @0..13: unclosed environment `proof`

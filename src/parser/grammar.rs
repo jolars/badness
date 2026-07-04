@@ -140,6 +140,26 @@ impl<'t> Parser<'t> {
         });
     }
 
+    /// Report an error at an explicit byte range. Used for *unclosed*-delimiter
+    /// errors, which are detected at the closing anchor (a recovery token or EOF)
+    /// but belong on the *opener* (`{`, `$`, `\[`, `\left`, `\begin{…}`)—the
+    /// token the reader must fix. Pointing them at the detection site would land
+    /// every unclosed error on EOF (a zero-width span at end of file).
+    fn error_at(&mut self, range: (usize, usize), message: impl Into<String>) {
+        self.errors.push(SyntaxError {
+            message: message.into(),
+            start: range.0,
+            end: range.1,
+        });
+    }
+
+    /// Byte range of the token at `pos` (`[starts[pos], starts[pos + 1])`).
+    /// Captured at a construct's opener before it is consumed, so an unclosed
+    /// error can point back at it (see [`Self::error_at`]).
+    fn token_span(&self, pos: usize) -> (usize, usize) {
+        (self.starts[pos], self.starts[pos + 1])
+    }
+
     fn skip_trivia(&mut self) {
         while self.kind().is_some_and(Self::is_trivia) {
             self.bump();
@@ -544,12 +564,13 @@ impl<'t> Parser<'t> {
     /// A brace group `{ … }`.
     fn group(&mut self) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACE));
+        let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
         loop {
             match self.kind() {
                 None => {
-                    self.error("unclosed `{`");
+                    self.error_at(opener, "unclosed `{`");
                     break;
                 }
                 Some(SyntaxKind::R_BRACE) => {
@@ -569,12 +590,13 @@ impl<'t> Parser<'t> {
     /// document) on a `}`, a `\begin`/`\end`, a paragraph break, or EOF.
     fn optional(&mut self) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACKET));
+        let opener = self.token_span(self.pos);
         self.open(SyntaxKind::OPTIONAL);
         self.bump(); // [
         loop {
             match self.kind() {
                 None | Some(SyntaxKind::R_BRACE) => {
-                    self.error("unclosed `[`");
+                    self.error_at(opener, "unclosed `[`");
                     break;
                 }
                 Some(SyntaxKind::R_BRACKET) => {
@@ -584,12 +606,12 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::CONTROL_WORD)
                     if self.at_command(BEGIN_CMD) || self.at_command(END_CMD) =>
                 {
-                    self.error("unclosed `[`");
+                    self.error_at(opener, "unclosed `[`");
                     break;
                 }
                 _ => {
                     if self.at_paragraph_break() {
-                        self.error("unclosed `[`");
+                        self.error_at(opener, "unclosed `[`");
                         break;
                     }
                     self.element();
@@ -609,6 +631,10 @@ impl<'t> Parser<'t> {
         } else {
             (SyntaxKind::INLINE_MATH, "$")
         };
+        let opener = (
+            self.starts[self.pos],
+            self.starts[self.pos + if display { 2 } else { 1 }],
+        );
         self.open(kind);
         self.bump(); // $
         if display {
@@ -618,7 +644,7 @@ impl<'t> Parser<'t> {
         loop {
             match self.kind() {
                 None => {
-                    self.error(format!("unclosed `{label}`"));
+                    self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
                 // `}` and `\end` are recovery anchors: `$`-math cannot span a
@@ -627,11 +653,11 @@ impl<'t> Parser<'t> {
                 // and a `\end` belongs to an enclosing environment. Leave the
                 // token for the caller and report the unclosed math.
                 Some(SyntaxKind::R_BRACE) => {
-                    self.error(format!("unclosed `{label}`"));
+                    self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
                 Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
-                    self.error(format!("unclosed `{label}`"));
+                    self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
                 Some(SyntaxKind::DOLLAR) => {
@@ -646,7 +672,7 @@ impl<'t> Parser<'t> {
                 }
                 _ => {
                     if self.at_paragraph_break() {
-                        self.error(format!("unclosed `{label}`"));
+                        self.error_at(opener, format!("unclosed `{label}`"));
                         break;
                     }
                     self.math_element();
@@ -667,13 +693,14 @@ impl<'t> Parser<'t> {
     /// [`Self::dollar_math`], the body's atoms are wrapped in a `MATH` node and
     /// parsed in math mode.
     fn delim_math(&mut self, kind: SyntaxKind, opener: &str, closer: &str) {
+        let opener_span = self.token_span(self.pos);
         self.open(kind);
         self.bump(); // \[ or \(
         self.open(SyntaxKind::MATH);
         loop {
             match self.kind() {
                 None => {
-                    self.error(format!("unclosed `{opener}`"));
+                    self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
                 Some(SyntaxKind::CONTROL_SYMBOL) if self.text() == closer => {
@@ -684,16 +711,16 @@ impl<'t> Parser<'t> {
                 // math (a subgroup would have entered via `{`). Leave it for
                 // the caller and report the unclosed math.
                 Some(SyntaxKind::R_BRACE) => {
-                    self.error(format!("unclosed `{opener}`"));
+                    self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
                 Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
-                    self.error(format!("unclosed `{opener}`"));
+                    self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
                 _ => {
                     if self.at_paragraph_break() {
-                        self.error(format!("unclosed `{opener}`"));
+                        self.error_at(opener_span, format!("unclosed `{opener}`"));
                         break;
                     }
                     self.math_element();
@@ -877,12 +904,13 @@ impl<'t> Parser<'t> {
     /// nests). Recovery mirrors [`Self::group`].
     fn math_group(&mut self) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACE));
+        let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
         loop {
             match self.kind() {
                 None => {
-                    self.error("unclosed `{`");
+                    self.error_at(opener, "unclosed `{`");
                     break;
                 }
                 Some(SyntaxKind::R_BRACE) => {
@@ -908,6 +936,7 @@ impl<'t> Parser<'t> {
     /// token for the caller.
     fn left_right(&mut self) {
         debug_assert!(self.at_command(LEFT_CMD));
+        let opener = self.token_span(self.pos);
         self.open(SyntaxKind::LEFT_RIGHT);
         self.bump(); // \left
         self.math_delim(LEFT_CMD);
@@ -915,27 +944,27 @@ impl<'t> Parser<'t> {
         loop {
             match self.kind() {
                 None => {
-                    self.error("unclosed `\\left`");
+                    self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
                 Some(SyntaxKind::CONTROL_WORD) if self.at_command(RIGHT_CMD) => break,
                 // Enclosing-scope closers: `\left … \right` cannot span a group,
                 // math, or environment boundary, so hand the token back.
                 Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => {
-                    self.error("unclosed `\\left`");
+                    self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
                 Some(SyntaxKind::CONTROL_SYMBOL) if matches!(self.text(), "\\]" | "\\)") => {
-                    self.error("unclosed `\\left`");
+                    self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
                 Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
-                    self.error("unclosed `\\left`");
+                    self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
                 _ => {
                     if self.at_paragraph_break() {
-                        self.error("unclosed `\\left`");
+                        self.error_at(opener, "unclosed `\\left`");
                         break;
                     }
                     self.math_element();
@@ -988,9 +1017,13 @@ impl<'t> Parser<'t> {
     fn environment(&mut self) {
         self.open(SyntaxKind::ENVIRONMENT);
 
+        let begin_start = self.starts[self.pos];
         self.open(SyntaxKind::BEGIN);
         self.bump(); // \begin
         let name = self.name_group();
+        // Span of the opener `\begin{name}` (before any trailing arguments), so
+        // an unclosed environment points back at the `\begin`, not at EOF.
+        let opener = (begin_start, self.starts[self.pos]);
         self.attach_arguments(); // `\begin{tabular}{ll}`, `[options]`, etc.
         self.close(); // BEGIN
 
@@ -1004,18 +1037,18 @@ impl<'t> Parser<'t> {
         } else {
             self.parse_block(Block::Environment);
         }
-        self.finish_environment(&name);
+        self.finish_environment(&name, opener);
     }
 
     /// Consume the matching `\end`, or recover. `parse_block` / `verbatim_body`
     /// leave the cursor at a `\end` or at EOF.
-    fn finish_environment(&mut self, name: &Option<String>) {
+    fn finish_environment(&mut self, name: &Option<String>, opener: (usize, usize)) {
         match self.kind() {
             None => {
-                self.error(format!(
-                    "unclosed environment `{}`",
-                    name.as_deref().unwrap_or("")
-                ));
+                self.error_at(
+                    opener,
+                    format!("unclosed environment `{}`", name.as_deref().unwrap_or("")),
+                );
             }
             // The cursor is at a `\end` (the only non-EOF stop condition).
             Some(_) => {
@@ -1031,11 +1064,14 @@ impl<'t> Parser<'t> {
                     // Close this one with a diagnostic and leave the \end for
                     // the caller (this unwinds the stack until some level
                     // matches, or it becomes a stray \end at the root).
-                    self.error(format!(
-                        "unclosed environment `{}` (found `\\end{{{}}}`)",
-                        name.as_deref().unwrap_or(""),
-                        end_name.as_deref().unwrap_or("")
-                    ));
+                    self.error_at(
+                        opener,
+                        format!(
+                            "unclosed environment `{}` (found `\\end{{{}}}`)",
+                            name.as_deref().unwrap_or(""),
+                            end_name.as_deref().unwrap_or("")
+                        ),
+                    );
                 }
             }
         }

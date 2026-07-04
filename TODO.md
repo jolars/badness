@@ -117,55 +117,6 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
   the command (`Figure\n\ref{x}`) is also a breakable space but is left for a later
   pass (replacing the newline with `~` reflows the source and overlaps the formatter).
 
-### Tier 1 — typographic & math substitutions (node-shape, clear autofix)
-
-- [x] `ellipsis`—`...` → `\dots` (text) or `\ldots`/`\cdots` by math context
-  (ChkTeX 11, lacheck). `Safe` for the unambiguous text `\dots`; `Unsafe` in math
-  where `\ldots` vs `\cdots` depends on neighbors.
-- [x] `straight-quotes`—ASCII `"` → `` `` ``/`''`; plus quote-direction and mixing
-  checks (ChkTeX 18/32-34, lacheck). `Unsafe` (open/close direction inferred from
-  context).
-- [x] `dash-length`—classify `-`/`--`/`---` by neighbors: number--number → en dash,
-  word---word → em dash (ChkTeX 8). `Unsafe`; needs a curated exception list
-  (hyphenated compounds, option flags).
-- [x] `times-variable`—literal `x` between digits (`640x200`) → `\times` (ChkTeX 29).
-  `Unsafe` (intent heuristic).
-- [x] `math-operator-name`—bare `sin`/`cos`/`log`/`lim`… in math typeset as italic
-  variables → `\sin` etc. (ChkTeX 35). `Unsafe` (changes typeset glyph and operator
-  spacing, and a bare `sin` is occasionally a real product—same reasoning as
-  `times-variable`, unlike the truly output-identical `\bf`→`\bfseries` swap). Matches an
-  operator-name prefix at a word boundary (so `sin(x)` too), only in math mode, and never
-  inside a sub/superscript (the `x_{max}` label case).
-- [x] `primitive-command`—raw TeX primitives discouraged in LaTeX: `\over`→`\frac`,
-  `\centerline`→`center`/`\centering`, `\eqno`, `\bgroup`… (ChkTeX 41, lacheck).
-  Extends the `deprecated-command` family (merge vs. sibling rule: open). Report-only
-  where the rewrite restructures arguments (`\over`); `Safe` control-word swaps where a
-  1:1 replacement exists.
-
-### Tier 2 — spacing/correctness semantics (not layout)
-
-These edit *significant* whitespace or command shape, so they do not overlap the
-formatter (which only normalizes redundant layout whitespace). Verify the overlap
-notes when implementing.
-
-- [x] `swallowed-space`—control word directly followed by a space TeX eats before
-  text (`\LaTeX is` renders "LaTeXis") (ChkTeX 1). `Unsafe` (insert `{}` or `\ `).
-  Scoped to a curated set of argument-less TeX-family logos, text mode only, and a
-  following alphanumeric word (a trailing `.` is desired, not flagged).
-- [x] `abbreviation-spacing`—inter-word `\ ` after `e.g.`/`i.e.`/`et al.`, and
-  forgotten `\@` before sentence-final punctuation after a capital (`UFO.` → `UFO\@.`)
-  unless `\frenchspacing` (ChkTeX 12/13, lacheck, textidote sh:010/011). `Unsafe`.
-  *Overlap note:* verify the formatter does not touch this.
-- [x] `space-before-command`—spurious space before `\footnote`/`\index`/`\label`
-  where the space is semantically wrong, not layout (ChkTeX 24/42). Shipped as
-  `Unsafe` (delete the space) rather than the originally-noted `Safe`, matching the
-  codebase convention that a spacing-altering fix is `Unsafe` (`diagnostic.rs`) and
-  its sibling spacing rules. *Overlap note (resolved):* the formatter preserves this
-  inter-token space, so the rule is warranted.
-- [x] `makeat-macro`—`@` inside a macro name used outside a
-  `\makeatletter`/`\makeatother` (or expl3) region (lacheck). badness can decide this
-  **exactly** from its letter-mode tracking rather than heuristically. Report-only.
-
 ### Tier 3 — structural / semantic / project-layer (curated subset)
 
 Whole-file or cross-file (`check_file`), using the semantic model, signature DB, and

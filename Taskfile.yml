@@ -69,6 +69,16 @@ tasks:
     cmds:
       - python3 scripts/gen_cwl_signatures.py --write
 
+  pkg-names:check:
+    desc: Check data/{package,class}_names.txt are in sync with the pinned TeX Live tlpdb
+    cmds:
+      - python3 scripts/gen_package_names.py
+
+  pkg-names:sync:
+    desc: Re-generate data/{package,class}_names.txt from the pinned TeX Live tlpdb
+    cmds:
+      - python3 scripts/gen_package_names.py --write
+
   check:
     desc: Everything CI runs
     deps: [fmt-check, lint, test]

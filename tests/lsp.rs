@@ -1924,6 +1924,42 @@ fn lsp_document_highlight_citation_keys() {
 }
 
 #[test]
+fn lsp_document_highlight_environment_pair() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("env.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\begin{equation}\nx\n\\end{equation}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor on the `\begin` name → both the begin and end name spans (TEXT).
+    let expected = vec![
+        (Position::new(0, 7), Some(DocumentHighlightKind::TEXT)),
+        (Position::new(2, 5), Some(DocumentHighlightKind::TEXT)),
+    ];
+    let on_begin = document_highlight(&client, 2, &uri, Position::new(0, 8));
+    assert_eq!(
+        highlight_starts(on_begin),
+        expected,
+        "the paired \\begin/\\end names, from the \\begin side"
+    );
+
+    // The same pair when invoked from the `\end` name.
+    let on_end = document_highlight(&client, 3, &uri, Position::new(2, 6));
+    assert_eq!(
+        highlight_starts(on_end),
+        expected,
+        "the pair resolves identically from the \\end side"
+    );
+
+    // A cursor in the body (not on a delimiter) highlights nothing.
+    let in_body = document_highlight(&client, 4, &uri, Position::new(1, 0));
+    assert!(in_body.is_empty(), "cursor in the body, not on a delimiter");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_references_cross_file_cite_from_tex_and_bib() {
     // A real on-disk project: the root `\input`s a chapter and `\addbibresource`s a
     // `.bib`. Both the chapter and the root cite the same key.

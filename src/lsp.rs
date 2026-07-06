@@ -3937,18 +3937,61 @@ fn rename_target_under_cursor(model: &SemanticModel, offset: usize) -> Option<Re
     })
 }
 
+/// The name spans to highlight when the cursor at byte `offset` sits on a
+/// `\begin{env}` or `\end{env}` delimiter: both paired names of the enclosing
+/// `ENVIRONMENT` (or just the begin's when the environment is unclosed). Purely
+/// syntactic — the parser already pairs begin/end structurally. Empty when the
+/// cursor isn't inside a `BEGIN`/`END` node (a cursor in the body walks up to the
+/// `ENVIRONMENT` without passing through `BEGIN`/`END`, so it resolves to nothing).
+/// A stray `\end` (no `ENVIRONMENT` parent) self-highlights.
+fn environment_pair_ranges(root: &SyntaxNode, offset: usize) -> Vec<TextRange> {
+    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
+    let (left, right) = match root.token_at_offset(at) {
+        rowan::TokenAtOffset::None => return Vec::new(),
+        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
+        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
+    };
+    let delimiter = [left, right].into_iter().flatten().find_map(|token| {
+        token
+            .parent_ancestors()
+            .find(|n| matches!(n.kind(), SyntaxKind::BEGIN | SyntaxKind::END))
+    });
+    let Some(delimiter) = delimiter else {
+        return Vec::new();
+    };
+    match delimiter.parent() {
+        Some(env) if env.kind() == SyntaxKind::ENVIRONMENT => env
+            .children()
+            .filter(|c| matches!(c.kind(), SyntaxKind::BEGIN | SyntaxKind::END))
+            .filter_map(|c| crate::ast::environment_name_range(&c))
+            .collect(),
+        // A stray `\end` with no open environment: highlight it alone.
+        _ => crate::ast::environment_name_range(&delimiter)
+            .into_iter()
+            .collect(),
+    }
+}
+
 /// Compute the `prepareRename` range + placeholder at `position`: the key-token span
 /// under the cursor and its current text. Reads the cached model when current, else a
 /// fresh parse (the same guard as [`compute_references`]); a `.bib` cursor resolves
 /// to its `@entry` key. `None` when the cursor isn't on a renameable key.
-/// Compute the document highlights for `position`: the cross-reference key under the
-/// cursor (a `\ref`/`\cite` use or a `\label` definition) and every same-key occurrence
-/// in the *same* buffer. Single-file, so no project resolution — the `\label`
-/// definition shades as [`DocumentHighlightKind::WRITE`] and every `\ref`/`\cite` use
-/// as [`DocumentHighlightKind::READ`]. Strict key gating (via
-/// [`rename_target_under_cursor`]): a cursor on the command word, the braces, or a
-/// sibling key in `\cref{a,b}` highlights nothing for that key. `.bib` buffers yield no
-/// highlights (an `@entry` key has no in-file uses).
+/// Compute the document highlights for `position`. Two cases, tried in order:
+///
+/// - **Cross-reference key** under the cursor (a `\ref`/`\cite` use or a `\label`
+///   definition): every same-key occurrence in the *same* buffer. Single-file, so no
+///   project resolution — the `\label` definition shades as
+///   [`DocumentHighlightKind::WRITE`] and every `\ref`/`\cite` use as
+///   [`DocumentHighlightKind::READ`]. Strict key gating (via
+///   [`rename_target_under_cursor`]): a cursor on the command word, the braces, or a
+///   sibling key in `\cref{a,b}` highlights nothing for that key.
+/// - **Environment delimiter** under the cursor (a `\begin{env}`/`\end{env}`): the
+///   matching pair's name spans, shaded [`DocumentHighlightKind::TEXT`] (via
+///   [`environment_pair_ranges`]).
+///
+/// The two positions are disjoint (a key sits in a command `GROUP`, a name in a
+/// `BEGIN`/`END` `NAME_GROUP`), so key-first ordering is behavior-preserving.
+/// `.bib` buffers yield no highlights (an `@entry` key has no in-file uses).
 fn compute_document_highlight(
     snapshot: &Analysis,
     path: &Path,
@@ -3962,47 +4005,52 @@ fn compute_document_highlight(
         if file_kind_for(path) == FileKind::Bib {
             return Vec::new();
         }
-        let collect = |model: &SemanticModel| -> Vec<DocumentHighlight> {
-            let Some(target) = rename_target_under_cursor(model, offset) else {
-                return Vec::new();
-            };
-            let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
-                range: lsp_range(&idx, text, range),
-                kind: Some(kind),
-            };
-            match &target.target {
-                CursorTarget::Labels(_) => {
-                    let name = &target.placeholder;
-                    let defs = model
-                        .labels()
-                        .iter()
-                        .filter(|l| &l.name == name)
-                        .map(|l| highlight(l.key_range, DocumentHighlightKind::WRITE));
-                    let uses = model
-                        .refs()
-                        .iter()
-                        .filter(|r| &r.name == name)
-                        .map(|r| highlight(r.key_range, DocumentHighlightKind::READ));
-                    defs.chain(uses).collect()
-                }
-                CursorTarget::Citations(_) => {
-                    let name = &target.placeholder;
-                    model
-                        .citations()
-                        .iter()
-                        .filter(|c| &c.name == name)
-                        .map(|c| highlight(c.key_range, DocumentHighlightKind::READ))
-                        .collect()
-                }
+        let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
+            range: lsp_range(&idx, text, range),
+            kind: Some(kind),
+        };
+        let collect = |root: &SyntaxNode, model: &SemanticModel| -> Vec<DocumentHighlight> {
+            // A cross-reference key takes precedence when the cursor is on one.
+            if let Some(target) = rename_target_under_cursor(model, offset) {
+                return match &target.target {
+                    CursorTarget::Labels(_) => {
+                        let name = &target.placeholder;
+                        let defs = model
+                            .labels()
+                            .iter()
+                            .filter(|l| &l.name == name)
+                            .map(|l| highlight(l.key_range, DocumentHighlightKind::WRITE));
+                        let uses = model
+                            .refs()
+                            .iter()
+                            .filter(|r| &r.name == name)
+                            .map(|r| highlight(r.key_range, DocumentHighlightKind::READ));
+                        defs.chain(uses).collect()
+                    }
+                    CursorTarget::Citations(_) => {
+                        let name = &target.placeholder;
+                        model
+                            .citations()
+                            .iter()
+                            .filter(|c| &c.name == name)
+                            .map(|c| highlight(c.key_range, DocumentHighlightKind::READ))
+                            .collect()
+                    }
+                };
             }
+            // Otherwise, a `\begin`/`\end` delimiter pair.
+            environment_pair_ranges(root, offset)
+                .into_iter()
+                .map(|range| highlight(range, DocumentHighlightKind::TEXT))
+                .collect()
         };
         match snapshot.lookup_file(path) {
             Some(file) if snapshot.file_text(file) == text => {
-                collect(snapshot.semantic_model(file))
+                collect(&snapshot.parsed_tree(file), snapshot.semantic_model(file))
             }
             _ => {
                 let root = SyntaxNode::new_root(parse(text).green);
-                collect(&SemanticModel::build(&root))
+                collect(&root, &SemanticModel::build(&root))
             }
         }
     }));

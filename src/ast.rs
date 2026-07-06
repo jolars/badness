@@ -185,6 +185,37 @@ pub fn environment_name(begin_or_end: &SyntaxNode) -> Option<String> {
     Some(text)
 }
 
+/// The byte range of the environment name *inside* a `BEGIN` or `END` node's
+/// `NAME_GROUP` (the span between the braces, e.g. `equation` in
+/// `\begin{equation}`) — the location-aware counterpart to [`environment_name`].
+/// The range runs from the first inner token's start to the last inner token's
+/// end, matching the brace-dropping in [`environment_name`] and mirroring
+/// [`nth_group_inner`]. Returns `None` when the node has no `NAME_GROUP` (a
+/// malformed `\begin`), it holds a nested node, or the name is empty (`\begin{}`,
+/// nothing to highlight).
+pub fn environment_name_range(begin_or_end: &SyntaxNode) -> Option<TextRange> {
+    let group = begin_or_end
+        .children()
+        .find(|child| child.kind() == SyntaxKind::NAME_GROUP)?;
+
+    let mut start: Option<TextSize> = None;
+    let mut end: Option<TextSize> = None;
+    for element in group.children_with_tokens() {
+        match element {
+            rowan::NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
+                _ => {
+                    let range = token.text_range();
+                    start.get_or_insert(range.start());
+                    end = Some(range.end());
+                }
+            },
+            rowan::NodeOrToken::Node(_) => return None,
+        }
+    }
+    Some(TextRange::new(start?, end?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +226,13 @@ mod tests {
             .descendants()
             .find(|node| node.kind() == SyntaxKind::COMMAND)
             .expect("a COMMAND node")
+    }
+
+    fn node(src: &str, kind: SyntaxKind) -> SyntaxNode {
+        SyntaxNode::new_root(parse(src).green)
+            .descendants()
+            .find(|n| n.kind() == kind)
+            .expect("a matching node")
     }
 
     #[test]
@@ -268,5 +306,25 @@ mod tests {
         let spec = nth_group(&cmd, 1).map(|g| group_inner_source(&g));
         assert_eq!(spec.as_deref(), Some("m O{d} m"));
         assert_eq!(nth_group_text(&cmd, 1), None);
+    }
+
+    #[test]
+    fn environment_name_range_spans_only_the_name() {
+        let src = "\\begin{equation}\nx\n\\end{equation}\n";
+        let begin = node(src, SyntaxKind::BEGIN);
+        let range = environment_name_range(&begin).expect("a name span");
+        assert_eq!(&src[range], "equation");
+
+        let end = node(src, SyntaxKind::END);
+        let range = environment_name_range(&end).expect("a name span");
+        assert_eq!(&src[range], "equation");
+    }
+
+    #[test]
+    fn environment_name_range_none_for_empty_name() {
+        assert_eq!(
+            environment_name_range(&node("\\begin{}\n\\end{}\n", SyntaxKind::BEGIN)),
+            None
+        );
     }
 }

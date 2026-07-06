@@ -232,15 +232,17 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   (`project::texmf`, see "TEXMF index" below), linking to its installed source
   (local always wins). `\graphicspath` is unsupported (graphics resolve against
   `base_dir` only). texlab covers the include edges only (`crates/links`).
-- [ ] **Go-to-definition for includes and user macros.** Extend `CursorTarget`
-  (`src/lsp.rs`, today Label/Citation only): an include argument jumps to the
-  target file (reuse include resolution—for a system package, the **TEXMF index**
-  now resolves the installed source, the same fallback the document-link path uses);
-  a user command `\mycmd` jumps to its
-  `\newcommand`/xparse definition (needs the definition *span* recorded in the
-  signature DB, `semantic::define`—provenance is already tracked). Supersedes the
-  deferred macro-body goto note. texlab: `crates/definition`
-  (command/include/label/citation/string_ref).
+- [~] **Go-to-definition for includes and user macros.** **File targets done:** a
+  file-referencing argument under the cursor (`\input`/`\include`/`\subfile`/
+  `\import`, `\usepackage`/`\documentclass`, `\bibliography`/`\addbibresource`,
+  `\includegraphics`) jumps to the resolved on-disk file. It reuses
+  `document_link::document_links` (finding the link whose span covers the cursor), so
+  it is disk-aware and TEXMF-aware for free—a system `\usepackage{amsmath}` jumps to
+  its installed source (`file_target_under_cursor` in `src/lsp.rs`; no `CursorTarget`
+  variant needed, the label/cite path is unchanged). *Still deferred:* a user command
+  `\mycmd` jumping to its `\newcommand`/xparse definition (needs the definition *span*
+  recorded in the signature DB, `semantic::define`—provenance is tracked, the span is
+  not). texlab: `crates/definition` (command/include/label/citation/string_ref).
 - [x] **Matching `\begin`/`\end` document highlight.** Highlight the paired
   begin/end of the environment under the cursor (highlight was label-key only
   before); the parser already pairs them structurally. texlab: `crates/highlights`
@@ -367,9 +369,9 @@ engine.
   cheaply derive. Gated by `[texmf]` config (`enabled`/`roots`/`use-kpsewhich`), and
   **never** wired into the formatter's signature scope (guard test
   `formatter_scope_never_reaches_the_texmf_tree`; see AGENTS.md "LSP environment
-  awareness"). *Deferred:* a MiKTeX `findtexmf` discovery path, and package
-  go-to-definition (the CursorTarget extension is the remaining wiring—the TEXMF
-  resolution it needs now exists; see the go-to-definition item under Navigation).
+  awareness"). All three LSP consumers plus **go-to-definition** for a file argument
+  (see the go-to-definition item under Navigation) resolve system packages through
+  the index. *Deferred:* a MiKTeX `findtexmf` discovery path.
 - [x] **Signature extraction from package sources.** The `semantic/define.rs`
   scanner already runs across loaded `.sty`/`.cls` (via `scope_signatures` and its
   db-less CLI mirror `collect_package_signatures`), and already recognizes

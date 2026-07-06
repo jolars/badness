@@ -565,11 +565,14 @@ enum WorkerJob {
     /// A go-to-definition request: resolve the `\ref`/`\cite` under the cursor to
     /// its `\label`/bib entry on the read pool and reply to `id`. Cross-file, so
     /// the worker snapshots project membership when it dispatches (like an analyze).
+    /// `texmf` gates the file-target fallback (an include/package argument jumps to
+    /// its resolved source, installed-tree-aware).
     GotoDefinition {
         id: RequestId,
         path: PathBuf,
         text: String,
         position: Position,
+        texmf: TexmfConfig,
     },
     /// A find-references request: enumerate every `\ref`/`\cite` use of the
     /// label/key under the cursor on the read pool and reply to `id`. Cross-file
@@ -797,7 +800,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             }
                             HoverRequest::METHOD => on_hover(&connection, &state, &job_tx, req),
                             GotoDefinition::METHOD => {
-                                on_goto_definition(&connection, &state, &job_tx, req)
+                                on_goto_definition(&connection, &mut state, &job_tx, req)
                             }
                             References::METHOD => on_references(&connection, &state, &job_tx, req),
                             DocumentHighlightRequest::METHOD => {
@@ -1591,7 +1594,7 @@ fn on_code_action(
 /// `.tex`, so a `.bib` cursor has nothing to jump *from*).
 fn on_goto_definition(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -1627,11 +1630,16 @@ fn on_goto_definition(
         )));
         return;
     }
+    let text = doc.text.clone();
+    // Resolve `[texmf]` for the file-target fallback (an include/package argument
+    // jumps to its resolved source, TEXMF-aware like document links).
+    let texmf = state.resolve_settings(&uri).texmf;
     let _ = job_tx.send(WorkerJob::GotoDefinition {
         id,
         path,
-        text: doc.text.clone(),
+        text,
         position,
+        texmf,
     });
 }
 
@@ -2225,6 +2233,7 @@ impl Worker {
                 path,
                 text,
                 position,
+                texmf,
             } => {
                 // Go-to-def is cross-file, so it needs the same membership snapshot
                 // an analyze captures (open buffers plus seeded on-disk siblings),
@@ -2233,7 +2242,9 @@ impl Worker {
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_goto_definition(&snapshot, id, &path, &text, position, members, &out_tx)
+                    run_goto_definition(
+                        &snapshot, id, &path, &text, position, members, &texmf, &out_tx,
+                    )
                 });
             }
             WorkerJob::References {
@@ -3802,6 +3813,7 @@ fn run_hover(
 
 /// Resolve the `\ref`/`\cite` under the cursor and reply with the matching
 /// definition [`Location`]s (always an array — empty when nothing resolves).
+#[allow(clippy::too_many_arguments)]
 fn run_goto_definition(
     snapshot: &Analysis,
     id: RequestId,
@@ -3809,9 +3821,10 @@ fn run_goto_definition(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    texmf: &TexmfConfig,
     out_tx: &Sender<Outbound>,
 ) {
-    let locations = compute_goto_definition(snapshot, path, text, position, members);
+    let locations = compute_goto_definition(snapshot, path, text, position, members, texmf);
     let result = serde_json::to_value(GotoDefinitionResponse::Array(locations))
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -3924,38 +3937,73 @@ fn compute_goto_definition(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    texmf: &TexmfConfig,
 ) -> Vec<Location> {
     let idx = LineIndex::new(text);
     let offset = idx.offset_at(text, position.line, position.character);
+    let base_dir = path.parent();
 
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         // Find the reference under the cursor (off the cached model when current,
-        // else a fresh parse), then resolve cross-file against the db snapshot.
-        let (target, lint_path) = match snapshot.lookup_file(path) {
+        // else a fresh parse), then resolve cross-file against the db snapshot. The
+        // parsed `root` is also kept for the file-target fallback below.
+        let (root, target, lint_path) = match snapshot.lookup_file(path) {
             Some(file) if snapshot.file_text(file) == text => (
+                snapshot.parsed_tree(file),
                 reference_under_cursor(snapshot.semantic_model(file), offset),
                 snapshot.file_path(file).to_path_buf(),
             ),
             _ => {
                 let root = SyntaxNode::new_root(parse(text).green);
                 let model = SemanticModel::build(&root);
-                (reference_under_cursor(&model, offset), path.to_path_buf())
+                let target = reference_under_cursor(&model, offset);
+                (root, target, path.to_path_buf())
             }
         };
-        let Some(target) = target else {
-            return Vec::new();
-        };
-        let (resolution, citations) = snapshot.resolve_project(members);
-        match target {
-            CursorTarget::Labels(names) => {
-                resolve_label_locations(snapshot, resolution, &lint_path, &names)
-            }
-            CursorTarget::Citations(names) => {
-                resolve_citation_locations(snapshot, citations, &lint_path, &names)
-            }
+        if let Some(target) = target {
+            let (resolution, citations) = snapshot.resolve_project(members);
+            return match target {
+                CursorTarget::Labels(names) => {
+                    resolve_label_locations(snapshot, resolution, &lint_path, &names)
+                }
+                CursorTarget::Citations(names) => {
+                    resolve_citation_locations(snapshot, citations, &lint_path, &names)
+                }
+            };
         }
+        // Not a `\ref`/`\cite`: fall back to a file-referencing argument
+        // (include/package/class/bib/graphics) under the cursor, jumping to the
+        // resolved on-disk target — the same resolution the document-link path uses,
+        // so a system package resolves through the TEXMF index too.
+        file_target_under_cursor(&root, base_dir, offset, texmf)
     }));
     cached.unwrap_or_default()
+}
+
+/// The go-to-definition file target under `offset`: the document link whose argument
+/// span covers the cursor, mapped to a whole-file [`Location`]. Reuses
+/// [`document_link::document_links`] (disk-aware and TEXMF-aware), so every command it
+/// resolves—`\input`, `\usepackage`, `\includegraphics`, …—becomes navigable. Empty
+/// when the cursor is not on a resolvable file argument.
+fn file_target_under_cursor(
+    root: &SyntaxNode,
+    base_dir: Option<&Path>,
+    offset: usize,
+    texmf: &TexmfConfig,
+) -> Vec<Location> {
+    let at = TextSize::new(offset as u32);
+    let index = crate::project::texmf::global_index(texmf);
+    document_link::document_links(root, base_dir, index)
+        .into_iter()
+        .find(|link| link.range.contains_inclusive(at))
+        .and_then(|link| path_to_uri(&link.target))
+        .map(|uri| {
+            vec![Location {
+                uri,
+                range: Range::default(),
+            }]
+        })
+        .unwrap_or_default()
 }
 
 /// The cite/ref keys whose command range covers `offset`, refs taking precedence

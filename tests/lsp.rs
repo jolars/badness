@@ -1746,6 +1746,52 @@ fn lsp_definition_cross_file_ref_and_cite() {
     shutdown(&client, server_thread);
 }
 
+#[test]
+fn lsp_definition_jumps_to_include_and_package_files() {
+    // Go-to-definition on a file-referencing argument (include/package) jumps to the
+    // resolved file, reusing the document-link resolution. TEXMF is disabled so the
+    // test stays hermetic (it asserts the local-file contract).
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("part.tex"), "\\label{a}\n").unwrap();
+    std::fs::write(dir.path().join("mypkg.sty"), "% pkg\n").unwrap();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[texmf]\nenabled = false\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\usepackage{mypkg}\n\\input{part}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor in `\input{part}` (line 1) → part.tex, whole-file target.
+    let input_locs = definition(&client, 2, &uri, Position::new(1, 9));
+    assert_eq!(
+        input_locs.len(),
+        1,
+        "one include target, got {input_locs:?}"
+    );
+    assert_eq!(
+        input_locs[0].uri,
+        path_to_file_uri(&dir.path().join("part.tex"))
+    );
+    assert_eq!(input_locs[0].range.start, Position::new(0, 0));
+
+    // Cursor in `\usepackage{mypkg}` (line 0) → the local mypkg.sty.
+    let pkg_locs = definition(&client, 3, &uri, Position::new(0, 13));
+    assert_eq!(pkg_locs.len(), 1, "one package target, got {pkg_locs:?}");
+    assert_eq!(
+        pkg_locs[0].uri,
+        path_to_file_uri(&dir.path().join("mypkg.sty"))
+    );
+
+    shutdown(&client, server_thread);
+}
+
 /// Send a `workspace/symbol` request and return the matched symbols as
 /// `(name, kind, uri)`, draining any stray diagnostics (a freshly-seeded project
 /// re-lints) before the response. The server replies with the modern

@@ -150,6 +150,26 @@ period, section length) are skipped as grammar-tool territory.
 
 ## Language server
 
+### Feature status vs texlab
+
+A deliberate diff against **texlab** (5.25.1) as the mature reference LSP. The
+comparison is asymmetric, and the framing matters when triaging the items below.
+
+- **Badness leads:** range formatting, on-type formatting, code-action quick-fixes
+  (texlab's `codeAction` handler returns an empty array), a native linter (20
+  LaTeX + 10 bib rules vs texlab's 4 built-ins plus a `chktex` shell-out),
+  comment-run folding, the deterministic rule-based formatter, and a first-class
+  bib formatter with entry sorting. texlab also ships **no** semantic tokens,
+  signature help, selection ranges, or code lens—so those are not texlab gaps.
+- **Badness trails (tracked below):** completion breadth (`### Completion`),
+  macro/include navigation and matching-pair highlight (`### Navigation &
+  structure`), label preview + inlay hints and macro references/rename
+  (`### Labels & references`), package hover, and the change-environment refactor
+  (`### Code actions`).
+- **Deliberately not matched:** the typeset-adjacent features under
+  `## Editor integration` (build, clean-aux, chktex passthrough, CSL rendering,
+  kpsewhich DB).
+
 ### Configuration & sync
 
 - [x] config over LSP—the LSP now discovers `badness.toml` per document
@@ -195,19 +215,92 @@ period, section length) are skipped as grammar-tool territory.
 ### Navigation & structure
 
 - [ ] Selection ranges (`textDocument/selectionRange`)—expand-selection from
-  the CST's node hierarchy (group → argument → command → environment).
+  the CST's node hierarchy (group → argument → command → environment). Subsumes
+  texlab's `findEnvironments` command: the enclosing-environment stack falls out
+  of the CST-hierarchy expansion.
+- [ ] **Document links (`textDocument/documentLink`).** Clickable include edges:
+  `\input`/`\include`/`\subfile`/`\import`, `\usepackage`/`\documentclass`
+  (→ resolved `.sty`/`.cls`/`.dtx` via `project::package`), `\bibliography`/
+  `\addbibresource`, and `\includegraphics`. Reuse the include graph
+  (`project/include.rs`, `graph.rs`) + package resolver; advertise
+  `documentLinkProvider`. Mostly wiring—resolution already exists. texlab covers
+  the include edges only (`crates/links`).
+- [ ] **Go-to-definition for includes and user macros.** Extend `CursorTarget`
+  (`src/lsp.rs`, today Label/Citation only): an include argument jumps to the
+  target file (reuse include resolution); a user command `\mycmd` jumps to its
+  `\newcommand`/xparse definition (needs the definition *span* recorded in the
+  signature DB, `semantic::define`—provenance is already tracked). Supersedes the
+  deferred macro-body goto note. texlab: `crates/definition`
+  (command/include/label/citation/string_ref).
+- [x] **Matching `\begin`/`\end` document highlight.** Highlight the paired
+  begin/end of the environment under the cursor (highlight was label-key only
+  before); the parser already pairs them structurally. texlab: `crates/highlights`
+  (label-only) plus its `findEnvironments` command.
 - [x] Workspace symbols (`workspace/symbol`)—the per-file outline (sections,
   labels, floats, theorems, macros, environments) aggregated across every tracked
   project file, filtered by the query string. LaTeX members only.
 
 ### Labels & references
 
+- [ ] **Label hover + inlay hints.** Hover a `\label`/`\ref` to render a preview
+  (kind + nearest heading/caption); inlay-hint the same after label definitions
+  and references (advertise `inlayHintProvider`). *Caveat:* the resolved *number*
+  needs `.aux` reading or counter tracking (which badness does not do), so a first
+  cut shows kind + context without the number—texlab reads `.aux`
+  (`crates/hover/label.rs`, `crates/inlay-hints/label.rs`).
+- [ ] **References + rename for user macros and environment names.** Extend
+  references/rename (label/citation keys only today) to command names (cross-file,
+  via the signature-DB provenance in `semantic::define`) and to environment-name
+  pairs. texlab: `crates/references` + `crates/rename`
+  (command/entry/label/string_def).
+
+### Completion
+
+Badness offers command, environment, label, cite-key, bib field/type, and file
+completion (`src/completion.rs`, `src/bib/completion.rs`). texlab's completion
+breadth is its biggest lead (`crates/completion/providers/`); the specialized
+sources below are missing.
+
+- [ ] **Package/class name completion** for `\usepackage{}` / `\documentclass{}`
+  (`file_arg` in `src/completion.rs` has no `usepackage`/`documentclass` case).
+  Source from CWL/package data + locally discovered files; the kpsewhich/distro DB
+  stays out of scope (same texmf/CTAN boundary as CWL ingest and the include
+  graph).
+- [ ] **Glossary/acronym key completion** (`\gls`/`\acrshort`/… ←
+  `\newglossaryentry`/`\newacronym`)—extend `semantic::define` to scan these
+  definers, mirroring the existing label/theorem discovery.
+- [ ] **Color name + model, TikZ/PGF library completion**—small static datasets
+  for `\color`/`\textcolor`/`\definecolor` and
+  `\usetikzlibrary`/`\usepgflibrary`.
+- [ ] **Argument-value enum completion** for fixed enumerated argument choices—
+  needs the signature DB to carry per-argument value enums.
+- [ ] **Package hover** (`\usepackage{amsmath}` → description). Depends on a
+  package-metadata dataset badness does not yet ship (texlab ships CTAN
+  descriptions in its component DB, `crates/hover/package.rs`). Pairs with the
+  label-hover item above.
+- [ ] *(Design decision)* **Package-scoped command completion.** texlab suggests
+  only commands provided by the loaded packages (a package→command component
+  model). Badness's signature DB is flat (curated + CWL + scanned); scoping
+  completion to `\usepackage`-loaded packages needs package→command attribution.
+  Open question, not a mechanical add.
+
 ### IntelliSense (signature DB)
 
 - [ ] Signature help (`textDocument/signatureHelp`)—show the active argument
-  while typing a command's `{…}`/`[…]` arguments.
+  while typing a command's `{…}`/`[…]` arguments. (Not a texlab gap—texlab has no
+  signature help—but a natural fit for the signature DB.)
 
 ### Code actions
+
+- [ ] **Change-environment refactor.** A code action rewriting the
+  `\begin{a}`/`\end{a}` name pair around the cursor to a new environment. A
+  correctness-only textual edit (never invokes the formatter—tenet #1); reuse the
+  paired begin/end spans the parser already builds. texlab exposes this as the
+  `texlab.changeEnvironment` execute-command.
+- **Note (not a rule):** texlab's `MismatchedEnvironment` diagnostic
+  (`\begin{a}…\end{b}`) is already covered by the parser's `unclosed environment …
+  (found \end{…})` finding (`src/parser/grammar.rs`), surfaced via the synthetic
+  `parse` lint—so, as with `unbalanced-left-right`, no separate rule is added.
 
 ### Infrastructure
 
@@ -281,11 +374,34 @@ scope (the same boundary the include graph and CWL ingest keep).
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [ ] `wasm32` build for a web playground.
 
+## Editor integration
+
+texlab bundles PDF-workflow features. Only position mapping (no typesetting by
+badness) is admissible; the rest are explicit non-goals recorded here so they are
+not re-proposed.
+
+- [ ] **Forward/inverse SyncTeX search (no typesetting).**
+  `textDocument/forwardSearch` (a custom LSP method) locates a configured PDF and
+  drives an external viewer; inverse search receives a viewer position over IPC
+  and answers with `window/showDocument`. Badness never typesets—it only maps
+  source↔PDF positions via SyncTeX and shells the viewer. texlab:
+  `crates/commands/fwd_search` + the `ipc` crate.
+- **Non-goals (do not re-propose):** build/latexmk orchestration
+  (`textDocument/build`), clean-aux/artifacts, `chktex` passthrough (the native
+  linter supersedes it), citeproc/CSL bibliography rendering (badness shows a
+  lightweight entry summary; full CSL is out of scope), and the kpsewhich/distro
+  package DB (same texmf/CTAN boundary as CWL ingest and the include graph). These
+  sit inside the AGENTS.md "We never typeset" non-goal.
+
 ## BibTeX/BibLaTeX
 
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
   single-file-sound, same caveat as `unused-string`).
+- [ ] `unused-entry`: a `.bib` entry never targeted by any `\cite`-family
+  command, project-aware behind the same closed+rooted namespace gate as
+  `unreferenced-label`/`undefined-ref` (the bib linter has `unused-string` but no
+  `unused-entry`). Report-only. texlab: `UnusedEntry`.
 - [x] Bib-aware LSP completion: `@string` macro names in value position, field
   names per entry type (type-scoped, hiding fields already present), and entry
   types after `@` (`src/bib/completion.rs`); plus `\cite` key completion on the

@@ -163,7 +163,7 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   signature help, selection ranges, or code lens—so those are not texlab gaps.
 - **Badness trails (tracked below):** completion breadth (`### Completion`),
   macro/include navigation and matching-pair highlight (`### Navigation &
-  structure`), label preview + inlay hints and macro references/rename
+  structure`), label preview and macro references/rename
   (`### Labels & references`), package hover, and the change-environment refactor
   (`### Code actions`).
 - **Deliberately not matched:** the typeset-adjacent features under
@@ -242,12 +242,11 @@ comparison is asymmetric, and the framing matters when triaging the items below.
 
 ### Labels & references
 
-- [ ] **Label hover + inlay hints.** Hover a `\label`/`\ref` to render a preview
-  (kind + nearest heading/caption); inlay-hint the same after label definitions
-  and references (advertise `inlayHintProvider`). *Caveat:* the resolved *number*
+- [ ] **Label hover.** Hover a `\label`/`\ref` to render a preview
+  (kind + nearest heading/caption); *Caveat:* the resolved *number*
   needs `.aux` reading or counter tracking (which badness does not do), so a first
   cut shows kind + context without the number—texlab reads `.aux`
-  (`crates/hover/label.rs`, `crates/inlay-hints/label.rs`).
+  (`crates/hover/label.rs`).
 - [ ] **References + rename for user macros and environment names.** Extend
   references/rename (label/citation keys only today) to command names (cross-file,
   via the signature-DB provenance in `semantic::define`) and to environment-name

@@ -28,6 +28,7 @@ path = "src/main.rs"
 annotate-snippets = "0.12.16"
 clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"
+dirs = "6.0.0"
 ignore = "0.4.26"
 log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.8"

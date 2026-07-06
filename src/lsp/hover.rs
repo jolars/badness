@@ -24,9 +24,13 @@
 use std::fmt::Write as _;
 
 use super::*;
+use crate::ast::{command_name, nth_group, nth_group_inner};
 use crate::bib::ast as bib_ast;
 use crate::bib::syntax::{SyntaxKind as BibSyntaxKind, SyntaxNode as BibSyntaxNode};
-use crate::semantic::signature::{ArgKind, CommandSig, EnvironmentSig, OutlineKind, builtin, cwl};
+use crate::lsp::document_link::comma_spans;
+use crate::semantic::signature::{
+    ArgKind, CommandSig, EnvironmentSig, OutlineKind, PackageMeta, builtin, cwl, package_metadata,
+};
 use crate::syntax::{SyntaxKind, SyntaxToken};
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
@@ -95,6 +99,12 @@ fn build_hover(
                 render_environment(&target.name, sig, user)
             }
         };
+        return Some(markup_hover(value, target.range, idx, text));
+    }
+
+    if let Some(target) = package_target_at(root, offset) {
+        let meta = package_metadata(&target.name)?;
+        let value = render_package(&target.name, target.is_class, meta);
         return Some(markup_hover(value, target.range, idx, text));
     }
 
@@ -243,6 +253,95 @@ pub(super) fn arg_slot(kind: ArgKind) -> &'static str {
         ArgKind::Brace => "{}",
         ArgKind::Bracket => "[]",
     }
+}
+
+// --- Package / class name (CTAN metadata) -------------------------------------
+
+/// A `\usepackage`/`\documentclass` name the cursor sits on: the stem to look up in
+/// the CTAN metadata DB, its byte range (for the client highlight), and whether it
+/// came from a class loader (for the rendered label).
+struct PackageTarget {
+    name: String,
+    range: TextRange,
+    is_class: bool,
+}
+
+/// Recognized package/class loaders whose brace `{name}` argument gets a CTAN
+/// metadata hover. Mirrors `document_link::classify`'s `usepackage`/`documentclass`
+/// arms and `completion::package_arg`.
+fn package_loader_is_class(name: &str) -> Option<bool> {
+    match name {
+        "usepackage" | "RequirePackage" => Some(false),
+        "documentclass" | "LoadClass" | "LoadClassWithOptions" => Some(true),
+        _ => None,
+    }
+}
+
+/// The package/class name token the cursor sits on, if any: a name inside the first
+/// brace `{…}` argument of a `\usepackage`/`\documentclass`-family command, resolved
+/// to the single comma-separated segment covering the offset (so `\usepackage{a,b|}`
+/// hovers `b`). Reuses `document_link::comma_spans` for the per-name spans.
+fn package_target_at(root: &SyntaxNode, offset: usize) -> Option<PackageTarget> {
+    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
+    let (left, right) = match root.token_at_offset(at) {
+        rowan::TokenAtOffset::None => return None,
+        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
+        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
+    };
+
+    for token in [left, right].into_iter().flatten() {
+        let Some(group) = token
+            .parent_ancestors()
+            .find(|n| n.kind() == SyntaxKind::GROUP)
+        else {
+            continue;
+        };
+        let Some(command) = group.parent() else {
+            continue;
+        };
+        if command.kind() != SyntaxKind::COMMAND {
+            continue;
+        }
+        let Some(name) = command_name(&command) else {
+            continue;
+        };
+        let Some(is_class) = package_loader_is_class(&name) else {
+            continue;
+        };
+        // Only the first brace group is the `{name}` list (a `[options]` bracket
+        // group is not a `GROUP` child, so group 0 is always the names).
+        if nth_group(&command, 0).as_ref() != Some(&group) {
+            continue;
+        }
+        let Some((inner_range, inner)) = nth_group_inner(&command, 0) else {
+            continue;
+        };
+        if let Some((seg, range)) = comma_spans(&inner, inner_range)
+            .into_iter()
+            .find(|(_, r)| r.contains_inclusive(at))
+        {
+            return Some(PackageTarget {
+                name: seg.to_string(),
+                range,
+                is_class,
+            });
+        }
+    }
+    None
+}
+
+/// Render a CTAN metadata hover: a bold `name` with a package/class tag, the one-line
+/// description when known, and a CTAN link when a catalogue id is known.
+fn render_package(name: &str, is_class: bool, meta: &PackageMeta) -> String {
+    let tag = if is_class { "class" } else { "package" };
+    let mut out = format!("**`{name}`** — {tag}");
+    if let Some(desc) = meta.desc.as_deref() {
+        let _ = write!(out, "\n\n{desc}");
+    }
+    if let Some(url) = meta.ctan_url() {
+        let _ = write!(out, "\n\n[CTAN]({url})");
+    }
+    out
 }
 
 /// A human summary of an argument list: e.g. `2 required, 1 optional`. Empty when the
@@ -504,5 +603,40 @@ mod tests {
     #[test]
     fn no_hover_on_plain_prose() {
         assert!(hover_md("Just some words here.\n", "words").is_none());
+    }
+
+    #[test]
+    fn package_name_hover_shows_ctan_metadata() {
+        let md = hover_md("\\usepackage{amsmath}\n", "amsmath").expect("hover for amsmath");
+        assert!(md.contains("package"), "kind: {md}");
+        assert!(md.contains("AMS mathematical facilities"), "desc: {md}");
+        assert!(
+            md.contains("https://ctan.org/pkg/latex-amsmath"),
+            "ctan link: {md}"
+        );
+    }
+
+    #[test]
+    fn documentclass_name_hover_marks_class() {
+        let md = hover_md("\\documentclass{article}\n", "article").expect("hover for article");
+        assert!(md.contains("class"), "kind: {md}");
+        assert!(md.contains("https://ctan.org/pkg/"), "ctan link: {md}");
+    }
+
+    #[test]
+    fn package_hover_picks_the_comma_segment_under_cursor() {
+        // The needle resolves to the second name; its hover must be booktabs', not amsmath's.
+        let md =
+            hover_md("\\usepackage{amsmath, booktabs}\n", "booktabs").expect("hover for booktabs");
+        assert!(md.contains("Publication quality tables"), "desc: {md}");
+    }
+
+    #[test]
+    fn no_package_hover_on_the_command_word() {
+        // Hovering the `\usepackage` control word is a signature/none case, not the
+        // CTAN metadata hover (which only fires on the argument name).
+        let md = hover_md("\\usepackage{amsmath}\n", "usepackage");
+        let is_ctan = md.as_deref().is_some_and(|m| m.contains("ctan.org"));
+        assert!(!is_ctan, "command word should not show CTAN hover: {md:?}");
     }
 }

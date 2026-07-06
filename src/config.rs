@@ -65,6 +65,8 @@ pub struct Config {
     pub format: FormatConfig,
     #[serde(default)]
     pub lint: LintConfig,
+    #[serde(default)]
+    pub texmf: TexmfConfig,
 }
 
 impl Config {
@@ -168,6 +170,41 @@ fn default_line_width() -> u32 {
 
 fn default_indent_width() -> u32 {
     DEFAULT_INDENT_WIDTH
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The `[texmf]` section: how the language server discovers the installed TeX tree
+/// for *LSP-only* package resolution (document links, hover, go-to-definition, and
+/// installed-set completion). This never feeds the formatter — `badness format` stays
+/// hermetic regardless of what is installed (see `AGENTS.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct TexmfConfig {
+    /// Whether to scan the TEXMF tree at all. When `false`, package resolution stays
+    /// local-only (today's behavior).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Extra TEXMF root directories to index in addition to (and ahead of) the
+    /// discovered ones. Useful for a non-standard install `kpsewhich` can't see.
+    #[serde(default)]
+    pub roots: Vec<PathBuf>,
+    /// Whether to shell out to `kpsewhich -var-value=…` to discover the tree roots.
+    /// When `false`, discovery falls back to default-path heuristics only.
+    #[serde(default = "default_true")]
+    pub use_kpsewhich: bool,
+}
+
+impl Default for TexmfConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            roots: Vec::new(),
+            use_kpsewhich: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -394,6 +431,24 @@ mod tests {
     fn wrap_defaults_to_none() {
         let config = parse("[format]\n").expect("parse");
         assert_eq!(config.format.wrap, None);
+    }
+
+    #[test]
+    fn texmf_defaults_to_enabled_with_kpsewhich() {
+        let config = parse("").expect("parse");
+        assert!(config.texmf.enabled);
+        assert!(config.texmf.use_kpsewhich);
+        assert!(config.texmf.roots.is_empty());
+    }
+
+    #[test]
+    fn parses_texmf_section() {
+        let config =
+            parse("[texmf]\nenabled = false\nuse-kpsewhich = false\nroots = [\"/opt/texmf\"]\n")
+                .expect("parse");
+        assert!(!config.texmf.enabled);
+        assert!(!config.texmf.use_kpsewhich);
+        assert_eq!(config.texmf.roots, vec![PathBuf::from("/opt/texmf")]);
     }
 
     #[test]

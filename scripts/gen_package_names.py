@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Generate ``data/package_names.txt`` and ``data/class_names.txt`` from the
-TeX Live package database (``texlive.tlpdb``).
+"""Generate ``data/package_names.txt``, ``data/class_names.txt``, and
+``data/package_metadata.json`` from the TeX Live package database
+(``texlive.tlpdb``).
 
 ``\\usepackage{X}`` / ``\\documentclass{X}`` take a ``.sty`` / ``.cls`` **file
 stem**, not a CTAN package identity (``\\documentclass{scrartcl}`` comes from the
@@ -18,6 +19,12 @@ Coverage is *all* stems (the long tail is prefix-filtered at completion time), b
 package loads for you) goes to the *secondary* block after a ``---`` separator line.
 The Rust side preserves file order as completion rank, so primary names sort first.
 
+``data/package_metadata.json`` carries, per *stem*, the owning package's one-line
+``shortdesc`` and its CTAN ``catalogue`` id (for a ``https://ctan.org/pkg/<id>`` URL).
+This is the shipped, static CTAN metadata tier consumed by package hover and
+completion detail -- descriptions the TEXMF file scan cannot cheaply derive. Same
+mechanical-facts-only posture as the name lists.
+
 The tlpdb is fetched from the **frozen historic ``tlnet-final`` snapshot** of a
 pinned TeX Live release (immutable), so regeneration is reproducible and needs no
 local TeX install. The pinned year is echoed into each file's header comment.
@@ -33,6 +40,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import lzma
 import sys
 import urllib.request
@@ -41,6 +49,7 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 PACKAGE_FILE = DATA_DIR / "package_names.txt"
 CLASS_FILE = DATA_DIR / "class_names.txt"
+METADATA_FILE = DATA_DIR / "package_metadata.json"
 
 # Pinned source: the frozen historic tlnet-final tlpdb for this TeX Live release.
 # Bump deliberately (then `--write`); the year is echoed into the file headers.
@@ -84,13 +93,19 @@ COMMON_CLASSES = frozenset(
 # --- tlpdb parsing ------------------------------------------------------------
 
 
-def parse_tlpdb(text: str) -> tuple[dict[str, str], dict[str, str]]:
-    """Parse ``texlive.tlpdb`` text into ``(packages, classes)`` maps of
-    ``stem -> owning-package-name``. Each blank-line-separated block starts with a
-    ``name <pkg>`` line; ``runfiles`` lists follow a ``runfiles size=…`` line as
-    space-indented paths. We collect the ``.sty`` / ``.cls`` basenames."""
+def parse_tlpdb(
+    text: str,
+) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, str]]]:
+    """Parse ``texlive.tlpdb`` text into ``(packages, classes, meta)``. ``packages``
+    and ``classes`` map ``stem -> owning-package-name``. ``meta`` maps
+    ``package-name -> {"shortdesc": ..., "catalogue": ...}`` (either key omitted when
+    absent). Each blank-line-separated block starts with a ``name <pkg>`` line;
+    ``runfiles`` lists follow a ``runfiles size=…`` line as space-indented paths, from
+    which we collect the ``.sty`` / ``.cls`` basenames. ``shortdesc`` and
+    ``catalogue`` are top-level ``key value`` lines."""
     packages: dict[str, str] = {}
     classes: dict[str, str] = {}
+    meta: dict[str, dict[str, str]] = {}
     pkg = None
     in_runfiles = False
 
@@ -118,8 +133,13 @@ def parse_tlpdb(text: str) -> tuple[dict[str, str], dict[str, str]]:
             in_runfiles = True
         else:
             in_runfiles = False
+            if pkg is not None and value.strip():
+                if key == "shortdesc":
+                    meta.setdefault(pkg, {})["shortdesc"] = value.strip()
+                elif key == "catalogue":
+                    meta.setdefault(pkg, {})["catalogue"] = value.strip()
 
-    return packages, classes
+    return packages, classes, meta
 
 
 def rank(stems: dict[str, str], common: frozenset[str]) -> tuple[list[str], list[str]]:
@@ -144,6 +164,40 @@ def render(kind: str, primary: list[str], secondary: list[str]) -> str:
     )
     body = "\n".join(primary) + f"\n{SEP}\n" + "\n".join(secondary) + "\n"
     return header + body
+
+
+def render_metadata(
+    packages: dict[str, str],
+    classes: dict[str, str],
+    meta: dict[str, dict[str, str]],
+) -> str:
+    """Render ``data/package_metadata.json``: a ``stem -> {desc, ctan}`` map for every
+    ``.sty``/``.cls`` stem whose owning package carries a ``shortdesc`` and/or CTAN
+    ``catalogue`` id. ``desc`` is the one-line description (omitted when absent);
+    ``ctan`` is the CTAN catalogue id (the Rust side builds ``ctan.org/pkg/<id>``),
+    defaulting to the package name. A stem with neither is skipped. Packages win over
+    classes on a shared stem (they resolve to the same CTAN package anyway)."""
+    entries: dict[str, dict[str, str]] = {}
+    # Classes first so packages overwrite on a shared stem.
+    for stem, pkg in list(classes.items()) + list(packages.items()):
+        info = meta.get(pkg, {})
+        desc = info.get("shortdesc")
+        ctan = info.get("catalogue") or pkg
+        if not desc and not info.get("catalogue"):
+            # No description and no real CTAN entry: nothing worth showing.
+            continue
+        entry: dict[str, str] = {"ctan": ctan}
+        if desc:
+            entry["desc"] = desc
+        entries[stem] = entry
+
+    note = (
+        f"GENERATED by scripts/gen_package_names.py from TeX Live {TL_YEAR} "
+        f"(tlnet-final texlive.tlpdb) -- do not edit by hand. "
+        f"Run `task pkg-names:sync` to regenerate."
+    )
+    doc = {"note": note, "entries": entries}
+    return json.dumps(doc, indent=1, sort_keys=True) + "\n"
 
 
 # --- source fetching ----------------------------------------------------------
@@ -175,6 +229,8 @@ def _selftest() -> int:
     sample = (
         "name amsmath\n"
         "category Package\n"
+        "shortdesc AMS mathematical facilities\n"
+        "catalogue amsmath\n"
         "runfiles size=42\n"
         " texmf-dist/tex/latex/amsmath/amsmath.sty\n"
         " texmf-dist/tex/latex/amsmath/amstext.sty\n"
@@ -182,6 +238,7 @@ def _selftest() -> int:
         "catalogue-ctan /macros/latex/required/amsmath\n"
         "\n"
         "name koma-script\n"
+        "shortdesc A bundle of versatile classes and packages\n"
         "runfiles size=9\n"
         " RELOC/tex/latex/koma-script/scrartcl.cls\n"
         " RELOC/tex/latex/koma-script/scrbook.cls\n"
@@ -190,12 +247,14 @@ def _selftest() -> int:
         "runfiles size=1\n"
         " texmf-dist/tex/latex/pgf/frontendlayer/tikz.sty\n"
     )
-    pkgs, classes = parse_tlpdb(sample)
+    pkgs, classes, meta = parse_tlpdb(sample)
     eq(pkgs.get("amsmath"), "amsmath", "amsmath stem")
     eq(pkgs.get("amstext"), "amsmath", "amstext owned by amsmath")
     eq(pkgs.get("tikz"), "pgf", "tikz owned by pgf")
     eq("amsmath" in classes, False, "no class from sty")
     eq(classes.get("scrartcl"), "koma-script", "scrartcl class stem")
+    eq(meta.get("amsmath", {}).get("shortdesc"), "AMS mathematical facilities", "shortdesc")
+    eq(meta.get("amsmath", {}).get("catalogue"), "amsmath", "catalogue id")
 
     primary, secondary = rank(pkgs, COMMON_PACKAGES)
     eq("amsmath" in primary, True, "namesake amsmath primary")
@@ -208,6 +267,15 @@ def _selftest() -> int:
     out = render("Package", primary, secondary)
     eq(out.count(f"\n{SEP}\n"), 1, "one separator")
     eq(out.startswith("# GENERATED"), True, "header present")
+
+    meta_json = render_metadata(pkgs, classes, meta)
+    parsed = json.loads(meta_json)
+    eq(parsed["entries"]["amsmath"]["desc"], "AMS mathematical facilities", "meta desc")
+    eq(parsed["entries"]["amsmath"]["ctan"], "amsmath", "meta ctan id")
+    # `tikz` stem is owned by `pgf`, which has no shortdesc/catalogue -> skipped.
+    eq("tikz" in parsed["entries"], False, "no meta without desc/catalogue")
+    # A class stem inherits its package's shortdesc; ctan falls back to the pkg name.
+    eq(parsed["entries"]["scrartcl"]["ctan"], "koma-script", "class ctan fallback")
     print("selftest: ok")
     return 0
 
@@ -243,7 +311,7 @@ def main() -> int:
         return _selftest()
 
     text = fetch_tlpdb(args.source)
-    pkgs, classes = parse_tlpdb(text)
+    pkgs, classes, meta = parse_tlpdb(text)
     if not pkgs or not classes:
         sys.exit("error: parsed no package/class stems -- is this a full tlpdb?")
 
@@ -255,6 +323,9 @@ def main() -> int:
     )
     rc |= _write_or_check(
         CLASS_FILE, render("Class", c_primary, c_secondary), args.write, "class"
+    )
+    rc |= _write_or_check(
+        METADATA_FILE, render_metadata(pkgs, classes, meta), args.write, "metadata"
     )
     return rc
 

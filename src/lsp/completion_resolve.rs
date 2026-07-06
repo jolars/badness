@@ -237,6 +237,12 @@ mod tests {
         let idx = LineIndex::new(src);
         let (line, character) = idx.utf16_position(src, offset);
         let uri: Uri = format!("file://{}", path.display()).parse().expect("uri");
+        // These tests never complete a package name, so the index is never resolved;
+        // a disabled config keeps that guaranteed (and hermetic).
+        let texmf = crate::config::TexmfConfig {
+            enabled: false,
+            ..Default::default()
+        };
         super::compute_completion(
             &snapshot,
             &uri,
@@ -244,6 +250,7 @@ mod tests {
             src,
             Position { line, character },
             members,
+            &texmf,
         )
     }
 

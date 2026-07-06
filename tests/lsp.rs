@@ -904,6 +904,14 @@ fn lsp_document_links() {
     std::fs::write(dir.path().join("mypkg.sty"), "").unwrap();
     std::fs::write(dir.path().join("refs.bib"), "").unwrap();
     std::fs::write(dir.path().join("fig.png"), "").unwrap();
+    // Disable the installed-tree (TEXMF) fallback so this test stays hermetic: it
+    // asserts the *local-only* contract, and a machine with TeX installed would
+    // otherwise resolve the system `amsmath` and add a fifth link.
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[texmf]\nenabled = false\n",
+    )
+    .unwrap();
     let main_path = dir.path().join("main.tex");
     // `\usepackage{amsmath}` has no local file, so it must NOT be linked.
     let main = "\\input{part}\n\
@@ -1481,6 +1489,14 @@ fn lsp_completion_package_names() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("mylocal.sty"), "x").unwrap();
     std::fs::write(dir.path().join("amsmath.sty"), "x").unwrap();
+    // Disable the installed-tree tier so the test is hermetic (a machine with TeX
+    // would otherwise fold thousands of installed stems into the results). The
+    // local + baked contract under test is unaffected.
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[texmf]\nenabled = false\n",
+    )
+    .unwrap();
 
     let uri = path_to_file_uri(&dir.path().join("main.tex"));
     let (client, server_thread) = start_server(None);

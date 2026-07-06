@@ -228,6 +228,37 @@ mod tests {
     }
 
     #[test]
+    fn formatter_scope_never_reaches_the_texmf_tree() {
+        // Hermeticism guard: the formatter's signature scope must stay local-only.
+        // Even with a system package installed in a TEXMF tree *and* indexable, the
+        // disk scope that feeds `badness format` must not pull its definitions in —
+        // otherwise formatting output would depend on what's installed, breaking the
+        // deterministic-formatting tenet. (The TEXMF index is LSP-only by design and
+        // is deliberately never wired into this path.)
+        let proj = tempfile::tempdir().unwrap();
+        let main = proj.path().join("main.tex");
+        std::fs::write(&main, "\\usepackage{amsmath}\n").unwrap();
+
+        // A separate installed tree whose amsmath.sty defines `\texmfonly`.
+        let tree = tempfile::tempdir().unwrap();
+        let installed = tree.path().join("tex/latex/amsmath/amsmath.sty");
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, "\\newcommand{\\texmfonly}{x}\n").unwrap();
+        // The index *can* resolve it (the tree is real and discoverable)…
+        let index =
+            crate::project::texmf::TexmfIndex::build_from_roots(&[tree.path().to_path_buf()]);
+        assert!(index.resolve("amsmath", &["sty"]).is_some());
+
+        // …yet the formatter's local-only scope sees nothing from it.
+        let root = SyntaxNode::new_root(parse("\\usepackage{amsmath}\n").green);
+        let db = disk_scope_signatures(&root, &main);
+        assert!(
+            db.command("texmfonly").is_none(),
+            "the formatter must not read signatures from the TEXMF tree"
+        );
+    }
+
+    #[test]
     fn load_cycle_terminates() {
         // a requires b, b requires a — the visited set breaks the cycle.
         let db = scope(

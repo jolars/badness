@@ -37,6 +37,7 @@ use rowan::{TextRange, TextSize};
 use crate::ast::{command_name, nth_group_inner, nth_group_text};
 use crate::completion::FileArgKind;
 use crate::project::package::dtx_source_of;
+use crate::project::texmf::TexmfIndex;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 /// A resolved, on-disk-existing link target paired with the source span that
@@ -54,7 +55,16 @@ pub(crate) struct LinkTarget {
 /// Collect the document links in `root`. `base_dir` is the directory of the file
 /// being scanned; relative targets resolve against it, and existence is checked
 /// there. Walks all descendants (a `\input` is valid anywhere in the tree).
-pub(crate) fn document_links(root: &SyntaxNode, base_dir: Option<&Path>) -> Vec<LinkTarget> {
+///
+/// `texmf` is the installed-tree index: a package/class name that resolves nowhere
+/// under `base_dir` (a system `\usepackage{amsmath}`) falls back to its installed
+/// source, so such loads become clickable too. Pass an empty [`TexmfIndex`] to keep
+/// resolution local-only (the pre-index behavior).
+pub(crate) fn document_links(
+    root: &SyntaxNode,
+    base_dir: Option<&Path>,
+    texmf: &TexmfIndex,
+) -> Vec<LinkTarget> {
     let mut links = Vec::new();
     for command in root
         .descendants()
@@ -66,7 +76,7 @@ pub(crate) fn document_links(root: &SyntaxNode, base_dir: Option<&Path>) -> Vec<
         let Some(class) = classify(&name) else {
             continue;
         };
-        collect_command(&command, class, base_dir, &mut links);
+        collect_command(&command, class, base_dir, texmf, &mut links);
     }
     links
 }
@@ -132,6 +142,7 @@ fn collect_command(
     command: &SyntaxNode,
     class: LinkClass,
     base_dir: Option<&Path>,
+    texmf: &TexmfIndex,
     out: &mut Vec<LinkTarget>,
 ) {
     match class {
@@ -143,7 +154,7 @@ fn collect_command(
             if name.is_empty() {
                 return;
             }
-            if let Some(target) = resolve_existing(name, &[ext], dtx, base_dir) {
+            if let Some(target) = resolve_existing(name, &[ext], dtx, base_dir, texmf) {
                 out.push(LinkTarget { range, target });
             }
         }
@@ -152,7 +163,7 @@ fn collect_command(
                 return;
             };
             for (name, range) in comma_spans(&inner, inner_range) {
-                if let Some(target) = resolve_existing(name, &[ext], dtx, base_dir) {
+                if let Some(target) = resolve_existing(name, &[ext], dtx, base_dir, texmf) {
                     out.push(LinkTarget { range, target });
                 }
             }
@@ -170,7 +181,7 @@ fn collect_command(
             }
             let joined = PathBuf::from(dir.trim()).join(file);
             let raw = joined.to_string_lossy();
-            if let Some(target) = resolve_existing(&raw, &["tex"], false, base_dir) {
+            if let Some(target) = resolve_existing(&raw, &["tex"], false, base_dir, texmf) {
                 out.push(LinkTarget { range, target });
             }
         }
@@ -183,7 +194,7 @@ fn collect_command(
                 return;
             }
             let exts = FileArgKind::Graphics.extensions();
-            if let Some(target) = resolve_existing(name, exts, false, base_dir) {
+            if let Some(target) = resolve_existing(name, exts, false, base_dir, texmf) {
                 out.push(LinkTarget { range, target });
             }
         }
@@ -197,11 +208,17 @@ fn collect_command(
 /// the deterministic kinds pass a single default). `dtx` adds a trailing `.dtx`
 /// literate-source candidate for `.sty`/`.cls` targets. Each candidate is joined
 /// onto `base_dir` when relative before the existence check.
+///
+/// When nothing exists under `base_dir`, a bare name (no directory) is looked up in
+/// the installed-tree `texmf` index — this is what makes a system `\usepackage{amsmath}`
+/// resolve to its installed source. An empty index skips this fallback, leaving the
+/// pre-index local-only behavior intact.
 fn resolve_existing(
     raw: &str,
     exts: &[&str],
     dtx: bool,
     base_dir: Option<&Path>,
+    texmf: &TexmfIndex,
 ) -> Option<PathBuf> {
     let raw = PathBuf::from(raw);
     let mut candidates: Vec<PathBuf> = if raw.extension().is_some() {
@@ -214,20 +231,47 @@ fn resolve_existing(
         let dtx_of: Vec<PathBuf> = candidates.iter().filter_map(|c| dtx_source_of(c)).collect();
         candidates.extend(dtx_of);
     }
-    candidates.into_iter().find_map(|candidate| {
+    let local = candidates.into_iter().find_map(|candidate| {
         let resolved = match base_dir {
             Some(dir) if candidate.is_relative() => dir.join(candidate),
             _ => candidate,
         };
         resolved.is_file().then_some(resolved)
-    })
+    });
+    local.or_else(|| resolve_in_texmf(&raw, exts, dtx, texmf))
+}
+
+/// Resolve a bare package/class/include *name* against the installed TEXMF index.
+/// Only a name with no directory component qualifies (a system package is referenced
+/// by name, never a relative path); an explicit extension pins the lookup, otherwise
+/// `exts` (plus a trailing `dtx` when `dtx`) are tried in order.
+fn resolve_in_texmf(raw: &Path, exts: &[&str], dtx: bool, texmf: &TexmfIndex) -> Option<PathBuf> {
+    if texmf.is_empty() {
+        return None;
+    }
+    // Reject anything carrying a directory: only bare names live in the tree by name.
+    if raw.parent().is_some_and(|p| !p.as_os_str().is_empty()) {
+        return None;
+    }
+    let stem = raw.file_stem()?.to_str()?;
+    let mut try_exts: Vec<&str> = match raw.extension().and_then(|e| e.to_str()) {
+        Some(ext) => vec![ext],
+        None => exts.to_vec(),
+    };
+    if dtx {
+        try_exts.push("dtx");
+    }
+    texmf.resolve(stem, &try_exts).map(Path::to_path_buf)
 }
 
 /// Split a group's inner text into comma-separated names paired with their precise
 /// source ranges, dropping empties. The document-link analog of the semantic
 /// builder's `key_spans`: each name's range is sliced off `inner_range` by byte
 /// offset (exact because trimming removes only single-byte ASCII whitespace).
-fn comma_spans(inner: &str, inner_range: TextRange) -> Vec<(&str, TextRange)> {
+///
+/// Shared with [`super::hover`]'s package-name hover (`pub(super)`), which picks the
+/// single segment covering the cursor.
+pub(super) fn comma_spans(inner: &str, inner_range: TextRange) -> Vec<(&str, TextRange)> {
     let base = inner_range.start();
     let mut out = Vec::new();
     let mut seg_off = 0usize;
@@ -249,10 +293,15 @@ mod tests {
     use super::*;
     use crate::parser::parse;
 
-    /// Parse `src` and collect links resolved against `base_dir`.
+    /// Parse `src` and collect links resolved against `base_dir` (no TEXMF tier).
     fn links(src: &str, base_dir: &Path) -> Vec<LinkTarget> {
+        links_with_texmf(src, base_dir, &TexmfIndex::default())
+    }
+
+    /// [`links`] with an explicit installed-tree index for the system-package tier.
+    fn links_with_texmf(src: &str, base_dir: &Path, texmf: &TexmfIndex) -> Vec<LinkTarget> {
         let root = SyntaxNode::new_root(parse(src).green);
-        document_links(&root, Some(base_dir))
+        document_links(&root, Some(base_dir), texmf)
     }
 
     /// The source substring a link underlines.
@@ -348,5 +397,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = "\\input{\\foo}\n";
         assert!(links(src, dir.path()).is_empty());
+    }
+
+    #[test]
+    fn system_package_resolves_through_the_texmf_index() {
+        // No local `amsmath.sty`, but the installed tree has one: the load links to it.
+        let base = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let installed = tree.path().join("tex/latex/amsmath/amsmath.sty");
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, "").unwrap();
+        let texmf = TexmfIndex::build_from_roots(&[tree.path().to_path_buf()]);
+
+        let src = "\\usepackage{amsmath}\n";
+        // Local-only (empty index): no link, as before.
+        assert!(links(src, base.path()).is_empty());
+        // With the index: the system package resolves to its installed source.
+        let got = links_with_texmf(src, base.path(), &texmf);
+        assert_eq!(got.len(), 1);
+        assert_eq!(underlined(src, &got[0]), "amsmath");
+        assert_eq!(got[0].target, installed);
+    }
+
+    #[test]
+    fn local_package_wins_over_the_texmf_index() {
+        // A project-local `mypkg.sty` resolves locally even when the tree also has one;
+        // the `base_dir` hit is returned before the TEXMF fallback is consulted.
+        let base = tempfile::tempdir().unwrap();
+        std::fs::write(base.path().join("mypkg.sty"), "").unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let installed = tree.path().join("tex/latex/mypkg/mypkg.sty");
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, "").unwrap();
+        let texmf = TexmfIndex::build_from_roots(&[tree.path().to_path_buf()]);
+
+        let got = links_with_texmf("\\usepackage{mypkg}\n", base.path(), &texmf);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].target, base.path().join("mypkg.sty"));
     }
 }

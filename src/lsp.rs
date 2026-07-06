@@ -115,7 +115,7 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::config::{Config, LintConfig};
+use crate::config::{Config, LintConfig, TexmfConfig};
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
@@ -125,6 +125,7 @@ use crate::formatter::{
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{parse, parse_with_flavor};
+use crate::project::texmf::TexmfIndex;
 use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
 use crate::syntax::{SyntaxKind, SyntaxNode};
@@ -328,6 +329,12 @@ struct ResolvedSettings {
     /// `[format.no-break-abbreviations]`. Held owned so a worker job can borrow it
     /// when building a [`SentenceOptions`] at format time.
     sentence_no_break: Vec<String>,
+    /// The `[texmf]` settings governing installed-tree package resolution. Consumed
+    /// only by LSP navigation (links/hover/completion), never the formatter — so it
+    /// cannot affect `badness format` output. Session-stable in practice (the
+    /// [`texmf::global_index`](crate::project::texmf::global_index) it drives is
+    /// first-config-wins).
+    texmf: TexmfConfig,
 }
 
 impl ResolvedSettings {
@@ -351,6 +358,7 @@ impl ResolvedSettings {
                 exclude: ExcludeFilter::none(),
                 sentence_lang,
                 sentence_no_break,
+                texmf: config.texmf.clone(),
             }
         } else {
             Self::from_editor(editor)
@@ -368,6 +376,7 @@ impl ResolvedSettings {
             exclude: ExcludeFilter::none(),
             sentence_lang: SentenceLanguage::default(),
             sentence_no_break: Vec::new(),
+            texmf: TexmfConfig::default(),
         }
     }
 
@@ -511,21 +520,26 @@ enum WorkerJob {
     /// A document-link request: build clickable include/package/bib/graphics links
     /// on the read pool and reply to `id`. Single-file and positional (it bypasses
     /// the range-free project graph); `path` supplies the base directory that
-    /// relative targets resolve and existence-check against.
+    /// relative targets resolve and existence-check against. `texmf` gates the
+    /// installed-tree fallback (a system `\usepackage{amsmath}` → its real source);
+    /// the read pool builds/consults the index so the tree walk stays off the main loop.
     DocumentLink {
         id: RequestId,
         path: PathBuf,
         text: String,
         kind: FileKind,
+        texmf: TexmfConfig,
     },
     /// A completion request: classify the cursor and build candidates on the read
     /// pool and reply to `id`. Carries the `uri` (the salsa-key path is derived from
-    /// it) so file-path completion can read the document's on-disk directory.
+    /// it) so file-path completion can read the document's on-disk directory, and the
+    /// `[texmf]` settings gating the installed-set completion tier.
     Completion {
         id: RequestId,
         uri: Uri,
         text: String,
         position: Position,
+        texmf: TexmfConfig,
     },
     /// A completion-resolve request: attach lazy signature/citation detail to a
     /// highlighted item on the read pool and reply to `id`. The item's `data`
@@ -775,7 +789,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             WorkspaceSymbolRequest::METHOD => {
                                 on_workspace_symbol(&connection, &job_tx, req)
                             }
-                            Completion::METHOD => on_completion(&connection, &state, &job_tx, req),
+                            Completion::METHOD => {
+                                on_completion(&connection, &mut state, &job_tx, req)
+                            }
                             ResolveCompletionItem::METHOD => {
                                 on_completion_resolve(&connection, &job_tx, req)
                             }
@@ -795,7 +811,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_folding_range(&connection, &state, &job_tx, req)
                             }
                             DocumentLinkRequest::METHOD => {
-                                on_document_link(&connection, &state, &job_tx, req)
+                                on_document_link(&connection, &mut state, &job_tx, req)
                             }
                             CodeActionRequest::METHOD => {
                                 on_code_action(&connection, &mut state, &job_tx, req)
@@ -1305,7 +1321,7 @@ fn on_folding_range(
 /// Single-file (with no project snapshot), modeled on [`on_folding_range`].
 fn on_document_link(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -1332,13 +1348,17 @@ fn on_document_link(
         )));
         return;
     };
+    let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
+    // Resolve `[texmf]` for this document (session-stable; the index is first-wins).
+    let texmf = state.resolve_settings(&uri).texmf;
     let _ = job_tx.send(WorkerJob::DocumentLink {
         id,
         path,
-        text: doc.text.clone(),
+        text,
         kind,
+        texmf,
     });
 }
 
@@ -1412,7 +1432,7 @@ fn reply_empty_diagnostic_report(connection: &Connection, id: RequestId) {
 /// `null` when the document is unknown.
 fn on_completion(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -1440,11 +1460,15 @@ fn on_completion(
         )));
         return;
     };
+    let text = doc.text.clone();
+    // Resolve `[texmf]` for the installed-set completion tier (session-stable).
+    let texmf = state.resolve_settings(&uri).texmf;
     let _ = job_tx.send(WorkerJob::Completion {
         id,
         uri,
-        text: doc.text.clone(),
+        text,
         position,
+        texmf,
     });
 }
 
@@ -2139,30 +2163,37 @@ impl Worker {
                 path,
                 text,
                 kind,
+                texmf,
             } => {
                 // Document links run on the read pool against a snapshot, like
                 // folding (single-file, id-bound responses). Resolution is positional
-                // and disk-aware, so no project membership snapshot is needed.
+                // and disk-aware, so no project membership snapshot is needed. The
+                // TEXMF index is built/consulted here (off the main loop).
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
-                self.read_spawner
-                    .spawn(move || run_document_link(&snapshot, id, &path, &text, kind, &out_tx));
+                self.read_spawner.spawn(move || {
+                    run_document_link(&snapshot, id, &path, &text, kind, &texmf, &out_tx)
+                });
             }
             WorkerJob::Completion {
                 id,
                 uri,
                 text,
                 position,
+                texmf,
             } => {
                 // Completion reads run on the read pool against a snapshot, like
                 // formatting/symbols (id-bound responses, not coalesced). Cite-key
                 // completion is cross-file, so — like go-to-def — we snapshot project
-                // membership here on the write side.
+                // membership here on the write side. The TEXMF index (installed-set
+                // tier) is built/consulted on the read pool, off the main loop.
                 let snapshot = self.db.snapshot();
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_completion(&snapshot, id, &uri, &text, position, members, &out_tx)
+                    run_completion(
+                        &snapshot, id, &uri, &text, position, members, &texmf, &out_tx,
+                    )
                 });
             }
             WorkerJob::ResolveCompletion { id, item } => {
@@ -3398,9 +3429,10 @@ fn run_document_link(
     path: &Path,
     text: &str,
     kind: FileKind,
+    texmf: &TexmfConfig,
     out_tx: &Sender<Outbound>,
 ) {
-    let links = compute_document_link(snapshot, path, text, kind);
+    let links = compute_document_link(snapshot, path, text, kind, texmf);
     let result = serde_json::to_value(links).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -3415,22 +3447,31 @@ fn compute_document_link(
     path: &Path,
     text: &str,
     kind: FileKind,
+    texmf: &TexmfConfig,
 ) -> Vec<DocumentLink> {
     if kind == FileKind::Bib {
         return Vec::new();
     }
     let idx = LineIndex::new(text);
     let base_dir = path.parent();
+    // The installed-tree index for the system-package fallback. Built lazily on first
+    // use (this read-pool thread), empty when scanning is disabled — either way the
+    // local `base_dir` resolution runs first and unchanged.
+    let index = crate::project::texmf::global_index(texmf);
     let targets = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let cached = snapshot
             .lookup_file(path)
             .filter(|&file| snapshot.file_text(file) == text);
         match cached {
-            Some(file) => document_link::document_links(&snapshot.parsed_tree(file), base_dir),
-            // Cache miss or stale snapshot: reparse the buffer.
-            None => {
-                document_link::document_links(&SyntaxNode::new_root(parse(text).green), base_dir)
+            Some(file) => {
+                document_link::document_links(&snapshot.parsed_tree(file), base_dir, index)
             }
+            // Cache miss or stale snapshot: reparse the buffer.
+            None => document_link::document_links(
+                &SyntaxNode::new_root(parse(text).green),
+                base_dir,
+                index,
+            ),
         }
     }))
     // A cancelled read yields no links this round; the client re-requests.
@@ -3525,6 +3566,7 @@ fn bib_to_document_symbol(item: &BibOutlineItem, idx: &LineIndex, text: &str) ->
 /// the captured `text` and recompute the signatures/model directly. Best-effort —
 /// like symbols, a parse error does not suppress completion (the tree is
 /// error-tolerant).
+#[allow(clippy::too_many_arguments)]
 fn run_completion(
     snapshot: &Analysis,
     id: RequestId,
@@ -3532,11 +3574,15 @@ fn run_completion(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    texmf: &TexmfConfig,
     out_tx: &Sender<Outbound>,
 ) {
     // The salsa-key path is derived from the URI (the same mapping `on_completion` uses).
     let path = uri_to_path(uri);
-    let items = compute_completion(snapshot, uri, &path, text, position, members);
+    // The `[texmf]` config is threaded down; the installed-tree index is resolved
+    // *only* when the cursor is in a package/class argument (see
+    // `build_completion_items`), so a command/label completion never pays the walk.
+    let items = compute_completion(snapshot, uri, &path, text, position, members, texmf);
     // `is_incomplete`: command/label/key universes are prefix-filtered server-side, so
     // the client re-queries as the typed prefix narrows.
     let result = serde_json::to_value(CompletionResponse::List(CompletionList {
@@ -3576,6 +3622,7 @@ fn compute_completion(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
     let idx = LineIndex::new(text);
     let offset = idx.offset_at(text, position.line, position.character);
@@ -3583,7 +3630,7 @@ fn compute_completion(
     if file_kind_for(path) == FileKind::Bib {
         return compute_bib_completion(text, offset);
     }
-    compute_tex_completion(snapshot, uri, path, text, offset, members)
+    compute_tex_completion(snapshot, uri, path, text, offset, members, texmf)
 }
 
 /// Bib completion: a fresh parse + model (sub-ms, and there is no cached bib tree
@@ -3616,6 +3663,7 @@ fn compute_tex_completion(
     text: &str,
     offset: usize,
     members: Vec<ProjectMember>,
+    texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
     // Classify off the cached tree when current; reparse on stale/miss. A cancelled
     // read also falls back to a reparse (`unwrap_or_else`) — neither touches `members`.
@@ -3637,12 +3685,13 @@ fn compute_tex_completion(
                     snapshot.scope_signatures(members.clone(), file),
                     snapshot.semantic_model(file),
                     uri,
+                    texmf,
                 )),
             };
         }
-        reparse_tex_completion(text, offset, uri, path)
+        reparse_tex_completion(text, offset, uri, path, texmf)
     }))
-    .unwrap_or_else(|_| reparse_tex_completion(text, offset, uri, path));
+    .unwrap_or_else(|_| reparse_tex_completion(text, offset, uri, path, texmf));
 
     match resolved {
         TexCompletion::Items(items) => items,
@@ -3659,7 +3708,13 @@ fn compute_tex_completion(
 
 /// Classify a `.tex` cursor off a fresh parse (the snapshot-free fallback). For a
 /// `\cite` context this still defers resolution to the snapshot, keying off `path`.
-fn reparse_tex_completion(text: &str, offset: usize, uri: &Uri, path: &Path) -> TexCompletion {
+fn reparse_tex_completion(
+    text: &str,
+    offset: usize,
+    uri: &Uri,
+    path: &Path,
+    texmf: &TexmfConfig,
+) -> TexCompletion {
     let root = SyntaxNode::new_root(parse(text).green);
     let ctx = crate::completion::classify_context(&root, offset);
     match ctx {
@@ -3670,7 +3725,7 @@ fn reparse_tex_completion(text: &str, offset: usize, uri: &Uri, path: &Path) -> 
         _ => {
             let sigs = crate::semantic::scan_definitions(&root);
             let model = SemanticModel::build(&root);
-            TexCompletion::Items(build_completion_items(&ctx, &sigs, &model, uri))
+            TexCompletion::Items(build_completion_items(&ctx, &sigs, &model, uri, texmf))
         }
     }
 }
@@ -4659,11 +4714,15 @@ fn build_completion_items(
     sigs: &SignatureDb,
     model: &SemanticModel,
     uri: &Uri,
+    texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
     match ctx {
         CompletionContext::FilePath { prefix, kind } => file_completion_items(uri, prefix, *kind),
         CompletionContext::PackageName { prefix, kind } => {
-            package_completion_items(uri, prefix, *kind, sigs, model)
+            // Resolve the installed-tree index lazily, here, so only a package/class
+            // completion pays for the (first-time) tree walk.
+            let index = crate::project::texmf::global_index(texmf);
+            package_completion_items(uri, prefix, *kind, sigs, model, index)
         }
         CompletionContext::None => Vec::new(),
         _ => {
@@ -4762,30 +4821,35 @@ fn file_completion_items(uri: &Uri, prefix: &str, kind: FileArgKind) -> Vec<Comp
     items
 }
 
-/// Package/class name candidates for `\usepackage`/`\documentclass`: local
-/// `.sty`/`.cls` files in the document directory first (most relevant), then the
-/// baked name list ([`crate::completion::package_names`], in rank order). Local
-/// files are offered as their **stem** (`\usepackage` takes a name, not a
-/// filename), so `amsmath.sty` becomes `amsmath`; a baked name equal to a local
-/// stem is dropped (the local file already covers it). `sortText` is assigned by
-/// final position so the client preserves this ordering instead of re-sorting
-/// alphabetically and losing the rank.
+/// Package/class name candidates for `\usepackage`/`\documentclass`, in three tiers
+/// of decreasing relevance: local `.sty`/`.cls` files in the document directory, then
+/// the **installed set** from the TEXMF index (`texmf`), then the baked name list
+/// ([`crate::completion::package_names`], all of CTAN in rank order). Files/installed
+/// names are offered as their **stem** (`\usepackage` takes a name, not a filename),
+/// so `amsmath.sty` becomes `amsmath`; a name already emitted by an earlier tier is
+/// dropped. Every item is enriched with the CTAN one-line description
+/// ([`package_metadata`](crate::semantic::signature::package_metadata)) as `detail`,
+/// and `sortText` is assigned by final position so the client preserves the tiering
+/// instead of re-sorting alphabetically. An empty `texmf` simply skips the middle
+/// tier (the pre-index behavior).
 fn package_completion_items(
     uri: &Uri,
     prefix: &str,
     kind: FileArgKind,
     sigs: &SignatureDb,
     model: &SemanticModel,
+    texmf: &TexmfIndex,
 ) -> Vec<CompletionItem> {
-    let mut local = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
     let mut items: Vec<CompletionItem> = Vec::new();
+    // Tier 1: local files (offered as stems).
     for file_item in file_completion_items(uri, prefix, kind) {
         // A directory can't be a package/class *name*; only files, as stems.
         if file_item.kind != Some(CompletionItemKind::FILE) {
             continue;
         }
         let stem = file_stem(&file_item.label);
-        if local.insert(stem.clone()) {
+        if seen.insert(stem.clone()) {
             items.push(CompletionItem {
                 label: stem,
                 kind: Some(CompletionItemKind::MODULE),
@@ -4793,18 +4857,41 @@ fn package_completion_items(
             });
         }
     }
+    // Tier 2: the installed set (what the user actually has), prefix-filtered here
+    // (the baked tier filters inside `candidates`).
+    let installed = match kind {
+        FileArgKind::Class => texmf.cls_stems(),
+        _ => texmf.sty_stems(),
+    };
+    for stem in installed.iter().filter(|s| s.starts_with(prefix)) {
+        if seen.insert(stem.clone()) {
+            items.push(CompletionItem {
+                label: stem.clone(),
+                kind: Some(CompletionItemKind::MODULE),
+                ..Default::default()
+            });
+        }
+    }
+    // Tier 3: the baked all-of-CTAN name list.
     let ctx = CompletionContext::PackageName {
         prefix: prefix.to_string(),
         kind,
     };
     let file = uri_to_fs_path(uri);
     for candidate in crate::completion::candidates(&ctx, sigs, model) {
-        if local.contains(&candidate.label) {
+        if seen.contains(&candidate.label) {
             continue;
         }
         items.push(candidate_to_item(candidate, file.as_deref()));
     }
     for (i, item) in items.iter_mut().enumerate() {
+        // Attach the CTAN description as detail (when this stem has metadata and no
+        // tier already set one).
+        if item.detail.is_none()
+            && let Some(meta) = crate::semantic::signature::package_metadata(&item.label)
+        {
+            item.detail = meta.desc.clone();
+        }
         item.sort_text = Some(format!("{i:06}"));
     }
     items
@@ -5437,5 +5524,58 @@ mod tests {
         assert!(u.as_str().contains("%20"), "got {}", u.as_str());
         // …and decodes back to the original filesystem path.
         assert_eq!(uri_to_fs_path(&u), Some(p));
+    }
+
+    #[test]
+    fn package_completion_surfaces_installed_set_and_ctan_detail() {
+        use crate::completion::FileArgKind;
+        use crate::semantic::signature::SignatureDb;
+
+        // A tree with an installed package that is *not* in the baked CTAN list.
+        let tree = tempfile::tempdir().unwrap();
+        let sty = tree.path().join("tex/latex/zzlocalpkg/zzlocalpkg.sty");
+        std::fs::create_dir_all(sty.parent().unwrap()).unwrap();
+        std::fs::write(&sty, "").unwrap();
+        let texmf = TexmfIndex::build_from_roots(&[tree.path().to_path_buf()]);
+
+        let sigs = SignatureDb::default();
+        let root = SyntaxNode::new_root(parse("").green);
+        let model = SemanticModel::build(&root);
+        let doc = uri("file:///proj/main.tex");
+
+        // The installed-set tier surfaces the local install; an empty index does not.
+        let installed =
+            package_completion_items(&doc, "zzlocal", FileArgKind::Package, &sigs, &model, &texmf);
+        assert!(installed.iter().any(|i| i.label == "zzlocalpkg"));
+        assert!(
+            package_completion_items(
+                &doc,
+                "zzlocal",
+                FileArgKind::Package,
+                &sigs,
+                &model,
+                &TexmfIndex::default()
+            )
+            .is_empty()
+        );
+
+        // A baked CTAN name is enriched with its shipped description as `detail`.
+        let baked = package_completion_items(
+            &doc,
+            "amsmath",
+            FileArgKind::Package,
+            &sigs,
+            &model,
+            &TexmfIndex::default(),
+        );
+        let amsmath = baked
+            .iter()
+            .find(|i| i.label == "amsmath")
+            .expect("amsmath from the baked list");
+        assert!(
+            amsmath.detail.as_deref().is_some_and(|d| d.contains("AMS")),
+            "detail: {:?}",
+            amsmath.detail
+        );
     }
 }

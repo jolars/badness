@@ -15,6 +15,7 @@ pub mod graph;
 pub mod include;
 pub mod labels;
 pub mod package;
+pub mod texmf;
 
 pub use citations::{CiteFileFacts, ResolvedCitations, document_cite_names, resolved_citations};
 pub use graph::{
@@ -30,3 +31,4 @@ pub use package::{
     PackageEdge, PackageEdgeKey, PackageKind, PackageTarget, collect_package_edge_keys,
     collect_package_edges, dtx_source_of,
 };
+pub use texmf::{TexmfIndex, global_index};

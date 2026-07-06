@@ -23,11 +23,12 @@ use lsp_types::{
     DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
-    DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams, DocumentRangeFormattingParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent,
-    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
+    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
+    DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent, FoldingRange,
+    FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
     InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
     RegistrationParams, RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
@@ -184,6 +185,16 @@ fn start_server(
             Some(FoldingRangeProviderCapability::Simple(true))
         ),
         "server must advertise foldingRangeProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.document_link_provider,
+            Some(DocumentLinkOptions {
+                resolve_provider: Some(false),
+                ..
+            })
+        ),
+        "server must advertise documentLinkProvider"
     );
     assert!(
         matches!(
@@ -881,6 +892,70 @@ fn lsp_folding_ranges() {
         triples.contains(&(4, 6, None)),
         "itemize fold, got {triples:?}"
     );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_document_links() {
+    // Document links are disk-aware: only targets that exist on disk are linked.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("part.tex"), "").unwrap();
+    std::fs::write(dir.path().join("mypkg.sty"), "").unwrap();
+    std::fs::write(dir.path().join("refs.bib"), "").unwrap();
+    std::fs::write(dir.path().join("fig.png"), "").unwrap();
+    let main_path = dir.path().join("main.tex");
+    // `\usepackage{amsmath}` has no local file, so it must NOT be linked.
+    let main = "\\input{part}\n\
+        \\usepackage{mypkg}\n\
+        \\usepackage{amsmath}\n\
+        \\addbibresource{refs.bib}\n\
+        \\includegraphics{fig}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    send_request(
+        &client,
+        2,
+        "textDocument/documentLink",
+        serde_json::to_value(DocumentLinkParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    // A freshly-seeded project re-lints, so drain any stray diagnostics first.
+    let resp = loop {
+        match recv(&client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(2));
+    let links: Vec<DocumentLink> =
+        serde_json::from_value(resp.result.unwrap()).expect("a documentLink response");
+
+    // Four resolvable targets; the system `amsmath` package is absent, so no link.
+    let targets: Vec<Uri> = links.iter().filter_map(|l| l.target.clone()).collect();
+    assert_eq!(links.len(), 4, "got {targets:?}");
+    assert!(targets.contains(&path_to_file_uri(&dir.path().join("part.tex"))));
+    assert!(targets.contains(&path_to_file_uri(&dir.path().join("mypkg.sty"))));
+    assert!(targets.contains(&path_to_file_uri(&dir.path().join("refs.bib"))));
+    assert!(targets.contains(&path_to_file_uri(&dir.path().join("fig.png"))));
+
+    // The `\input{part}` link underlines just the `part` argument (line 0).
+    let part_link = links
+        .iter()
+        .find(|l| l.target == Some(path_to_file_uri(&dir.path().join("part.tex"))))
+        .unwrap();
+    assert_eq!(part_link.range.start, Position::new(0, 7));
+    assert_eq!(part_link.range.end, Position::new(0, 11));
 
     shutdown(&client, server_thread);
 }

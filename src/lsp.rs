@@ -56,6 +56,7 @@
 
 mod code_action;
 mod completion_resolve;
+mod document_link;
 mod folding;
 mod hover;
 mod task_pool;
@@ -73,9 +74,9 @@ use lsp_types::notification::{
 };
 use lsp_types::request::{
     CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
-    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References, RegisterCapability,
-    Rename, Request as _, ResolveCompletionItem, WorkspaceDiagnosticRefresh,
+    DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition,
+    HoverRequest, OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References,
+    RegisterCapability, Rename, Request as _, ResolveCompletionItem, WorkspaceDiagnosticRefresh,
     WorkspaceSymbolRequest,
 };
 use lsp_types::{
@@ -86,10 +87,11 @@ use lsp_types::{
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
     DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentOnTypeFormattingOptions,
-    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
-    DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileSystemWatcher, FoldingRange,
-    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
+    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
     PublishDiagnosticsParams, Range, ReferenceParams, Registration, RegistrationParams,
@@ -205,6 +207,13 @@ fn server_capabilities() -> ServerCapabilities {
             work_done_progress_options: Default::default(),
         })),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        // Clickable include edges: `\input`/`\include`/`\import`, `\usepackage`/
+        // `\documentclass`, `\bibliography`/`\addbibresource`, `\includegraphics`.
+        // Links are built eagerly (target + range together), so no `resolve` step.
+        document_link_provider: Some(DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: Default::default(),
+        }),
         completion_provider: Some(CompletionOptions {
             // `\` opens command/env names; `{` opens a name/key/path argument;
             // `/` re-triggers path segments. Snippet support is read off the
@@ -499,6 +508,16 @@ enum WorkerJob {
         text: String,
         kind: FileKind,
     },
+    /// A document-link request: build clickable include/package/bib/graphics links
+    /// on the read pool and reply to `id`. Single-file and positional (it bypasses
+    /// the range-free project graph); `path` supplies the base directory that
+    /// relative targets resolve and existence-check against.
+    DocumentLink {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        kind: FileKind,
+    },
     /// A completion request: classify the cursor and build candidates on the read
     /// pool and reply to `id`. Carries the `uri` (the salsa-key path is derived from
     /// it) so file-path completion can read the document's on-disk directory.
@@ -774,6 +793,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             Rename::METHOD => on_rename(&connection, &state, &job_tx, req),
                             FoldingRangeRequest::METHOD => {
                                 on_folding_range(&connection, &state, &job_tx, req)
+                            }
+                            DocumentLinkRequest::METHOD => {
+                                on_document_link(&connection, &state, &job_tx, req)
                             }
                             CodeActionRequest::METHOD => {
                                 on_code_action(&connection, &mut state, &job_tx, req)
@@ -1271,6 +1293,48 @@ fn on_folding_range(
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
     let _ = job_tx.send(WorkerJob::FoldingRange {
+        id,
+        path,
+        text: doc.text.clone(),
+        kind,
+    });
+}
+
+/// `textDocument/documentLink`: dispatch a document-link job to the worker. Replies
+/// `null` for an unknown document; otherwise the read pool resolves the links.
+/// Single-file (with no project snapshot), modeled on [`on_folding_range`].
+fn on_document_link(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<DocumentLinkParams>(DocumentLinkRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid documentLink params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: no links.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    let _ = job_tx.send(WorkerJob::DocumentLink {
         id,
         path,
         text: doc.text.clone(),
@@ -2069,6 +2133,20 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
                     .spawn(move || run_folding(&snapshot, id, &path, &text, kind, &out_tx));
+            }
+            WorkerJob::DocumentLink {
+                id,
+                path,
+                text,
+                kind,
+            } => {
+                // Document links run on the read pool against a snapshot, like
+                // folding (single-file, id-bound responses). Resolution is positional
+                // and disk-aware, so no project membership snapshot is needed.
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || run_document_link(&snapshot, id, &path, &text, kind, &out_tx));
             }
             WorkerJob::Completion {
                 id,
@@ -3310,6 +3388,65 @@ fn compute_folding(
             folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx, text)
         }
     }
+}
+
+/// Compute document links for a [`WorkerJob::DocumentLink`] on the read pool and
+/// reply to `id`. Mirrors [`run_folding`].
+fn run_document_link(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    out_tx: &Sender<Outbound>,
+) {
+    let links = compute_document_link(snapshot, path, text, kind);
+    let result = serde_json::to_value(links).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Compute the clickable links in `text`, preferring the snapshot's cached tree and
+/// falling back to a direct reparse when it is unavailable or stale. `.bib` files
+/// have no include structure (the LaTeX parser does not apply), so they yield none.
+/// Each resolved, on-disk target is mapped to an LSP [`DocumentLink`] via the shared
+/// [`lsp_range`] + [`path_to_uri`]; a target whose path cannot form a URI is dropped.
+fn compute_document_link(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+) -> Vec<DocumentLink> {
+    if kind == FileKind::Bib {
+        return Vec::new();
+    }
+    let idx = LineIndex::new(text);
+    let base_dir = path.parent();
+    let targets = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let cached = snapshot
+            .lookup_file(path)
+            .filter(|&file| snapshot.file_text(file) == text);
+        match cached {
+            Some(file) => document_link::document_links(&snapshot.parsed_tree(file), base_dir),
+            // Cache miss or stale snapshot: reparse the buffer.
+            None => {
+                document_link::document_links(&SyntaxNode::new_root(parse(text).green), base_dir)
+            }
+        }
+    }))
+    // A cancelled read yields no links this round; the client re-requests.
+    .unwrap_or_default();
+
+    targets
+        .into_iter()
+        .filter_map(|target| {
+            Some(DocumentLink {
+                range: lsp_range(&idx, text, target.range),
+                target: Some(path_to_uri(&target.target)?),
+                tooltip: None,
+                data: None,
+            })
+        })
+        .collect()
 }
 
 /// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte

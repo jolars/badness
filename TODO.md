@@ -218,13 +218,21 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   the CST's node hierarchy (group → argument → command → environment). Subsumes
   texlab's `findEnvironments` command: the enclosing-environment stack falls out
   of the CST-hierarchy expansion.
-- [ ] **Document links (`textDocument/documentLink`).** Clickable include edges:
-  `\input`/`\include`/`\subfile`/`\import`, `\usepackage`/`\documentclass`
-  (→ resolved `.sty`/`.cls`/`.dtx` via `project::package`), `\bibliography`/
-  `\addbibresource`, and `\includegraphics`. Reuse the include graph
-  (`project/include.rs`, `graph.rs`) + package resolver; advertise
-  `documentLinkProvider`. Mostly wiring—resolution already exists. texlab covers
-  the include edges only (`crates/links`).
+- [x] **Document links (`textDocument/documentLink`).** Clickable include edges:
+  `\input`/`\include`/`\subfile`/`\import`/`\subimport`,
+  `\usepackage`/`\RequirePackage`/`\documentclass`/`\LoadClass` (→ resolved
+  `.sty`/`.cls`/`.dtx`), `\bibliography`/`\addbibresource`, and
+  `\includegraphics` (extension guessed against the graphics image types). A
+  self-contained single-file, positional walk (`src/lsp/document_link.rs`)
+  bypasses the range-free project graph: it takes each command's precise
+  argument span via `ast::nth_group_inner` (per comma-separated name) and is
+  **disk-aware**—a link is emitted only when the resolved target exists on disk
+  (first existing candidate wins for the graphics guess; a `.dtx` fallback
+  covers literate `.sty`/`.cls` sources). The local-only package resolver has no
+  kpsewhich/TEXMF search, so a system `\usepackage{amsmath}` (no local file)
+  correctly yields no link while a project-local `mypkg.sty` does.
+  `\graphicspath` is unsupported (graphics resolve against `base_dir` only).
+  texlab covers the include edges only (`crates/links`).
 - [ ] **Go-to-definition for includes and user macros.** Extend `CursorTarget`
   (`src/lsp.rs`, today Label/Citation only): an include argument jumps to the
   target file (reuse include resolution); a user command `\mycmd` jumps to its

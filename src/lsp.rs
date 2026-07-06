@@ -4890,7 +4890,7 @@ fn package_completion_items(
         if item.detail.is_none()
             && let Some(meta) = crate::semantic::signature::package_metadata(&item.label)
         {
-            item.detail = meta.desc.clone();
+            item.detail = meta.desc.map(str::to_string);
         }
         item.sort_text = Some(format!("{i:06}"));
     }

@@ -335,7 +335,7 @@ fn package_target_at(root: &SyntaxNode, offset: usize) -> Option<PackageTarget> 
 fn render_package(name: &str, is_class: bool, meta: &PackageMeta) -> String {
     let tag = if is_class { "class" } else { "package" };
     let mut out = format!("**`{name}`** — {tag}");
-    if let Some(desc) = meta.desc.as_deref() {
+    if let Some(desc) = meta.desc {
         let _ = write!(out, "\n\n{desc}");
     }
     if let Some(url) = meta.ctan_url() {

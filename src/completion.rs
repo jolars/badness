@@ -20,7 +20,7 @@ use rowan::{TextSize, TokenAtOffset};
 use crate::ast::command_name;
 use crate::semantic::SemanticModel;
 use crate::semantic::builder::{is_cite_command, ref_command};
-use crate::semantic::signature::{SignatureDb, builtin, cwl};
+use crate::semantic::signature::{SignatureDb, builtin, class_names, cwl, package_names};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// What the cursor at a given offset is positioned to complete.
@@ -41,6 +41,11 @@ pub enum CompletionContext {
     /// Inside the path argument of a file-taking command (`\includegraphics`,
     /// `\input`, …). `prefix` is the partial path typed so far (may contain `/`).
     FilePath { prefix: String, kind: FileArgKind },
+    /// Inside a `\usepackage{…}` / `\documentclass{…}` name group. Candidates are
+    /// the baked `.sty`/`.cls` name list (`kind` selecting which); the LSP layer
+    /// additionally merges any local `.sty`/`.cls` files. `kind` is always
+    /// [`FileArgKind::Package`] or [`FileArgKind::Class`].
+    PackageName { prefix: String, kind: FileArgKind },
     /// Nothing to complete here (prose, a comment, a `\cite{…}` key, …).
     None,
 }
@@ -55,6 +60,10 @@ pub enum FileArgKind {
     TexSource,
     /// `\bibliography` / `\addbibresource` — `.bib` databases.
     Bib,
+    /// `\usepackage` / `\RequirePackage` — `.sty` package files (`.dtx` sources).
+    Package,
+    /// `\documentclass` / `\LoadClass` — `.cls` class files (`.dtx` sources).
+    Class,
 }
 
 impl FileArgKind {
@@ -67,6 +76,10 @@ impl FileArgKind {
             ],
             FileArgKind::TexSource => &["tex"],
             FileArgKind::Bib => &["bib"],
+            // `.dtx` is offered because a `.sty`/`.cls` load resolves through a
+            // sibling `.dtx` source (`project::package::dtx_source_of`).
+            FileArgKind::Package => &["sty", "dtx"],
+            FileArgKind::Class => &["cls", "dtx"],
         }
     }
 }
@@ -78,6 +91,8 @@ pub enum CandidateKind {
     Command,
     Environment,
     Label,
+    /// A `.sty`/`.cls` package or class name (`\usepackage`/`\documentclass`).
+    Package,
 }
 
 /// A completion candidate before it becomes an `lsp_types::CompletionItem`.
@@ -192,6 +207,17 @@ fn command_arg_context(
             prefix: prefix.to_string(),
         });
     }
+    if let Some(kind) = package_arg(name)
+        && index == 0
+    {
+        // A `\usepackage{amsmath,gr|}` completes the name after the last comma.
+        let inner = group_prefix(group, offset);
+        let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
+        return Some(CompletionContext::PackageName {
+            prefix: prefix.to_string(),
+            kind,
+        });
+    }
     if let Some((kind, path_index)) = file_arg(name)
         && index == path_index
     {
@@ -201,6 +227,17 @@ fn command_arg_context(
         });
     }
     None
+}
+
+/// The [`FileArgKind`] for a `\usepackage`/`\documentclass`-family command whose
+/// first `{…}` completes package/class *names* (baked list + local files), or
+/// `None`. Returns [`FileArgKind::Package`]/[`FileArgKind::Class`] only.
+fn package_arg(name: &str) -> Option<FileArgKind> {
+    Some(match name {
+        "usepackage" | "RequirePackage" => FileArgKind::Package,
+        "documentclass" | "LoadClass" | "LoadClassWithOptions" => FileArgKind::Class,
+        _ => return None,
+    })
 }
 
 /// The file-argument category and the `GROUP`-index of the path argument for a
@@ -279,10 +316,35 @@ pub fn candidates(
             environment_candidates(user_sigs, prefix, *closing)
         }
         CompletionContext::LabelRef { prefix } => label_candidates(model, prefix),
+        CompletionContext::PackageName { prefix, kind } => package_candidates(*kind, prefix),
         CompletionContext::FilePath { .. }
         | CompletionContext::CitationKey { .. }
         | CompletionContext::None => Vec::new(),
     }
+}
+
+/// Baked package/class name candidates for `\usepackage`/`\documentclass`,
+/// prefix-filtered. The list is pre-sorted into rank order (namesake/common names
+/// first), which is *preserved* here (no re-sort) so the LSP layer can turn
+/// position into `sortText`. The LSP layer additionally merges local `.sty`/`.cls`
+/// files. Class-taking commands draw from [`class_names`], the rest from
+/// [`package_names`].
+fn package_candidates(kind: FileArgKind, prefix: &str) -> Vec<CompletionCandidate> {
+    let names = if kind == FileArgKind::Class {
+        class_names()
+    } else {
+        package_names()
+    };
+    names
+        .iter()
+        .filter(|name| name.starts_with(prefix))
+        .map(|&label| CompletionCandidate {
+            label: label.to_string(),
+            kind: CandidateKind::Package,
+            insert_text: None,
+            snippet: false,
+        })
+        .collect()
 }
 
 /// All command names (built-in ∪ scanned ∪ bulk CWL), prefix-filtered, deduped,
@@ -589,6 +651,80 @@ mod tests {
                 kind: FileArgKind::TexSource,
             }
         );
+    }
+
+    #[test]
+    fn usepackage_is_package_name() {
+        let src = "\\usepackage{amsm}\n";
+        assert_eq!(
+            classify(src, at(src, "\\usepackage{amsm")),
+            CompletionContext::PackageName {
+                prefix: "amsm".to_string(),
+                kind: FileArgKind::Package,
+            }
+        );
+    }
+
+    #[test]
+    fn usepackage_with_option_is_package_name() {
+        let src = "\\usepackage[utf8]{inp}\n";
+        assert_eq!(
+            classify(src, at(src, "{inp")),
+            CompletionContext::PackageName {
+                prefix: "inp".to_string(),
+                kind: FileArgKind::Package,
+            }
+        );
+    }
+
+    #[test]
+    fn usepackage_completes_name_after_last_comma() {
+        let src = "\\usepackage{amsmath,gra}\n";
+        assert_eq!(
+            classify(src, at(src, "\\usepackage{amsmath,gra")),
+            CompletionContext::PackageName {
+                prefix: "gra".to_string(),
+                kind: FileArgKind::Package,
+            }
+        );
+    }
+
+    #[test]
+    fn documentclass_is_class_name() {
+        let src = "\\documentclass{art}\n";
+        assert_eq!(
+            classify(src, at(src, "\\documentclass{art")),
+            CompletionContext::PackageName {
+                prefix: "art".to_string(),
+                kind: FileArgKind::Class,
+            }
+        );
+    }
+
+    #[test]
+    fn package_candidates_match_prefix_and_include_amsmath() {
+        let src = "\\usepackage{amsm}\n";
+        let got = labels(src, at(src, "\\usepackage{amsm"));
+        assert!(got.contains(&"amsmath".to_string()), "{got:?}");
+        assert!(got.iter().all(|n| n.starts_with("amsm")), "{got:?}");
+    }
+
+    #[test]
+    fn class_candidates_include_article() {
+        let src = "\\documentclass{art}\n";
+        let got = labels(src, at(src, "\\documentclass{art"));
+        assert!(got.contains(&"article".to_string()), "{got:?}");
+        assert!(got.iter().all(|n| n.starts_with("art")), "{got:?}");
+    }
+
+    #[test]
+    fn package_candidates_preserve_rank_order() {
+        // A namesake/common name (`tikz`) ranks before an internal style with the
+        // same prefix; the baked order is preserved (not alphabetized).
+        let src = "\\usepackage{ti}\n";
+        let got = labels(src, at(src, "\\usepackage{ti"));
+        let tikz = got.iter().position(|n| n == "tikz");
+        assert!(tikz.is_some(), "tikz present: {got:?}");
     }
 
     #[test]

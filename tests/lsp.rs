@@ -1474,6 +1474,62 @@ fn lsp_completion_file_paths() {
     shutdown(&client, server_thread);
 }
 
+#[test]
+fn lsp_completion_package_names() {
+    // A local `.sty` sibling plus the baked name list: `\usepackage{|}` merges
+    // both, deduping the local file against its baked namesake.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("mylocal.sty"), "x").unwrap();
+    std::fs::write(dir.path().join("amsmath.sty"), "x").unwrap();
+
+    let uri = path_to_file_uri(&dir.path().join("main.tex"));
+    let (client, server_thread) = start_server(None);
+
+    // `\usepackage{|}` at column 12: local `.sty` files (as MODULE names, extension
+    // stripped) and baked package names, all deduped.
+    did_open(&client, &uri, 1, "\\usepackage{}\n");
+    let _ = recv_diagnostics(&client);
+    let items = complete(&client, 2, &uri, Position::new(0, 12));
+    let names = labels(&items);
+    assert!(names.contains(&"mylocal"), "local .sty offered: {names:?}");
+    assert!(names.contains(&"amsmath"), "baked name offered: {names:?}");
+    // `amsmath` is present once (local file deduped against baked name).
+    assert_eq!(
+        names.iter().filter(|n| **n == "amsmath").count(),
+        1,
+        "amsmath deduped: {names:?}"
+    );
+    let amsmath = items.iter().find(|i| i.label == "amsmath").unwrap();
+    assert_eq!(amsmath.kind, Some(CompletionItemKind::MODULE));
+    // Ranking is carried by `sortText`, not the alphabetical label order.
+    assert!(amsmath.sort_text.is_some(), "sortText set for ranking");
+
+    // `\documentclass{art|}` → the baked class list (`article`), not packages.
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "\\documentclass{art}\n".to_owned(),
+            }],
+        })
+        .unwrap(),
+    );
+    let _ = recv_diagnostics(&client);
+    let classes = complete(&client, 3, &uri, Position::new(0, 18));
+    let names = labels(&classes);
+    assert!(names.contains(&"article"), "{names:?}");
+    assert!(names.iter().all(|n| n.starts_with("art")), "{names:?}");
+
+    shutdown(&client, server_thread);
+}
+
 /// The lint-rule codes carried by a diagnostics batch (parse diagnostics have no
 /// code and are dropped), for asserting which cross-file rules fired.
 fn rule_codes(diags: &PublishDiagnosticsParams) -> Vec<String> {

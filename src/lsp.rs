@@ -4662,6 +4662,9 @@ fn build_completion_items(
 ) -> Vec<CompletionItem> {
     match ctx {
         CompletionContext::FilePath { prefix, kind } => file_completion_items(uri, prefix, *kind),
+        CompletionContext::PackageName { prefix, kind } => {
+            package_completion_items(uri, prefix, *kind, sigs, model)
+        }
         CompletionContext::None => Vec::new(),
         _ => {
             // The document path keys the scope-first signature lookup that
@@ -4683,6 +4686,7 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
         CandidateKind::Command => CompletionItemKind::FUNCTION,
         CandidateKind::Environment => CompletionItemKind::CLASS,
         CandidateKind::Label => CompletionItemKind::REFERENCE,
+        CandidateKind::Package => CompletionItemKind::MODULE,
     };
     let data = file.and_then(|file| {
         let payload = match candidate.kind {
@@ -4694,7 +4698,9 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
                 name: candidate.label.clone(),
                 file: file.to_path_buf(),
             },
-            CandidateKind::Label => return None,
+            // A package/class name carries no resolvable signature (yet); a future
+            // description payload would attach here.
+            CandidateKind::Label | CandidateKind::Package => return None,
         };
         payload.into_value()
     });
@@ -4754,6 +4760,62 @@ fn file_completion_items(uri: &Uri, prefix: &str, kind: FileArgKind) -> Vec<Comp
         }
     }
     items
+}
+
+/// Package/class name candidates for `\usepackage`/`\documentclass`: local
+/// `.sty`/`.cls` files in the document directory first (most relevant), then the
+/// baked name list ([`crate::completion::package_names`], in rank order). Local
+/// files are offered as their **stem** (`\usepackage` takes a name, not a
+/// filename), so `amsmath.sty` becomes `amsmath`; a baked name equal to a local
+/// stem is dropped (the local file already covers it). `sortText` is assigned by
+/// final position so the client preserves this ordering instead of re-sorting
+/// alphabetically and losing the rank.
+fn package_completion_items(
+    uri: &Uri,
+    prefix: &str,
+    kind: FileArgKind,
+    sigs: &SignatureDb,
+    model: &SemanticModel,
+) -> Vec<CompletionItem> {
+    let mut local = std::collections::HashSet::new();
+    let mut items: Vec<CompletionItem> = Vec::new();
+    for file_item in file_completion_items(uri, prefix, kind) {
+        // A directory can't be a package/class *name*; only files, as stems.
+        if file_item.kind != Some(CompletionItemKind::FILE) {
+            continue;
+        }
+        let stem = file_stem(&file_item.label);
+        if local.insert(stem.clone()) {
+            items.push(CompletionItem {
+                label: stem,
+                kind: Some(CompletionItemKind::MODULE),
+                ..Default::default()
+            });
+        }
+    }
+    let ctx = CompletionContext::PackageName {
+        prefix: prefix.to_string(),
+        kind,
+    };
+    let file = uri_to_fs_path(uri);
+    for candidate in crate::completion::candidates(&ctx, sigs, model) {
+        if local.contains(&candidate.label) {
+            continue;
+        }
+        items.push(candidate_to_item(candidate, file.as_deref()));
+    }
+    for (i, item) in items.iter_mut().enumerate() {
+        item.sort_text = Some(format!("{i:06}"));
+    }
+    items
+}
+
+/// The stem of a filename label (`amsmath.sty` -> `amsmath`); unchanged if no dot.
+fn file_stem(label: &str) -> String {
+    label
+        .rsplit_once('.')
+        .map(|(stem, _)| stem.to_string())
+        .unwrap_or_else(|| label.to_string())
 }
 
 /// Whether `name`'s extension (case-insensitive) is one of `exts`.

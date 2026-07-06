@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.6.0](https://github.com/jolars/badness/compare/v0.5.0...v0.6.0) (2026-07-06)
+
+### Features
+- **completion:** complete `\usepackage`/`\documentclass` names ([`2457147`](https://github.com/jolars/badness/commit/24571476c68f47e2acdd0f0ed918f0b2cb584e04))
+- **completion:** add baked package/class name lists ([`ff4906d`](https://github.com/jolars/badness/commit/ff4906dfd2e4dbf3aa2830eb382c63284429cf69))
+- **lsp:** add document links ([`915aea6`](https://github.com/jolars/badness/commit/915aea6402fa4813c5eae383548d300b1f3610da))
+- **lsp:** highlight matching `\begin`/`\end` pair ([`d643518`](https://github.com/jolars/badness/commit/d64351844066b7232c71460528b7391e3a538b28))
+- **lsp:** re-indent on close via onTypeFormatting ([`5972340`](https://github.com/jolars/badness/commit/5972340cb4d8bb1bc9972f55b559e4211f1e7228))
+- **parser:** parse math environments in math mode ([`9097be3`](https://github.com/jolars/badness/commit/9097be3717c025b73bcc528dc2ac35b13bcd6b94))
+- **formatter:** implement sentence and semantic wrap modes ([`17003ba`](https://github.com/jolars/badness/commit/17003bace4b7a40505361adfbd6545b58ee66b6d))
+- **linter:** add hard-coded-reference rule ([`da66c29`](https://github.com/jolars/badness/commit/da66c298c385142a76970b91a61e322f11e2b765))
+- **linter:** add sectioning-level-jump rule ([`6ac6def`](https://github.com/jolars/badness/commit/6ac6defb60760c257f51ab2e7f22884ac3fc2b0d))
+- **linter:** add makeat-macro rule ([`2ae6d07`](https://github.com/jolars/badness/commit/2ae6d075ab6ab01e7efe44cad5f538c4292f7fd2))
+- **linter:** add space-before-command rule ([`36d5fa3`](https://github.com/jolars/badness/commit/36d5fa3c47af7939bcbacba8911bab3ca118b485))
+- **linter:** add abbreviation-spacing rule ([`2fea8db`](https://github.com/jolars/badness/commit/2fea8db340303dbb5f640adc7fc5ddc83aacfd74))
+- **linter:** add swallowed-space rule ([`c48aa20`](https://github.com/jolars/badness/commit/c48aa20ce6f59df9cca16959417abf6938f1a5b3))
+- **linter:** add primitive-command rule ([`94da7ca`](https://github.com/jolars/badness/commit/94da7cacda77e12ed0da2fa323738920fe681fdf))
+- **linter:** add math-operator-name rule ([`17cc5f2`](https://github.com/jolars/badness/commit/17cc5f2e175315d5686d0f9ed1cea781e48f82f3))
+- **linter:** add times-variable rule ([`52de07a`](https://github.com/jolars/badness/commit/52de07ac61fb5222ef4b4d1a3c0cd0631c40ebd3))
+- **linter:** add dash-length rule ([`a6218e0`](https://github.com/jolars/badness/commit/a6218e0aadde3694786f58132104b5d23fd8c5c6))
+- **linter:** add straight-quotes rule for ASCII quotes ([`adff4ba`](https://github.com/jolars/badness/commit/adff4bafdfa91f6e8f2f0598e32430248b48d9cb))
+- **linter:** add ellipsis rule for literal ... ([`488ebdd`](https://github.com/jolars/badness/commit/488ebddc399f91acc29f5cb38aa851ac962afd57))
+- **linter:** generate rules reference from metadata ([`74e2234`](https://github.com/jolars/badness/commit/74e223425ada75b25e3558903784cf2cf2a9c438))
+- **math:** normalize operator spacing ([`36c9314`](https://github.com/jolars/badness/commit/36c9314b3017366879160a385a67e83f3bdcbead))
+- **semantic:** keep built-in over delegating arity-0 redef ([`9fd50d8`](https://github.com/jolars/badness/commit/9fd50d8f74f661dffa8f9e3bbb6c58494d2453df))
+- add title, author, date, thanks to signatures db ([`3c537d1`](https://github.com/jolars/badness/commit/3c537d1b3b4af9f1f7ce1abd6a06914504dd03a8))
+- **formatter:** stack binary chains under the relation too ([`0777920`](https://github.com/jolars/badness/commit/077792009dc99f761a0046012cffdb8bdf8e04b6))
+- **formatter:** align relation chains in display math ([`e69a72e`](https://github.com/jolars/badness/commit/e69a72ee540ab9af778cbd7246d0e09351d7bc82))
+- **formatter:** join alignment-cell continuation lines ([`cd3e590`](https://github.com/jolars/badness/commit/cd3e5907c7b629348222306badce7501aadb4f41))
+- **semantic:** resolve packages to .dtx sources ([`249e68e`](https://github.com/jolars/badness/commit/249e68e63bc91844a863e123767e06d2daf5aed9))
+
+### Bug Fixes
+- **parser:** point unclosed-delimiter errors at the opener ([`1029351`](https://github.com/jolars/badness/commit/10293517fb100519c84cb830b446327be06ded8e))
+- **formatter:** tight spacing and no paren breaks in display math ([`7112b8c`](https://github.com/jolars/badness/commit/7112b8cd9b4b6e0d9d5e230b9fe75c8a587079d7))
+- **linter:** allow en dash between proper names in dash-length ([`2ab4342`](https://github.com/jolars/badness/commit/2ab4342147279ec63c86b5f26e53a8749805ec9d))
+- **formatter:** peel over-attached cell off table rules ([`7c91ac9`](https://github.com/jolars/badness/commit/7c91ac97cd1ff7e74b4c4a629ef4dab713307334))
+
+### Reverts
+- "feat(formatter): stack binary chains under the relation too" ([`4a6988b`](https://github.com/jolars/badness/commit/4a6988bbebf2257a4cdf2c05c86c33bd561fd7be))
+
 ## [0.5.0](https://github.com/jolars/badness/compare/v0.4.0...v0.5.0) (2026-07-01)
 
 ### Features

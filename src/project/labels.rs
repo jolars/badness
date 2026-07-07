@@ -46,6 +46,21 @@ pub fn document_label_names(model: &SemanticModel) -> Vec<SmolStr> {
     names
 }
 
+/// The distinct glossary/acronym keys defined in `model`
+/// (`\newglossaryentry`/`\newacronym`/…), sorted and deduped — the per-file input
+/// to the [`crate::incremental::file_glossary_keys`] firewall, the glossary
+/// analog of [`document_label_names`].
+pub fn document_glossary_keys(model: &SemanticModel) -> Vec<SmolStr> {
+    let mut keys: Vec<SmolStr> = model
+        .glossary_defs()
+        .iter()
+        .map(|def| def.key.clone())
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
 /// Whether `root` carries a `\documentclass` or a `\begin{document}` — the
 /// document-root signal gating the `undefined-ref` lint (see [`ResolvedLabels`]).
 /// Shared by the CLI and the [`crate::incremental::file_is_document_root`]

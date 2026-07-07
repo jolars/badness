@@ -285,9 +285,16 @@ sources below are missing.
   from the pinned TeX Live tlpdb; names only, ranked namesake/common-first). Every
   item is enriched with the shipped CTAN one-line `desc` as `detail`
   (`data/package_metadata.json`, `semantic::signature::package_metadata`).
-- [ ] **Glossary/acronym key completion** (`\gls`/`\acrshort`/… ←
-  `\newglossaryentry`/`\newacronym`)—extend `semantic::define` to scan these
-  definers, mirroring the existing label/theorem discovery.
+- [x] **Glossary/acronym key completion** (`\gls`/`\acrshort`/… ←
+  `\newglossaryentry`/`\newacronym`). Definers are scanned into the
+  `SemanticModel` (`GlossaryDef` in `semantic::builder`, mirroring label
+  discovery—not `semantic::define`, which holds command *signatures*), projected
+  through the `file_glossary_keys` firewall, and unioned cross-file by walking
+  `ResolvedLabels::namespace_members` in `glossary_completion_items` (`lsp.rs`),
+  the cite-completion shape. `\loadglsentries` is an `IncludeKind::GlsEntries`
+  edge so a dedicated entries file joins the namespace. Covers base glossaries +
+  glossaries-extra (`\newabbreviation`, `\glsxtr*`). *Deferred:* hover,
+  goto-definition, and rename for keys (`GlossaryDef` carries the ranges).
 - [ ] **Color name + model, TikZ/PGF library completion**—small static datasets
   for `\color`/`\textcolor`/`\definecolor` and
   `\usetikzlibrary`/`\usepgflibrary`.

@@ -19,7 +19,7 @@ use rowan::{TextSize, TokenAtOffset};
 
 use crate::ast::command_name;
 use crate::semantic::SemanticModel;
-use crate::semantic::builder::{is_cite_command, ref_command};
+use crate::semantic::builder::{is_cite_command, is_glossary_ref_command, ref_command};
 use crate::semantic::signature::{SignatureDb, builtin, class_names, cwl, package_names};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -38,6 +38,13 @@ pub enum CompletionContext {
     ///
     /// [`FilePath`]: CompletionContext::FilePath
     CitationKey { prefix: String },
+    /// Inside the key group of a `\gls`/`\acrshort`-family command. Keys come
+    /// from the document namespace's `\newglossaryentry`/`\newacronym` definers
+    /// (a cross-file snapshot query), so — like [`CitationKey`] — this is resolved
+    /// in the LSP layer, not by [`candidates`].
+    ///
+    /// [`CitationKey`]: CompletionContext::CitationKey
+    GlossaryKey { prefix: String },
     /// Inside the path argument of a file-taking command (`\includegraphics`,
     /// `\input`, …). `prefix` is the partial path typed so far (may contain `/`).
     FilePath { prefix: String, kind: FileArgKind },
@@ -207,6 +214,14 @@ fn command_arg_context(
             prefix: prefix.to_string(),
         });
     }
+    if is_glossary_ref_command(name) && index == 0 {
+        // A `\gls{key}` group holds exactly one key (never a comma list), so the
+        // prefix is the whole typed inner. Later groups (`\glslink{key}{text}`)
+        // never classify.
+        return Some(CompletionContext::GlossaryKey {
+            prefix: group_prefix(group, offset).trim_start().to_string(),
+        });
+    }
     if let Some(kind) = package_arg(name)
         && index == 0
     {
@@ -319,6 +334,7 @@ pub fn candidates(
         CompletionContext::PackageName { prefix, kind } => package_candidates(*kind, prefix),
         CompletionContext::FilePath { .. }
         | CompletionContext::CitationKey { .. }
+        | CompletionContext::GlossaryKey { .. }
         | CompletionContext::None => Vec::new(),
     }
 }
@@ -755,6 +771,69 @@ mod tests {
         let src = "\\cite{ke}\n";
         let tree = root(src);
         let ctx = classify_context(&tree, at(src, "\\cite{ke"));
+        let cands = candidates(&ctx, &SignatureDb::default(), &SemanticModel::build(&tree));
+        assert!(cands.is_empty());
+    }
+
+    #[test]
+    fn gls_is_classified_as_glossary_key() {
+        let src = "\\gls{ex}\n";
+        assert_eq!(
+            classify(src, at(src, "\\gls{e")),
+            CompletionContext::GlossaryKey {
+                prefix: "e".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn acrshort_and_glsxtr_classify_as_glossary_key() {
+        for src in [
+            "\\acrshort{fps}\n",
+            "\\ACRfullpl{fps}\n",
+            "\\glsxtrlong{fps}\n",
+        ] {
+            assert_eq!(
+                classify(src, at(src, "{fp")),
+                CompletionContext::GlossaryKey {
+                    prefix: "fp".to_string()
+                },
+                "{src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn glslink_key_group_only_classifies() {
+        // The key is group 0; the text group of `\glslink{key}{text}` is prose.
+        let src = "\\glslink{ex}{shown text}\n";
+        assert_eq!(
+            classify(src, at(src, "\\glslink{e")),
+            CompletionContext::GlossaryKey {
+                prefix: "e".to_string()
+            }
+        );
+        assert_eq!(classify(src, at(src, "{shown")), CompletionContext::None);
+    }
+
+    #[test]
+    fn gls_key_is_not_comma_split() {
+        // Glossary commands take exactly one key; a comma is part of the key text.
+        let src = "\\gls{a,b}\n";
+        assert_eq!(
+            classify(src, at(src, "\\gls{a,b")),
+            CompletionContext::GlossaryKey {
+                prefix: "a,b".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn glossary_key_candidates_empty_from_pure() {
+        // Keys are resolved in the LSP layer (cross-file), so the pure path is empty.
+        let src = "\\newacronym{aa}{AA}{an acronym}\n\\gls{a}\n";
+        let tree = root(src);
+        let ctx = classify_context(&tree, at(src, "\\gls{a"));
         let cands = candidates(&ctx, &SignatureDb::default(), &SemanticModel::build(&tree));
         assert!(cands.is_empty());
     }

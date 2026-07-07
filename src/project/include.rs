@@ -39,6 +39,11 @@ pub enum IncludeKind {
     Import,
     SubImport,
     SubFile,
+    /// `\loadglsentries[type]{file}` (glossaries): loads a file of
+    /// `\newglossaryentry`/`\newacronym` definitions. Resolution is `\input`-like
+    /// (single target, `.tex` defaulted); kept distinct so later passes can honor
+    /// the difference (its body is preamble-only definitions, never text).
+    GlsEntries,
 }
 
 /// The target file of an inclusion command.
@@ -127,6 +132,7 @@ fn include_kind(name: &str) -> Option<IncludeKind> {
         "import" => IncludeKind::Import,
         "subimport" => IncludeKind::SubImport,
         "subfile" => IncludeKind::SubFile,
+        "loadglsentries" => IncludeKind::GlsEntries,
         _ => return None,
     })
 }
@@ -304,6 +310,18 @@ mod tests {
         assert_eq!(
             sf[0].target,
             IncludeTarget::Path(PathBuf::from("sections/one.tex"))
+        );
+    }
+
+    #[test]
+    fn loadglsentries_is_recognized_with_optional_arg() {
+        // `\loadglsentries[type]{file}`: the OPTIONAL never shifts the target
+        // group, and the `.tex` extension defaults in like `\input`.
+        let e = edges("\\loadglsentries[main]{glossary/entries}\n", None);
+        assert_eq!(e[0].kind, IncludeKind::GlsEntries);
+        assert_eq!(
+            e[0].target,
+            IncludeTarget::Path(PathBuf::from("glossary/entries.tex"))
         );
     }
 

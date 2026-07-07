@@ -43,6 +43,12 @@
     "labelcref": { "args": ["req"], "inline": true },
     "href": { "args": ["req", "req"] },
 
+    "newglossaryentry": { "args": ["req", "req"] },
+    "longnewglossaryentry": { "args": ["req", "req", "req"] },
+    "newacronym": { "args": ["opt", "req", "req", "req"] },
+    "newabbreviation": { "args": ["opt", "req", "req", "req"] },
+    "loadglsentries": { "args": ["opt", "req"] },
+
     "cite": { "args": ["opt", { "kind": "req", "content": "tokenList" }], "inline": true },
     "nocite": { "args": [{ "kind": "req", "content": "tokenList" }] },
     "citep": { "args": ["opt", "opt", { "kind": "req", "content": "tokenList" }], "inline": true },

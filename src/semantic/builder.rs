@@ -12,7 +12,9 @@ use rowan::{TextRange, TextSize};
 
 use crate::ast::{command_name, first_group_range, nth_group_inner};
 use crate::semantic::SemanticModel;
-use crate::semantic::label::{CitationRef, LabelDef, LabelRef, RefCommand};
+use crate::semantic::label::{
+    CitationRef, GlossaryDef, GlossaryDefKind, LabelDef, LabelRef, RefCommand,
+};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 pub fn build(root: &SyntaxNode) -> SemanticModel {
@@ -51,6 +53,21 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                     key_range,
                     resolved: false,
                 });
+            }
+        } else if let Some(kind) = glossary_definer(&name) {
+            // Like `\label`: the key is the whole first group (never comma-split),
+            // and a nested-macro key (`\newacronym{\foo}…`) is skipped. The
+            // optional `[opts]` of `\newacronym` is an OPTIONAL node, not a GROUP,
+            // so it never shifts the key's group index.
+            if let Some((inner_range, inner)) = nth_group_inner(&command, 0) {
+                for (key, key_range) in key_spans(&inner, inner_range, false) {
+                    model.glossary_defs.push(GlossaryDef {
+                        key: SmolStr::from(key),
+                        kind,
+                        range: first_group_range(&command),
+                        key_range,
+                    });
+                }
             }
         } else if is_cite_command(&name)
             && let Some((inner_range, inner)) = nth_group_inner(&command, 0)
@@ -125,6 +142,82 @@ pub(crate) fn ref_command(name: &str) -> Option<RefCommand> {
         "cpageref" => RefCommand::CpageRef,
         _ => return None,
     })
+}
+
+/// The recognized glossary/acronym *definer* command for a control-word name, or
+/// `None`. The definition-side analog of [`ref_command`]; the key is always the
+/// first `{…}` group.
+pub(crate) fn glossary_definer(name: &str) -> Option<GlossaryDefKind> {
+    Some(match name {
+        "newglossaryentry"
+        | "longnewglossaryentry"
+        | "provideglossaryentry"
+        | "longprovideglossaryentry" => GlossaryDefKind::Entry,
+        "newacronym" => GlossaryDefKind::Acronym,
+        "newabbreviation" => GlossaryDefKind::Abbreviation,
+        _ => return None,
+    })
+}
+
+/// Whether `name` is a glossary/acronym *reference* command whose first `{…}`
+/// group is an entry key (`\gls`, `\acrshort`, `\glsxtrfull`, …). Shared with the
+/// completion classifier (`crate::completion`), like [`ref_command`] and
+/// [`is_cite_command`], so the name set has a single source of truth. Unlike
+/// citations, every command here takes exactly **one** key per group (no comma
+/// list).
+pub(crate) fn is_glossary_ref_command(name: &str) -> bool {
+    // The `\gls` core set: base name + first-letter-uppercase + all-caps
+    // sentence-start variants, each with an optional plural `pl`.
+    const GLS: &[&str] = &[
+        "gls",
+        "Gls",
+        "GLS",
+        "glspl",
+        "Glspl",
+        "GLSpl",
+        // Text-form accessors (`\glstext{key}` prints the entry text without
+        // triggering first-use).
+        "glstext",
+        "Glstext",
+        "glsfirst",
+        "Glsfirst",
+        "glsplural",
+        "Glsplural",
+        "glsfirstplural",
+        "Glsfirstplural",
+        "glsdesc",
+        "Glsdesc",
+        "glsname",
+        "Glsname",
+        "glssymbol",
+        "Glssymbol",
+        // Key-first commands with further groups (`\glslink{key}{text}`).
+        "glslink",
+        "glsdisp",
+        "glsadd",
+        // glossaries-extra short/long/full accessors.
+        "glsxtrshort",
+        "Glsxtrshort",
+        "glsxtrlong",
+        "Glsxtrlong",
+        "glsxtrfull",
+        "Glsxtrfull",
+    ];
+    if GLS.contains(&name) {
+        return true;
+    }
+    // The acronym set: `\acrshort`/`\acrlong`/`\acrfull`, plural `pl`, in
+    // `acr`/`Acr`/`ACR` casing — a stem check like `is_cite_command`'s
+    // `cite`/`Cite` prefix trick.
+    for stem in ["acr", "Acr", "ACR"] {
+        if let Some(rest) = name.strip_prefix(stem) {
+            return matches!(
+                rest,
+                "short" | "shortpl" | "long" | "longpl" | "full" | "fullpl"
+            );
+        }
+    }
+    false
 }
 
 /// Split a group's inner text into keys paired with their precise byte ranges in
@@ -223,6 +316,51 @@ mod tests {
             vec![("a", "a"), ("b", "b"), ("c", "c")],
             "each key in a list command isolates its own span"
         );
+    }
+
+    #[test]
+    fn newglossaryentry_key_scanned_with_range() {
+        let src = "\\newglossaryentry{ex}{name={example},description={an example}}\n";
+        let model = model(src);
+        let def = &model.glossary_defs()[0];
+        assert_eq!(def.key, "ex");
+        assert_eq!(def.kind, crate::semantic::label::GlossaryDefKind::Entry);
+        assert_eq!(&src[def.key_range], "ex");
+    }
+
+    #[test]
+    fn newacronym_optional_arg_does_not_shift_key() {
+        let src = "\\newacronym[longplural={frames}]{fps}{FPS}{frame rate}\n";
+        let model = model(src);
+        let def = &model.glossary_defs()[0];
+        assert_eq!(def.key, "fps");
+        assert_eq!(def.kind, crate::semantic::label::GlossaryDefKind::Acronym);
+        assert_eq!(&src[def.key_range], "fps");
+    }
+
+    #[test]
+    fn glossary_definer_family_scanned() {
+        let src = "\\longnewglossaryentry{a}{name={a}}{desc}\n\\newabbreviation{b}{B}{bee}\n\\provideglossaryentry{c}{name={c}}\n";
+        let model = model(src);
+        let keys: Vec<_> = model
+            .glossary_defs()
+            .iter()
+            .map(|d| d.key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn glossary_nested_macro_key_skipped() {
+        // Like `\label{\foo}`: an unresolvable key is skipped, never guessed.
+        let model = model("\\newacronym{\\foo}{F}{foo}\n");
+        assert!(model.glossary_defs().is_empty());
+    }
+
+    #[test]
+    fn gls_use_is_not_a_definition() {
+        let model = model("\\gls{ex}\\acrshort{fps}\n");
+        assert!(model.glossary_defs().is_empty());
     }
 
     #[test]

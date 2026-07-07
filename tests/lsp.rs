@@ -2749,6 +2749,61 @@ fn lsp_cite_completion_cross_file() {
     shutdown(&client, server_thread);
 }
 
+#[test]
+fn lsp_gls_completion_cross_file() {
+    // A real on-disk project: the root defines an acronym in its preamble and
+    // `\input`s a chapter that uses `\gls`. Only the chapter is opened; the
+    // server seeds the sibling root and offers its keys across the namespace.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("main.tex"),
+        "\\documentclass{article}\n\\newacronym{fps}{FPS}{frames per second}\n\\input{chap}\n",
+    )
+    .unwrap();
+    let chap_path = dir.path().join("chap.tex");
+    let chap = "\\gls{fp}\n";
+    std::fs::write(&chap_path, chap).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&chap_path);
+    did_open(&client, &uri, 1, chap);
+
+    // Cursor inside `\gls{fp|}` → the preamble-defined key, prefix-filtered.
+    let items = complete_draining(&client, 2, &uri, Position::new(0, 7));
+    let names = labels(&items);
+    assert!(names.contains(&"fps"), "{names:?}");
+    let key = items.iter().find(|i| i.label == "fps").unwrap();
+    assert_eq!(key.kind, Some(CompletionItemKind::REFERENCE));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_gls_completion_via_loadglsentries() {
+    // Entries live in a dedicated file pulled in by `\loadglsentries`; the edge
+    // joins it to the document namespace, so its keys complete in the root.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("entries.tex"),
+        "\\newglossaryentry{ex}{name={example},description={an example}}\n",
+    )
+    .unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\loadglsentries{entries}\n\\gls{e}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+
+    // Cursor inside `\gls{e|}`.
+    let items = complete_draining(&client, 2, &uri, Position::new(1, 6));
+    let names = labels(&items);
+    assert!(names.contains(&"ex"), "{names:?}");
+
+    shutdown(&client, server_thread);
+}
+
 /// Helper: send a whole-buffer `didChange` (version `v`) replacing the document text.
 fn did_change_full(client: &Connection, uri: &Uri, v: i32, text: &str) {
     send_notification(

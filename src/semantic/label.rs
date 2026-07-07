@@ -96,6 +96,36 @@ pub struct LabelRef {
     pub resolved: bool,
 }
 
+/// Which definer command produced a [`GlossaryDef`]. Kept distinct so a later
+/// hover/goto-def pass can render the entry appropriately (an acronym has
+/// short/long groups; an entry has a key=value settings group).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GlossaryDefKind {
+    /// `\newglossaryentry` / `\longnewglossaryentry`.
+    Entry,
+    /// `\newacronym` (glossaries).
+    Acronym,
+    /// `\newabbreviation` (glossaries-extra).
+    Abbreviation,
+}
+
+/// A glossary/acronym key definition site (`\newglossaryentry{key}{…}`,
+/// `\newacronym[opts]{key}{short}{long}`, …). The definition-side analog of
+/// [`LabelDef`]; the reference side (`\gls{key}`) is classified directly off the
+/// CST by completion and carries no stored model record yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlossaryDef {
+    /// The entry key, as authored.
+    pub key: SmolStr,
+    pub kind: GlossaryDefKind,
+    /// Range of the command through its key group (like [`LabelDef::range`]) —
+    /// the navigation target for a future go-to-definition.
+    pub range: TextRange,
+    /// Range of just the trimmed key text inside the braces — the precise span a
+    /// future rename would rewrite.
+    pub key_range: TextRange,
+}
+
 /// A citation *use* site — one per key. A `\cite{a,b}` produces two
 /// `CitationRef`s. Citations are always cross-file: cite keys live in `.bib`
 /// files, so there is no in-file resolution (no `resolved` flag); the

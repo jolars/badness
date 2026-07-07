@@ -25,7 +25,7 @@ use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
 use crate::file_discovery::file_kind_or_tex;
 use crate::parser::parse_with_flavor;
 use crate::project::citations::document_cite_names;
-use crate::project::labels::{document_label_names, is_document_root};
+use crate::project::labels::{document_glossary_keys, document_label_names, is_document_root};
 use crate::project::{
     BibTarget, IncludeEdgeKey, PackageEdgeKey, Project, ProjectMember, ResolvedCitations,
     ResolvedLabels, collect_bib_resource_targets, collect_include_edge_keys,
@@ -66,6 +66,9 @@ pub enum QueryKind {
     /// A file's sorted, distinct label-name set ([`file_labels`]) — the firewall
     /// the cross-file label resolver consumes.
     FileLabels,
+    /// A file's sorted, distinct glossary/acronym key set
+    /// ([`file_glossary_keys`]) — the firewall glossary key completion consumes.
+    FileGlossaryKeys,
     /// Whether a file is a document root ([`file_is_document_root`]).
     FileIsDocumentRoot,
     /// The cross-file inclusion graph ([`crate::project::project_graph`]); a
@@ -325,6 +328,24 @@ pub fn file_labels(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr> {
         file: Some(file),
     });
     document_label_names(semantic_model(db, file))
+}
+
+/// The file's distinct glossary/acronym keys, sorted — a range-free projection
+/// of [`semantic_model`], the glossary analog of [`file_labels`].
+///
+/// The per-file firewall glossary key completion consumes: a prose or `\gls`
+/// edit leaves this `Vec` *equal*, so salsa backdates and the completion path's
+/// per-member reads stay memoized. Cross-file union needs no dedicated resolver —
+/// the namespace is the same include-graph component
+/// [`crate::project::resolved_labels`] already computes, so the LSP layer walks
+/// `namespace_members` and unions these per-file sets directly.
+#[salsa::tracked(returns(ref))]
+pub fn file_glossary_keys(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileGlossaryKeys,
+        file: Some(file),
+    });
+    document_glossary_keys(semantic_model(db, file))
 }
 
 /// Whether `file` looks like a document *root* — it carries a `\documentclass`
@@ -663,6 +684,12 @@ impl IncrementalDatabase {
         file_labels(self, file)
     }
 
+    /// The file's distinct, sorted glossary/acronym keys (the firewall feeding
+    /// glossary key completion).
+    pub fn file_glossary_keys(&self, file: SourceFile) -> &[SmolStr] {
+        file_glossary_keys(self, file)
+    }
+
     /// Whether `file` carries a `\documentclass` / `\begin{document}`.
     pub fn file_is_document_root(&self, file: SourceFile) -> bool {
         *file_is_document_root(self, file)
@@ -761,6 +788,11 @@ impl Analysis {
     /// The file's scanned user-definition signatures (for completion).
     pub fn document_signatures(&self, file: SourceFile) -> &SignatureDb {
         self.0.document_signatures(file)
+    }
+
+    /// The file's distinct, sorted glossary/acronym keys (for completion).
+    pub fn file_glossary_keys(&self, file: SourceFile) -> &[SmolStr] {
+        self.0.file_glossary_keys(file)
     }
 
     /// `.bib` parse diagnostics for `file` (empty when it parses cleanly).

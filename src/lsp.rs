@@ -3872,11 +3872,12 @@ fn compute_bib_completion(text: &str, offset: usize) -> Vec<CompletionItem> {
 }
 
 /// The outcome of classifying a `.tex` cursor: either ready-to-send pure items, or a
-/// cite-key context whose candidates need the cross-file bibliography (resolved
+/// cite/glossary-key context whose candidates need cross-file facts (resolved
 /// against the snapshot, like a file-path read).
 enum TexCompletion {
     Items(Vec<CompletionItem>),
     Cite { prefix: String, lint_path: PathBuf },
+    Glossary { prefix: String, lint_path: PathBuf },
 }
 
 /// LaTeX completion, mirroring go-to-def's cached-or-reparse-then-resolve shape: the
@@ -3901,6 +3902,10 @@ fn compute_tex_completion(
             let ctx = crate::completion::classify_context(&root, offset);
             return match ctx {
                 CompletionContext::CitationKey { prefix } => TexCompletion::Cite {
+                    prefix,
+                    lint_path: snapshot.file_path(file).to_path_buf(),
+                },
+                CompletionContext::GlossaryKey { prefix } => TexCompletion::Glossary {
                     prefix,
                     lint_path: snapshot.file_path(file).to_path_buf(),
                 },
@@ -3929,6 +3934,15 @@ fn compute_tex_completion(
             }))
             .unwrap_or_default()
         }
+        TexCompletion::Glossary { prefix, lint_path } => {
+            salsa::Cancelled::catch(AssertUnwindSafe(|| {
+                // The glossary key namespace is the same include-graph component
+                // the label resolver computes; only membership is consumed here.
+                let (labels, _) = snapshot.resolve_project(members);
+                glossary_completion_items(snapshot, labels, &lint_path, &prefix)
+            }))
+            .unwrap_or_default()
+        }
     }
 }
 
@@ -3945,6 +3959,10 @@ fn reparse_tex_completion(
     let ctx = crate::completion::classify_context(&root, offset);
     match ctx {
         CompletionContext::CitationKey { prefix } => TexCompletion::Cite {
+            prefix,
+            lint_path: path.to_path_buf(),
+        },
+        CompletionContext::GlossaryKey { prefix } => TexCompletion::Glossary {
             prefix,
             lint_path: path.to_path_buf(),
         },
@@ -3988,6 +4006,41 @@ fn cite_completion_items(
                 key: key.to_string(),
             }
             .into_value(),
+            label: key.to_string(),
+            kind: Some(CompletionItemKind::REFERENCE),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Glossary/acronym key candidates: every `\newglossaryentry`/`\newacronym` key
+/// defined in the completing file's namespace (its include-graph component,
+/// [`ResolvedLabels::namespace_members`]), prefix-filtered and deduped. The
+/// glossary analog of [`cite_completion_items`]; unlike BibTeX keys, glossary
+/// keys are case-sensitive, so the prefix filter is exact.
+fn glossary_completion_items(
+    snapshot: &Analysis,
+    labels: &ResolvedLabels,
+    lint_path: &Path,
+    prefix: &str,
+) -> Vec<CompletionItem> {
+    let mut keys: Vec<SmolStr> = Vec::new();
+    for member in labels.namespace_members(lint_path) {
+        let Some(file) = snapshot.lookup_file(member) else {
+            continue;
+        };
+        keys.extend(
+            snapshot
+                .file_glossary_keys(file)
+                .iter()
+                .filter(|key| key.starts_with(prefix))
+                .cloned(),
+        );
+    }
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .map(|key| CompletionItem {
             label: key.to_string(),
             kind: Some(CompletionItemKind::REFERENCE),
             ..Default::default()

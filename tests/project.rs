@@ -201,6 +201,25 @@ fn label_set_preserving_edit_does_not_rebuild_resolved_labels() {
 }
 
 #[test]
+fn glossary_key_set_survives_key_preserving_edit() {
+    // The glossary firewall (`file_glossary_keys`): a `\gls` use edit re-runs the
+    // projection (its semantic model changed) but the key set stays *equal*, so
+    // salsa can backdate — the property glossary completion's per-member reads
+    // rely on. Keys arrive sorted and deduped.
+    let (mut db, main, _part) = main_part(
+        "\\newacronym{fps}{FPS}{frames per second}\n\\newglossaryentry{ex}{name={x}}\n",
+        "\\gls{fps}\n",
+    );
+    assert_eq!(db.file_glossary_keys(main), ["ex", "fps"]);
+
+    db.set_file_text(
+        main,
+        "\\newacronym{fps}{FPS}{frames per second}\n\\newglossaryentry{ex}{name={x}}\n\\gls{ex}\n",
+    );
+    assert_eq!(db.file_glossary_keys(main), ["ex", "fps"]);
+}
+
+#[test]
 fn label_change_rebuilds_resolved_labels() {
     // The complement: adding a `\label` changes part's label set, so the
     // cross-file resolution *must* rebuild (the firewall doesn't over-cache).

@@ -23,7 +23,7 @@ pub mod outline;
 pub mod signature;
 pub mod xparse;
 
-pub use define::scan_definitions;
+pub use define::{DefSite, DefSiteKind, scan_definition_sites, scan_definitions};
 pub use doc::{DocAssociation, DocKind, doc_associations};
 pub use label::{
     CitationRef, GlossaryDef, GlossaryDefKind, LabelDef, LabelId, LabelRef, RefCommand, RefId,

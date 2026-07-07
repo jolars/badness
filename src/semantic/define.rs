@@ -27,13 +27,16 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{command_name, group_command_name, group_inner_source, nth_group, nth_group_text};
+use crate::ast::{
+    command_name, control_word_range, group_command_name, group_inner_source, nth_group,
+    nth_group_inner, nth_group_text,
+};
 use crate::semantic::signature::{
     ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb,
 };
 use crate::semantic::xparse;
 use crate::syntax::{SyntaxKind, SyntaxNode};
-use rowan::NodeOrToken;
+use rowan::{NodeOrToken, TextRange, TextSize};
 use smol_str::SmolStr;
 
 /// Scan `root` for user command/environment definitions and return their extracted
@@ -74,6 +77,125 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
     apply_verbatim_flags(&mut db, &bodies);
     apply_verbatim_env_flags(&mut db, &env_bodies, &bodies);
     db
+}
+
+/// Which namespace a scanned definition site names. Commands and environments live
+/// in disjoint TeX namespaces, so a name match is only meaningful within a kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefSiteKind {
+    Command,
+    Environment,
+}
+
+/// One user definition's *location* — the range-bearing sibling of the signature
+/// facts [`scan_definitions`] extracts. Signatures stay range-free so the
+/// `document_signatures` salsa query backdates on pure-offset edits; definition
+/// sites feed LSP navigation (goto-definition, references, rename), which needs
+/// byte ranges and recomputes them per request off the memoized tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefSite {
+    /// The defined name (no leading `\` for commands).
+    pub name: SmolStr,
+    pub kind: DefSiteKind,
+    /// The defined name's own span. For a command this is the `\name` control-word
+    /// token, backslash included, so it compares equal to the same token found by an
+    /// occurrence walk; for an environment it is the name text between the braces of
+    /// `\newenvironment{name}` (the [`environment_name_range`] convention).
+    ///
+    /// [`environment_name_range`]: crate::ast::environment_name_range
+    pub name_range: TextRange,
+    /// The whole definition's span, through the sibling name `COMMAND` in the
+    /// unbraced `\newcommand\foo…`/`\def\foo…` forms.
+    pub range: TextRange,
+}
+
+/// Scan `root` for user command/environment definitions and return their *sites*, in
+/// document order. Same recognizer set and name resolution as [`scan_definitions`]
+/// (the [`DefKind`] dispatch and [`resolve_command_def`] sibling heuristic), but
+/// keeping every definition — no last-wins collapsing, since a `\renewcommand` of an
+/// earlier definition is still a definition site the user may navigate to or rename.
+pub fn scan_definition_sites(root: &SyntaxNode) -> Vec<DefSite> {
+    let mut sites = Vec::new();
+    for command in root
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::COMMAND)
+    {
+        let Some(name) = command_name(&command) else {
+            continue;
+        };
+        let site = match DefKind::of(&name) {
+            Some(DefKind::Command | DefKind::XparseCommand) => command_def_site(&command),
+            Some(DefKind::Def) => def_def_site(&command),
+            Some(DefKind::Environment | DefKind::XparseEnvironment) => {
+                environment_def_site(&command)
+            }
+            None => None,
+        };
+        sites.extend(site);
+    }
+    sites
+}
+
+/// The [`DefSite`] of a `\newcommand`/xparse command definition, resolving the same
+/// two name forms as [`resolve_command_def`]: braced `{\name}` (the control word
+/// inside the name group) and unbraced `\newcommand\name` (the sibling `COMMAND`
+/// hosting the signature groups).
+fn command_def_site(command: &SyntaxNode) -> Option<DefSite> {
+    let def = resolve_command_def(command)?;
+    let name_range = if def.first_arg_group == 1 {
+        let group = nth_group(command, 0)?;
+        let name_command = group
+            .children()
+            .find(|child| child.kind() == SyntaxKind::COMMAND)?;
+        control_word_range(&name_command)?
+    } else {
+        control_word_range(&def.host)?
+    };
+    Some(DefSite {
+        name: SmolStr::new(&def.name),
+        kind: DefSiteKind::Command,
+        name_range,
+        range: TextRange::new(
+            command.text_range().start(),
+            command.text_range().end().max(def.host.text_range().end()),
+        ),
+    })
+}
+
+/// The [`DefSite`] of a `\def`-family definition — the name is always the
+/// immediately-following sibling `COMMAND` (TeX has no braced `\def{\name}` form).
+fn def_def_site(command: &SyntaxNode) -> Option<DefSite> {
+    let name_node = adjacent_sibling_command(command)?;
+    let name = command_name(&name_node)?;
+    let name_range = control_word_range(&name_node)?;
+    Some(DefSite {
+        name: SmolStr::new(&name),
+        kind: DefSiteKind::Command,
+        name_range,
+        range: TextRange::new(command.text_range().start(), name_node.text_range().end()),
+    })
+}
+
+/// The [`DefSite`] of a `\newenvironment`/xparse environment definition. The name is
+/// brace-delimited *text* in group 0; the recorded span is the trimmed name within
+/// the group's inner range, mirroring the `.trim()` in [`scan_newenvironment`].
+fn environment_def_site(command: &SyntaxNode) -> Option<DefSite> {
+    let (inner_range, text) = nth_group_inner(command, 0)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let leading = text.len() - text.trim_start().len();
+    let name_range = TextRange::at(
+        inner_range.start() + TextSize::new(leading as u32),
+        TextSize::new(trimmed.len() as u32),
+    );
+    Some(DefSite {
+        name: SmolStr::new(trimmed),
+        kind: DefSiteKind::Environment,
+        name_range,
+        range: command.text_range(),
+    })
 }
 
 /// Replacement-body facts for one scanned command definition, used to detect
@@ -1021,5 +1143,88 @@ mod tests {
         let sig = db.environment("shellenv").expect("shellenv defined");
         assert!(sig.verbatim_body);
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
+    }
+
+    fn sites_of(src: &str) -> Vec<DefSite> {
+        assert_eq!(reconstruct(src), src, "reconstruct must round-trip");
+        scan_definition_sites(&SyntaxNode::new_root(parse(src).green))
+    }
+
+    #[test]
+    fn def_site_newcommand_braced_name_span() {
+        let src = "\\newcommand{\\foo}[1]{#1}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        let site = &sites[0];
+        assert_eq!(site.name, "foo");
+        assert_eq!(site.kind, DefSiteKind::Command);
+        assert_eq!(&src[site.name_range], "\\foo");
+        assert_eq!(&src[site.range], "\\newcommand{\\foo}[1]{#1}");
+    }
+
+    #[test]
+    fn def_site_newcommand_unbraced_name_span() {
+        let src = "\\newcommand\\foo[1]{#1}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].name, "foo");
+        assert_eq!(&src[sites[0].name_range], "\\foo");
+        assert_eq!(&src[sites[0].range], "\\newcommand\\foo[1]{#1}");
+    }
+
+    #[test]
+    fn def_site_def_sibling_name_span() {
+        let src = "\\def\\foo#1{#1}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].name, "foo");
+        assert_eq!(sites[0].kind, DefSiteKind::Command);
+        assert_eq!(&src[sites[0].name_range], "\\foo");
+    }
+
+    #[test]
+    fn def_site_xparse_command_name_span() {
+        let src = "\\NewDocumentCommand{\\foo}{m O{d}}{x}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].name, "foo");
+        assert_eq!(&src[sites[0].name_range], "\\foo");
+    }
+
+    #[test]
+    fn def_site_newenvironment_name_span() {
+        let src = "\\newenvironment{myenv}{begin}{end}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        let site = &sites[0];
+        assert_eq!(site.name, "myenv");
+        assert_eq!(site.kind, DefSiteKind::Environment);
+        assert_eq!(&src[site.name_range], "myenv");
+    }
+
+    #[test]
+    fn def_site_xparse_environment_name_span() {
+        let src = "\\NewDocumentEnvironment{myenv}{m}{a}{b}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].name, "myenv");
+        assert_eq!(sites[0].kind, DefSiteKind::Environment);
+        assert_eq!(&src[sites[0].name_range], "myenv");
+    }
+
+    #[test]
+    fn def_site_keeps_every_redefinition() {
+        // Unlike `scan_definitions` (last wins), every site is a navigation target.
+        let src = "\\newcommand{\\foo}{a}\n\\renewcommand{\\foo}{b}\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 2);
+        assert!(sites.iter().all(|s| s.name == "foo"));
+        assert!(sites[0].name_range.start() < sites[1].name_range.start());
+    }
+
+    #[test]
+    fn def_site_none_for_malformed() {
+        assert!(sites_of("\\newcommand\n").is_empty());
+        assert!(sites_of("\\newenvironment{}{a}{b}\n").is_empty());
     }
 }

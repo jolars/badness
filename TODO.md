@@ -210,17 +210,19 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   (`project::texmf`, see "TEXMF index" below), linking to its installed source
   (local always wins). `\graphicspath` is unsupported (graphics resolve against
   `base_dir` only). texlab covers the include edges only (`crates/links`).
-- [~] **Go-to-definition for includes and user macros.** **File targets done:** a
+- [x] **Go-to-definition for includes and user macros.** **File targets:** a
   file-referencing argument under the cursor (`\input`/`\include`/`\subfile`/
   `\import`, `\usepackage`/`\documentclass`, `\bibliography`/`\addbibresource`,
   `\includegraphics`) jumps to the resolved on-disk file. It reuses
   `document_link::document_links` (finding the link whose span covers the cursor), so
   it is disk-aware and TEXMF-aware for free—a system `\usepackage{amsmath}` jumps to
   its installed source (`file_target_under_cursor` in `src/lsp.rs`; no `CursorTarget`
-  variant needed, the label/cite path is unchanged). *Still deferred:* a user command
-  `\mycmd` jumping to its `\newcommand`/xparse definition (needs the definition *span*
-  recorded in the signature DB, `semantic::define`—provenance is tracked, the span is
-  not). texlab: `crates/definition` (command/include/label/citation/string_ref).
+  variant needed, the label/cite path is unchanged). **User macros:** `\mycmd` (and a
+  `\begin{myenv}` name) jumps to its `\newcommand`/`\def`/xparse (`\newenvironment`)
+  definition sites across the macro namespace — definition *spans* come from
+  `semantic::scan_definition_sites`, the range-bearing sibling of the signature scan
+  (`SignatureDb` stays range-free so `document_signatures` keeps Eq-backdating).
+  texlab: `crates/definition` (command/include/label/citation/string_ref).
 - [x] **Matching `\begin`/`\end` document highlight.** Highlight the paired
   begin/end of the environment under the cursor (highlight was label-key only
   before); the parser already pairs them structurally. texlab: `crates/highlights`
@@ -242,10 +244,18 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   awareness" tier 3); `[build] aux-dir` locates out-of-tree builds. Deferred:
   latexmkrc/`Tectonic.toml` aux-dir auto-detection; eager `**/*.aux` watching
   (numbers refresh on the next request).
-- [ ] **References + rename for user macros and environment names.** Extend
-  references/rename (label/citation keys only today) to command names (cross-file,
-  via the signature-DB provenance in `semantic::define`) and to environment-name
-  pairs. texlab: `crates/references` + `crates/rename`
+- [x] **References + rename for user macros and environment names.** References,
+  rename, and goto-definition extend past label/citation keys to command names and
+  environment names (`src/lsp/name_refs.rs`): occurrences via a request-time walk
+  over the memoized tree (an Eq firewall would never backdate range-bearing facts),
+  definition sites via `semantic::scan_definition_sites`, and the *macro namespace*
+  = include component ∪ package-load reachability in both directions (so a rename
+  reaches a local `.sty` definition and back). References are ungated (pure
+  occurrence search, built-ins included); **rename is gated to user-defined names**
+  (a project definition site must exist) and validated by `is_valid_command_name`
+  (letters-only, `@`/`_`/`:` only when the old name had them — letter-mode-safe by
+  construction). Environment matching is name-based, not pair-based, so unbalanced
+  files degrade gracefully. texlab: `crates/references` + `crates/rename`
   (command/entry/label/string_def).
 
 ### Completion

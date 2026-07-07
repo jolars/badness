@@ -834,6 +834,16 @@ impl Analysis {
         let project = Project::new(&self.0, members);
         scope_signatures(&self.0, project, file)
     }
+
+    /// Intern `members` as a `Project` and resolve its package-load graph
+    /// ([`package_graph`]): the `\usepackage`/`\documentclass` edges into local
+    /// `.sty`/`.cls` members. Name-based references/rename walk it (in both
+    /// directions) to extend the macro namespace past the include component.
+    /// Borrows the snapshot's storage.
+    pub fn package_graph(&self, members: Vec<ProjectMember>) -> &crate::project::PackageGraph {
+        let project = Project::new(&self.0, members);
+        package_graph(&self.0, project)
+    }
 }
 
 #[salsa::db]

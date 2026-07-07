@@ -3592,3 +3592,392 @@ fn lsp_negotiates_utf8_position_encoding() {
 
     shutdown(&client, server_thread);
 }
+
+#[test]
+fn lsp_references_command_same_file() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    // A definition and two uses; `\foobar` must not match `\foo` by prefix.
+    let doc = "\\newcommand{\\foo}{x}\n\\foo bar\n\\foo and \\foobar\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // From a use: both uses, the definition-site name excluded without the flag.
+    let uses = references(&client, 2, &uri, Position::new(1, 2), false);
+    assert_eq!(
+        sorted_starts(uses),
+        vec![Position::new(1, 0), Position::new(2, 0)],
+        "both uses, no declaration, no prefix match"
+    );
+    let with_decl = references(&client, 3, &uri, Position::new(1, 2), true);
+    assert_eq!(
+        sorted_starts(with_decl),
+        vec![
+            Position::new(0, 12),
+            Position::new(1, 0),
+            Position::new(2, 0)
+        ],
+        "the `\\foo` inside `\\newcommand` is the declaration"
+    );
+
+    // Find-references resolves identically from the definition-site name.
+    let from_def = references(&client, 4, &uri, Position::new(0, 14), false);
+    assert_eq!(
+        sorted_starts(from_def),
+        vec![Position::new(1, 0), Position::new(2, 0)]
+    );
+
+    // prepareRename anchors to the name behind the backslash.
+    let prepared = prepare_rename(&client, 5, &uri, Position::new(1, 2));
+    let response: PrepareRenameResponse = serde_json::from_value(prepared).unwrap();
+    match response {
+        PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } => {
+            assert_eq!(range, Range::new(Position::new(1, 1), Position::new(1, 4)));
+            assert_eq!(placeholder, "foo");
+        }
+        other => panic!("expected RangeWithPlaceholder, got {other:?}"),
+    }
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_references_command_cross_file() {
+    // The root defines `\foo` and `\input`s a chapter using it.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("part.tex"), "\\foo\n").unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\newcommand{\\foo}{x}\n\
+        \\begin{document}\n\
+        \\input{part}\n\
+        \\foo\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let part_uri = path_to_file_uri(&dir.path().join("part.tex"));
+    let uses = references(&client, 2, &main_uri, Position::new(4, 2), false);
+    let mut by_file: Vec<(String, Position)> = uses
+        .into_iter()
+        .map(|l| (l.uri.as_str().to_owned(), l.range.start))
+        .collect();
+    by_file.sort();
+    assert_eq!(
+        by_file,
+        vec![
+            (main_uri.as_str().to_owned(), Position::new(4, 0)),
+            (part_uri.as_str().to_owned(), Position::new(0, 0)),
+        ],
+        "uses in both files, declaration excluded"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_command_rewrites_def_in_local_sty() {
+    // The definition lives in a local package: rename from a `.tex` use must reach
+    // the `.sty` (package-load edge), and rename from the `.sty` definition must
+    // reach the documents loading it (the reverse direction).
+    let dir = tempfile::tempdir().expect("temp dir");
+    let sty_src = "\\newcommand{\\foo}{x}\n";
+    std::fs::write(dir.path().join("mystyle.sty"), sty_src).unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\usepackage{mystyle}\n\
+        \\begin{document}\n\
+        \\foo\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let sty_uri = path_to_file_uri(&dir.path().join("mystyle.sty"));
+
+    // From the use in main: both files rewritten.
+    let changes = rename(&client, 2, &main_uri, Position::new(3, 2), "qux");
+    assert_eq!(changes.len(), 2, "edits span the .tex and the .sty");
+    assert_eq!(
+        apply_edits(sty_src, &changes[&sty_uri]),
+        "\\newcommand{\\qux}{x}\n",
+        "the definition in the package is rewritten"
+    );
+    assert!(apply_edits(main, &changes[&main_uri]).contains("\\qux\n"));
+
+    // A leading backslash in the typed name is accepted too.
+    let with_backslash = rename(&client, 3, &main_uri, Position::new(3, 2), "\\qux");
+    assert_eq!(
+        with_backslash[&sty_uri], changes[&sty_uri],
+        "`\\qux` and `qux` produce identical edits"
+    );
+
+    // From the definition site inside the .sty: the reverse direction.
+    did_open(&client, &sty_uri, 1, sty_src);
+    let _ = recv_diagnostics(&client);
+    let from_sty = rename(&client, 4, &sty_uri, Position::new(0, 14), "qux");
+    assert_eq!(
+        from_sty.len(),
+        2,
+        "rename from the package reaches the loading document"
+    );
+    assert!(apply_edits(main, &from_sty[&main_uri]).contains("\\qux\n"));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_command_gated_to_user_defined() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\textbf{x}\n\\textbf{y}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // A built-in has no project definition site: prepareRename and rename decline.
+    let prepared = prepare_rename(&client, 2, &uri, Position::new(0, 3));
+    assert!(prepared.is_null(), "built-in commands are not renameable");
+    let changes = rename(&client, 3, &uri, Position::new(0, 3), "strong");
+    assert!(changes.is_empty(), "rename declines on a built-in");
+
+    // References stay ungated: a pure occurrence search still works.
+    let uses = references(&client, 4, &uri, Position::new(0, 3), false);
+    assert_eq!(
+        sorted_starts(uses),
+        vec![Position::new(0, 0), Position::new(1, 0)],
+        "find-references works for built-ins"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_command_edit_shapes_and_validation() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    // Adjacent word, braced argument, adjacent control word, star variant.
+    let doc = "\\newcommand{\\foo}{x}\n\\foo bar \\foo{y} \\foo\\bar\n\\foo*\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    let changes = rename(&client, 2, &uri, Position::new(1, 2), "qux");
+    assert_eq!(
+        apply_edits(doc, &changes[&uri]),
+        "\\newcommand{\\qux}{x}\n\\qux bar \\qux{y} \\qux\\bar\n\\qux*\n",
+        "every token boundary survives: word, brace, control word, star"
+    );
+
+    // A digit would end the control word early at every use site; `@` outside a
+    // letter-mode name would mis-lex. Both decline.
+    assert!(
+        rename(&client, 3, &uri, Position::new(1, 2), "my2cmd").is_empty(),
+        "digits are not control-word letters"
+    );
+    assert!(
+        rename(&client, 4, &uri, Position::new(1, 2), "a@b").is_empty(),
+        "a plain name must not gain `@`"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_command_at_names_in_sty() {
+    // In a `.sty`, `@` is a letter, so `\my@helper` is one token; the new name may
+    // keep `@` because the old one proves every site is in `\makeatletter` scope.
+    let (client, server_thread) = start_server(None);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let sty_path = dir.path().join("mystyle.sty");
+    let sty_src = "\\newcommand{\\my@helper}{x}\n\\my@helper\n";
+    std::fs::write(&sty_path, sty_src).unwrap();
+    let sty_uri = path_to_file_uri(&sty_path);
+    did_open(&client, &sty_uri, 1, sty_src);
+    let _ = recv_diagnostics(&client);
+
+    let changes = rename(&client, 2, &sty_uri, Position::new(1, 3), "my@other");
+    assert_eq!(
+        apply_edits(sty_src, &changes[&sty_uri]),
+        "\\newcommand{\\my@other}{x}\n\\my@other\n",
+        "`@` is allowed when the old name already used it"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_command_skips_comments_and_verbatim() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\newcommand{\\foo}{x}\n\
+        % \\foo in a comment\n\
+        \\begin{verbatim}\n\
+        \\foo\n\
+        \\end{verbatim}\n\
+        \\foo\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    let changes = rename(&client, 2, &uri, Position::new(5, 2), "qux");
+    let out = apply_edits(doc, &changes[&uri]);
+    assert!(
+        out.contains("% \\foo in a comment") && out.contains("\\begin{verbatim}\n\\foo\n"),
+        "comment and verbatim occurrences are untouched, got {out:?}"
+    );
+    assert!(
+        out.starts_with("\\newcommand{\\qux}{x}") && out.ends_with("\\qux\n"),
+        "the real definition and use are rewritten, got {out:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_references_and_rename_environment_cross_file() {
+    // `\newenvironment` in the root; balanced pairs in both files plus an
+    // unbalanced `\begin` in the chapter (name-based, not pair-based).
+    let dir = tempfile::tempdir().expect("temp dir");
+    let part_src = "\\begin{myenv}\ny\n\\end{myenv}\n\\begin{myenv}\n";
+    std::fs::write(dir.path().join("part.tex"), part_src).unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\newenvironment{myenv}{a}{b}\n\
+        \\begin{document}\n\
+        \\begin{myenv}\n\
+        x\n\
+        \\end{myenv}\n\
+        \\input{part}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let part_uri = path_to_file_uri(&dir.path().join("part.tex"));
+
+    // References from the name in main's `\begin{myenv}`: every delimiter name in
+    // both files; the `\newenvironment{myenv}` name only with the declaration flag.
+    let uses = references(&client, 2, &main_uri, Position::new(3, 8), false);
+    assert_eq!(uses.len(), 5, "2 in main + 3 in part, got {uses:?}");
+    let with_decl = references(&client, 3, &main_uri, Position::new(3, 8), true);
+    assert_eq!(with_decl.len(), 6, "plus the definition name");
+    assert!(
+        with_decl
+            .iter()
+            .any(|l| l.uri == main_uri && l.range.start == Position::new(1, 16)),
+        "the declaration is the `\\newenvironment` name argument"
+    );
+
+    // Rename rewrites every delimiter and the definition name.
+    let changes = rename(&client, 4, &main_uri, Position::new(3, 8), "blockx");
+    let main_out = apply_edits(main, &changes[&main_uri]);
+    assert!(
+        main_out.contains("\\newenvironment{blockx}")
+            && main_out.contains("\\begin{blockx}\nx\n\\end{blockx}"),
+        "definition + main pair renamed, got {main_out:?}"
+    );
+    assert_eq!(
+        apply_edits(part_src, &changes[&part_uri]),
+        "\\begin{blockx}\ny\n\\end{blockx}\n\\begin{blockx}\n",
+        "the unbalanced trailing \\begin is renamed too"
+    );
+
+    // A cursor in the body (not on a delimiter or name) declines.
+    let in_body = prepare_rename(&client, 5, &main_uri, Position::new(4, 0));
+    assert!(in_body.is_null(), "the body is not a name");
+
+    // A built-in environment declines rename (no project definition).
+    let builtin = rename(&client, 6, &main_uri, Position::new(2, 9), "doc");
+    assert!(builtin.is_empty(), "`document` is not user-defined");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_references_cref_command_word_still_resolves_labels() {
+    // Precedence regression: the cursor on `\cref`'s control word sits inside the
+    // reference's whole-command range, so the label path must win over the
+    // command-name fallback (which would see the `cref` token instead).
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("def.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\label{a}\n\\cref{a}\n\\cref{a}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    let with_decl = references(&client, 2, &uri, Position::new(1, 2), true);
+    assert_eq!(
+        sorted_starts(with_decl),
+        vec![
+            Position::new(0, 0),
+            Position::new(1, 0),
+            Position::new(2, 0)
+        ],
+        "label resolution wins: the \\label declaration is included"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_definition_user_command_and_environment() {
+    // Goto-definition jumps from a use to the definition-site name, across the
+    // package-load edge into a local `.sty`.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let sty_src = "\\newcommand{\\foo}{x}\n";
+    std::fs::write(dir.path().join("mystyle.sty"), sty_src).unwrap();
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\
+        \\usepackage{mystyle}\n\
+        \\newenvironment{myenv}{a}{b}\n\
+        \\begin{document}\n\
+        \\foo\n\
+        \\begin{myenv}\n\
+        \\textbf{x}\n\
+        \\end{myenv}\n\
+        \\end{document}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let main_uri = path_to_file_uri(&main_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    let sty_uri = path_to_file_uri(&dir.path().join("mystyle.sty"));
+
+    // Command use → the `\foo` name inside the `.sty` definition.
+    let defs = definition(&client, 2, &main_uri, Position::new(4, 2));
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].uri, sty_uri);
+    assert_eq!(
+        defs[0].range,
+        Range::new(Position::new(0, 12), Position::new(0, 16))
+    );
+
+    // Environment name → the `\newenvironment{myenv}` name argument.
+    let env_defs = definition(&client, 3, &main_uri, Position::new(5, 9));
+    assert_eq!(env_defs.len(), 1);
+    assert_eq!(env_defs[0].uri, main_uri);
+    assert_eq!(
+        env_defs[0].range,
+        Range::new(Position::new(2, 16), Position::new(2, 21))
+    );
+
+    // A built-in with no project definition yields nothing.
+    let builtin = definition(&client, 4, &main_uri, Position::new(6, 3));
+    assert!(builtin.is_empty(), "`\\textbf` has no definition site");
+
+    shutdown(&client, server_thread);
+}

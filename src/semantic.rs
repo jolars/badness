@@ -29,7 +29,7 @@ pub use label::{CitationRef, LabelDef, LabelId, LabelRef, RefCommand, RefId};
 pub use load::{
     DiskPackageSource, PackageSource, collect_package_signatures, disk_scope_signatures,
 };
-pub use outline::{OutlineItem, OutlineSymbol, outline};
+pub use outline::{LabelContext, OutlineItem, OutlineSymbol, label_context, outline};
 pub use signature::{
     ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, Signatures,
 };

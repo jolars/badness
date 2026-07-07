@@ -266,6 +266,133 @@ fn section_title(command: &SyntaxNode) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// What a `\label` at some offset labels: the classification driving label
+/// hover (kind + nearest heading/caption). Like [`OutlineItem`], LSP-agnostic
+/// and classified from the curated [`signature::builtin`] DB only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelContext {
+    /// Directly under a sectioning command; `title` is its heading text.
+    Section { title: String },
+    /// Inside a float environment (`figure`, `table`, …); `caption` is the
+    /// text of a `\caption` in that float, when present.
+    Float {
+        env: String,
+        caption: Option<String>,
+    },
+    /// Inside a theorem-like environment; `description` is the optional
+    /// `\begin{thm}[…]` argument, when present.
+    Theorem {
+        env: String,
+        description: Option<String>,
+    },
+    /// Inside math (`$…$`, `\[…\]`, or a math environment).
+    Equation,
+    /// Inside a list environment (`enumerate`, `itemize`, …).
+    Item,
+}
+
+/// Classify the `\label` whose key sits at `offset`: the innermost classifying
+/// ancestor wins (float/theorem/math/list environment), matching how the label
+/// resolves in TeX; a label in plain prose falls back to the nearest *preceding*
+/// sectioning command. `None` in unclassifiable plain text before any section.
+pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext> {
+    let element = root.covering_element(TextRange::empty(offset));
+    let mut node = match element {
+        rowan::NodeOrToken::Node(n) => Some(n),
+        rowan::NodeOrToken::Token(t) => t.parent(),
+    };
+    while let Some(current) = node {
+        match current.kind() {
+            SyntaxKind::MATH | SyntaxKind::INLINE_MATH | SyntaxKind::DISPLAY_MATH => {
+                return Some(LabelContext::Equation);
+            }
+            SyntaxKind::ENVIRONMENT => {
+                let begin = current.children().find(|c| c.kind() == SyntaxKind::BEGIN);
+                if let Some(name) = begin.as_ref().and_then(environment_name)
+                    && let Some(sig) = signature::builtin().environment(&name)
+                {
+                    match sig.outline {
+                        Some(OutlineKind::Float) => {
+                            return Some(LabelContext::Float {
+                                caption: caption_text(&current),
+                                env: name,
+                            });
+                        }
+                        Some(OutlineKind::Theorem) => {
+                            return Some(LabelContext::Theorem {
+                                description: begin.as_ref().and_then(optional_text),
+                                env: name,
+                            });
+                        }
+                        None => {
+                            if sig.math {
+                                return Some(LabelContext::Equation);
+                            }
+                            if sig.list {
+                                return Some(LabelContext::Item);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        node = current.parent();
+    }
+
+    // Plain prose: the label belongs to the current sectioning unit — the last
+    // sectioning command starting before the label.
+    let mut best: Option<SyntaxNode> = None;
+    for command in root
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMMAND)
+    {
+        if command.text_range().start() > offset {
+            break;
+        }
+        let is_sectioning = command_name(&command)
+            .and_then(|name| {
+                signature::builtin()
+                    .command(&name)
+                    .and_then(|c| c.sectioning)
+            })
+            .is_some();
+        if is_sectioning {
+            best = Some(command);
+        }
+    }
+    let section = best?;
+    let title = section_title(&section)
+        .or_else(|| command_name(&section))
+        .unwrap_or_default();
+    Some(LabelContext::Section { title })
+}
+
+/// The text of the first `\caption` inside `env`, via the same first-group
+/// extraction as [`section_title`].
+fn caption_text(env: &SyntaxNode) -> Option<String> {
+    env.descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMMAND)
+        .find(|c| command_name(c).as_deref() == Some("caption"))
+        .and_then(|caption| section_title(&caption))
+}
+
+/// The inner text of a `\begin{…}[…]` optional argument (its `OPTIONAL` child,
+/// brackets stripped), trimmed; `None` when absent or empty.
+fn optional_text(begin: &SyntaxNode) -> Option<String> {
+    let optional = begin
+        .children()
+        .find(|c| c.kind() == SyntaxKind::OPTIONAL)?;
+    let text = optional.text().to_string();
+    let inner = text
+        .strip_prefix('[')
+        .map(|t| t.strip_suffix(']').unwrap_or(t))
+        .unwrap_or(&text)
+        .trim()
+        .to_owned();
+    (!inner.is_empty()).then_some(inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +507,105 @@ mod tests {
         let items = outline_of("\\section{\\textsc{Intro}}\n");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "\\textsc{Intro}");
+    }
+
+    /// Classify the label at the offset of `\label` in `src`.
+    fn context_of(src: &str) -> Option<LabelContext> {
+        let offset = src.find("\\label").expect("marker") + "\\label{".len();
+        let root = SyntaxNode::new_root(parse(src).green);
+        label_context(&root, TextSize::new(offset as u32))
+    }
+
+    #[test]
+    fn label_after_section_is_section_context() {
+        let ctx = context_of("\\section{Intro}\ntext\n\\label{sec:a}\nmore\n");
+        assert_eq!(
+            ctx,
+            Some(LabelContext::Section {
+                title: "Intro".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn label_in_figure_gets_caption() {
+        let ctx =
+            context_of("\\begin{figure}\n\\caption{A chart}\n\\label{fig:x}\n\\end{figure}\n");
+        assert_eq!(
+            ctx,
+            Some(LabelContext::Float {
+                env: "figure".to_owned(),
+                caption: Some("A chart".to_owned())
+            })
+        );
+    }
+
+    #[test]
+    fn label_in_captionless_table() {
+        let ctx = context_of("\\begin{table}\nx\\label{tab:x}\n\\end{table}\n");
+        assert_eq!(
+            ctx,
+            Some(LabelContext::Float {
+                env: "table".to_owned(),
+                caption: None
+            })
+        );
+    }
+
+    #[test]
+    fn label_in_theorem_with_description() {
+        let ctx = context_of("\\begin{theorem}[Euler]\nx \\label{thm:a}\n\\end{theorem}\n");
+        assert_eq!(
+            ctx,
+            Some(LabelContext::Theorem {
+                env: "theorem".to_owned(),
+                description: Some("Euler".to_owned())
+            })
+        );
+    }
+
+    #[test]
+    fn label_in_equation_environment_is_equation() {
+        let ctx = context_of("\\begin{equation}\nE = mc^2 \\label{eq:e}\n\\end{equation}\n");
+        assert_eq!(ctx, Some(LabelContext::Equation));
+    }
+
+    #[test]
+    fn label_in_display_math_is_equation() {
+        let ctx = context_of("\\[ x \\label{eq:x} \\]\n");
+        assert_eq!(ctx, Some(LabelContext::Equation));
+    }
+
+    #[test]
+    fn label_in_enumerate_is_item() {
+        let ctx = context_of("\\begin{enumerate}\n\\item one \\label{it:1}\n\\end{enumerate}\n");
+        assert_eq!(ctx, Some(LabelContext::Item));
+    }
+
+    #[test]
+    fn float_wins_over_enclosing_section() {
+        let ctx = context_of("\\section{A}\n\\begin{figure}\n\\label{fig:x}\n\\end{figure}\n");
+        assert!(matches!(ctx, Some(LabelContext::Float { .. })));
+    }
+
+    #[test]
+    fn item_label_inside_figure_stays_item() {
+        // Innermost classifying ancestor wins.
+        let ctx = context_of(
+            "\\begin{figure}\n\\begin{itemize}\n\\item \\label{it:x}\n\\end{itemize}\n\\end{figure}\n",
+        );
+        assert_eq!(ctx, Some(LabelContext::Item));
+    }
+
+    #[test]
+    fn label_before_any_section_is_none() {
+        assert_eq!(context_of("text \\label{x} more\n"), None);
+    }
+
+    #[test]
+    fn section_after_the_label_does_not_count() {
+        let ctx = context_of("text \\label{x}\n\\section{Later}\n");
+        assert_eq!(ctx, None);
     }
 
     #[test]

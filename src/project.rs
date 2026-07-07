@@ -10,6 +10,9 @@
 //! `include.rs` handles inclusion extraction; `graph.rs` builds the cross-file
 //! graph.
 
+// The file is named `auxfile.rs` rather than `aux.rs` because `aux` is a
+// reserved device name on Windows and git refuses to check out such a path.
+#[path = "project/auxfile.rs"]
 pub mod aux;
 pub mod citations;
 pub mod graph;

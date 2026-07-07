@@ -97,11 +97,11 @@ impl SemanticModel {
     /// Label definitions never referenced within *this* file.
     ///
     /// A per-file fact, **not** a lint signal: a label referenced only from
-    /// another file looks unreferenced here. A cross-file "unused label"
-    /// diagnostic would build on the project-level
+    /// another file looks unreferenced here. The cross-file `unreferenced-label`
+    /// lint instead builds on the project-level
     /// [`crate::project::resolved_labels`] (as `undefined-ref` does for refs),
-    /// but is deferred — it can false-positive on labels referenced from outside
-    /// the analyzed set.
+    /// firing only in a closed, rooted namespace so it never false-positives on
+    /// labels referenced from outside the analyzed set.
     pub fn unreferenced_labels(&self) -> impl Iterator<Item = LabelId> + '_ {
         (0..self.labels.len())
             .map(LabelId::from_index)

@@ -25,7 +25,9 @@ use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
 use crate::file_discovery::file_kind_or_tex;
 use crate::parser::parse_with_flavor;
 use crate::project::citations::document_cite_names;
-use crate::project::labels::{document_glossary_keys, document_label_names, is_document_root};
+use crate::project::labels::{
+    document_glossary_keys, document_label_names, document_ref_names, is_document_root,
+};
 use crate::project::{
     BibTarget, IncludeEdgeKey, PackageEdgeKey, Project, ProjectMember, ResolvedCitations,
     ResolvedLabels, collect_bib_resource_targets, collect_include_edge_keys,
@@ -66,6 +68,9 @@ pub enum QueryKind {
     /// A file's sorted, distinct label-name set ([`file_labels`]) — the firewall
     /// the cross-file label resolver consumes.
     FileLabels,
+    /// A file's sorted, distinct `\ref`-key set ([`file_refs`]) — the reference
+    /// firewall the cross-file label resolver consumes for `unreferenced-label`.
+    FileRefs,
     /// A file's sorted, distinct glossary/acronym key set
     /// ([`file_glossary_keys`]) — the firewall glossary key completion consumes.
     FileGlossaryKeys,
@@ -328,6 +333,26 @@ pub fn file_labels(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr> {
         file: Some(file),
     });
     document_label_names(semantic_model(db, file))
+}
+
+/// The file's distinct `\ref`-family key names, sorted — a range-free projection
+/// of [`semantic_model`], the reference mirror of [`file_labels`].
+///
+/// This is the per-file firewall the cross-file
+/// [`crate::project::resolved_labels`] resolver consumes for `unreferenced-label`
+/// (a label with no reference anywhere in its namespace). Stripping ranges means
+/// a prose edit, or a body edit that only shifts a `\ref`'s offset, leaves this
+/// `Vec` *equal* — salsa backdates and the project union is not rebuilt. Adding or
+/// removing a `\ref` key *does* change it, so the resolution rebuilds (that is
+/// exactly the dependency `unreferenced-label` needs). `Eq` for the same firewall
+/// reason as [`file_labels`].
+#[salsa::tracked(returns(ref))]
+pub fn file_refs(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileRefs,
+        file: Some(file),
+    });
+    document_ref_names(semantic_model(db, file))
 }
 
 /// The file's distinct glossary/acronym keys, sorted — a range-free projection
@@ -682,6 +707,12 @@ impl IncrementalDatabase {
     /// cross-file resolver).
     pub fn file_labels(&self, file: SourceFile) -> &[SmolStr] {
         file_labels(self, file)
+    }
+
+    /// The file's distinct, sorted `\ref`-family key names (the reference firewall
+    /// feeding the cross-file resolver for `unreferenced-label`).
+    pub fn file_refs(&self, file: SourceFile) -> &[SmolStr] {
+        file_refs(self, file)
     }
 
     /// The file's distinct, sorted glossary/acronym keys (the firewall feeding

@@ -173,31 +173,61 @@ fn resolved_labels_unions_across_the_include_graph() {
 }
 
 #[test]
-fn label_set_preserving_edit_does_not_rebuild_resolved_labels() {
-    // The label firewall: adding a `\ref` to part.tex changes its semantic model
-    // (so `file_labels` re-executes) but not its `\label`-name set — so
-    // `file_labels` backdates and the cross-file `resolved_labels` memo is reused.
+fn prose_edit_does_not_rebuild_resolved_labels() {
+    // The label/reference firewalls together: a prose edit to part.tex changes its
+    // semantic model (so `file_labels` and `file_refs` both re-execute) but neither
+    // its `\label`-name set nor its `\ref`-key set — so both backdate and the
+    // cross-file `resolved_labels` memo is reused.
     let (mut db, main, part) = main_part(
         "\\documentclass{article}\n\\input{part}\n\\ref{a}\n",
-        "\\label{a}\n",
+        "\\label{a}\\ref{a}\n",
     );
     let _ = resolved_labels(&db, project_main_part(&db, main, part));
 
     db.clear_query_log();
 
-    // The model changes (a new ref) but the label-name set is still just `{a}`.
-    db.set_file_text(part, "\\label{a}\\ref{a}\n");
+    // The model changes (added prose) but the label set is still `{a}` and the ref
+    // set is still `{a}`.
+    db.set_file_text(part, "Prose.\n\\label{a}\\ref{a}\n");
     let _ = resolved_labels(&db, project_main_part(&db, main, part));
 
     let counts = count_by_kind(&db.query_log());
-    // part's label set is recomputed (its model changed)...
+    // part's label and ref sets are recomputed (its model changed)...
     assert_eq!(counts.get(&QueryKind::FileLabels), Some(&1));
-    // ...but the set is unchanged, so the resolution memo is reused.
+    assert_eq!(counts.get(&QueryKind::FileRefs), Some(&1));
+    // ...but both sets are unchanged, so the resolution memo is reused.
     assert_eq!(
         counts.get(&QueryKind::ResolvedLabels),
         None,
-        "resolved labels must not rebuild when no label set changed"
+        "resolved labels must not rebuild when neither the label nor ref set changed"
     );
+}
+
+#[test]
+fn ref_change_rebuilds_resolved_labels() {
+    // The reference firewall's complement: adding a `\ref` changes part's ref set,
+    // so the cross-file resolution *must* rebuild — `unreferenced-label` depends on
+    // the cross-file reference union, so the memo cannot over-cache across it.
+    let (mut db, main, part) = main_part(
+        "\\documentclass{article}\n\\input{part}\n\\ref{a}\n",
+        "\\label{a}\\label{b}\n",
+    );
+    let _ = resolved_labels(&db, project_main_part(&db, main, part));
+
+    db.clear_query_log();
+
+    // Adding `\ref{b}` grows part's ref set from `{a}` to `{a, b}`.
+    db.set_file_text(part, "\\label{a}\\label{b}\\ref{b}\n");
+    let resolved = resolved_labels(&db, project_main_part(&db, main, part));
+
+    let counts = count_by_kind(&db.query_log());
+    assert_eq!(counts.get(&QueryKind::FileRefs), Some(&1));
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedLabels),
+        Some(&1),
+        "resolved labels must rebuild when a ref set changes"
+    );
+    assert!(resolved.is_referenced(&fpath(&db, main), "b"));
 }
 
 #[test]

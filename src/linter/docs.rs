@@ -21,7 +21,7 @@ use crate::linter::render::{OutputMode, render_findings};
 use crate::linter::rules::{Rule, all_rules};
 use crate::parser::parse;
 use crate::project::include::BibTarget;
-use crate::project::labels::document_label_names;
+use crate::project::labels::{document_label_names, document_ref_names};
 use crate::project::{
     CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
     collect_bib_resource_targets, collect_include_edge_keys,
@@ -58,7 +58,12 @@ pub fn demo_diagnostics(source: &str) -> Vec<Diagnostic> {
 
     // `true` treats the snippet as a document root, so the namespace is rooted
     // (and, with no unresolved includes, closed).
-    let labels = [(path.clone(), document_label_names(&model), true)];
+    let labels = [(
+        path.clone(),
+        document_label_names(&model),
+        document_ref_names(&model),
+        true,
+    )];
     let resolved_labels = ResolvedLabels::build(&labels, &graph);
 
     let bib_targets = collect_bib_resource_targets(&root, None);

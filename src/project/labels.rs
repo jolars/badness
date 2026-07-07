@@ -18,14 +18,14 @@
 //! merged into one component, so a label defined in both is reported as a
 //! cross-file duplicate even though they never co-compile.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use smol_str::SmolStr;
 
 use crate::ast::{command_name, environment_name};
 use crate::incremental::{
-    IncrementalDb, QueryKind, QueryLogEntry, file_is_document_root, file_labels,
+    IncrementalDb, QueryKind, QueryLogEntry, file_is_document_root, file_labels, file_refs,
 };
 use crate::project::graph::{IncludeGraph, Project, project_graph};
 use crate::semantic::SemanticModel;
@@ -41,6 +41,18 @@ pub fn document_label_names(model: &SemanticModel) -> Vec<SmolStr> {
         .iter()
         .map(|label| label.name.clone())
         .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The distinct `\ref`-family key names *used* in `model`, sorted and deduped —
+/// the per-file reference input to [`ResolvedLabels::build`], the mirror image of
+/// [`document_label_names`]. A `\cref{a,b}` contributes both `a` and `b` (the
+/// model already splits key lists). Feeds the cross-file `unreferenced-label`
+/// lint, which asks whether a `\label` is targeted *anywhere* in the namespace.
+pub fn document_ref_names(model: &SemanticModel) -> Vec<SmolStr> {
+    let mut names: Vec<SmolStr> = model.refs().iter().map(|r| r.name.clone()).collect();
     names.sort_unstable();
     names.dedup();
     names
@@ -79,6 +91,10 @@ pub fn is_document_root(root: &SyntaxNode) -> bool {
 struct Component {
     /// Label name → the files in this component that define it, sorted & deduped.
     defs: HashMap<SmolStr, Vec<PathBuf>>,
+    /// Every `\ref`-family key *used* by any file in the component. Membership
+    /// only (order-free), so a `HashSet`: `unreferenced-label` asks "is this
+    /// label referenced somewhere in the namespace?", the mirror of `defs`.
+    refs: HashSet<SmolStr>,
     /// Whether every include in the component resolves to an analyzed member: no
     /// dynamic and no external (out-of-set) targets. Only then is "defined
     /// nowhere" trustworthy enough to drive `undefined-ref`.
@@ -102,14 +118,19 @@ pub struct ResolvedLabels {
 
 impl ResolvedLabels {
     /// Resolve labels for `files` — each a `(path, distinct sorted label names,
-    /// is_document_root)` triple — partitioned by the inclusion `graph`.
+    /// distinct sorted `\ref` key names, is_document_root)` tuple — partitioned by
+    /// the inclusion `graph`.
     ///
     /// Pure and deterministic: components are assigned in sorted-path order and
     /// every definer list is sorted, so the output never depends on `HashMap`
-    /// iteration order.
-    pub fn build(files: &[(PathBuf, Vec<SmolStr>, bool)], graph: &IncludeGraph) -> Self {
+    /// iteration order. (The per-component reference set is queried by membership
+    /// only, so its iteration order never reaches the output.)
+    pub fn build(
+        files: &[(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)],
+        graph: &IncludeGraph,
+    ) -> Self {
         // Sorted, unique member paths give union-find a deterministic index space.
-        let mut paths: Vec<&Path> = files.iter().map(|(p, _, _)| p.as_path()).collect();
+        let mut paths: Vec<&Path> = files.iter().map(|(p, _, _, _)| p.as_path()).collect();
         paths.sort_unstable();
         paths.dedup();
         let index: HashMap<&Path, usize> = paths.iter().enumerate().map(|(i, p)| (*p, i)).collect();
@@ -146,8 +167,8 @@ impl ResolvedLabels {
             })
             .collect();
 
-        // Index definitions and the rooted flag per component.
-        for (path, names, is_root) in files {
+        // Index definitions, references, and the rooted flag per component.
+        for (path, names, refs, is_root) in files {
             let Some(&id) = component_of.get(path) else {
                 continue;
             };
@@ -159,6 +180,7 @@ impl ResolvedLabels {
                     .or_default()
                     .push(path.clone());
             }
+            comp.refs.extend(refs.iter().cloned());
         }
 
         // An unresolved include (dynamic or out-of-set) opens its component: the
@@ -197,6 +219,18 @@ impl ResolvedLabels {
     /// Whether `name` is defined anywhere in `file`'s namespace.
     pub fn is_defined(&self, file: &Path, name: &str) -> bool {
         !self.definers(file, name).is_empty()
+    }
+
+    /// Whether `name` is targeted by a `\ref`-family command anywhere in `file`'s
+    /// namespace. The mirror of [`is_defined`](Self::is_defined): `undefined-ref`
+    /// asks whether a *reference* has a definition, `unreferenced-label` asks
+    /// whether a *definition* has a reference. Both are trustworthy only over a
+    /// closed, rooted namespace (see [`is_closed`](Self::is_closed) /
+    /// [`is_root_component`](Self::is_root_component)).
+    pub fn is_referenced(&self, file: &Path, name: &str) -> bool {
+        self.component_of
+            .get(file)
+            .is_some_and(|&id| self.components[id].refs.contains(name))
     }
 
     /// All member files sharing `file`'s namespace (its connected component),
@@ -243,8 +277,11 @@ impl ResolvedLabels {
 /// [`ResolvedLabels`] holds `HashMap`s (not `Eq`/`salsa::Update`) and is a pure
 /// function of the interned [`Project`] plus the backdated per-file facts, so it
 /// carries no salsa references. The firewall pays off here: a prose edit leaves
-/// `file_labels`, `file_is_document_root`, and `include_edges` all backdated, so
-/// neither [`project_graph`] nor this query re-executes.
+/// `file_labels`, `file_refs`, `file_is_document_root`, and `include_edges` all
+/// backdated, so neither [`project_graph`] nor this query re-executes. A `\ref`
+/// edit *does* rebuild this query (it changes `file_refs`), because
+/// `unreferenced-label` depends on the cross-file reference union — but a pure
+/// prose edit still backdates both firewalls.
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
 pub fn resolved_labels<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> ResolvedLabels {
     db.record_query(QueryLogEntry {
@@ -255,7 +292,7 @@ pub fn resolved_labels<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -
     let graph = project_graph(db, project);
     // Labels live in LaTeX files (`.tex`/`.sty`/`.cls`); `.bib` members carry none
     // and are not part of the include-graph namespace.
-    let files: Vec<(PathBuf, Vec<SmolStr>, bool)> = project
+    let files: Vec<(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)> = project
         .members(db)
         .iter()
         .filter(|member| member.kind.is_latex())
@@ -263,6 +300,7 @@ pub fn resolved_labels<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -
             (
                 member.path.clone(),
                 file_labels(db, member.file).clone(),
+                file_refs(db, member.file).clone(),
                 *file_is_document_root(db, member.file),
             )
         })
@@ -337,7 +375,10 @@ mod tests {
     #[test]
     fn lone_file_is_its_own_component() {
         let g = graph(&[("/p/a.tex", &[])]);
-        let r = ResolvedLabels::build(&[(PathBuf::from("/p/a.tex"), names(&["x"]), false)], &g);
+        let r = ResolvedLabels::build(
+            &[(PathBuf::from("/p/a.tex"), names(&["x"]), names(&[]), false)],
+            &g,
+        );
         assert!(r.is_defined(Path::new("/p/a.tex"), "x"));
         assert!(!r.is_defined(Path::new("/p/a.tex"), "y"));
         // No other file defines `x`.
@@ -355,8 +396,18 @@ mod tests {
         ]);
         let r = ResolvedLabels::build(
             &[
-                (PathBuf::from("/p/main.tex"), names(&[]), true),
-                (PathBuf::from("/p/chap.tex"), names(&["a"]), false),
+                (
+                    PathBuf::from("/p/main.tex"),
+                    names(&[]),
+                    names(&["a"]),
+                    true,
+                ),
+                (
+                    PathBuf::from("/p/chap.tex"),
+                    names(&["a"]),
+                    names(&[]),
+                    false,
+                ),
             ],
             &g,
         );
@@ -364,6 +415,10 @@ mod tests {
         assert!(r.is_defined(Path::new("/p/main.tex"), "a"));
         assert!(r.is_root_component(Path::new("/p/chap.tex")));
         assert!(r.is_closed(Path::new("/p/main.tex")));
+        // The chapter's `\label{a}` is referenced cross-file (from main), visible
+        // when the whole namespace is queried from either member.
+        assert!(r.is_referenced(Path::new("/p/chap.tex"), "a"));
+        assert!(!r.is_referenced(Path::new("/p/chap.tex"), "b"));
     }
 
     #[test]
@@ -382,10 +437,15 @@ mod tests {
         ]);
         let r = ResolvedLabels::build(
             &[
-                (PathBuf::from("/p/main.tex"), names(&[]), true),
-                (PathBuf::from("/p/a.tex"), names(&["k"]), false),
-                (PathBuf::from("/p/b.tex"), names(&["k"]), false),
-                (PathBuf::from("/p/shared.tex"), names(&[]), false),
+                (PathBuf::from("/p/main.tex"), names(&[]), names(&[]), true),
+                (PathBuf::from("/p/a.tex"), names(&["k"]), names(&[]), false),
+                (PathBuf::from("/p/b.tex"), names(&["k"]), names(&[]), false),
+                (
+                    PathBuf::from("/p/shared.tex"),
+                    names(&[]),
+                    names(&[]),
+                    false,
+                ),
             ],
             &g,
         );
@@ -412,8 +472,8 @@ mod tests {
         let g = graph(&[("/p/one.tex", &[]), ("/p/two.tex", &[])]);
         let r = ResolvedLabels::build(
             &[
-                (PathBuf::from("/p/one.tex"), names(&["x"]), true),
-                (PathBuf::from("/p/two.tex"), names(&["x"]), true),
+                (PathBuf::from("/p/one.tex"), names(&["x"]), names(&[]), true),
+                (PathBuf::from("/p/two.tex"), names(&["x"]), names(&[]), true),
             ],
             &g,
         );
@@ -429,8 +489,18 @@ mod tests {
         let g = graph(&[("/p/one.tex", &[]), ("/p/two.tex", &[])]);
         let r = ResolvedLabels::build(
             &[
-                (PathBuf::from("/p/one.tex"), names(&["intro"]), true),
-                (PathBuf::from("/p/two.tex"), names(&["intro"]), true),
+                (
+                    PathBuf::from("/p/one.tex"),
+                    names(&["intro"]),
+                    names(&[]),
+                    true,
+                ),
+                (
+                    PathBuf::from("/p/two.tex"),
+                    names(&["intro"]),
+                    names(&[]),
+                    true,
+                ),
             ],
             &g,
         );
@@ -453,8 +523,8 @@ mod tests {
         ]);
         let r = ResolvedLabels::build(
             &[
-                (PathBuf::from("/p/a.tex"), names(&["x"]), false),
-                (PathBuf::from("/p/b.tex"), names(&[]), false),
+                (PathBuf::from("/p/a.tex"), names(&["x"]), names(&[]), false),
+                (PathBuf::from("/p/b.tex"), names(&[]), names(&[]), false),
             ],
             &g,
         );
@@ -473,7 +543,10 @@ mod tests {
             }];
             IncludeGraph::build(&facts, None)
         };
-        let r = ResolvedLabels::build(&[(PathBuf::from("/p/main.tex"), names(&[]), true)], &g);
+        let r = ResolvedLabels::build(
+            &[(PathBuf::from("/p/main.tex"), names(&[]), names(&[]), true)],
+            &g,
+        );
         assert!(!r.is_closed(Path::new("/p/main.tex")));
     }
 
@@ -481,15 +554,49 @@ mod tests {
     fn external_include_opens_the_component() {
         // `/p/missing.tex` is not an analyzed member → unresolved → open.
         let g = graph(&[("/p/main.tex", &[(IncludeKind::Input, "/p/missing.tex")])]);
-        let r = ResolvedLabels::build(&[(PathBuf::from("/p/main.tex"), names(&[]), true)], &g);
+        let r = ResolvedLabels::build(
+            &[(PathBuf::from("/p/main.tex"), names(&[]), names(&[]), true)],
+            &g,
+        );
         assert!(!r.is_closed(Path::new("/p/main.tex")));
     }
 
     #[test]
     fn rootless_component_reports_no_root() {
         let g = graph(&[("/p/frag.tex", &[])]);
-        let r = ResolvedLabels::build(&[(PathBuf::from("/p/frag.tex"), names(&["x"]), false)], &g);
+        let r = ResolvedLabels::build(
+            &[(
+                PathBuf::from("/p/frag.tex"),
+                names(&["x"]),
+                names(&[]),
+                false,
+            )],
+            &g,
+        );
         assert!(!r.is_root_component(Path::new("/p/frag.tex")));
         assert!(r.is_closed(Path::new("/p/frag.tex")));
+    }
+
+    #[test]
+    fn is_referenced_tracks_the_component_reference_union() {
+        // One namespace: `a` is defined and referenced (in-file), `b` is defined
+        // but never referenced anywhere, `c` is referenced but undefined.
+        let g = graph(&[("/p/a.tex", &[])]);
+        let r = ResolvedLabels::build(
+            &[(
+                PathBuf::from("/p/a.tex"),
+                names(&["a", "b"]),
+                names(&["a", "c"]),
+                true,
+            )],
+            &g,
+        );
+        assert!(r.is_referenced(Path::new("/p/a.tex"), "a"));
+        assert!(!r.is_referenced(Path::new("/p/a.tex"), "b"));
+        // A referenced-but-undefined key still reads as referenced (that is
+        // `undefined-ref`'s concern, not this method's).
+        assert!(r.is_referenced(Path::new("/p/a.tex"), "c"));
+        // An unknown file has an empty reference set.
+        assert!(!r.is_referenced(Path::new("/p/missing.tex"), "a"));
     }
 }

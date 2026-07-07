@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 use badness::cli::{Cli, Command, WrapArg};
 use badness::parser::{LexConfig, parse_with_flavor};
-use badness::project::labels::{document_label_names, is_document_root};
+use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
     CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
     collect_bib_resource_targets, collect_include_edge_keys,
@@ -419,6 +419,7 @@ fn run_lint(
                 label_inputs.push((
                     path.clone(),
                     document_label_names(&model),
+                    document_ref_names(&model),
                     is_document_root(&root),
                 ));
                 cite_facts.push(CiteFileFacts {

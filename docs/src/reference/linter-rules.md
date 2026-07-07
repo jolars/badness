@@ -596,6 +596,24 @@ warning: undefined-citation
   | ^^^^^^^^^^^^^^^^^ citation of undefined key `knuth:1984`
 ```
 
+## `unreferenced-label`
+
+Flag a `\label` that no `\ref`-family command targets anywhere in the document. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
+
+A label that no `\ref`-family command ever targets:
+
+```tex
+\section{Intro}\label{sec:intro}
+```
+
+```text
+warning: unreferenced-label
+ --> example.tex:1:16
+  |
+1 | \section{Intro}\label{sec:intro}
+  |                ^^^^^^^^^^^^^^^^^ label `sec:intro` is never referenced
+```
+
 ## `verbatim-trailing-text`
 
 Flag non-whitespace text after a verbatim-like environment's `\end{…}` on the same line (ChkTeX warning 31). LaTeX closes a verbatim environment by scanning line by line to `\end{verbatim}` and then gobbling the rest of that line, so `\end{verbatim} foo` silently drops `foo`. Scoped to verbatim-like environments — read off the parse tree (an opaque `VERBATIM_BODY`, or a curated built-in verbatim name for the empty-body case) — because ordinary environments do not gobble their `\end` line. A trailing `%` comment is treated as trivia, not flagged. Report-only: whether to move or delete the swallowed text is the author's call, so no fix is correct by construction.

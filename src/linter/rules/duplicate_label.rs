@@ -179,8 +179,18 @@ mod tests {
         let names = |list: &[&str]| list.iter().map(SmolStr::new).collect::<Vec<_>>();
         ResolvedLabels::build(
             &[
-                (PathBuf::from("main.tex"), names(main_labels), true),
-                (PathBuf::from("other.tex"), names(other_labels), false),
+                (
+                    PathBuf::from("main.tex"),
+                    names(main_labels),
+                    Vec::new(),
+                    true,
+                ),
+                (
+                    PathBuf::from("other.tex"),
+                    names(other_labels),
+                    Vec::new(),
+                    false,
+                ),
             ],
             &graph,
         )

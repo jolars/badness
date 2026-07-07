@@ -107,6 +107,7 @@ mod tests {
             &[(
                 PathBuf::from(DOC),
                 labels.iter().map(SmolStr::new).collect(),
+                Vec::new(),
                 rooted,
             )],
             &graph,

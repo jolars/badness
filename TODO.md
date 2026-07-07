@@ -147,10 +147,14 @@ period, section length) are skipped as grammar-tool territory.
   every unbalanced-`\left` path (EOF, `}`, `$`, `\]`, `\end`, paragraph break), so a
   dedicated lint rule would only duplicate the existing `parse` finding on the same
   span. No separate rule added.
-- [ ] `unreferenced-label`—a `\label` never targeted by any `\ref`-family command,
+- [x] `unreferenced-label`—a `\label` never targeted by any `\ref`-family command,
   project-aware behind the same closed+rooted namespace gate as `undefined-ref`
   (**supersedes the old `unused-label` deferral**, whose open-namespace false-positive
-  risk is exactly what that gate handles). Report-only.
+  risk is exactly what that gate handles). Report-only. Needed a cross-file
+  *reference* union: `ResolvedLabels` now carries per-component `\ref` keys (new
+  `file_refs` firewall + `document_ref_names`), mirroring the definition union, with
+  `is_referenced`. A `\ref` edit therefore rebuilds `resolved_labels` (a pure prose
+  edit still backdates both firewalls).
 - [x] `sectioning-level-jump`—a heading that skips a level (`\section` →
   `\subsubsection`), read from the semantic sectioning tree (textidote sh:secskip).
   Report-only.

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use badness::linter::{Severity, lint_document};
 use badness::parser::{parse, reconstruct};
-use badness::project::labels::{document_label_names, is_document_root};
+use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{FileFacts, IncludeGraph, ResolvedLabels, collect_include_edge_keys};
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
@@ -50,6 +50,7 @@ fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
             (
                 path.clone(),
                 document_label_names(model),
+                document_ref_names(model),
                 is_document_root(root),
             )
         })
@@ -410,10 +411,12 @@ fn well_formed_project_has_no_cross_file_findings() {
 fn cross_file_duplicate_label_is_reported_in_both_files() {
     // The same key defined in two files of one document is a cross-file dupe;
     // each file's definition is flagged, naming the other.
+    // The `\ref{dup}` keeps `unreferenced-label` quiet so this stays focused on
+    // the duplicate mechanism.
     let findings = lint_project(&[
         (
             "main.tex",
-            "\\documentclass{article}\n\\input{chap}\n\\label{dup}\n",
+            "\\documentclass{article}\n\\input{chap}\n\\label{dup}\\ref{dup}\n",
         ),
         ("chap.tex", "\\label{dup}\n"),
     ]);
@@ -470,6 +473,41 @@ fn independent_documents_do_not_cross_contaminate() {
         findings.is_empty(),
         "expected no collisions, got: {findings:?}"
     );
+}
+
+#[test]
+fn unreferenced_label_fires_in_a_closed_rooted_document() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\label{used}\\ref{used}\\label{dead}\n",
+    )]);
+    assert_eq!(rules_only(&findings), vec!["unreferenced-label"]);
+    assert!(findings[0].2.contains("dead"));
+}
+
+#[test]
+fn unreferenced_label_sees_a_cross_file_reference() {
+    // The label is defined in the chapter and referenced only from the rooted
+    // main document: the closed namespace unions both, so it is *not* flagged.
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\input{chap}\n\\ref{c}\n",
+        ),
+        ("chap.tex", "\\label{c}\n"),
+    ]);
+    assert!(
+        findings.is_empty(),
+        "expected the cross-file reference to satisfy the label, got: {findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_is_silent_for_a_bare_fragment() {
+    // No `\documentclass`: the reference may live in an unanalyzed main document,
+    // so the orphan label is not flagged.
+    let findings = lint_project(&[("chap.tex", "\\label{orphan}\n")]);
+    assert!(findings.is_empty(), "expected silence, got: {findings:?}");
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ pub mod swallowed_space;
 pub mod times_variable;
 pub mod undefined_citation;
 pub mod undefined_ref;
+pub mod unreferenced_label;
 pub mod verbatim_trailing_text;
 
 pub use abbreviation_spacing::AbbreviationSpacing;
@@ -58,6 +59,7 @@ pub use swallowed_space::SwallowedSpace;
 pub use times_variable::TimesVariable;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
+pub use unreferenced_label::UnreferencedLabel;
 pub use verbatim_trailing_text::VerbatimTrailingText;
 
 /// Everything a [`Rule`] reads to produce diagnostics for one file.
@@ -180,6 +182,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(MissingRequiredArgument),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
+        Box::new(UnreferencedLabel),
         Box::new(VerbatimTrailingText),
     ]
 }
@@ -209,6 +212,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "missing-required-argument",
     "undefined-ref",
     "undefined-citation",
+    "unreferenced-label",
     "verbatim-trailing-text",
 ];
 

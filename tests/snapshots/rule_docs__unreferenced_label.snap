@@ -1,0 +1,21 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `unreferenced-label`
+
+Flag a `\label` that no `\ref`-family command targets anywhere in the document. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
+
+A label that no `\ref`-family command ever targets:
+
+```tex
+\section{Intro}\label{sec:intro}
+```
+
+```text
+warning: unreferenced-label
+ --> example.tex:1:16
+  |
+1 | \section{Intro}\label{sec:intro}
+  |                ^^^^^^^^^^^^^^^^^ label `sec:intro` is never referenced
+```

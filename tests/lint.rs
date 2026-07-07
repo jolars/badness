@@ -245,6 +245,22 @@ fn hard_coded_reference_fires_end_to_end() {
 }
 
 #[test]
+fn verbatim_trailing_text_fires_end_to_end() {
+    // Text after `\end{verbatim}` on the same line is silently gobbled by LaTeX;
+    // report-only, and an ordinary environment's `\end` line is left alone.
+    let src = "\
+\\begin{verbatim}
+code
+\\end{verbatim} dropped
+\\begin{itemize}\\item a\\end{itemize} kept
+";
+    assert_eq!(
+        lint(src),
+        vec![("verbatim-trailing-text", Severity::Warning)]
+    );
+}
+
+#[test]
 fn node_ignore_silences_a_stylistic_rule() {
     let src = "\
 % badness-ignore dollar-display-math: legacy snippet

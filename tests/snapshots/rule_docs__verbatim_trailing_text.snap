@@ -1,0 +1,23 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `verbatim-trailing-text`
+
+Flag non-whitespace text after a verbatim-like environment's `\end{…}` on the same line (ChkTeX warning 31). LaTeX closes a verbatim environment by scanning line by line to `\end{verbatim}` and then gobbling the rest of that line, so `\end{verbatim} foo` silently drops `foo`. Scoped to verbatim-like environments — read off the parse tree (an opaque `VERBATIM_BODY`, or a curated built-in verbatim name for the empty-body case) — because ordinary environments do not gobble their `\end` line. A trailing `%` comment is treated as trivia, not flagged. Report-only: whether to move or delete the swallowed text is the author's call, so no fix is correct by construction.
+
+Text after `\end{verbatim}` is silently discarded by LaTeX:
+
+```tex
+\begin{verbatim}
+sample
+\end{verbatim} and more
+```
+
+```text
+warning: verbatim-trailing-text
+ --> example.tex:3:16
+  |
+3 | \end{verbatim} and more
+  |                ^^^^^^^^ text after `\end{verbatim}` on the same line is silently discarded
+```

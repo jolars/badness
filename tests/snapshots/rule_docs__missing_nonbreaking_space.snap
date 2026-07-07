@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `missing-nonbreaking-space`
 
-Flag a plain space where a TeX tie (`~`) belongs, before a command whose output a line break would orphan: a bare-number reference (`Figure \ref{x}`, `\eqref`, `\pageref`) or a bracketed citation (`see \cite{a}`, `\parencite`, `\autocite`). A tie keeps the reference on the same line. Self-describing references (`\autoref`, `\cref`) and textual citations (`\textcite`, `\citet`) are not flagged -- they emit their own noun, so a break orphans nothing. Only the same-line `WORD SPACE \cmd` shape is flagged. The fix is **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it.
+Flag a plain space where a TeX tie (`~`) belongs, before a command whose output a line break would orphan: a bare-number reference (`Figure \ref{x}`, `\eqref`, `\pageref`) or a bracketed citation (`see \cite{a}`, `\parencite`, `\autocite`). A tie keeps the reference on the same line. Self-describing references (`\autoref`, `\cref`) and textual citations (`\textcite`, `\citet`) are not flagged -- they emit their own noun, so a break orphans nothing. Both a same-line space and a single source line break before the command are flagged (a blank line is not -- that starts a new paragraph). For a same-line space the fix is **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it. A line break is report-only: rewriting the newline to `~` would join the two lines, a reflow the formatter owns.
 
 A plain space where a tie belongs before a cross-reference:
 

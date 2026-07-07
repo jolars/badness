@@ -140,7 +140,7 @@ period, section length) are skipped as grammar-tool territory.
   and names the file redefines are skipped. *Possible widening:* enforce
   scanned user-macro arities, and `\begin{env}` arguments (e.g. `tabular`'s
   column spec).
-- [ ] `verbatim-trailing-text`—text after `\end{verbatim}` on the same line, silently
+- [x] `verbatim-trailing-text`—text after `\end{verbatim}` on the same line, silently
   dropped (ChkTeX 31). Report-only.
 - [x] `unbalanced-left-right`—`\left` with no matching `\right`. **Already covered by
   the parser:** `left_right` recovery emits an `unclosed \left` parse diagnostic on

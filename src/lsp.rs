@@ -74,16 +74,17 @@ use lsp_types::notification::{
     DidOpenTextDocument, Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
-    DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition,
-    HoverRequest, OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References,
-    RegisterCapability, Rename, Request as _, ResolveCompletionItem, SignatureHelpRequest,
-    WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
+    ApplyWorkspaceEdit, CodeActionRequest, Completion, DocumentDiagnosticRequest,
+    DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, ExecuteCommand,
+    FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, OnTypeFormatting,
+    PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename, Request as _,
+    ResolveCompletionItem, SignatureHelpRequest, WorkspaceDiagnosticRefresh,
+    WorkspaceSymbolRequest,
 };
 use lsp_types::{
-    CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
-    CompletionList, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
+    ApplyWorkspaceEditParams, CodeActionParams, CodeActionProviderCapability, CompletionItem,
+    CompletionItemKind, CompletionList, CompletionOptions, CompletionParams, CompletionResponse,
+    Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
@@ -91,8 +92,8 @@ use lsp_types::{
     DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
     DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
     DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    ExecuteCommandOptions, ExecuteCommandParams, FileChangeType, FileSystemWatcher, FoldingRange,
+    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
     PublishDiagnosticsParams, Range, ReferenceParams, Registration, RegistrationParams,
@@ -161,6 +162,13 @@ pub fn serve(connection: Connection) -> Result<(), DynError> {
 /// `textDocument/diagnostic` (the `diagnostic_provider` capability). A client that
 /// advertises pull support is served pull-only; everyone else keeps push (see
 /// `supports_pull_diagnostics`). `workspace/diagnostic` is deferred (see `TODO.md`).
+/// The change-environment refactor's `workspace/executeCommand` id, plus the
+/// texlab-compatible alias so an editor keybinding written for texlab
+/// (`texlab.changeEnvironment`) works against badness unchanged. Both take one
+/// [`RenameParams`]-shaped argument (texlab's wire format).
+const CHANGE_ENVIRONMENT_COMMAND: &str = "badness.changeEnvironment";
+const CHANGE_ENVIRONMENT_COMMAND_TEXLAB: &str = "texlab.changeEnvironment";
+
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -196,6 +204,15 @@ fn server_capabilities() -> ServerCapabilities {
         // Surface linter autofixes as quick-fixes. `Simple(true)` returns
         // fully-built actions (no `codeAction/resolve` step).
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        // The change-environment refactor (see [`on_execute_command`]). The
+        // `texlab.…` alias keeps texlab client integrations working as-is.
+        execute_command_provider: Some(ExecuteCommandOptions {
+            commands: vec![
+                CHANGE_ENVIRONMENT_COMMAND.to_owned(),
+                CHANGE_ENVIRONMENT_COMMAND_TEXLAB.to_owned(),
+            ],
+            work_done_progress_options: Default::default(),
+        }),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         // Show the active argument while typing a command's/environment's
         // `{…}`/`[…]` arguments. `{`/`[` open an argument; `}`/`]` as *retriggers*
@@ -650,6 +667,20 @@ enum WorkerJob {
         position: Position,
         new_name: String,
     },
+    /// A `changeEnvironment` execute-command: rewrite the enclosing environment's
+    /// `\begin`/`\end` name pair around the cursor to `new_name`. Single-file and
+    /// purely syntactic (the parser already pairs the delimiters), dispatched to
+    /// the read pool like the others; `uri` keys the resulting edit. Answers via
+    /// [`Outbound::ApplyEdit`] (or an error response when no environment encloses
+    /// the cursor).
+    ChangeEnvironment {
+        id: RequestId,
+        uri: Uri,
+        path: PathBuf,
+        text: String,
+        position: Position,
+        new_name: String,
+    },
     /// A `textDocument/diagnostic` pull request: compute diagnostics **on demand**
     /// off a fresh snapshot and reply to `id`. Cross-file (like an analyze), so the
     /// worker snapshots project membership when it dispatches. Carries the live
@@ -693,6 +724,15 @@ enum Outbound {
     },
     /// A request response (e.g. a formatting edit array).
     Response(Response),
+    /// Answer an execute-command by *pushing* `edit` to the client — a
+    /// `workspace/applyEdit` server→client request (allocated a fresh request id by
+    /// the main loop), followed by a `null` response to the originating request
+    /// `id`. The client's applyEdit response is fire-and-forget.
+    ApplyEdit {
+        id: RequestId,
+        label: String,
+        edit: WorkspaceEdit,
+    },
     /// Project membership grew (the worker discovered on-disk siblings), so the
     /// cross-file resolution may have changed for *every* open document. Re-lint
     /// them all.
@@ -858,6 +898,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             CodeActionRequest::METHOD => {
                                 on_code_action(&connection, &mut state, &job_tx, req)
                             }
+                            ExecuteCommand::METHOD => {
+                                on_execute_command(&connection, &state, &job_tx, req)
+                            }
                             DocumentDiagnosticRequest::METHOD => {
                                 on_document_diagnostic(&connection, &mut state, &job_tx, req)
                             }
@@ -867,8 +910,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                     Message::Notification(not) => {
                         on_notification(&connection, &mut state, &job_tx, not);
                     }
-                    // The MVP issues no client-bound requests, so any response is
-                    // unexpected.
+                    // Server-initiated requests (watcher registration,
+                    // `workspace/applyEdit`) are fire-and-forget, so the client's
+                    // response needs no action.
                     Message::Response(_) => {}
                 }
             }
@@ -1907,6 +1951,81 @@ fn on_rename(
     });
 }
 
+/// `workspace/executeCommand`: route the change-environment refactor (either
+/// command id) to the worker. The single argument is `RenameParams`-shaped —
+/// texlab's wire format, so texlab clients need no adaptation. Unlike the
+/// document-keyed handlers, failures reply with an *error* (not `null`): a command
+/// is an explicit user action, so a silent no-op would read as a bug.
+fn on_execute_command(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let respond_err = |code: ErrorCode, message: String| {
+        let resp = Response::new_err(id.clone(), code as i32, message);
+        let _ = connection.sender.send(Message::Response(resp));
+    };
+    let params = match req.extract::<ExecuteCommandParams>(ExecuteCommand::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            respond_err(
+                ErrorCode::InvalidParams,
+                "invalid executeCommand params".to_owned(),
+            );
+            return;
+        }
+    };
+    match params.command.as_str() {
+        CHANGE_ENVIRONMENT_COMMAND | CHANGE_ENVIRONMENT_COMMAND_TEXLAB => {
+            let Some(args) = params
+                .arguments
+                .into_iter()
+                .next()
+                .and_then(|arg| serde_json::from_value::<RenameParams>(arg).ok())
+            else {
+                respond_err(
+                    ErrorCode::InvalidParams,
+                    "changeEnvironment expects one {textDocument, position, newName} argument"
+                        .to_owned(),
+                );
+                return;
+            };
+            let new_name = args.new_name;
+            if !is_valid_key(&new_name) {
+                respond_err(
+                    ErrorCode::InvalidParams,
+                    format!("`{new_name}` is not a valid environment name"),
+                );
+                return;
+            }
+            let uri = args.text_document_position.text_document.uri;
+            let position = args.text_document_position.position;
+            let Some(doc) = state.documents.get(&uri) else {
+                respond_err(
+                    ErrorCode::InvalidParams,
+                    format!("document is not open: {}", uri.as_str()),
+                );
+                return;
+            };
+            let path = uri_to_path(&uri);
+            let _ = job_tx.send(WorkerJob::ChangeEnvironment {
+                id,
+                uri,
+                path,
+                text: doc.text.clone(),
+                position,
+                new_name,
+            });
+        }
+        other => respond_err(
+            ErrorCode::InvalidParams,
+            format!("unknown workspace command: {other}"),
+        ),
+    }
+}
+
 /// Forward a worker result to the client. Diagnostics are version-gated: a result
 /// is sent only when its document is still open at exactly that version, so a
 /// stale (superseded or post-close) analyze never repaints squiggles.
@@ -1938,6 +2057,25 @@ fn forward_outbound(
         }
         Outbound::Response(resp) => {
             let _ = connection.sender.send(Message::Response(resp));
+        }
+        Outbound::ApplyEdit { id, label, edit } => {
+            let params = ApplyWorkspaceEditParams {
+                label: Some(label),
+                edit,
+            };
+            if let Ok(params) = serde_json::to_value(params) {
+                let request_id = state.next_request_id;
+                state.next_request_id += 1;
+                let _ = connection.sender.send(Message::Request(Request {
+                    id: RequestId::from(request_id),
+                    method: ApplyWorkspaceEdit::METHOD.to_owned(),
+                    params,
+                }));
+            }
+            let _ = connection.sender.send(Message::Response(Response::new_ok(
+                id,
+                serde_json::Value::Null,
+            )));
         }
         Outbound::RelintAll => relint_all_open(connection, state, job_tx),
     }
@@ -2431,6 +2569,24 @@ impl Worker {
                 self.read_spawner.spawn(move || {
                     run_rename(
                         &snapshot, id, &path, &text, position, &new_name, members, &out_tx,
+                    )
+                });
+            }
+            WorkerJob::ChangeEnvironment {
+                id,
+                uri,
+                path,
+                text,
+                position,
+                new_name,
+            } => {
+                // Single-file like prepareRename: only the cursor buffer's tree is
+                // read, so no membership snapshot is needed.
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_change_environment(
+                        &snapshot, id, &uri, &path, &text, position, &new_name, &out_tx,
                     )
                 });
             }
@@ -4192,6 +4348,71 @@ fn run_rename(
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
+/// Answer a `changeEnvironment` execute-command: push the begin/end name rewrite
+/// via [`Outbound::ApplyEdit`], or reply with an error when no environment
+/// encloses the cursor (an executed command should say why it did nothing, unlike
+/// the `null`-on-miss document requests).
+#[allow(clippy::too_many_arguments)]
+fn run_change_environment(
+    snapshot: &Analysis,
+    id: RequestId,
+    uri: &Uri,
+    path: &Path,
+    text: &str,
+    position: Position,
+    new_name: &str,
+    out_tx: &Sender<Outbound>,
+) {
+    match compute_change_environment(snapshot, path, text, position) {
+        Some((old_name, ranges)) => {
+            let idx = LineIndex::new(text);
+            let mut changes = HashMap::new();
+            for range in ranges {
+                push_edit(&mut changes, uri, &idx, text, range, new_name);
+            }
+            let edit = WorkspaceEdit {
+                changes: Some(changes),
+                ..Default::default()
+            };
+            let label = format!("change environment: {old_name} -> {new_name}");
+            let _ = out_tx.send(Outbound::ApplyEdit { id, label, edit });
+        }
+        None => {
+            let _ = out_tx.send(Outbound::Response(Response::new_err(
+                id,
+                ErrorCode::RequestFailed as i32,
+                "no environment around the cursor".to_owned(),
+            )));
+        }
+    }
+}
+
+/// Compute the change-environment target at `position`: the enclosing
+/// environment's current name plus the name spans to rewrite. Reads the cached
+/// tree when current, else a fresh parse (the same guard as
+/// [`compute_document_highlight`]). `None` for a `.bib` buffer (no environments)
+/// or when [`environment_change_target`] declines.
+fn compute_change_environment(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    position: Position,
+) -> Option<(String, Vec<TextRange>)> {
+    if file_kind_for(path) == FileKind::Bib {
+        return None;
+    }
+    let idx = LineIndex::new(text);
+    let offset = idx.offset_at(text, position.line, position.character);
+
+    let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
+        Some(file) if snapshot.file_text(file) == text => {
+            environment_change_target(&snapshot.parsed_tree(file), offset)
+        }
+        _ => environment_change_target(&SyntaxNode::new_root(parse(text).green), offset),
+    }));
+    computed.ok().flatten()
+}
+
 /// What the cursor points at inside a `.tex` buffer: the keys whose command range
 /// covers the offset. Refs and citations are kept distinct so each resolves against
 /// its own namespace (labels vs. bibliography). A multi-key list command
@@ -4497,6 +4718,40 @@ fn environment_pair_ranges(root: &SyntaxNode, offset: usize) -> Vec<TextRange> {
             .into_iter()
             .collect(),
     }
+}
+
+/// The change-environment target at byte `offset`: the *innermost* `ENVIRONMENT`
+/// node containing the cursor (anywhere in the body or on either delimiter — the
+/// refactor names the environment "around the cursor", unlike
+/// [`environment_pair_ranges`]'s delimiter-only gate), as its current begin name
+/// plus the name spans to rewrite. The parser's structural pairing is
+/// authoritative: an unclosed environment rewrites just its `\begin` name, and a
+/// mismatched-but-paired `\end` is rewritten too (making the pair consistent).
+/// Correctness-only (tenet #1): when any paired delimiter's name is not a plain
+/// token run (so a textual rewrite could corrupt it), decline the whole edit
+/// rather than rewrite half a pair.
+fn environment_change_target(root: &SyntaxNode, offset: usize) -> Option<(String, Vec<TextRange>)> {
+    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
+    let (left, right) = match root.token_at_offset(at) {
+        rowan::TokenAtOffset::None => return None,
+        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
+        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
+    };
+    let env = [left, right].into_iter().flatten().find_map(|token| {
+        token
+            .parent_ancestors()
+            .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+    })?;
+    let begin = env
+        .children()
+        .find(|child| child.kind() == SyntaxKind::BEGIN)?;
+    let old_name = crate::ast::environment_name(&begin)?;
+    let ranges = env
+        .children()
+        .filter(|child| matches!(child.kind(), SyntaxKind::BEGIN | SyntaxKind::END))
+        .map(|child| crate::ast::environment_name_range(&child))
+        .collect::<Option<Vec<_>>>()?;
+    (!ranges.is_empty()).then_some((old_name, ranges))
 }
 
 /// Compute the `prepareRename` range + placeholder at `position`: the key-token span

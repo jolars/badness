@@ -326,11 +326,16 @@ sources below are missing.
 
 ### Code actions
 
-- [ ] **Change-environment refactor.** A code action rewriting the
-  `\begin{a}`/`\end{a}` name pair around the cursor to a new environment. A
-  correctness-only textual edit (never invokes the formatter—tenet #1); reuse the
-  paired begin/end spans the parser already builds. texlab exposes this as the
-  `texlab.changeEnvironment` execute-command.
+- [x] **Change-environment refactor.** Rewrites the `\begin{a}`/`\end{a}` name
+  pair around the cursor (the innermost enclosing environment; an unclosed one
+  rewrites just its `\begin`) to a new environment. A correctness-only textual
+  edit (never invokes the formatter—tenet #1) built from the paired begin/end
+  spans the parser already builds; declines when a delimiter name is not a plain
+  token run rather than rewrite half a pair. Exposed as the
+  `badness.changeEnvironment` execute-command with `texlab.changeEnvironment` as
+  a wire-compatible alias (same single `RenameParams`-shaped argument; the edit
+  is pushed via `workspace/applyEdit`), so texlab client keybindings work
+  unchanged.
 
 ### Infrastructure
 

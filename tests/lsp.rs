@@ -16,19 +16,20 @@ use std::time::Duration;
 use badness::formatter::{FormatStyle, format_with_style};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    ClientCapabilities, CodeActionContext, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CompletionItem, CompletionItemKind, CompletionParams,
-    CompletionResponse, DiagnosticClientCapabilities, DiagnosticWorkspaceClientCapabilities,
-    DidChangeTextDocumentParams, DidChangeWatchedFilesClientCapabilities,
-    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
-    DocumentFormattingParams, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
-    DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
+    ApplyWorkspaceEditParams, ClientCapabilities, CodeActionContext, CodeActionOrCommand,
+    CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
+    CompletionParams, CompletionResponse, DiagnosticClientCapabilities,
+    DiagnosticWorkspaceClientCapabilities, DidChangeTextDocumentParams,
+    DidChangeWatchedFilesClientCapabilities, DidChangeWatchedFilesParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
+    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, DocumentLink,
+    DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
     DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
-    DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent, FoldingRange,
-    FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability, FormattingOptions,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandParams, FileChangeType, FileEvent,
+    FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
     InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
     RegistrationParams, RenameOptions, RenameParams, SignatureHelp, SignatureHelpParams,
@@ -217,6 +218,19 @@ fn start_server(
             Some(CodeActionProviderCapability::Simple(true))
         ),
         "server must advertise codeActionProvider"
+    );
+    assert!(
+        init.capabilities
+            .execute_command_provider
+            .as_ref()
+            .is_some_and(|opts| {
+                opts.commands
+                    .contains(&"badness.changeEnvironment".to_owned())
+                    && opts
+                        .commands
+                        .contains(&"texlab.changeEnvironment".to_owned())
+            }),
+        "server must advertise the changeEnvironment execute-commands"
     );
     assert!(init.capabilities.text_document_sync.is_some());
     assert!(
@@ -2312,6 +2326,258 @@ fn lsp_document_highlight_environment_pair() {
     // A cursor in the body (not on a delimiter) highlights nothing.
     let in_body = document_highlight(&client, 4, &uri, Position::new(1, 0));
     assert!(in_body.is_empty(), "cursor in the body, not on a delimiter");
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a change-environment `workspace/executeCommand` under `command` (the
+/// `badness.…` id or its `texlab.…` alias), with the texlab-shaped single
+/// `RenameParams` argument.
+fn change_environment(
+    client: &Connection,
+    id: i32,
+    command: &str,
+    uri: &Uri,
+    position: Position,
+    new_name: &str,
+) {
+    send_request(
+        client,
+        id,
+        "workspace/executeCommand",
+        serde_json::to_value(ExecuteCommandParams {
+            command: command.to_owned(),
+            arguments: vec![
+                serde_json::to_value(RenameParams {
+                    text_document_position: TextDocumentPositionParams {
+                        text_document: TextDocumentIdentifier { uri: uri.clone() },
+                        position,
+                    },
+                    new_name: new_name.to_owned(),
+                    work_done_progress_params: Default::default(),
+                })
+                .unwrap(),
+            ],
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+}
+
+/// Receive the server's `workspace/applyEdit` push for command `id`, ack it, then
+/// assert the command itself resolves with a `null` result. Skips interleaved
+/// notifications (diagnostics pushes).
+fn recv_apply_edit_then_ok(client: &Connection, id: i32) -> ApplyWorkspaceEditParams {
+    let params = loop {
+        match recv(client) {
+            Message::Request(req) if req.method == "workspace/applyEdit" => {
+                let params = serde_json::from_value(req.params).expect("valid applyEdit params");
+                client
+                    .sender
+                    .send(Message::Response(Response::new_ok(
+                        req.id,
+                        serde_json::json!({ "applied": true }),
+                    )))
+                    .unwrap();
+                break params;
+            }
+            Message::Notification(_) => continue,
+            other => panic!("expected a workspace/applyEdit request, got {other:?}"),
+        }
+    };
+    loop {
+        match recv(client) {
+            Message::Response(resp) => {
+                assert_eq!(resp.id, RequestId::from(id));
+                assert!(
+                    resp.error.is_none(),
+                    "the command must succeed, got {:?}",
+                    resp.error
+                );
+                break;
+            }
+            Message::Notification(_) => continue,
+            other => panic!("expected the command response, got {other:?}"),
+        }
+    }
+    params
+}
+
+/// Receive an **error** response to command `id` (no `applyEdit` may precede it)
+/// and return its message. Skips interleaved notifications.
+fn recv_command_error(client: &Connection, id: i32) -> String {
+    loop {
+        match recv(client) {
+            Message::Response(resp) => {
+                assert_eq!(resp.id, RequestId::from(id));
+                return resp.error.expect("the command must fail").message;
+            }
+            Message::Notification(_) => continue,
+            other => panic!("expected an error response, got {other:?}"),
+        }
+    }
+}
+
+/// The `(line, start_col, end_col, new_text)` of each edit for `uri`, sorted.
+fn edit_summary(params: &ApplyWorkspaceEditParams, uri: &Uri) -> Vec<(u32, u32, u32, String)> {
+    let mut edits: Vec<_> = params
+        .edit
+        .changes
+        .as_ref()
+        .and_then(|changes| changes.get(uri))
+        .expect("edits keyed by the document URI")
+        .iter()
+        .map(|edit| {
+            assert_eq!(edit.range.start.line, edit.range.end.line);
+            (
+                edit.range.start.line,
+                edit.range.start.character,
+                edit.range.end.character,
+                edit.new_text.clone(),
+            )
+        })
+        .collect();
+    edits.sort();
+    edits
+}
+
+#[test]
+fn lsp_change_environment_rewrites_pair() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("change-env.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\begin{center}\n\\begin{itemize}\nhi\n\\end{itemize}\n\\end{center}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // A cursor in the inner body targets the *innermost* environment.
+    change_environment(
+        &client,
+        2,
+        "badness.changeEnvironment",
+        &uri,
+        Position::new(2, 0),
+        "enumerate",
+    );
+    let params = recv_apply_edit_then_ok(&client, 2);
+    assert_eq!(
+        edit_summary(&params, &uri),
+        vec![
+            (1, 7, 14, "enumerate".to_owned()),
+            (3, 5, 12, "enumerate".to_owned()),
+        ],
+        "both itemize names, nothing else"
+    );
+    assert_eq!(
+        params.label.as_deref(),
+        Some("change environment: itemize -> enumerate")
+    );
+
+    // The texlab alias, invoked from the outer `\end` name, targets the outer pair.
+    change_environment(
+        &client,
+        3,
+        "texlab.changeEnvironment",
+        &uri,
+        Position::new(4, 6),
+        "figure",
+    );
+    let params = recv_apply_edit_then_ok(&client, 3);
+    assert_eq!(
+        edit_summary(&params, &uri),
+        vec![
+            (0, 7, 13, "figure".to_owned()),
+            (4, 5, 11, "figure".to_owned()),
+        ],
+        "the outer center pair"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_change_environment_unclosed_rewrites_begin_only() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("change-env-unclosed.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\begin{center}\nhi\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    change_environment(
+        &client,
+        2,
+        "badness.changeEnvironment",
+        &uri,
+        Position::new(1, 0),
+        "figure",
+    );
+    let params = recv_apply_edit_then_ok(&client, 2);
+    assert_eq!(
+        edit_summary(&params, &uri),
+        vec![(0, 7, 13, "figure".to_owned())],
+        "just the unclosed \\begin name"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_change_environment_declines_without_environment() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("change-env-none.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "hello world\n\\begin{center}\nhi\n\\end{center}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // No environment encloses the cursor → an error, never a silent no-op.
+    change_environment(
+        &client,
+        2,
+        "badness.changeEnvironment",
+        &uri,
+        Position::new(0, 2),
+        "figure",
+    );
+    let message = recv_command_error(&client, 2);
+    assert!(
+        message.contains("no environment"),
+        "explains the miss, got {message:?}"
+    );
+
+    // A new name that would corrupt the surface syntax is rejected up front.
+    change_environment(
+        &client,
+        3,
+        "badness.changeEnvironment",
+        &uri,
+        Position::new(2, 0),
+        "fig{ure",
+    );
+    let message = recv_command_error(&client, 3);
+    assert!(
+        message.contains("not a valid environment name"),
+        "rejects the brace, got {message:?}"
+    );
+
+    // An unknown command id is an error too.
+    send_request(
+        &client,
+        4,
+        "workspace/executeCommand",
+        serde_json::to_value(ExecuteCommandParams {
+            command: "badness.doesNotExist".to_owned(),
+            arguments: vec![],
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let message = recv_command_error(&client, 4);
+    assert!(
+        message.contains("unknown workspace command"),
+        "got {message:?}"
+    );
 
     shutdown(&client, server_thread);
 }

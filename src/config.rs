@@ -67,6 +67,8 @@ pub struct Config {
     pub lint: LintConfig,
     #[serde(default)]
     pub texmf: TexmfConfig,
+    #[serde(default)]
+    pub build: BuildConfig,
 }
 
 impl Config {
@@ -205,6 +207,21 @@ impl Default for TexmfConfig {
             use_kpsewhich: true,
         }
     }
+}
+
+/// The `[build]` section: where the TeX compiler leaves its artifacts. Read by the
+/// language server only (label-number hover and document symbols pull resolved
+/// numbers from the `.aux`); never by the formatter or linter, which stay hermetic
+/// (see `AGENTS.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct BuildConfig {
+    /// Directory holding the build's `.aux` files (latexmk's `-auxdir`/`-outdir`),
+    /// resolved relative to the root document's directory when not absolute. When
+    /// unset, each document's `.aux` is expected next to it (plain
+    /// `latex`/`pdflatex` runs).
+    #[serde(default)]
+    pub aux_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -449,6 +466,18 @@ mod tests {
         assert!(!config.texmf.enabled);
         assert!(!config.texmf.use_kpsewhich);
         assert_eq!(config.texmf.roots, vec![PathBuf::from("/opt/texmf")]);
+    }
+
+    #[test]
+    fn build_aux_dir_defaults_to_none() {
+        let config = parse("").expect("parse");
+        assert_eq!(config.build.aux_dir, None);
+    }
+
+    #[test]
+    fn parses_build_section() {
+        let config = parse("[build]\naux-dir = \"out\"\n").expect("parse");
+        assert_eq!(config.build.aux_dir, Some(PathBuf::from("out")));
     }
 
     #[test]

@@ -115,11 +115,14 @@ excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
   and rewriting only the two names (correct by construction, withheld on an
   unterminated or recovery-mismatched pair). Both are consumed by `lint --fix` and
   the LSP code actions.
-- [~] `missing-nonbreaking-space` (a tie before a cite/ref command, broad curated
-  family, `\nocite` excluded; `Unsafe` autofix) is **done**. *Follow-up:* the tie lint
-  only covers a same-line `WORD WHITESPACE \cmd` shape; a *source line break* before
-  the command (`Figure\n\ref{x}`) is also a breakable space but is left for a later
-  pass (replacing the newline with `~` reflows the source and overlaps the formatter).
+- [x] `missing-nonbreaking-space` (a tie before a cite/ref command, broad curated
+  family, `\nocite` excluded; `Unsafe` autofix) is **done**, both gap shapes. A
+  same-line `WORD WHITESPACE \cmd` carries the `Unsafe` tie fix; a *single source
+  line break* (`Figure\n\ref{x}`) is also a breakable space and is now flagged too,
+  but **report-only**: the only correct rewrite (newline to `~`) joins the two source
+  lines, and picking line breaks is the formatter's job (tenet 1), so we report the
+  finding and withhold the fix for that shape. A blank line (`\par`, two or more
+  newlines) is never flagged.
 
 ### Tier 3 — structural / semantic / project-layer (curated subset)
 

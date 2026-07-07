@@ -14,10 +14,22 @@
 //! `TILDE` is valid wherever the whitespace stood, so the result parses and is
 //! lossless.
 //!
-//! Scope is deliberately tight: only a same-line `WORD WHITESPACE \cmd` shape is
-//! flagged. A *source line break* before the command (`Figure\n\ref{x}`) is also
-//! a breakable space in LaTeX, but replacing a newline with `~` reflows the
-//! source and overlaps the formatter's job, so it is left for a later pass.
+//! **Two gap shapes, one finding.** A same-line gap (`WORD WHITESPACE \cmd`) and
+//! a single *source line break* (`Figure\n\ref{x}`) are both breakable spaces
+//! LaTeX may split, so both are flagged. They differ only in the fix:
+//!
+//! - **Same-line space:** carries the `Unsafe` tie fix above (splice the space
+//!   to `~`).
+//! - **Single newline:** *report-only, no fix.* There is no `~`-insertion that
+//!   keeps the line break—`Figure~\n\ref` and `Figure\n~\ref` both render as a
+//!   tie plus a space (double glue). The only correct rewrite replaces the
+//!   newline with `~`, which *joins the two source lines*: a reflow, and picking
+//!   line breaks is the formatter's job (tenet 1, "a fix owes only correctness,
+//!   never line-width"). So we report the finding and withhold the fix for this
+//!   shape—the sanctioned move when a fix can't meet the correctness-only bar.
+//!
+//! A *blank line* (`\par`, two or more newlines) is never flagged: the reference
+//! opens a new paragraph, so there is nothing to keep on the same line.
 //!
 //! The command table lives here, not in `data/signatures.json`: which commands
 //! want a tie is a lint judgment, not the structural arity/verbatim fact the
@@ -53,7 +65,7 @@ use std::path::PathBuf;
 
 use crate::ast::command_name;
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::syntax::{SyntaxElement, SyntaxKind};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
 use super::{Example, Rule, RuleContext};
 
@@ -107,10 +119,13 @@ impl Rule for MissingNonbreakingSpace {
          \\cite{a}`, `\\parencite`, `\\autocite`). A tie keeps the reference on \
          the same line. Self-describing references (`\\autoref`, `\\cref`) and \
          textual citations (`\\textcite`, `\\citet`) are not flagged -- they emit \
-         their own noun, so a break orphans nothing. Only the same-line `WORD \
-         SPACE \\cmd` shape is flagged. The fix is **unsafe** -- inserting a tie \
-         changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and \
-         the editor code action apply it."
+         their own noun, so a break orphans nothing. Both a same-line space and a \
+         single source line break before the command are flagged (a blank line is \
+         not -- that starts a new paragraph). For a same-line space the fix is \
+         **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves \
+         it alone; `--unsafe-fixes` and the editor code action apply it. A line \
+         break is report-only: rewriting the newline to `~` would join the two \
+         lines, a reflow the formatter owns."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -131,37 +146,64 @@ impl Rule for MissingNonbreakingSpace {
         if !TIE_COMMANDS.contains(&name.as_str()) {
             return;
         }
-        // The token immediately before the control word. Trivia floats as a
-        // sibling (it is not absorbed into the COMMAND node), and `prev_token`
-        // walks globally across node boundaries, so this reaches the real
-        // preceding token regardless of nesting.
-        let Some(ws) = command.first_token().and_then(|t| t.prev_token()) else {
+        let Some(first) = command.first_token() else {
             return;
         };
-        // Only a same-line plain space is a tie candidate. A `~` (already tied),
-        // a newline, or a `{`/`}` all fall through here.
-        if ws.kind() != SyntaxKind::WHITESPACE {
+        // Walk back over the inter-word gap immediately before the control word:
+        // a contiguous run of WHITESPACE / NEWLINE trivia. It floats as siblings
+        // (not absorbed into the COMMAND node) and `prev_token` crosses node
+        // boundaries, so this reaches the real gap regardless of nesting. The
+        // token that ends the walk is the anchor the reference would tie to.
+        let mut run: Vec<SyntaxToken> = Vec::new();
+        let mut newlines = 0usize;
+        let mut anchor: Option<SyntaxToken> = None;
+        let mut cursor = first.prev_token();
+        while let Some(tok) = cursor {
+            match tok.kind() {
+                SyntaxKind::WHITESPACE => {}
+                SyntaxKind::NEWLINE => newlines += 1,
+                // A `~` (already tied), a `{`/`}`, a comment, or the anchor word.
+                _ => {
+                    anchor = Some(tok);
+                    break;
+                }
+            }
+            cursor = tok.prev_token();
+            run.push(tok);
+        }
+        // No gap at all (the command abuts a `~`/brace): nothing to tie.
+        let (Some(nearest), Some(earliest)) = (run.first(), run.last()) else {
+            return;
+        };
+        // Require a real word before the gap so we never tie at sentence or
+        // paragraph start, after `{`, or after another command's `}`.
+        if anchor.map(|t| t.kind()) != Some(SyntaxKind::WORD) {
             return;
         }
-        // Require a real word before the space so we never tie at sentence or
-        // paragraph start, after `{`, or after another command's `}`.
-        if ws.prev_token().map(|t| t.kind()) != Some(SyntaxKind::WORD) {
+        // A blank line (`\par`) starts a new paragraph: nothing to keep together.
+        if newlines >= 2 {
             return;
         }
 
-        let range = ws.text_range();
-        let start = usize::from(range.start());
-        let end = usize::from(range.end());
-        // Replace the whole whitespace run (lexed as one token) with a single
-        // tie. Correct by construction: a `TILDE` is valid here, the splice is
-        // contiguous, so the result parses and stays lossless. Unsafe because it
-        // alters line-breaking.
-        let fix = Fix::unsafe_(
-            start,
-            end,
-            "~",
-            format!("Replace the space before `\\{name}` with a non-breaking space `~`"),
-        );
+        let start = usize::from(earliest.text_range().start());
+        let end = usize::from(nearest.text_range().end());
+        // Same-line gap: replace the whole whitespace run (lexed as one token)
+        // with a single tie. Correct by construction: a `TILDE` is valid here,
+        // the splice is contiguous, so the result parses and stays lossless.
+        // Unsafe because it alters line-breaking.
+        //
+        // A single source line break gets *no* fix: the only correct rewrite
+        // (newline -> `~`) joins the two source lines, and that reflow is the
+        // formatter's call (tenet 1), so we report the finding and withhold the
+        // fix for this shape.
+        let fix = (newlines == 0).then(|| {
+            Fix::unsafe_(
+                start,
+                end,
+                "~",
+                format!("Replace the space before `\\{name}` with a non-breaking space `~`"),
+            )
+        });
         sink.push(Diagnostic {
             rule: self.id(),
             severity: self.default_severity(),
@@ -171,7 +213,7 @@ impl Rule for MissingNonbreakingSpace {
             message: format!(
                 "missing non-breaking space before `\\{name}`; use a tie `~` so the reference stays on the same line"
             ),
-            fix: Some(fix),
+            fix,
         });
     }
 }
@@ -282,9 +324,30 @@ mod tests {
     }
 
     #[test]
-    fn newline_is_out_of_scope() {
-        // A source line break before the command is not flagged in v1.
-        assert!(findings("Figure\n\\ref{x}\n").is_empty());
+    fn single_newline_is_flagged_report_only() {
+        // A single source line break is a breakable space too, so it is flagged
+        // -- but with no fix (newline -> `~` would join the two lines, a reflow
+        // the formatter owns).
+        let out = findings("Figure\n\\ref{x}\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].rule, "missing-nonbreaking-space");
+        // Caret on the newline (byte 6..7).
+        assert_eq!((out[0].start, out[0].end), (6, 7));
+        assert!(out[0].fix.is_none(), "the newline shape carries no fix");
+    }
+
+    #[test]
+    fn newline_with_indentation_is_flagged_report_only() {
+        // Trailing indentation after the break is part of the same gap.
+        let out = findings("Figure\n  \\cite{x}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
+    }
+
+    #[test]
+    fn blank_line_is_not_flagged() {
+        // Two-plus newlines is a `\par`: the reference opens a new paragraph.
+        assert!(findings("Figure\n\n\\ref{x}\n").is_empty());
     }
 
     #[test]

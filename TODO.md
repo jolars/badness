@@ -324,10 +324,6 @@ sources below are missing.
   correctness-only textual edit (never invokes the formatter—tenet #1); reuse the
   paired begin/end spans the parser already builds. texlab exposes this as the
   `texlab.changeEnvironment` execute-command.
-- **Note (not a rule):** texlab's `MismatchedEnvironment` diagnostic
-  (`\begin{a}…\end{b}`) is already covered by the parser's `unclosed environment …
-  (found \end{…})` finding (`src/parser/grammar.rs`), surfaced via the synthetic
-  `parse` lint—so, as with `unbalanced-left-right`, no separate rule is added.
 
 ### Infrastructure
 

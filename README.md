@@ -69,6 +69,10 @@ Formatter style is set through flags: `--line-width` (default `80`),
 `preserve`, with `sentence`/`semantic` planned). See the documentation for the
 full reference.
 
+The language server runs over stdio (`badness lsp`); see the [editor setup
+guide](https://badness.dev/guide/editor-setup.html) for Neovim and VS Code
+wiring.
+
 ## Documentation
 
 Full documentation lives at **<https://badness.dev/>** (built with

@@ -8,20 +8,31 @@ badness lsp
 
 The server speaks the Language Server Protocol over **stdio**. Point your
 editor's LSP client at the `badness` binary with the `lsp` argument and
-associate it with LaTeX (`.tex`) files.
+associate it with LaTeX (`.tex`) and BibTeX (`.bib`) files.
+
+Formatter width settings can be supplied as `initializationOptions` at startup
+or through `workspace/didChangeConfiguration`: `lineWidth` and `indentWidth`,
+either as a bare object or namespaced under a `badness` key. They act as a
+fallback: a discovered `badness.toml` always wins outright, and absent one,
+your editor's tab size (sent with each formatting request) overrides the
+indent width.
 
 ## Neovim
 
-With the built-in `vim.lsp` client:
+With the built-in `vim.lsp` client (Neovim 0.11+):
 
 ```lua
 vim.lsp.config.badness = {
   cmd = { "badness", "lsp" },
-  filetypes = { "tex", "latex", "plaintex" },
-  root_markers = { ".git" },
+  filetypes = { "tex", "latex", "plaintex", "bib" },
+  root_markers = { "badness.toml", ".git" },
+  init_options = { lineWidth = 80, indentWidth = 2 },
 }
 vim.lsp.enable("badness")
 ```
+
+The `init_options` block is optional; omit it to use the defaults or a
+`badness.toml`.
 
 ## VS Code
 

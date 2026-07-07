@@ -350,8 +350,12 @@ sources below are missing.
   (`with_encoding`; `new` keeps the UTF-16 default for CLI `line_col` use), and
   is threaded from `GlobalState`/`Worker` into every conversion, including
   signature-help label offsets.
-- [ ] README editor-wiring docs (Neovim/VS Code `initializationOptions`,
-  `badness lsp` invocation).
+- [x] README editor-wiring docs (Neovim/VS Code `initializationOptions`,
+  `badness lsp` invocation). Resolved as a README one-liner pointing at
+  `docs/src/guide/editor-setup.md`, which carries the full story: Neovim
+  `vim.lsp.config` with `init_options`, `lineWidth`/`indentWidth` accepted
+  bare or under a `badness` key, file-config-wins precedence, `bib` filetype,
+  VS Code via the extension's `badness.*` settings.
 
 ## Package & class infrastructure (`.sty`/`.cls`/`.dtx`/`.ins`)
 

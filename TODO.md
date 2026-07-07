@@ -308,9 +308,14 @@ sources below are missing.
 
 ### IntelliSense (signature DB)
 
-- [ ] Signature help (`textDocument/signatureHelp`)—show the active argument
+- [x] Signature help (`textDocument/signatureHelp`)—show the active argument
   while typing a command's `{…}`/`[…]` arguments. (Not a texlab gap—texlab has no
-  signature help—but a natural fit for the signature DB.)
+  signature help—but a natural fit for the signature DB.) Triggered by `{`/`[`
+  (retriggered by `}`/`]`); the cursor's `GROUP`/`OPTIONAL` is greedily aligned
+  against the signature's slots (omitted optionals skipped, extraneous arguments
+  suppress rather than mishighlight), rendered as `#n` placeholder labels
+  (`\sqrt[#1]{#2}`) since the DB carries no argument names
+  (`src/lsp/signature_help.rs`).
 
 ### Code actions
 

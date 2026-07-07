@@ -31,11 +31,11 @@ use lsp_types::{
     HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
     InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
-    RegistrationParams, RenameOptions, RenameParams, SymbolKind, TextDocumentClientCapabilities,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
-    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    RegistrationParams, RenameOptions, RenameParams, SignatureHelp, SignatureHelpParams,
+    SymbolKind, TextDocumentClientCapabilities, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri,
+    VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceClientCapabilities,
+    WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -202,6 +202,14 @@ fn start_server(
             Some(HoverProviderCapability::Simple(true))
         ),
         "server must advertise hoverProvider"
+    );
+    assert!(
+        init.capabilities
+            .signature_help_provider
+            .as_ref()
+            .and_then(|opts| opts.trigger_characters.as_deref())
+            == Some(&["{".to_owned(), "[".to_owned()][..]),
+        "server must advertise signatureHelpProvider triggered by `{{` and `[`"
     );
     assert!(
         matches!(
@@ -1440,6 +1448,60 @@ fn lsp_hover_command_signature_and_null() {
     assert!(
         hover_markdown(&client, 3, &uri, Position::new(2, 2)).is_none(),
         "prose hover should be null"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+/// Send a `textDocument/signatureHelp` request and decode the reply (`None` for
+/// `null`).
+fn signature_help(
+    client: &Connection,
+    id: i32,
+    uri: &Uri,
+    position: Position,
+) -> Option<SignatureHelp> {
+    send_request(
+        client,
+        id,
+        "textDocument/signatureHelp",
+        serde_json::to_value(SignatureHelpParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            context: None,
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(client);
+    assert_eq!(resp.id, RequestId::from(id));
+    match resp.result.unwrap() {
+        serde_json::Value::Null => None,
+        value => Some(serde_json::from_value(value).expect("valid SignatureHelp")),
+    }
+}
+
+#[test]
+fn lsp_signature_help_active_argument_and_null() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///sighelp.tex".parse().unwrap();
+
+    let doc = "\\frac{a}{b}\n\nPlain words here.\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // Inside the second `{…}` of `\frac` (line 0, right after `b`).
+    let help = signature_help(&client, 2, &uri, Position::new(0, 10)).expect("help for \\frac");
+    assert_eq!(help.signatures.len(), 1);
+    assert_eq!(help.signatures[0].label, "\\frac{#1}{#2}");
+    assert_eq!(help.active_parameter, Some(1));
+
+    // A prose position resolves to nothing → `null`.
+    assert!(
+        signature_help(&client, 3, &uri, Position::new(2, 2)).is_none(),
+        "prose position should be null"
     );
 
     shutdown(&client, server_thread);

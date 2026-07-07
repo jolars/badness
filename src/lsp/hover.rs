@@ -361,7 +361,7 @@ fn render_package(name: &str, is_class: bool, meta: &PackageMeta) -> String {
 
 /// A human summary of an argument list: e.g. `2 required, 1 optional`. Empty when the
 /// construct takes no arguments.
-fn arg_summary(args: &[crate::semantic::signature::ArgSpec]) -> Option<String> {
+pub(super) fn arg_summary(args: &[crate::semantic::signature::ArgSpec]) -> Option<String> {
     let req = args.iter().filter(|a| a.required).count();
     let opt = args.len() - req;
     let mut parts = Vec::new();

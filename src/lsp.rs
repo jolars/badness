@@ -59,6 +59,7 @@ mod completion_resolve;
 mod document_link;
 mod folding;
 mod hover;
+mod signature_help;
 mod task_pool;
 
 use std::collections::{HashMap, HashSet};
@@ -76,8 +77,8 @@ use lsp_types::request::{
     CodeActionRequest, Completion, DocumentDiagnosticRequest, DocumentHighlightRequest,
     DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition,
     HoverRequest, OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References,
-    RegisterCapability, Rename, Request as _, ResolveCompletionItem, WorkspaceDiagnosticRefresh,
-    WorkspaceSymbolRequest,
+    RegisterCapability, Rename, Request as _, ResolveCompletionItem, SignatureHelpRequest,
+    WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
@@ -96,10 +97,10 @@ use lsp_types::{
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
     PublishDiagnosticsParams, Range, ReferenceParams, Registration, RegistrationParams,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
-    RenameParams, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    RenameParams, ServerCapabilities, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
+    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit,
+    WorkspaceSymbol, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -196,6 +197,16 @@ fn server_capabilities() -> ServerCapabilities {
         // fully-built actions (no `codeAction/resolve` step).
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        // Show the active argument while typing a command's/environment's
+        // `{…}`/`[…]` arguments. `{`/`[` open an argument; `}`/`]` as *retriggers*
+        // make the client re-query when one closes, so the between-arguments
+        // `null` dismisses the popup and a still-inside position advances the
+        // highlight. No `,`: a `\cite{a,b}` key list is one slot.
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["{".to_owned(), "[".to_owned()]),
+            retrigger_characters: Some(vec!["}".to_owned(), "]".to_owned()]),
+            work_done_progress_options: Default::default(),
+        }),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         // Shade a cross-reference key and every same-key occurrence in the buffer.
@@ -575,6 +586,16 @@ enum WorkerJob {
         /// reads the compile's `.aux`).
         build: BuildConfig,
     },
+    /// A signature-help request: describe the command/environment whose argument
+    /// the cursor is typing in on the read pool and reply to `id`. Cross-file
+    /// (the signature scope folds in loaded packages), so the worker snapshots
+    /// project membership when it dispatches, like [`Hover`](Self::Hover).
+    SignatureHelp {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        position: Position,
+    },
     /// A go-to-definition request: resolve the `\ref`/`\cite` under the cursor to
     /// its `\label`/bib entry on the read pool and reply to `id`. Cross-file, so
     /// the worker snapshots project membership when it dispatches (like an analyze).
@@ -813,6 +834,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             }
                             HoverRequest::METHOD => {
                                 on_hover(&connection, &mut state, &job_tx, req)
+                            }
+                            SignatureHelpRequest::METHOD => {
+                                on_signature_help(&connection, &mut state, &job_tx, req)
                             }
                             GotoDefinition::METHOD => {
                                 on_goto_definition(&connection, &mut state, &job_tx, req)
@@ -1564,6 +1588,50 @@ fn on_hover(
     });
 }
 
+/// `textDocument/signatureHelp`: build a signature-help job for the worker, or
+/// reply `null` when the document is unknown. The request's `context` is ignored:
+/// help is recomputed statelessly per request, and with exactly one signature per
+/// reply `is_retrigger`/`active_signature_help` add nothing.
+fn on_signature_help(
+    connection: &Connection,
+    state: &mut GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<SignatureHelpParams>(SignatureHelpRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid signature help params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+    let path = uri_to_path(&uri);
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: nothing to describe.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let text = doc.text.clone();
+    let _ = job_tx.send(WorkerJob::SignatureHelp {
+        id,
+        path,
+        text,
+        position,
+    });
+}
+
 /// `textDocument/codeAction`: build a code-action job for the worker, or reply with
 /// an empty action list when the document is unknown. Surfaces linter autofixes as
 /// quick-fixes; a `.bib` cursor is handled too (its bib-lint fixes are surfaced the
@@ -2258,6 +2326,21 @@ impl Worker {
                     run_hover(
                         &snapshot, id, &path, &text, position, members, &build, &out_tx,
                     )
+                });
+            }
+            WorkerJob::SignatureHelp {
+                id,
+                path,
+                text,
+                position,
+            } => {
+                // The signature scope folds in loaded packages, so — like hover —
+                // snapshot project membership on the write side.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_signature_help(&snapshot, id, &path, &text, position, members, &out_tx)
                 });
             }
             WorkerJob::GotoDefinition {
@@ -3941,6 +4024,23 @@ fn run_hover(
 ) {
     let result = hover::compute_hover(snapshot, path, text, position, members, build)
         .and_then(|hover| serde_json::to_value(hover).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Describe the command/environment whose argument the cursor is typing in and
+/// reply with a `SignatureHelp` (or `null` when nothing resolves).
+fn run_signature_help(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    position: Position,
+    members: Vec<ProjectMember>,
+    out_tx: &Sender<Outbound>,
+) {
+    let result = signature_help::compute_signature_help(snapshot, path, text, position, members)
+        .and_then(|help| serde_json::to_value(help).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }

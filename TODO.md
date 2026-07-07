@@ -107,10 +107,14 @@ An optional `Fix::safe`/`Fix::unsafe_` is picked up by `--fix`, LSP code actions
 layout items (whitespace, indentation, brace-on-scripts) are the formatter's job and
 excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
 
-- [~] Wire the remaining report-only fixes onto the autofix infra:
-  `deprecated-command`'s `\bf → \bfseries` is **done** (a `Safe` control-word swap,
-  consumed by `lint --fix` and the new LSP code actions); `obsolete-environment`'s
-  `eqnarray → align` is still report-only.
+- [x] Wire the remaining report-only fixes onto the autofix infra: **done**.
+  `deprecated-command`'s `\bf → \bfseries` is a `Safe` control-word swap;
+  `obsolete-environment`'s `eqnarray → align` is a `Safe` swap too—since a `Fix`
+  is one contiguous replacement but a rename touches two disjoint spans
+  (`\begin`/`\end`), it splices the whole environment, copying the body verbatim
+  and rewriting only the two names (correct by construction, withheld on an
+  unterminated or recovery-mismatched pair). Both are consumed by `lint --fix` and
+  the LSP code actions.
 - [~] `missing-nonbreaking-space` (a tie before a cite/ref command, broad curated
   family, `\nocite` excluded; `Unsafe` autofix) is **done**. *Follow-up:* the tie lint
   only covers a same-line `WORD WHITESPACE \cmd` shape; a *source line break* before

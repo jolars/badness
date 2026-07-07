@@ -117,7 +117,7 @@ warning: missing-nonbreaking-space
 
 ## `obsolete-environment`
 
-Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). Reports only; the swap is left for a later autofix.
+Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). The autofix swaps the `\begin`/`\end` names, copying the body verbatim, so it is correct by construction.
 
 The superseded `eqnarray` environment:
 
@@ -133,6 +133,14 @@ warning: obsolete-environment
   |
 1 | \begin{eqnarray}
   |       ^^^^^^^^^^ `eqnarray` is obsolete; use `align`
+```
+
+After applying the fix:
+
+```tex
+\begin{align}
+  a &=& b
+\end{align}
 ```
 
 ## `primitive-command`

@@ -235,7 +235,7 @@ mod tests {
         let members = super::members_of(&snapshot);
         let offset = src.find(needle).expect("needle present") + needle.len();
         let idx = LineIndex::new(src);
-        let (line, character) = idx.utf16_position(src, offset);
+        let (line, character) = idx.position(src, offset);
         let uri: Uri = format!("file://{}", path.display()).parse().expect("uri");
         // These tests never complete a package name, so the index is never resolved;
         // a disabled config keeps that guaranteed (and hermetic).
@@ -251,6 +251,7 @@ mod tests {
             Position { line, character },
             members,
             &texmf,
+            PositionEncoding::Utf16,
         )
     }
 

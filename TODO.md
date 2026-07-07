@@ -339,8 +339,17 @@ sources below are missing.
 
 ### Infrastructure
 
-- [ ] Client capability negotiation—gate advertised providers and
-  UTF-8/UTF-16 position encoding on what `initialize` reports.
+- [x] Client capability negotiation—gate advertised providers and
+  UTF-8/UTF-16 position encoding on what `initialize` reports. The handshake is
+  now two-step (`initialize_start`/`initialize_finish`) so `server_capabilities`
+  can read the client's params: UTF-8 is advertised and served when
+  `general.positionEncodings` offers it (columns become byte distances), else
+  the mandatory UTF-16; the pull-diagnostics provider is advertised only to a
+  client that reports `textDocument.diagnostic` support. The negotiated
+  encoding lives in `text::PositionEncoding`, is carried by every `LineIndex`
+  (`with_encoding`; `new` keeps the UTF-16 default for CLI `line_col` use), and
+  is threaded from `GlobalState`/`Worker` into every conversion, including
+  signature-help label offsets.
 - [ ] README editor-wiring docs (Neovim/VS Code `initializationOptions`,
   `badness lsp` invocation).
 

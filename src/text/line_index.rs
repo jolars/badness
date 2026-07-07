@@ -1,10 +1,10 @@
 //! Byte-offset → line/column conversion.
 //!
-//! Kept free of any LSP type dependency for now: it exposes a 1-indexed
-//! **code-point** [`LineCol`]
-//! for CLI diagnostics and a 0-indexed **UTF-16** `(line, character)` pair for
-//! LSP positions, which Phase 6 will map onto `lsp_types::Position`. (Marked an
-//! extraction candidate in `AGENTS.md`.)
+//! Kept free of any LSP type dependency: it exposes a 1-indexed **code-point**
+//! [`LineCol`] for CLI diagnostics and a 0-indexed `(line, character)` pair for
+//! LSP positions, counted in the [`PositionEncoding`] the index was built with
+//! (the encoding negotiated at `initialize`). (Marked an extraction candidate
+//! in `AGENTS.md`.)
 
 /// A 1-indexed line/column, with the column counted in Unicode code points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +15,20 @@ pub struct LineCol {
     pub column: usize,
 }
 
+/// How an LSP `Position.character` counts columns within a line — the position
+/// encoding negotiated at `initialize` from the client's
+/// `general.positionEncodings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PositionEncoding {
+    /// `character` counts UTF-8 code units (bytes). Preferred when the client
+    /// offers it: a column is then a plain byte distance, no per-line re-count.
+    Utf8,
+    /// `character` counts UTF-16 code units — the protocol-mandatory default
+    /// every client supports.
+    #[default]
+    Utf16,
+}
+
 /// Precomputed line-start byte offsets for a text buffer.
 #[derive(Debug, Clone)]
 pub struct LineIndex {
@@ -23,10 +37,21 @@ pub struct LineIndex {
     line_starts: Vec<usize>,
     /// Total length of the indexed text, in bytes.
     len: usize,
+    /// The column unit [`position`](Self::position)/[`offset_at`](Self::offset_at)
+    /// count in. Irrelevant to [`line_col`](Self::line_col) (code points).
+    encoding: PositionEncoding,
 }
 
 impl LineIndex {
+    /// An index converting positions in the LSP-default **UTF-16** encoding.
+    /// CLI diagnostics (which only use [`line_col`](Self::line_col)) use this
+    /// too; LSP code should build with the *negotiated* encoding via
+    /// [`with_encoding`](Self::with_encoding).
     pub fn new(text: &str) -> Self {
+        Self::with_encoding(text, PositionEncoding::Utf16)
+    }
+
+    pub fn with_encoding(text: &str, encoding: PositionEncoding) -> Self {
         let mut line_starts = vec![0];
         let bytes = text.as_bytes();
         let mut i = 0;
@@ -50,6 +75,7 @@ impl LineIndex {
         Self {
             line_starts,
             len: text.len(),
+            encoding,
         }
     }
 
@@ -75,26 +101,31 @@ impl LineIndex {
         }
     }
 
-    /// 0-indexed (line, character-in-UTF-16-units) for LSP positions.
+    /// 0-indexed (line, character) for LSP positions, with `character` counted
+    /// in the index's [`PositionEncoding`].
     ///
     /// `text` must be the same buffer the index was built from.
-    pub fn utf16_position(&self, text: &str, offset: usize) -> (u32, u32) {
+    pub fn position(&self, text: &str, offset: usize) -> (u32, u32) {
         let offset = offset.min(self.len);
         let line = self.line_of(offset);
         let start = self.line_starts[line];
-        let character: usize = text[start..offset].chars().map(char::len_utf16).sum();
+        let character: usize = match self.encoding {
+            PositionEncoding::Utf8 => offset - start,
+            PositionEncoding::Utf16 => text[start..offset].chars().map(char::len_utf16).sum(),
+        };
         (line as u32, character as u32)
     }
 
-    /// Byte offset of a 0-indexed UTF-16 LSP position. The inverse of
-    /// [`utf16_position`](Self::utf16_position), used to splice incremental
-    /// `didChange` edits into a buffer.
+    /// Byte offset of a 0-indexed LSP position (`character` in the index's
+    /// [`PositionEncoding`]). The inverse of [`position`](Self::position), used
+    /// to splice incremental `didChange` edits into a buffer.
     ///
     /// `text` must be the same buffer the index was built from. An out-of-range
     /// `line` clamps to the end of the text; a `character` past the line's content
     /// clamps to the line's end (the byte before its trailing newline, or the text
-    /// end on the last line). A `character` landing inside a surrogate pair snaps
-    /// to the end of that code point.
+    /// end on the last line). A `character` landing inside a code point (a UTF-16
+    /// surrogate pair, or a UTF-8 multi-byte sequence) snaps to the end of that
+    /// code point.
     pub fn offset_at(&self, text: &str, line: u32, character: u32) -> usize {
         let line = line as usize;
         let Some(&start) = self.line_starts.get(line) else {
@@ -108,14 +139,25 @@ impl LineIndex {
             .map(|&next| line_end_excluding_newline(text, start, next))
             .unwrap_or(self.len);
 
-        let mut units = 0u32;
-        for (i, ch) in text[start..line_end].char_indices() {
-            if units >= character {
-                return start + i;
+        match self.encoding {
+            PositionEncoding::Utf8 => {
+                let mut offset = line_end.min(start + character as usize);
+                while !text.is_char_boundary(offset) {
+                    offset += 1;
+                }
+                offset
             }
-            units += ch.len_utf16() as u32;
+            PositionEncoding::Utf16 => {
+                let mut units = 0u32;
+                for (i, ch) in text[start..line_end].char_indices() {
+                    if units >= character {
+                        return start + i;
+                    }
+                    units += ch.len_utf16() as u32;
+                }
+                line_end
+            }
         }
-        line_end
     }
 }
 
@@ -154,7 +196,17 @@ mod tests {
         let text = "a𝕏b";
         let idx = LineIndex::new(text);
         let off = "a𝕏".len(); // byte offset just after the astral char
-        assert_eq!(idx.utf16_position(text, off), (0, 3));
+        assert_eq!(idx.position(text, off), (0, 3));
+    }
+
+    #[test]
+    fn utf8_counts_bytes() {
+        // The same buffer in UTF-8 encoding: characters are byte distances.
+        let text = "a𝕏b";
+        let idx = LineIndex::with_encoding(text, PositionEncoding::Utf8);
+        let off = "a𝕏".len();
+        assert_eq!(idx.position(text, off), (0, 5));
+        assert_eq!(idx.offset_at(text, 0, 5), off);
     }
 
     #[test]
@@ -165,20 +217,22 @@ mod tests {
     }
 
     #[test]
-    fn offset_at_round_trips_utf16_positions() {
+    fn offset_at_round_trips_positions_in_both_encodings() {
         // Astral char on line 0, LF break, ASCII on line 1. Every char-boundary
         // offset's position must map back to that same offset. (CRLF is excluded
         // here because the byte *between* \r and \n is a terminator interior, not
         // an addressable position — see `offset_at_crlf_terminator` below.)
         let text = "a𝕏b\ncd";
-        let idx = LineIndex::new(text);
-        for offset in (0..=text.len()).filter(|&o| text.is_char_boundary(o)) {
-            let (line, character) = idx.utf16_position(text, offset);
-            assert_eq!(
-                idx.offset_at(text, line, character),
-                offset,
-                "offset {offset}"
-            );
+        for encoding in [PositionEncoding::Utf16, PositionEncoding::Utf8] {
+            let idx = LineIndex::with_encoding(text, encoding);
+            for offset in (0..=text.len()).filter(|&o| text.is_char_boundary(o)) {
+                let (line, character) = idx.position(text, offset);
+                assert_eq!(
+                    idx.offset_at(text, line, character),
+                    offset,
+                    "offset {offset} ({encoding:?})"
+                );
+            }
         }
     }
 
@@ -210,5 +264,15 @@ mod tests {
         let idx = LineIndex::new(text);
         // "𝕏" is 2 UTF-16 units; character 1 lands mid-pair → snaps to its end.
         assert_eq!(idx.offset_at(text, 0, 1), text.len());
+    }
+
+    #[test]
+    fn offset_at_inside_utf8_sequence_snaps_to_code_point_end() {
+        let text = "𝕏";
+        let idx = LineIndex::with_encoding(text, PositionEncoding::Utf8);
+        // "𝕏" is 4 bytes; character 2 lands mid-sequence → snaps to its end.
+        assert_eq!(idx.offset_at(text, 0, 2), text.len());
+        // A character past the line's content clamps to the line end.
+        assert_eq!(idx.offset_at(text, 0, 99), text.len());
     }
 }

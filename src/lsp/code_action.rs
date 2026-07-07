@@ -27,8 +27,9 @@ pub(crate) fn code_actions_for_range(
     text: &str,
     uri: &Uri,
     request_range: Range,
+    enc: PositionEncoding,
 ) -> CodeActionResponse {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let req_start = idx.offset_at(
         text,
         request_range.start.line,
@@ -84,7 +85,7 @@ mod tests {
 
     fn full_range(text: &str) -> Range {
         let idx = LineIndex::new(text);
-        let (el, ec) = idx.utf16_position(text, text.len());
+        let (el, ec) = idx.position(text, text.len());
         Range {
             start: Position::new(0, 0),
             end: Position::new(el, ec),
@@ -99,7 +100,13 @@ mod tests {
     #[test]
     fn offers_quickfix_for_deprecated_command_in_range() {
         let src = "{\\bf hi}\n";
-        let actions = code_actions_for_range(&findings(src), src, &uri(), full_range(src));
+        let actions = code_actions_for_range(
+            &findings(src),
+            src,
+            &uri(),
+            full_range(src),
+            PositionEncoding::Utf16,
+        );
         let CodeActionOrCommand::CodeAction(action) = actions
             .iter()
             .find(
@@ -132,14 +139,21 @@ mod tests {
             start: Position::new(0, 0),
             end: Position::new(0, 0),
         };
-        let actions = code_actions_for_range(&findings(src), src, &uri(), cursor);
+        let actions =
+            code_actions_for_range(&findings(src), src, &uri(), cursor, PositionEncoding::Utf16);
         assert!(actions.is_empty());
     }
 
     #[test]
     fn surfaces_dollar_display_math_fix() {
         let src = "$$x = y$$\n";
-        let actions = code_actions_for_range(&findings(src), src, &uri(), full_range(src));
+        let actions = code_actions_for_range(
+            &findings(src),
+            src,
+            &uri(),
+            full_range(src),
+            PositionEncoding::Utf16,
+        );
         assert!(actions.iter().any(|a| matches!(
             a,
             CodeActionOrCommand::CodeAction(a) if a.title.contains("\\[")

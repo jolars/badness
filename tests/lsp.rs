@@ -28,15 +28,16 @@ use lsp_types::{
     DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
     DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandParams, FileChangeType, FileEvent,
     FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceContext, ReferenceParams,
-    RegistrationParams, RenameOptions, RenameParams, SignatureHelp, SignatureHelpParams,
-    SymbolKind, TextDocumentClientCapabilities, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri,
-    VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceClientCapabilities,
-    WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    FormattingOptions, GeneralClientCapabilities, GotoDefinitionParams, GotoDefinitionResponse,
+    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams,
+    Position, PositionEncodingKind, PrepareRenameResponse, PublishDiagnosticsParams, Range,
+    ReferenceContext, ReferenceParams, RegistrationParams, RenameOptions, RenameParams,
+    SignatureHelp, SignatureHelpParams, SymbolKind, TextDocumentClientCapabilities,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 
 /// Build a valid `file://` URI from a filesystem path, cross-platform. A raw
@@ -234,8 +235,13 @@ fn start_server(
     );
     assert!(init.capabilities.text_document_sync.is_some());
     assert!(
-        init.capabilities.diagnostic_provider.is_some(),
-        "server must advertise diagnosticProvider (pull diagnostics)"
+        init.capabilities.diagnostic_provider.is_none(),
+        "diagnosticProvider is gated on client pull support, which this client lacks"
+    );
+    assert_eq!(
+        init.capabilities.position_encoding,
+        Some(PositionEncodingKind::UTF16),
+        "a client offering no positionEncodings gets the mandatory UTF-16 default"
     );
     send_notification(
         &client,
@@ -3468,6 +3474,120 @@ fn lsp_watched_change_for_open_buffer_is_ignored() {
         !rule_codes(&diags).iter().any(|c| c == "deprecated-command"),
         "an open buffer's diagnostics must track the overlay, not disk, got {:?}",
         diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+/// A client offering `utf-8` in `general.positionEncodings` is answered with a
+/// `positionEncoding: "utf-8"` capability, and every position on the wire then
+/// counts columns in bytes: symbol ranges come back byte-counted, and a ranged
+/// `didChange` splice is interpreted byte-wise. ("→" is 3 UTF-8 bytes but 1
+/// UTF-16 unit, so the two encodings are cleanly told apart.)
+#[test]
+fn lsp_negotiates_utf8_position_encoding() {
+    let (server, client) = Connection::memory();
+    let server_thread = std::thread::spawn(move || badness::lsp::serve(server).unwrap());
+
+    let params = InitializeParams {
+        capabilities: ClientCapabilities {
+            general: Some(GeneralClientCapabilities {
+                position_encodings: Some(vec![
+                    PositionEncodingKind::UTF8,
+                    PositionEncodingKind::UTF16,
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    send_request(
+        &client,
+        1,
+        "initialize",
+        serde_json::to_value(params).unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(1));
+    let init: InitializeResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(
+        init.capabilities.position_encoding,
+        Some(PositionEncodingKind::UTF8),
+        "a client offering utf-8 must be served utf-8 positions"
+    );
+    send_notification(
+        &client,
+        "initialized",
+        serde_json::to_value(InitializedParams {}).unwrap(),
+    );
+
+    let uri: Uri = "file:///utf8.tex".parse().unwrap();
+    // Byte layout: "→" 0..3, "\section" 3..11, "{" 11, "Intro" 12..17, "}" 17.
+    did_open(&client, &uri, 1, "→\\section{Intro}\n");
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    let symbols = |id: i32, client: &Connection| -> Vec<DocumentSymbol> {
+        send_request(
+            client,
+            id,
+            "textDocument/documentSymbol",
+            serde_json::to_value(DocumentSymbolParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .unwrap(),
+        );
+        let resp = recv_response(client);
+        assert_eq!(resp.id, RequestId::from(id));
+        match serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response") {
+            DocumentSymbolResponse::Nested(symbols) => symbols,
+            other => panic!("expected a nested documentSymbol response, got {other:?}"),
+        }
+    };
+
+    // Output positions count bytes: the section starts after the 3-byte arrow
+    // (a UTF-16 server would say character 1).
+    let syms = symbols(2, &client);
+    assert_eq!(syms.len(), 1);
+    assert_eq!(syms[0].name, "Intro");
+    assert_eq!(syms[0].range.start, Position::new(0, 3));
+
+    // Input positions count bytes too: splice "Intro" (bytes 12..17) by its
+    // byte-counted range. A UTF-16 server would splice inside "\section".
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: Some(Range {
+                    start: Position::new(0, 12),
+                    end: Position::new(0, 17),
+                }),
+                range_length: None,
+                text: "Body".to_owned(),
+            }],
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(
+        diags.diagnostics.is_empty(),
+        "the byte-spliced doc still parses cleanly, got {:?}",
+        diags.diagnostics
+    );
+
+    let syms = symbols(3, &client);
+    assert_eq!(syms.len(), 1);
+    assert_eq!(
+        syms[0].name, "Body",
+        "the didChange range must be interpreted in utf-8"
     );
 
     shutdown(&client, server_thread);

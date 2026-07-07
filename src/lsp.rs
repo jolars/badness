@@ -95,13 +95,14 @@ use lsp_types::{
     ExecuteCommandOptions, ExecuteCommandParams, FileChangeType, FileSystemWatcher, FoldingRange,
     FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
-    InsertTextFormat, Location, NumberOrString, OneOf, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, ReferenceParams, Registration, RegistrationParams,
-    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
-    RenameParams, ServerCapabilities, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit,
-    WorkspaceSymbol, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
+    RegistrationParams, RelatedFullDocumentDiagnosticReport,
+    RelatedUnchangedDocumentDiagnosticReport, RenameOptions, RenameParams, ServerCapabilities,
+    SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use rowan::{TextRange, TextSize};
 use salsa::Database as _;
@@ -132,7 +133,7 @@ use crate::project::texmf::TexmfIndex;
 use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
 use crate::syntax::{SyntaxKind, SyntaxNode};
-use crate::text::LineIndex;
+use crate::text::{LineIndex, PositionEncoding};
 
 use task_pool::{Spawner, TaskPool, read_pool_size};
 
@@ -150,17 +151,48 @@ pub fn run() -> Result<(), DynError> {
 /// Perform the `initialize` handshake on `connection`, then run the message loop
 /// until shutdown. Split out from [`run`] so tests can drive it over a
 /// `Connection::memory()` pair.
+///
+/// The two-step `initialize_start`/`initialize_finish` handshake (rather than the
+/// one-shot `Connection::initialize`) is what lets [`server_capabilities`] depend
+/// on the *client's* params: the advertised position encoding and the pull-
+/// diagnostics provider are negotiated from what the client reports.
 pub fn serve(connection: Connection) -> Result<(), DynError> {
-    let capabilities = serde_json::to_value(server_capabilities())?;
-    let init_params = connection.initialize(capabilities)?;
-    main_loop(connection, init_params)
+    let (initialize_id, init_params) = connection.initialize_start()?;
+    let encoding = negotiate_position_encoding(&init_params);
+    let (supports_pull_diagnostics, _) = client_diagnostic_support(&init_params);
+    let capabilities =
+        serde_json::to_value(server_capabilities(encoding, supports_pull_diagnostics))?;
+    connection.initialize_finish(
+        initialize_id,
+        serde_json::json!({ "capabilities": capabilities }),
+    )?;
+    main_loop(connection, init_params, encoding)
+}
+
+/// Pick the position encoding from the client's `general.positionEncodings`:
+/// UTF-8 when offered (columns are then plain byte distances — no per-line
+/// re-count), else the protocol-mandatory UTF-16 default (also the fallback for
+/// a pre-3.17 client that sends no offer). Advertised back via
+/// `ServerCapabilities::position_encoding` and honored by every [`LineIndex`]
+/// conversion (each is built with [`LineIndex::with_encoding`]).
+fn negotiate_position_encoding(init_params: &serde_json::Value) -> PositionEncoding {
+    let offers = init_params
+        .get("capabilities")
+        .and_then(|c| c.get("general"))
+        .and_then(|g| g.get("positionEncodings"))
+        .and_then(serde_json::Value::as_array);
+    match offers {
+        Some(list) if list.iter().any(|v| v.as_str() == Some("utf-8")) => PositionEncoding::Utf8,
+        _ => PositionEncoding::Utf16,
+    }
 }
 
 /// Advertise what we support: **incremental** text sync + whole-document
 /// formatting. Diagnostics are offered both ways — *pushed* via
 /// `publishDiagnostics` (the default, needing no flag) and *pulled* via
-/// `textDocument/diagnostic` (the `diagnostic_provider` capability). A client that
-/// advertises pull support is served pull-only; everyone else keeps push (see
+/// `textDocument/diagnostic` (the `diagnostic_provider` capability, advertised
+/// only to a client that reports pull support). A client that advertises pull
+/// support is served pull-only; everyone else keeps push (see
 /// `supports_pull_diagnostics`). `workspace/diagnostic` is deferred (see `TODO.md`).
 /// The change-environment refactor's `workspace/executeCommand` id, plus the
 /// texlab-compatible alias so an editor keybinding written for texlab
@@ -169,22 +201,32 @@ pub fn serve(connection: Connection) -> Result<(), DynError> {
 const CHANGE_ENVIRONMENT_COMMAND: &str = "badness.changeEnvironment";
 const CHANGE_ENVIRONMENT_COMMAND_TEXLAB: &str = "texlab.changeEnvironment";
 
-fn server_capabilities() -> ServerCapabilities {
+fn server_capabilities(
+    encoding: PositionEncoding,
+    supports_pull_diagnostics: bool,
+) -> ServerCapabilities {
     ServerCapabilities {
+        // Echo the negotiated encoding (see `negotiate_position_encoding`).
+        position_encoding: Some(match encoding {
+            PositionEncoding::Utf8 => PositionEncodingKind::UTF8,
+            PositionEncoding::Utf16 => PositionEncodingKind::UTF16,
+        }),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         )),
-        diagnostic_provider: Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
-            identifier: Some("badness".to_owned()),
-            // Editing an `\input` target / `.bib` changes this file's
-            // `undefined-ref` / `undefined-citation` set, so a pull in one file can
-            // depend on another's content.
-            inter_file_dependencies: true,
-            // Deferred: workspace pull is a streaming/long-poll protocol that fits
-            // the one-shot read-job model poorly (see `TODO.md`).
-            workspace_diagnostics: false,
-            work_done_progress_options: Default::default(),
-        })),
+        diagnostic_provider: supports_pull_diagnostics.then(|| {
+            DiagnosticServerCapabilities::Options(DiagnosticOptions {
+                identifier: Some("badness".to_owned()),
+                // Editing an `\input` target / `.bib` changes this file's
+                // `undefined-ref` / `undefined-citation` set, so a pull in one file
+                // can depend on another's content.
+                inter_file_dependencies: true,
+                // Deferred: workspace pull is a streaming/long-poll protocol that
+                // fits the one-shot read-job model poorly (see `TODO.md`).
+                workspace_diagnostics: false,
+                work_done_progress_options: Default::default(),
+            })
+        }),
         document_formatting_provider: Some(OneOf::Left(true)),
         // Format the editor selection, expanded to whole top-level blocks (see
         // `compute_range_format`).
@@ -295,6 +337,10 @@ struct GlobalState {
     /// `client/registerCapability`). Namespaced from the client's request ids, so they
     /// never collide.
     next_request_id: i32,
+    /// The position encoding negotiated at `initialize` (see
+    /// [`negotiate_position_encoding`]), governing every `Position` ↔ byte-offset
+    /// conversion on the main loop (`didChange` splicing).
+    position_encoding: PositionEncoding,
 }
 
 /// Formatting settings supplied by the editor, as `initializationOptions` at
@@ -810,7 +856,13 @@ fn client_watched_files_support(init_params: &serde_json::Value) -> bool {
 
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
 /// the read pool, then shuttles messages between the client and the workers.
-fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(), DynError> {
+/// `encoding` is the position encoding [`serve`] negotiated (and advertised) at
+/// `initialize`.
+fn main_loop(
+    connection: Connection,
+    init_params: serde_json::Value,
+    encoding: PositionEncoding,
+) -> Result<(), DynError> {
     let editor_settings = init_params
         .get("initializationOptions")
         .map(EditorSettings::from_client_value)
@@ -826,6 +878,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
         supports_diagnostic_refresh,
         supports_dynamic_watchers,
         next_request_id: 1,
+        position_encoding: encoding,
     };
 
     // Register on-disk watchers now: `lsp-server`'s `Connection::initialize` already
@@ -837,7 +890,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
     let read_pool = TaskPool::new("badness-lsp-read", read_pool_size());
     let (job_tx, job_rx) = unbounded::<WorkerJob>();
     let (out_tx, out_rx) = unbounded::<Outbound>();
-    let worker = spawn_worker(job_rx, out_tx, read_pool.spawner());
+    let worker = spawn_worker(job_rx, out_tx, read_pool.spawner(), encoding);
 
     loop {
         select! {
@@ -976,7 +1029,11 @@ fn on_notification(
             let Some(doc) = state.documents.get_mut(&uri) else {
                 return;
             };
-            apply_content_changes(&mut doc.text, params.content_changes);
+            apply_content_changes(
+                &mut doc.text,
+                params.content_changes,
+                state.position_encoding,
+            );
             doc.version = version;
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
@@ -1116,14 +1173,18 @@ fn on_watched_files_change(
 
 /// Apply a batch of `didChange` content changes to `text`, in order. A change
 /// with no range replaces the whole buffer; a ranged change splices via the
-/// (UTF-16-aware) [`LineIndex`]. The index is rebuilt per change because each
+/// (encoding-aware) [`LineIndex`]. The index is rebuilt per change because each
 /// mutation shifts later offsets.
-fn apply_content_changes(text: &mut String, changes: Vec<TextDocumentContentChangeEvent>) {
+fn apply_content_changes(
+    text: &mut String,
+    changes: Vec<TextDocumentContentChangeEvent>,
+    enc: PositionEncoding,
+) {
     for change in changes {
         match change.range {
             None => *text = change.text,
             Some(range) => {
-                let idx = LineIndex::new(text);
+                let idx = LineIndex::with_encoding(text, enc);
                 let start = idx.offset_at(text, range.start.line, range.start.character);
                 let end = idx.offset_at(text, range.end.line, range.end.character);
                 // Guard against a degenerate (start > end) range from a misbehaving
@@ -2195,6 +2256,7 @@ fn spawn_worker(
     job_rx: Receiver<WorkerJob>,
     out_tx: Sender<Outbound>,
     read_spawner: Spawner,
+    encoding: PositionEncoding,
 ) -> JoinHandle<()> {
     let (done_tx, done_rx) = unbounded::<AnalyzeDone>();
     std::thread::Builder::new()
@@ -2205,6 +2267,7 @@ fn spawn_worker(
                 out_tx,
                 done_tx,
                 read_spawner,
+                encoding,
                 inflight: None,
                 pending: HashMap::new(),
                 seeded_dirs: HashSet::new(),
@@ -2221,6 +2284,10 @@ struct Worker {
     /// in-flight slot and dispatch the next pending analyze.
     done_tx: Sender<AnalyzeDone>,
     read_spawner: Spawner,
+    /// The position encoding negotiated at `initialize`, threaded into every
+    /// read job so its `LineIndex` conversions count columns in the negotiated
+    /// unit (see [`negotiate_position_encoding`]).
+    encoding: PositionEncoding,
     /// The single in-flight analyze, if any. At most one runs at a time: the
     /// write-phase needs exclusive `&mut db`, and salsa cancellation is global, so
     /// a second concurrent analyze couldn't be cancelled selectively.
@@ -2260,6 +2327,7 @@ impl Worker {
     }
 
     fn handle_job(&mut self, job: WorkerJob) {
+        let enc = self.encoding;
         match job {
             WorkerJob::Edit {
                 uri,
@@ -2313,7 +2381,9 @@ impl Worker {
                 self.read_spawner.spawn(move || {
                     let sentence =
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
-                    run_format(&snapshot, id, &path, &text, style, kind, sentence, &out_tx)
+                    run_format(
+                        &snapshot, id, &path, &text, style, kind, sentence, enc, &out_tx,
+                    )
                 });
             }
             WorkerJob::RangeFormat {
@@ -2334,7 +2404,7 @@ impl Worker {
                     let sentence =
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
                     run_range_format(
-                        &snapshot, id, &path, &text, style, kind, range, sentence, &out_tx,
+                        &snapshot, id, &path, &text, style, kind, range, sentence, enc, &out_tx,
                     )
                 });
             }
@@ -2356,7 +2426,7 @@ impl Worker {
                     let sentence =
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
                     run_on_type_format(
-                        &snapshot, id, &path, &text, style, kind, position, sentence, &out_tx,
+                        &snapshot, id, &path, &text, style, kind, position, sentence, enc, &out_tx,
                     )
                 });
             }
@@ -2374,7 +2444,9 @@ impl Worker {
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_symbols(&snapshot, id, &path, &text, kind, members, &build, &out_tx)
+                    run_symbols(
+                        &snapshot, id, &path, &text, kind, members, &build, enc, &out_tx,
+                    )
                 });
             }
             WorkerJob::WorkspaceSymbols { id, query } => {
@@ -2384,8 +2456,9 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
-                self.read_spawner
-                    .spawn(move || run_workspace_symbols(&snapshot, id, &query, members, &out_tx));
+                self.read_spawner.spawn(move || {
+                    run_workspace_symbols(&snapshot, id, &query, members, enc, &out_tx)
+                });
             }
             WorkerJob::FoldingRange {
                 id,
@@ -2398,7 +2471,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
-                    .spawn(move || run_folding(&snapshot, id, &path, &text, kind, &out_tx));
+                    .spawn(move || run_folding(&snapshot, id, &path, &text, kind, enc, &out_tx));
             }
             WorkerJob::DocumentLink {
                 id,
@@ -2414,7 +2487,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_document_link(&snapshot, id, &path, &text, kind, &texmf, &out_tx)
+                    run_document_link(&snapshot, id, &path, &text, kind, &texmf, enc, &out_tx)
                 });
             }
             WorkerJob::Completion {
@@ -2434,7 +2507,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_completion(
-                        &snapshot, id, &uri, &text, position, members, &texmf, &out_tx,
+                        &snapshot, id, &uri, &text, position, members, &texmf, enc, &out_tx,
                     )
                 });
             }
@@ -2462,7 +2535,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_hover(
-                        &snapshot, id, &path, &text, position, members, &build, &out_tx,
+                        &snapshot, id, &path, &text, position, members, &build, enc, &out_tx,
                     )
                 });
             }
@@ -2478,7 +2551,7 @@ impl Worker {
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_signature_help(&snapshot, id, &path, &text, position, members, &out_tx)
+                    run_signature_help(&snapshot, id, &path, &text, position, members, enc, &out_tx)
                 });
             }
             WorkerJob::GotoDefinition {
@@ -2496,7 +2569,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_goto_definition(
-                        &snapshot, id, &path, &text, position, members, &texmf, &out_tx,
+                        &snapshot, id, &path, &text, position, members, &texmf, enc, &out_tx,
                     )
                 });
             }
@@ -2521,6 +2594,7 @@ impl Worker {
                         position,
                         members,
                         include_declaration,
+                        enc,
                         &out_tx,
                     )
                 });
@@ -2536,7 +2610,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_document_highlight(&snapshot, id, &path, &text, position, &out_tx)
+                    run_document_highlight(&snapshot, id, &path, &text, position, enc, &out_tx)
                 });
             }
             WorkerJob::PrepareRename {
@@ -2551,7 +2625,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_prepare_rename(&snapshot, id, &path, &text, position, &out_tx)
+                    run_prepare_rename(&snapshot, id, &path, &text, position, enc, &out_tx)
                 });
             }
             WorkerJob::Rename {
@@ -2568,7 +2642,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_rename(
-                        &snapshot, id, &path, &text, position, &new_name, members, &out_tx,
+                        &snapshot, id, &path, &text, position, &new_name, members, enc, &out_tx,
                     )
                 });
             }
@@ -2586,7 +2660,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_change_environment(
-                        &snapshot, id, &uri, &path, &text, position, &new_name, &out_tx,
+                        &snapshot, id, &uri, &path, &text, position, &new_name, enc, &out_tx,
                     )
                 });
             }
@@ -2615,6 +2689,7 @@ impl Worker {
                         members,
                         previous_result_id,
                         &rules,
+                        enc,
                         &out_tx,
                     )
                 });
@@ -2636,7 +2711,8 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_code_action(
-                        &snapshot, id, &uri, &path, &text, kind, range, members, &rules, &out_tx,
+                        &snapshot, id, &uri, &path, &text, kind, range, members, &rules, enc,
+                        &out_tx,
                     )
                 });
             }
@@ -2783,6 +2859,7 @@ impl Worker {
     /// db clone. A superseding edit (or any write) trips `salsa::Cancelled`, caught
     /// so a cancelled analyze publishes nothing.
     fn start_analyze(&mut self, req: AnalyzeRequest) {
+        let enc = self.encoding;
         let snapshot = self.db.snapshot();
         // Snapshot membership now (write side) so the read job interns the same
         // `Project` the latest edit produced.
@@ -2803,9 +2880,9 @@ impl Worker {
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
                 FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                    analyze_tex(&snapshot, &path, members, &rules)
+                    analyze_tex(&snapshot, &path, members, &rules, enc)
                 }
-                FileKind::Bib => analyze_bib(&snapshot, &path, &rules),
+                FileKind::Bib => analyze_bib(&snapshot, &path, &rules, enc),
             }));
             if let Ok(Some(diags)) = result {
                 let _ = out_tx.send(Outbound::Diagnostics {
@@ -2837,13 +2914,14 @@ fn analyze_tex(
     path: &Path,
     members: Vec<ProjectMember>,
     rules: &RuleSelection,
+    enc: PositionEncoding,
 ) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
     let text = snapshot.file_text(file).to_owned();
     // The file's normalized identity, which keys the cross-file resolvers (it
     // equals this file's `ProjectMember::path`).
     let lint_path = snapshot.file_path(file).to_path_buf();
-    let idx = LineIndex::new(&text);
+    let idx = LineIndex::with_encoding(&text, enc);
     let mut diags: Vec<Diagnostic> = snapshot
         .parse_diagnostics(file)
         .iter()
@@ -2870,10 +2948,15 @@ fn analyze_tex(
 /// plus bib lint-rule findings over the cached bib tree + model. The bib linter
 /// has no cross-file resolution argument (no bib rule is cross-file-sensitive
 /// yet).
-fn analyze_bib(snapshot: &Analysis, path: &Path, rules: &RuleSelection) -> Option<Vec<Diagnostic>> {
+fn analyze_bib(
+    snapshot: &Analysis,
+    path: &Path,
+    rules: &RuleSelection,
+    enc: PositionEncoding,
+) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
     let text = snapshot.file_text(file).to_owned();
-    let idx = LineIndex::new(&text);
+    let idx = LineIndex::with_encoding(&text, enc);
     let mut diags: Vec<Diagnostic> = snapshot
         .bib_parse_diagnostics(file)
         .iter()
@@ -2926,9 +3009,10 @@ fn run_document_diagnostic(
     members: Vec<ProjectMember>,
     previous_result_id: Option<String>,
     rules: &RuleSelection,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let items = compute_diagnostics(snapshot, path, text, kind, members, rules);
+    let items = compute_diagnostics(snapshot, path, text, kind, members, rules, enc);
     let result_id = result_id_for(&items);
     let report = if previous_result_id.as_deref() == Some(result_id.as_str()) {
         DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
@@ -2964,19 +3048,20 @@ fn compute_diagnostics(
     kind: FileKind,
     members: Vec<ProjectMember>,
     rules: &RuleSelection,
+    enc: PositionEncoding,
 ) -> Vec<Diagnostic> {
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            analyze_tex(snapshot, path, members, rules)
+            analyze_tex(snapshot, path, members, rules, enc)
         }
-        FileKind::Bib => analyze_bib(snapshot, path, rules),
+        FileKind::Bib => analyze_bib(snapshot, path, rules, enc),
     }));
     match cached {
         Ok(Some(items)) => items,
         // `Ok(None)` = file not in the snapshot; `Err` = cancelled by a racing edit.
         // Either way recompute from the captured buffer (single-file: cross-file
         // findings, if any, arrive on the client's next pull after the edit settles).
-        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind, rules),
+        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind, rules, enc),
     }
 }
 
@@ -2988,8 +3073,9 @@ fn fallback_diagnostics(
     text: &str,
     kind: FileKind,
     rules: &RuleSelection,
+    enc: PositionEncoding,
 ) -> Vec<Diagnostic> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let mut diags: Vec<Diagnostic> = Vec::new();
     match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
@@ -3051,10 +3137,11 @@ fn run_code_action(
     range: Range,
     members: Vec<ProjectMember>,
     rules: &RuleSelection,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     let findings = compute_lint_findings(snapshot, path, text, kind, members, rules);
-    let actions = code_action::code_actions_for_range(&findings, text, uri, range);
+    let actions = code_action::code_actions_for_range(&findings, text, uri, range, enc);
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
 }
@@ -3174,9 +3261,10 @@ fn run_format(
     style: FormatStyle,
     kind: FileKind,
     sentence: SentenceOptions<'_>,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_format(snapshot, path, text, style, kind, sentence) {
+    let result = match compute_format(snapshot, path, text, style, kind, sentence, enc) {
         Some(edit) => serde_json::to_value(vec![edit]).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -3193,6 +3281,7 @@ fn compute_format(
     style: FormatStyle,
     kind: FileKind,
     sentence: SentenceOptions<'_>,
+    enc: PositionEncoding,
 ) -> Option<TextEdit> {
     // `Some(Some(s))` = formatted; `Some(None)` = clean refusal (parse/format
     // error); `None` = cache miss / stale snapshot (fall back to the captured text).
@@ -3237,8 +3326,8 @@ fn compute_format(
     if formatted == text {
         return None;
     }
-    let idx = LineIndex::new(text);
-    let (end_line, end_col) = idx.utf16_position(text, text.len());
+    let idx = LineIndex::with_encoding(text, enc);
+    let (end_line, end_col) = idx.position(text, text.len());
     Some(TextEdit {
         range: Range {
             start: Position::new(0, 0),
@@ -3261,9 +3350,11 @@ fn run_range_format(
     kind: FileKind,
     range: Range,
     sentence: SentenceOptions<'_>,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_range_format(snapshot, path, text, style, kind, range, sentence) {
+    let result = match compute_range_format(snapshot, path, text, style, kind, range, sentence, enc)
+    {
         Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -3279,6 +3370,7 @@ fn run_range_format(
 /// formatted fragment is then diffed against the original block slice so the edits
 /// are minimal. Shares [`compute_format`]'s salsa fast-path / reparse-fallback
 /// shape.
+#[allow(clippy::too_many_arguments)]
 fn compute_range_format(
     snapshot: &Analysis,
     path: &Path,
@@ -3287,6 +3379,7 @@ fn compute_range_format(
     kind: FileKind,
     sel_range: Range,
     sentence: SentenceOptions<'_>,
+    enc: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
     // Range formatting is LaTeX-only for now; bib falls back to no edits.
     match kind {
@@ -3294,7 +3387,7 @@ fn compute_range_format(
         FileKind::Bib => return None,
     }
 
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let start = idx.offset_at(text, sel_range.start.line, sel_range.start.character);
     let end = idx.offset_at(text, sel_range.end.line, sel_range.end.character);
     let (lo, hi) = (start.min(end), start.max(end));
@@ -3381,13 +3474,14 @@ fn run_on_type_format(
     kind: FileKind,
     position: Position,
     sentence: SentenceOptions<'_>,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_on_type_format(snapshot, path, text, style, kind, position, sentence)
-    {
-        Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
-        None => serde_json::Value::Null,
-    };
+    let result =
+        match compute_on_type_format(snapshot, path, text, style, kind, position, sentence, enc) {
+            Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
@@ -3401,6 +3495,7 @@ fn run_on_type_format(
 /// and the shared range machinery ([`range_edits_for_root`]) computes the edit
 /// against the containing top-level block. Shares the salsa fast-path / reparse-
 /// fallback shape.
+#[allow(clippy::too_many_arguments)]
 fn compute_on_type_format(
     snapshot: &Analysis,
     path: &Path,
@@ -3409,13 +3504,14 @@ fn compute_on_type_format(
     kind: FileKind,
     position: Position,
     sentence: SentenceOptions<'_>,
+    enc: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
     match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {}
         FileKind::Bib => return None,
     }
 
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
     let off = offset.min(u32::MAX as usize) as u32;
     let sel = TextRange::empty(TextSize::new(off));
@@ -3516,13 +3612,14 @@ fn run_symbols(
     kind: FileKind,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     let symbols = match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            compute_symbols(snapshot, path, text, kind, members, build)
+            compute_symbols(snapshot, path, text, kind, members, build, enc)
         }
-        FileKind::Bib => compute_bib_symbols(snapshot, path, text),
+        FileKind::Bib => compute_bib_symbols(snapshot, path, text, enc),
     };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
         .unwrap_or(serde_json::Value::Null);
@@ -3540,8 +3637,9 @@ fn compute_symbols(
     kind: FileKind,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
+    enc: PositionEncoding,
 ) -> Vec<DocumentSymbol> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
         if snapshot.file_text(file) != text {
@@ -3574,8 +3672,13 @@ fn compute_symbols(
 /// Compute the BibTeX outline (a flat entry list) for `text`, preferring the
 /// snapshot's cached bib model and falling back to a direct reparse when it is
 /// unavailable or stale.
-fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &str) -> Vec<DocumentSymbol> {
-    let idx = LineIndex::new(text);
+fn compute_bib_symbols(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    enc: PositionEncoding,
+) -> Vec<DocumentSymbol> {
+    let idx = LineIndex::with_encoding(text, enc);
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
         if snapshot.file_text(file) != text {
@@ -3604,6 +3707,7 @@ fn run_workspace_symbols(
     id: RequestId,
     query: &str,
     members: Vec<ProjectMember>,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     let needle = query.to_ascii_lowercase();
@@ -3614,7 +3718,7 @@ fn run_workspace_symbols(
         }
         let collected = salsa::Cancelled::catch(AssertUnwindSafe(|| {
             let text = snapshot.file_text(member.file);
-            let idx = LineIndex::new(text);
+            let idx = LineIndex::with_encoding(text, enc);
             let items = outline(&snapshot.parsed_tree(member.file));
             // Group the picker by file via `container_name`.
             let container = member.path.file_stem().and_then(|s| s.to_str());
@@ -3677,9 +3781,10 @@ fn run_folding(
     path: &Path,
     text: &str,
     kind: FileKind,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let ranges = compute_folding(snapshot, path, text, kind);
+    let ranges = compute_folding(snapshot, path, text, kind, enc);
     let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -3692,11 +3797,12 @@ fn compute_folding(
     path: &Path,
     text: &str,
     kind: FileKind,
+    enc: PositionEncoding,
 ) -> Vec<FoldingRange> {
     if kind == FileKind::Bib {
         return Vec::new();
     }
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
         if snapshot.file_text(file) != text {
@@ -3719,6 +3825,7 @@ fn compute_folding(
 
 /// Compute document links for a [`WorkerJob::DocumentLink`] on the read pool and
 /// reply to `id`. Mirrors [`run_folding`].
+#[allow(clippy::too_many_arguments)]
 fn run_document_link(
     snapshot: &Analysis,
     id: RequestId,
@@ -3726,9 +3833,10 @@ fn run_document_link(
     text: &str,
     kind: FileKind,
     texmf: &TexmfConfig,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let links = compute_document_link(snapshot, path, text, kind, texmf);
+    let links = compute_document_link(snapshot, path, text, kind, texmf, enc);
     let result = serde_json::to_value(links).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -3744,11 +3852,12 @@ fn compute_document_link(
     text: &str,
     kind: FileKind,
     texmf: &TexmfConfig,
+    enc: PositionEncoding,
 ) -> Vec<DocumentLink> {
     if kind == FileKind::Bib {
         return Vec::new();
     }
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let base_dir = path.parent();
     // The installed-tree index for the system-package fallback. Built lazily on first
     // use (this read-pool thread), empty when scanning is disabled — either way the
@@ -3817,7 +3926,7 @@ fn document_aux(
 }
 
 /// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte
-/// ranges through the (UTF-16-aware) [`LineIndex`].
+/// ranges through the (encoding-aware) [`LineIndex`].
 /// Map an [`OutlineSymbol`] to its LSP [`SymbolKind`]. Shared by the per-file
 /// `documentSymbol` ([`to_document_symbol`]) and project-wide `workspace/symbol`
 /// ([`run_workspace_symbols`]) outputs so the two never drift.
@@ -3957,6 +4066,7 @@ fn run_completion(
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     // The salsa-key path is derived from the URI (the same mapping `on_completion` uses).
@@ -3964,7 +4074,7 @@ fn run_completion(
     // The `[texmf]` config is threaded down; the installed-tree index is resolved
     // *only* when the cursor is in a package/class argument (see
     // `build_completion_items`), so a command/label completion never pays the walk.
-    let items = compute_completion(snapshot, uri, &path, text, position, members, texmf);
+    let items = compute_completion(snapshot, uri, &path, text, position, members, texmf, enc);
     // `is_incomplete`: command/label/key universes are prefix-filtered server-side, so
     // the client re-queries as the typed prefix narrows.
     let result = serde_json::to_value(CompletionResponse::List(CompletionList {
@@ -3997,6 +4107,7 @@ fn run_completion_resolve(
 /// Compute completion items at `position`. A `.bib` cursor goes through the bib
 /// classifier; a `.tex` cursor through the LaTeX one, preferring the snapshot's cached
 /// tree/queries and falling back to a direct reparse when unavailable or stale.
+#[allow(clippy::too_many_arguments)]
 fn compute_completion(
     snapshot: &Analysis,
     uri: &Uri,
@@ -4005,8 +4116,9 @@ fn compute_completion(
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
+    enc: PositionEncoding,
 ) -> Vec<CompletionItem> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     if file_kind_for(path) == FileKind::Bib {
@@ -4229,9 +4341,10 @@ fn run_hover(
     position: Position,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = hover::compute_hover(snapshot, path, text, position, members, build)
+    let result = hover::compute_hover(snapshot, path, text, position, members, build, enc)
         .and_then(|hover| serde_json::to_value(hover).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -4239,6 +4352,7 @@ fn run_hover(
 
 /// Describe the command/environment whose argument the cursor is typing in and
 /// reply with a `SignatureHelp` (or `null` when nothing resolves).
+#[allow(clippy::too_many_arguments)]
 fn run_signature_help(
     snapshot: &Analysis,
     id: RequestId,
@@ -4246,11 +4360,13 @@ fn run_signature_help(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = signature_help::compute_signature_help(snapshot, path, text, position, members)
-        .and_then(|help| serde_json::to_value(help).ok())
-        .unwrap_or(serde_json::Value::Null);
+    let result =
+        signature_help::compute_signature_help(snapshot, path, text, position, members, enc)
+            .and_then(|help| serde_json::to_value(help).ok())
+            .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
@@ -4265,9 +4381,10 @@ fn run_goto_definition(
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let locations = compute_goto_definition(snapshot, path, text, position, members, texmf);
+    let locations = compute_goto_definition(snapshot, path, text, position, members, texmf, enc);
     let result = serde_json::to_value(GotoDefinitionResponse::Array(locations))
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -4284,10 +4401,18 @@ fn run_references(
     position: Position,
     members: Vec<ProjectMember>,
     include_declaration: bool,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let locations =
-        compute_references(snapshot, path, text, position, members, include_declaration);
+    let locations = compute_references(
+        snapshot,
+        path,
+        text,
+        position,
+        members,
+        include_declaration,
+        enc,
+    );
     let result = serde_json::to_value(locations).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -4304,9 +4429,10 @@ fn run_document_highlight(
     path: &Path,
     text: &str,
     position: Position,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let highlights = compute_document_highlight(snapshot, path, text, position);
+    let highlights = compute_document_highlight(snapshot, path, text, position, enc);
     let result = serde_json::to_value(highlights).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -4317,9 +4443,10 @@ fn run_prepare_rename(
     path: &Path,
     text: &str,
     position: Position,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = compute_prepare_rename(snapshot, path, text, position)
+    let result = compute_prepare_rename(snapshot, path, text, position, enc)
         .map(|(range, placeholder)| {
             serde_json::to_value(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder })
                 .unwrap_or(serde_json::Value::Null)
@@ -4340,9 +4467,10 @@ fn run_rename(
     position: Position,
     new_name: &str,
     members: Vec<ProjectMember>,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = compute_rename(snapshot, path, text, position, new_name, members)
+    let result = compute_rename(snapshot, path, text, position, new_name, members, enc)
         .and_then(|edit| serde_json::to_value(edit).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -4361,11 +4489,12 @@ fn run_change_environment(
     text: &str,
     position: Position,
     new_name: &str,
+    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    match compute_change_environment(snapshot, path, text, position) {
+    match compute_change_environment(snapshot, path, text, position, enc) {
         Some((old_name, ranges)) => {
-            let idx = LineIndex::new(text);
+            let idx = LineIndex::with_encoding(text, enc);
             let mut changes = HashMap::new();
             for range in ranges {
                 push_edit(&mut changes, uri, &idx, text, range, new_name);
@@ -4397,11 +4526,12 @@ fn compute_change_environment(
     path: &Path,
     text: &str,
     position: Position,
+    enc: PositionEncoding,
 ) -> Option<(String, Vec<TextRange>)> {
     if file_kind_for(path) == FileKind::Bib {
         return None;
     }
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
@@ -4446,8 +4576,9 @@ fn compute_goto_definition(
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
+    enc: PositionEncoding,
 ) -> Vec<Location> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
     let base_dir = path.parent();
 
@@ -4472,10 +4603,10 @@ fn compute_goto_definition(
             let (resolution, citations) = snapshot.resolve_project(members);
             return match target {
                 CursorTarget::Labels(names) => {
-                    resolve_label_locations(snapshot, resolution, &lint_path, &names)
+                    resolve_label_locations(snapshot, resolution, &lint_path, &names, enc)
                 }
                 CursorTarget::Citations(names) => {
-                    resolve_citation_locations(snapshot, citations, &lint_path, &names)
+                    resolve_citation_locations(snapshot, citations, &lint_path, &names, enc)
                 }
             };
         }
@@ -4542,6 +4673,7 @@ fn reference_under_cursor(model: &SemanticModel, offset: usize) -> Option<Cursor
 /// `\ref`/`\cite` use sites across the namespace. The cursor's own buffer is read
 /// off the cached tree when current, else a fresh parse. `include_declaration`
 /// appends the `\label`/`@entry` definition to the results.
+#[allow(clippy::too_many_arguments)]
 fn compute_references(
     snapshot: &Analysis,
     path: &Path,
@@ -4549,8 +4681,9 @@ fn compute_references(
     position: Position,
     members: Vec<ProjectMember>,
     include_declaration: bool,
+    enc: PositionEncoding,
 ) -> Vec<Location> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -4581,6 +4714,7 @@ fn compute_references(
                 &[key],
                 include_declaration,
                 decl,
+                enc,
             );
         }
 
@@ -4609,6 +4743,7 @@ fn compute_references(
                 &origin,
                 &names,
                 include_declaration,
+                enc,
             ),
             CursorTarget::Citations(names) => reference_citation_locations(
                 snapshot,
@@ -4618,6 +4753,7 @@ fn compute_references(
                 &names,
                 include_declaration,
                 None,
+                enc,
             ),
         }
     }));
@@ -4779,8 +4915,9 @@ fn compute_document_highlight(
     path: &Path,
     text: &str,
     position: Position,
+    enc: PositionEncoding,
 ) -> Vec<DocumentHighlight> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -4844,8 +4981,9 @@ fn compute_prepare_rename(
     path: &Path,
     text: &str,
     position: Position,
+    enc: PositionEncoding,
 ) -> Option<(Range, String)> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -4887,11 +5025,12 @@ fn compute_rename(
     position: Position,
     new_name: &str,
     members: Vec<ProjectMember>,
+    enc: PositionEncoding,
 ) -> Option<WorkspaceEdit> {
     if !is_valid_key(new_name) {
         return None;
     }
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let changes = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -4914,6 +5053,7 @@ fn compute_rename(
                 FileKind::Bib,
                 &[key],
                 new_name,
+                enc,
             );
         }
 
@@ -4937,7 +5077,7 @@ fn compute_rename(
         };
         match target.target {
             CursorTarget::Labels(names) => {
-                rename_label_edits(snapshot, resolution, &origin, &names, new_name)
+                rename_label_edits(snapshot, resolution, &origin, &names, new_name, enc)
             }
             CursorTarget::Citations(names) => rename_citation_edits(
                 snapshot,
@@ -4946,6 +5086,7 @@ fn compute_rename(
                 FileKind::Tex,
                 &names,
                 new_name,
+                enc,
             ),
         }
     }))
@@ -4985,6 +5126,7 @@ fn reference_label_locations(
     origin: &Path,
     names: &[SmolStr],
     include_declaration: bool,
+    enc: PositionEncoding,
 ) -> Vec<Location> {
     let mut locations = Vec::new();
     for member in resolution.namespace_members(origin) {
@@ -4992,7 +5134,7 @@ fn reference_label_locations(
             continue;
         };
         let text = snapshot.file_text(file);
-        let idx = LineIndex::new(text);
+        let idx = LineIndex::with_encoding(text, enc);
         let model = snapshot.semantic_model(file);
         for r in model.refs() {
             if names.contains(&r.name) {
@@ -5025,6 +5167,7 @@ fn reference_citation_locations(
     names: &[SmolStr],
     include_declaration: bool,
     decl_for_bib: Option<Location>,
+    enc: PositionEncoding,
 ) -> Vec<Location> {
     let members = if kind == FileKind::Bib {
         citations.bib_citers(origin)
@@ -5037,7 +5180,7 @@ fn reference_citation_locations(
             continue;
         };
         let text = snapshot.file_text(file);
-        let idx = LineIndex::new(text);
+        let idx = LineIndex::with_encoding(text, enc);
         for c in snapshot.semantic_model(file).citations() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
                 locations.push(location_for(member, &idx, text, c.range));
@@ -5049,7 +5192,7 @@ fn reference_citation_locations(
         match kind {
             FileKind::Bib => locations.extend(decl_for_bib),
             _ => locations.extend(resolve_citation_locations(
-                snapshot, citations, origin, names,
+                snapshot, citations, origin, names, enc,
             )),
         }
     }
@@ -5064,6 +5207,7 @@ fn resolve_label_locations(
     resolution: &ResolvedLabels,
     lint_path: &Path,
     names: &[SmolStr],
+    enc: PositionEncoding,
 ) -> Vec<Location> {
     let mut locations = Vec::new();
     for name in names {
@@ -5072,7 +5216,7 @@ fn resolve_label_locations(
                 continue;
             };
             let text = snapshot.file_text(file);
-            let idx = LineIndex::new(text);
+            let idx = LineIndex::with_encoding(text, enc);
             for label in snapshot.semantic_model(file).labels() {
                 if &label.name == name {
                     locations.push(location_for(def_path, &idx, text, label.range));
@@ -5092,6 +5236,7 @@ fn resolve_citation_locations(
     citations: &ResolvedCitations,
     lint_path: &Path,
     names: &[SmolStr],
+    enc: PositionEncoding,
 ) -> Vec<Location> {
     let mut locations = Vec::new();
     for bib_path in citations.bib_definers(lint_path) {
@@ -5099,7 +5244,7 @@ fn resolve_citation_locations(
             continue;
         };
         let text = snapshot.file_text(file);
-        let idx = LineIndex::new(text);
+        let idx = LineIndex::with_encoding(text, enc);
         for entry in snapshot.bib_semantic_model(file).entries() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
                 locations.push(location_for(bib_path, &idx, text, entry.key_range));
@@ -5155,6 +5300,7 @@ fn rename_label_edits(
     origin: &Path,
     names: &[SmolStr],
     new_name: &str,
+    enc: PositionEncoding,
 ) -> HashMap<Uri, Vec<TextEdit>> {
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
     for member in resolution.namespace_members(origin) {
@@ -5165,7 +5311,7 @@ fn rename_label_edits(
             continue;
         };
         let text = snapshot.file_text(file);
-        let idx = LineIndex::new(text);
+        let idx = LineIndex::with_encoding(text, enc);
         let model = snapshot.semantic_model(file);
         for r in model.refs() {
             if names.contains(&r.name) {
@@ -5194,6 +5340,7 @@ fn rename_citation_edits(
     kind: FileKind,
     names: &[SmolStr],
     new_name: &str,
+    enc: PositionEncoding,
 ) -> HashMap<Uri, Vec<TextEdit>> {
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
     let tex_members = if kind == FileKind::Bib {
@@ -5209,7 +5356,7 @@ fn rename_citation_edits(
             continue;
         };
         let text = snapshot.file_text(file);
-        let idx = LineIndex::new(text);
+        let idx = LineIndex::with_encoding(text, enc);
         for c in snapshot.semantic_model(file).citations() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
                 push_edit(&mut changes, &uri, &idx, text, c.key_range, new_name);
@@ -5218,10 +5365,10 @@ fn rename_citation_edits(
     }
     match kind {
         // From a `.bib` cursor, rewrite the entry in the origin bibliography itself.
-        FileKind::Bib => push_bib_entry_edits(snapshot, &mut changes, origin, names, new_name),
+        FileKind::Bib => push_bib_entry_edits(snapshot, &mut changes, origin, names, new_name, enc),
         _ => {
             for bib_path in citations.bib_definers(origin) {
-                push_bib_entry_edits(snapshot, &mut changes, bib_path, names, new_name);
+                push_bib_entry_edits(snapshot, &mut changes, bib_path, names, new_name, enc);
             }
         }
     }
@@ -5236,6 +5383,7 @@ fn push_bib_entry_edits(
     bib_path: &Path,
     names: &[SmolStr],
     new_name: &str,
+    enc: PositionEncoding,
 ) {
     let Some(file) = snapshot.lookup_file(bib_path) else {
         return;
@@ -5244,7 +5392,7 @@ fn push_bib_entry_edits(
         return;
     };
     let text = snapshot.file_text(file);
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     for entry in snapshot.bib_semantic_model(file).entries() {
         if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
             push_edit(changes, &uri, &idx, text, entry.key_range, new_name);
@@ -5648,10 +5796,10 @@ fn severity_to_lsp(severity: Severity) -> DiagnosticSeverity {
     }
 }
 
-/// Convert a byte range into an LSP range via the (UTF-16-aware) [`LineIndex`].
+/// Convert a byte range into an LSP range via the (encoding-aware) [`LineIndex`].
 fn byte_range_to_lsp(idx: &LineIndex, text: &str, start: usize, end: usize) -> Range {
-    let (sl, sc) = idx.utf16_position(text, start);
-    let (el, ec) = idx.utf16_position(text, end);
+    let (sl, sc) = idx.position(text, start);
+    let (el, ec) = idx.position(text, end);
     Range {
         start: Position::new(sl, sc),
         end: Position::new(el, ec),
@@ -5859,7 +6007,7 @@ mod tests {
             range_length: None,
             text: "there".to_owned(),
         };
-        apply_content_changes(&mut text, vec![change]);
+        apply_content_changes(&mut text, vec![change], PositionEncoding::Utf16);
         assert_eq!(text, "hello there\n");
     }
 
@@ -5871,7 +6019,7 @@ mod tests {
             range_length: None,
             text: "new".to_owned(),
         };
-        apply_content_changes(&mut text, vec![change]);
+        apply_content_changes(&mut text, vec![change], PositionEncoding::Utf16);
         assert_eq!(text, "new");
     }
 
@@ -5902,6 +6050,7 @@ mod tests {
             supports_diagnostic_refresh: false,
             supports_dynamic_watchers: false,
             next_request_id: 1,
+            position_encoding: PositionEncoding::Utf16,
         }
     }
 

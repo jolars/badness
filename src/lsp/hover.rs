@@ -51,8 +51,9 @@ pub(crate) fn compute_hover(
     position: Position,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
+    enc: PositionEncoding,
 ) -> Option<Hover> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -702,6 +703,7 @@ mod tests {
             position,
             members,
             &BuildConfig::default(),
+            PositionEncoding::Utf16,
         )?;
         match hover.contents {
             HoverContents::Markup(m) => Some(m.value),
@@ -711,7 +713,7 @@ mod tests {
 
     fn byte_to_position(src: &str, offset: usize) -> Position {
         let idx = LineIndex::new(src);
-        let (line, character) = idx.utf16_position(src, offset);
+        let (line, character) = idx.position(src, offset);
         Position { line, character }
     }
 

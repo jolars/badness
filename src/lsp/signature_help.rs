@@ -42,22 +42,23 @@ pub(crate) fn compute_signature_help(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    enc: PositionEncoding,
 ) -> Option<SignatureHelp> {
-    let idx = LineIndex::new(text);
+    let idx = LineIndex::with_encoding(text, enc);
     let offset = idx.offset_at(text, position.line, position.character);
 
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
         Some(file) if snapshot.file_text(file) == text => {
             let root = snapshot.parsed_tree(file);
             let scope = snapshot.scope_signatures(members, file);
-            signature_help_at(&root, scope, offset)
+            signature_help_at(&root, scope, offset, enc)
         }
         // Untracked or stale: a fresh parse + scan (no cross-package scope),
         // like hover's fallback.
         _ => {
             let root = SyntaxNode::new_root(parse(text).green);
             let scanned = crate::semantic::scan_definitions(&root);
-            signature_help_at(&root, &scanned, offset)
+            signature_help_at(&root, &scanned, offset, enc)
         }
     }));
     result.ok().flatten()
@@ -69,6 +70,7 @@ fn signature_help_at(
     root: &SyntaxNode,
     scope: &SignatureDb,
     offset: usize,
+    enc: PositionEncoding,
 ) -> Option<SignatureHelp> {
     let target = argument_target_at(root, offset)?;
     let (prefix, args, provenance) = match target.kind {
@@ -92,7 +94,7 @@ fn signature_help_at(
         }
     };
     let active = active_parameter(&args, &target.owner, &target.group)?;
-    Some(render_help(&prefix, &args, provenance, active))
+    Some(render_help(&prefix, &args, provenance, active, enc))
 }
 
 /// hover's provenance word: `command` vs `user-defined command`.
@@ -238,13 +240,22 @@ fn active_parameter(specs: &[ArgSpec], owner: &SyntaxNode, cursor: &SyntaxNode) 
 }
 
 /// Render the one-signature [`SignatureHelp`]: `prefix` + one `[#n]`/`{#n}` chunk
-/// per slot, each chunk a [`ParameterLabel::LabelOffsets`] range (UTF-16 code
-/// units; the chunks are ASCII, only the prefix needs real UTF-16 counting), and
-/// a facts line as the documentation.
-fn render_help(prefix: &str, specs: &[ArgSpec], provenance: String, active: u32) -> SignatureHelp {
+/// per slot, each chunk a [`ParameterLabel::LabelOffsets`] range (counted in the
+/// negotiated position encoding, like `Position`; the chunks are ASCII, only the
+/// prefix needs real code-unit counting), and a facts line as the documentation.
+fn render_help(
+    prefix: &str,
+    specs: &[ArgSpec],
+    provenance: String,
+    active: u32,
+    enc: PositionEncoding,
+) -> SignatureHelp {
     let mut label = prefix.to_string();
     let mut parameters = Vec::with_capacity(specs.len());
-    let mut pos = prefix.encode_utf16().count() as u32;
+    let mut pos = match enc {
+        PositionEncoding::Utf8 => prefix.len() as u32,
+        PositionEncoding::Utf16 => prefix.encode_utf16().count() as u32,
+    };
     for (i, spec) in specs.iter().enumerate() {
         let chunk = match spec.kind {
             ArgKind::Brace => format!("{{#{}}}", i + 1),
@@ -293,8 +304,15 @@ mod tests {
         let snapshot = db.snapshot();
         let members = super::members_of(&snapshot);
         let idx = LineIndex::new(src);
-        let (line, character) = idx.utf16_position(src, offset);
-        compute_signature_help(&snapshot, path, src, Position { line, character }, members)
+        let (line, character) = idx.position(src, offset);
+        compute_signature_help(
+            &snapshot,
+            path,
+            src,
+            Position { line, character },
+            members,
+            PositionEncoding::Utf16,
+        )
     }
 
     /// The rendered label and active parameter, for the common assertions.

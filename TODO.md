@@ -12,17 +12,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [x] **Math operator atoms.** In math mode a `WORD` glued around `+ - * / = < >`
-  is split into flat operator/operand atoms (byte-range `split_math_word`, trailing
-  operand is the scriptable base). Needed a `SubTok` event. See `AGENTS.md`
-  decisions #3/#4.
-
-- [x] **Math environments parse in math mode.** An environment the built-in DB flags
-  `math` (`equation`, `align`, `gather`, matrix, …) has its body wrapped in a `MATH`
-  node (`math_environment_body`, gated by `is_math_environment`), so it enjoys the same
-  math-aware layout as `\[…\]` instead of formatting as prose. No lexer changes. See
-  `AGENTS.md` decision #1 ("Math environments").
-
 ## Formatter
 
 - [x] **Math operator spacing.** A single space around each binary/relation atom
@@ -30,20 +19,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.
   Group bodies normalized (`x^{a+b}` -> `x^{a + b}`). Scientific notation (`1e-5`)
   is a known non-special-cased limitation.
-
-- [x] **Math environment layout.** `lower_math_environment` routes a `math`-flagged
-  environment's `MATH` body: a single formula (`equation`) through the relation-aware
-  display breaker (`lower_display_math_body`); a grid (`align`/matrix, or a `gather`
-  row stack) through `build_alignment_grid` in math mode (cells lower via
-  `lower_math_seq`). A top-level `\\` is a hard break in a math body, so row stacks and
-  grid-fallbacks keep each row on its own line. Long align rows stay flat (parity with
-  the prior grid); per-cell relation breaking is a possible later refinement.
-
-- [x] `Sentence`/`Semantic` (sembr) wrap modes. One sentence per line (width
-  ignored); `Semantic` additionally preserves authored soft breaks. Boundary
-  detection is a per-language abbreviation profile (`formatter::sentence`, ported
-  from panache) driven by `[format] lang` + `[format.no-break-abbreviations]`.
-  Babel/polyglossia language auto-detection is deferred (config-only for now).
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on
@@ -60,12 +35,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   its own separators rather than the paragraph fill.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
-- [x] **Brace-group body reflow (`ReflowKind::Statement`).** A multi-line brace
-  body (a `\newcommand` definition body) now reflows as code-like *statements*: each
-  source line stays its own logical line, but an over-long one wraps to the width
-  (breaking before a trailing `{…}` atom) instead of forcing the printer to detonate
-  the innermost nested prose group—the only soft break a rigid
-  `lower_element_stream` body exposed. Continuation is **flush**, not hanging.
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
   blocked on structure).** A wrapped brace-body line ideally hangs its continuation
   one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather
@@ -90,76 +59,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   passthrough lines today).
 
 ## Linter
-
-Ships today: `duplicate-label`, `deprecated-command` (`\bf`→`\bfseries`),
-`missing-nonbreaking-space` (tie before cite/ref), `obsolete-environment`
-(`eqnarray`→`align`), `dollar-display-math` (`$$`→`\[…\]`), `mismatched-delimiter`
-(`\left…\right` orientation), `undefined-ref`, `undefined-citation`.
-
-A new rule is a unit struct implementing `Rule` (`src/linter/rules.rs`), added in
-four spots there (`mod`, `pub use`, `all_rules()`, `ALL_RULE_IDS`, kept in lockstep
-by `registry_and_id_list_agree`) plus a new `src/linter/rules/<name>.rs`. Node-shape
-rules declare `interests(&[SyntaxKind])` + `check`; whole-file/semantic rules use
-`check_file` (reading `ctx.model`, `ctx.resolution`, `ctx.citations`, signature DB).
-An optional `Fix::safe`/`Fix::unsafe_` is picked up by `--fix`, LSP code actions, and
-`select`/`ignore` for free. The candidates below are all **type-(B)** lints
-(content/semantic/typographic) a deterministic formatter would never make — type-(A)
-layout items (whitespace, indentation, brace-on-scripts) are the formatter's job and
-excluded. Sources: ChkTeX (numbered warnings), lacheck, textidote.
-
-- [x] Wire the remaining report-only fixes onto the autofix infra: **done**.
-  `deprecated-command`'s `\bf → \bfseries` is a `Safe` control-word swap;
-  `obsolete-environment`'s `eqnarray → align` is a `Safe` swap too—since a `Fix`
-  is one contiguous replacement but a rename touches two disjoint spans
-  (`\begin`/`\end`), it splices the whole environment, copying the body verbatim
-  and rewriting only the two names (correct by construction, withheld on an
-  unterminated or recovery-mismatched pair). Both are consumed by `lint --fix` and
-  the LSP code actions.
-- [x] `missing-nonbreaking-space` (a tie before a cite/ref command, broad curated
-  family, `\nocite` excluded; `Unsafe` autofix) is **done**, both gap shapes. A
-  same-line `WORD WHITESPACE \cmd` carries the `Unsafe` tie fix; a *single source
-  line break* (`Figure\n\ref{x}`) is also a breakable space and is now flagged too,
-  but **report-only**: the only correct rewrite (newline to `~`) joins the two source
-  lines, and picking line breaks is the formatter's job (tenet 1), so we report the
-  finding and withhold the fix for that shape. A blank line (`\par`, two or more
-  newlines) is never flagged.
-
-### Tier 3 — structural / semantic / project-layer (curated subset)
-
-Whole-file or cross-file (`check_file`), using the semantic model, signature DB, and
-project resolution. Pure prose-opinion textidote rules (title capitalization, caption
-period, section length) are skipped as grammar-tool territory.
-
-- [x] `missing-required-argument`—command invoked with fewer `{…}` groups than its
-  signature-DB arity (ChkTeX 14, done precisely via the tree + DB, not line
-  heuristics). Report-only. **Done**, conservatively: curated built-in tier only
-  (CWL arities are bulk-converted and package-load-blind), and since TeX accepts
-  unbraced single-token arguments (`\frac12`), it fires only at a hard boundary
-  (`}`, `$`/`\]`, `\end`, `&`, `\\`, blank line, EOF); definition bodies,
-  unknown-command arguments, standalone scope groups, `\let`-style alias forms,
-  and names the file redefines are skipped. *Possible widening:* enforce
-  scanned user-macro arities, and `\begin{env}` arguments (e.g. `tabular`'s
-  column spec).
-- [x] `verbatim-trailing-text`—text after `\end{verbatim}` on the same line, silently
-  dropped (ChkTeX 31). Report-only.
-- [x] `unbalanced-left-right`—`\left` with no matching `\right`. **Already covered by
-  the parser:** `left_right` recovery emits an `unclosed \left` parse diagnostic on
-  every unbalanced-`\left` path (EOF, `}`, `$`, `\]`, `\end`, paragraph break), so a
-  dedicated lint rule would only duplicate the existing `parse` finding on the same
-  span. No separate rule added.
-- [x] `unreferenced-label`—a `\label` never targeted by any `\ref`-family command,
-  project-aware behind the same closed+rooted namespace gate as `undefined-ref`
-  (**supersedes the old `unused-label` deferral**, whose open-namespace false-positive
-  risk is exactly what that gate handles). Report-only. Needed a cross-file
-  *reference* union: `ResolvedLabels` now carries per-component `\ref` keys (new
-  `file_refs` firewall + `document_ref_names`), mirroring the definition union, with
-  `is_referenced`. A `\ref` edit therefore rebuilds `resolved_labels` (a pure prose
-  edit still backdates both firewalls).
-- [x] `sectioning-level-jump`—a heading that skips a level (`\section` →
-  `\subsubsection`), read from the semantic sectioning tree (textidote sh:secskip).
-  Report-only.
-- [x] `hard-coded-reference`—literal "Figure 3"/"Section 2"/"Table 1" in prose
-  instead of `\ref`/`\cref` (textidote sh:hcfig/hctab/hcsec). Report-only, heuristic.
 
 ## Semantic layer & signatures
 
@@ -213,68 +112,6 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   the CST's node hierarchy (group → argument → command → environment). Subsumes
   texlab's `findEnvironments` command: the enclosing-environment stack falls out
   of the CST-hierarchy expansion.
-- [x] **Document links (`textDocument/documentLink`).** Clickable include edges:
-  `\input`/`\include`/`\subfile`/`\import`/`\subimport`,
-  `\usepackage`/`\RequirePackage`/`\documentclass`/`\LoadClass` (→ resolved
-  `.sty`/`.cls`/`.dtx`), `\bibliography`/`\addbibresource`, and
-  `\includegraphics` (extension guessed against the graphics image types). A
-  self-contained single-file, positional walk (`src/lsp/document_link.rs`)
-  bypasses the range-free project graph: it takes each command's precise
-  argument span via `ast::nth_group_inner` (per comma-separated name) and is
-  **disk-aware**—a link is emitted only when the resolved target exists on disk
-  (first existing candidate wins for the graphics guess; a `.dtx` fallback
-  covers literate `.sty`/`.cls` sources). A project-local `mypkg.sty` resolves
-  locally; a system `\usepackage{amsmath}` now falls back to the **TEXMF index**
-  (`project::texmf`, see "TEXMF index" below), linking to its installed source
-  (local always wins). `\graphicspath` is unsupported (graphics resolve against
-  `base_dir` only). texlab covers the include edges only (`crates/links`).
-- [x] **Go-to-definition for includes and user macros.** **File targets:** a
-  file-referencing argument under the cursor (`\input`/`\include`/`\subfile`/
-  `\import`, `\usepackage`/`\documentclass`, `\bibliography`/`\addbibresource`,
-  `\includegraphics`) jumps to the resolved on-disk file. It reuses
-  `document_link::document_links` (finding the link whose span covers the cursor), so
-  it is disk-aware and TEXMF-aware for free—a system `\usepackage{amsmath}` jumps to
-  its installed source (`file_target_under_cursor` in `src/lsp.rs`; no `CursorTarget`
-  variant needed, the label/cite path is unchanged). **User macros:** `\mycmd` (and a
-  `\begin{myenv}` name) jumps to its `\newcommand`/`\def`/xparse (`\newenvironment`)
-  definition sites across the macro namespace — definition *spans* come from
-  `semantic::scan_definition_sites`, the range-bearing sibling of the signature scan
-  (`SignatureDb` stays range-free so `document_signatures` keeps Eq-backdating).
-  texlab: `crates/definition` (command/include/label/citation/string_ref).
-- [x] **Matching `\begin`/`\end` document highlight.** Highlight the paired
-  begin/end of the environment under the cursor (highlight was label-key only
-  before); the parser already pairs them structurally. texlab: `crates/highlights`
-  (label-only) plus its `findEnvironments` command.
-- [x] Workspace symbols (`workspace/symbol`)—the per-file outline (sections,
-  labels, floats, theorems, macros, environments) aggregated across every tracked
-  project file, filtered by the query string. LaTeX members only.
-
-### Labels & references
-
-- [x] **Label hover.** Hover a `\label`/`\ref`-family key to render a preview:
-  kind + nearest heading/caption (`semantic::label_context`, classified at the
-  definition site, cross-file like go-to-def) *and* the resolved number from the
-  compile's `.aux` (`project::aux`, mirroring texlab's `\newlabel` extraction) —
-  `Figure 3: A chart`, `Section 1.2 (Intro)`; degrades to numberless when never
-  compiled. The same aux data feeds **document symbols**: section names get their
-  toc numbers prefixed (`1.2 Intro`, via `\@writefile{toc}` title matching) and
-  labels/floats their numbers as `detail`. LSP-only (AGENTS.md, "LSP environment
-  awareness" tier 3); `[build] aux-dir` locates out-of-tree builds. Deferred:
-  latexmkrc/`Tectonic.toml` aux-dir auto-detection; eager `**/*.aux` watching
-  (numbers refresh on the next request).
-- [x] **References + rename for user macros and environment names.** References,
-  rename, and goto-definition extend past label/citation keys to command names and
-  environment names (`src/lsp/name_refs.rs`): occurrences via a request-time walk
-  over the memoized tree (an Eq firewall would never backdate range-bearing facts),
-  definition sites via `semantic::scan_definition_sites`, and the *macro namespace*
-  = include component ∪ package-load reachability in both directions (so a rename
-  reaches a local `.sty` definition and back). References are ungated (pure
-  occurrence search, built-ins included); **rename is gated to user-defined names**
-  (a project definition site must exist) and validated by `is_valid_command_name`
-  (letters-only, `@`/`_`/`:` only when the old name had them — letter-mode-safe by
-  construction). Environment matching is name-based, not pair-based, so unbalanced
-  files degrade gracefully. texlab: `crates/references` + `crates/rename`
-  (command/entry/label/string_def).
 
 ### Completion
 
@@ -283,36 +120,11 @@ completion (`src/completion.rs`, `src/bib/completion.rs`). texlab's completion
 breadth is its biggest lead (`crates/completion/providers/`); the specialized
 sources below are missing.
 
-- [x] **Package/class name completion** for `\usepackage{}` / `\documentclass{}`
-  (`package_arg` in `src/completion.rs`, `PackageName` context). Three tiers in
-  `package_completion_items`: local `.sty`/`.cls` files, then the **installed set**
-  from the TEXMF index (`project::texmf`, see below), then the baked all-of-CTAN name
-  list (`data/{package,class}_names.txt`, generated by `scripts/gen_package_names.py`
-  from the pinned TeX Live tlpdb; names only, ranked namesake/common-first). Every
-  item is enriched with the shipped CTAN one-line `desc` as `detail`
-  (`data/package_metadata.json`, `semantic::signature::package_metadata`).
-- [x] **Glossary/acronym key completion** (`\gls`/`\acrshort`/… ←
-  `\newglossaryentry`/`\newacronym`). Definers are scanned into the
-  `SemanticModel` (`GlossaryDef` in `semantic::builder`, mirroring label
-  discovery—not `semantic::define`, which holds command *signatures*), projected
-  through the `file_glossary_keys` firewall, and unioned cross-file by walking
-  `ResolvedLabels::namespace_members` in `glossary_completion_items` (`lsp.rs`),
-  the cite-completion shape. `\loadglsentries` is an `IncludeKind::GlsEntries`
-  edge so a dedicated entries file joins the namespace. Covers base glossaries +
-  glossaries-extra (`\newabbreviation`, `\glsxtr*`). *Deferred:* hover,
-  goto-definition, and rename for keys (`GlossaryDef` carries the ranges).
 - [ ] **Color name + model, TikZ/PGF library completion**—small static datasets
   for `\color`/`\textcolor`/`\definecolor` and
   `\usetikzlibrary`/`\usepgflibrary`.
 - [ ] **Argument-value enum completion** for fixed enumerated argument choices—
   needs the signature DB to carry per-argument value enums.
-- [x] **Package hover** (`\usepackage{amsmath}` → description). Hovering a
-  package/class name inside `\usepackage`/`\RequirePackage`/`\documentclass`/
-  `\LoadClass` renders the shipped CTAN one-line description plus a
-  `https://ctan.org/pkg/<id>` link (`package_target_at`/`render_package` in
-  `src/lsp/hover.rs`, backed by `data/package_metadata.json`). The metadata is the
-  static dataset that was missing; unlike texlab's component DB it is tlpdb-derived,
-  not a live query. *Deferred:* an "installed at `<path>`" line from the TEXMF index.
 - [ ] *(Design decision)* **Package-scoped command completion.** texlab suggests
   only commands provided by the loaded packages (a package→command component
   model). Badness's signature DB is flat (curated + CWL + scanned); scoping

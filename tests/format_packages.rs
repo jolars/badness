@@ -42,6 +42,34 @@ fn local_package_environment_arity_glues_begin_argument() {
 }
 
 #[test]
+fn format_never_reads_the_aux_file() {
+    // Hermeticism guard (the `.aux` analog of the TEXMF guard in
+    // `semantic::load`): the compile's `.aux` feeds LSP label hover and document
+    // symbols only. `badness format` output must be byte-identical whether or not
+    // a sibling `.aux` exists — otherwise formatting would depend on whether the
+    // user last compiled, breaking the deterministic-formatting tenet.
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let doc = "\\section{Intro}\n\\label{sec:a}\nSee \\ref{sec:a}.\n";
+
+    let without_aux =
+        format_file_with_packages(doc, &main, FormatStyle::default(), LatexFlavor::Document)
+            .expect("formats cleanly");
+    fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{sec:a}{{1}{1}{Intro}{section.1}{}}\n",
+    )
+    .unwrap();
+    let with_aux =
+        format_file_with_packages(doc, &main, FormatStyle::default(), LatexFlavor::Document)
+            .expect("formats cleanly");
+    assert_eq!(
+        without_aux, with_aux,
+        "the formatter must not read the .aux file"
+    );
+}
+
+#[test]
 fn formatting_is_idempotent_with_packages() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

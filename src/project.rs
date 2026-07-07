@@ -10,6 +10,7 @@
 //! `include.rs` handles inclusion extraction; `graph.rs` builds the cross-file
 //! graph.
 
+pub mod aux;
 pub mod citations;
 pub mod graph;
 pub mod include;

@@ -26,7 +26,8 @@ pub mod xparse;
 pub use define::{DefSite, DefSiteKind, scan_definition_sites, scan_definitions};
 pub use doc::{DocAssociation, DocKind, doc_associations};
 pub use label::{
-    CitationRef, GlossaryDef, GlossaryDefKind, LabelDef, LabelId, LabelRef, RefCommand, RefId,
+    CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelId, LabelRef,
+    RefCommand, RefId,
 };
 pub use load::{
     DiskPackageSource, PackageSource, collect_package_signatures, disk_scope_signatures,
@@ -50,6 +51,9 @@ pub struct SemanticModel {
     pub(crate) citations: Vec<CitationRef>,
     /// Glossary/acronym key definitions (`\newglossaryentry`, `\newacronym`, …).
     pub(crate) glossary_defs: Vec<GlossaryDef>,
+    /// Color-name definitions (`\definecolor`, `\providecolor`, `\colorlet`),
+    /// offered by color-name completion alongside the built-in list.
+    pub(crate) color_defs: Vec<ColorDef>,
     /// Whether the file contains a `\nocite{*}` wildcard, which pulls every entry
     /// of the bibliography into the document — so `undefined-citation` cannot flag
     /// anything in its namespace.
@@ -83,6 +87,12 @@ impl SemanticModel {
     /// in this file.
     pub fn glossary_defs(&self) -> &[GlossaryDef] {
         &self.glossary_defs
+    }
+
+    /// The color-name definitions (`\definecolor`/`\providecolor`/`\colorlet`) in
+    /// this file, offered by color-name completion.
+    pub fn color_defs(&self) -> &[ColorDef] {
+        &self.color_defs
     }
 
     /// Whether the file contains a `\nocite{*}` wildcard.

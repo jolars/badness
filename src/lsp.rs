@@ -5816,6 +5816,9 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
         CandidateKind::Environment => CompletionItemKind::CLASS,
         CandidateKind::Label => CompletionItemKind::REFERENCE,
         CandidateKind::Package => CompletionItemKind::MODULE,
+        CandidateKind::Color => CompletionItemKind::COLOR,
+        CandidateKind::ColorModel => CompletionItemKind::ENUM_MEMBER,
+        CandidateKind::TikzLibrary => CompletionItemKind::MODULE,
     };
     let data = file.and_then(|file| {
         let payload = match candidate.kind {
@@ -5828,8 +5831,13 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
                 file: file.to_path_buf(),
             },
             // A package/class name carries no resolvable signature (yet); a future
-            // description payload would attach here.
-            CandidateKind::Label | CandidateKind::Package => return None,
+            // description payload would attach here. Colors and TikZ libraries are
+            // likewise static labels with nothing to resolve lazily.
+            CandidateKind::Label
+            | CandidateKind::Package
+            | CandidateKind::Color
+            | CandidateKind::ColorModel
+            | CandidateKind::TikzLibrary => return None,
         };
         payload.into_value()
     });

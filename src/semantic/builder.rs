@@ -13,7 +13,8 @@ use rowan::{TextRange, TextSize};
 use crate::ast::{command_name, first_group_range, nth_group_inner};
 use crate::semantic::SemanticModel;
 use crate::semantic::label::{
-    CitationRef, GlossaryDef, GlossaryDefKind, LabelDef, LabelRef, RefCommand,
+    CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelRef,
+    RefCommand,
 };
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -63,6 +64,20 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                 for (key, key_range) in key_spans(&inner, inner_range, false) {
                     model.glossary_defs.push(GlossaryDef {
                         key: SmolStr::from(key),
+                        kind,
+                        range: first_group_range(&command),
+                        key_range,
+                    });
+                }
+            }
+        } else if let Some(kind) = color_definer(&name) {
+            // The defined color name is the first `{…}` group for all three
+            // definers (`\definecolor{name}…`, `\colorlet{name}{base}`), never
+            // comma-split, and a nested-macro name is skipped like `\label{\foo}`.
+            if let Some((inner_range, inner)) = nth_group_inner(&command, 0) {
+                for (key, key_range) in key_spans(&inner, inner_range, false) {
+                    model.color_defs.push(ColorDef {
+                        name: SmolStr::from(key),
                         kind,
                         range: first_group_range(&command),
                         key_range,
@@ -155,6 +170,19 @@ pub(crate) fn glossary_definer(name: &str) -> Option<GlossaryDefKind> {
         | "longprovideglossaryentry" => GlossaryDefKind::Entry,
         "newacronym" => GlossaryDefKind::Acronym,
         "newabbreviation" => GlossaryDefKind::Abbreviation,
+        _ => return None,
+    })
+}
+
+/// The recognized color *definer* command for a control-word name, or `None`.
+/// The definition-side analog of [`glossary_definer`]: the newly defined color
+/// name is always the first `{…}` group (`\definecolor{name}{model}{spec}`,
+/// `\colorlet{name}{base}`).
+pub(crate) fn color_definer(name: &str) -> Option<ColorDefKind> {
+    Some(match name {
+        "definecolor" => ColorDefKind::DefineColor,
+        "providecolor" => ColorDefKind::ProvideColor,
+        "colorlet" => ColorDefKind::Colorlet,
         _ => return None,
     })
 }
@@ -361,6 +389,32 @@ mod tests {
     fn gls_use_is_not_a_definition() {
         let model = model("\\gls{ex}\\acrshort{fps}\n");
         assert!(model.glossary_defs().is_empty());
+    }
+
+    #[test]
+    fn color_definers_scanned_with_ranges() {
+        let src = "\\definecolor{brandblue}{HTML}{0055AA}\n\\colorlet{accent}{brandblue}\n\\providecolor{muted}{gray}{0.5}\n";
+        let model = model(src);
+        let defs: Vec<_> = model
+            .color_defs()
+            .iter()
+            .map(|d| (d.name.as_str(), d.kind, &src[d.key_range]))
+            .collect();
+        use crate::semantic::label::ColorDefKind::*;
+        assert_eq!(
+            defs,
+            vec![
+                ("brandblue", DefineColor, "brandblue"),
+                ("accent", Colorlet, "accent"),
+                ("muted", ProvideColor, "muted"),
+            ]
+        );
+    }
+
+    #[test]
+    fn textcolor_use_is_not_a_color_definition() {
+        let model = model("\\textcolor{red}{x}\\color{blue}\n");
+        assert!(model.color_defs().is_empty());
     }
 
     #[test]

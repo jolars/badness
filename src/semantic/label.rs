@@ -126,6 +126,37 @@ pub struct GlossaryDef {
     pub key_range: TextRange,
 }
 
+/// Which definer command produced a [`ColorDef`]. Kept distinct so a later
+/// hover/goto-def pass can render the definition appropriately (`\definecolor`
+/// carries a model + spec; `\colorlet` aliases an existing color).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorDefKind {
+    /// `\definecolor{name}{model}{spec}`.
+    DefineColor,
+    /// `\providecolor{name}{model}{spec}`.
+    ProvideColor,
+    /// `\colorlet{name}{base}`.
+    Colorlet,
+}
+
+/// A color-name definition site (`\definecolor{name}{model}{spec}`,
+/// `\colorlet{name}{base}`, …). The definition-side analog of [`LabelDef`],
+/// collected so color-name completion can offer document-defined colors
+/// alongside the built-in list; the reference side (`\textcolor{name}{…}`) is
+/// classified directly off the CST by completion and carries no stored record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorDef {
+    /// The color name, as authored (the first `{…}` group).
+    pub name: SmolStr,
+    pub kind: ColorDefKind,
+    /// Range of the command through its name group (like [`LabelDef::range`]) —
+    /// the navigation target for a future go-to-definition.
+    pub range: TextRange,
+    /// Range of just the trimmed name text inside the braces — the precise span a
+    /// future rename would rewrite.
+    pub key_range: TextRange,
+}
+
 /// A citation *use* site — one per key. A `\cite{a,b}` produces two
 /// `CitationRef`s. Citations are always cross-file: cite keys live in `.bib`
 /// files, so there is no in-file resolution (no `resolved` flag); the

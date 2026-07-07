@@ -20,7 +20,10 @@ use rowan::{TextSize, TokenAtOffset};
 use crate::ast::command_name;
 use crate::semantic::SemanticModel;
 use crate::semantic::builder::{is_cite_command, is_glossary_ref_command, ref_command};
-use crate::semantic::signature::{SignatureDb, builtin, class_names, cwl, package_names};
+use crate::semantic::signature::{
+    SignatureDb, builtin, class_names, color_models, color_names, cwl, package_names,
+    pgf_libraries, tikz_libraries,
+};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// What the cursor at a given offset is positioned to complete.
@@ -53,6 +56,17 @@ pub enum CompletionContext {
     /// additionally merges any local `.sty`/`.cls` files. `kind` is always
     /// [`FileArgKind::Package`] or [`FileArgKind::Class`].
     PackageName { prefix: String, kind: FileArgKind },
+    /// Inside a group taking an existing color name (`\color{…}`,
+    /// `\textcolor{…}`, `\colorbox{…}`, the base of `\colorlet{new}{…}`, …).
+    /// Candidates are the built-in color list unioned with the document's
+    /// `\definecolor`/`\colorlet` names.
+    ColorName { prefix: String },
+    /// Inside the model group of `\definecolor{name}{model}{…}` /
+    /// `\providecolor` — a color model (`rgb`, `HTML`, `cmyk`, …).
+    ColorModel { prefix: String },
+    /// Inside a `\usetikzlibrary{…}` (`pgf` false) / `\usepgflibrary{…}` (`pgf`
+    /// true) name group. A comma-separated list, completed after the last comma.
+    TikzLibrary { prefix: String, pgf: bool },
     /// Nothing to complete here (prose, a comment, a `\cite{…}` key, …).
     None,
 }
@@ -100,6 +114,12 @@ pub enum CandidateKind {
     Label,
     /// A `.sty`/`.cls` package or class name (`\usepackage`/`\documentclass`).
     Package,
+    /// A color name (`\color`/`\textcolor`/…).
+    Color,
+    /// A color model (`\definecolor` second argument).
+    ColorModel,
+    /// A TikZ/PGF library name (`\usetikzlibrary`/`\usepgflibrary`).
+    TikzLibrary,
 }
 
 /// A completion candidate before it becomes an `lsp_types::CompletionItem`.
@@ -241,7 +261,58 @@ fn command_arg_context(
             kind,
         });
     }
+    if color_name_arg(name, index) {
+        // A single color per group (`\color{red}`); the whole inner is the prefix.
+        return Some(CompletionContext::ColorName {
+            prefix: group_prefix(group, offset).trim_start().to_string(),
+        });
+    }
+    if color_model_arg(name, index) {
+        return Some(CompletionContext::ColorModel {
+            prefix: group_prefix(group, offset).trim_start().to_string(),
+        });
+    }
+    if let Some(pgf) = tikz_library_command(name)
+        && index == 0
+    {
+        // A `\usetikzlibrary{calc,fi|}` completes the name after the last comma.
+        let inner = group_prefix(group, offset);
+        let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
+        return Some(CompletionContext::TikzLibrary {
+            prefix: prefix.to_string(),
+            pgf,
+        });
+    }
     None
+}
+
+/// Whether the `index`-th brace group of `name` takes an *existing* color name.
+/// `\fcolorbox{frame}{bg}{text}` completes both its first two groups; `\colorlet`
+/// completes only its *second* group (the base), the first being the new name.
+fn color_name_arg(name: &str, index: usize) -> bool {
+    match name {
+        "color" | "textcolor" | "colorbox" | "pagecolor" => index == 0,
+        "fcolorbox" => index < 2,
+        "colorlet" => index == 1,
+        _ => false,
+    }
+}
+
+/// Whether the `index`-th brace group of `name` takes a color *model*
+/// (`\definecolor{name}{model}{spec}`). The optional-argument model form
+/// (`\color[rgb]{…}`) is not classified — only brace groups are inspected.
+fn color_model_arg(name: &str, index: usize) -> bool {
+    matches!(name, "definecolor" | "providecolor") && index == 1
+}
+
+/// Whether `name` is a TikZ/PGF library loader, returning whether it is the PGF
+/// (`\usepgflibrary`) rather than TikZ (`\usetikzlibrary`) set, or `None`.
+fn tikz_library_command(name: &str) -> Option<bool> {
+    match name {
+        "usetikzlibrary" => Some(false),
+        "usepgflibrary" => Some(true),
+        _ => None,
+    }
 }
 
 /// The [`FileArgKind`] for a `\usepackage`/`\documentclass`-family command whose
@@ -332,6 +403,18 @@ pub fn candidates(
         }
         CompletionContext::LabelRef { prefix } => label_candidates(model, prefix),
         CompletionContext::PackageName { prefix, kind } => package_candidates(*kind, prefix),
+        CompletionContext::ColorName { prefix } => color_name_candidates(model, prefix),
+        CompletionContext::ColorModel { prefix } => {
+            static_candidates(color_models(), prefix, CandidateKind::ColorModel)
+        }
+        CompletionContext::TikzLibrary { prefix, pgf } => {
+            let libs = if *pgf {
+                pgf_libraries()
+            } else {
+                tikz_libraries()
+            };
+            static_candidates(libs, prefix, CandidateKind::TikzLibrary)
+        }
         CompletionContext::FilePath { .. }
         | CompletionContext::CitationKey { .. }
         | CompletionContext::GlossaryKey { .. }
@@ -357,6 +440,51 @@ fn package_candidates(kind: FileArgKind, prefix: &str) -> Vec<CompletionCandidat
         .map(|&label| CompletionCandidate {
             label: label.to_string(),
             kind: CandidateKind::Package,
+            insert_text: None,
+            snippet: false,
+        })
+        .collect()
+}
+
+/// Candidates from a static, pre-ordered name list (`color_models`,
+/// `tikz_libraries`/`pgf_libraries`), prefix-filtered with the source order
+/// preserved. Used for the closed built-in sets that carry no document-defined
+/// members.
+fn static_candidates(
+    names: &[&str],
+    prefix: &str,
+    kind: CandidateKind,
+) -> Vec<CompletionCandidate> {
+    names
+        .iter()
+        .filter(|name| name.starts_with(prefix))
+        .map(|&label| CompletionCandidate {
+            label: label.to_string(),
+            kind,
+            insert_text: None,
+            snippet: false,
+        })
+        .collect()
+}
+
+/// Color-name candidates: the built-in list (color/xcolor base + dvipsnames)
+/// unioned with the document's `\definecolor`/`\colorlet` names, prefix-filtered,
+/// sorted, and deduped — mirroring [`label_candidates`]'s merge of scanned names.
+fn color_name_candidates(model: &SemanticModel, prefix: &str) -> Vec<CompletionCandidate> {
+    let mut names = union_names(
+        color_names()
+            .iter()
+            .copied()
+            .chain(model.color_defs().iter().map(|def| def.name.as_str())),
+        prefix,
+    );
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|label| CompletionCandidate {
+            label,
+            kind: CandidateKind::Color,
             insert_text: None,
             snippet: false,
         })
@@ -842,5 +970,139 @@ mod tests {
     fn prose_is_not_completed() {
         let src = "Hello world\n";
         assert_eq!(classify(src, at(src, "Hello wo")), CompletionContext::None);
+    }
+
+    #[test]
+    fn textcolor_first_arg_is_color_name() {
+        let src = "\\textcolor{re}{x}\n";
+        assert_eq!(
+            classify(src, at(src, "\\textcolor{re")),
+            CompletionContext::ColorName {
+                prefix: "re".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn color_second_arg_is_not_a_color_name() {
+        // `\textcolor{color}{text}` — the second group is prose, not a color.
+        let src = "\\textcolor{red}{te}\n";
+        assert_eq!(
+            classify(src, at(src, "\\textcolor{red}{te")),
+            CompletionContext::None
+        );
+    }
+
+    #[test]
+    fn colorlet_new_name_arg_is_not_completed() {
+        // The first group names a *new* color, so it offers no existing-color list.
+        let src = "\\colorlet{min}{red}\n";
+        assert_eq!(
+            classify(src, at(src, "\\colorlet{min")),
+            CompletionContext::None
+        );
+    }
+
+    #[test]
+    fn colorlet_base_arg_is_color_name() {
+        // The second group is the base color, an existing name.
+        let src = "\\colorlet{mine}{re}\n";
+        assert_eq!(
+            classify(src, at(src, "\\colorlet{mine}{re")),
+            CompletionContext::ColorName {
+                prefix: "re".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn definecolor_model_arg_is_color_model() {
+        let src = "\\definecolor{c}{rg}{1,0,0}\n";
+        assert_eq!(
+            classify(src, at(src, "\\definecolor{c}{rg")),
+            CompletionContext::ColorModel {
+                prefix: "rg".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn usetikzlibrary_is_tikz_library() {
+        let src = "\\usetikzlibrary{cal}\n";
+        assert_eq!(
+            classify(src, at(src, "\\usetikzlibrary{cal")),
+            CompletionContext::TikzLibrary {
+                prefix: "cal".to_string(),
+                pgf: false,
+            }
+        );
+    }
+
+    #[test]
+    fn usetikzlibrary_completes_after_last_comma() {
+        let src = "\\usetikzlibrary{calc,ar}\n";
+        assert_eq!(
+            classify(src, at(src, "\\usetikzlibrary{calc,ar")),
+            CompletionContext::TikzLibrary {
+                prefix: "ar".to_string(),
+                pgf: false,
+            }
+        );
+    }
+
+    #[test]
+    fn usepgflibrary_is_pgf_library() {
+        let src = "\\usepgflibrary{arr}\n";
+        assert_eq!(
+            classify(src, at(src, "\\usepgflibrary{arr")),
+            CompletionContext::TikzLibrary {
+                prefix: "arr".to_string(),
+                pgf: true,
+            }
+        );
+    }
+
+    #[test]
+    fn color_name_candidates_include_base_and_dvipsnames() {
+        let src = "\\textcolor{re}{x}\n";
+        let got = labels(src, at(src, "\\textcolor{re"));
+        assert!(got.contains(&"red".to_string()));
+        let src = "\\textcolor{Ro}{x}\n";
+        let got = labels(src, at(src, "\\textcolor{Ro"));
+        assert!(got.contains(&"RoyalBlue".to_string()));
+        assert!(got.iter().all(|n| n.starts_with("Ro")));
+    }
+
+    #[test]
+    fn color_name_candidates_include_document_colors() {
+        // A `\definecolor` name is offered alongside the built-ins.
+        let src = "\\definecolor{mycolor}{rgb}{1,0,0}\n\\textcolor{myc}{x}\n";
+        let got = labels(src, at(src, "\\textcolor{myc"));
+        assert_eq!(got, vec!["mycolor".to_string()]);
+    }
+
+    #[test]
+    fn colorlet_defines_a_document_color() {
+        // `\colorlet{name}{base}` contributes `name`, completed later.
+        let src = "\\colorlet{brand}{blue}\n\\color{bra}\n";
+        let got = labels(src, at(src, "\\color{bra"));
+        assert_eq!(got, vec!["brand".to_string()]);
+    }
+
+    #[test]
+    fn color_model_candidates_include_rgb() {
+        let src = "\\definecolor{c}{rg}{1,0,0}\n";
+        let got = labels(src, at(src, "\\definecolor{c}{rg"));
+        assert_eq!(got, vec!["rgb".to_string()]);
+    }
+
+    #[test]
+    fn tikz_library_candidates_are_split_by_command() {
+        let src = "\\usetikzlibrary{cal}\n";
+        assert!(labels(src, at(src, "\\usetikzlibrary{cal")).contains(&"calc".to_string()));
+        // `arrows.meta` is a TikZ library; `plothandlers` is a PGF-only one.
+        let src = "\\usepgflibrary{plot}\n";
+        let got = labels(src, at(src, "\\usepgflibrary{plot"));
+        assert!(got.contains(&"plothandlers".to_string()));
     }
 }

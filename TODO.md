@@ -120,9 +120,12 @@ completion (`src/completion.rs`, `src/bib/completion.rs`). texlab's completion
 breadth is its biggest lead (`crates/completion/providers/`); the specialized
 sources below are missing.
 
-- [ ] **Color name + model, TikZ/PGF library completion**—small static datasets
-  for `\color`/`\textcolor`/`\definecolor` and
-  `\usetikzlibrary`/`\usepgflibrary`.
+- [x] **Color name + model, TikZ/PGF library completion**—small static datasets
+  (`data/colors.json`, `data/tikz_libraries.json`) for
+  `\color`/`\textcolor`/`\definecolor` and `\usetikzlibrary`/`\usepgflibrary`.
+  Color-name completion also merges document `\definecolor`/`\colorlet` names.
+  (Model completion is brace-arg only; the optional-arg form `\color[rgb]{…}` is
+  not yet classified.)
 - [ ] **Argument-value enum completion** for fixed enumerated argument choices—
   needs the signature DB to carry per-argument value enums.
 - [ ] *(Design decision)* **Package-scoped command completion.** texlab suggests

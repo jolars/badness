@@ -1730,6 +1730,42 @@ fn lsp_completion_package_names() {
     shutdown(&client, server_thread);
 }
 
+#[test]
+fn lsp_completion_colors_and_tikz_libraries() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///paint.tex".parse().unwrap();
+
+    // `\textcolor{re|}` offers the built-in color list (kind COLOR); a document
+    // `\definecolor` name is merged in; `\usetikzlibrary{cal|}` offers libraries.
+    let doc = "\\definecolor{brandblue}{HTML}{0055AA}\n\\textcolor{re}{x}\n\\color{bra}\n\\usetikzlibrary{cal}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    // `\textcolor{re|}` at line 1, column 13.
+    let colors = complete(&client, 2, &uri, Position::new(1, 13));
+    let names = labels(&colors);
+    assert!(names.contains(&"red"), "built-in color offered: {names:?}");
+    let red = colors.iter().find(|i| i.label == "red").unwrap();
+    assert_eq!(red.kind, Some(CompletionItemKind::COLOR));
+
+    // A `\definecolor` name is offered at `\color{bra|}` (line 2, column 10).
+    let doc_colors = complete(&client, 3, &uri, Position::new(2, 10));
+    assert!(
+        labels(&doc_colors).contains(&"brandblue"),
+        "document color offered: {:?}",
+        labels(&doc_colors)
+    );
+
+    // `\usetikzlibrary{cal|}` at line 3, column 19.
+    let libs = complete(&client, 4, &uri, Position::new(3, 19));
+    let names = labels(&libs);
+    assert!(names.contains(&"calc"), "tikz library offered: {names:?}");
+    let calc = libs.iter().find(|i| i.label == "calc").unwrap();
+    assert_eq!(calc.kind, Some(CompletionItemKind::MODULE));
+
+    shutdown(&client, server_thread);
+}
+
 /// The lint-rule codes carried by a diagnostics batch (parse diagnostics have no
 /// code and are dropped), for asserting which cross-file rules fired.
 fn rule_codes(diags: &PublishDiagnosticsParams) -> Vec<String> {

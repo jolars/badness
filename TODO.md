@@ -253,11 +253,17 @@ comparison is asymmetric, and the framing matters when triaging the items below.
 
 ### Labels & references
 
-- [ ] **Label hover.** Hover a `\label`/`\ref` to render a preview
-  (kind + nearest heading/caption); *Caveat:* the resolved *number*
-  needs `.aux` reading or counter tracking (which badness does not do), so a first
-  cut shows kind + context without the number—texlab reads `.aux`
-  (`crates/hover/label.rs`).
+- [x] **Label hover.** Hover a `\label`/`\ref`-family key to render a preview:
+  kind + nearest heading/caption (`semantic::label_context`, classified at the
+  definition site, cross-file like go-to-def) *and* the resolved number from the
+  compile's `.aux` (`project::aux`, mirroring texlab's `\newlabel` extraction) —
+  `Figure 3: A chart`, `Section 1.2 (Intro)`; degrades to numberless when never
+  compiled. The same aux data feeds **document symbols**: section names get their
+  toc numbers prefixed (`1.2 Intro`, via `\@writefile{toc}` title matching) and
+  labels/floats their numbers as `detail`. LSP-only (AGENTS.md, "LSP environment
+  awareness" tier 3); `[build] aux-dir` locates out-of-tree builds. Deferred:
+  latexmkrc/`Tectonic.toml` aux-dir auto-detection; eager `**/*.aux` watching
+  (numbers refresh on the next request).
 - [ ] **References + rename for user macros and environment names.** Extend
   references/rename (label/citation keys only today) to command names (cross-file,
   via the signature-DB provenance in `semantic::define`) and to environment-name

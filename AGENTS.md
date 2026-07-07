@@ -252,6 +252,17 @@ no typesetting):
    use it) and enumerating via `ls-R`/walk. Cached to the OS cache dir keyed by a
    distro fingerprint; a lazy process-global (first config wins). Powers document
    links, go-to-definition, and installed-set completion for system packages.
+3. **The compile's `.aux` artifacts** (`project::aux`): a dedicated line-oriented
+   scanner (never the LaTeX parser — aux files are written under `\makeatletter`,
+   so `\@input`/`\@writefile` would mis-lex) extracting `\newlabel` numbers and
+   `\@writefile{toc}` entries, following `\@input` per-chapter chains. Freshness is
+   a per-file `(mtime, len)`-keyed process cache — a recompile is picked up on the
+   next request, no watcher. Located per label namespace (sibling `.aux`, or
+   `[build] aux-dir` for out-of-tree builds; latexmkrc/Tectonic auto-detection
+   deferred). Powers label hover (`Figure 3: A chart`) and document-symbol number
+   enrichment (`1.2 Intro`; toc titles matched whitespace-normalized, consumed in
+   document order). Guarded by `format_never_reads_the_aux_file`
+   (`tests/format_packages.rs`).
 
 The distinction the old TODO conflated: a **runtime distro query feeding the
 formatter** stays a non-goal (it would break the hermeticism above); a **read-only

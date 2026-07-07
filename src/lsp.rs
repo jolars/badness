@@ -115,7 +115,7 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::config::{Config, LintConfig, TexmfConfig};
+use crate::config::{BuildConfig, Config, LintConfig, TexmfConfig};
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
@@ -125,6 +125,7 @@ use crate::formatter::{
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{parse, parse_with_flavor};
+use crate::project::aux::AuxData;
 use crate::project::texmf::TexmfIndex;
 use crate::project::{ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline};
@@ -335,6 +336,10 @@ struct ResolvedSettings {
     /// [`texmf::global_index`](crate::project::texmf::global_index) it drives is
     /// first-config-wins).
     texmf: TexmfConfig,
+    /// The `[build]` settings locating the compiler's `.aux` artifacts. Consumed
+    /// only by label hover and document symbols (resolved numbers), never the
+    /// formatter — so it cannot affect `badness format` output.
+    build: BuildConfig,
 }
 
 impl ResolvedSettings {
@@ -359,6 +364,7 @@ impl ResolvedSettings {
                 sentence_lang,
                 sentence_no_break,
                 texmf: config.texmf.clone(),
+                build: config.build.clone(),
             }
         } else {
             Self::from_editor(editor)
@@ -377,6 +383,7 @@ impl ResolvedSettings {
             sentence_lang: SentenceLanguage::default(),
             sentence_no_break: Vec::new(),
             texmf: TexmfConfig::default(),
+            build: BuildConfig::default(),
         }
     }
 
@@ -497,12 +504,15 @@ enum WorkerJob {
         sentence_no_break: Vec<String>,
     },
     /// A document-symbol request: build the outline on the read pool and reply to
-    /// `id`.
+    /// `id`. Cross-file only for the `.aux` enrichment (resolved numbers), so the
+    /// worker snapshots project membership when it dispatches; `build` locates the
+    /// aux files.
     Symbols {
         id: RequestId,
         path: PathBuf,
         text: String,
         kind: FileKind,
+        build: BuildConfig,
     },
     /// A `workspace/symbol` request: aggregate every tracked file's outline on the
     /// read pool and reply to `id` with the matches for `query`. Cross-file (it
@@ -561,6 +571,9 @@ enum WorkerJob {
         path: PathBuf,
         text: String,
         position: Position,
+        /// `[build]` settings for the label-number lookup (a `\label`/`\ref` hover
+        /// reads the compile's `.aux`).
+        build: BuildConfig,
     },
     /// A go-to-definition request: resolve the `\ref`/`\cite` under the cursor to
     /// its `\label`/bib entry on the read pool and reply to `id`. Cross-file, so
@@ -787,7 +800,7 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                                 on_type_formatting(&connection, &mut state, &job_tx, req)
                             }
                             DocumentSymbolRequest::METHOD => {
-                                on_document_symbol(&connection, &state, &job_tx, req)
+                                on_document_symbol(&connection, &mut state, &job_tx, req)
                             }
                             WorkspaceSymbolRequest::METHOD => {
                                 on_workspace_symbol(&connection, &job_tx, req)
@@ -798,7 +811,9 @@ fn main_loop(connection: Connection, init_params: serde_json::Value) -> Result<(
                             ResolveCompletionItem::METHOD => {
                                 on_completion_resolve(&connection, &job_tx, req)
                             }
-                            HoverRequest::METHOD => on_hover(&connection, &state, &job_tx, req),
+                            HoverRequest::METHOD => {
+                                on_hover(&connection, &mut state, &job_tx, req)
+                            }
                             GotoDefinition::METHOD => {
                                 on_goto_definition(&connection, &mut state, &job_tx, req)
                             }
@@ -1219,7 +1234,7 @@ fn on_type_formatting(
 /// `null` when the document is unknown.
 fn on_document_symbol(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -1248,11 +1263,15 @@ fn on_document_symbol(
     };
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
+    let text = doc.text.clone();
+    // Resolve `[build]` for the `.aux` number enrichment, like hover.
+    let build = state.resolve_settings(&uri).build;
     let _ = job_tx.send(WorkerJob::Symbols {
         id,
         path,
-        text: doc.text.clone(),
+        text,
         kind,
+        build,
     });
 }
 
@@ -1503,7 +1522,7 @@ fn on_completion_resolve(connection: &Connection, job_tx: &Sender<WorkerJob>, re
 /// nothing there today (no bib-field hover yet), so it returns `null` on its own.
 fn on_hover(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -1532,11 +1551,16 @@ fn on_hover(
         )));
         return;
     };
+    let text = doc.text.clone();
+    // Resolve `[build]` for the label-number lookup (a `\label`/`\ref` hover reads
+    // the compile's `.aux`), like go-to-def resolves `[texmf]`.
+    let build = state.resolve_settings(&uri).build;
     let _ = job_tx.send(WorkerJob::Hover {
         id,
         path,
-        text: doc.text.clone(),
+        text,
         position,
+        build,
     });
 }
 
@@ -2135,13 +2159,17 @@ impl Worker {
                 path,
                 text,
                 kind,
+                build,
             } => {
                 // Symbol reads, like formatting, run on the read pool against a
-                // snapshot (id-bound responses, not coalesced).
+                // snapshot (id-bound responses, not coalesced). The membership
+                // snapshot only feeds the `.aux` number enrichment.
                 let snapshot = self.db.snapshot();
+                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
-                self.read_spawner
-                    .spawn(move || run_symbols(&snapshot, id, &path, &text, kind, &out_tx));
+                self.read_spawner.spawn(move || {
+                    run_symbols(&snapshot, id, &path, &text, kind, members, &build, &out_tx)
+                });
             }
             WorkerJob::WorkspaceSymbols { id, query } => {
                 // Workspace symbols scan every tracked file, so — like
@@ -2218,14 +2246,18 @@ impl Worker {
                 path,
                 text,
                 position,
+                build,
             } => {
-                // Hover's signature scope and `\cite` resolution are both cross-file,
-                // so — like go-to-def — snapshot project membership on the write side.
+                // Hover's signature scope and `\cite`/`\ref` resolution are all
+                // cross-file, so — like go-to-def — snapshot project membership on
+                // the write side.
                 let snapshot = self.db.snapshot();
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_hover(&snapshot, id, &path, &text, position, members, &out_tx)
+                    run_hover(
+                        &snapshot, id, &path, &text, position, members, &build, &out_tx,
+                    )
                 });
             }
             WorkerJob::GotoDefinition {
@@ -3236,17 +3268,20 @@ fn closes_multiline_construct(root: &SyntaxNode, text: &str, offset: u32) -> boo
 /// (`salsa::Cancelled`), a stale snapshot (`file_text != text`), or a cache miss,
 /// reparse the captured `text` directly. Best-effort — unlike formatting, a parse
 /// error does *not* suppress the outline (the tree is error-tolerant).
+#[allow(clippy::too_many_arguments)]
 fn run_symbols(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
     text: &str,
     kind: FileKind,
+    members: Vec<ProjectMember>,
+    build: &BuildConfig,
     out_tx: &Sender<Outbound>,
 ) {
     let symbols = match kind {
         FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            compute_symbols(snapshot, path, text, kind)
+            compute_symbols(snapshot, path, text, kind, members, build)
         }
         FileKind::Bib => compute_bib_symbols(snapshot, path, text),
     };
@@ -3256,12 +3291,16 @@ fn run_symbols(
 }
 
 /// Compute the LaTeX outline for `text`, preferring the snapshot's cached tree and
-/// falling back to a direct reparse when it is unavailable or stale.
+/// falling back to a direct reparse when it is unavailable or stale. When the
+/// project has been compiled, the outline is enriched with the `.aux`'s resolved
+/// numbers (see [`to_document_symbol`]).
 fn compute_symbols(
     snapshot: &Analysis,
     path: &Path,
     text: &str,
     kind: FileKind,
+    members: Vec<ProjectMember>,
+    build: &BuildConfig,
 ) -> Vec<DocumentSymbol> {
     let idx = LineIndex::new(text);
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -3280,9 +3319,16 @@ fn compute_symbols(
             parse_with_flavor(text, kind.lex_config()).green,
         )),
     };
+    let aux = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let (resolution, _) = snapshot.resolve_project(members);
+        document_aux(snapshot, resolution, path, build)
+    }))
+    // A cancelled read degrades to the numberless outline this round.
+    .unwrap_or_default();
+    let mut toc_cursor = 0;
     items
         .iter()
-        .map(|item| to_document_symbol(item, &idx, text))
+        .map(|item| to_document_symbol(item, &idx, text, aux.as_ref(), &mut toc_cursor))
         .collect()
 }
 
@@ -3501,6 +3547,36 @@ fn compute_document_link(
         .collect()
 }
 
+/// The merged `.aux` facts for `path`'s label namespace: the aux root is the
+/// namespace's document root's directory (where the compiler ran), falling back
+/// to `path`'s own; an unknown/untracked file still checks its sibling `.aux`.
+/// `None` when the project was never compiled. Shared by label hover (numbers in
+/// the preview) and `documentSymbol` (numbers in the outline).
+fn document_aux(
+    snapshot: &Analysis,
+    resolution: &ResolvedLabels,
+    path: &Path,
+    build: &BuildConfig,
+) -> Option<AuxData> {
+    let namespace = resolution.namespace_members(path);
+    let namespace: Vec<&Path> = if namespace.is_empty() {
+        vec![path]
+    } else {
+        namespace
+    };
+    let root_dir = namespace
+        .iter()
+        .find(|p| {
+            snapshot
+                .lookup_file(p)
+                .is_some_and(|f| snapshot.file_is_document_root(f))
+        })
+        .and_then(|p| p.parent())
+        .or_else(|| path.parent())
+        .unwrap_or(Path::new(""));
+    crate::project::aux::aux_data_for(&namespace, root_dir, build.aux_dir.as_deref())
+}
+
 /// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte
 /// ranges through the (UTF-16-aware) [`LineIndex`].
 /// Map an [`OutlineSymbol`] to its LSP [`SymbolKind`]. Shared by the per-file
@@ -3517,19 +3593,54 @@ fn outline_symbol_kind(kind: OutlineSymbol) -> SymbolKind {
     }
 }
 
+/// Enrichment from the compile's `.aux` (when one exists): a section name gets its
+/// toc number prefixed (`"1.2 Intro"`), a label its `\newlabel` number as
+/// `detail`, and a float/theorem its child label's number as `detail`. Section
+/// matching consumes toc entries in document order (`toc_cursor`) against
+/// whitespace-normalized titles, so a macro-heavy title that fails to match
+/// degrades to its plain, numberless name.
 #[allow(deprecated)] // `DocumentSymbol::deprecated` is a required struct field.
-fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> DocumentSymbol {
+fn to_document_symbol(
+    item: &OutlineItem,
+    idx: &LineIndex,
+    text: &str,
+    aux: Option<&AuxData>,
+    toc_cursor: &mut usize,
+) -> DocumentSymbol {
     let kind = outline_symbol_kind(item.kind);
     let range = item.range;
     let selection = item.selection_range;
+    let mut name = item.name.clone();
+    let mut detail = None;
+    if let Some(aux) = aux {
+        match item.kind {
+            OutlineSymbol::Section => {
+                if let Some(number) = next_toc_number(aux, &item.name, toc_cursor) {
+                    name = format!("{number} {name}");
+                }
+            }
+            OutlineSymbol::Label => {
+                detail = aux.labels.get(item.name.as_str()).cloned();
+            }
+            OutlineSymbol::Float | OutlineSymbol::Theorem => {
+                // The float's own number is exactly its child label's.
+                detail = item
+                    .children
+                    .iter()
+                    .find(|c| c.kind == OutlineSymbol::Label)
+                    .and_then(|label| aux.labels.get(label.name.as_str()).cloned());
+            }
+            OutlineSymbol::Macro | OutlineSymbol::Environment => {}
+        }
+    }
     let children: Vec<DocumentSymbol> = item
         .children
         .iter()
-        .map(|child| to_document_symbol(child, idx, text))
+        .map(|child| to_document_symbol(child, idx, text, aux, toc_cursor))
         .collect();
     DocumentSymbol {
-        name: item.name.clone(),
-        detail: None,
+        name,
+        detail,
         kind,
         tags: None,
         deprecated: None,
@@ -3542,6 +3653,27 @@ fn to_document_symbol(item: &OutlineItem, idx: &LineIndex, text: &str) -> Docume
         ),
         children: (!children.is_empty()).then_some(children),
     }
+}
+
+/// The number of the next toc entry matching `title`, consuming entries up to and
+/// including the match. Titles compare with all whitespace stripped: TeX pads the
+/// written form (`\textsc  {Intro}`) where the CST title has none.
+fn next_toc_number(aux: &AuxData, title: &str, cursor: &mut usize) -> Option<String> {
+    let want = normalize_toc_title(title);
+    if want.is_empty() {
+        return None;
+    }
+    let (offset, entry) = aux.toc[(*cursor).min(aux.toc.len())..]
+        .iter()
+        .enumerate()
+        .find(|(_, e)| e.number.is_some() && normalize_toc_title(&e.title) == want)?;
+    *cursor += offset + 1;
+    entry.number.clone()
+}
+
+/// Strip all whitespace for toc-title comparison.
+fn normalize_toc_title(title: &str) -> String {
+    title.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 /// Convert a flat [`BibOutlineItem`] into an LSP [`DocumentSymbol`]. Bib entries
@@ -3794,8 +3926,9 @@ fn bib_candidate_to_item(candidate: BibCompletionCandidate) -> CompletionItem {
     }
 }
 
-/// Describe the command/environment or `\cite` key under the cursor and reply with a
-/// [`Hover`] (or `null` when nothing resolves).
+/// Describe the command/environment, `\cite` key, or `\label`/`\ref` key under the
+/// cursor and reply with a [`Hover`] (or `null` when nothing resolves).
+#[allow(clippy::too_many_arguments)]
 fn run_hover(
     snapshot: &Analysis,
     id: RequestId,
@@ -3803,9 +3936,10 @@ fn run_hover(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    build: &BuildConfig,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = hover::compute_hover(snapshot, path, text, position, members)
+    let result = hover::compute_hover(snapshot, path, text, position, members, build)
         .and_then(|hover| serde_json::to_value(hover).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));

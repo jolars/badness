@@ -791,6 +791,76 @@ fn lsp_document_symbol_outline() {
 }
 
 #[test]
+fn lsp_document_symbol_numbers_from_aux() {
+    // A compiled project: the sibling `.aux` prefixes section names with their toc
+    // numbers and attaches label/float numbers as `detail`.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let doc = "\\documentclass{article}\n\
+        \\begin{document}\n\
+        \\section{Intro}\n\
+        \\label{sec:intro}\n\
+        \\begin{figure}\n\
+        \\label{fig:one}\n\
+        \\end{figure}\n\
+        \\section{Methods}\n\
+        \\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, doc).unwrap();
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\@writefile{toc}{\\contentsline {section}{\\numberline {1}Intro}{1}{section.1}}\n\
+         \\newlabel{sec:intro}{{1}{1}{Intro}{section.1}{}}\n\
+         \\newlabel{fig:one}{{3}{2}{}{figure.3}{}}\n\
+         \\@writefile{toc}{\\contentsline {section}{\\numberline {2}Methods}{2}{section.2}}\n",
+    )
+    .unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    send_request(
+        &client,
+        2,
+        "textDocument/documentSymbol",
+        serde_json::to_value(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let response: DocumentSymbolResponse =
+        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response");
+    let DocumentSymbolResponse::Nested(symbols) = response else {
+        panic!("expected a nested documentSymbol response");
+    };
+
+    let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["1 Intro", "2 Methods"]);
+
+    let intro_kids = symbols[0].children.as_deref().unwrap_or_default();
+    let label = intro_kids
+        .iter()
+        .find(|c| c.name == "sec:intro")
+        .expect("label leaf");
+    assert_eq!(label.detail.as_deref(), Some("1"));
+
+    let figure = intro_kids
+        .iter()
+        .find(|c| c.name == "figure")
+        .expect("figure symbol");
+    assert_eq!(figure.detail.as_deref(), Some("3"), "via its child label");
+    let figure_kids = figure.children.as_deref().unwrap_or_default();
+    assert_eq!(figure_kids[0].detail.as_deref(), Some("3"));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_document_symbol_dtx_documented_macros() {
     let (client, server_thread) = start_server(None);
     // A `.dtx` is parsed in docstrip mode, so the leading-`%` ltxdoc lines become
@@ -1478,6 +1548,38 @@ fn lsp_completion_file_paths() {
     assert!(names.contains(&"logo.png"), "{names:?}");
     assert!(names.contains(&"chapters"), "{names:?}");
     assert!(!names.contains(&"intro.tex"), "{names:?}");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_hover_label_number_from_aux_dir() {
+    // A compiled project with an out-of-tree aux dir: `[build] aux-dir` routes the
+    // label-number lookup, so hovering a `\ref` key shows the resolved number.
+    let dir = tempfile::tempdir().unwrap();
+    let main = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\n\\label{sec:a}\nSee \\ref{sec:a}.\n\\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[build]\naux-dir = \"out\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("out")).unwrap();
+    std::fs::write(
+        dir.path().join("out/main.aux"),
+        "\\newlabel{sec:a}{{2}{1}{Intro}{section.2}{}}\n",
+    )
+    .unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    // Cursor inside the `sec:a` key of `\ref` on line 4 (`See \ref{sec:a}.`).
+    let md = hover_markdown(&client, 2, &uri, Position::new(4, 10)).expect("label hover");
+    assert_eq!(md, "Section 2 (Intro)");
 
     shutdown(&client, server_thread);
 }

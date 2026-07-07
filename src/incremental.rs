@@ -752,6 +752,12 @@ impl Analysis {
         self.0.semantic_model(file)
     }
 
+    /// Whether `file` carries a `\documentclass` / `\begin{document}` — label
+    /// hover's anchor for the aux root (the directory the compiler ran in).
+    pub fn file_is_document_root(&self, file: SourceFile) -> bool {
+        self.0.file_is_document_root(file)
+    }
+
     /// The file's scanned user-definition signatures (for completion).
     pub fn document_signatures(&self, file: SourceFile) -> &SignatureDb {
         self.0.document_signatures(file)

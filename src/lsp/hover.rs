@@ -15,11 +15,16 @@
 //! - **Citation → `.bib` entry.** A `\cite`-family key resolves cross-file against
 //!   the project bibliography ([`Analysis::resolve_project`]); the matched
 //!   `@entry`'s author/title/year/journal are pulled from the cached bib CST.
+//! - **Label preview.** A `\label`/`\ref`-family key renders what it labels
+//!   ([`semantic::label_context`] at the definition site, resolved cross-file like
+//!   citations) plus the number the last compile assigned, read from the build's
+//!   `.aux` ([`crate::project::aux`]) — `Figure 3: A chart`, `Section 1.2 (Intro)`.
+//!   Degrades to the numberless preview when the project was never compiled.
 //!
-//! Label resolution for `\ref` and the user-macro *definition body* are deferred
-//! (see `TODO.md`). Like go-to-definition, the read runs off the snapshot's cached
-//! parse when the tracked buffer still matches `text`, else a fresh parse, all
-//! wrapped in [`salsa::Cancelled::catch`].
+//! The user-macro *definition body* hover is deferred (see `TODO.md`). Like
+//! go-to-definition, the read runs off the snapshot's cached parse when the tracked
+//! buffer still matches `text`, else a fresh parse, all wrapped in
+//! [`salsa::Cancelled::catch`].
 
 use std::fmt::Write as _;
 
@@ -31,6 +36,7 @@ use crate::lsp::document_link::comma_spans;
 use crate::semantic::signature::{
     ArgKind, CommandSig, EnvironmentSig, OutlineKind, PackageMeta, builtin, cwl, package_metadata,
 };
+use crate::semantic::{LabelContext, label_context};
 use crate::syntax::{SyntaxKind, SyntaxToken};
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
@@ -44,6 +50,7 @@ pub(crate) fn compute_hover(
     text: &str,
     position: Position,
     members: Vec<ProjectMember>,
+    build: &BuildConfig,
 ) -> Option<Hover> {
     let idx = LineIndex::new(text);
     let offset = idx.offset_at(text, position.line, position.character);
@@ -56,7 +63,7 @@ pub(crate) fn compute_hover(
                 let scope = snapshot.scope_signatures(members.clone(), file);
                 let lint_path = snapshot.file_path(file).to_path_buf();
                 build_hover(
-                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, text,
+                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, text, build,
                 )
             }
             // Untracked or stale: a fresh parse + scan (no cross-package scope), like
@@ -67,7 +74,7 @@ pub(crate) fn compute_hover(
                 let model = SemanticModel::build(&root);
                 let scanned = crate::semantic::scan_definitions(&root);
                 build_hover(
-                    snapshot, &root, &model, &scanned, path, members, offset, &idx, text,
+                    snapshot, &root, &model, &scanned, path, members, offset, &idx, text, build,
                 )
             }
         }
@@ -75,7 +82,8 @@ pub(crate) fn compute_hover(
     result.ok().flatten()
 }
 
-/// The shared body: try a command/environment signature, then a citation entry.
+/// The shared body: try a command/environment signature, then a citation entry,
+/// then a label preview.
 #[allow(clippy::too_many_arguments)]
 fn build_hover(
     snapshot: &Analysis,
@@ -87,6 +95,7 @@ fn build_hover(
     offset: usize,
     idx: &LineIndex,
     text: &str,
+    build: &BuildConfig,
 ) -> Option<Hover> {
     if let Some(target) = signature_target_at(root, offset) {
         let value = match target.kind {
@@ -111,6 +120,12 @@ fn build_hover(
     if let Some((name, key_range)) = citation_at(model, offset) {
         let (_, citations) = snapshot.resolve_project(members);
         let value = render_citation(snapshot, citations, lint_path, &name)?;
+        return Some(markup_hover(value, key_range, idx, text));
+    }
+
+    if let Some((name, key_range)) = label_target_at(model, offset) {
+        let (resolution, _) = snapshot.resolve_project(members);
+        let value = render_label(snapshot, resolution, lint_path, root, model, &name, build)?;
         return Some(markup_hover(value, key_range, idx, text));
     }
 
@@ -516,6 +531,146 @@ pub(super) fn clean_value(value: &BibSyntaxNode) -> String {
     inner.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// --- Label preview --------------------------------------------------------------
+
+/// The label key whose *key* range covers `offset` — a `\label` definition key or
+/// a `\ref`-family use key. Per-key like [`citation_at`], so a multi-key
+/// `\cref{a,b}` resolves the one key under the cursor.
+fn label_target_at(model: &SemanticModel, offset: usize) -> Option<(SmolStr, TextRange)> {
+    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
+    model
+        .labels()
+        .iter()
+        .find(|l| l.key_range.contains_inclusive(at))
+        .map(|l| (l.name.clone(), l.key_range))
+        .or_else(|| {
+            model
+                .refs()
+                .iter()
+                .find(|r| r.key_range.contains_inclusive(at))
+                .map(|r| (r.name.clone(), r.key_range))
+        })
+}
+
+/// Render the label preview: what the key labels ([`label_context`] at its
+/// definition site, resolved cross-file like go-to-definition) plus the number
+/// the last compile assigned (from the `.aux`, when one exists). `None` when
+/// there is neither a classifiable definition site nor a compiled number.
+fn render_label(
+    snapshot: &Analysis,
+    resolution: &ResolvedLabels,
+    lint_path: &Path,
+    root: &SyntaxNode,
+    model: &SemanticModel,
+    name: &SmolStr,
+    build: &BuildConfig,
+) -> Option<String> {
+    // Definition site: the current file first (also covering the untracked
+    // fresh-parse path, whose model is absent from the resolution), then the
+    // namespace's definers.
+    let context = model
+        .labels()
+        .iter()
+        .find(|l| l.name == *name)
+        .and_then(|def| label_context(root, def.key_range.start()))
+        .or_else(|| {
+            resolution
+                .definers(lint_path, name)
+                .iter()
+                .find_map(|def_path| {
+                    let file = snapshot.lookup_file(def_path)?;
+                    let def = snapshot
+                        .semantic_model(file)
+                        .labels()
+                        .iter()
+                        .find(|l| l.name == *name)?;
+                    label_context(&snapshot.parsed_tree(file), def.key_range.start())
+                })
+        });
+
+    let number = label_number(snapshot, resolution, lint_path, name, build);
+    render_label_markdown(context.as_ref(), number.as_deref())
+}
+
+/// The number the last compile assigned to `name`, read from the namespace's
+/// `.aux` files ([`super::document_aux`]).
+fn label_number(
+    snapshot: &Analysis,
+    resolution: &ResolvedLabels,
+    lint_path: &Path,
+    name: &SmolStr,
+    build: &BuildConfig,
+) -> Option<String> {
+    super::document_aux(snapshot, resolution, lint_path, build)?
+        .labels
+        .get(name.as_str())
+        .cloned()
+}
+
+/// The preview line, texlab-style: `Section 1.2 (Intro)`, `Figure 3: A chart`,
+/// `Theorem 4 (Euler)`, `Equation (1.5)`, `Item 2`. Number and context each
+/// degrade independently; with neither there is nothing to say.
+fn render_label_markdown(context: Option<&LabelContext>, number: Option<&str>) -> Option<String> {
+    let mut out = String::new();
+    match context {
+        Some(LabelContext::Section { title }) => {
+            out.push_str("Section");
+            if let Some(n) = number {
+                let _ = write!(out, " {n}");
+            }
+            if !title.is_empty() {
+                let _ = write!(out, " ({title})");
+            }
+        }
+        Some(LabelContext::Float { env, caption }) => {
+            out.push_str(&capitalize(env));
+            if let Some(n) = number {
+                let _ = write!(out, " {n}");
+            }
+            if let Some(c) = caption {
+                let _ = write!(out, ": {c}");
+            }
+        }
+        Some(LabelContext::Theorem { env, description }) => {
+            out.push_str(&capitalize(env));
+            if let Some(n) = number {
+                let _ = write!(out, " {n}");
+            }
+            if let Some(d) = description {
+                let _ = write!(out, " ({d})");
+            }
+        }
+        Some(LabelContext::Equation) => {
+            out.push_str("Equation");
+            if let Some(n) = number {
+                let _ = write!(out, " ({n})");
+            }
+        }
+        Some(LabelContext::Item) => {
+            out.push_str("Item");
+            if let Some(n) = number {
+                let _ = write!(out, " {n}");
+            }
+        }
+        // Unclassifiable definition (or none found): the compiled number alone
+        // still tells the reader what the reference resolves to.
+        None => {
+            let n = number?;
+            let _ = write!(out, "Label {n}");
+        }
+    }
+    Some(out)
+}
+
+/// Uppercase the first character (`figure` → `Figure`) for the preview's kind word.
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,7 +695,14 @@ mod tests {
         let snapshot = db.snapshot();
         let members = super::members_of(&snapshot);
         let position = byte_to_position(src, offset);
-        let hover = compute_hover(&snapshot, path, src, position, members)?;
+        let hover = compute_hover(
+            &snapshot,
+            path,
+            src,
+            position,
+            members,
+            &BuildConfig::default(),
+        )?;
         match hover.contents {
             HoverContents::Markup(m) => Some(m.value),
             other => panic!("expected markup, got {other:?}"),
@@ -603,6 +765,84 @@ mod tests {
     #[test]
     fn no_hover_on_plain_prose() {
         assert!(hover_md("Just some words here.\n", "words").is_none());
+    }
+
+    #[test]
+    fn label_ref_without_aux_shows_kind_and_context() {
+        let src = "\\section{Intro}\n\\label{sec:a}\nSee \\ref{sec:a}.\n";
+        let offset = src.rfind("sec:a").expect("ref key");
+        let path = Path::new("/p/main.tex");
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(path, src.to_string());
+        let md = markdown_at(&db, path, src, offset).expect("hover for \\ref key");
+        assert_eq!(md, "Section (Intro)");
+    }
+
+    #[test]
+    fn label_definition_site_hovers_too() {
+        let src = "\\begin{figure}\n\\caption{A chart}\n\\label{fig:x}\n\\end{figure}\n";
+        let offset = src.find("fig:x").expect("label key");
+        let path = Path::new("/p/main.tex");
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(path, src.to_string());
+        let md = markdown_at(&db, path, src, offset).expect("hover for \\label key");
+        assert_eq!(md, "Figure: A chart");
+    }
+
+    #[test]
+    fn undefined_ref_without_aux_has_no_hover() {
+        let src = "See \\ref{nowhere}.\n";
+        let offset = src.find("nowhere").expect("ref key");
+        let path = Path::new("/p/main.tex");
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(path, src.to_string());
+        assert!(markdown_at(&db, path, src, offset).is_none());
+    }
+
+    #[test]
+    fn label_ref_with_aux_shows_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.tex");
+        let src = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\n\\label{sec:a}\nSee \\ref{sec:a}.\n\\begin{equation}\nx\\label{eq:x}\n\\end{equation}\n\\eqref{eq:x}\n\\end{document}\n";
+        std::fs::write(&path, src).unwrap();
+        std::fs::write(
+            dir.path().join("main.aux"),
+            "\\newlabel{sec:a}{{1.2}{1}{Intro}{section.1.2}{}}\n\\newlabel{eq:x}{{3}{1}}\n",
+        )
+        .unwrap();
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(&path, src.to_string());
+
+        let offset = src.rfind("sec:a").expect("ref key");
+        let md = markdown_at(&db, &path, src, offset).expect("hover for \\ref key");
+        assert_eq!(md, "Section 1.2 (Intro)");
+
+        let offset = src.rfind("eq:x").expect("eqref key");
+        let md = markdown_at(&db, &path, src, offset).expect("hover for \\eqref key");
+        assert_eq!(md, "Equation (3)");
+    }
+
+    #[test]
+    fn cross_file_label_context_and_number_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let part = dir.path().join("part.tex");
+        let main_src = "\\documentclass{article}\n\\begin{document}\n\\input{part}\nSee \\ref{thm:euler}.\n\\end{document}\n";
+        let part_src = "\\begin{theorem}[Euler]\nx \\label{thm:euler}\n\\end{theorem}\n";
+        std::fs::write(&main, main_src).unwrap();
+        std::fs::write(&part, part_src).unwrap();
+        std::fs::write(
+            dir.path().join("main.aux"),
+            "\\newlabel{thm:euler}{{4}{1}}\n",
+        )
+        .unwrap();
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(&main, main_src.to_string());
+        db.upsert_file(&part, part_src.to_string());
+
+        let offset = main_src.rfind("thm:euler").expect("ref key");
+        let md = markdown_at(&db, &main, main_src, offset).expect("hover for \\ref key");
+        assert_eq!(md, "Theorem 4 (Euler)");
     }
 
     #[test]

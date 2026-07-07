@@ -13,9 +13,9 @@ associate it with LaTeX (`.tex`) and BibTeX (`.bib`) files.
 Formatter width settings can be supplied as `initializationOptions` at startup
 or through `workspace/didChangeConfiguration`: `lineWidth` and `indentWidth`,
 either as a bare object or namespaced under a `badness` key. They act as a
-fallback: a discovered `badness.toml` always wins outright, and absent one,
-your editor's tab size (sent with each formatting request) overrides the
-indent width.
+fallback: a discovered `badness.toml` always wins outright, and absent one, your
+editor's tab size (sent with each formatting request) overrides the indent
+width.
 
 ## Neovim
 

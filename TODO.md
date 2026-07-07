@@ -186,30 +186,8 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   results) that fits the one-shot id-bound read-job model poorly. Advertise
   `workspace_diagnostics: true` and add it once that plumbing exists; editors
   drive interactive diagnostics through `textDocument/diagnostic` meanwhile.
-- [x] `workspace/didChangeWatchedFiles` + dynamic `client/registerCapability`
-  for `**/*.{tex,bib}` and `badness.toml` so on-disk edits to non-open
-  includes/`.bib` files (the project graph's leaves) and the config reanalyze.
-  Watchers are registered post-handshake (`register_file_watchers`) when the client
-  advertises `didChangeWatchedFiles.dynamicRegistration`; no `notify`-crate fallback
-  otherwise. A `.tex`/`.bib` change re-reads + re-upserts the non-open file
-  (`Worker::apply_watched_change`, scoped to seeded project dirs) and re-lints via
-  `RelintAll`; a `badness.toml` change clears the config cache and re-lints
-  (`relint_all_open`). Open buffers are skipped (the editor overlay is authoritative).
 
 ### Formatting
-
-- [x] Range formatting (`textDocument/rangeFormatting`)—expand the selection to
-  whole top-level blocks (children of `ROOT`), lower only those (a byte-range
-  emission filter in `format_node_range_with_signatures`, so the formatter stays
-  the sole layout authority and out-of-range blocks are never laid out), then
-  diff the fragment against the original slice into minimal edits. LaTeX only;
-  bib is a no-op for now.
-- [x] On-type formatting (`textDocument/onTypeFormatting`): typing `}` re-indents
-  the containing top-level block, but only when the `}` structurally closes a
-  multi-line group or an `\end{…}` (a `closes_multiline_construct` guard);
-  inline `\textbf{x}` and `\begin{…}` opens are skipped. Reuses the range path
-  (`range_edits_for_root` with an empty selection at the cursor). Trigger `}`;
-  client opt-in (e.g. `editor.formatOnType`).
 
 ### Navigation & structure
 
@@ -315,47 +293,7 @@ sources below are missing.
 
 ### IntelliSense (signature DB)
 
-- [x] Signature help (`textDocument/signatureHelp`)—show the active argument
-  while typing a command's `{…}`/`[…]` arguments. (Not a texlab gap—texlab has no
-  signature help—but a natural fit for the signature DB.) Triggered by `{`/`[`
-  (retriggered by `}`/`]`); the cursor's `GROUP`/`OPTIONAL` is greedily aligned
-  against the signature's slots (omitted optionals skipped, extraneous arguments
-  suppress rather than mishighlight), rendered as `#n` placeholder labels
-  (`\sqrt[#1]{#2}`) since the DB carries no argument names
-  (`src/lsp/signature_help.rs`).
-
 ### Code actions
-
-- [x] **Change-environment refactor.** Rewrites the `\begin{a}`/`\end{a}` name
-  pair around the cursor (the innermost enclosing environment; an unclosed one
-  rewrites just its `\begin`) to a new environment. A correctness-only textual
-  edit (never invokes the formatter—tenet #1) built from the paired begin/end
-  spans the parser already builds; declines when a delimiter name is not a plain
-  token run rather than rewrite half a pair. Exposed as the
-  `badness.changeEnvironment` execute-command with `texlab.changeEnvironment` as
-  a wire-compatible alias (same single `RenameParams`-shaped argument; the edit
-  is pushed via `workspace/applyEdit`), so texlab client keybindings work
-  unchanged.
-
-### Infrastructure
-
-- [x] Client capability negotiation—gate advertised providers and
-  UTF-8/UTF-16 position encoding on what `initialize` reports. The handshake is
-  now two-step (`initialize_start`/`initialize_finish`) so `server_capabilities`
-  can read the client's params: UTF-8 is advertised and served when
-  `general.positionEncodings` offers it (columns become byte distances), else
-  the mandatory UTF-16; the pull-diagnostics provider is advertised only to a
-  client that reports `textDocument.diagnostic` support. The negotiated
-  encoding lives in `text::PositionEncoding`, is carried by every `LineIndex`
-  (`with_encoding`; `new` keeps the UTF-16 default for CLI `line_col` use), and
-  is threaded from `GlobalState`/`Worker` into every conversion, including
-  signature-help label offsets.
-- [x] README editor-wiring docs (Neovim/VS Code `initializationOptions`,
-  `badness lsp` invocation). Resolved as a README one-liner pointing at
-  `docs/src/guide/editor-setup.md`, which carries the full story: Neovim
-  `vim.lsp.config` with `init_options`, `lineWidth`/`indentWidth` accepted
-  bare or under a `badness` key, file-config-wins precedence, `bib` filetype,
-  VS Code via the extension's `badness.*` settings.
 
 ## Package & class infrastructure (`.sty`/`.cls`/`.dtx`/`.ins`)
 

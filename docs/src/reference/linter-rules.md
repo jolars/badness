@@ -520,6 +520,38 @@ warning: sectioning-level-jump
   | ^^^^^^^^^^^^^^ `\subsubsection` skips a sectioning level after `\section` (expected `\subsection`)
 ```
 
+## `missing-required-argument`
+
+Flag a command invoked with fewer `{…}` groups than the required arity in its curated built-in signature (ChkTeX warning 14, decided on the parse tree and signature database rather than line heuristics). TeX also accepts unbraced single-token arguments (`\frac12`), so the rule stays silent whenever a following token could still supply the missing argument and fires only at a hard boundary: the end of the enclosing group, math shell, or environment, an alignment `&`, a `\\` line break, a blank line, or the end of the file. Contexts where a bare command is deliberate are skipped -- macro-definition bodies (`\newcommand{\bold}{\textbf}`), arguments of unknown commands, standalone `{…}` scope groups, `\let`-style alias forms, and names the file itself redefines. Report-only: the missing argument's content is the author's to write, so no fix is correct by construction.
+
+A fraction missing its denominator:
+
+```tex
+$\frac{1}$
+```
+
+```text
+warning: missing-required-argument
+ --> example.tex:1:2
+  |
+1 | $\frac{1}$
+  |  ^^^^^ `\frac` is missing 1 of its 2 required arguments
+```
+
+A command left bare at the end of a group, with nothing to take:
+
+```tex
+\emph{see \textbf}
+```
+
+```text
+warning: missing-required-argument
+ --> example.tex:1:11
+  |
+1 | \emph{see \textbf}
+  |           ^^^^^^^ `\textbf` is missing its required argument
+```
+
 ## `undefined-ref`
 
 Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.

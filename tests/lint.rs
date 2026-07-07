@@ -638,6 +638,30 @@ fn straight_quotes_fix_is_unsafe_and_correct() {
 }
 
 #[test]
+fn missing_required_argument_flags_truncated_invocation() {
+    let out = lint("Half is $\\frac{1}$ of a whole.\n");
+    let hits: Vec<_> = out
+        .iter()
+        .filter(|(r, _)| *r == "missing-required-argument")
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].1, Severity::Warning);
+    // An unbraced following token could be the argument (`\frac12` is valid
+    // TeX), and a definition body carries the command without invoking it.
+    for src in [
+        "Half is $\\frac12$ of a whole.\n",
+        "\\newcommand{\\bold}{\\textbf}\n",
+    ] {
+        assert!(
+            lint(src)
+                .iter()
+                .all(|(r, _)| *r != "missing-required-argument"),
+            "must not flag: {src}"
+        );
+    }
+}
+
+#[test]
 fn sectioning_level_jump_flags_skipped_level() {
     let out = lint("\\section{Intro}\n\\subsubsection{Deep}\n");
     let hits: Vec<_> = out

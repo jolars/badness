@@ -123,9 +123,16 @@ Whole-file or cross-file (`check_file`), using the semantic model, signature DB,
 project resolution. Pure prose-opinion textidote rules (title capitalization, caption
 period, section length) are skipped as grammar-tool territory.
 
-- [ ] `missing-required-argument`—command invoked with fewer `{…}` groups than its
+- [x] `missing-required-argument`—command invoked with fewer `{…}` groups than its
   signature-DB arity (ChkTeX 14, done precisely via the tree + DB, not line
-  heuristics). Report-only.
+  heuristics). Report-only. **Done**, conservatively: curated built-in tier only
+  (CWL arities are bulk-converted and package-load-blind), and since TeX accepts
+  unbraced single-token arguments (`\frac12`), it fires only at a hard boundary
+  (`}`, `$`/`\]`, `\end`, `&`, `\\`, blank line, EOF); definition bodies,
+  unknown-command arguments, standalone scope groups, `\let`-style alias forms,
+  and names the file redefines are skipped. *Possible widening:* enforce
+  scanned user-macro arities, and `\begin{env}` arguments (e.g. `tabular`'s
+  column spec).
 - [ ] `verbatim-trailing-text`—text after `\end{verbatim}` on the same line, silently
   dropped (ChkTeX 31). Report-only.
 - [x] `unbalanced-left-right`—`\left` with no matching `\right`. **Already covered by

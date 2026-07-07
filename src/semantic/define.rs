@@ -370,6 +370,16 @@ fn keeps_builtin_over_arity0(name: &str, arity: usize, body: &DefBody) -> bool {
             .is_some()
 }
 
+/// Whether `name` is a definition command the scanner recognizes
+/// (`\newcommand`/`\def`/xparse families; see [`DefKind`]). Exposed so consumers
+/// that must treat a definition's arguments as *code carried, not executed* (the
+/// linter's `missing-required-argument` rule skips partial applications like
+/// `\newcommand{\bold}{\textbf}`) share the scanner's one name list instead of
+/// duplicating it.
+pub(crate) fn is_definition_command(name: &str) -> bool {
+    DefKind::of(name).is_some()
+}
+
 /// Which definition family a control word names, if any.
 enum DefKind {
     Command,

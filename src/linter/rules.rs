@@ -25,6 +25,7 @@ pub mod makeat_macro;
 pub mod math_operator_name;
 pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
+pub mod missing_required_argument;
 pub mod obsolete_environment;
 pub mod primitive_command;
 pub mod sectioning_level_jump;
@@ -46,6 +47,7 @@ pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
+pub use missing_required_argument::MissingRequiredArgument;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use primitive_command::PrimitiveCommand;
 pub use sectioning_level_jump::SectioningLevelJump;
@@ -173,6 +175,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(MathOperatorName),
         Box::new(MakeatMacro),
         Box::new(SectioningLevelJump),
+        Box::new(MissingRequiredArgument),
         Box::new(UndefinedRef),
         Box::new(UndefinedCitation),
     ]
@@ -200,6 +203,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "math-operator-name",
     "makeat-macro",
     "sectioning-level-jump",
+    "missing-required-argument",
     "undefined-ref",
     "undefined-citation",
 ];

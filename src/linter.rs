@@ -14,7 +14,7 @@ pub mod render;
 pub mod rules;
 pub mod suppression;
 
-pub use check::{check_document, lint_document};
+pub use check::{check_document, check_document_fixable, lint_document};
 pub use diagnostic::{Applicability, Diagnostic, Fix, Severity};
 pub use fix::{FixOutcome, apply_fixes};
 pub use render::{OutputMode, render_findings};

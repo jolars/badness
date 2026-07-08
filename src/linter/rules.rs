@@ -7,6 +7,9 @@
 //! shared `lint_document` driver stays config-unaware.
 
 use std::path::Path;
+use std::sync::OnceLock;
+
+use rowan::{TextRange, TextSize};
 
 use crate::project::{ResolvedCitations, ResolvedLabels};
 use crate::semantic::SemanticModel;
@@ -84,6 +87,73 @@ pub struct RuleContext<'a> {
     /// `.bib` resources), or `None` when there is no project view. Gates
     /// `undefined-citation`, the bibliographic analog of `resolution`.
     pub citations: Option<&'a ResolvedCitations>,
+    /// Disjoint byte ranges covered by `MATH` nodes, sorted by start. Computed
+    /// once per file so the many rules that must ignore math (`e.g.` inside `$…$`
+    /// is not sentence punctuation, a `-` there is not a dash, …) share one
+    /// membership test ([`RuleContext::in_math`]) instead of each climbing the
+    /// ancestor chain per token. Mirrors the formatter's `expl3_regions` side
+    /// channel: a read-only, precomputed range set derived purely from the tree.
+    math_regions: Vec<TextRange>,
+}
+
+impl<'a> RuleContext<'a> {
+    /// Assemble the context for one file, precomputing the shared math-region
+    /// index. `resolution`/`citations` are `None` when there is no project view.
+    pub fn new(
+        path: &'a Path,
+        root: &'a SyntaxNode,
+        model: &'a SemanticModel,
+        resolution: Option<&'a ResolvedLabels>,
+        citations: Option<&'a ResolvedCitations>,
+    ) -> Self {
+        Self {
+            path,
+            root,
+            model,
+            resolution,
+            citations,
+            math_regions: math_regions(root),
+        }
+    }
+
+    /// Whether byte `offset` falls inside a `MATH` node. `O(log n)` over the
+    /// precomputed disjoint regions — the shared replacement for the ad-hoc
+    /// `parent_ancestors().any(MATH)` climbs the math-sensitive rules used to do.
+    pub fn in_math(&self, offset: usize) -> bool {
+        let offset = TextSize::from(offset as u32);
+        // Find the last region starting at or before `offset`; it is the only one
+        // that can contain it (regions are disjoint and sorted).
+        match self
+            .math_regions
+            .binary_search_by(|r| r.start().cmp(&offset))
+        {
+            Ok(_) => true, // a region starts exactly here
+            Err(0) => false,
+            Err(i) => self.math_regions[i - 1].contains(offset),
+        }
+    }
+}
+
+/// Collect the disjoint byte ranges covered by `MATH` nodes, sorted by start.
+/// Nested/adjacent `MATH` spans are coalesced so [`RuleContext::in_math`] can
+/// binary-search a clean interval set.
+fn math_regions(root: &SyntaxNode) -> Vec<TextRange> {
+    let mut ranges: Vec<TextRange> = root
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::MATH)
+        .map(|node| node.text_range())
+        .collect();
+    ranges.sort_by_key(|r| r.start());
+    let mut merged: Vec<TextRange> = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        match merged.last_mut() {
+            Some(last) if r.start() <= last.end() => {
+                *last = TextRange::new(last.start(), last.end().max(r.end()));
+            }
+            _ => merged.push(r),
+        }
+    }
+    merged
 }
 
 /// A documented example for a rule: a snippet of LaTeX that triggers it.
@@ -168,6 +238,41 @@ pub trait Rule: Send + Sync {
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let _ = (ctx, sink);
     }
+
+    /// An **ordered, stateful** visitor riding the driver's single shared
+    /// traversal, for rules whose finding depends on the *sequence* of elements
+    /// (a running toggle, the previous heading's level, …) that a stateless
+    /// per-element [`check`](Rule::check) cannot carry. Returning `Some` opts the
+    /// rule into the shared walk instead of a private `check_file` re-traversal;
+    /// the default `None` opts out. The driver constructs one visitor per file and
+    /// feeds it every element in document order, then calls
+    /// [`StreamVisitor::finish`].
+    fn stream(&self) -> Option<Box<dyn StreamVisitor>> {
+        None
+    }
+
+    /// Whether this rule can emit an autofix. The `--fix` fixpoint loop runs only
+    /// the fix-emitting rules each round (report-only rules contribute nothing to
+    /// fix), so it must be `true` for every rule that ever sets `Diagnostic::fix`.
+    /// Guarded by `emits_fix_matches_reality` in this module's tests.
+    fn emits_fix(&self) -> bool {
+        false
+    }
+}
+
+/// An ordered, stateful pass driven by the linter's single shared traversal (see
+/// [`Rule::stream`]). Constructed fresh per file, it receives every CST element in
+/// document (preorder) order via [`visit`](StreamVisitor::visit), then a final
+/// [`finish`](StreamVisitor::finish). Findings are pushed onto `sink` with the
+/// path left empty, exactly like [`Rule::check`].
+pub trait StreamVisitor {
+    /// Called once for every element of the shared walk, in document order.
+    fn visit(&mut self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>);
+
+    /// Called once after the walk, for any deferred finding. Default no-op.
+    fn finish(&mut self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let _ = (ctx, sink);
+    }
 }
 
 /// Every built-in rule, in registry order.
@@ -199,6 +304,57 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DuplicatePackage),
         Box::new(MissingProvides),
     ]
+}
+
+/// A prebuilt, shareable view of a rule set: the boxed rules plus the
+/// kind → subscriber dispatch table, computed once. The table is identical for
+/// every file, so `lint_document` borrows a cached registry instead of rebuilding
+/// it per file (the old per-invocation cost, quadratic over a project). Being
+/// `Sync` (rules are `Send + Sync`), one registry is also shared by reference
+/// across the CLI's rayon lint phase.
+pub struct RuleRegistry {
+    /// Every rule in the set, in registry order.
+    pub rules: Vec<Box<dyn Rule>>,
+    /// `by_kind[kind as usize]` lists the indices into `rules` of the node-shape
+    /// rules subscribed to that `SyntaxKind`. Indexed by the `#[repr(u16)]`
+    /// discriminant, so dispatch is an `O(1)` slice index.
+    pub by_kind: Vec<Vec<usize>>,
+    /// Whether any rule subscribed to a node kind (lets the driver skip the walk
+    /// entirely when only whole-file/streaming rules are present).
+    pub any_node_rules: bool,
+}
+
+impl RuleRegistry {
+    fn build(rules: Vec<Box<dyn Rule>>) -> Self {
+        let mut by_kind: Vec<Vec<usize>> = vec![Vec::new(); SyntaxKind::COUNT];
+        let mut any_node_rules = false;
+        for (i, rule) in rules.iter().enumerate() {
+            for kind in rule.interests() {
+                by_kind[*kind as usize].push(i);
+                any_node_rules = true;
+            }
+        }
+        Self {
+            rules,
+            by_kind,
+            any_node_rules,
+        }
+    }
+}
+
+/// The shared registry of every built-in rule, built once on first use.
+pub fn registry() -> &'static RuleRegistry {
+    static REGISTRY: OnceLock<RuleRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| RuleRegistry::build(all_rules()))
+}
+
+/// The registry restricted to fix-emitting rules ([`Rule::emits_fix`]), used by
+/// the `--fix` fixpoint loop so report-only rules aren't recomputed each round.
+pub fn fixable_registry() -> &'static RuleRegistry {
+    static REGISTRY: OnceLock<RuleRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        RuleRegistry::build(all_rules().into_iter().filter(|r| r.emits_fix()).collect())
+    })
 }
 
 /// The ids of every built-in **LaTeX** rule. Kept in lockstep with [`all_rules`].
@@ -312,6 +468,30 @@ mod tests {
     fn registry_and_id_list_agree() {
         let ids: Vec<&str> = all_rules().iter().map(|r| r.id()).collect();
         assert_eq!(ids, ALL_RULE_IDS);
+    }
+
+    // A rule that ever produces an autofix must report `emits_fix()`, or the
+    // `--fix` loop (which runs only `fixable_registry`) would silently skip it.
+    // Lint each rule's own examples (which the docs tests require to trigger) and
+    // assert any produced fix is backed by the flag.
+    #[test]
+    fn emits_fix_matches_reality() {
+        for rule in all_rules() {
+            if rule.emits_fix() {
+                continue;
+            }
+            let path = std::path::Path::new(rule.example_path());
+            for example in rule.examples() {
+                let produced_fix = crate::linter::docs::demo_diagnostics_at(path, example.source)
+                    .iter()
+                    .any(|d| d.rule == rule.id() && d.fix.is_some());
+                assert!(
+                    !produced_fix,
+                    "rule `{}` emits a fix but `emits_fix()` returns false",
+                    rule.id()
+                );
+            }
+        }
     }
 
     #[test]

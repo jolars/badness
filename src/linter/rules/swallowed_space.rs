@@ -63,6 +63,10 @@ impl Rule for SwallowedSpace {
         "swallowed-space"
     }
 
+    fn emits_fix(&self) -> bool {
+        true
+    }
+
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
@@ -90,7 +94,7 @@ impl Rule for SwallowedSpace {
         &[SyntaxKind::COMMAND]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(command) = el.as_node() else {
             return;
         };
@@ -104,10 +108,7 @@ impl Rule for SwallowedSpace {
         }
         // In math the inter-token space is insignificant, so a swallowed space
         // changes nothing visible: stay quiet.
-        if command
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::MATH)
-        {
+        if ctx.in_math(usize::from(command.text_range().start())) {
             return;
         }
         // The `CONTROL_WORD` token is the command's first token; the token
@@ -182,13 +183,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {
             if SwallowedSpace.interests().contains(&el.kind()) {

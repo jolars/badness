@@ -47,10 +47,10 @@ use std::path::PathBuf;
 use crate::ast::{command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::define::{is_definition_command, scan_definitions};
-use crate::semantic::signature;
+use crate::semantic::signature::{self, SignatureDb};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
-use super::{Example, Rule, RuleContext};
+use super::{Example, Rule, RuleContext, StreamVisitor};
 
 const EXAMPLES: &[Example] = &[
     Example {
@@ -94,63 +94,80 @@ impl Rule for MissingRequiredArgument {
         EXAMPLES
     }
 
-    fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        // One per-file pass of the definition scanner gates redefined built-ins;
-        // the walk itself then mirrors the driver's COMMAND dispatch.
-        let user_defs = scan_definitions(ctx.root);
-        for node in ctx.root.descendants() {
-            if node.kind() != SyntaxKind::COMMAND {
-                continue;
-            }
-            let Some(name) = command_name(&node) else {
-                continue;
-            };
-            let Some(sig) = signature::builtin().command(&name) else {
-                continue;
-            };
-            // A verbatim-argument command's final argument is an opaque VERB
-            // token, not a group; its mixed shape is skipped wholesale.
-            if sig.verbatim {
-                continue;
-            }
-            let required = sig.args.iter().filter(|a| a.required).count();
-            if required == 0 {
-                continue;
-            }
-            // The file redefined this name; the built-in arity no longer applies.
-            if user_defs.command(&name).is_some() {
-                continue;
-            }
-            let braced = node
-                .children()
-                .filter(|child| child.kind() == SyntaxKind::GROUP)
-                .count();
-            if braced >= required
-                || in_unsafe_group(&node)
-                || follows_bare_command(&node)
-                || !at_hard_boundary(&node)
-            {
-                continue;
-            }
-            let range = control_word_range(&node).unwrap_or_else(|| node.text_range());
-            let message = match (braced, required) {
-                (0, 1) => format!("`\\{name}` is missing its required argument"),
-                (0, _) => format!("`\\{name}` is missing its {required} required arguments"),
-                _ => format!(
-                    "`\\{name}` is missing {} of its {required} required arguments",
-                    required - braced
-                ),
-            };
-            sink.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
-                path: PathBuf::new(),
-                start: usize::from(range.start()),
-                end: usize::from(range.end()),
-                message,
-                fix: None,
-            });
+    // Streaming rather than node-shape: the redefined-name gate needs the
+    // definition scanner's per-file result, computed once (lazily, on the first
+    // COMMAND) and shared across the rest of the shared walk — instead of the
+    // former separate `descendants()` pass on top of the scanner's own.
+    fn stream(&self) -> Option<Box<dyn StreamVisitor>> {
+        Some(Box::new(MissingRequiredArgumentVisitor { user_defs: None }))
+    }
+}
+
+/// Holds the per-file user-definition signatures (redefined built-ins are
+/// skipped). Scanned once, lazily, the first time a COMMAND is seen.
+struct MissingRequiredArgumentVisitor {
+    user_defs: Option<SignatureDb>,
+}
+
+impl StreamVisitor for MissingRequiredArgumentVisitor {
+    fn visit(&mut self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(node) = el.as_node() else {
+            return;
+        };
+        if node.kind() != SyntaxKind::COMMAND {
+            return;
         }
+        let Some(name) = command_name(node) else {
+            return;
+        };
+        let Some(sig) = signature::builtin().command(&name) else {
+            return;
+        };
+        // A verbatim-argument command's final argument is an opaque VERB token, not
+        // a group; its mixed shape is skipped wholesale.
+        if sig.verbatim {
+            return;
+        }
+        let required = sig.args.iter().filter(|a| a.required).count();
+        if required == 0 {
+            return;
+        }
+        // The file redefined this name; the built-in arity no longer applies.
+        let user_defs = self
+            .user_defs
+            .get_or_insert_with(|| scan_definitions(ctx.root));
+        if user_defs.command(&name).is_some() {
+            return;
+        }
+        let braced = node
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::GROUP)
+            .count();
+        if braced >= required
+            || in_unsafe_group(node)
+            || follows_bare_command(node)
+            || !at_hard_boundary(node)
+        {
+            return;
+        }
+        let range = control_word_range(node).unwrap_or_else(|| node.text_range());
+        let message = match (braced, required) {
+            (0, 1) => format!("`\\{name}` is missing its required argument"),
+            (0, _) => format!("`\\{name}` is missing its {required} required arguments"),
+            _ => format!(
+                "`\\{name}` is missing {} of its {required} required arguments",
+                required - braced
+            ),
+        };
+        sink.push(Diagnostic {
+            rule: "missing-required-argument",
+            severity: Severity::Warning,
+            path: PathBuf::new(),
+            start: usize::from(range.start()),
+            end: usize::from(range.end()),
+            message,
+            fix: None,
+        });
     }
 }
 
@@ -302,15 +319,13 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
-        MissingRequiredArgument.check_file(&ctx, &mut out);
+        let mut visitor = MissingRequiredArgument.stream().expect("streaming rule");
+        for el in root.descendants_with_tokens() {
+            visitor.visit(&el, &ctx, &mut out);
+        }
+        visitor.finish(&ctx, &mut out);
         out
     }
 

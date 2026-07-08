@@ -24,7 +24,7 @@ use badness::formatter::{
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
 };
 use badness::linter::{
-    Diagnostic, OutputMode, RuleSelection, apply_fixes, check_document, lint_document,
+    Diagnostic, OutputMode, RuleSelection, apply_fixes, check_document_fixable, lint_document,
     render_findings,
 };
 use std::collections::HashMap;
@@ -39,7 +39,8 @@ use badness::project::{
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
 use clap::Parser;
-use rowan::NodeOrToken;
+use rayon::prelude::*;
+use rowan::{GreenNode, NodeOrToken};
 use smol_str::SmolStr;
 
 /// Lower the CLI [`WrapArg`] to the formatter's [`WrapMode`]. Kept as a free
@@ -299,6 +300,109 @@ fn run_explain(id: &str) -> ExitCode {
     }
 }
 
+/// Per-file result of the parallel Phase-1 parse+analyze in [`run_lint`]. Carries
+/// only `Send` data across the rayon boundary — a `GreenNode` (Send), never a red
+/// `SyntaxNode` (not Send; AGENTS.md decision #7). The red tree is materialized
+/// thread-locally to extract facts and dropped before returning; Phase 3
+/// re-materializes it from the green node to lint.
+/// Result of reading one discovered source in parallel: its `(path, text, kind)`
+/// on success, or the `(path, error)` to report on failure.
+type ReadResult = Result<(PathBuf, String, FileKind), (PathBuf, std::io::Error)>;
+
+enum FileAnalysis {
+    Bib {
+        diagnostics: Vec<Diagnostic>,
+        path: PathBuf,
+        keys: Vec<SmolStr>,
+    },
+    // Boxed: the `.tex` payload is far larger than the `.bib` one, so an unboxed
+    // variant would bloat every `FileAnalysis` to its size.
+    Tex(Box<TexAnalysis>),
+}
+
+/// The `.tex`/`.sty`/… parse+analyze payload carried by [`FileAnalysis::Tex`].
+struct TexAnalysis {
+    diagnostics: Vec<Diagnostic>,
+    path: PathBuf,
+    green: GreenNode,
+    model: SemanticModel,
+    facts: FileFacts,
+    label_input: (PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool),
+    cite_fact: CiteFileFacts,
+}
+
+/// Parse and analyze one source. Pure and thread-safe (no shared mutable state,
+/// no environment access), so [`run_lint`] maps it over all files with rayon. The
+/// resolver-feeding facts use the same pure helpers the salsa queries do, so CLI
+/// and LSP agree.
+fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
+    match kind {
+        FileKind::Bib => {
+            // Build the model once: it yields both the lint diagnostics and the
+            // cite keys this `.bib` contributes to the citation resolver.
+            let parsed = badness::bib::parse(content);
+            let mut diagnostics: Vec<Diagnostic> = parsed
+                .errors
+                .iter()
+                .map(|err| Diagnostic {
+                    rule: "parse",
+                    severity: badness::linter::Severity::Error,
+                    path: path.to_path_buf(),
+                    start: err.start,
+                    end: err.end,
+                    message: err.message.clone(),
+                    fix: None,
+                })
+                .collect();
+            let root = parsed.syntax();
+            let model = badness::bib::semantic::Model::build(&root);
+            let keys = model.entries().iter().map(|e| e.key.clone()).collect();
+            diagnostics.extend(badness::bib::linter::lint_document(path, &root, &model));
+            FileAnalysis::Bib {
+                diagnostics,
+                path: path.to_path_buf(),
+                keys,
+            }
+        }
+        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            let parsed = parse_with_flavor(content, kind.lex_config());
+            let diagnostics: Vec<Diagnostic> = parsed
+                .errors
+                .iter()
+                .map(|err| Diagnostic::from_parse(path.to_path_buf(), err))
+                .collect();
+            let green = parsed.green;
+            let root = SyntaxNode::new_root(green.clone());
+            let model = SemanticModel::build(&root);
+            let facts = FileFacts {
+                path: path.to_path_buf(),
+                include_edges: collect_include_edge_keys(&root, path.parent()),
+            };
+            let label_input = (
+                path.to_path_buf(),
+                document_label_names(&model),
+                document_ref_names(&model),
+                is_document_root(&root),
+            );
+            let cite_fact = CiteFileFacts {
+                path: path.to_path_buf(),
+                bib_targets: collect_bib_resource_targets(&root, path.parent()),
+                nocite_all: model.has_wildcard_nocite(),
+                is_document_root: is_document_root(&root),
+            };
+            FileAnalysis::Tex(Box::new(TexAnalysis {
+                diagnostics,
+                path: path.to_path_buf(),
+                green,
+                model,
+                facts,
+                label_input,
+                cite_fact,
+            }))
+        }
+    }
+}
+
 /// Lint each path (or stdin), rendering parse diagnostics. Exits non-zero if
 /// any diagnostics are reported or any file fails to read. With `fix`, safe
 /// autofixes (plus unsafe ones when `unsafe_fixes` is set) are applied in place
@@ -352,10 +456,20 @@ fn run_lint(
             );
             return ExitCode::FAILURE;
         }
-        for (path, kind) in files {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => sources.push((path, content, kind)),
-                Err(err) => {
+        // Read every file in parallel (IO-bound; the OS serves many opens at once).
+        // Order-preserving collect keeps `sources` in the discovered (sorted) order,
+        // then a serial fold reports read failures deterministically.
+        let read_results: Vec<ReadResult> = files
+            .par_iter()
+            .map(|(path, kind)| match std::fs::read_to_string(path) {
+                Ok(content) => Ok((path.clone(), content, *kind)),
+                Err(err) => Err((path.clone(), err)),
+            })
+            .collect();
+        for result in read_results {
+            match result {
+                Ok(source) => sources.push(source),
+                Err((path, err)) => {
                     eprintln!("badness: cannot read {}: {err}", path.display());
                     failed = true;
                 }
@@ -372,78 +486,75 @@ fn run_lint(
     // *same* pure helpers the salsa
     // queries do (`document_label_names`, `is_document_root`,
     // `collect_include_edge_keys`, `ResolvedLabels::build`), so CLI and LSP agree.
+    // Phase 1 — parse + analyze every source in parallel. Each task is pure and
+    // returns only `Send` data (`analyze_source`); rayon preserves input order in
+    // the collected Vec, so folding it below is deterministic.
+    let analyses: Vec<FileAnalysis> = sources
+        .par_iter()
+        .map(|(path, content, kind)| analyze_source(path, content, *kind))
+        .collect();
+
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
-    let mut analyzed: Vec<(&PathBuf, SyntaxNode, SemanticModel)> = Vec::new();
+    let mut analyzed: Vec<(PathBuf, GreenNode, SemanticModel)> = Vec::new();
     let mut facts: Vec<FileFacts> = Vec::new();
     let mut label_inputs = Vec::new();
     let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
     // Cite keys per analyzed `.bib` path, feeding the cross-file citation resolver.
     let mut bib_keys: HashMap<PathBuf, Vec<SmolStr>> = HashMap::new();
-    for (path, content, kind) in &sources {
-        match kind {
-            FileKind::Bib => {
-                // Build the model once: it yields both the lint diagnostics and the
-                // cite keys this `.bib` contributes to the citation resolver.
-                let parsed = badness::bib::parse(content);
-                diagnostics.extend(parsed.errors.iter().map(|err| Diagnostic {
-                    rule: "parse",
-                    severity: badness::linter::Severity::Error,
-                    path: path.clone(),
-                    start: err.start,
-                    end: err.end,
-                    message: err.message.clone(),
-                    fix: None,
-                }));
-                let root = parsed.syntax();
-                let model = badness::bib::semantic::Model::build(&root);
-                bib_keys.insert(
-                    path.clone(),
-                    model.entries().iter().map(|e| e.key.clone()).collect(),
-                );
-                diagnostics.extend(badness::bib::linter::lint_document(path, &root, &model));
+    for analysis in analyses {
+        match analysis {
+            FileAnalysis::Bib {
+                diagnostics: d,
+                path,
+                keys,
+            } => {
+                diagnostics.extend(d);
+                bib_keys.insert(path, keys);
             }
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                let parsed = parse_with_flavor(content, kind.lex_config());
-                diagnostics.extend(
-                    parsed
-                        .errors
-                        .iter()
-                        .map(|err| Diagnostic::from_parse(path.clone(), err)),
-                );
-                let root = SyntaxNode::new_root(parsed.green);
-                let model = SemanticModel::build(&root);
-                facts.push(FileFacts {
-                    path: path.clone(),
-                    include_edges: collect_include_edge_keys(&root, path.parent()),
-                });
-                label_inputs.push((
-                    path.clone(),
-                    document_label_names(&model),
-                    document_ref_names(&model),
-                    is_document_root(&root),
-                ));
-                cite_facts.push(CiteFileFacts {
-                    path: path.clone(),
-                    bib_targets: collect_bib_resource_targets(&root, path.parent()),
-                    nocite_all: model.has_wildcard_nocite(),
-                    is_document_root: is_document_root(&root),
-                });
-                analyzed.push((path, root, model));
+            FileAnalysis::Tex(tex) => {
+                let TexAnalysis {
+                    diagnostics: d,
+                    path,
+                    green,
+                    model,
+                    facts: f,
+                    label_input,
+                    cite_fact,
+                } = *tex;
+                diagnostics.extend(d);
+                facts.push(f);
+                label_inputs.push(label_input);
+                cite_facts.push(cite_fact);
+                analyzed.push((path, green, model));
             }
         }
     }
 
+    // Phase 2 — cross-file resolution: a serial barrier (needs the whole analyzed
+    // set) over the collected facts. Pure graph work, no re-parsing.
     let graph = IncludeGraph::build(&facts, None);
     let resolved = ResolvedLabels::build(&label_inputs, &graph);
     let resolved_citations = ResolvedCitations::build(&cite_facts, &graph, &bib_keys);
-    for (path, root, model) in &analyzed {
-        diagnostics.extend(lint_document(
-            path,
-            root,
-            model,
-            Some(&resolved),
-            Some(&resolved_citations),
-        ));
+
+    // Phase 3 — lint every analyzed file in parallel, sharing the resolution by
+    // reference. The red tree is materialized thread-locally from each green node
+    // (red trees are not `Send`). Order-preserving collect keeps output stable;
+    // the final sort below makes it fully deterministic regardless.
+    let lint_results: Vec<Vec<Diagnostic>> = analyzed
+        .par_iter()
+        .map(|(path, green, model)| {
+            let root = SyntaxNode::new_root(green.clone());
+            lint_document(
+                path,
+                &root,
+                model,
+                Some(&resolved),
+                Some(&resolved_citations),
+            )
+        })
+        .collect();
+    for result in lint_results {
+        diagnostics.extend(result);
     }
 
     // Drop findings from rules the config/CLI deselected. Parse diagnostics
@@ -461,12 +572,13 @@ fn run_lint(
     });
 
     if !diagnostics.is_empty() {
-        let source_for = |path: &Path| {
-            sources
-                .iter()
-                .find(|(p, _, _)| p == path)
-                .map(|(_, text, _)| text.clone())
-        };
+        // Index sources by path so the renderer's per-file source lookup is O(1),
+        // not a linear scan of every source (quadratic over a large project).
+        let source_index: HashMap<&Path, &str> = sources
+            .iter()
+            .map(|(p, text, _)| (p.as_path(), text.as_str()))
+            .collect();
+        let source_for = |path: &Path| source_index.get(path).map(|s| s.to_string());
         eprint!(
             "{}",
             render_findings(&diagnostics, OutputMode::Pretty, &source_for)
@@ -533,7 +645,10 @@ fn fix_file(
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
             FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                check_document(path, &content, kind.lex_config())
+                // Fixpoint loop: only fix-emitting rules can change anything, so run
+                // just those each round (report-only rules are surfaced later by the
+                // reporting pass).
+                check_document_fixable(path, &content, kind.lex_config())
             }
             FileKind::Bib => badness::bib::linter::check_document(path, &content),
         };

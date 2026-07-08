@@ -56,6 +56,10 @@ impl Rule for DashLength {
         "dash-length"
     }
 
+    fn emits_fix(&self) -> bool {
+        true
+    }
+
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
@@ -86,7 +90,7 @@ impl Rule for DashLength {
         &[SyntaxKind::WORD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(tok) = el.as_token() else {
             return;
         };
@@ -96,10 +100,7 @@ impl Rule for DashLength {
             return;
         }
         // A `-` in math is a minus, not a dash; leave it alone.
-        if tok
-            .parent_ancestors()
-            .any(|node| node.kind() == SyntaxKind::MATH)
-        {
+        if ctx.in_math(usize::from(tok.text_range().start())) {
             return;
         }
         let Some((run_start, run_end)) = lone_internal_dash_run(text) else {
@@ -216,13 +217,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {
             if DashLength.interests().contains(&el.kind()) {

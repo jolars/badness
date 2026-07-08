@@ -54,6 +54,10 @@ impl Rule for TimesVariable {
         "times-variable"
     }
 
+    fn emits_fix(&self) -> bool {
+        true
+    }
+
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
@@ -80,7 +84,7 @@ impl Rule for TimesVariable {
         &[SyntaxKind::WORD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(tok) = el.as_token() else {
             return;
         };
@@ -95,9 +99,7 @@ impl Rule for TimesVariable {
         // `\times` is only valid in math mode; wrap it in inline math otherwise so
         // the fixed text still compiles. Both are a single contiguous splice, so
         // the result re-parses and stays lossless.
-        let in_math = tok
-            .parent_ancestors()
-            .any(|node| node.kind() == SyntaxKind::MATH);
+        let in_math = ctx.in_math(base);
         let content = if in_math { "\\times" } else { "$\\times$" };
 
         sink.push(Diagnostic {
@@ -156,13 +158,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {
             if TimesVariable.interests().contains(&el.kind()) {

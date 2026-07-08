@@ -46,6 +46,10 @@ impl Rule for StraightQuotes {
         "straight-quotes"
     }
 
+    fn emits_fix(&self) -> bool {
+        true
+    }
+
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
@@ -72,7 +76,7 @@ impl Rule for StraightQuotes {
         &[SyntaxKind::WORD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(tok) = el.as_token() else {
             return;
         };
@@ -82,10 +86,7 @@ impl Rule for StraightQuotes {
             return;
         }
         // A straight `"` in math is not a quotation mark; leave it alone.
-        if tok
-            .parent_ancestors()
-            .any(|node| node.kind() == SyntaxKind::MATH)
-        {
+        if ctx.in_math(usize::from(tok.text_range().start())) {
             return;
         }
         let base = usize::from(tok.text_range().start());
@@ -149,13 +150,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {
             if StraightQuotes.interests().contains(&el.kind()) {

@@ -34,6 +34,7 @@ log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.8"
 lsp-types = "0.97"
 phf = "0.14"
+rayon = "1.10"
 rowan = "0.16.1"
 salsa = "0.27.0"
 serde = { version = "1", features = ["derive"] }

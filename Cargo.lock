@@ -109,6 +109,7 @@ dependencies = [
  "parser",
  "phf",
  "phf_codegen",
+ "rayon",
  "rowan",
  "salsa",
  "serde",

@@ -50,6 +50,10 @@ impl Rule for Ellipsis {
         "ellipsis"
     }
 
+    fn emits_fix(&self) -> bool {
+        true
+    }
+
     fn default_severity(&self) -> Severity {
         Severity::Warning
     }
@@ -75,7 +79,7 @@ impl Rule for Ellipsis {
         &[SyntaxKind::WORD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(tok) = el.as_token() else {
             return;
         };
@@ -84,10 +88,8 @@ impl Rule for Ellipsis {
         if !text.contains("...") {
             return;
         }
-        let in_math = tok
-            .parent_ancestors()
-            .any(|node| node.kind() == SyntaxKind::MATH);
         let base = usize::from(tok.text_range().start());
+        let in_math = ctx.in_math(base);
         let bytes = text.as_bytes();
 
         let mut i = 0;
@@ -211,13 +213,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {
             if Ellipsis.interests().contains(&el.kind()) {

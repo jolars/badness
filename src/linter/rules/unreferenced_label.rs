@@ -123,13 +123,7 @@ mod tests {
     fn findings(src: &str, resolution: Option<&ResolvedLabels>) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new(DOC),
-            root: &root,
-            model: &model,
-            resolution,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new(DOC), &root, &model, resolution, None);
         let mut out = Vec::new();
         UnreferencedLabel.check_file(&ctx, &mut out);
         out

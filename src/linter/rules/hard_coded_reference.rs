@@ -104,7 +104,7 @@ impl Rule for HardCodedReference {
         &[SyntaxKind::WORD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(word) = el.as_token() else {
             return;
         };
@@ -114,10 +114,7 @@ impl Rule for HardCodedReference {
         }
         // A `.` in math is not sentence punctuation, and a reference word there is
         // not prose; skip math entirely.
-        if word
-            .parent_ancestors()
-            .any(|node| node.kind() == SyntaxKind::MATH)
-        {
+        if ctx.in_math(usize::from(word.text_range().start())) {
             return;
         }
         // The separator between the word and the number: either a tie `~`, or a
@@ -208,13 +205,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         for el in root.descendants_with_tokens() {
             if HardCodedReference.interests().contains(&el.kind()) {

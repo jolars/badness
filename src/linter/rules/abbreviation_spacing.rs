@@ -45,9 +45,9 @@
 use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::syntax::{SyntaxKind, SyntaxToken};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
-use super::{Example, Rule, RuleContext};
+use super::{Example, Rule, RuleContext, StreamVisitor};
 
 const EXAMPLES: &[Example] = &[
     Example {
@@ -97,64 +97,76 @@ impl Rule for AbbreviationSpacing {
         EXAMPLES
     }
 
-    // Whole-file: the finding depends on the running `\frenchspacing` toggle, not
-    // just the local word, so we walk in document order tracking it.
-    fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        let mut french = false;
-        for el in ctx.root.descendants_with_tokens() {
-            let Some(tok) = el.as_token() else {
-                continue;
-            };
-            match tok.kind() {
-                SyntaxKind::CONTROL_WORD => match tok.text() {
-                    "\\frenchspacing" => french = true,
-                    "\\nonfrenchspacing" => french = false,
-                    _ => {}
-                },
-                SyntaxKind::WORD if !french => {
-                    // A `.` in math is not sentence punctuation; skip.
-                    if tok
-                        .parent_ancestors()
-                        .any(|node| node.kind() == SyntaxKind::MATH)
-                    {
-                        continue;
-                    }
-                    self.check_word(tok, sink);
-                }
+    // Streaming rather than node-shape: the finding depends on the running
+    // `\frenchspacing` toggle, not just the local word, so we track it across the
+    // driver's one shared walk in document order.
+    fn stream(&self) -> Option<Box<dyn StreamVisitor>> {
+        Some(Box::new(AbbreviationSpacingVisitor { french: false }))
+    }
+
+    fn emits_fix(&self) -> bool {
+        true
+    }
+}
+
+/// Carries the `\frenchspacing` toggle across the shared walk; the rule stays
+/// silent between a `\frenchspacing` and the next `\nonfrenchspacing`.
+struct AbbreviationSpacingVisitor {
+    french: bool,
+}
+
+impl StreamVisitor for AbbreviationSpacingVisitor {
+    fn visit(&mut self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(tok) = el.as_token() else {
+            return;
+        };
+        match tok.kind() {
+            SyntaxKind::CONTROL_WORD => match tok.text() {
+                "\\frenchspacing" => self.french = true,
+                "\\nonfrenchspacing" => self.french = false,
                 _ => {}
+            },
+            SyntaxKind::WORD if !self.french => {
+                // A `.` in math is not sentence punctuation; skip.
+                if ctx.in_math(usize::from(tok.text_range().start())) {
+                    return;
+                }
+                check_word(tok, sink);
             }
+            _ => {}
         }
     }
 }
 
-impl AbbreviationSpacing {
-    fn check_word(&self, word: &SyntaxToken, sink: &mut Vec<Diagnostic>) {
-        let text = word.text();
-        let base = usize::from(word.text_range().start());
+/// Flag the two mis-spacing shapes on a single `WORD` token (see the module doc).
+/// Free-standing so the streaming visitor can call it without a rule instance.
+fn check_word(word: &SyntaxToken, sink: &mut Vec<Diagnostic>) {
+    let text = word.text();
+    let base = usize::from(word.text_range().start());
 
-        // --- Interword after a lowercase abbreviation (ChkTeX 12). ---
-        if let Some(abbrev) = matched_interword_abbrev(word)
-            && let Some(ws) = word.next_token()
-            && ws.kind() == SyntaxKind::WHITESPACE
-            && ws
-                .next_token()
-                .is_some_and(|next| starts_with_ascii_lower(&next))
-        {
-            let start = usize::from(ws.text_range().start());
-            let end = usize::from(ws.text_range().end());
-            // Replace the (possibly multi-space) gap with a single `\ ` interword
-            // space. Correct by construction (tenet 1): `\ ` is a valid space here,
-            // the splice is contiguous, so the result parses and stays lossless.
-            // Unsafe because it changes the typeset spacing.
-            let fix = Fix::unsafe_(
-                start,
-                end,
-                "\\ ",
-                format!("Replace the space after `{abbrev}` with an interword space `\\ `"),
-            );
-            sink.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
+    // --- Interword after a lowercase abbreviation (ChkTeX 12). ---
+    if let Some(abbrev) = matched_interword_abbrev(word)
+        && let Some(ws) = word.next_token()
+        && ws.kind() == SyntaxKind::WHITESPACE
+        && ws
+            .next_token()
+            .is_some_and(|next| starts_with_ascii_lower(&next))
+    {
+        let start = usize::from(ws.text_range().start());
+        let end = usize::from(ws.text_range().end());
+        // Replace the (possibly multi-space) gap with a single `\ ` interword
+        // space. Correct by construction (tenet 1): `\ ` is a valid space here,
+        // the splice is contiguous, so the result parses and stays lossless.
+        // Unsafe because it changes the typeset spacing.
+        let fix = Fix::unsafe_(
+            start,
+            end,
+            "\\ ",
+            format!("Replace the space after `{abbrev}` with an interword space `\\ `"),
+        );
+        sink.push(Diagnostic {
+                rule: "abbreviation-spacing",
+                severity: Severity::Warning,
                 path: PathBuf::new(),
                 start,
                 end,
@@ -163,34 +175,34 @@ impl AbbreviationSpacing {
                 ),
                 fix: Some(fix),
             });
-            return;
-        }
+        return;
+    }
 
-        // --- Intersentence after an uppercase acronym (ChkTeX 13). ---
-        if ends_with_acronym_punct(text)
-            && let Some(ws) = word.next_token()
-            && ws.kind() == SyntaxKind::WHITESPACE
-            && ws
-                .next_token()
-                .is_some_and(|next| starts_with_ascii_upper(&next))
-        {
-            // The punctuation is the final ASCII byte of the word; `\@` goes
-            // immediately before it.
-            let punct = base + text.len() - 1;
-            let start = punct;
-            let end = base + text.len();
-            // Zero-width insertion of `\@` before the period. Correct by
-            // construction (tenet 1): `\@` is valid before the punctuation, so the
-            // result parses and stays lossless. Unsafe because it changes spacing.
-            let fix = Fix::unsafe_(
-                punct,
-                punct,
-                "\\@",
-                "Insert `\\@` before the sentence-ending punctuation so TeX widens the gap",
-            );
-            sink.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
+    // --- Intersentence after an uppercase acronym (ChkTeX 13). ---
+    if ends_with_acronym_punct(text)
+        && let Some(ws) = word.next_token()
+        && ws.kind() == SyntaxKind::WHITESPACE
+        && ws
+            .next_token()
+            .is_some_and(|next| starts_with_ascii_upper(&next))
+    {
+        // The punctuation is the final ASCII byte of the word; `\@` goes
+        // immediately before it.
+        let punct = base + text.len() - 1;
+        let start = punct;
+        let end = base + text.len();
+        // Zero-width insertion of `\@` before the period. Correct by
+        // construction (tenet 1): `\@` is valid before the punctuation, so the
+        // result parses and stays lossless. Unsafe because it changes spacing.
+        let fix = Fix::unsafe_(
+            punct,
+            punct,
+            "\\@",
+            "Insert `\\@` before the sentence-ending punctuation so TeX widens the gap",
+        );
+        sink.push(Diagnostic {
+                rule: "abbreviation-spacing",
+                severity: Severity::Warning,
                 path: PathBuf::new(),
                 start,
                 end,
@@ -199,7 +211,6 @@ impl AbbreviationSpacing {
                         .to_owned(),
                 fix: Some(fix),
             });
-        }
     }
 }
 
@@ -296,15 +307,13 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
-        AbbreviationSpacing.check_file(&ctx, &mut out);
+        let mut visitor = AbbreviationSpacing.stream().expect("streaming rule");
+        for el in root.descendants_with_tokens() {
+            visitor.visit(&el, &ctx, &mut out);
+        }
+        visitor.finish(&ctx, &mut out);
         out
     }
 

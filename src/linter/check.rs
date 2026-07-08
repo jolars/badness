@@ -7,10 +7,10 @@ use std::path::Path;
 use crate::parser::{LexConfig, parse_with_flavor};
 use crate::project::{ResolvedCitations, ResolvedLabels};
 use crate::semantic::SemanticModel;
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::SyntaxNode;
 
 use super::diagnostic::Diagnostic;
-use super::rules::{RuleContext, all_rules};
+use super::rules::{RuleContext, RuleRegistry, StreamVisitor, fixable_registry, registry};
 use super::suppression::SuppressionMap;
 
 /// Parse and lint a single file's `text` from scratch, returning its parse
@@ -36,6 +36,21 @@ pub fn check_document(path: &Path, text: &str, config: impl Into<LexConfig>) -> 
     diagnostics
 }
 
+/// Like [`check_document`] but running only the fix-emitting rules
+/// ([`fixable_registry`]). The `--fix` fixpoint loop re-lints after each round;
+/// report-only rules can produce no fix, so running them every round is wasted
+/// work. Their findings are surfaced once by the reporting pass that follows.
+pub fn check_document_fixable(
+    path: &Path,
+    text: &str,
+    config: impl Into<LexConfig>,
+) -> Vec<Diagnostic> {
+    let parsed = parse_with_flavor(text, config);
+    let root = SyntaxNode::new_root(parsed.green);
+    let model = SemanticModel::build(&root);
+    lint_with(fixable_registry(), path, &root, &model, None, None)
+}
+
 /// Run all built-in rules against `root`/`model`, returning the surviving
 /// diagnostics (suppressed ones removed, `path` stamped, sorted by position).
 ///
@@ -53,41 +68,48 @@ pub fn lint_document(
     resolution: Option<&ResolvedLabels>,
     citations: Option<&ResolvedCitations>,
 ) -> Vec<Diagnostic> {
-    let ctx = RuleContext {
-        path,
-        root,
-        model,
-        resolution,
-        citations,
-    };
-    let rules = all_rules();
+    lint_with(registry(), path, root, model, resolution, citations)
+}
+
+/// The shared driver, generic over which [`RuleRegistry`] to run — the full set
+/// ([`registry`]) for reporting, or the fix-emitting subset ([`fixable_registry`])
+/// for the `--fix` loop. Borrowing a cached registry means the dispatch table is
+/// built once, not once per file (nor once per project file).
+fn lint_with(
+    reg: &RuleRegistry,
+    path: &Path,
+    root: &SyntaxNode,
+    model: &SemanticModel,
+    resolution: Option<&ResolvedLabels>,
+    citations: Option<&ResolvedCitations>,
+) -> Vec<Diagnostic> {
+    let ctx = RuleContext::new(path, root, model, resolution, citations);
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
-    // Build the node-dispatch table: kind discriminant -> indices of subscribed
-    // rules. `SyntaxKind` is a contiguous `#[repr(u16)]`, so a flat Vec indexed by
-    // `kind as usize` beats a hash map.
-    let mut by_kind: Vec<Vec<usize>> = vec![Vec::new(); SyntaxKind::COUNT];
-    let mut any_node_rules = false;
-    for (i, rule) in rules.iter().enumerate() {
-        for kind in rule.interests() {
-            by_kind[*kind as usize].push(i);
-            any_node_rules = true;
-        }
-    }
+    // Per-file stateful visitors that ride the one shared walk instead of each
+    // re-traversing the tree (see `Rule::stream`). Cheap to construct (a handful).
+    let mut visitors: Vec<Box<dyn StreamVisitor>> =
+        reg.rules.iter().filter_map(|r| r.stream()).collect();
 
-    // Single shared traversal feeding every node-shape rule. Visits tokens too
-    // (`descendants_with_tokens`) so token-level rules can subscribe to e.g.
-    // `COMMENT` or `WORD`.
-    if any_node_rules {
+    // Single shared traversal feeding every node-shape rule and every streaming
+    // visitor. Visits tokens too (`descendants_with_tokens`) so token-level rules
+    // can subscribe to e.g. `COMMENT` or `WORD`.
+    if reg.any_node_rules || !visitors.is_empty() {
         for el in root.descendants_with_tokens() {
-            for &i in &by_kind[el.kind() as usize] {
-                rules[i].check(&el, &ctx, &mut diagnostics);
+            for &i in &reg.by_kind[el.kind() as usize] {
+                reg.rules[i].check(&el, &ctx, &mut diagnostics);
+            }
+            for v in &mut visitors {
+                v.visit(&el, &ctx, &mut diagnostics);
             }
         }
     }
+    for v in &mut visitors {
+        v.finish(&ctx, &mut diagnostics);
+    }
 
     // Whole-file pass for model-/resolution-driven rules.
-    for rule in &rules {
+    for rule in &reg.rules {
         rule.check_file(&ctx, &mut diagnostics);
     }
 

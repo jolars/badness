@@ -33,9 +33,9 @@ use std::path::PathBuf;
 use crate::ast::{command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::signature;
-use crate::syntax::SyntaxKind;
+use crate::syntax::{SyntaxElement, SyntaxKind};
 
-use super::{Example, Rule, RuleContext};
+use super::{Example, Rule, RuleContext, StreamVisitor};
 
 /// The standard sectioning ladder, indexed by level (`\part` = 0 …
 /// `\subparagraph` = 6), matching `data/signatures.json`'s `sectioning` values.
@@ -87,47 +87,59 @@ impl Rule for SectioningLevelJump {
         EXAMPLES
     }
 
-    fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        // Walk COMMAND nodes in document (preorder) order, tracking the level of
-        // the immediately preceding heading. A heading deeper than `prev + 1`
-        // skipped at least one rung of the ladder.
-        let mut prev_level: Option<u8> = None;
-        for node in ctx.root.descendants() {
-            if node.kind() != SyntaxKind::COMMAND {
-                continue;
-            }
-            let Some(name) = command_name(&node) else {
-                continue;
-            };
-            let Some(level) = signature::builtin()
-                .command(&name)
-                .and_then(|c| c.sectioning)
-            else {
-                continue;
-            };
-            if let Some(prev) = prev_level
-                && level > prev + 1
-            {
-                // The nearest missing rung; `prev + 1 <= level <= 6`, so the index
-                // is in range.
-                let expected = LEVEL_NAMES[(prev + 1) as usize];
-                let previous = LEVEL_NAMES[prev as usize];
-                let range = control_word_range(&node).unwrap_or_else(|| node.text_range());
-                sink.push(Diagnostic {
-                    rule: self.id(),
-                    severity: self.default_severity(),
-                    path: PathBuf::new(),
-                    start: usize::from(range.start()),
-                    end: usize::from(range.end()),
-                    message: format!(
-                        "`\\{name}` skips a sectioning level after `\\{previous}` \
-                         (expected `\\{expected}`)"
-                    ),
-                    fix: None,
-                });
-            }
-            prev_level = Some(level);
+    // Streaming rather than node-shape: the finding depends on the *sequence* of
+    // headings in document order (the previous heading's level), which a stateless
+    // per-element `check` cannot track. Rides the driver's one shared walk.
+    fn stream(&self) -> Option<Box<dyn StreamVisitor>> {
+        Some(Box::new(SectioningLevelJumpVisitor { prev_level: None }))
+    }
+}
+
+/// Tracks the level of the immediately preceding heading across the shared walk;
+/// a heading deeper than `prev + 1` skipped at least one rung of the ladder.
+struct SectioningLevelJumpVisitor {
+    prev_level: Option<u8>,
+}
+
+impl StreamVisitor for SectioningLevelJumpVisitor {
+    fn visit(&mut self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+        let Some(node) = el.as_node() else {
+            return;
+        };
+        if node.kind() != SyntaxKind::COMMAND {
+            return;
         }
+        let Some(name) = command_name(node) else {
+            return;
+        };
+        let Some(level) = signature::builtin()
+            .command(&name)
+            .and_then(|c| c.sectioning)
+        else {
+            return;
+        };
+        if let Some(prev) = self.prev_level
+            && level > prev + 1
+        {
+            // The nearest missing rung; `prev + 1 <= level <= 6`, so the index is
+            // in range.
+            let expected = LEVEL_NAMES[(prev + 1) as usize];
+            let previous = LEVEL_NAMES[prev as usize];
+            let range = control_word_range(node).unwrap_or_else(|| node.text_range());
+            sink.push(Diagnostic {
+                rule: "sectioning-level-jump",
+                severity: Severity::Warning,
+                path: PathBuf::new(),
+                start: usize::from(range.start()),
+                end: usize::from(range.end()),
+                message: format!(
+                    "`\\{name}` skips a sectioning level after `\\{previous}` \
+                     (expected `\\{expected}`)"
+                ),
+                fix: None,
+            });
+        }
+        self.prev_level = Some(level);
     }
 }
 
@@ -141,15 +153,13 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
-        SectioningLevelJump.check_file(&ctx, &mut out);
+        let mut visitor = SectioningLevelJump.stream().expect("streaming rule");
+        for el in root.descendants_with_tokens() {
+            visitor.visit(&el, &ctx, &mut out);
+        }
+        visitor.finish(&ctx, &mut out);
         out
     }
 

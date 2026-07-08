@@ -109,13 +109,7 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new("x.tex"),
-            root: &root,
-            model: &model,
-            resolution: None,
-            citations: None,
-        };
+        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
         let mut out = Vec::new();
         DuplicateLabel.check_file(&ctx, &mut out);
         out
@@ -199,13 +193,13 @@ mod tests {
     fn cross_findings(src: &str, path: &str, resolution: &ResolvedLabels) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext {
-            path: std::path::Path::new(path),
-            root: &root,
-            model: &model,
-            resolution: Some(resolution),
-            citations: None,
-        };
+        let ctx = RuleContext::new(
+            std::path::Path::new(path),
+            &root,
+            &model,
+            Some(resolution),
+            None,
+        );
         let mut out = Vec::new();
         DuplicateLabel.check_file(&ctx, &mut out);
         out

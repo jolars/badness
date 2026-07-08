@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.7.0](https://github.com/jolars/badness/compare/v0.6.0...v0.7.0) (2026-07-08)
+
+### Features
+- **lsp:** selection ranges from CST hierarchy ([`2aff55f`](https://github.com/jolars/badness/commit/2aff55f151c5b4b593b62dfa9e3f817ea5602db0))
+- **formatter:** column-spec-aware table alignment ([`9ab94ba`](https://github.com/jolars/badness/commit/9ab94ba19ce8c34f13cff42dd248d78a570961c0))
+- **linter:** package-aware duplicate and provides lints ([`758fac3`](https://github.com/jolars/badness/commit/758fac39180017423444d2ba57ca9d38031734b4))
+- **semantic:** recognize package metadata and options ([`0cd95ce`](https://github.com/jolars/badness/commit/0cd95ce51a58c87a19b6c9564d2e6eea3307f476))
+- **lsp:** color and TikZ/PGF library completion ([`1a881f3`](https://github.com/jolars/badness/commit/1a881f33a598be78e6e196ac53733c2b584bcbed))
+- **lint:** add unreferenced-label rule ([`4d975a1`](https://github.com/jolars/badness/commit/4d975a1560b8a67b6befb505f1470657f30dee30))
+- **lint:** add verbatim-trailing-text rule ([`a11358d`](https://github.com/jolars/badness/commit/a11358dff3bcd09b2d27c8ae373bd6e190dc1aa5))
+- **lint:** flag line-break tie in missing-nonbreaking-space ([`de2d51f`](https://github.com/jolars/badness/commit/de2d51fb1db7d0c53d6f868cec13bff51f4df6c7))
+- **lint:** autofix obsolete-environment eqnarray to align ([`aa26b13`](https://github.com/jolars/badness/commit/aa26b138e3f19a83f42541401de20d4b1bf1690e))
+- **lint:** add missing-required-argument rule ([`5206ee6`](https://github.com/jolars/badness/commit/5206ee66e6b683b371c0fc670440bb981e92ceec))
+- **lsp:** references, rename, goto-def for user macros ([`fdeb0e9`](https://github.com/jolars/badness/commit/fdeb0e9b3f2c35076656b61b1022b7ffcf7865ab))
+- **lsp:** negotiate client capabilities at initialize ([`36b6ed2`](https://github.com/jolars/badness/commit/36b6ed29d40f61839ccc43ec8f5657a10d27b50d))
+- **lsp:** change-environment refactor command ([`1f27fab`](https://github.com/jolars/badness/commit/1f27fab4ccc37022555588dac39fe56566afefb7))
+- **lsp:** glossary/acronym key completion ([`f73f138`](https://github.com/jolars/badness/commit/f73f138c46fbb8982aa580528114be70e28f2c75))
+- **lsp:** signature help for command arguments ([`0c5f649`](https://github.com/jolars/badness/commit/0c5f6491d7b377db7e04da2daacbbaa8476c5b75))
+- **lsp:** label hover and symbol numbers from `.aux` ([`3efb7aa`](https://github.com/jolars/badness/commit/3efb7aa4d7afc64ecb3ba340097d3f78997062ce))
+- **semantic:** classify what a `\label` labels ([`01a8b0b`](https://github.com/jolars/badness/commit/01a8b0b76b408c5d0da48a75dfeedb67a1bf8697))
+- **project:** scan `.aux` for label numbers and toc ([`ed48898`](https://github.com/jolars/badness/commit/ed4889826dd9be877a8eef425060c3186b5e9f82))
+- **config:** add `[build]` section with `aux-dir` ([`ad8cc8a`](https://github.com/jolars/badness/commit/ad8cc8a80bc8932feb01844616f776aec273afa7))
+- **lsp:** go-to-definition for include/package file arguments ([`99927ea`](https://github.com/jolars/badness/commit/99927ea832d901f4c8810f0611cd4350e3871bea))
+- **lsp:** resolve packages via TEXMF index and CTAN metadata ([`24ba5c7`](https://github.com/jolars/badness/commit/24ba5c73c955544471a29553a97f91695b0ae48a))
+
+### Bug Fixes
+- **bib:** tighten title-capitalization camelCase heuristic ([`91de065`](https://github.com/jolars/badness/commit/91de06585001800aab0bf3ff2b91b3e126e7c244))
+- **ci:** rename aux.rs, allow option-ext MPL-2.0 ([`cc1c834`](https://github.com/jolars/badness/commit/cc1c8348058f6b1856af98874e1d77163c12f882))
+
+### Performance Improvements
+- **formatter:** parallelize the CLI format paths ([`d38b4d6`](https://github.com/jolars/badness/commit/d38b4d6bc2b2899a25b0b5ad970895b438d5e9da))
+- **linter:** cache registry, stream rewalkers, parallelize CLI ([`5c3813a`](https://github.com/jolars/badness/commit/5c3813a298d4c2c3e1e9771b806385c5be6d6a74))
+- **signature:** bake CTAN metadata via phf, not runtime parse ([`f635d23`](https://github.com/jolars/badness/commit/f635d23f215516269485b9fbfc73a289e84c0317))
+
 ## [0.6.0](https://github.com/jolars/badness/compare/v0.5.0...v0.6.0) (2026-07-06)
 
 ### Features

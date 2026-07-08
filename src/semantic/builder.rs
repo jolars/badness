@@ -16,6 +16,7 @@ use crate::semantic::label::{
     CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelRef,
     RefCommand,
 };
+use crate::semantic::pkgmeta;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 pub fn build(root: &SyntaxNode) -> SemanticModel {
@@ -102,6 +103,24 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                     });
                 }
             }
+        } else if pkgmeta::provides_kind(&name).is_some() {
+            // Package/class self-identification — first `\Provides…` wins (a file
+            // identifies itself once).
+            if model.provides.is_none()
+                && let Some(decl) = pkgmeta::provides_from_command(&command)
+            {
+                model.provides = Some(decl);
+            }
+        } else if name == "NeedsTeXFormat" {
+            if model.needs_format.is_none()
+                && let Some(decl) = pkgmeta::needs_format_from_command(&command)
+            {
+                model.needs_format = Some(decl);
+            }
+        } else if name == "DeclareOption"
+            && let Some(decl) = pkgmeta::option_from_command(&command)
+        {
+            model.options.push(decl);
         }
     }
 

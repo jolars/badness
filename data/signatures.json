@@ -26,6 +26,18 @@
     "includegraphics": { "args": ["opt", "req"] },
     "usepackage": { "args": ["opt", "req"] },
     "documentclass": { "args": ["opt", "req"] },
+
+    "NeedsTeXFormat": { "args": ["req", "opt"] },
+    "ProvidesPackage": { "args": ["req", "opt"] },
+    "ProvidesClass": { "args": ["req", "opt"] },
+    "ProvidesFile": { "args": ["req", "opt"] },
+    "ProvidesExplPackage": { "args": ["req", "req", "req", "req"] },
+    "ProvidesExplClass": { "args": ["req", "req", "req", "req"] },
+    "ProvidesExplFile": { "args": ["req", "req", "req", "req"] },
+    "DeclareOption": { "args": ["req", "req"] },
+    "ExecuteOptions": { "args": ["req"] },
+    "ProcessOptions": { "args": [] },
+
     "newcommand": { "args": ["req", "opt", "req"] },
     "renewcommand": { "args": ["req", "opt", "req"] },
     "label": { "args": ["req"] },

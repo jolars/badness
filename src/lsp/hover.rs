@@ -33,6 +33,7 @@ use crate::ast::{command_name, nth_group, nth_group_inner};
 use crate::bib::ast as bib_ast;
 use crate::bib::syntax::{SyntaxKind as BibSyntaxKind, SyntaxNode as BibSyntaxNode};
 use crate::lsp::document_link::comma_spans;
+use crate::semantic::pkgmeta::{NeedsFormatDecl, OptionDecl, ProvidesDecl, provides_kind};
 use crate::semantic::signature::{
     ArgKind, CommandSig, EnvironmentSig, OutlineKind, PackageMeta, builtin, cwl, package_metadata,
 };
@@ -98,6 +99,10 @@ fn build_hover(
     text: &str,
     build: &BuildConfig,
 ) -> Option<Hover> {
+    if let Some((value, range)) = declaration_hover(model, root, offset) {
+        return Some(markup_hover(value, range, idx, text));
+    }
+
     if let Some(target) = signature_target_at(root, offset) {
         let value = match target.kind {
             TargetKind::Command => {
@@ -358,6 +363,122 @@ fn render_package(name: &str, is_class: bool, meta: &PackageMeta) -> String {
         let _ = write!(out, "\n\n[CTAN]({url})");
     }
     out
+}
+
+// --- Package authoring declarations (recognize, never execute) -----------------
+
+/// Hover for a package/class authoring command the cursor sits on — the metadata a
+/// `.sty`/`.cls` declares about itself (`\ProvidesPackage`, `\NeedsTeXFormat`,
+/// `\DeclareOption`, …). The identity/option facts are read from the pre-extracted
+/// [`SemanticModel`], matched to the command by its control-word range; the
+/// option-*processing* commands (`\ProcessOptions`/`\ExecuteOptions`) get a static
+/// note. Tried before the generic signature hover, which would otherwise render these
+/// as plain command prototypes. Returns the markdown and the range to highlight.
+fn declaration_hover(
+    model: &SemanticModel,
+    root: &SyntaxNode,
+    offset: usize,
+) -> Option<(String, TextRange)> {
+    let (name, range) = declaration_command_at(root, offset)?;
+
+    if provides_kind(&name).is_some() {
+        let decl = model.provides().filter(|d| d.range == range)?;
+        return Some((render_provides(decl), range));
+    }
+    if name == "NeedsTeXFormat" {
+        let decl = model.needs_format().filter(|d| d.range == range)?;
+        return Some((render_needs_format(decl), range));
+    }
+    if name == "DeclareOption" {
+        let decl = model.options().iter().find(|d| d.range == range)?;
+        return Some((render_option(decl), range));
+    }
+    let note = match name.as_str() {
+        "ProcessOptions" => "**Processes package options** — recognized, never executed by badness",
+        "ExecuteOptions" => "**Executes default options** — recognized, never executed by badness",
+        _ => return None,
+    };
+    Some((note.to_string(), range))
+}
+
+/// The name and control-word range of the `COMMAND` whose control word the cursor sits
+/// on. Mirrors [`signature_target_at`]'s command branch, but keeps the raw name (the
+/// caller decides whether it is a package-authoring declaration).
+fn declaration_command_at(root: &SyntaxNode, offset: usize) -> Option<(String, TextRange)> {
+    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
+    let (left, right) = match root.token_at_offset(at) {
+        rowan::TokenAtOffset::None => return None,
+        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
+        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
+    };
+    for token in [left, right].into_iter().flatten() {
+        if token.kind() == SyntaxKind::CONTROL_WORD
+            && let Some(parent) = token.parent()
+            && parent.kind() == SyntaxKind::COMMAND
+        {
+            return Some((
+                token.text().trim_start_matches('\\').to_string(),
+                token.text_range(),
+            ));
+        }
+    }
+    None
+}
+
+/// Render a `\Provides…` self-identification: the namespace + name, an inline
+/// version/date, then the free-text description on its own line. The version's `v`
+/// prefix (LaTeX2e's `v1.2`) is dropped so it reads uniformly with the expl3 form.
+fn render_provides(decl: &ProvidesDecl) -> String {
+    let mut out = format!("**Provides {}** `{}`", decl.kind.noun(), decl.name);
+    let version = decl
+        .version
+        .as_deref()
+        .map(|v| v.trim_start_matches(['v', 'V']));
+    match (version, decl.date.as_deref()) {
+        (Some(v), Some(d)) => {
+            let _ = write!(out, " — version {v} ({d})");
+        }
+        (Some(v), None) => {
+            let _ = write!(out, " — version {v}");
+        }
+        (None, Some(d)) => {
+            let _ = write!(out, " — {d}");
+        }
+        (None, None) => {}
+    }
+    if let Some(desc) = provides_description(decl) {
+        let _ = write!(out, "\n\n{desc}");
+    }
+    out
+}
+
+/// The human description of a `\Provides…`: the raw `info` with the date and version
+/// tokens (already surfaced inline) dropped. For the expl3 form `info` is the
+/// description group verbatim, so this is a no-op there. `None` when nothing remains.
+fn provides_description(decl: &ProvidesDecl) -> Option<String> {
+    let info = decl.info.as_deref()?;
+    let rest: Vec<&str> = info
+        .split_whitespace()
+        .filter(|t| Some(*t) != decl.date.as_deref() && Some(*t) != decl.version.as_deref())
+        .collect();
+    (!rest.is_empty()).then(|| rest.join(" "))
+}
+
+/// Render a `\NeedsTeXFormat{format}[date]`.
+fn render_needs_format(decl: &NeedsFormatDecl) -> String {
+    let mut out = format!("**Requires format** `{}`", decl.format);
+    if let Some(date) = decl.date.as_deref() {
+        let _ = write!(out, " ({date})");
+    }
+    out
+}
+
+/// Render a `\DeclareOption{name}` or the starred default handler `\DeclareOption*`.
+fn render_option(decl: &OptionDecl) -> String {
+    match decl.name.as_deref() {
+        Some(name) => format!("**Declares option** `{name}`"),
+        None => "**Default option handler** (`\\DeclareOption*`)".to_string(),
+    }
 }
 
 /// A human summary of an argument list: e.g. `2 required, 1 optional`. Empty when the
@@ -744,6 +865,55 @@ mod tests {
         let md = markdown_at(&db, path, src, offset).expect("hover for \\foo");
         assert!(md.contains("user-defined command"), "provenance: {md}");
         assert!(md.contains("1 required argument"), "arity: {md}");
+    }
+
+    #[test]
+    fn provides_package_hover_shows_identity() {
+        let src = "\\ProvidesPackage{mypkg}[2024/01/01 v1.2 My package]\n";
+        let md = hover_md(src, "ProvidesPackage").expect("hover for \\ProvidesPackage");
+        assert!(md.contains("Provides package"), "kind: {md}");
+        assert!(md.contains("`mypkg`"), "name: {md}");
+        assert!(md.contains("version 1.2"), "version (v stripped): {md}");
+        assert!(md.contains("2024/01/01"), "date: {md}");
+        assert!(md.contains("My package"), "description: {md}");
+    }
+
+    #[test]
+    fn provides_expl_package_hover() {
+        let src = "\\ProvidesExplPackage{mypkg}{2024/01/01}{1.2}{My package}\n";
+        let md = hover_md(src, "ProvidesExplPackage").expect("hover for expl3 provides");
+        assert!(md.contains("Provides package"), "kind: {md}");
+        assert!(md.contains("version 1.2"), "version: {md}");
+        assert!(md.contains("My package"), "description: {md}");
+    }
+
+    #[test]
+    fn needs_tex_format_hover() {
+        let src = "\\NeedsTeXFormat{LaTeX2e}[2020/10/01]\n";
+        let md = hover_md(src, "NeedsTeXFormat").expect("hover for \\NeedsTeXFormat");
+        assert!(md.contains("Requires format"), "label: {md}");
+        assert!(md.contains("`LaTeX2e`"), "format: {md}");
+        assert!(md.contains("2020/10/01"), "date: {md}");
+    }
+
+    #[test]
+    fn declare_option_hover_named_and_star() {
+        let named = "\\DeclareOption{draft}{\\@drafttrue}\n";
+        let md = hover_md(named, "DeclareOption").expect("hover for \\DeclareOption");
+        assert!(md.contains("Declares option"), "label: {md}");
+        assert!(md.contains("`draft`"), "option name: {md}");
+
+        let star = "\\DeclareOption*{\\PackageWarning{p}{unknown}}\n";
+        let md = hover_md(star, "DeclareOption").expect("hover for \\DeclareOption*");
+        assert!(md.contains("Default option handler"), "star form: {md}");
+    }
+
+    #[test]
+    fn process_options_hover_is_static_note() {
+        let src = "\\ProcessOptions\\relax\n";
+        let md = hover_md(src, "ProcessOptions").expect("hover for \\ProcessOptions");
+        assert!(md.contains("Processes package options"), "note: {md}");
+        assert!(md.contains("never executed"), "hermetic note: {md}");
     }
 
     #[test]

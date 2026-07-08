@@ -197,10 +197,18 @@ engine.
   existing per-file `document_signatures` (its `macrocode` bodies already lex as
   real code). Broadening the definer set beyond the above (`\DeclareMathOperator`,
   etoolbox `\newrobustcmd`/`\csdef`, ...) is deferred.
-- [ ] **Package metadata & options (recognize, never execute).**
-  `\ProvidesPackage`/`\ProvidesClass` (name/date/version),
-  `\NeedsTeXFormat`, `\DeclareOption`/`\ProcessOptions`/`\ExecuteOptions` ---
-  surfaced as signatures/metadata for hover/diagnostics, never run.
+- [x] **Package metadata & options (recognize, never execute).**
+  `\ProvidesPackage`/`\ProvidesClass`/`\ProvidesFile` (and the expl3
+  `\ProvidesExpl*`), `\NeedsTeXFormat`, `\DeclareOption` (incl. the starred
+  default handler), `\ProcessOptions`/`\ExecuteOptions` now carry curated
+  signatures (`data/signatures.json`) and are statically recognized: the
+  identity (name/date/version/description), required format, and declared
+  option names are extracted into the per-file `SemanticModel`
+  (`semantic::pkgmeta`, collected in `builder.rs`'s single CST walk, never
+  executed) and surfaced on LSP hover (`lsp::hover::declaration_hover`).
+  *Deferred to the package-aware diagnostics item below:* the diagnostics
+  themselves (unknown-option, duplicate `\RequirePackage`, missing
+  `\ProvidesPackage`) — they consume the model this item builds.
 - [ ] **Package-aware diagnostics.** Once the load graph exists: unknown-option,
   duplicate `\RequirePackage`, missing `\ProvidesPackage`, and resolving
   user-macro definitions to their defining package for hover/go-to-definition.

@@ -20,6 +20,7 @@ pub mod doc;
 pub mod label;
 pub mod load;
 pub mod outline;
+pub mod pkgmeta;
 pub mod signature;
 pub mod xparse;
 
@@ -33,6 +34,7 @@ pub use load::{
     DiskPackageSource, PackageSource, collect_package_signatures, disk_scope_signatures,
 };
 pub use outline::{LabelContext, OutlineItem, OutlineSymbol, label_context, outline};
+pub use pkgmeta::{NeedsFormatDecl, OptionDecl, ProvidesDecl, ProvidesKind};
 pub use signature::{
     ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, Signatures,
 };
@@ -58,6 +60,13 @@ pub struct SemanticModel {
     /// of the bibliography into the document — so `undefined-citation` cannot flag
     /// anything in its namespace.
     pub(crate) nocite_all: bool,
+    /// The file's own `\ProvidesPackage`/`\ProvidesClass`/`\ProvidesFile` (or expl3
+    /// variant) self-identification, if any (first wins). Recognized, never executed.
+    pub(crate) provides: Option<ProvidesDecl>,
+    /// The file's `\NeedsTeXFormat{format}[date]` declaration, if any (first wins).
+    pub(crate) needs_format: Option<NeedsFormatDecl>,
+    /// The file's `\DeclareOption` declarations (including the starred default handler).
+    pub(crate) options: Vec<OptionDecl>,
 }
 
 impl SemanticModel {
@@ -98,6 +107,21 @@ impl SemanticModel {
     /// Whether the file contains a `\nocite{*}` wildcard.
     pub fn has_wildcard_nocite(&self) -> bool {
         self.nocite_all
+    }
+
+    /// The file's `\ProvidesPackage`/`\ProvidesClass`/`\ProvidesFile` self-identification.
+    pub fn provides(&self) -> Option<&ProvidesDecl> {
+        self.provides.as_ref()
+    }
+
+    /// The file's `\NeedsTeXFormat` declaration.
+    pub fn needs_format(&self) -> Option<&NeedsFormatDecl> {
+        self.needs_format.as_ref()
+    }
+
+    /// The file's `\DeclareOption` declarations.
+    pub fn options(&self) -> &[OptionDecl] {
+        &self.options
     }
 
     pub fn reference(&self, id: RefId) -> &LabelRef {

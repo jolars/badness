@@ -1,219 +1,133 @@
-//! Small generic accessors over the CST — reading a `COMMAND` node's name and
-//! its literal `{…}` argument text. Purely syntactic: these know nothing about
-//! what any command *means*, so both the syntactic `project/` layer and the
-//! semantic layer build on them without meaning leaking downward (AGENTS.md
-//! decision #2). This is the seed of an `ast/` layer; it was
-//! extracted when its second consumer (the semantic label/reference model)
-//! appeared.
+//! A typed AST layer over the CST — thin, read-only wrappers ([`AstNode`] /
+//! [`AstToken`]) giving nodes a typed identity and named, *positional* accessors
+//! (reading a `COMMAND`'s name and its literal `{…}` argument text, an
+//! `ENVIRONMENT`'s `\begin`/`\end`, …).
+//!
+//! Purely syntactic: the wrappers know nothing about what any command *means*, so
+//! both the syntactic `project/` layer and the semantic layer build on them without
+//! meaning leaking downward (AGENTS.md decision #2). Because the CST is generic and
+//! greedy (decision #8), accessors are positional ([`nodes::Command::nth_group`]) and
+//! tolerate over-attached groups by construction — they never pretend arity is fixed.
+//!
+//! The free functions below are thin shims over the wrapper methods, kept so existing
+//! `&SyntaxNode`-based call sites compile unchanged during the migration.
 
-use rowan::{TextRange, TextSize};
+pub mod nodes;
+pub mod tokens;
 
-use crate::syntax::{SyntaxKind, SyntaxNode};
+pub use nodes::{Begin, Command, End, Environment, Group, NameGroup, Optional};
+pub use tokens::ControlWord;
 
-/// The control-word name of a `COMMAND` node (the leading `\` stripped), or
-/// `None` for a control symbol. The grammar bumps the control word as the
-/// command's first token (`grammar.rs`, `fn command`).
+use rowan::{NodeOrToken, TextRange};
+
+use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
+
+/// A typed wrapper over a CST *node* of a single [`SyntaxKind`]. Mirrors
+/// rust-analyzer's `AstNode`: `cast` succeeds iff `can_cast(node.kind())`.
+pub trait AstNode {
+    fn can_cast(kind: SyntaxKind) -> bool
+    where
+        Self: Sized;
+    fn cast(syntax: SyntaxNode) -> Option<Self>
+    where
+        Self: Sized;
+    fn syntax(&self) -> &SyntaxNode;
+}
+
+/// A typed wrapper over a CST *token* of a single [`SyntaxKind`].
+pub trait AstToken {
+    fn can_cast(kind: SyntaxKind) -> bool
+    where
+        Self: Sized;
+    fn cast(syntax: SyntaxToken) -> Option<Self>
+    where
+        Self: Sized;
+    fn syntax(&self) -> &SyntaxToken;
+    fn text(&self) -> &str {
+        self.syntax().text()
+    }
+}
+
+/// The first child node castable to `N`. Replaces the raw
+/// `children().find(|c| c.kind() == X)` idiom at *field-extraction* sites.
+pub fn child<N: AstNode>(parent: &SyntaxNode) -> Option<N> {
+    parent.children().find_map(N::cast)
+}
+
+/// All child nodes castable to `N`, in source order.
+pub fn children<N: AstNode>(parent: &SyntaxNode) -> impl Iterator<Item = N> {
+    parent.children().filter_map(N::cast)
+}
+
+/// The first child token castable to `T`.
+pub fn child_token<T: AstToken>(parent: &SyntaxNode) -> Option<T> {
+    parent
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find_map(T::cast)
+}
+
+// --- Free-function shims (see module docs) -----------------------------------
+
+/// The control-word name of a `COMMAND` node (the leading `\` stripped), or `None`
+/// for a control symbol.
 pub fn command_name(command: &SyntaxNode) -> Option<String> {
-    command
-        .children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .find(|token| token.kind() == SyntaxKind::CONTROL_WORD)
-        .map(|token| token.text().trim_start_matches('\\').to_string())
+    Command::cast(command.clone()).and_then(|c| c.name())
 }
 
-/// The range of a `COMMAND` node's leading `CONTROL_WORD` token (the `\foo`
-/// itself, backslash included), or `None` for a control symbol. Rules use this
-/// to underline just the control word and to scope a control-word swap fix,
-/// rather than the whole node (which may carry greedily-attached argument
-/// groups).
+/// The range of a `COMMAND` node's leading `CONTROL_WORD` token, or `None` for a
+/// control symbol.
 pub fn control_word_range(command: &SyntaxNode) -> Option<TextRange> {
-    command
-        .children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .find(|token| token.kind() == SyntaxKind::CONTROL_WORD)
-        .map(|token| token.text_range())
+    Command::cast(command.clone()).and_then(|c| c.control_word_range())
 }
 
-/// The literal text inside the `n`-th `GROUP` argument of `command`, with the
-/// enclosing braces dropped. Concatenates the group's inner token text so
-/// content split across `WORD`/`.`/`/`/`UNDERSCORE` tokens (e.g.
-/// `chapters/my_file`, `sec:intro`) reassembles. Returns `None` when there is
-/// no `n`-th group, or when it holds non-token content (a nested command — not
-/// a flat literal).
+/// The literal text inside the `n`-th `GROUP` argument of `command`, braces dropped.
 pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
-    let group = command
-        .children()
-        .filter(|child| child.kind() == SyntaxKind::GROUP)
-        .nth(n)?;
-
-    let mut text = String::new();
-    for element in group.children_with_tokens() {
-        match element {
-            rowan::NodeOrToken::Token(token) => match token.kind() {
-                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                _ => text.push_str(token.text()),
-            },
-            // A nested node (e.g. a COMMAND) means the argument isn't a flat
-            // literal; treat the whole thing as unresolvable.
-            rowan::NodeOrToken::Node(_) => return None,
-        }
-    }
-    Some(text)
+    Command::cast(command.clone()).and_then(|c| c.nth_group_text(n))
 }
 
-/// The byte range of the content *inside* the `n`-th `GROUP` argument (the span
-/// between the braces) together with that inner text — the location-aware
-/// counterpart to [`nth_group_text`]. The inner range runs from the first inner
-/// token's start to the last inner token's end; an empty group (`{}`) yields a
-/// zero-width range just after the `{`. Returns `None` under exactly the same
-/// conditions as [`nth_group_text`] (no `n`-th group, or non-token content such as
-/// a nested command), so callers see the same skip-on-nested-macro behavior.
-///
-/// The text/range correspondence is exact: in the success path the group holds
-/// only flat tokens, so its inner bytes are contiguous and per-key sub-ranges can
-/// be sliced off `inner_range` by byte offset (used by the semantic builder to give
-/// each key in a `\cref{a,b}` its own precise span).
+/// The byte range of the content inside the `n`-th `GROUP` argument together with
+/// that inner text.
 pub fn nth_group_inner(command: &SyntaxNode, n: usize) -> Option<(TextRange, String)> {
-    let group = command
-        .children()
-        .filter(|child| child.kind() == SyntaxKind::GROUP)
-        .nth(n)?;
-
-    let mut text = String::new();
-    let mut start: Option<TextSize> = None;
-    let mut end: Option<TextSize> = None;
-    // Fallback anchor for an empty group: the byte just after the opening brace.
-    let mut after_l_brace = group.text_range().start();
-    for element in group.children_with_tokens() {
-        match element {
-            rowan::NodeOrToken::Token(token) => match token.kind() {
-                SyntaxKind::L_BRACE => after_l_brace = token.text_range().end(),
-                SyntaxKind::R_BRACE => {}
-                _ => {
-                    let range = token.text_range();
-                    start.get_or_insert(range.start());
-                    end = Some(range.end());
-                    text.push_str(token.text());
-                }
-            },
-            // A nested node (e.g. a COMMAND) means the argument isn't a flat
-            // literal; treat the whole thing as unresolvable, like `nth_group_text`.
-            rowan::NodeOrToken::Node(_) => return None,
-        }
-    }
-    let range = match (start, end) {
-        (Some(start), Some(end)) => TextRange::new(start, end),
-        _ => TextRange::empty(after_l_brace),
-    };
-    Some((range, text))
+    Command::cast(command.clone()).and_then(|c| c.nth_group_inner(n))
 }
 
-/// The `n`-th `GROUP` argument node of `command`, if present. The thin node-level
-/// counterpart to [`nth_group_text`], for callers that must inspect a group's
-/// structure (a nested `\name` command, or raw source) rather than flatten it to a
-/// literal.
+/// The `n`-th `GROUP` argument node of `command`, if present.
 pub fn nth_group(command: &SyntaxNode, n: usize) -> Option<SyntaxNode> {
-    command
-        .children()
-        .filter(|child| child.kind() == SyntaxKind::GROUP)
-        .nth(n)
+    Command::cast(command.clone()).and_then(|c| c.nth_group(n).map(|g| g.syntax().clone()))
 }
 
 /// The byte range of `command` spanning its control word through the end of its
-/// *first* `{…}` group — e.g. `\label{key}` up to the closing brace of `{key}`.
-/// Deliberately not [`SyntaxNode::text_range`], which the greedy parser may
-/// stretch over a *second* group it attached without knowing the command's arity
-/// (`\label{a}\n{…}`; AGENTS.md decision #8). Falls back to the full command range
-/// when the first group is absent.
+/// first `{…}` group; the full command range when the first group is absent.
 pub fn first_group_range(command: &SyntaxNode) -> TextRange {
-    match nth_group(command, 0) {
-        Some(group) => TextRange::new(command.text_range().start(), group.text_range().end()),
+    match Command::cast(command.clone()) {
+        Some(c) => c.first_group_range(),
         None => command.text_range(),
     }
 }
 
-/// The control-word name (leading `\` stripped) of a single `COMMAND` wrapped in
-/// `group`, as in a `\newcommand{\foo}` / `\NewDocumentCommand{\foo}` name group.
-/// Returns `None` unless the group's only non-trivia child is exactly one control
-/// word — anything else (plain text, multiple tokens, a control symbol) is not a
-/// definable command name we extract.
+/// The control-word name of a single `COMMAND` wrapped in `group`.
 pub fn group_command_name(group: &SyntaxNode) -> Option<String> {
-    let command = group
-        .children()
-        .find(|child| child.kind() == SyntaxKind::COMMAND)?;
-    command_name(&command)
+    Group::cast(group.clone()).and_then(|g| g.command_name())
 }
 
-/// The raw inner source of `group` with its outer `L_BRACE`/`R_BRACE` dropped, but
-/// *all* interior text preserved — nested `{…}` braces included. Unlike
-/// [`nth_group_text`], which bails on nested nodes, this reconstructs the verbatim
-/// content needed for an xparse argument spec like `{m O{0} m}` (whose `{0}` default
-/// parses as a nested `GROUP`). Trivia (whitespace/newlines) is kept verbatim; the
-/// caller tokenizes the result.
+/// The raw inner source of `group` with its outer braces dropped, nested braces kept.
 pub fn group_inner_source(group: &SyntaxNode) -> String {
-    let mut text = String::new();
-    for element in group.descendants_with_tokens() {
-        if let rowan::NodeOrToken::Token(token) = element {
-            text.push_str(token.text());
-        }
-    }
-    // Drop the outer braces the group carries as its first/last tokens (tolerating
-    // a malformed group missing one).
-    let inner = text.strip_prefix('{').unwrap_or(&text);
-    inner.strip_suffix('}').unwrap_or(inner).to_string()
+    Group::cast(group.clone())
+        .map(|g| g.inner_source())
+        .unwrap_or_default()
 }
 
-/// The environment name of a `BEGIN` or `END` node — the literal text of its
-/// `NAME_GROUP` child, braces dropped. Returns `None` when the node has no
-/// `NAME_GROUP` (a malformed `\begin`) or it holds non-token content. The grammar
-/// emits the name as a `NAME_GROUP` (`grammar.rs`, `fn name_group`).
+/// The environment name of a `BEGIN` or `END` node — the text of its `NAME_GROUP`
+/// child, braces dropped.
 pub fn environment_name(begin_or_end: &SyntaxNode) -> Option<String> {
-    let group = begin_or_end
-        .children()
-        .find(|child| child.kind() == SyntaxKind::NAME_GROUP)?;
-
-    let mut text = String::new();
-    for element in group.children_with_tokens() {
-        match element {
-            rowan::NodeOrToken::Token(token) => match token.kind() {
-                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                _ => text.push_str(token.text()),
-            },
-            rowan::NodeOrToken::Node(_) => return None,
-        }
-    }
-    Some(text)
+    child::<NameGroup>(begin_or_end).and_then(|g| g.text())
 }
 
-/// The byte range of the environment name *inside* a `BEGIN` or `END` node's
-/// `NAME_GROUP` (the span between the braces, e.g. `equation` in
-/// `\begin{equation}`) — the location-aware counterpart to [`environment_name`].
-/// The range runs from the first inner token's start to the last inner token's
-/// end, matching the brace-dropping in [`environment_name`] and mirroring
-/// [`nth_group_inner`]. Returns `None` when the node has no `NAME_GROUP` (a
-/// malformed `\begin`), it holds a nested node, or the name is empty (`\begin{}`,
-/// nothing to highlight).
+/// The byte range of the environment name inside a `BEGIN` or `END` node's
+/// `NAME_GROUP`.
 pub fn environment_name_range(begin_or_end: &SyntaxNode) -> Option<TextRange> {
-    let group = begin_or_end
-        .children()
-        .find(|child| child.kind() == SyntaxKind::NAME_GROUP)?;
-
-    let mut start: Option<TextSize> = None;
-    let mut end: Option<TextSize> = None;
-    for element in group.children_with_tokens() {
-        match element {
-            rowan::NodeOrToken::Token(token) => match token.kind() {
-                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                _ => {
-                    let range = token.text_range();
-                    start.get_or_insert(range.start());
-                    end = Some(range.end());
-                }
-            },
-            rowan::NodeOrToken::Node(_) => return None,
-        }
-    }
-    Some(TextRange::new(start?, end?))
+    child::<NameGroup>(begin_or_end).and_then(|g| g.range())
 }
 
 #[cfg(test)]
@@ -326,5 +240,59 @@ mod tests {
             environment_name_range(&node("\\begin{}\n\\end{}\n", SyntaxKind::BEGIN)),
             None
         );
+    }
+
+    // --- Wrapper-native tests --------------------------------------------------
+
+    #[test]
+    fn cast_is_kind_exact() {
+        let cmd = command("\\section{Hi}\n");
+        assert!(Command::cast(cmd.clone()).is_some());
+        assert!(Group::cast(cmd.clone()).is_none());
+        let group = nth_group(&cmd, 0).unwrap();
+        assert!(Group::cast(group.clone()).is_some());
+        assert!(Command::cast(group).is_none());
+    }
+
+    #[test]
+    fn typed_nth_group_is_a_group_node() {
+        let cmd = Command::cast(command("\\label{k}\n")).unwrap();
+        let group = cmd.nth_group(0).unwrap();
+        assert_eq!(group.syntax().kind(), SyntaxKind::GROUP);
+    }
+
+    #[test]
+    fn optionals_do_not_shift_group_indexing() {
+        // `\cmd[o]{a}` — the GROUP index ignores the OPTIONAL. define.rs relies on it.
+        let cmd = Command::cast(command("\\cmd[o]{a}\n")).unwrap();
+        assert_eq!(cmd.nth_group_text(0).as_deref(), Some("a"));
+        assert_eq!(cmd.optionals().count(), 1);
+    }
+
+    #[test]
+    fn first_group_range_stops_at_first_group() {
+        // Greedy over-attachment (decision #8): `\label{a}\n{b}` attaches `{b}` too.
+        let src = "\\label{a}\n{b}\n";
+        let cmd = Command::cast(command(src)).unwrap();
+        assert_eq!(&src[cmd.first_group_range()], "\\label{a}");
+        assert_eq!(cmd.nth_group_text(1).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn environment_wrapper_reaches_begin_and_end() {
+        let env = Environment::cast(node(
+            "\\begin{equation}\nx\n\\end{equation}\n",
+            SyntaxKind::ENVIRONMENT,
+        ))
+        .unwrap();
+        assert_eq!(
+            env.begin().and_then(|b| b.name()).as_deref(),
+            Some("equation")
+        );
+        assert_eq!(
+            env.end().and_then(|e| e.name()).as_deref(),
+            Some("equation")
+        );
+        assert_eq!(env.name().as_deref(), Some("equation"));
     }
 }

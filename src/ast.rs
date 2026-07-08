@@ -68,54 +68,66 @@ pub fn child_token<T: AstToken>(parent: &SyntaxNode) -> Option<T> {
 }
 
 // --- Free-function shims (see module docs) -----------------------------------
+//
+// These stay *kind-agnostic* — they read whatever relevant child a node has rather
+// than requiring the node's own kind, because callers rely on that latitude (dtx
+// `\begin{macro}{\foo}` calls `nth_group` on a `BEGIN`; an xparse default body handed
+// to `group_inner_source` may be an `OPTIONAL`). The typed wrapper *methods* are
+// kind-checked at `cast`; the shims delegate only to the kind-agnostic navigation
+// helpers and per-node body functions, never to `cast`.
 
 /// The control-word name of a `COMMAND` node (the leading `\` stripped), or `None`
 /// for a control symbol.
 pub fn command_name(command: &SyntaxNode) -> Option<String> {
-    Command::cast(command.clone()).and_then(|c| c.name())
+    child_token::<ControlWord>(command).map(|cw| cw.name())
 }
 
 /// The range of a `COMMAND` node's leading `CONTROL_WORD` token, or `None` for a
 /// control symbol.
 pub fn control_word_range(command: &SyntaxNode) -> Option<TextRange> {
-    Command::cast(command.clone()).and_then(|c| c.control_word_range())
+    child_token::<ControlWord>(command).map(|cw| cw.range())
 }
 
 /// The literal text inside the `n`-th `GROUP` argument of `command`, braces dropped.
 pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
-    Command::cast(command.clone()).and_then(|c| c.nth_group_text(n))
+    children::<Group>(command)
+        .nth(n)
+        .and_then(|g| g.inner_text())
 }
 
 /// The byte range of the content inside the `n`-th `GROUP` argument together with
 /// that inner text.
 pub fn nth_group_inner(command: &SyntaxNode, n: usize) -> Option<(TextRange, String)> {
-    Command::cast(command.clone()).and_then(|c| c.nth_group_inner(n))
+    children::<Group>(command).nth(n).and_then(|g| g.inner())
 }
 
 /// The `n`-th `GROUP` argument node of `command`, if present.
 pub fn nth_group(command: &SyntaxNode, n: usize) -> Option<SyntaxNode> {
-    Command::cast(command.clone()).and_then(|c| c.nth_group(n).map(|g| g.syntax().clone()))
+    children::<Group>(command)
+        .nth(n)
+        .map(|g| g.syntax().clone())
 }
 
 /// The byte range of `command` spanning its control word through the end of its
 /// first `{…}` group; the full command range when the first group is absent.
 pub fn first_group_range(command: &SyntaxNode) -> TextRange {
-    match Command::cast(command.clone()) {
-        Some(c) => c.first_group_range(),
+    match children::<Group>(command).next() {
+        Some(group) => TextRange::new(
+            command.text_range().start(),
+            group.syntax().text_range().end(),
+        ),
         None => command.text_range(),
     }
 }
 
 /// The control-word name of a single `COMMAND` wrapped in `group`.
 pub fn group_command_name(group: &SyntaxNode) -> Option<String> {
-    Group::cast(group.clone()).and_then(|g| g.command_name())
+    child::<Command>(group).and_then(|c| c.name())
 }
 
 /// The raw inner source of `group` with its outer braces dropped, nested braces kept.
 pub fn group_inner_source(group: &SyntaxNode) -> String {
-    Group::cast(group.clone())
-        .map(|g| g.inner_source())
-        .unwrap_or_default()
+    nodes::inner_source_of(group)
 }
 
 /// The environment name of a `BEGIN` or `END` node — the text of its `NAME_GROUP`
@@ -276,6 +288,26 @@ mod tests {
         let cmd = Command::cast(command(src)).unwrap();
         assert_eq!(&src[cmd.first_group_range()], "\\label{a}");
         assert_eq!(cmd.nth_group_text(1).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn free_fn_shims_stay_kind_agnostic() {
+        // The shims read whatever child a node has, not gating on the node's own
+        // kind: dtx `\begin{macro}{\foo}` reads the `{\foo}` GROUP off a BEGIN node,
+        // not a COMMAND. The typed `Command::nth_group` would (correctly) not apply
+        // here, but the free-function shim must.
+        let begin = node(
+            "\\begin{macro}{\\foo}\ncode\n\\end{macro}\n",
+            SyntaxKind::BEGIN,
+        );
+        assert_eq!(
+            nth_group(&begin, 0).map(|g| g.kind()),
+            Some(SyntaxKind::GROUP)
+        );
+        assert_eq!(
+            group_command_name(&nth_group(&begin, 0).unwrap()).as_deref(),
+            Some("foo")
+        );
     }
 
     #[test]

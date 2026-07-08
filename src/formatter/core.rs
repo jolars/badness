@@ -51,7 +51,7 @@ use std::iter::Peekable;
 use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
-use crate::ast::{command_name, environment_name};
+use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
 use crate::semantic::{ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, scan_definitions};
@@ -1469,10 +1469,10 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// covers `macrocode` and any prose-layer environment uniformly. `DOC_MARGIN`/
 /// `GUARD` exist only under the `.dtx` config, so this is always false elsewhere.
 fn is_margin_framed(node: &SyntaxNode) -> bool {
-    let Some(begin) = node.children().find(|c| c.kind() == SyntaxKind::BEGIN) else {
+    let Some(begin) = Environment::cast(node.clone()).and_then(|e| e.begin()) else {
         return false;
     };
-    let mut tok = begin.first_token().and_then(|t| t.prev_token());
+    let mut tok = begin.syntax().first_token().and_then(|t| t.prev_token());
     while let Some(t) = tok {
         match t.kind() {
             SyntaxKind::WHITESPACE => tok = t.prev_token(),
@@ -1681,9 +1681,8 @@ fn lower_node_dropping_leading_comment(node: &SyntaxNode, cx: LowerCtx<'_>) -> I
 /// [`crate::semantic::signature::EnvironmentSig::no_indent`]). The canonical case
 /// is `document`, whose body conventionally sits flush against the margin.
 fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    node.children()
-        .find(|child| child.kind() == SyntaxKind::BEGIN)
-        .and_then(|begin| environment_name(&begin))
+    Environment::cast(node.clone())
+        .and_then(|e| e.name())
         .and_then(|name| cx.signatures.environment(&name))
         .is_some_and(|sig| sig.no_indent)
 }
@@ -1753,9 +1752,8 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// formatter lays out one per line with a hanging indent (see
 /// [`lower_list_environment`]).
 fn is_list_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    node.children()
-        .find(|child| child.kind() == SyntaxKind::BEGIN)
-        .and_then(|begin| environment_name(&begin))
+    Environment::cast(node.clone())
+        .and_then(|e| e.name())
         .and_then(|name| cx.signatures.environment(&name))
         .is_some_and(|sig| sig.list)
 }
@@ -2000,9 +1998,8 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, usize, Ve
 /// `align` — an `align`/matrix-family environment whose `&` columns the formatter
 /// lays out into a grid (see [`lower_aligned_environment`]).
 fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    node.children()
-        .find(|child| child.kind() == SyntaxKind::BEGIN)
-        .and_then(|begin| environment_name(&begin))
+    Environment::cast(node.clone())
+        .and_then(|e| e.name())
         .and_then(|name| cx.signatures.environment(&name))
         .is_some_and(|sig| sig.align)
 }
@@ -2012,9 +2009,8 @@ fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// in a `MATH` node (it entered math mode); [`lower_math_environment`] lays it out
 /// with the math-aware paths.
 fn is_math_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    node.children()
-        .find(|child| child.kind() == SyntaxKind::BEGIN)
-        .and_then(|begin| environment_name(&begin))
+    Environment::cast(node.clone())
+        .and_then(|e| e.name())
         .and_then(|name| cx.signatures.environment(&name))
         .is_some_and(|sig| sig.math)
 }
@@ -2688,12 +2684,11 @@ fn rule_overattaches_cell(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// `NAME_GROUP`), so those return `None` and fall through. The spec is the *last*
 /// `{…}` `GROUP` on the `\begin` — uniform across `tabular`'s `{spec}`, `array`'s
 /// `{spec}`, and `tabular*`'s `{width}[pos]{spec}` (the `[pos]` is an `OPTIONAL`, not
-/// a `GROUP`). The raw inner source is read via [`crate::ast::group_inner_source`]
-/// rather than `nth_group_text`, which would bail on the nested `{…}` of a `p{3cm}`
-/// column.
+/// a `GROUP`). The raw inner source is read via [`Group::inner_source`] rather than
+/// `nth_group_text`, which would bail on the nested `{…}` of a `p{3cm}` column.
 fn column_alignments(env: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<ColAlign>> {
-    let begin = env.children().find(|c| c.kind() == SyntaxKind::BEGIN)?;
-    let name = environment_name(&begin)?;
+    let begin = Environment::cast(env.clone())?.begin()?;
+    let name = begin.name()?;
     if !cx
         .signatures
         .environment(&name)
@@ -2701,11 +2696,8 @@ fn column_alignments(env: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<ColAlign>
     {
         return None;
     }
-    let spec = begin
-        .children()
-        .filter(|c| c.kind() == SyntaxKind::GROUP)
-        .last()?;
-    colspec::parse_column_spec(&crate::ast::group_inner_source(&spec))
+    let spec = crate::ast::children::<Group>(begin.syntax()).last()?;
+    colspec::parse_column_spec(&spec.inner_source())
 }
 
 /// Render the grid to IR: align each cell within its column to the column's declared

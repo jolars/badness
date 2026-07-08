@@ -209,16 +209,7 @@ impl Group {
     /// `{0}` default parses as a nested `GROUP`). Trivia is kept verbatim; the caller
     /// tokenizes the result.
     pub fn inner_source(&self) -> String {
-        let mut text = String::new();
-        for element in self.syntax.descendants_with_tokens() {
-            if let NodeOrToken::Token(token) = element {
-                text.push_str(token.text());
-            }
-        }
-        // Drop the outer braces the group carries as its first/last tokens
-        // (tolerating a malformed group missing one).
-        let inner = text.strip_prefix('{').unwrap_or(&text);
-        inner.strip_suffix('}').unwrap_or(inner).to_string()
+        inner_source_of(&self.syntax)
     }
 
     /// The single `COMMAND` child wrapped in this group, if any.
@@ -232,6 +223,23 @@ impl Group {
     pub fn command_name(&self) -> Option<String> {
         self.command()?.name()
     }
+}
+
+/// The shared body of [`Group::inner_source`], kept kind-agnostic so the
+/// free-function shim can call it on any node — an xparse default like `O{0}` parses
+/// its `{0}` as a nested group but a top-level default body may be an `OPTIONAL`
+/// rather than a `GROUP`. Concatenates all descendant token text, then drops a single
+/// leading `{` and trailing `}` if present (a bracket-delimited `OPTIONAL` keeps its
+/// brackets, matching the pre-wrapper behavior).
+pub(crate) fn inner_source_of(node: &SyntaxNode) -> String {
+    let mut text = String::new();
+    for element in node.descendants_with_tokens() {
+        if let NodeOrToken::Token(token) = element {
+            text.push_str(token.text());
+        }
+    }
+    let inner = text.strip_prefix('{').unwrap_or(&text);
+    inner.strip_suffix('}').unwrap_or(inner).to_string()
 }
 
 impl NameGroup {

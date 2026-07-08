@@ -10,6 +10,8 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
+use rayon::prelude::*;
+
 use super::{
     FormatError, FormatStyle, SentenceOptions, WrapMode, format_file_with_packages_sentence,
 };
@@ -116,7 +118,7 @@ pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
 /// discovery (explicitly-named files are never pruned).
 pub fn check_paths_with_style(
     paths: &[PathBuf],
-    mut style: FormatStyle,
+    style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
@@ -131,37 +133,50 @@ pub fn check_paths_with_style(
     }
 
     let checked_files = files.len();
-    let mut changed_files = Vec::new();
 
-    for (path, kind) in files {
-        let content = fs::read_to_string(&path).map_err(|err| CheckError::ReadError {
-            path: path.clone(),
-            source: err.to_string(),
-        })?;
+    // Read + format each file in parallel (formatting is a pure function of input
+    // plus shipped data, so it is thread-safe). `Some(path)` marks a file that
+    // would change. The order-preserving collect keeps `changed_files`
+    // deterministic, and returning the first `Err` in that order reports the same
+    // failure the serial loop would.
+    let results: Vec<Result<Option<PathBuf>, CheckError>> = files
+        .par_iter()
+        .map(|(path, kind)| {
+            let content = fs::read_to_string(path).map_err(|err| CheckError::ReadError {
+                path: path.clone(),
+                source: err.to_string(),
+            })?;
 
-        style.wrap = wrap_override.unwrap_or(kind.default_wrap());
-        let formatted = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_file_with_packages_sentence(
-                    &content,
-                    &path,
-                    style,
-                    kind.lex_config(),
-                    sentence,
-                )
-                .map_err(|err| CheckError::FormatError {
-                    path: path.clone(),
-                    source: err,
-                })?
-            }
-            FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {
-                CheckError::BibFormatError {
-                    path: path.clone(),
-                    source: err,
+            let mut style = style;
+            style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+            let formatted = match kind {
+                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+                    format_file_with_packages_sentence(
+                        &content,
+                        path,
+                        style,
+                        kind.lex_config(),
+                        sentence,
+                    )
+                    .map_err(|err| CheckError::FormatError {
+                        path: path.clone(),
+                        source: err,
+                    })?
                 }
-            })?,
-        };
-        if formatted != content {
+                FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {
+                    CheckError::BibFormatError {
+                        path: path.clone(),
+                        source: err,
+                    }
+                })?,
+            };
+            Ok((formatted != content).then(|| path.clone()))
+        })
+        .collect();
+
+    let mut changed_files = Vec::new();
+    for result in results {
+        if let Some(path) = result? {
             changed_files.push(path);
         }
     }

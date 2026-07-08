@@ -860,7 +860,7 @@ fn report_discovery_error(err: &FileDiscoveryError) {
 /// formatter by [`FileKind`].
 fn run_format_paths(
     paths: &[PathBuf],
-    mut style: FormatStyle,
+    style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
@@ -879,46 +879,52 @@ fn run_format_paths(
         return ExitCode::FAILURE;
     }
 
-    let mut failed = false;
-    for (path, kind) in &files {
-        let content = match std::fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(err) => {
-                eprintln!("badness: cannot read {}: {err}", path.display());
-                failed = true;
-                continue;
-            }
-        };
-        style.wrap = wrap_override.unwrap_or(kind.default_wrap());
-        let formatted = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                format_file_with_packages_sentence(
-                    &content,
-                    path,
-                    style,
-                    kind.lex_config(),
-                    sentence,
-                )
-                .map_err(|e| e.to_string())
-            }
-            FileKind::Bib => {
-                badness::bib::format_with_style(&content, style).map_err(|e| e.to_string())
-            }
-        };
-        match formatted {
-            Ok(formatted) => {
-                if formatted != *content
-                    && let Err(err) = std::fs::write(path, formatted)
-                {
-                    eprintln!("badness: cannot write {}: {err}", path.display());
-                    failed = true;
+    // Read, format, and write each file in parallel (formatting is a pure function
+    // of input plus shipped data, so it is thread-safe; distinct output files never
+    // race). Each task returns `Some(message)` on failure; the order-preserving
+    // collect lets the serial fold below report errors deterministically.
+    let outcomes: Vec<Option<String>> = files
+        .par_iter()
+        .map(|(path, kind)| {
+            let content = match std::fs::read_to_string(path) {
+                Ok(content) => content,
+                Err(err) => return Some(format!("badness: cannot read {}: {err}", path.display())),
+            };
+            let mut style = style;
+            style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+            let formatted = match kind {
+                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+                    format_file_with_packages_sentence(
+                        &content,
+                        path,
+                        style,
+                        kind.lex_config(),
+                        sentence,
+                    )
+                    .map_err(|e| e.to_string())
                 }
+                FileKind::Bib => {
+                    badness::bib::format_with_style(&content, style).map_err(|e| e.to_string())
+                }
+            };
+            match formatted {
+                Ok(formatted) => {
+                    if formatted != *content
+                        && let Err(err) = std::fs::write(path, formatted)
+                    {
+                        return Some(format!("badness: cannot write {}: {err}", path.display()));
+                    }
+                    None
+                }
+                Err(msg) => Some(format!("badness: cannot format {}: {msg}", path.display())),
             }
-            Err(msg) => {
-                eprintln!("badness: cannot format {}: {msg}", path.display());
-                failed = true;
-            }
-        }
+        })
+        .collect();
+
+    let mut failed = false;
+    for message in outcomes.into_iter().flatten() {
+        eprintln!("{message}");
+        failed = true;
     }
     if failed {
         ExitCode::FAILURE

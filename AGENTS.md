@@ -174,6 +174,36 @@ for the sanctioned lexer modes is in TODO.md ("Design notes").
    is the one named-node exception. This is a CST-shape convention enforced by tests,
    not a hard oracle.
 
+10. **Typed AST wrappers are a read-only view, never a re-model of the tree.** On top
+    of the untyped rowan CST sits a thin typed layer (`ast.rs` + `ast/nodes.rs` +
+    `ast/tokens.rs`, and the bib parallel `bib/ast.rs`): rust-analyzer-style `AstNode`/
+    `AstToken` traits (`can_cast`/`cast`/`syntax`), an `ast_node!` identity macro (a
+    12-line `macro_rules!`, *not* codegen—the accessors are hand-written), and one
+    wrapper struct per node kind (`Command`, `Group`, `Optional`, `NameGroup`, `Begin`,
+    `End`, `Environment`, `ControlWord`; add more only when a field-extraction consumer
+    appears—`Math`/`Scripted`/… stay unwrapped until then). Wrappers expose **structure**
+    (a command's name token, its positional argument groups, an environment's
+    `\begin`/`\end`), never **meaning**—no signature-DB lookup lives here (composing with
+    decision #2). Because the CST is greedy and generic (decision #8), accessors are
+    **positional** (`Command::nth_group(n)` filters `GROUP` only, so an `OPTIONAL` never
+    shifts brace indexing) and tolerate over-attachment by construction; they never
+    pretend arity is fixed (`Command::title()` would be a lie—a `\section` and a
+    `\newcommand` share the `COMMAND` shape). Navigation uses the generic helpers
+    `child::<N>`/`children::<N>`/`child_token::<T>`, which replace the raw
+    `children().find(|c| c.kind()==X)` idiom at *field-extraction* sites.
+
+    The wrappers are read-only, so they can't threaten losslessness or idempotence. The
+    **formatter deliberately stays raw** for structural work: the `lower_node`
+    `match node.kind()` dispatch and the token-classification loops (trivia walks,
+    `L_BRACE`/`R_BRACE` matching) are idiomatic tree-walking that wrappers would only
+    obscure—the formatter adopts wrappers *only* for field access (argument/name
+    extraction). The pre-wrapper **free functions** (`command_name`, `environment_name`,
+    `nth_group_text`, …) remain as thin **kind-agnostic shims** over the wrapper bodies:
+    they read whatever relevant child a node has without gating on the node's own kind,
+    because callers rely on that latitude (dtx `\begin{macro}{\foo}` reads a `GROUP` off a
+    `BEGIN`; an xparse default body handed to `group_inner_source` may be an `OPTIONAL`).
+    The typed methods are kind-checked at `cast`; the shims are not.
+
 ## Invariants (test oracles—enforce them)
 
 - **Losslessness:** `reconstruct(text) == text`, byte-for-byte.
@@ -318,6 +348,10 @@ index/metadata feeding LSP navigation** is sanctioned. The index is gated by
 ## Working agreements for agents
 
 - Keep the syntactic layer free of semantic knowledge.
+- Read/navigate the CST through the typed AST wrappers (decision #10): typed accessors
+  and `child`/`children`/`child_token` over raw `children().find(|c| c.kind()==X)`. Add a
+  wrapper struct when a node kind gains a field-extraction consumer; keep accessors
+  positional and meaning-free.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
   decision #1 without recording the decision here.
 - Update TODO.md as phases progress; update this file when a decision changes.

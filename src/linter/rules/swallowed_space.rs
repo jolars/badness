@@ -36,7 +36,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::command_name;
+use crate::ast::{AstToken, ControlWord, child_token, command_name};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::syntax::{SyntaxElement, SyntaxKind};
 
@@ -115,14 +115,10 @@ impl Rule for SwallowedSpace {
         // directly after it must be a same-line space. Anything else — a `{`
         // (already `\LaTeX{}`), a `\ ` control symbol, a `~`, or a newline —
         // means the space is not swallowed, so we skip.
-        let Some(control_word) = command
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|t| t.kind() == SyntaxKind::CONTROL_WORD)
-        else {
+        let Some(control_word) = child_token::<ControlWord>(command) else {
             return;
         };
-        let Some(space) = control_word.next_token() else {
+        let Some(space) = control_word.syntax().next_token() else {
             return;
         };
         if space.kind() != SyntaxKind::WHITESPACE {

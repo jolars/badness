@@ -25,8 +25,8 @@
 use rowan::{TextRange, TextSize};
 
 use crate::ast::{
-    command_name, environment_name, first_group_range, group_inner_source, nth_group,
-    nth_group_text,
+    AstNode, Begin, Environment, Optional, child, command_name, first_group_range,
+    group_inner_source, nth_group, nth_group_text,
 };
 use crate::semantic::doc::{DocAssociation, DocKind, doc_associations};
 use crate::semantic::signature::{self, OutlineKind};
@@ -175,8 +175,8 @@ fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
 /// transparently when it is not outline-worthy.
 fn collect_environment(env: &SyntaxNode, out: &mut Vec<Raw>) {
     // The name lives in the `\begin{name}` (`BEGIN` node), not on `ENVIRONMENT`.
-    let begin = env.children().find(|c| c.kind() == SyntaxKind::BEGIN);
-    let name = begin.as_ref().and_then(environment_name);
+    let begin = Environment::cast(env.clone()).and_then(|e| e.begin());
+    let name = begin.as_ref().and_then(Begin::name);
     let kind = name.as_deref().and_then(|name| {
         signature::builtin()
             .environment(name)
@@ -192,7 +192,7 @@ fn collect_environment(env: &SyntaxNode, out: &mut Vec<Raw>) {
     let name = name.unwrap_or_default();
     let selection = begin
         .as_ref()
-        .map(|b| b.text_range())
+        .map(|b| b.syntax().text_range())
         .unwrap_or_else(|| env.text_range());
     out.push(Raw {
         level: None,
@@ -307,8 +307,8 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
                 return Some(LabelContext::Equation);
             }
             SyntaxKind::ENVIRONMENT => {
-                let begin = current.children().find(|c| c.kind() == SyntaxKind::BEGIN);
-                if let Some(name) = begin.as_ref().and_then(environment_name)
+                let begin = Environment::cast(current.clone()).and_then(|e| e.begin());
+                if let Some(name) = begin.as_ref().and_then(Begin::name)
                     && let Some(sig) = signature::builtin().environment(&name)
                 {
                     match sig.outline {
@@ -379,11 +379,9 @@ fn caption_text(env: &SyntaxNode) -> Option<String> {
 
 /// The inner text of a `\begin{…}[…]` optional argument (its `OPTIONAL` child,
 /// brackets stripped), trimmed; `None` when absent or empty.
-fn optional_text(begin: &SyntaxNode) -> Option<String> {
-    let optional = begin
-        .children()
-        .find(|c| c.kind() == SyntaxKind::OPTIONAL)?;
-    let text = optional.text().to_string();
+fn optional_text(begin: &Begin) -> Option<String> {
+    let optional = child::<Optional>(begin.syntax())?;
+    let text = optional.syntax().text().to_string();
     let inner = text
         .strip_prefix('[')
         .map(|t| t.strip_suffix(']').unwrap_or(t))

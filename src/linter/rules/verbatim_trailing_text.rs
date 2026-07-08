@@ -27,7 +27,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::environment_name;
+use crate::ast::{AstNode, Environment};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::signature;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -104,10 +104,9 @@ impl Rule for VerbatimTrailingText {
 /// user-defined verbatim environments; the curated built-in `verbatim_body` flag
 /// is the fallback for an *empty* body, which emits no token.
 fn verbatim_env_name(env: &SyntaxNode) -> Option<String> {
-    let name = env
-        .children()
-        .find(|c| c.kind() == SyntaxKind::BEGIN)
-        .and_then(|begin| environment_name(&begin))?;
+    let name = Environment::cast(env.clone())
+        .and_then(|e| e.begin())
+        .and_then(|begin| begin.name())?;
     let has_body = env
         .children()
         .any(|c| c.kind() == SyntaxKind::VERBATIM_BODY);

@@ -34,6 +34,7 @@
 
 use std::path::PathBuf;
 
+use crate::ast::{AstToken, ControlWord, child_token};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
@@ -88,21 +89,24 @@ impl Rule for MakeatMacro {
         // Embedded/trailing `@`: a `COMMAND`'s control word directly abutting an
         // `@`-word (`\foo@bar`, `\p@`).
         if let Some(command) = el.as_node() {
-            let Some(control_word) = command
-                .children_with_tokens()
-                .filter_map(|e| e.into_token())
-                .find(|t| t.kind() == SyntaxKind::CONTROL_WORD)
-            else {
+            let Some(control_word) = child_token::<ControlWord>(command) else {
                 return;
             };
-            let Some(next) = control_word.next_token() else {
+            let Some(next) = control_word.syntax().next_token() else {
                 return;
             };
             if next.kind() == SyntaxKind::WORD
                 && next.text().starts_with('@')
                 && let Some(run) = at_letter_run(&next)
             {
-                report(self, control_word.text(), &control_word, &next, run, sink);
+                report(
+                    self,
+                    control_word.text(),
+                    control_word.syntax(),
+                    &next,
+                    run,
+                    sink,
+                );
             }
             return;
         }

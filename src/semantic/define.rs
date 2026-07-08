@@ -28,8 +28,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    command_name, control_word_range, group_command_name, group_inner_source, nth_group,
-    nth_group_inner, nth_group_text,
+    AstNode, Command, Optional, child, children, command_name, control_word_range,
+    group_command_name, group_inner_source, nth_group, nth_group_inner, nth_group_text,
 };
 use crate::semantic::signature::{
     ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb,
@@ -144,10 +144,7 @@ fn command_def_site(command: &SyntaxNode) -> Option<DefSite> {
     let def = resolve_command_def(command)?;
     let name_range = if def.first_arg_group == 1 {
         let group = nth_group(command, 0)?;
-        let name_command = group
-            .children()
-            .find(|child| child.kind() == SyntaxKind::COMMAND)?;
-        control_word_range(&name_command)?
+        child::<Command>(&group)?.control_word_range()?
     } else {
         control_word_range(&def.host)?
     };
@@ -703,12 +700,10 @@ fn scan_xparse_environment(
 /// the first `[…]` optional (default `0`), and whether a *second* optional is
 /// present (which makes the first argument optional).
 fn newcommand_arity(command: &SyntaxNode) -> (usize, bool) {
-    let optionals: Vec<SyntaxNode> = command
-        .children()
-        .filter(|child| child.kind() == SyntaxKind::OPTIONAL)
-        .collect();
+    let optionals: Vec<Optional> = children::<Optional>(command).collect();
     let arity = optionals
         .first()
+        .map(|o| o.syntax())
         .and_then(optional_number)
         .unwrap_or(0)
         .min(9); // LaTeX caps macro arity at 9.

@@ -24,7 +24,7 @@
 use rowan::TextRange;
 use smol_str::SmolStr;
 
-use crate::ast::{command_name, control_word_range, nth_group_text};
+use crate::ast::{AstNode, Optional, child, command_name, control_word_range, nth_group_text};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 /// Which of the three `\Provides…` namespaces a declaration names.
@@ -187,11 +187,9 @@ pub fn option_from_command(command: &SyntaxNode) -> Option<OptionDecl> {
 /// `None` when there is no optional or it holds non-literal content — a nested macro
 /// in the bracket makes the whole thing unresolvable, like [`nth_group_text`].
 fn first_optional_text(command: &SyntaxNode) -> Option<String> {
-    let optional = command
-        .children()
-        .find(|child| child.kind() == SyntaxKind::OPTIONAL)?;
+    let optional = child::<Optional>(command)?;
     let mut text = String::new();
-    for element in optional.children_with_tokens() {
+    for element in optional.syntax().children_with_tokens() {
         match element {
             rowan::NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::L_BRACKET | SyntaxKind::R_BRACKET => {}

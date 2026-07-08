@@ -34,7 +34,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{command_name, environment_name};
+use crate::ast::{AstNode, AstToken, ControlWord, Environment, child_token, command_name};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::semantic::signature::builtin;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -107,14 +107,10 @@ impl Rule for SpaceBeforeCommand {
         // The `CONTROL_WORD` is the command's leading token; the token directly
         // before it (trivia floats as a sibling, and `prev_token` walks globally)
         // must be a same-line space.
-        let Some(control_word) = command
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|t| t.kind() == SyntaxKind::CONTROL_WORD)
-        else {
+        let Some(control_word) = child_token::<ControlWord>(command) else {
             return;
         };
-        let Some(space) = control_word.prev_token() else {
+        let Some(space) = control_word.syntax().prev_token() else {
             return;
         };
         if space.kind() != SyntaxKind::WHITESPACE {
@@ -159,10 +155,9 @@ impl Rule for SpaceBeforeCommand {
 fn in_math(node: &SyntaxNode) -> bool {
     node.ancestors().any(|anc| match anc.kind() {
         SyntaxKind::MATH => true,
-        SyntaxKind::ENVIRONMENT => anc
-            .children()
-            .find(|c| c.kind() == SyntaxKind::BEGIN)
-            .and_then(|begin| environment_name(&begin))
+        SyntaxKind::ENVIRONMENT => Environment::cast(anc.clone())
+            .and_then(|e| e.begin())
+            .and_then(|begin| begin.name())
             .and_then(|name| builtin().environment(&name).map(|env| env.math))
             .unwrap_or(false),
         _ => false,

@@ -44,7 +44,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{command_name, control_word_range};
+use crate::ast::{Group, children, command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::define::{is_definition_command, scan_definitions};
 use crate::semantic::signature::{self, SignatureDb};
@@ -139,10 +139,7 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
         if user_defs.command(&name).is_some() {
             return;
         }
-        let braced = node
-            .children()
-            .filter(|child| child.kind() == SyntaxKind::GROUP)
-            .count();
+        let braced = children::<Group>(node).count();
         if braced >= required
             || in_unsafe_group(node)
             || follows_bare_command(node)

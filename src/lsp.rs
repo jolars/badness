@@ -5149,6 +5149,8 @@ fn environment_pair_ranges(root: &SyntaxNode, offset: usize) -> Vec<TextRange> {
 /// token run (so a textual rewrite could corrupt it), decline the whole edit
 /// rather than rewrite half a pair.
 fn environment_change_target(root: &SyntaxNode, offset: usize) -> Option<(String, Vec<TextRange>)> {
+    use crate::ast::AstNode;
+
     let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
     let (left, right) = match root.token_at_offset(at) {
         rowan::TokenAtOffset::None => return None,
@@ -5158,13 +5160,12 @@ fn environment_change_target(root: &SyntaxNode, offset: usize) -> Option<(String
     let env = [left, right].into_iter().flatten().find_map(|token| {
         token
             .parent_ancestors()
-            .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+            .find_map(crate::ast::Environment::cast)
     })?;
-    let begin = env
-        .children()
-        .find(|child| child.kind() == SyntaxKind::BEGIN)?;
-    let old_name = crate::ast::environment_name(&begin)?;
+    let begin = env.begin()?;
+    let old_name = begin.name()?;
     let ranges = env
+        .syntax()
         .children()
         .filter(|child| matches!(child.kind(), SyntaxKind::BEGIN | SyntaxKind::END))
         .map(|child| crate::ast::environment_name_range(&child))

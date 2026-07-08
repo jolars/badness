@@ -24,7 +24,7 @@
 use rowan::TextRange;
 
 use crate::ast::{
-    command_name, environment_name, first_group_range, group_command_name, nth_group,
+    AstNode, Begin, Environment, command_name, first_group_range, group_command_name, nth_group,
 };
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -84,10 +84,10 @@ fn collect(node: &SyntaxNode, out: &mut Vec<DocAssociation>) {
 /// non-ltxdoc environment is transparent.
 fn collect_environment(env: &SyntaxNode, out: &mut Vec<DocAssociation>) {
     // The name and the documented-entity argument both live on the `\begin` node.
-    let begin = env.children().find(|c| c.kind() == SyntaxKind::BEGIN);
+    let begin = Environment::cast(env.clone()).and_then(|e| e.begin());
     let kind = begin
         .as_ref()
-        .and_then(environment_name)
+        .and_then(Begin::name)
         .and_then(|name| match name.as_str() {
             "macro" => Some(DocKind::Macro),
             "environment" => Some(DocKind::Environment),
@@ -95,7 +95,7 @@ fn collect_environment(env: &SyntaxNode, out: &mut Vec<DocAssociation>) {
         });
 
     if let (Some(kind), Some(begin)) = (kind, begin.as_ref())
-        && let Some(group) = nth_group(begin, 0)
+        && let Some(group) = nth_group(begin.syntax(), 0)
         && let Some(name) = documented_name(&group, kind)
     {
         let mut code = Vec::new();
@@ -196,10 +196,9 @@ fn group_inner_text(group: &SyntaxNode) -> Option<String> {
 fn collect_code(node: &SyntaxNode, out: &mut Vec<TextRange>) {
     for child in node.children() {
         if child.kind() == SyntaxKind::ENVIRONMENT {
-            let name = child
-                .children()
-                .find(|c| c.kind() == SyntaxKind::BEGIN)
-                .and_then(|b| environment_name(&b));
+            let name = Environment::cast(child.clone())
+                .and_then(|e| e.begin())
+                .and_then(|b| b.name());
             match name.as_deref() {
                 Some("macrocode" | "macrocode*") => out.push(child.text_range()),
                 // A nested documented construct owns its own code; stop here.

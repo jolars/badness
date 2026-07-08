@@ -286,9 +286,13 @@ not re-proposed.
 - [ ] Bib document-symbol outline completeness: `src/bib/outline.rs` surfaces
   regular entries only; consider `@string`/`@preamble`/`@comment` blocks (and a
   richer `SymbolKind`/detail).
-- [ ] `title-capitalization` refinement: the acronym heuristic flags mid-word
-  capitals, so CamelCase names (`McDonald`, `DeForest`) are false positives ---
-  a curated name-particle allowlist or a smarter word model would tighten it.
+- [x] `title-capitalization` refinement: a single mid-word capital now counts only
+  when it is the *first* capital of a lowercase-initial word (the camelCase brand
+  pattern, `iPhone`/`eBay`/`pH`). A later capital in a capital-initial word is a
+  surname particle (`McDonald`, `DeForest`, `MacArthur`) or style token (`LaTeX`),
+  so it is left alone---no curated name list needed, at the cost of an occasional
+  miss (a capital-initial acronym like the cell line `HeLa`). `[A-Z]{2,}` runs
+  (`DNA`) still flag regardless of word shape.
 - [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
   component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
   helper when a third consumer appears.

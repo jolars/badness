@@ -9,14 +9,21 @@
 //!
 //! **Acronym heuristic (not strict).** Only capitals likely to be acronyms are
 //! flagged, to stay quiet on ordinary Title-Cased databases:
-//! - a run of **two or more** consecutive capitals (`DNA`, `LaTeX`'s `L`+`T`… —
-//!   any `[A-Z]{2,}` run), or
-//! - a **single** capital in the *middle* of a word (`iPhone`'s `P`),
+//! - a run of **two or more** consecutive capitals (`DNA`, any `[A-Z]{2,}` run), or
+//! - a **single** capital in the *middle* of a **lowercase-initial** word — the
+//!   camelCase brand pattern (`iPhone`'s `P`, `eBay`'s `B`, `pH`'s `H`).
 //!
-//! A lone capital starting a word (`The`, `Quick`) is left alone. Only text at
-//! brace depth 0 inside the value is considered — content already inside a nested
-//! `{…}` group is protected and skipped. Bare `LITERAL` pieces (macros/numbers) are
-//! not scanned.
+//! A lone capital *starting* a word (`The`, `Quick`) is left alone. So is a single
+//! interior capital in a word that **already contains a capital**: that is the
+//! surname-particle pattern (`McDonald`, `DeForest`, `MacArthur`) or a mixed-case
+//! token (`LaTeX`), where the interior capital is a proper name or style choice, not
+//! a clobbered acronym. Distinguishing these from a real acronym without a word list
+//! is impossible in general, so the rule stays quiet on the capital-initial shape and
+//! accepts the occasional miss (e.g. a cell line like `HeLa`).
+//!
+//! Only text at brace depth 0 inside the value is considered — content already inside
+//! a nested `{…}` group is protected and skipped. Bare `LITERAL` pieces
+//! (macros/numbers) are not scanned.
 
 use std::path::PathBuf;
 
@@ -117,9 +124,12 @@ fn inner_of(node: &SyntaxNode, open: char, close: char) -> Option<(String, usize
 fn unprotected_acronyms(text: &str) -> Vec<(usize, usize, String)> {
     let mut hits = Vec::new();
     let mut depth: i32 = 0;
-    // Byte offset of the previous char and whether it was an alphabetic letter at
-    // depth 0 (to detect a mid-word single capital).
+    // State tracked across the current word (a maximal run of alphabetic chars at
+    // depth 0): whether the previous char was a letter (to detect a mid-word capital)
+    // and whether this word has already contained a capital (to tell the camelCase
+    // brand pattern `iPhone` apart from a surname particle like `McDonald`).
     let mut prev_alpha = false;
+    let mut word_has_upper = false;
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -128,12 +138,14 @@ fn unprotected_acronyms(text: &str) -> Vec<(usize, usize, String)> {
             '{' => {
                 depth += 1;
                 prev_alpha = false;
+                word_has_upper = false;
                 i += 1;
                 continue;
             }
             '}' => {
                 depth -= 1;
                 prev_alpha = false;
+                word_has_upper = false;
                 i += 1;
                 continue;
             }
@@ -142,21 +154,29 @@ fn unprotected_acronyms(text: &str) -> Vec<(usize, usize, String)> {
         if depth == 0 && ch.is_ascii_uppercase() {
             // Extend a maximal run of consecutive ASCII capitals at this depth.
             let run_start = off;
-            let prev_alpha_at_run = prev_alpha;
+            // A single interior capital counts only when it is the *first* capital of
+            // a lowercase-initial word; a later capital is a name/style token.
+            let midword_single = prev_alpha && !word_has_upper;
             let mut j = i;
             while j < chars.len() && chars[j].1.is_ascii_uppercase() {
                 j += 1;
             }
             let run_len = j - i;
             let run_end = chars.get(j).map(|&(o, _)| o).unwrap_or(text.len());
-            if run_len >= 2 || prev_alpha_at_run {
+            if run_len >= 2 || midword_single {
                 hits.push((run_start, run_end, text[run_start..run_end].to_string()));
             }
             prev_alpha = true;
+            word_has_upper = true;
             i = j;
             continue;
         }
-        prev_alpha = depth == 0 && ch.is_alphabetic();
+        let alpha = depth == 0 && ch.is_alphabetic();
+        if !alpha {
+            // Word boundary: reset the per-word capital flag.
+            word_has_upper = false;
+        }
+        prev_alpha = alpha;
         i += 1;
     }
     hits
@@ -209,6 +229,42 @@ mod tests {
         let out = findings("@article{k, title = {The iPhone era}}\n");
         assert_eq!(out.len(), 1);
         assert!(out[0].message.contains('P'));
+    }
+
+    #[test]
+    fn flags_lowercase_initial_camelcase() {
+        // The brand pattern: lowercase-initial word, first capital mid-word.
+        assert_eq!(
+            findings("@article{k, title = {The eBay auction}}\n").len(),
+            1
+        );
+        assert_eq!(
+            findings("@article{k, title = {Measuring pH levels}}\n").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn ignores_camelcase_surname() {
+        // A single interior capital in a capital-initial word is a name particle,
+        // not a clobbered acronym: the word already starts with a capital.
+        assert!(findings("@article{k, title = {The McDonald study}}\n").is_empty());
+        assert!(findings("@article{k, title = {On DeForest triodes}}\n").is_empty());
+        assert!(findings("@article{k, title = {The MacArthur grant}}\n").is_empty());
+    }
+
+    #[test]
+    fn ignores_mixed_case_style_token() {
+        // `LaTeX`: capital-initial, so the interior `T`/`X` are style, not acronyms.
+        assert!(findings("@article{k, title = {Typesetting with LaTeX}}\n").is_empty());
+    }
+
+    #[test]
+    fn still_flags_uppercase_run_in_capital_initial_word() {
+        // A 2+ capital run stays flagged even when the word is capital-initial.
+        let out = findings("@article{k, title = {The QChem package}}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("QC"));
     }
 
     #[test]

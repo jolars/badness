@@ -113,10 +113,12 @@ comparison is asymmetric, and the framing matters when triaging the items below.
 
 ### Navigation & structure
 
-- [ ] Selection ranges (`textDocument/selectionRange`)—expand-selection from
+- [x] Selection ranges (`textDocument/selectionRange`)—expand-selection from
   the CST's node hierarchy (group → argument → command → environment). Subsumes
   texlab's `findEnvironments` command: the enclosing-environment stack falls out
-  of the CST-hierarchy expansion.
+  of the CST-hierarchy expansion. (`lsp/selection_range.rs`: leaf token +
+  `parent_ancestors` up to `ROOT`, consecutive-equal ranges collapsed; single-file
+  read-pool job mirroring folding.)
 
 ### Completion
 

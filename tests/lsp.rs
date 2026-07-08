@@ -33,7 +33,8 @@ use lsp_types::{
     InitializedParams, InsertTextFormat, Location, NumberOrString, OneOf, PartialResultParams,
     Position, PositionEncodingKind, PrepareRenameResponse, PublishDiagnosticsParams, Range,
     ReferenceContext, ReferenceParams, RegistrationParams, RenameOptions, RenameParams,
-    SignatureHelp, SignatureHelpParams, SymbolKind, TextDocumentClientCapabilities,
+    SelectionRange, SelectionRangeParams, SelectionRangeProviderCapability, SignatureHelp,
+    SignatureHelpParams, SymbolKind, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams,
@@ -187,6 +188,13 @@ fn start_server(
             Some(FoldingRangeProviderCapability::Simple(true))
         ),
         "server must advertise foldingRangeProvider"
+    );
+    assert!(
+        matches!(
+            init.capabilities.selection_range_provider,
+            Some(SelectionRangeProviderCapability::Simple(true))
+        ),
+        "server must advertise selectionRangeProvider"
     );
     assert!(
         matches!(
@@ -989,6 +997,77 @@ fn lsp_folding_ranges() {
     assert!(
         triples.contains(&(4, 6, None)),
         "itemize fold, got {triples:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_selection_ranges() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///sel.tex".parse().unwrap();
+
+    // \section{Intro}\n — cursor on the 'n' of Intro (line 0, char 10).
+    let doc = "\\section{Intro}\n";
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc -> no diagnostics");
+
+    send_request(
+        &client,
+        2,
+        "textDocument/selectionRange",
+        serde_json::to_value(SelectionRangeParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            positions: vec![Position::new(0, 10)],
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let ranges: Vec<SelectionRange> =
+        serde_json::from_value(resp.result.unwrap()).expect("a selectionRange response");
+
+    // One chain per input position.
+    assert_eq!(ranges.len(), 1, "one chain per position, got {ranges:?}");
+
+    // Flatten the chain innermost -> outermost and assert it widens through the
+    // expected CST levels: the "Intro" word, the {Intro} group, the \section command,
+    // and the document root.
+    let mut flat: Vec<Range> = Vec::new();
+    let mut cur = Some(Box::new(ranges[0].clone()));
+    while let Some(node) = cur {
+        flat.push(node.range);
+        cur = node.parent;
+    }
+    let pairs: Vec<((u32, u32), (u32, u32))> = flat
+        .iter()
+        .map(|r| {
+            (
+                (r.start.line, r.start.character),
+                (r.end.line, r.end.character),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs[0],
+        ((0, 9), (0, 14)),
+        "innermost is the title word, got {pairs:?}"
+    );
+    assert!(
+        pairs.contains(&((0, 8), (0, 15))),
+        "the {{Intro}} group is a level, got {pairs:?}"
+    );
+    assert!(
+        pairs.contains(&((0, 0), (0, 15))),
+        "the \\section command is a level, got {pairs:?}"
+    );
+    assert_eq!(
+        *pairs.last().unwrap(),
+        ((0, 0), (1, 0)),
+        "outermost is the whole document, got {pairs:?}"
     );
 
     shutdown(&client, server_thread);

@@ -60,6 +60,7 @@ mod document_link;
 mod folding;
 mod hover;
 mod name_refs;
+mod selection_range;
 mod signature_help;
 mod task_pool;
 
@@ -79,7 +80,7 @@ use lsp_types::request::{
     DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, ExecuteCommand,
     FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, OnTypeFormatting,
     PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename, Request as _,
-    ResolveCompletionItem, SignatureHelpRequest, WorkspaceDiagnosticRefresh,
+    ResolveCompletionItem, SelectionRangeRequest, SignatureHelpRequest, WorkspaceDiagnosticRefresh,
     WorkspaceSymbolRequest,
 };
 use lsp_types::{
@@ -99,7 +100,8 @@ use lsp_types::{
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
     RegistrationParams, RelatedFullDocumentDiagnosticReport,
-    RelatedUnchangedDocumentDiagnosticReport, RenameOptions, RenameParams, ServerCapabilities,
+    RelatedUnchangedDocumentDiagnosticReport, RenameOptions, RenameParams, SelectionRange,
+    SelectionRangeParams, SelectionRangeProviderCapability, ServerCapabilities,
     SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
     UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
@@ -284,6 +286,9 @@ fn server_capabilities(
             work_done_progress_options: Default::default(),
         })),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        // Expand-selection: nested ranges walking outward through the CST hierarchy
+        // (token -> group -> argument -> command -> environment -> ... -> root).
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         // Clickable include edges: `\input`/`\include`/`\import`, `\usepackage`/
         // `\documentclass`, `\bibliography`/`\addbibresource`, `\includegraphics`.
         // Links are built eagerly (target + range together), so no `resolve` step.
@@ -605,6 +610,17 @@ enum WorkerJob {
         path: PathBuf,
         text: String,
         kind: FileKind,
+    },
+    /// A selection-range request: for each cursor `positions`, compute the nested
+    /// "expand selection" chain from the CST ancestor walk on the read pool and reply
+    /// to `id`. Single-file and positional like [`FoldingRange`](Self::FoldingRange),
+    /// with no project snapshot.
+    SelectionRange {
+        id: RequestId,
+        path: PathBuf,
+        text: String,
+        kind: FileKind,
+        positions: Vec<Position>,
     },
     /// A document-link request: build clickable include/package/bib/graphics links
     /// on the read pool and reply to `id`. Single-file and positional (it bypasses
@@ -949,6 +965,9 @@ fn main_loop(
                             Rename::METHOD => on_rename(&connection, &state, &job_tx, req),
                             FoldingRangeRequest::METHOD => {
                                 on_folding_range(&connection, &state, &job_tx, req)
+                            }
+                            SelectionRangeRequest::METHOD => {
+                                on_selection_range(&connection, &state, &job_tx, req)
                             }
                             DocumentLinkRequest::METHOD => {
                                 on_document_link(&connection, &mut state, &job_tx, req)
@@ -1469,6 +1488,49 @@ fn on_folding_range(
         path,
         text: doc.text.clone(),
         kind,
+    });
+}
+
+/// `textDocument/selectionRange`: build a selection-range job for the worker, or reply
+/// `null` when the document is unknown. Modeled on [`on_folding_range`], plus the
+/// cursor `positions` the expand-selection chains are computed at.
+fn on_selection_range(
+    connection: &Connection,
+    state: &GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let params = match req.extract::<SelectionRangeParams>(SelectionRangeRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid selectionRange params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let uri = params.text_document.uri;
+    let Some(doc) = state.documents.get(&uri) else {
+        // Unknown document: no ranges.
+        let _ = connection.sender.send(Message::Response(Response::new_ok(
+            id,
+            serde_json::Value::Null,
+        )));
+        return;
+    };
+    let path = uri_to_path(&uri);
+    let kind = file_kind_for(&path);
+    let _ = job_tx.send(WorkerJob::SelectionRange {
+        id,
+        path,
+        text: doc.text.clone(),
+        kind,
+        positions: params.positions,
     });
 }
 
@@ -2477,6 +2539,21 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
                     .spawn(move || run_folding(&snapshot, id, &path, &text, kind, enc, &out_tx));
+            }
+            WorkerJob::SelectionRange {
+                id,
+                path,
+                text,
+                kind,
+                positions,
+            } => {
+                // Selection ranges run on the read pool against a snapshot, like
+                // folding (single-file, id-bound responses).
+                let snapshot = self.db.snapshot();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_selection_range(&snapshot, id, &path, &text, kind, &positions, enc, &out_tx)
+                });
             }
             WorkerJob::DocumentLink {
                 id,
@@ -3827,6 +3904,71 @@ fn compute_folding(
         Ok(None) | Err(_) => {
             folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx, text)
         }
+    }
+}
+
+/// Compute selection ranges for a [`WorkerJob::SelectionRange`] on the read pool and
+/// reply with a `Vec<SelectionRange>` (one chain per input position). Mirrors
+/// [`run_folding`].
+#[allow(clippy::too_many_arguments)]
+fn run_selection_range(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    positions: &[Position],
+    enc: PositionEncoding,
+    out_tx: &Sender<Outbound>,
+) {
+    let ranges = compute_selection_range(snapshot, path, text, kind, positions, enc);
+    let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Compute the LaTeX expand-selection chains for each cursor in `positions`, preferring
+/// the snapshot's cached tree and falling back to a direct reparse when it is
+/// unavailable or stale. `.bib` files have no LaTeX structure (the LaTeX parser does not
+/// apply), so they yield an empty range per position. Mirrors [`compute_folding`].
+fn compute_selection_range(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    kind: FileKind,
+    positions: &[Position],
+    enc: PositionEncoding,
+) -> Vec<SelectionRange> {
+    if kind == FileKind::Bib {
+        return positions
+            .iter()
+            .map(|&pos| SelectionRange {
+                range: Range::new(pos, pos),
+                parent: None,
+            })
+            .collect();
+    }
+    let idx = LineIndex::with_encoding(text, enc);
+    let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let file = snapshot.lookup_file(path)?;
+        if snapshot.file_text(file) != text {
+            return None;
+        }
+        Some(selection_range::selection_ranges(
+            &snapshot.parsed_tree(file),
+            &idx,
+            text,
+            positions,
+        ))
+    }));
+    match cached {
+        Ok(Some(ranges)) => ranges,
+        // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
+        Ok(None) | Err(_) => selection_range::selection_ranges(
+            &SyntaxNode::new_root(parse(text).green),
+            &idx,
+            text,
+            positions,
+        ),
     }
 }
 

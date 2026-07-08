@@ -634,6 +634,44 @@ warning: verbatim-trailing-text
   |                ^^^^^^^^ text after `\end{verbatim}` on the same line is silently discarded
 ```
 
+## `duplicate-package`
+
+Flag a package loaded more than once in the same file with `\usepackage`/`\RequirePackage` (which share one package namespace). LaTeX loads a given package only once; a second load is redundant and, when the options disagree, an option-clash error. No autofix: removing a load can drop options the survivor lacks, and which load to keep is the author's call. Class loads (`\documentclass`/`\LoadClass`) are a separate concern and are not flagged.
+
+The same package loaded twice:
+
+```tex
+\usepackage{amsmath}
+\usepackage{amsmath}
+```
+
+```text
+warning: duplicate-package
+ --> example.tex:2:1
+  |
+2 | \usepackage{amsmath}
+  | ^^^^^^^^^^^^^^^^^^^^ package `amsmath` is loaded more than once
+```
+
+## `missing-provides`
+
+Flag a package or class source (`.sty`/`.cls`) that never identifies itself with the matching `\ProvidesPackage`/`\ProvidesClass`. Every well-formed package declares its identity so LaTeX can log it and honor date-based compatibility checks; a `.sty` carrying only `\ProvidesClass` (wrong kind) still counts as missing. The rule is inert for any other extension -- a `.tex` has nothing to provide, and a `.dtx` hides its declaration inside guarded `macrocode`. No autofix: writing a correct `\Provides…` line (placement, date, version) is the author's call.
+
+A package source with no self-identification (the docs are rendered against a `.sty` path):
+
+```tex
+\NeedsTeXFormat{LaTeX2e}
+\RequirePackage{xcolor}
+```
+
+```text
+warning: missing-provides
+ --> example.sty:1:1
+  |
+1 | \NeedsTeXFormat{LaTeX2e}
+  | ^^^^^^^^^^^^^^^ package file lacks `\ProvidesPackage`
+```
+
 ## Configuration
 
 Rules are selected through the `[lint]` table in `badness.toml`, or the matching

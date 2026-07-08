@@ -731,3 +731,41 @@ fn sectioning_level_jump_flags_skipped_level() {
             .all(|(r, _)| *r != "sectioning-level-jump")
     );
 }
+
+/// Lint `src` at a chosen path (extension matters for the package rules) through
+/// the public driver, returning just the rule ids.
+fn lint_at(path: &str, src: &str) -> Vec<&'static str> {
+    let root = SyntaxNode::new_root(parse(src).green);
+    let model = SemanticModel::build(&root);
+    lint_document(Path::new(path), &root, &model, None, None)
+        .into_iter()
+        .map(|d| d.rule)
+        .collect()
+}
+
+#[test]
+fn duplicate_package_flags_second_load() {
+    let out = lint("\\documentclass{article}\n\\usepackage{amsmath}\n\\usepackage{amsmath}\n");
+    let hits: Vec<_> = out
+        .iter()
+        .filter(|(r, _)| *r == "duplicate-package")
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].1, Severity::Warning);
+    // Distinct packages draw no finding.
+    assert!(
+        lint("\\usepackage{amsmath}\n\\usepackage{amssymb}\n")
+            .iter()
+            .all(|(r, _)| *r != "duplicate-package")
+    );
+}
+
+#[test]
+fn missing_provides_fires_only_for_package_sources() {
+    // A `.sty` without `\ProvidesPackage` is flagged...
+    assert!(lint_at("mypkg.sty", "\\RequirePackage{xcolor}\n").contains(&"missing-provides"));
+    // ...a self-identifying one is not...
+    assert!(!lint_at("mypkg.sty", "\\ProvidesPackage{mypkg}\n").contains(&"missing-provides"));
+    // ...and a `.tex` document is inert regardless.
+    assert!(!lint_at("main.tex", "\\RequirePackage{xcolor}\n").contains(&"missing-provides"));
+}

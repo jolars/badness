@@ -209,9 +209,23 @@ engine.
   *Deferred to the package-aware diagnostics item below:* the diagnostics
   themselves (unknown-option, duplicate `\RequirePackage`, missing
   `\ProvidesPackage`) — they consume the model this item builds.
-- [ ] **Package-aware diagnostics.** Once the load graph exists: unknown-option,
-  duplicate `\RequirePackage`, missing `\ProvidesPackage`, and resolving
-  user-macro definitions to their defining package for hover/go-to-definition.
+- [~] **Package-aware diagnostics.** Consuming the load graph and the `pkgmeta`
+  model. Landed as two per-file lints (`src/linter/rules/`): **`duplicate-package`**
+  (the same package loaded twice via `\usepackage`/`\RequirePackage` in one file,
+  keyed on the resolved target from `collect_package_edges`; intra-file only, since
+  a cross-file re-load is idempotent in LaTeX) and **`missing-provides`** (a
+  `.sty`/`.cls` that never declares its matching `\ProvidesPackage`/`\ProvidesClass`,
+  gated on the file extension and reading `SemanticModel::provides()`; the "wrong
+  kind" case counts as missing). Both are `Warning`, no autofix. The docs renderer
+  grew a per-rule `example_path()` so an extension-gated rule's example can lint as a
+  `.sty`. *Still deferred:* **unknown-option** (needs `\usepackage`-option extraction
+  from the CST, a cross-file package-model reachable from a lint rule — today rules
+  see only `ResolvedLabels`/`ResolvedCitations` — and would fire only for a
+  locally-resolvable `.sty` without a `\DeclareOption*` default handler, since no
+  option data ships for system packages) and **macro->package provenance** in hover
+  (go-to-definition already resolves package macros via `macro_namespace`; only hover
+  lacks the source-package label, which needs provenance preserved through
+  `SignatureDb::merge_from`).
 
 ## Performance & hardening
 

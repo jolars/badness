@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use smol_str::SmolStr;
 
@@ -46,7 +46,15 @@ fn example_path() -> PathBuf {
 /// names is registered as an analyzed, empty bibliography so the namespace is
 /// closed and any cited key reads as undefined.
 pub fn demo_diagnostics(source: &str) -> Vec<Diagnostic> {
-    let path = example_path();
+    demo_diagnostics_at(&example_path(), source)
+}
+
+/// Like [`demo_diagnostics`] but lints the snippet under a given synthetic path.
+/// Path-sensitive rules (gated on the file extension, like `missing-provides`)
+/// pass their [`Rule::example_path`](crate::linter::rules::Rule::example_path) so
+/// their examples fire.
+pub fn demo_diagnostics_at(path: &Path, source: &str) -> Vec<Diagnostic> {
+    let path = path.to_path_buf();
     let root = SyntaxNode::new_root(parse(source).green);
     let model = SemanticModel::build(&root);
 
@@ -96,6 +104,7 @@ pub fn demo_diagnostics(source: &str) -> Vec<Diagnostic> {
 pub fn render_rule_doc(rule: &dyn Rule) -> String {
     let mut out = String::new();
     let id = rule.id();
+    let example_path = PathBuf::from(rule.example_path());
     let _ = writeln!(out, "## `{id}`");
 
     let description = rule.description().trim();
@@ -113,13 +122,13 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
         fenced(&mut out, "tex", example.source);
 
         // Restrict to this rule so an example can't advertise another's finding.
-        let diagnostics: Vec<Diagnostic> = demo_diagnostics(example.source)
+        let diagnostics: Vec<Diagnostic> = demo_diagnostics_at(&example_path, example.source)
             .into_iter()
             .filter(|d| d.rule == id)
             .collect();
         let source = example.source.to_string();
         let rendered = render_findings(&diagnostics, OutputMode::Pretty, &|path| {
-            (path == example_path().as_path()).then(|| source.clone())
+            (path == example_path.as_path()).then(|| source.clone())
         });
         let _ = writeln!(out);
         fenced(&mut out, "text", &rendered);

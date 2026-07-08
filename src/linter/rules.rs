@@ -19,12 +19,14 @@ pub mod dash_length;
 pub mod deprecated_command;
 pub mod dollar_display_math;
 pub mod duplicate_label;
+pub mod duplicate_package;
 pub mod ellipsis;
 pub mod hard_coded_reference;
 pub mod makeat_macro;
 pub mod math_operator_name;
 pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
+pub mod missing_provides;
 pub mod missing_required_argument;
 pub mod obsolete_environment;
 pub mod primitive_command;
@@ -43,12 +45,14 @@ pub use dash_length::DashLength;
 pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
+pub use duplicate_package::DuplicatePackage;
 pub use ellipsis::Ellipsis;
 pub use hard_coded_reference::HardCodedReference;
 pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
 pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
+pub use missing_provides::MissingProvides;
 pub use missing_required_argument::MissingRequiredArgument;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use primitive_command::PrimitiveCommand;
@@ -135,6 +139,14 @@ pub trait Rule: Send + Sync {
         &[]
     }
 
+    /// The synthetic filename an example snippet is linted as when rendering the
+    /// rule reference. Defaults to `example.tex`; a rule gated on the file
+    /// extension (like `missing-provides`, inert outside `.sty`/`.cls`) overrides
+    /// this so its examples actually trigger under the docs renderer.
+    fn example_path(&self) -> &'static str {
+        "example.tex"
+    }
+
     /// The `SyntaxKind`s this rule subscribes to. During the driver's single
     /// shared traversal, [`Rule::check`] is invoked once for every element whose
     /// kind appears here. The default (`&[]`) opts out of node dispatch entirely —
@@ -184,6 +196,8 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(UndefinedCitation),
         Box::new(UnreferencedLabel),
         Box::new(VerbatimTrailingText),
+        Box::new(DuplicatePackage),
+        Box::new(MissingProvides),
     ]
 }
 
@@ -214,6 +228,8 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "undefined-citation",
     "unreferenced-label",
     "verbatim-trailing-text",
+    "duplicate-package",
+    "missing-provides",
 ];
 
 /// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).

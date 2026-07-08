@@ -7,8 +7,10 @@
 //! rule. The generator (`examples/docgen.rs`) writes the same
 //! `render_reference_page` output to the mdBook source tree.
 
+use std::path::Path;
+
 use badness::linter::docs::{
-    demo_diagnostics, explain_rule, render_reference_page, render_rule_doc,
+    demo_diagnostics_at, explain_rule, render_reference_page, render_rule_doc,
 };
 use badness::linter::rules::{ALL_RULE_IDS, all_rules};
 
@@ -45,7 +47,7 @@ fn every_rule_is_documented() {
 fn documented_examples_actually_trigger() {
     for rule in all_rules() {
         for example in rule.examples() {
-            let diagnostics = demo_diagnostics(example.source);
+            let diagnostics = demo_diagnostics_at(Path::new(rule.example_path()), example.source);
             assert!(
                 diagnostics.iter().any(|d| d.rule == rule.id()),
                 "example for rule `{}` produced no finding of that rule:\n{}",

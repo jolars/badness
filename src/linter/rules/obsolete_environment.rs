@@ -16,8 +16,8 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{environment_name, environment_name_range};
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
+use crate::ast::{AstNode, Begin, Environment};
+use crate::syntax::{SyntaxElement, SyntaxKind};
 
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 
@@ -63,20 +63,23 @@ impl Rule for ObsoleteEnvironment {
     }
 
     fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        let Some(env) = el.as_node() else {
+        let Some(env) = el.as_node().cloned().and_then(Environment::cast) else {
             return;
         };
-        let Some(begin) = env.children().find(|c| c.kind() == SyntaxKind::BEGIN) else {
+        let Some(begin) = env.begin() else {
             return;
         };
-        let Some(name) = environment_name(&begin) else {
+        let Some(name) = begin.name() else {
             return;
         };
         let Some((_, replacement)) = OBSOLETE.iter().find(|(obs, _)| *obs == name) else {
             return;
         };
         // Underline the name inside `\begin{…}`, not the whole environment.
-        let range = name_group_range(&begin).unwrap_or_else(|| begin.text_range());
+        let range = begin
+            .name_group()
+            .map(|g| g.syntax().text_range())
+            .unwrap_or_else(|| begin.syntax().text_range());
         sink.push(Diagnostic {
             rule: self.id(),
             severity: self.default_severity(),
@@ -84,17 +87,9 @@ impl Rule for ObsoleteEnvironment {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: format!("`{name}` is obsolete; use `{replacement}`"),
-            fix: environment_swap_fix(env, &begin, &name, replacement),
+            fix: environment_swap_fix(&env, &begin, &name, replacement),
         });
     }
-}
-
-/// The range of a `BEGIN`/`END` node's `NAME_GROUP` child (the `{name}`).
-fn name_group_range(begin: &SyntaxNode) -> Option<rowan::TextRange> {
-    begin
-        .children()
-        .find(|c| c.kind() == SyntaxKind::NAME_GROUP)
-        .map(|g| g.text_range())
 }
 
 /// A `Safe` swap of an environment's name at both ends (`eqnarray` → `align`).
@@ -107,21 +102,21 @@ fn name_group_range(begin: &SyntaxNode) -> Option<rowan::TextRange> {
 /// (unterminated), or an `\end` naming a different environment (parser recovery)
 /// would make a symmetric swap corrupt the source, so those stay report-only.
 fn environment_swap_fix(
-    env: &SyntaxNode,
-    begin: &SyntaxNode,
+    env: &Environment,
+    begin: &Begin,
     name: &str,
     replacement: &str,
 ) -> Option<Fix> {
-    let end = env.children().find(|c| c.kind() == SyntaxKind::END)?;
-    if environment_name(&end).as_deref() != Some(name) {
+    let end = env.end()?;
+    if end.name().as_deref() != Some(name) {
         return None;
     }
-    let begin_name = environment_name_range(begin)?;
-    let end_name = environment_name_range(&end)?;
+    let begin_name = begin.name_range()?;
+    let end_name = end.name_range()?;
 
     // `\begin` precedes `\end`, so the name spans are ordered and disjoint.
-    let env_start = env.text_range().start();
-    let env_text = env.text().to_string();
+    let env_start = env.syntax().text_range().start();
+    let env_text = env.syntax().text().to_string();
     let bs = usize::from(begin_name.start() - env_start);
     let be = usize::from(begin_name.end() - env_start);
     let es = usize::from(end_name.start() - env_start);
@@ -134,7 +129,7 @@ fn environment_swap_fix(
     );
     Some(Fix::safe(
         usize::from(env_start),
-        usize::from(env.text_range().end()),
+        usize::from(env.syntax().text_range().end()),
         content,
         format!("Replace `{name}` with `{replacement}`"),
     ))
@@ -145,6 +140,7 @@ mod tests {
     use super::*;
     use crate::parser::parse;
     use crate::semantic::SemanticModel;
+    use crate::syntax::SyntaxNode;
 
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);

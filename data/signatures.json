@@ -98,7 +98,8 @@
     "cline": { "args": ["req"], "rule": true },
     "specialrule": { "args": ["req", "req", "req"], "rule": true },
     "addlinespace": { "args": ["opt"], "rule": true },
-    "morecmidrules": { "rule": true }
+    "morecmidrules": { "rule": true },
+    "multicolumn": { "args": ["req", "req", "req"] }
   },
 
   "environments": {

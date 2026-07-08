@@ -50,13 +50,18 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   package-specific grammar, out of scope for the generic parser (decisions #1, #2;
   non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
   corpus, and AGENTS.md amendment), not a formatter patch.
-- [ ] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table
-  environments (`tabular`/`array` are now grid-aligned, but every column is
-  left-aligned regardless of its `{lcr}` spec). Also: `\cmidrule(lr){2-3}`
-  paren trim specs (the parenthesized part isn't recognized as part of the
-  rule line, so such a line is treated as a cell and the table falls back),
-  and the same-line `\\ \hline` form (only own-line rule commands become
-  passthrough lines today).
+- [x] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table
+  environments. The `{lcr}` spec is parsed (`formatter::colspec`, layout-only,
+  bails to all-left on any unrecognized token; `p`/`m`/`b` read as left, `*{n}{}`
+  expands, `>{}`/`<{}`/`@{}`/`!{}` and rules produce no column) and threaded into the
+  grid renderer: each cell aligns L/C/R, a right/center last column pads on the left
+  only (no trailing whitespace), and a `\multicolumn{n}{spec}{…}` spans `n` columns
+  (excluded from single-column widths, aligned within its span by its own spec, wide
+  markup overflows rather than ballooning the data columns). Also handled:
+  `\cmidrule(lr){2-3}` paren trim specs (the `(lr)` `WORD` and detached `{2-3}` group
+  are consumed as part of the rule line) and the same-line `\\ \hline` form (a rule
+  sharing a physical line with the preceding `\\` is normalized onto its own
+  passthrough line).
 
 ## Linter
 

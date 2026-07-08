@@ -6,6 +6,7 @@
 //! [`core`].
 
 pub mod check;
+pub(crate) mod colspec;
 pub(crate) mod context;
 pub mod core;
 pub(crate) mod ir;

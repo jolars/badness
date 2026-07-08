@@ -218,6 +218,19 @@ never match.
   `SentenceOptions` threaded on `FormatContext`; babel/polyglossia auto-detection is
   deferred. The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
   *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
+- **Table column alignment** (`tabular`/`array`) is a formatter concern (layout, so
+  the formatter owns it—tenet #1). The `{lcr}` column spec is parsed by
+  `formatter::colspec` into per-column `ColAlign`s, reading only the static argument
+  text (no macro meaning); it is **conservative**, bailing to all-left on any token it
+  does not model (`p`/`m`/`b` count as left, `*{n}{}` expands, `>{}`/`<{}`/`@{}`/`!{}`
+  and vertical rules add no column). The grid renderer aligns each cell L/C/R; a
+  right/center *last* cell pads on the left only (no trailing whitespace, so
+  idempotence holds—padding re-trims on re-parse). A `\multicolumn{n}{spec}{…}` spans
+  `n` columns: excluded from single-column widths, aligned within its span by its own
+  spec, and left to overflow rather than ballooning narrow data columns. The rule-line
+  recognizer (`non_row_line`) tolerates the booktabs `\cmidrule(lr){2-3}` paren trim
+  (the `(lr)` `WORD` and detached `{2-3}` group are consumed as part of the rule line),
+  and a same-line `\\ \hline` is normalized onto its own passthrough line.
 - **CLI:** `clap` + `build.rs` generating man pages, completions, and markdown
   (`clap_mangen`, `clap_complete`, `clapdown`).
 

@@ -50,6 +50,7 @@ use std::iter::Peekable;
 
 use rowan::{TextRange, TextSize};
 
+use super::colspec::{self, ColAlign};
 use crate::ast::{command_name, environment_name};
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
@@ -2018,12 +2019,22 @@ fn is_math_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.math)
 }
 
-/// One row of an alignment grid: its rendered, trimmed cell strings, the flat text
-/// of the `\\` that terminated the row (`None` for a final row written without a
-/// trailing line break), and an optional end-of-line comment that trails the row
-/// (rendered *after* the `\\`, so the break is never commented out).
+/// One rendered grid cell: its flat, trimmed text, the number of columns it spans
+/// (`1` for an ordinary cell, `n` for `\multicolumn{n}{…}{…}`), and an optional
+/// alignment override (a `\multicolumn`'s own `{spec}`; `None` means "use the
+/// column's declared alignment").
+struct Cell {
+    text: String,
+    span: usize,
+    align: Option<ColAlign>,
+}
+
+/// One row of an alignment grid: its rendered cells, the flat text of the `\\` that
+/// terminated the row (`None` for a final row written without a trailing line
+/// break), and an optional end-of-line comment that trails the row (rendered
+/// *after* the `\\`, so the break is never commented out).
 struct AlignRow {
-    cells: Vec<String>,
+    cells: Vec<Cell>,
     line_break: Option<String>,
     trailing_comment: Option<String>,
 }
@@ -2079,7 +2090,8 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return lower_environment(node, cx);
     }
 
-    let body = render_alignment_rows(&items);
+    let aligns = column_alignments(node, cx).unwrap_or_default();
+    let body = render_alignment_rows(&items, &aligns);
     Ir::concat([
         leading,
         begin,
@@ -2144,7 +2156,8 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let body = if is_grid {
         match build_alignment_grid(&body_elements, cx, true) {
             Some(items) if items.iter().any(|item| matches!(item, GridItem::Row(_))) => {
-                render_alignment_rows(&items)
+                let aligns = column_alignments(node, cx).unwrap_or_default();
+                render_alignment_rows(&items, &aligns)
             }
             // A grid we cannot lay out on aligned rows (a nested block, a mid-row
             // comment, a blank line): fall back to the generic environment lowering,
@@ -2217,7 +2230,7 @@ fn build_alignment_grid(
     /// collapsed and still (correctly) falls back — it cannot sit on one aligned row.
     fn finish_cell(
         cell: &mut Vec<SyntaxElement>,
-        cells: &mut Vec<String>,
+        cells: &mut Vec<Cell>,
         printer: &Printer,
         cx: LowerCtx<'_>,
         math: bool,
@@ -2232,6 +2245,8 @@ fn build_alignment_grid(
         while cell.last().is_some_and(&is_edge_trivia) {
             cell.pop();
         }
+        // Read the `\multicolumn` span/alignment before the cell is drained below.
+        let (span, align) = detect_multicolumn(cell);
         // A comment in a cell is handled by the caller (passthrough / trailing /
         // fallback) and never reaches here in a handled case; this guard keeps the
         // fallback safe if one ever slips through an unmodeled path.
@@ -2269,12 +2284,50 @@ fn build_alignment_grid(
         if ir.contains_forced_break() {
             return None;
         }
-        cells.push(printer.print_flat(&ir).trim().to_string());
+        cells.push(Cell {
+            text: printer.print_flat(&ir).trim().to_string(),
+            span,
+            align,
+        });
         Some(())
     }
 
+    /// Inspect a not-yet-drained cell for a lone `\multicolumn{n}{spec}{body}`,
+    /// returning its column span and the alignment from its `{spec}` (`(1, None)`
+    /// for any ordinary cell). The greedy parser attaches all three `{…}` groups to
+    /// the `\multicolumn` `COMMAND`, so the cell is a single command node; a
+    /// non-integer span or unparsable spec degrades to span 1 / no override.
+    fn detect_multicolumn(cell: &[SyntaxElement]) -> (usize, Option<ColAlign>) {
+        let mut content = cell.iter().filter(|e| {
+            !e.as_token()
+                .is_some_and(|t| is_collapsible_trivia(t.kind()))
+        });
+        let Some(first) = content.next() else {
+            return (1, None);
+        };
+        if content.next().is_some() {
+            return (1, None);
+        }
+        let Some(node) = first.as_node() else {
+            return (1, None);
+        };
+        if node.kind() != SyntaxKind::COMMAND
+            || command_name(node).as_deref() != Some("multicolumn")
+        {
+            return (1, None);
+        }
+        let span = crate::ast::nth_group_text(node, 0)
+            .and_then(|t| t.trim().parse::<usize>().ok())
+            .filter(|&n| n >= 1);
+        let align = crate::ast::nth_group(node, 1)
+            .map(|g| crate::ast::group_inner_source(&g))
+            .and_then(|s| colspec::parse_column_spec(&s))
+            .and_then(|v| v.first().copied());
+        (span.unwrap_or(1), align)
+    }
+
     let mut items: Vec<GridItem> = Vec::new();
-    let mut cells: Vec<String> = Vec::new();
+    let mut cells: Vec<Cell> = Vec::new();
     let mut cell: Vec<SyntaxElement> = Vec::new();
     let mut final_pushed = false;
 
@@ -2299,17 +2352,19 @@ fn build_alignment_grid(
                 idx = line.next;
                 continue;
             }
-            // Not on its own line: it directly follows the previous row's `\\`. A
-            // pure comment there trails that row; a rule there (the `\\ \hline`
-            // form) is not modeled — fall through so the cell path falls back.
-            if !line.has_rule {
-                if let Some(GridItem::Row(row)) = items.last_mut() {
-                    row.trailing_comment = Some(line.text);
-                }
-                cell.clear();
-                idx = line.next;
-                continue;
+            // Not on its own line: it directly follows the previous row's `\\`.
+            if line.has_rule {
+                // The `\\ \hline` form — a rule sharing the physical line with the
+                // preceding row's `\\`. Normalize it onto its own passthrough line
+                // (idempotent: on re-parse it reads as an own-line rule).
+                items.push(GridItem::Passthrough(line.text));
+            } else if let Some(GridItem::Row(row)) = items.last_mut() {
+                // A pure comment there trails that row.
+                row.trailing_comment = Some(line.text);
             }
+            cell.clear();
+            idx = line.next;
+            continue;
         }
 
         match &inline[idx] {
@@ -2355,7 +2410,7 @@ fn build_alignment_grid(
     // the prior row without adding a blank line; otherwise it is a real last row.
     if !final_pushed {
         finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
-        let final_is_empty = cells.len() == 1 && cells[0].is_empty();
+        let final_is_empty = cells.len() == 1 && cells[0].text.is_empty() && cells[0].span == 1;
         if !final_is_empty {
             items.push(GridItem::Row(AlignRow {
                 cells,
@@ -2418,6 +2473,21 @@ fn non_row_line(
                 content_end = i;
                 continue;
             }
+            // The booktabs `\cmidrule(lr){2-3}` paren trim spec. `(lr)` is generic
+            // catcode-12 text (a `WORD`) that breaks the greedy argument attach, so
+            // it and the following detached `{2-3}` range group arrive as loose
+            // siblings after the rule command. Recognizing them as part of the rule
+            // line is a layout decision (the rule-line concept is the formatter's).
+            SyntaxElement::Token(t) if has_rule && is_paren_trim_word(t) => {
+                i += 1;
+                content_end = i;
+                continue;
+            }
+            SyntaxElement::Node(n) if has_rule && n.kind() == SyntaxKind::GROUP => {
+                i += 1;
+                content_end = i;
+                continue;
+            }
             _ => return None,
         }
         i += 1;
@@ -2468,6 +2538,19 @@ fn token_is_rule_word(token: &SyntaxToken, cx: LowerCtx<'_>) -> bool {
             .signatures
             .command(token.text().trim_start_matches('\\'))
             .is_some_and(|sig| sig.rule)
+}
+
+/// Whether `token` is a booktabs `\cmidrule` paren trim spec — a `WORD` of the form
+/// `(l)`, `(r)`, `(lr)`, or `(rl)` (catcode-12 text the lexer globs into one token).
+fn is_paren_trim_word(token: &SyntaxToken) -> bool {
+    if token.kind() != SyntaxKind::WORD {
+        return false;
+    }
+    let t = token.text();
+    t.len() >= 3
+        && t.starts_with('(')
+        && t.ends_with(')')
+        && t[1..t.len() - 1].chars().all(|c| c == 'l' || c == 'r')
 }
 
 /// Whether `node` (a `COMMAND`) is a horizontal-rule command per the signature DB.
@@ -2596,30 +2679,88 @@ fn rule_overattaches_cell(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     !first_slot_is_brace
 }
 
-/// Render the grid to IR: pad every non-last cell in a row to its column width
-/// (left-align), join cells with `" & "`, append the row's `\\` and any trailing
-/// comment, and join all items with [`Ir::hard_line`]. A row is one [`Ir::text`]
-/// (no newline; cells are flat), which the caller indents one step. The row's
-/// *last* cell is never padded, so no line carries trailing whitespace.
-/// [`GridItem::Passthrough`] lines (comments, `\hline`/`\midrule`, …) are emitted
-/// verbatim between rows and never counted toward column widths.
-fn render_alignment_rows(items: &[GridItem]) -> Ir {
-    // Column width = the max char-count over every cell in that column (including
-    // last cells, so a long final cell still widens the column above it). Char
-    // count matches the printer's own column metric. Passthrough lines do not
-    // participate.
+/// The per-column alignments declared by a `tabular`/`array` environment's column
+/// specification (`\begin{tabular}{lcr}` → `[Left, Center, Right]`), or `None` to
+/// signal the caller to fall back to all-left.
+///
+/// Only environments the signature DB marks `align` carry a user column spec; a math
+/// grid's `\begin` has no argument `GROUP` at all (the environment name is a separate
+/// `NAME_GROUP`), so those return `None` and fall through. The spec is the *last*
+/// `{…}` `GROUP` on the `\begin` — uniform across `tabular`'s `{spec}`, `array`'s
+/// `{spec}`, and `tabular*`'s `{width}[pos]{spec}` (the `[pos]` is an `OPTIONAL`, not
+/// a `GROUP`). The raw inner source is read via [`crate::ast::group_inner_source`]
+/// rather than `nth_group_text`, which would bail on the nested `{…}` of a `p{3cm}`
+/// column.
+fn column_alignments(env: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<ColAlign>> {
+    let begin = env.children().find(|c| c.kind() == SyntaxKind::BEGIN)?;
+    let name = environment_name(&begin)?;
+    if !cx
+        .signatures
+        .environment(&name)
+        .is_some_and(|sig| sig.align)
+    {
+        return None;
+    }
+    let spec = begin
+        .children()
+        .filter(|c| c.kind() == SyntaxKind::GROUP)
+        .last()?;
+    colspec::parse_column_spec(&crate::ast::group_inner_source(&spec))
+}
+
+/// Render the grid to IR: align each cell within its column to the column's declared
+/// alignment (`aligns`, empty = all-left), join cells with `" & "`, append the row's
+/// `\\` and any trailing comment, and join all items with [`Ir::hard_line`]. A row is
+/// one [`Ir::text`] (no newline; cells are flat), which the caller indents one step.
+/// A row's *last* cell never carries trailing padding, so no line has trailing
+/// whitespace (a right/center-aligned last column still gets its *leading* pad, e.g.
+/// a right-aligned numeric final column). [`GridItem::Passthrough`] lines (comments,
+/// `\hline`/`\midrule`, …) are emitted verbatim between rows and never counted toward
+/// column widths.
+///
+/// A `\multicolumn{n}{…}{…}` cell spans `n` columns: it never defines a single
+/// column's width, and its rendered field is the sum of the spanned column widths
+/// plus the `" & "` separators it absorbs. The spanned columns keep their
+/// data-derived widths (the `\multicolumn`'s *source* markup is usually wider than a
+/// few narrow columns; growing them to fit would balloon the data rows), so when the
+/// markup exceeds its span it simply overflows that one row — matching how such a row
+/// is written by hand. When the span is instead *wider* than the markup, the cell is
+/// aligned within it per the `\multicolumn`'s own `{spec}`.
+fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
+    const SEP: &str = " & ";
+
+    // Column width = the max char-count over every *span-1* cell in that column
+    // (including last cells, so a long final cell still widens the column above it).
+    // Char count matches the printer's own column metric. Spanning cells and
+    // passthrough lines do not participate here.
     let mut col_widths: Vec<usize> = Vec::new();
+    let mut widen = |c: usize, width: usize| {
+        while c >= col_widths.len() {
+            col_widths.push(0);
+        }
+        if width > col_widths[c] {
+            col_widths[c] = width;
+        }
+    };
     for item in items {
         let GridItem::Row(row) = item else { continue };
-        for (c, cell) in row.cells.iter().enumerate() {
-            let width = cell.chars().count();
-            if c == col_widths.len() {
-                col_widths.push(width);
-            } else if width > col_widths[c] {
-                col_widths[c] = width;
+        let mut c = 0;
+        for cell in &row.cells {
+            if cell.span == 1 {
+                widen(c, cell.text.chars().count());
             }
+            c += cell.span;
         }
     }
+
+    // The combined field width of the `span` columns starting at `c`: their widths
+    // plus the `" & "` separators the spanning cell absorbs.
+    let field_width = |c: usize, span: usize| -> usize {
+        let sum: usize = (c..c + span)
+            .map(|i| col_widths.get(i).copied().unwrap_or(0))
+            .sum();
+        sum + SEP.len() * (span - 1)
+    };
 
     let lines = items.iter().map(|item| {
         let row = match item {
@@ -2628,15 +2769,29 @@ fn render_alignment_rows(items: &[GridItem]) -> Ir {
         };
         let mut line = String::new();
         let last = row.cells.len().saturating_sub(1);
-        for (c, cell) in row.cells.iter().enumerate() {
-            if c > 0 {
-                line.push_str(" & ");
+        let mut c = 0;
+        for (idx, cell) in row.cells.iter().enumerate() {
+            if idx > 0 {
+                line.push_str(SEP);
             }
-            line.push_str(cell);
-            if c < last {
-                let pad = col_widths[c].saturating_sub(cell.chars().count());
-                line.push_str(&" ".repeat(pad));
-            }
+            let field = field_width(c, cell.span);
+            let text_width = cell.text.chars().count();
+            let pad = field.saturating_sub(text_width);
+            // A `\multicolumn`'s own `{spec}` overrides the column alignment.
+            let align = cell
+                .align
+                .unwrap_or_else(|| aligns.get(c).copied().unwrap_or(ColAlign::Left));
+            let (leading, trailing) = match align {
+                ColAlign::Left => (0, pad),
+                ColAlign::Right => (pad, 0),
+                ColAlign::Center => (pad / 2, pad - pad / 2),
+            };
+            // The last cell never carries trailing whitespace (leading pad is fine).
+            let trailing = if idx == last { 0 } else { trailing };
+            line.push_str(&" ".repeat(leading));
+            line.push_str(&cell.text);
+            line.push_str(&" ".repeat(trailing));
+            c += cell.span;
         }
         if let Some(line_break) = &row.line_break {
             line.push(' ');

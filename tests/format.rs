@@ -329,6 +329,18 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // passthrough line and the cell rejoins its row and grid-aligns.
     ("align_rule_overattached_cell", WrapMode::Preserve, 80),
     ("array_columns", WrapMode::Preserve, 80),
+    // Column-spec-aware L/C/R alignment: cells align per the `{lcr}` spec, a
+    // right-aligned numeric column pads on the left (no trailing whitespace), a
+    // `\multicolumn` spans its columns, `p{…}` reads as left, `\cmidrule(lr){2-3}`
+    // and same-line `\\ \hline` stay passthrough lines, and an unknown spec falls
+    // back to all-left.
+    ("tabular_align_lcr", WrapMode::Preserve, 80),
+    ("tabular_align_right_numeric", WrapMode::Preserve, 80),
+    ("tabular_multicolumn", WrapMode::Preserve, 80),
+    ("tabular_cmidrule_trim", WrapMode::Preserve, 80),
+    ("tabular_rule_same_line", WrapMode::Preserve, 80),
+    ("tabular_pmb_left", WrapMode::Preserve, 80),
+    ("tabular_unknown_spec_fallback", WrapMode::Preserve, 80),
     // Named math environments parse in math mode (their body is a `MATH` node), so
     // they format math-aware like `\[…\]`: a single-formula `equation` breaks at its
     // top-level relations (the relation column aligns the continuation lines); a

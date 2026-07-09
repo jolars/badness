@@ -3,7 +3,7 @@
 Badness is an open-source project. The authoritative guide for working in the
 codebase (architecture, tenets, and conventions) lives in
 [`CONTRIBUTING.md`](https://github.com/jolars/badness/blob/main/CONTRIBUTING.md)
-at the repo root, written for both human and AI contributors.
+at the repo root.
 
 ## Architecture
 
@@ -29,5 +29,5 @@ Badness follows the rust-analyzer model:
   assertion.
 - Keep code `rustfmt`-clean; `clippy` warnings are errors.
 
-See `CONTRIBUTING.md` for more details on the architecture, tenets, and
-conventions.
+See [`CONTRIBUTING.md`](https://github.com/jolars/badness/blob/main/CONTRIBUTING.md)
+for more details on the architecture, tenets, and conventions.

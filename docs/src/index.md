@@ -19,7 +19,7 @@ are layered on top as a separate concern, and recomputation is incremental.
 ## The Architecture
 
 Badness treats input as generic TeX surface syntax. It never *requires*
-resolving macros or catcodes to succeeddoing that in full generality is
+resolving macros or catcodes to succeed—doing that in full generality is
 equivalent to running a TeX engine, so anything it cannot statically recognize
 degrades to generic nodes rather than a crash. Two properties are guaranteed by
 construction and enforced as test oracles:

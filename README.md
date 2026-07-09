@@ -8,7 +8,6 @@ Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/bad
 VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-vsx.org/extension/jolars/badness)
 [![VS
 Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix)](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Badness** is a language server, formatter, and linter for LaTeX, built on a
 lossless concrete syntax tree.
@@ -30,23 +29,20 @@ already formatted file changes nothing).
 
 ## Installation
 
-Badness is written in Rust. Build from a checkout:
+Badness is available from several sources:
 
-```sh
-git clone https://github.com/jolars/badness
-cd badness
-cargo install --path .
-```
+- **crates.io**: `cargo install badness`
+- **npm**: `npm install -g badness` (bundles a prebuilt binary)
+- **PyPI**: `uv tool install badness`/`pipx install badness`
+- **Prebuilt binaries**: from the [releases
+  page](https://github.com/jolars/badness/releases)
+- **VS Code/Open VSX**: the [**Badness**
+  extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
+  (also works in Positron and Cursor)
+- **From source**: `cargo install --path .` in a checkout
 
-### VS Code extension
-
-If you use VS Code or a compatible editor (such as Positron or Cursor), install
-the [Badness
-extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
-from the VS Code Marketplace or the [Open VSX
-extension](https://open-vsx.org/extension/jolars/badness). It bundles the
-`badness` binary and starts the language server automatically when you open a
-`.tex` file.
+The VS Code/Open VSX extension bundles the `badness` binary and starts the
+language server automatically when you open a `.tex` file.
 
 ## Usage
 
@@ -66,8 +62,8 @@ badness lsp
 
 Formatter style is set through flags: `--line-width` (default `80`),
 `--indent-width` (default `2`), and `--wrap` (`reflow` by default; also
-`preserve`, with `sentence`/`semantic` planned). See the documentation for the
-full reference.
+`preserve`, `sentence`, and `semantic`). Persistent settings live in a
+`badness.toml`. See the documentation for the full reference.
 
 The language server runs over stdio (`badness lsp`); see the [editor setup
 guide](https://badness.dev/guide/editor-setup.html) for Neovim and VS Code

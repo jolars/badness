@@ -78,16 +78,15 @@ A deliberate diff against **texlab** (5.25.1) as the mature reference LSP. The
 comparison is asymmetric, and the framing matters when triaging the items below.
 
 - **Badness leads:** range formatting, on-type formatting, code-action quick-fixes
-  (texlab's `codeAction` handler returns an empty array), a native linter (20
-  LaTeX + 10 bib rules vs texlab's 4 built-ins plus a `chktex` shell-out),
+  (texlab's `codeAction` handler returns an empty array), a native linter (25
+  LaTeX + 9 bib rules vs texlab's 4 built-ins plus a `chktex` shell-out),
   comment-run folding, the deterministic rule-based formatter, and a first-class
   bib formatter with entry sorting. texlab also ships **no** semantic tokens,
   signature help, selection ranges, or code lens—so those are not texlab gaps.
-- **Badness trails (tracked below):** completion breadth (`### Completion`),
-  macro/include navigation and matching-pair highlight (`### Navigation &
-  structure`), label preview and macro references/rename
-  (`### Labels & references`), package hover, and the change-environment refactor
-  (`### Code actions`).
+- **Badness trails (tracked below):** completion breadth (`### Completion`) and
+  matching-pair highlight (`### Navigation & structure`). (Macro references/
+  rename, package hover, and the change-environment refactor have since shipped;
+  see the `[x]` items below.)
 - **Deliberately not matched:** the typeset-adjacent features under
   `## Editor integration` (build, clean-aux, chktex passthrough, CSL rendering).
 

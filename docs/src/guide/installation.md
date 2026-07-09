@@ -1,11 +1,25 @@
 # Installation
 
 Badness is distributed as a single binary, `badness`. The current version is
-`{{ badness-version }}`.
+`{{ badness-version }}`. It is available from several sources:
+
+- **crates.io**: `cargo install badness`
+- **npm**: `npm install -g badness` (bundles a prebuilt binary)
+- **PyPI**: `uv tool install badness`/`pipx install badness`
+- **Prebuilt binaries**: from the [releases
+  page](https://github.com/jolars/badness/releases)
+- **VS Code/Open VSX**: the
+  [**Badness**](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
+  extension (also on [Open VSX](https://open-vsx.org/extension/jolars/badness);
+  works in Positron and Cursor)
+
+The editor extension bundles a platform-specific `badness` binary and starts the
+language server automatically, so no separate CLI install is required. See
+[Editor Setup](editor-setup.md) for configuration.
 
 ## From Source
 
-Badness is written in Rust (edition 2024). With a Rust toolchain installed,
+Badness is written in Rust. With a Rust toolchain installed,
 build from a checkout:
 
 ```sh

@@ -51,9 +51,6 @@ README for the full list of settings.
 
 ## Other Editors
 
-Any LSP-capable editor can drive badness: configure a server whose command is
+Any LSP-capable editor can run badness: configure a server whose command is
 `badness lsp`, communicating over stdio, for LaTeX documents. Consult your
 editor's LSP client documentation for the exact configuration shape.
-
-> The language server is young; the set of supported LSP requests will expand.
-> Track progress in the [Changelog](../changelog.md).

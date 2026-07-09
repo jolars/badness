@@ -1,8 +1,8 @@
 # Getting Started
 
-Badness has three subcommands: `format`, `lint`, and `lsp`. This page walks
-through the first two from the command line. For editor integration, see [Editor
-Setup](editor-setup.md).
+Badness's main subcommands are `format`, `lint`, and `lsp` (with `parse` and
+`init` as helpers). This page walks through formatting and linting from the
+command line. For editor integration, see [Editor Setup](editor-setup.md).
 
 ## Formatting a File
 

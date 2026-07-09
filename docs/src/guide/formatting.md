@@ -20,8 +20,11 @@ badness format --check paper.tex  # report, don't write; non-zero if unformatted
   | `--indent-width <N>` | `2`      | Spaces per indent step.                                                                        |
   | `--wrap <mode>`      | `reflow` | How line breaks inside a paragraph are laid out. See [Wrap Modes](../reference/wrap-modes.md). |
 
-A configuration file is not yet read; style is set through these flags. This is
-expected to change as badness matures.
+These flags override the defaults for a single run. For persistent settings,
+badness reads a `badness.toml` discovered from the working directory upward (its
+`[format]` section mirrors these options); pass `--config <PATH>` to point at a
+specific file or `--no-config` to ignore any discovered one. Run `badness init`
+to write a starter `badness.toml`.
 
 ## Guarantees
 
@@ -29,9 +32,10 @@ The formatter is built around a small set of invariants that double as test
 oracles:
 
 - **Idempotence**: `format(format(x)) == format(x)`.
-- **Stability**: formatting does not change the parsed structure of a document.
+- **Losslessness**: the parsed tree reconstructs the input byte-for-byte, so the
+  formatter never loses or corrupts content.
 - **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
   `\verb`, comments) is never altered.
 
-If the formatter ever produces output that violates one of these, that is a bug
-to report, not behavior to work around.
+Note that formatting *may* normalize structure on purpose (for example,
+`x^{2}` becomes `x^2`); it preserves meaning, not the exact parse tree.

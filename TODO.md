@@ -1,4 +1,4 @@
-# badness—Roadmap
+# Badness TODO
 
 A LaTeX formatter, linter, and language server on a lossless rowan CST,
 following **rust-analyzer's** architecture. See `AGENTS.md` for load-bearing

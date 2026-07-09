@@ -17,8 +17,34 @@ error-tolerant, hand-written parser producing a lossless tree; semantics layered
 top as a separate concern; incremental recomputation via salsa.
 
 **Single-crate Cargo package** (`badness`, edition 2024), *not* a workspace. Module
-folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`, `text/`, plus
-`syntax.rs` and `incremental.rs`.
+folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`, `text/`, `ast/`,
+`lsp/`, and `bib/` (the parallel BibTeX pipeline, below), plus top-level `syntax.rs`,
+`incremental.rs`, `config.rs`, `cli.rs`, `completion.rs`, and `file_discovery.rs`.
+
+**Supported inputs.** The CLI processes `.tex`, `.sty`/`.cls`, `.dtx`, `.ins`, and
+`.bib` files (directories are walked with the `ignore` crate, honoring `.gitignore`
+plus `badness.toml` excludes; see `file_discovery.rs`). The lexer's `LatexFlavor`
+(`Document` vs `Package`) picks the starting catcode regime—`.sty`/`.cls`/`.dtx` begin
+with `@` already a letter (implicit `\makeatletter`). `.dtx` docstrip surface syntax is
+parsed; `.ins` install scripts default to the `Preserve` wrap mode. Each `FileKind`
+carries its own default `WrapMode`.
+
+**Parallel BibTeX subsystem (`bib/`).** `.bib` files get their own full pipeline—a
+sibling of `parser/` built on the *same* lossless rowan CST + flat event-stream
+architecture, but with a distinct grammar, its own `SyntaxKind`/`BibLang` marker, and
+its own lexer, parser, `tree_builder`, `ast/`, formatter, linter, semantic layer,
+completion, and outline. The same invariants apply (losslessness, idempotence). The bib
+CST also has typed AST wrappers (`bib/ast.rs`, decision #10). Note: the `bib.rs`
+module-header comment calling the formatter/linter/LSP "later increments" is stale—they
+are implemented.
+
+**Configuration (`badness.toml`).** Discovered by an ancestor walk from each input
+(`config.rs`); the **CLI is the only consumer**—the library API takes a fully-resolved
+`FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`, `wrap`,
+`lang`, `no-break-abbreviations`), `[texmf]`, and `[build]` (`aux-dir`). Excludes follow
+the Ruff model (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
+additive). `wrap` is optional and resolves per file kind when omitted. This keeps the
+formatter hermetic (config is local project data, not the environment).
 
 ## Tenets
 
@@ -225,7 +251,7 @@ never match.
 
 ## Technology choices
 
-- **rowan** (`0.16`) for the CST; **salsa** (`0.26`) for incremental queries;
+- **rowan** for the CST; **salsa** for incremental queries;
   **smol_str** for interned token text; **insta** for snapshot tests;
   **annotate-snippets** for diagnostics rendering.
 - **LSP:** `lsp-server` + `lsp-types` (rust-analyzer's stack), **not**
@@ -233,9 +259,11 @@ never match.
   (`salsa::Cancelled`) that composes with `lsp-server`'s sync main loop + threadpool
   and fights tower-lsp's async `&self` model. `text/line_index.rs` uses
   `lsp_types::Position`.
-- **Formatter engine:** a Wadler/Prettier-style `Doc` IR
-  (`Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent`), plus an `Ir::Fill`
-  node (per-gap greedy break decisions) for paragraph reflow.
+- **Formatter engine:** a Wadler/Prettier-style `Doc` IR (`formatter::ir::Ir`), whose
+  core variants are `Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent` plus an
+  `Ir::Fill` node (per-gap greedy break decisions) for paragraph reflow. The enum also
+  carries `Align`, `IfBreak`, `ConditionalGroup`(`AllLines`), `Verbatim`, `ColumnZero`,
+  `MarginPrefix`, and `Nil`—see `ir.rs` for the authoritative list.
 - **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
   `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling **panache**
   formatter and mechanized through the `Doc` IR (`Fill`), not a separate line-filler.
@@ -342,6 +370,14 @@ index/metadata feeding LSP navigation** is sanctioned. The index is gated by
     `path_to_uri` (`lsp.rs`), which strips the `/` before a Windows drive letter and
     keeps the Unix root. Keep `uri_to_fs_path_handles_unix_and_windows` green; tests
     and snapshots must not assume `/` vs `\`.
+- **Generated `data/` artifacts.** Several data files are generated from pinned
+  upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check`/`:sync`
+  targets: `cwl_signatures.json` (TeXstudio CWL corpus, `cwl:check`/`:sync`),
+  `package_names.txt`+`class_names.txt`+`package_metadata.json` (TeX Live tlpdb,
+  `pkg-names:check`/`:sync`), and `bib_fields.json` (below). `signatures.json` (curated
+  built-in command signatures), `colors.json`, and `tikz_libraries.json` are curated by
+  hand. Re-sync generated files via their model/task; don't hand-edit the mechanical
+  facts.
 - **Bib field DB** (`data/bib_fields.json`) tracks biblatex's canonical data model
   (`blx-dm.def`). `scripts/gen_bib_fields.py` syncs the mechanical facts (entry-type
   set, field categories, `required` constraints), preserving the hand-curated

@@ -1,0 +1,42 @@
+/* Benchmark dot plot (see theme/bench-charts.js) and its fallback table. */
+
+.bench-chart-block {
+  margin: 1rem 0 1.5rem;
+}
+
+.bench-figure {
+  margin: 0;
+}
+
+.bench-figure > figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.9em;
+  line-height: 1.4;
+  opacity: 0.85;
+}
+
+/* Vega renders into here at container width; height comes from the spec. */
+.bench-chart {
+  width: 100%;
+  min-height: 340px;
+}
+
+.bench-chart-block noscript {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-style: italic;
+}
+
+/* The same numbers as the chart, tucked away for no-JS/print/screen readers. */
+.bench-table {
+  margin-top: 0.75rem;
+}
+
+.bench-table > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.bench-table h3 {
+  margin-top: 1rem;
+}

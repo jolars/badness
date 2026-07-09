@@ -10,6 +10,15 @@ default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/jolars/badness"
 edit-url-template = "https://github.com/jolars/badness/edit/main/docs/{path}"
+# Vendored Vega runtime + the benchmark dot-plot renderer (theme/bench-charts.js).
+# Load order matters: vega, then vega-lite, then vega-embed, then our script.
+additional-js = [
+    "theme/vendor/vega.min.js",
+    "theme/vendor/vega-lite.min.js",
+    "theme/vendor/vega-embed.min.js",
+    "theme/bench-charts.js",
+]
+additional-css = ["theme/bench-charts.css"]
 
 [preprocessor]
 

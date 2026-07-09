@@ -6,7 +6,7 @@ use mdbook_preprocessor::book::Book;
 use mdbook_preprocessor::errors::Result;
 use mdbook_preprocessor::{Preprocessor, PreprocessorContext};
 use semver::{Version, VersionReq};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::PathBuf;
 
@@ -177,6 +177,22 @@ struct BenchResult {
     document: String,
     formatter: String,
     mean_ms: f64,
+    stddev_ms: Option<f64>,
+    min_ms: Option<f64>,
+    max_ms: Option<f64>,
+}
+
+/// One dot in the results chart: a (document, formatter) timing, its ratio to
+/// the badness baseline, and the numbers the tooltip shows. Serialized inline
+/// into the page for `docs/theme/bench-charts.js` to plot with Vega-Lite.
+#[derive(Serialize)]
+struct ChartPoint {
+    document: String,
+    formatter: String,
+    mean_ms: f64,
+    ratio: f64,
+    ratio_label: String,
+    stddev_ms: Option<f64>,
     min_ms: Option<f64>,
     max_ms: Option<f64>,
 }
@@ -251,10 +267,87 @@ fn render_meta(meta: &Meta) -> String {
     out
 }
 
-/// One `###` section with a results table per benchmarked document, in corpus
-/// order; rows follow the order tools appear in `results`. `badness` is the
-/// baseline and every other tool's `Relative` column is its mean ratio to it.
+/// The results marker becomes an interactive dot plot (Vega-Lite, driven by
+/// `docs/theme/bench-charts.js` and wired via `book.toml`'s `additional-js`)
+/// plus a collapsed HTML table with the same numbers as a no-JS/print fallback.
+///
+/// The chart data rides inline in a `<script type="application/json">`; the JS
+/// plots time-relative-to-badness on a log axis, one dot per (document,
+/// formatter). Kept as raw HTML (not a Markdown pipe table) so the fallback
+/// renders inside `<details>`.
 fn render_results(b: &Benchmarks) -> String {
+    let points = chart_points(b);
+    let data_json = serde_json::to_string(&points).unwrap_or_else(|_| "[]".to_string());
+
+    let mut out = String::new();
+    out.push_str("<div class=\"bench-chart-block\">\n");
+    // The chart and its caption form the <figure>; the caption must be the
+    // figure's first or last child, so the no-JS/table fallback lives as a
+    // sibling below it, not inside the figure.
+    out.push_str("<figure class=\"bench-figure\">\n");
+    out.push_str("<div class=\"bench-chart\"></div>\n");
+    out.push_str("<script type=\"application/json\" class=\"bench-data\">");
+    out.push_str(&data_json);
+    out.push_str("</script>\n");
+    out.push_str(
+        "<figcaption>Formatting speed relative to <code>badness</code>. Each dot is one \
+         document formatted by one tool; the vertical position is mean wall-clock time as a \
+         ratio to <code>badness</code> on a log scale, so <code>badness</code> lies on the \
+         dashed baseline at 1, faster tools fall below it and slower tools rise above. Color \
+         distinguishes documents; hover a dot for the exact millisecond figures.</figcaption>\n",
+    );
+    out.push_str("</figure>\n");
+    out.push_str(
+        "<noscript>Enable JavaScript for the interactive chart; \
+         the data table below has the same numbers.</noscript>\n",
+    );
+    out.push_str("<details class=\"bench-table\">\n<summary>Data table</summary>\n");
+    out.push_str(&render_results_tables_html(b));
+    out.push_str("</details>\n");
+    out.push_str("</div>\n");
+    out
+}
+
+/// One dot per (document, formatter): its mean time as a ratio to that
+/// document's badness baseline (badness itself is `1.0`), in corpus order.
+/// Documents whose baseline is missing or non-positive are skipped (they carry
+/// no meaningful ratio); they still appear in the fallback table.
+fn chart_points(b: &Benchmarks) -> Vec<ChartPoint> {
+    let mut points = Vec::new();
+    for doc in &b.documents {
+        let base = b
+            .results
+            .iter()
+            .find(|r| r.document == doc.id && r.formatter == "badness")
+            .map(|r| r.mean_ms);
+        let Some(base) = base.filter(|&b| b > 0.0) else {
+            continue;
+        };
+        for r in b.results.iter().filter(|r| r.document == doc.id) {
+            let ratio_label = if r.formatter == "badness" {
+                "baseline".to_string()
+            } else {
+                relative_cell(r.mean_ms, Some(base))
+            };
+            points.push(ChartPoint {
+                document: doc.name.clone(),
+                formatter: r.formatter.clone(),
+                mean_ms: r.mean_ms,
+                ratio: r.mean_ms / base,
+                ratio_label,
+                stddev_ms: r.stddev_ms,
+                min_ms: r.min_ms,
+                max_ms: r.max_ms,
+            });
+        }
+    }
+    points
+}
+
+/// One `<h3>` + HTML `<table>` per benchmarked document, in corpus order; rows
+/// follow the order tools appear in `results`. `badness` is the baseline and
+/// every other tool's `Relative` cell is its mean ratio to it.
+fn render_results_tables_html(b: &Benchmarks) -> String {
     let mut out = String::new();
     for doc in &b.documents {
         let base = b
@@ -264,11 +357,15 @@ fn render_results(b: &Benchmarks) -> String {
             .map(|r| r.mean_ms);
 
         out.push_str(&format!(
-            "### {} ({} bytes, {} lines)\n\n",
-            doc.name, doc.size_bytes, doc.lines
+            "<h3>{} ({} bytes, {} lines)</h3>\n",
+            esc(&doc.name),
+            doc.size_bytes,
+            doc.lines
         ));
-        out.push_str("| Tool | Mean (ms) | Min (ms) | Max (ms) | Relative |\n");
-        out.push_str("| --- | ---: | ---: | ---: | --- |\n");
+        out.push_str(
+            "<table>\n<thead><tr><th>Tool</th><th>Mean (ms)</th>\
+             <th>Min (ms)</th><th>Max (ms)</th><th>Relative</th></tr></thead>\n<tbody>\n",
+        );
         for r in b.results.iter().filter(|r| r.document == doc.id) {
             let relative = if r.formatter == "badness" {
                 "baseline".to_string()
@@ -276,17 +373,24 @@ fn render_results(b: &Benchmarks) -> String {
                 relative_cell(r.mean_ms, base)
             };
             out.push_str(&format!(
-                "| {} | {} | {} | {} | {} |\n",
-                r.formatter,
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                esc(&r.formatter),
                 fmt_ms(Some(r.mean_ms)),
                 fmt_ms(r.min_ms),
                 fmt_ms(r.max_ms),
-                relative
+                esc(&relative),
             ));
         }
-        out.push('\n');
+        out.push_str("</tbody>\n</table>\n");
     }
     out
+}
+
+/// Minimal HTML text escaping for the fallback table's cell text.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Format a millisecond figure to four decimals, or an em dash when absent

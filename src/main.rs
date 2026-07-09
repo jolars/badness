@@ -834,12 +834,6 @@ fn run_format_stdin(
 /// Print a file-discovery error to stderr, prefixed like the other CLI errors.
 fn report_discovery_error(err: &FileDiscoveryError) {
     match err {
-        FileDiscoveryError::NonTexFilePath { path } => {
-            eprintln!(
-                "badness: input file {} is not a .tex file; only .tex files are supported",
-                path.display()
-            );
-        }
         FileDiscoveryError::UnsupportedLintFilePath { path } => {
             eprintln!(
                 "badness: input file {} is not a .tex, .sty, .cls, .dtx, .ins, or .bib file",

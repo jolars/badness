@@ -66,7 +66,7 @@ impl fmt::Display for CheckError {
             Self::UnsupportedFilePath { path } => {
                 write!(
                     f,
-                    "input file {} is not a .tex, .sty, .cls, or .bib file",
+                    "input file {} is not a .tex, .sty, .cls, .dtx, .ins, or .bib file",
                     path.display()
                 )
             }
@@ -91,8 +91,7 @@ impl std::error::Error for CheckError {}
 impl From<FileDiscoveryError> for CheckError {
     fn from(value: FileDiscoveryError) -> Self {
         match value {
-            FileDiscoveryError::NonTexFilePath { path }
-            | FileDiscoveryError::UnsupportedLintFilePath { path } => {
+            FileDiscoveryError::UnsupportedLintFilePath { path } => {
                 Self::UnsupportedFilePath { path }
             }
             FileDiscoveryError::WalkError { path, message } => Self::WalkError { path, message },

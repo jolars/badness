@@ -2,3 +2,6 @@
 # avoid bloat and licensing concerns). The committed baseline small.tex stays.
 *.tex
 !small.tex
+
+# The multi-file project corpus for the folder benchmark (also fetched, untracked).
+project/

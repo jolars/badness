@@ -31,10 +31,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 DOCS_DIR="benches/documents"
+PROJECT_SRC="$DOCS_DIR/project"
 BADNESS="$REPO_ROOT/target/release/badness"
 HYPERFINE_MIN_RUNS=3
+PROJECT_ITERS=5
 
 JSON_OUT="benches/benchmark_results.json"
+
+# The folder benchmark runs against a throwaway copy of the project corpus so
+# both tools walk an identical, un-gitignored file set (see the project block
+# below). Clean it up on any exit.
+PROJECT_STAGE=""
+cleanup() { [ -n "$PROJECT_STAGE" ] && rm -rf "$PROJECT_STAGE"; }
+trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -94,7 +103,9 @@ run_one() {
     local iterations="$1" cmd="$2"
     if [ "$BACKEND" = "hyperfine" ]; then
         local tmp; tmp=$(mktemp)
-        hyperfine --warmup 1 --min-runs "$HYPERFINE_MIN_RUNS" \
+        # --ignore-failure: the folder benchmark's `--check` commands exit non-zero
+        # when files "would reformat" (the normal case); that is not a run error.
+        hyperfine --warmup 1 --min-runs "$HYPERFINE_MIN_RUNS" --ignore-failure \
             --export-json "$tmp" --style=none "$cmd" >/dev/null 2>&1
         local mean stddev min max runs
         mean=$(jq -r '.results[0].mean' "$tmp")
@@ -109,7 +120,8 @@ run_one() {
         local start end
         start=$(date +%s%N)
         local i
-        for ((i=1; i<=iterations; i++)); do eval "$cmd" >/dev/null 2>&1; done
+        # `|| true`: a `--check` command exits non-zero when files would reformat.
+        for ((i=1; i<=iterations; i++)); do eval "$cmd" >/dev/null 2>&1 || true; done
         end=$(date +%s%N)
         awk -v t="$((end - start))" -v n="$iterations" \
             'BEGIN { printf "%.4f null null null %d\n", (t/n)/1e6, n }'
@@ -137,13 +149,27 @@ declare -a TOOLS=("badness")
 [ "$HAVE_TEXFMT" = "yes" ]      && TOOLS+=("tex-fmt")
 [ "$HAVE_LATEXINDENT" = "yes" ] && TOOLS+=("latexindent")
 
-# Command template per tool, with FILE substituted at call time.
+# Command template per tool, with FILE substituted at call time (single-file,
+# stdin → stdout).
 cmd_for() {
     local tool="$1" file="$2"
     case "$tool" in
         badness)     echo "$BADNESS format --no-config --stdin-filepath bench.tex < '$file'" ;;
         tex-fmt)     echo "tex-fmt --stdin < '$file'" ;;
         latexindent) echo "latexindent -g /dev/null - < '$file'" ;;
+    esac
+}
+
+# Command template for the whole-project (folder) benchmark: format a directory
+# recursively in read-only `--check` mode (the folder analog of stdin → stdout —
+# full formatting work, nothing written). Only badness and tex-fmt support this;
+# latexindent has no recursive directory mode and is excluded from the folder
+# comparison.
+dir_cmd_for() {
+    local tool="$1" dir="$2"
+    case "$tool" in
+        badness) echo "$BADNESS format --no-config --check '$dir'" ;;
+        tex-fmt) echo "tex-fmt --check --recursive '$dir'" ;;
     esac
 }
 
@@ -182,6 +208,56 @@ for entry in "${CORPUS[@]}"; do
     done
     log
 done
+
+# --- Whole-project (folder) benchmark ----------------------------------------
+# A recursive `--check` over a real multi-file project (badness vs tex-fmt only;
+# latexindent has no recursive mode). We benchmark a throwaway copy so the walk
+# sees an un-gitignored, `.tex`-only tree — `benches/documents/.gitignore` hides
+# `*.tex`, and `badness format` is `.tex`-only while tex-fmt would also touch
+# `.bib`/`.cls`, so staging just the `.tex` fragments keeps the compared set
+# identical. Any file badness cannot format yet is dropped from *both* tools via
+# a generated `.ignore` (both honor it), so the comparison stays symmetric.
+
+if [ -z "${BADNESS_BENCH_INPUT:-}" ] && [ -d "$PROJECT_SRC" ]; then
+    PROJECT_STAGE=$(mktemp -d)
+    # The source holds only .tex fragments (download.sh fetches nothing else), so
+    # a plain recursive copy stages the tree, preserving its subdirectory layout.
+    cp -r "$PROJECT_SRC/." "$PROJECT_STAGE/"
+
+    proj_bytes=0; proj_lines=0; proj_files=0; proj_excluded=0
+    while IFS= read -r f; do
+        if "$BADNESS" format --no-config --stdin-filepath bench.tex < "$f" >/dev/null 2>&1; then
+            proj_files=$((proj_files + 1))
+            proj_bytes=$((proj_bytes + $(wc -c < "$f")))
+            proj_lines=$((proj_lines + $(wc -l < "$f")))
+        else
+            # Exclude from both walks (relative path, gitignore semantics).
+            printf '/%s\n' "${f#"$PROJECT_STAGE"/}" >> "$PROJECT_STAGE/.ignore"
+            proj_excluded=$((proj_excluded + 1))
+        fi
+    done < <(find "$PROJECT_STAGE" -name '*.tex' | sort)
+
+    if [ "$proj_files" -eq 0 ]; then
+        log "⚠️  skip project — badness cannot format any of its files yet"
+    else
+        label="project ($proj_files files)"
+        [ "$proj_excluded" -gt 0 ] && \
+            log "   ($proj_excluded file(s) excluded from both tools — badness cannot format them yet)"
+        DOC_ID+=("project"); DOC_LABEL+=("$label"); DOC_FILE+=("$PROJECT_SRC")
+        DOC_SIZE+=("$proj_bytes"); DOC_LINES+=("$proj_lines"); DOC_ITERS+=("$PROJECT_ITERS")
+
+        log "━━ $label ($proj_bytes bytes, $proj_lines lines; recursive --check) ━━"
+        for tool in badness tex-fmt; do
+            [ "$tool" = "tex-fmt" ] && [ "$HAVE_TEXFMT" != "yes" ] && continue
+            cmd="$(dir_cmd_for "$tool" "$PROJECT_STAGE")"
+            log "  $tool..."
+            read -r mean stddev min max runs < <(run_one "$PROJECT_ITERS" "$cmd")
+            RES_DOC+=("project"); RES_TOOL+=("$tool"); RES_MEAN+=("$mean")
+            RES_STDDEV+=("$stddev"); RES_MIN+=("$min"); RES_MAX+=("$max"); RES_RUNS+=("$runs")
+        done
+        log
+    fi
+fi
 
 [ "${#DOC_ID[@]}" -gt 0 ] || { echo "error: no documents benchmarked (corpus missing or all gated out)" >&2; exit 1; }
 

@@ -35,6 +35,30 @@ The corpus is real LaTeX: a committed `small.tex` baseline plus larger documents
 `badness` cannot yet format (parser diagnostics) are skipped, as are comparison
 tools missing from `PATH`.
 
+### Whole-project (folder) benchmark
+
+One entry, `project`, measures **recursive folder formatting** rather than a
+single file: each tool walks a real multi-file LaTeX thesis (the pinned
+[`kks32/phd-thesis-template`], its `.tex` fragments) and formats every file in
+read-only `--check` mode—the folder analog of the `stdin -> stdout` runs above
+(full formatting work, nothing written). Only `badness` and `tex-fmt` appear
+here: `latexindent` has no recursive directory mode, so it is excluded from this
+comparison by design.
+
+  | Tool      | Invocation                          |
+  | --------- | ----------------------------------- |
+  | `badness` | `badness format --check <dir>`      |
+  | `tex-fmt` | `tex-fmt --check --recursive <dir>` |
+
+The benchmark runs against a throwaway copy of the fetched project so both tools
+walk an identical, un-gitignored, `.tex`-only tree (`badness format` is
+`.tex`-only, while `tex-fmt` would otherwise also touch `.bib`/`.cls`). Any file
+`badness` cannot format yet is dropped from *both* tools, keeping the comparison
+symmetric. This is a different mode from the single-file rows, so read its ratio
+on its own terms, not against them.
+
+[`kks32/phd-thesis-template`]: https://github.com/kks32/phd-thesis-template
+
 ## Setup
 
 {{ benchmark-meta }}

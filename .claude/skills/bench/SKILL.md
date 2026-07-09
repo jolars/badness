@@ -47,12 +47,20 @@ mdbook-build time or in CI — the docs page only renders the committed JSON.
    correct any drift:
    - The exact tool invocations and flags: `badness format --no-config
      --stdin-filepath`, `tex-fmt --stdin`, `latexindent -g /dev/null -` (every
-     tool runs stdin → stdout).
+     single-file run is stdin → stdout).
+   - The **whole-project (folder) benchmark** (`project` entry): a recursive
+     `--check` over a throwaway copy of the fetched project — `badness format
+     --check <dir>` vs `tex-fmt --check --recursive <dir>`, **badness vs tex-fmt
+     only** (`latexindent` has no recursive mode). The staged tree is `.tex`-only
+     and un-gitignored so both tools walk an identical set; files badness can't
+     format are dropped from both via a generated `.ignore`.
    - What is and isn't measured: speed only, each tool at its defaults, no output
      equivalence; `latexindent` does no reflow.
    - The corpus and its source: `small.tex` committed; `cv.tex`,
      `masters_dissertation.tex`, `phd_dissertation.tex` fetched by
-     `benches/documents/download.sh` from the pinned `tex-fmt` tag.
+     `benches/documents/download.sh` from the pinned `tex-fmt` tag; the folder
+     benchmark's project corpus is the pinned `kks32/phd-thesis-template` (its
+     `.tex` fragments), fetched into `benches/documents/project/`.
    - The disclaimers above ("not a CI gate, not a parity target; ratios over
      absolutes") are present.
 

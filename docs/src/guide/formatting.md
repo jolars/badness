@@ -37,5 +37,5 @@ oracles:
 - **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
   `\verb`, comments) is never altered.
 
-Note that formatting *may* normalize structure on purpose (for example,
-`x^{2}` becomes `x^2`); it preserves meaning, not the exact parse tree.
+Note that formatting *may* normalize structure on purpose (for example, `x^{2}`
+becomes `x^2`); it preserves meaning, not the exact parse tree.

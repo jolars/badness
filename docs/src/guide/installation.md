@@ -19,8 +19,8 @@ language server automatically, so no separate CLI install is required. See
 
 ## From Source
 
-Badness is written in Rust. With a Rust toolchain installed,
-build from a checkout:
+Badness is written in Rust. With a Rust toolchain installed, build from a
+checkout:
 
 ```sh
 git clone https://github.com/jolars/badness

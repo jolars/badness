@@ -616,17 +616,53 @@ fn apply_fixes_to_paths(
         eprintln!("badness: no .tex or .bib files found under the provided input paths");
         return Some(ExitCode::FAILURE);
     }
-    for (path, kind) in files {
-        match fix_file(&path, kind, include_unsafe, rules) {
-            Ok(0) => {}
-            Ok(n) => eprintln!("{}: {n} fix{} applied", path.display(), plural(n)),
-            Err(err) => {
-                eprintln!("badness: cannot fix {}: {err}", path.display());
-                return Some(ExitCode::FAILURE);
+
+    // Fix each file in parallel: `fix_file` is a pure per-file fixpoint (read, lint,
+    // apply, write back) with no shared mutable state, and distinct output files
+    // never race. The order-preserving collect lets the serial fold below report
+    // "n fixes applied" messages and read failures deterministically, in discovered
+    // order, mirroring `run_format_paths`.
+    let outcomes: Vec<FixOutcome> = files
+        .par_iter()
+        .map(
+            |(path, kind)| match fix_file(path, *kind, include_unsafe, rules) {
+                Ok(0) => FixOutcome::Unchanged,
+                Ok(n) => FixOutcome::Applied {
+                    path: path.clone(),
+                    count: n,
+                },
+                Err(err) => {
+                    FixOutcome::Failed(format!("badness: cannot fix {}: {err}", path.display()))
+                }
+            },
+        )
+        .collect();
+
+    let mut failed = false;
+    for outcome in outcomes {
+        match outcome {
+            FixOutcome::Unchanged => {}
+            FixOutcome::Applied { path, count } => {
+                eprintln!("{}: {count} fix{} applied", path.display(), plural(count))
+            }
+            FixOutcome::Failed(message) => {
+                eprintln!("{message}");
+                failed = true;
             }
         }
     }
-    None
+    failed.then_some(ExitCode::FAILURE)
+}
+
+/// Per-file result of the parallel autofix pass in [`apply_fixes_to_paths`],
+/// folded serially afterward so messages print in discovered order.
+enum FixOutcome {
+    /// The file was already clean; nothing to report.
+    Unchanged,
+    /// `count` fixes were applied to `path`.
+    Applied { path: PathBuf, count: usize },
+    /// The file could not be fixed; carries the ready-to-print error message.
+    Failed(String),
 }
 
 /// Run the fixpoint loop on a single file and write it back if anything changed.

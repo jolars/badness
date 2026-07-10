@@ -488,6 +488,7 @@ pub fn class_names() -> &'static [&'static str] {
 // hand back `&'static [&'static str]` like the name lists above.
 const COLORS_JSON: &str = include_str!("../../data/colors.json");
 const TIKZ_LIBRARIES_JSON: &str = include_str!("../../data/tikz_libraries.json");
+const ARG_ENUMS_JSON: &str = include_str!("../../data/arg_enums.json");
 
 /// `data/colors.json`: the built-in color-name and color-model lists.
 #[derive(Deserialize)]
@@ -509,6 +510,13 @@ static COLORS: LazyLock<ColorsData> = LazyLock::new(|| {
 static TIKZ_LIBRARIES: LazyLock<TikzLibrariesData> = LazyLock::new(|| {
     serde_json::from_str(TIKZ_LIBRARIES_JSON)
         .expect("bundled data/tikz_libraries.json must be valid")
+});
+/// `data/arg_enums.json`: fixed value sets for enumerated command arguments,
+/// keyed by command name then *brace-group* index (the same index
+/// `completion::group_index` computes — `OPTIONAL` slots are skipped). Consumed by
+/// completion only; never read by the formatter or parser.
+static ARG_ENUMS: LazyLock<HashMap<String, HashMap<usize, Vec<String>>>> = LazyLock::new(|| {
+    serde_json::from_str(ARG_ENUMS_JSON).expect("bundled data/arg_enums.json must be valid")
 });
 
 /// Borrow a `'static` list of owned names as `&'static str` slices.
@@ -544,6 +552,15 @@ pub fn pgf_libraries() -> &'static [&'static str] {
     static LIBS: LazyLock<Vec<&'static str>> =
         LazyLock::new(|| as_static_slice(&TIKZ_LIBRARIES.pgf));
     &LIBS
+}
+
+/// The fixed value set for the `index`-th *brace* argument of command `name`, if
+/// that argument takes an enumerated value (`\pagestyle{plain}`,
+/// `\pagenumbering{roman}`, …). `index` is the brace-only group index (matching
+/// `completion::group_index`). Values are completion *suggestions*, not a closed
+/// set. See [`ARG_ENUMS_JSON`].
+pub fn arg_enum_values(name: &str, index: usize) -> Option<&'static [String]> {
+    ARG_ENUMS.get(name)?.get(&index).map(Vec::as_slice)
 }
 
 // The baked CTAN metadata tier: a one-line description and CTAN catalogue id per
@@ -806,6 +823,24 @@ mod tests {
         let db = builtin();
         assert!(db.command("section").is_some());
         assert!(db.environment("tabular").is_some());
+    }
+
+    #[test]
+    fn arg_enums_json_loads_and_resolves() {
+        // Exercises data/arg_enums.json through the real loader; a malformed file
+        // would panic here. A modeled brace argument resolves, an unmodeled index
+        // and an unknown command do not.
+        assert_eq!(
+            arg_enum_values("pagenumbering", 0),
+            Some(
+                ["arabic", "roman", "Roman", "alph", "Alph"]
+                    .map(String::from)
+                    .as_slice()
+            )
+        );
+        assert!(arg_enum_values("pagestyle", 0).is_some());
+        assert!(arg_enum_values("pagestyle", 1).is_none());
+        assert!(arg_enum_values("definitelynotacommand", 0).is_none());
     }
 
     #[test]

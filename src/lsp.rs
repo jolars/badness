@@ -5962,6 +5962,7 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
         CandidateKind::Color => CompletionItemKind::COLOR,
         CandidateKind::ColorModel => CompletionItemKind::ENUM_MEMBER,
         CandidateKind::TikzLibrary => CompletionItemKind::MODULE,
+        CandidateKind::ArgumentEnum => CompletionItemKind::ENUM_MEMBER,
     };
     let data = file.and_then(|file| {
         let payload = match candidate.kind {
@@ -5980,7 +5981,8 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
             | CandidateKind::Package
             | CandidateKind::Color
             | CandidateKind::ColorModel
-            | CandidateKind::TikzLibrary => return None,
+            | CandidateKind::TikzLibrary
+            | CandidateKind::ArgumentEnum => return None,
         };
         payload.into_value()
     });

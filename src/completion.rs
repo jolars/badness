@@ -21,8 +21,8 @@ use crate::ast::command_name;
 use crate::semantic::SemanticModel;
 use crate::semantic::builder::{is_cite_command, is_glossary_ref_command, ref_command};
 use crate::semantic::signature::{
-    SignatureDb, builtin, class_names, color_models, color_names, cwl, package_names,
-    pgf_libraries, tikz_libraries,
+    SignatureDb, arg_enum_values, builtin, class_names, color_models, color_names, cwl,
+    package_names, pgf_libraries, tikz_libraries,
 };
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -67,6 +67,11 @@ pub enum CompletionContext {
     /// Inside a `\usetikzlibrary{…}` (`pgf` false) / `\usepgflibrary{…}` (`pgf`
     /// true) name group. A comma-separated list, completed after the last comma.
     TikzLibrary { prefix: String, pgf: bool },
+    /// Inside a brace argument whose value is drawn from a fixed enumerated set
+    /// (`\pagestyle{…}`, `\pagenumbering{…}`, `\bibliographystyle{…}`, …). The
+    /// `values` are the built-in suggestions for that slot (`data/arg_enums.json`),
+    /// resolved at classify time; `prefix` is the partial value typed so far.
+    ArgumentEnum { prefix: String, values: Vec<String> },
     /// Nothing to complete here (prose, a comment, a `\cite{…}` key, …).
     None,
 }
@@ -120,6 +125,8 @@ pub enum CandidateKind {
     ColorModel,
     /// A TikZ/PGF library name (`\usetikzlibrary`/`\usepgflibrary`).
     TikzLibrary,
+    /// An enumerated argument value (`\pagestyle`/`\pagenumbering`/…).
+    ArgumentEnum,
 }
 
 /// A completion candidate before it becomes an `lsp_types::CompletionItem`.
@@ -283,6 +290,14 @@ fn command_arg_context(
             pgf,
         });
     }
+    if let Some(values) = arg_enum_values(name, index) {
+        // A fixed enumerated value, one per group (`\pagestyle{plain}`); the whole
+        // inner is the prefix. Checked last so the specific handlers above win.
+        return Some(CompletionContext::ArgumentEnum {
+            prefix: group_prefix(group, offset).trim_start().to_string(),
+            values: values.to_vec(),
+        });
+    }
     None
 }
 
@@ -415,6 +430,16 @@ pub fn candidates(
             };
             static_candidates(libs, prefix, CandidateKind::TikzLibrary)
         }
+        CompletionContext::ArgumentEnum { prefix, values } => values
+            .iter()
+            .filter(|value| value.starts_with(prefix.as_str()))
+            .map(|value| CompletionCandidate {
+                label: value.clone(),
+                kind: CandidateKind::ArgumentEnum,
+                insert_text: None,
+                snippet: false,
+            })
+            .collect(),
         CompletionContext::FilePath { .. }
         | CompletionContext::CitationKey { .. }
         | CompletionContext::GlossaryKey { .. }
@@ -1094,6 +1119,47 @@ mod tests {
         let src = "\\definecolor{c}{rg}{1,0,0}\n";
         let got = labels(src, at(src, "\\definecolor{c}{rg"));
         assert_eq!(got, vec!["rgb".to_string()]);
+    }
+
+    #[test]
+    fn pagestyle_arg_is_enum() {
+        let src = "\\pagestyle{pl}\n";
+        assert_eq!(
+            classify(src, at(src, "\\pagestyle{pl")),
+            CompletionContext::ArgumentEnum {
+                prefix: "pl".to_string(),
+                values: vec![
+                    "empty".to_string(),
+                    "plain".to_string(),
+                    "headings".to_string(),
+                    "myheadings".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn enum_candidates_filter_by_prefix() {
+        let src = "\\pagestyle{pl}\n";
+        let got = labels(src, at(src, "\\pagestyle{pl"));
+        assert_eq!(got, vec!["plain".to_string()]);
+    }
+
+    #[test]
+    fn empty_enum_arg_offers_all_values() {
+        let src = "\\pagenumbering{}\n";
+        let got = labels(src, at(src, "\\pagenumbering{"));
+        assert_eq!(got, vec!["arabic", "roman", "Roman", "alph", "Alph"]);
+    }
+
+    #[test]
+    fn non_enum_command_arg_is_not_completed() {
+        // A command with no enum table entry classifies as nothing here.
+        let src = "\\label{sec}\n";
+        assert_eq!(
+            classify(src, at(src, "\\label{sec")),
+            CompletionContext::None
+        );
     }
 
     #[test]

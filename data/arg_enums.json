@@ -1,0 +1,22 @@
+{
+  "pagestyle": { "0": ["empty", "plain", "headings", "myheadings"] },
+  "thispagestyle": { "0": ["empty", "plain", "headings", "myheadings"] },
+  "pagenumbering": { "0": ["arabic", "roman", "Roman", "alph", "Alph"] },
+  "bibliographystyle": {
+    "0": [
+      "plain",
+      "plainnat",
+      "alpha",
+      "abbrv",
+      "unsrt",
+      "apalike",
+      "ieeetr",
+      "acm",
+      "siam"
+    ]
+  },
+  "theoremstyle": { "0": ["plain", "definition", "remark"] },
+  "mathversion": { "0": ["normal", "bold"] },
+  "fontshape": { "0": ["n", "it", "sl", "sc", "ui"] },
+  "fontseries": { "0": ["m", "b", "bx", "sb", "c", "l"] }
+}

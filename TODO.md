@@ -132,8 +132,16 @@ sources below are missing.
   Color-name completion also merges document `\definecolor`/`\colorlet` names.
   (Model completion is brace-arg only; the optional-arg form `\color[rgb]{…}` is
   not yet classified.)
-- [ ] **Argument-value enum completion** for fixed enumerated argument choices—
-  needs the signature DB to carry per-argument value enums.
+- [x] **Argument-value enum completion** for fixed enumerated argument choices
+  (`\pagestyle`, `\pagenumbering`, `\bibliographystyle`, `\theoremstyle`,
+  `\mathversion`, `\fontshape`/`\fontseries`). A curated side dataset
+  (`data/arg_enums.json`) keyed by command name then *brace*-group index, consumed
+  by completion only (`semantic::signature::arg_enum_values`)—it is *not* a field
+  on the formatter's `ArgSpec` (cold completion data stays out of the hot `Copy`
+  struct), mirroring the color/TikZ datasets. Static built-ins only; merging
+  document-defined values (e.g. `\fancypagestyle` names into `\pagestyle`,
+  `\newtheoremstyle` into `\theoremstyle`) the way colors merge `\definecolor` is a
+  clean follow-up on top of the table.
 - [ ] *(Design decision)* **Package-scoped command completion.** texlab suggests
   only commands provided by the loaded packages (a package→command component
   model). Badness's signature DB is flat (curated + CWL + scanned); scoping

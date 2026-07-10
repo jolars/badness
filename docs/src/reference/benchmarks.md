@@ -4,17 +4,16 @@ Wall-clock speed of `badness` against comparable tools, measured with
 [hyperfine]: the **formatter** against
 [`tex-fmt`](https://github.com/wgunderwood/tex-fmt) and
 [`latexindent`](https://github.com/cmhughes/latexindent.pl), and the **linter**
-against the classic TeX Live checkers
-[`lacheck`](https://ctan.org/pkg/lacheck) and
-[`chktex`](https://ctan.org/pkg/chktex).
+against the classic TeX Live checkers [`lacheck`](https://ctan.org/pkg/lacheck)
+and [`chktex`](https://ctan.org/pkg/chktex).
 
 These numbers measure *speed only*, never output or diagnostic equivalence, and
 the tools do genuinely different amounts of work:
 
 - `latexindent` only indents; it does no line breaking.
 - `tex-fmt` breaks overfull lines greedily but does not reflow: it won't rewrap
-  lines that already fit, so it moves far less text than `badness`, which reflows
-  each paragraph to the target width.
+  lines that already fit, so it moves far less text than `badness`, which
+  reflows each paragraph to the target width.
 - Among the linters, `lacheck` is a small classic checker, `chktex` is
   regex-driven, and `badness lint` does a full CST parse plus its rule set.
 

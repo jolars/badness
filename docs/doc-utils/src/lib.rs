@@ -124,6 +124,8 @@ fn strip_changelog_heading(contents: &str) -> &str {
 
 const BENCH_META_MARKER: &str = "{{ benchmark-meta }}";
 const BENCH_RESULTS_MARKER: &str = "{{ benchmark-results }}";
+const LINT_META_MARKER: &str = "{{ lint-benchmark-meta }}";
+const LINT_RESULTS_MARKER: &str = "{{ lint-benchmark-results }}";
 
 /// The committed benchmark artifact, deserialized straight from
 /// `benches/benchmark_results.json`. See `benches/compare_format.sh` for the
@@ -133,6 +135,10 @@ struct Benchmarks {
     meta: Meta,
     documents: Vec<Document>,
     results: Vec<BenchResult>,
+    /// Linter timings (badness lint vs lacheck/chktex), same row shape as
+    /// `results`. Defaulted so a pre-schema-v2 artifact still deserializes.
+    #[serde(default)]
+    lint_results: Vec<BenchResult>,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +163,8 @@ struct Tools {
     #[serde(rename = "tex-fmt")]
     tex_fmt: Option<Tool>,
     latexindent: Option<Tool>,
+    lacheck: Option<Tool>,
+    chktex: Option<Tool>,
 }
 
 #[derive(Deserialize)]
@@ -202,10 +210,16 @@ struct ChartPoint {
 /// JSON is read but never regenerated here, so the benchmark is only ever run
 /// manually (via `task bench`), not at site-build time.
 fn insert_benchmarks(book: &mut Book) {
+    const MARKERS: [&str; 4] = [
+        BENCH_META_MARKER,
+        BENCH_RESULTS_MARKER,
+        LINT_META_MARKER,
+        LINT_RESULTS_MARKER,
+    ];
     let needs_render = {
         let mut found = false;
         book.for_each_chapter_mut(|ch| {
-            if ch.content.contains(BENCH_META_MARKER) || ch.content.contains(BENCH_RESULTS_MARKER) {
+            if MARKERS.iter().any(|m| ch.content.contains(m)) {
                 found = true;
             }
         });
@@ -216,17 +230,22 @@ fn insert_benchmarks(book: &mut Book) {
     }
 
     let path = project_root().join("benches/benchmark_results.json");
-    let (meta, results) = match std::fs::read_to_string(&path)
+    let (meta, results, lint_meta, lint_results) = match std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str::<Benchmarks>(&s).ok())
     {
-        Some(b) => (render_meta(&b.meta), render_results(&b)),
+        Some(b) => (
+            render_meta(&b.meta),
+            render_results(&b.documents, &b.results, FORMAT_CAPTION),
+            render_lint_meta(&b.meta),
+            render_results(&b.documents, &b.lint_results, LINT_CAPTION),
+        ),
         None => {
             let note = format!(
                 "_Benchmark data unavailable (`{}` missing or unreadable; run `task bench`)._",
                 path.display()
             );
-            (note.clone(), note)
+            (note.clone(), note.clone(), note.clone(), note)
         }
     };
 
@@ -237,8 +256,30 @@ fn insert_benchmarks(book: &mut Book) {
         if ch.content.contains(BENCH_RESULTS_MARKER) {
             ch.content = ch.content.replace(BENCH_RESULTS_MARKER, &results);
         }
+        if ch.content.contains(LINT_META_MARKER) {
+            ch.content = ch.content.replace(LINT_META_MARKER, &lint_meta);
+        }
+        if ch.content.contains(LINT_RESULTS_MARKER) {
+            ch.content = ch.content.replace(LINT_RESULTS_MARKER, &lint_results);
+        }
     });
 }
+
+/// Chart caption for the formatter results (`{{ benchmark-results }}`).
+const FORMAT_CAPTION: &str = "Formatting speed relative to <code>badness</code>. Each dot is one \
+     document formatted by one tool; the vertical position is mean wall-clock time as a \
+     ratio to <code>badness</code> on a log scale, so <code>badness</code> lies on the \
+     dashed baseline at 1, faster tools fall below it and slower tools rise above. Color \
+     distinguishes documents; hover a dot for the exact millisecond figures.";
+
+/// Chart caption for the linter results (`{{ lint-benchmark-results }}`).
+const LINT_CAPTION: &str =
+    "Linting speed relative to <code>badness</code>. Each dot is one document checked \
+     by one tool; the vertical position is mean wall-clock time as a ratio to \
+     <code>badness</code> on a log scale, so <code>badness</code> lies on the dashed \
+     baseline at 1, faster tools fall below it and slower tools rise above. These tools \
+     report different problems, so a difference here is not a same-job speed verdict. \
+     Color distinguishes documents; hover a dot for the exact millisecond figures.";
 
 /// A Markdown bullet list of tool versions, timing backend, host, and run date.
 fn render_meta(meta: &Meta) -> String {
@@ -255,6 +296,32 @@ fn render_meta(meta: &Meta) -> String {
         Some(t) => out.push_str(&format!("- **latexindent**: `{}`\n", t.version)),
         None => out.push_str("- **latexindent**: not measured (not installed)\n"),
     }
+    push_host_meta(&mut out, meta);
+    out
+}
+
+/// The linter analog of `render_meta`: badness/lacheck/chktex versions plus the
+/// shared backend, host, and run date.
+fn render_lint_meta(meta: &Meta) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "- **badness**: `{}`\n",
+        meta.tools.badness.version
+    ));
+    match &meta.tools.lacheck {
+        Some(t) => out.push_str(&format!("- **lacheck**: `{}`\n", t.version)),
+        None => out.push_str("- **lacheck**: not measured (not installed)\n"),
+    }
+    match &meta.tools.chktex {
+        Some(t) => out.push_str(&format!("- **chktex**: `{}`\n", t.version)),
+        None => out.push_str("- **chktex**: not measured (not installed)\n"),
+    }
+    push_host_meta(&mut out, meta);
+    out
+}
+
+/// The backend/host/generated bullets shared by both meta blocks.
+fn push_host_meta(out: &mut String, meta: &Meta) {
     out.push_str(&format!(
         "- **backend**: {} (min runs: {})\n",
         meta.backend, meta.min_runs
@@ -264,7 +331,6 @@ fn render_meta(meta: &Meta) -> String {
         meta.host.os, meta.host.arch, meta.host.cpu
     ));
     out.push_str(&format!("- **generated**: {}\n", meta.generated_at));
-    out
 }
 
 /// The results marker becomes an interactive dot plot (Vega-Lite, driven by
@@ -275,8 +341,8 @@ fn render_meta(meta: &Meta) -> String {
 /// plots time-relative-to-badness on a log axis, one dot per (document,
 /// formatter). Kept as raw HTML (not a Markdown pipe table) so the fallback
 /// renders inside `<details>`.
-fn render_results(b: &Benchmarks) -> String {
-    let points = chart_points(b);
+fn render_results(documents: &[Document], results: &[BenchResult], caption: &str) -> String {
+    let points = chart_points(documents, results);
     let data_json = serde_json::to_string(&points).unwrap_or_else(|_| "[]".to_string());
 
     let mut out = String::new();
@@ -289,20 +355,16 @@ fn render_results(b: &Benchmarks) -> String {
     out.push_str("<script type=\"application/json\" class=\"bench-data\">");
     out.push_str(&data_json);
     out.push_str("</script>\n");
-    out.push_str(
-        "<figcaption>Formatting speed relative to <code>badness</code>. Each dot is one \
-         document formatted by one tool; the vertical position is mean wall-clock time as a \
-         ratio to <code>badness</code> on a log scale, so <code>badness</code> lies on the \
-         dashed baseline at 1, faster tools fall below it and slower tools rise above. Color \
-         distinguishes documents; hover a dot for the exact millisecond figures.</figcaption>\n",
-    );
+    out.push_str("<figcaption>");
+    out.push_str(caption);
+    out.push_str("</figcaption>\n");
     out.push_str("</figure>\n");
     out.push_str(
         "<noscript>Enable JavaScript for the interactive chart; \
          the data table below has the same numbers.</noscript>\n",
     );
     out.push_str("<details class=\"bench-table\">\n<summary>Data table</summary>\n");
-    out.push_str(&render_results_tables_html(b));
+    out.push_str(&render_results_tables_html(documents, results));
     out.push_str("</details>\n");
     out.push_str("</div>\n");
     out
@@ -312,18 +374,17 @@ fn render_results(b: &Benchmarks) -> String {
 /// document's badness baseline (badness itself is `1.0`), in corpus order.
 /// Documents whose baseline is missing or non-positive are skipped (they carry
 /// no meaningful ratio); they still appear in the fallback table.
-fn chart_points(b: &Benchmarks) -> Vec<ChartPoint> {
+fn chart_points(documents: &[Document], results: &[BenchResult]) -> Vec<ChartPoint> {
     let mut points = Vec::new();
-    for doc in &b.documents {
-        let base = b
-            .results
+    for doc in documents {
+        let base = results
             .iter()
             .find(|r| r.document == doc.id && r.formatter == "badness")
             .map(|r| r.mean_ms);
         let Some(base) = base.filter(|&b| b > 0.0) else {
             continue;
         };
-        for r in b.results.iter().filter(|r| r.document == doc.id) {
+        for r in results.iter().filter(|r| r.document == doc.id) {
             let ratio_label = if r.formatter == "badness" {
                 "baseline".to_string()
             } else {
@@ -347,11 +408,15 @@ fn chart_points(b: &Benchmarks) -> Vec<ChartPoint> {
 /// One `<h3>` + HTML `<table>` per benchmarked document, in corpus order; rows
 /// follow the order tools appear in `results`. `badness` is the baseline and
 /// every other tool's `Relative` cell is its mean ratio to it.
-fn render_results_tables_html(b: &Benchmarks) -> String {
+fn render_results_tables_html(documents: &[Document], results: &[BenchResult]) -> String {
     let mut out = String::new();
-    for doc in &b.documents {
-        let base = b
-            .results
+    for doc in documents {
+        // Skip documents absent from this result set (e.g. the folder benchmark
+        // has no linter rows), so no empty table is emitted.
+        if !results.iter().any(|r| r.document == doc.id) {
+            continue;
+        }
+        let base = results
             .iter()
             .find(|r| r.document == doc.id && r.formatter == "badness")
             .map(|r| r.mean_ms);
@@ -366,7 +431,7 @@ fn render_results_tables_html(b: &Benchmarks) -> String {
             "<table>\n<thead><tr><th>Tool</th><th>Mean (ms)</th>\
              <th>Min (ms)</th><th>Max (ms)</th><th>Relative</th></tr></thead>\n<tbody>\n",
         );
-        for r in b.results.iter().filter(|r| r.document == doc.id) {
+        for r in results.iter().filter(|r| r.document == doc.id) {
             let relative = if r.formatter == "badness" {
                 "baseline".to_string()
             } else {

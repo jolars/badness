@@ -1,4 +1,6 @@
 // Renders the benchmark dot plot(s) on the Benchmarks page with Vega-Lite.
+// One block per `.bench-chart-block`, so the formatter and linter charts share
+// this code (each carries its own inline data payload).
 //
 // Data is injected by the `doc-utils` mdbook preprocessor as an inline
 // `<script type="application/json" class="bench-data">` next to a
@@ -6,8 +8,8 @@
 // is vendored under theme/vendor/ and loaded before this file via book.toml's
 // `additional-js`, so nothing is fetched at view time.
 //
-// Chart: x = formatter, y = time relative to badness (log scale, baseline = 1),
-// color = document, one dot per (document, formatter), with a hover tooltip.
+// Chart: x = tool, y = time relative to badness (log scale, baseline = 1),
+// color = document, one dot per (document, tool), with a hover tooltip.
 (function () {
   "use strict";
 
@@ -61,7 +63,7 @@
             x: {
               field: "formatter",
               type: "nominal",
-              title: "Formatter",
+              title: "Tool",
               sort: formatters,
               axis: { labelAngle: 0 },
             },
@@ -83,7 +85,7 @@
             },
             tooltip: [
               { field: "document", title: "Document" },
-              { field: "formatter", title: "Formatter" },
+              { field: "formatter", title: "Tool" },
               { field: "mean_ms", title: "Mean (ms)", format: ".3f" },
               { field: "ratio_label", title: "Relative" },
               { field: "min_ms", title: "Min (ms)", format: ".3f" },

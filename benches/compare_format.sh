@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Benchmark badness's formatter speed against other LaTeX formatters
-# (tex-fmt, latexindent) on a corpus of real documents, using hyperfine.
+# (tex-fmt, latexindent) and its linter speed against the classic TeX Live
+# checkers (lacheck, chktex) on a corpus of real documents, using hyperfine.
 #
 # Usage:
 #   ./benches/compare_format.sh             # → benches/benchmark_results.json
@@ -14,14 +15,17 @@
 # manually with `task bench`; it is never rebuilt at site-generation time or in CI.
 #
 # This is a *visibility* tool, not a CI gate and not an output-parity target.
-# It measures wall-clock formatting speed only, never output equivalence — the
-# three tools have very different layout philosophies (notably latexindent only
-# indents by default and does no line reflow, so it does less work).
+# It measures wall-clock speed only, never output equivalence — the formatters
+# have very different layout philosophies (notably latexindent only indents by
+# default and does no line reflow, so it does less work), and the linters find
+# genuinely different problem classes (lacheck is a small classic checker,
+# chktex is regex-driven, badness lint does a full CST parse + rule set).
 #
 # Timing backend: prefers `hyperfine` (warmup + stddev/min/max) with `jq` to read
 # its JSON; falls back to a plain shell timing loop (mean only) when either is
-# missing. Comparison tools absent from PATH are skipped silently. Every tool is
-# run stdin → stdout so the comparison is free of file-mutation noise.
+# missing. Comparison tools absent from PATH are skipped silently. Formatters run
+# stdin → stdout (free of file-mutation noise); linters are read-only and run on
+# the corpus file path.
 #
 # Mirrors the sibling project panache's `benches/compare_all.sh`.
 
@@ -48,7 +52,7 @@ trap cleanup EXIT
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --out)  JSON_OUT="$2"; shift 2 ;;
-        -h|--help) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -60,6 +64,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 HAVE_TEXFMT=$(have tex-fmt && echo yes || echo no)
 HAVE_LATEXINDENT=$(have latexindent && echo yes || echo no)
+HAVE_LACHECK=$(have lacheck && echo yes || echo no)
+HAVE_CHKTEX=$(have chktex && echo yes || echo no)
 HAVE_HYPERFINE=$(have hyperfine && echo yes || echo no)
 HAVE_JQ=$(have jq && echo yes || echo no)
 
@@ -76,9 +82,12 @@ cargo build --release --quiet 2>&1 | grep -v "warning:" >&2 || true
 # --- Tool versions + host metadata -------------------------------------------
 
 BADNESS_VER=$("$BADNESS" --version | awk '{print $2}')
-TEXFMT_VER=""; LATEXINDENT_VER=""
+TEXFMT_VER=""; LATEXINDENT_VER=""; LACHECK_VER=""; CHKTEX_VER=""
 [ "$HAVE_TEXFMT" = "yes" ] && TEXFMT_VER=$(tex-fmt --version 2>/dev/null | awk '{print $2}')
 [ "$HAVE_LATEXINDENT" = "yes" ] && LATEXINDENT_VER=$(latexindent --version 2>/dev/null | head -1 | awk '{print $1}' | tr -d ',')
+# lacheck has no --version flag; its --help banner carries "LaCheck (TeX Live) 1.30".
+[ "$HAVE_LACHECK" = "yes" ] && LACHECK_VER=$(lacheck --help 2>&1 | grep -m1 'LaCheck (TeX Live)' | awk '{print $NF}')
+[ "$HAVE_CHKTEX" = "yes" ] && CHKTEX_VER=$(chktex --version 2>/dev/null | head -1 | awk '{print $2}')
 
 HOST_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 HOST_ARCH=$(uname -m)
@@ -89,6 +98,10 @@ log "Formatters:"
 log "  badness: $BADNESS_VER"
 if [ "$HAVE_TEXFMT" = "yes" ]; then log "  tex-fmt: $TEXFMT_VER"; else log "  tex-fmt: (not on PATH — skipped)"; fi
 if [ "$HAVE_LATEXINDENT" = "yes" ]; then log "  latexindent: $LATEXINDENT_VER"; else log "  latexindent: (not on PATH — skipped)"; fi
+log "Linters:"
+log "  badness: $BADNESS_VER"
+if [ "$HAVE_LACHECK" = "yes" ]; then log "  lacheck: $LACHECK_VER"; else log "  lacheck: (not on PATH — skipped)"; fi
+if [ "$HAVE_CHKTEX" = "yes" ]; then log "  chktex: $CHKTEX_VER"; else log "  chktex: (not on PATH — skipped)"; fi
 log "  backend: $BACKEND"
 [ "$BACKEND" = "shell-loop" ] && log "  (hint: install hyperfine + jq for stddev/min/max stats)"
 log
@@ -149,14 +162,33 @@ declare -a TOOLS=("badness")
 [ "$HAVE_TEXFMT" = "yes" ]      && TOOLS+=("tex-fmt")
 [ "$HAVE_LATEXINDENT" = "yes" ] && TOOLS+=("latexindent")
 
-# Command template per tool, with FILE substituted at call time (single-file,
-# stdin → stdout).
+# Active linter list — same PATH-gated pattern as the formatters.
+declare -a LINTERS=("badness")
+[ "$HAVE_LACHECK" = "yes" ] && LINTERS+=("lacheck")
+[ "$HAVE_CHKTEX" = "yes" ]  && LINTERS+=("chktex")
+
+# Command template per formatter, with FILE substituted at call time
+# (single-file, stdin → stdout).
 cmd_for() {
     local tool="$1" file="$2"
     case "$tool" in
         badness)     echo "$BADNESS format --no-config --stdin-filepath bench.tex < '$file'" ;;
         tex-fmt)     echo "tex-fmt --stdin < '$file'" ;;
         latexindent) echo "latexindent -g /dev/null - < '$file'" ;;
+    esac
+}
+
+# Command template per linter. Linters are read-only, so they run on the corpus
+# file path directly (lacheck only reliably reads a real file, not stdin `-`).
+# Findings make chktex exit 2 and badness exit 1 — that is not a run error, and
+# run_one already passes hyperfine --ignore-failure (and `|| true` in the
+# shell-loop fallback), so no extra exit handling is needed here.
+lint_cmd_for() {
+    local tool="$1" file="$2"
+    case "$tool" in
+        badness) echo "$BADNESS lint --no-config '$file'" ;;
+        chktex)  echo "chktex -q '$file'" ;;
+        lacheck) echo "lacheck '$file'" ;;
     esac
 }
 
@@ -178,6 +210,7 @@ dir_cmd_for() {
 # Accumulators, indexed in lockstep so the renderers can walk them.
 declare -a DOC_ID=() DOC_LABEL=() DOC_FILE=() DOC_SIZE=() DOC_LINES=() DOC_ITERS=()
 declare -a RES_DOC=() RES_TOOL=() RES_MEAN=() RES_STDDEV=() RES_MIN=() RES_MAX=() RES_RUNS=()
+declare -a LINT_DOC=() LINT_TOOL=() LINT_MEAN=() LINT_STDDEV=() LINT_MIN=() LINT_MAX=() LINT_RUNS=()
 
 for entry in "${CORPUS[@]}"; do
     IFS='|' read -r id file label iters <<< "$entry"
@@ -199,12 +232,21 @@ for entry in "${CORPUS[@]}"; do
     DOC_SIZE+=("$size"); DOC_LINES+=("$lines"); DOC_ITERS+=("$iters")
 
     log "━━ $label ($size bytes, $lines lines) ━━"
+    log "  format:"
     for tool in "${TOOLS[@]}"; do
         cmd="$(cmd_for "$tool" "$file")"
-        log "  $tool..."
+        log "    $tool..."
         read -r mean stddev min max runs < <(run_one "$iters" "$cmd")
         RES_DOC+=("$id"); RES_TOOL+=("$tool"); RES_MEAN+=("$mean")
         RES_STDDEV+=("$stddev"); RES_MIN+=("$min"); RES_MAX+=("$max"); RES_RUNS+=("$runs")
+    done
+    log "  lint:"
+    for tool in "${LINTERS[@]}"; do
+        cmd="$(lint_cmd_for "$tool" "$file")"
+        log "    $tool..."
+        read -r mean stddev min max runs < <(run_one "$iters" "$cmd")
+        LINT_DOC+=("$id"); LINT_TOOL+=("$tool"); LINT_MEAN+=("$mean")
+        LINT_STDDEV+=("$stddev"); LINT_MIN+=("$min"); LINT_MAX+=("$max"); LINT_RUNS+=("$runs")
     done
     log
 done
@@ -266,7 +308,7 @@ fi
 mkdir -p "$(dirname "$JSON_OUT")"
 {
         printf '{\n'
-        printf '  "schema_version": 1,\n'
+        printf '  "schema_version": 2,\n'
         printf '  "meta": {\n'
         printf '    "generated_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf '    "host": {"os": "%s", "arch": "%s", "cpu": "%s"},\n' \
@@ -277,6 +319,8 @@ mkdir -p "$(dirname "$JSON_OUT")"
         printf '      "badness": {"version": "%s"}' "$(json_escape "$BADNESS_VER")"
         [ "$HAVE_TEXFMT" = "yes" ]      && printf ',\n      "tex-fmt": {"version": "%s"}' "$(json_escape "$TEXFMT_VER")"
         [ "$HAVE_LATEXINDENT" = "yes" ] && printf ',\n      "latexindent": {"version": "%s"}' "$(json_escape "$LATEXINDENT_VER")"
+        [ "$HAVE_LACHECK" = "yes" ]     && printf ',\n      "lacheck": {"version": "%s"}' "$(json_escape "$LACHECK_VER")"
+        [ "$HAVE_CHKTEX" = "yes" ]      && printf ',\n      "chktex": {"version": "%s"}' "$(json_escape "$CHKTEX_VER")"
         printf '\n    }\n'
         printf '  },\n'
 
@@ -296,6 +340,18 @@ mkdir -p "$(dirname "$JSON_OUT")"
                 "${RES_DOC[$i]}" "${RES_TOOL[$i]}" "${RES_MEAN[$i]}" \
                 "${RES_STDDEV[$i]}" "${RES_MIN[$i]}" "${RES_MAX[$i]}" "${RES_RUNS[$i]}"
             [ "$i" -lt $((${#RES_DOC[@]} - 1)) ] && printf ','
+            printf '\n'
+        done
+        printf '  ],\n'
+
+        # Linter timings: same row shape as "results" (the "formatter" key holds
+        # the tool name, so the shared renderer and chart reuse it unchanged).
+        printf '  "lint_results": [\n'
+        for i in "${!LINT_DOC[@]}"; do
+            printf '    {"document":"%s","formatter":"%s","mean_ms":%s,"stddev_ms":%s,"min_ms":%s,"max_ms":%s,"runs":%d}' \
+                "${LINT_DOC[$i]}" "${LINT_TOOL[$i]}" "${LINT_MEAN[$i]}" \
+                "${LINT_STDDEV[$i]}" "${LINT_MIN[$i]}" "${LINT_MAX[$i]}" "${LINT_RUNS[$i]}"
+            [ "$i" -lt $((${#LINT_DOC[@]} - 1)) ] && printf ','
             printf '\n'
         done
         printf '  ]\n'

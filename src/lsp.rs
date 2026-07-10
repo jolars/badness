@@ -3992,9 +3992,10 @@ fn run_document_link(
 
 /// Compute the clickable links in `text`, preferring the snapshot's cached tree and
 /// falling back to a direct reparse when it is unavailable or stale. `.bib` files
-/// have no include structure (the LaTeX parser does not apply), so they yield none.
-/// Each resolved, on-disk target is mapped to an LSP [`DocumentLink`] via the shared
-/// [`lsp_range`] + [`path_to_uri`]; a target whose path cannot form a URI is dropped.
+/// have no include structure (the LaTeX parser does not apply), so they instead get
+/// external `doi`/`url` field links via [`crate::bib::document_link`]. Each resolved,
+/// on-disk target is mapped to an LSP [`DocumentLink`] via the shared [`lsp_range`] +
+/// [`path_to_uri`]; a target whose path cannot form a URI is dropped.
 fn compute_document_link(
     snapshot: &Analysis,
     path: &Path,
@@ -4004,7 +4005,7 @@ fn compute_document_link(
     enc: PositionEncoding,
 ) -> Vec<DocumentLink> {
     if kind == FileKind::Bib {
-        return Vec::new();
+        return compute_bib_document_link(snapshot, path, text, enc);
     }
     let idx = LineIndex::with_encoding(text, enc);
     let base_dir = path.parent();
@@ -4037,6 +4038,43 @@ fn compute_document_link(
             Some(DocumentLink {
                 range: lsp_range(&idx, text, target.range),
                 target: Some(path_to_uri(&target.target)?),
+                tooltip: None,
+                data: None,
+            })
+        })
+        .collect()
+}
+
+/// Document links for a `.bib` file: the `doi`/`url` field values turned into
+/// clickable external links (see [`crate::bib::document_link`]). Prefers the
+/// snapshot's cached bib tree, reparsing on a cache miss or stale buffer; a target
+/// string that does not parse as a URI is dropped.
+fn compute_bib_document_link(
+    snapshot: &Analysis,
+    path: &Path,
+    text: &str,
+    enc: PositionEncoding,
+) -> Vec<DocumentLink> {
+    let idx = LineIndex::with_encoding(text, enc);
+    let links = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let cached = snapshot
+            .lookup_file(path)
+            .filter(|&file| snapshot.file_text(file) == text);
+        match cached {
+            Some(file) => {
+                crate::bib::document_link::document_links(&snapshot.parsed_bib_tree(file))
+            }
+            None => crate::bib::document_link::document_links(&crate::bib::parse(text).syntax()),
+        }
+    }))
+    .unwrap_or_default();
+
+    links
+        .into_iter()
+        .filter_map(|link| {
+            Some(DocumentLink {
+                range: lsp_range(&idx, text, link.range),
+                target: Some(link.target.parse::<Uri>().ok()?),
                 tooltip: None,
                 data: None,
             })

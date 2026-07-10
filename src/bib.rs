@@ -14,6 +14,7 @@
 pub mod ast;
 pub mod completion;
 pub mod core;
+pub mod document_link;
 pub(crate) mod events;
 pub mod formatter;
 pub(crate) mod grammar;

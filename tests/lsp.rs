@@ -1146,6 +1146,64 @@ fn lsp_document_links() {
 }
 
 #[test]
+fn lsp_bib_document_links() {
+    // A `.bib` file has no include structure, but its `doi`/`url` fields become
+    // clickable external links (a bare DOI resolves under `https://doi.org/`).
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///refs.bib".parse().unwrap();
+    let doc = "@article{k,\n\
+        \x20 doi = {10.1000/xyz},\n\
+        \x20 url = {https://example.com/a},\n\
+        \x20 title = {Not a link},\n\
+        }\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    send_request(
+        &client,
+        2,
+        "textDocument/documentLink",
+        serde_json::to_value(DocumentLinkParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(&client) {
+            Message::Response(resp) => break resp,
+            Message::Notification(_) => continue,
+            other => panic!("expected a response, got {other:?}"),
+        }
+    };
+    assert_eq!(resp.id, RequestId::from(2));
+    let links: Vec<DocumentLink> =
+        serde_json::from_value(resp.result.unwrap()).expect("a documentLink response");
+
+    let targets: Vec<String> = links
+        .iter()
+        .filter_map(|l| l.target.as_ref().map(|u| u.to_string()))
+        .collect();
+    assert_eq!(links.len(), 2, "got {targets:?}");
+    assert!(targets.contains(&"https://doi.org/10.1000/xyz".to_owned()));
+    assert!(targets.contains(&"https://example.com/a".to_owned()));
+
+    // The DOI link underlines just the value (line 1, after `doi = {`).
+    let doi_link = links
+        .iter()
+        .find(|l| {
+            l.target.as_ref().map(|u| u.to_string())
+                == Some("https://doi.org/10.1000/xyz".to_owned())
+        })
+        .unwrap();
+    assert_eq!(doi_link.range.start, Position::new(1, 9));
+    assert_eq!(doi_link.range.end, Position::new(1, 20));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_code_action_quickfix() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///ca.tex".parse().unwrap();

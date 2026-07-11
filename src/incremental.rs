@@ -268,10 +268,18 @@ pub fn scope_signatures<'db>(
     let mut merged = SignatureDb::default();
     for loaded in graph.transitively_loaded(file.path(db)) {
         if let Some(&member) = by_path.get(loaded.as_path()) {
-            merged.merge_from(document_signatures(db, member));
+            // Tag each merged name with the package's file stem, so hover can
+            // name the defining package (mirrors `semantic::load`).
+            match loaded.file_stem().and_then(|s| s.to_str()) {
+                Some(origin) => {
+                    merged.merge_from_package(document_signatures(db, member), origin);
+                }
+                None => merged.merge_from(document_signatures(db, member)),
+            }
         }
     }
-    // The document's own definitions are applied last, so they win over packages.
+    // The document's own definitions are applied last, so they win over packages
+    // (and clear any package origin for a shadowed name).
     merged.merge_from(document_signatures(db, file));
     merged
 }

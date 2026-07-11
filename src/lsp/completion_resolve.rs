@@ -179,12 +179,12 @@ fn command_detail(
     name: &str,
 ) -> Option<(String, String)> {
     let scope = scope_for(snapshot, members, file);
-    let (sig, user) = super::hover::lookup_command(&scope, name)?;
+    let (sig, provenance) = super::hover::lookup_command(&scope, name)?;
     let mut detail = format!("\\{name}");
     for arg in sig.args.iter() {
         detail.push_str(super::hover::arg_slot(arg.kind));
     }
-    Some((detail, super::hover::render_command(name, sig, user)))
+    Some((detail, super::hover::render_command(name, sig, &provenance)))
 }
 
 /// `(detail, documentation)` for an environment, like [`command_detail`] but with a
@@ -196,9 +196,12 @@ fn environment_detail(
     name: &str,
 ) -> Option<(String, String)> {
     let scope = scope_for(snapshot, members, file);
-    let (sig, user) = super::hover::lookup_environment(&scope, name)?;
+    let (sig, provenance) = super::hover::lookup_environment(&scope, name)?;
     let detail = format!("\\begin{{{name}}}{}", arg_slots(&sig.args));
-    Some((detail, super::hover::render_environment(name, sig, user)))
+    Some((
+        detail,
+        super::hover::render_environment(name, sig, &provenance),
+    ))
 }
 
 /// The merged signature scope for `file` when it is a tracked document, else an

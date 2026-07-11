@@ -131,6 +131,8 @@ fn scope_signatures_pulls_in_local_package_definition() {
     let scope = scope_signatures(&db, project_main_pkg(&db, main, pkg), main);
     let sig = scope.command("myfoo").expect("package command in scope");
     assert_eq!(sig.args.len(), 2);
+    // Provenance: the scope remembers which package supplied the signature.
+    assert_eq!(scope.command_origin("myfoo"), Some("mypkg"));
 }
 
 #[test]
@@ -140,8 +142,10 @@ fn scope_signatures_document_definition_wins() {
         "\\newcommand{\\dup}[1]{#1}\n",
     );
     let scope = scope_signatures(&db, project_main_pkg(&db, main, pkg), main);
-    // The document's 2-arg \dup overrides the package's 1-arg one.
+    // The document's 2-arg \dup overrides the package's 1-arg one, and the
+    // package origin is cleared with it.
     assert_eq!(scope.command("dup").unwrap().args.len(), 2);
+    assert_eq!(scope.command_origin("dup"), None);
 }
 
 /// Intern a project from an explicit `(SourceFile, FileKind)` membership, sorting

@@ -68,7 +68,14 @@ fn collect_loaded(
         }
         if let Some((pkg_root, pkg_base)) = load_pkg(&path, src) {
             collect_loaded(&pkg_root, Some(&pkg_base), src, visited, merged);
-            merged.merge_from(&scan_definitions(&pkg_root));
+            // The origin is the *edge target's* stem, so the `.dtx` fallback
+            // (`mypkg.sty` absent, `mypkg.dtx` loaded) still reads `mypkg`.
+            match path.file_stem().and_then(|s| s.to_str()) {
+                Some(origin) => {
+                    merged.merge_from_package(&scan_definitions(&pkg_root), origin);
+                }
+                None => merged.merge_from(&scan_definitions(&pkg_root)),
+            }
         }
     }
 }
@@ -151,6 +158,7 @@ mod tests {
         );
         let sig = db.command("myfoo").expect("package command in scope");
         assert_eq!(sig.args.len(), 2);
+        assert_eq!(db.command_origin("myfoo"), Some("mypkg"));
     }
 
     #[test]
@@ -185,8 +193,10 @@ mod tests {
             "/proj",
             &[("/proj/mypkg.sty", "\\newcommand{\\dup}[1]{#1}\n")],
         );
-        // The document's 2-arg \dup overrides the package's 1-arg one.
+        // The document's 2-arg \dup overrides the package's 1-arg one, and the
+        // package origin is cleared with it (hover reads "user-defined" again).
         assert_eq!(db.command("dup").unwrap().args.len(), 2);
+        assert_eq!(db.command_origin("dup"), None);
     }
 
     #[test]
@@ -206,6 +216,8 @@ mod tests {
             .command("myfoo")
             .expect("package command from .dtx in scope");
         assert_eq!(sig.args.len(), 2);
+        // The origin reads off the edge target, so the fallback keeps the stem.
+        assert_eq!(db.command_origin("myfoo"), Some("mypkg"));
     }
 
     #[test]

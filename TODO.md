@@ -223,7 +223,7 @@ engine.
   *Deferred to the package-aware diagnostics item below:* the diagnostics
   themselves (unknown-option, duplicate `\RequirePackage`, missing
   `\ProvidesPackage`) — they consume the model this item builds.
-- [~] **Package-aware diagnostics.** Consuming the load graph and the `pkgmeta`
+- [x] **Package-aware diagnostics.** Consuming the load graph and the `pkgmeta`
   model. Landed as two per-file lints (`src/linter/rules/`): **`duplicate-package`**
   (the same package loaded twice via `\usepackage`/`\RequirePackage` in one file,
   keyed on the resolved target from `collect_package_edges`; intra-file only, since
@@ -247,10 +247,15 @@ engine.
   it; class loads are never checked (an unknown class option is a silent global
   option, not an error). Warning, no autofix. The docs renderer additionally grew
   `example_companions()` (synthetic sibling files) so the two-file example renders
-  and fires. *Still deferred:* **macro->package provenance** in hover
-  (go-to-definition already resolves package macros via `macro_namespace`; only hover
-  lacks the source-package label, which needs provenance preserved through
-  `SignatureDb::merge_from`).
+  and fires. **Macro->package provenance in hover** landed too: `SignatureDb` grew
+  origin side maps (`command_origin`/`environment_origin`, a side channel rather
+  than a `CommandSig` field so the static phf tiers stay untouched) populated by a
+  new `merge_from_package(other, origin)` at both merge sites
+  (`semantic::load::collect_loaded` and `incremental::scope_signatures`, tagging
+  each name with the loaded file's stem); plain `merge_from` and `insert_*` clear
+  a shadowed name's origin, so a document `\renewcommand` reads "user-defined"
+  again. Hover/signature-help/completion-resolve share a `Provenance` enum
+  (`Base`/`Document`/`Package`) and render ``command defined by package `mypkg` ``.
 
 ## Performance & hardening
 

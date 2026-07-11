@@ -267,6 +267,14 @@ pub(crate) const fn environment(
 pub struct SignatureDb {
     commands: HashMap<SmolStr, CommandSig>,
     environments: HashMap<SmolStr, EnvironmentSig>,
+    /// Which loaded package (by file stem) a command signature came from, when
+    /// it was merged via [`merge_from_package`](Self::merge_from_package).
+    /// Absent for the document's own definitions and for every static tier
+    /// (built-in/CWL DBs never carry origins). A side map rather than a
+    /// `CommandSig` field so the phf-generated static tables stay untouched.
+    command_origins: HashMap<SmolStr, SmolStr>,
+    /// The environment mirror of [`command_origins`](Self::command_origins).
+    environment_origins: HashMap<SmolStr, SmolStr>,
 }
 
 impl SignatureDb {
@@ -294,17 +302,35 @@ impl SignatureDb {
         self.environments.keys().map(SmolStr::as_str)
     }
 
+    /// The package (file stem) whose merge supplied the current signature of
+    /// command `name`, if it came from a package
+    /// ([`merge_from_package`](Self::merge_from_package)) rather than the
+    /// document or a static tier.
+    pub fn command_origin(&self, name: &str) -> Option<&str> {
+        self.command_origins.get(name).map(SmolStr::as_str)
+    }
+
+    /// The environment mirror of [`command_origin`](Self::command_origin).
+    pub fn environment_origin(&self, name: &str) -> Option<&str> {
+        self.environment_origins.get(name).map(SmolStr::as_str)
+    }
+
     /// Record a command signature, replacing any existing entry for `name`. Used
     /// by the per-file definition scan ([`super::define`]) to populate a fresh DB;
     /// the built-in DB is built from JSON and never mutated. A redefinition wins,
-    /// mirroring TeX's last-`\newcommand`-wins behavior.
+    /// mirroring TeX's last-`\newcommand`-wins behavior; any recorded package
+    /// origin is cleared, since it described the entry being replaced.
     pub fn insert_command(&mut self, name: impl Into<SmolStr>, sig: CommandSig) {
-        self.commands.insert(name.into(), sig);
+        let name = name.into();
+        self.command_origins.remove(&name);
+        self.commands.insert(name, sig);
     }
 
     /// Record an environment signature, replacing any existing entry for `name`.
     pub fn insert_environment(&mut self, name: impl Into<SmolStr>, sig: EnvironmentSig) {
-        self.environments.insert(name.into(), sig);
+        let name = name.into();
+        self.environment_origins.remove(&name);
+        self.environments.insert(name, sig);
     }
 
     /// Merge every command and environment of `other` into `self`, with `other`
@@ -312,11 +338,52 @@ impl SignatureDb {
     /// `insert_*`). Used to fold a loaded package's scanned definitions into a
     /// document's merged signature scope; the caller orders the merges so the
     /// document's own definitions are applied last and override any package.
+    ///
+    /// Origins always describe the *current* entry: each merged name takes
+    /// `other`'s origin when it has one, and clears any stale one of `self`'s
+    /// otherwise — so the document overlay (scanned defs carry no origins)
+    /// automatically strips package provenance from a shadowed name.
     pub fn merge_from(&mut self, other: &SignatureDb) {
         for (name, sig) in &other.commands {
+            match other.command_origins.get(name) {
+                Some(origin) => {
+                    self.command_origins.insert(name.clone(), origin.clone());
+                }
+                None => {
+                    self.command_origins.remove(name);
+                }
+            }
             self.commands.insert(name.clone(), sig.clone());
         }
         for (name, sig) in &other.environments {
+            match other.environment_origins.get(name) {
+                Some(origin) => {
+                    self.environment_origins
+                        .insert(name.clone(), origin.clone());
+                }
+                None => {
+                    self.environment_origins.remove(name);
+                }
+            }
+            self.environments.insert(name.clone(), sig.clone());
+        }
+    }
+
+    /// Like [`merge_from`](Self::merge_from), additionally recording `origin`
+    /// (a package file stem, e.g. `mypkg`) as the provenance of every merged
+    /// name. Used when folding a loaded package's scanned definitions into a
+    /// document scope, so hover can name the defining package.
+    /// Package-over-package: the last merge wins, consistent with the
+    /// signature overwrite itself.
+    pub fn merge_from_package(&mut self, other: &SignatureDb, origin: &str) {
+        for (name, sig) in &other.commands {
+            self.command_origins
+                .insert(name.clone(), SmolStr::from(origin));
+            self.commands.insert(name.clone(), sig.clone());
+        }
+        for (name, sig) in &other.environments {
+            self.environment_origins
+                .insert(name.clone(), SmolStr::from(origin));
             self.environments.insert(name.clone(), sig.clone());
         }
     }
@@ -809,6 +876,8 @@ fn parse(json: &str) -> serde_json::Result<SignatureDb> {
             .into_iter()
             .map(|(name, sig)| (SmolStr::new(name), sig.into()))
             .collect(),
+        command_origins: HashMap::new(),
+        environment_origins: HashMap::new(),
     })
 }
 
@@ -1142,6 +1211,59 @@ mod tests {
         };
         let sig = sigs.command(name).expect("CWL-only name resolves");
         assert!(sig.sectioning.is_none() && !sig.inline && !sig.verbatim);
+    }
+
+    /// A minimal one-command DB for the origin-merge tests.
+    fn db_with_command(name: &str) -> SignatureDb {
+        let mut db = SignatureDb::default();
+        db.insert_command(name, CommandSig::default());
+        db
+    }
+
+    #[test]
+    fn merge_from_package_records_origin() {
+        let mut scope = SignatureDb::default();
+        scope.merge_from_package(&db_with_command("myfoo"), "mypkg");
+        assert_eq!(scope.command_origin("myfoo"), Some("mypkg"));
+        assert!(scope.command("myfoo").is_some());
+    }
+
+    #[test]
+    fn plain_merge_clears_origin_on_shadow() {
+        // The document overlay: its scanned defs carry no origins, so merging
+        // them last strips the package provenance of a shadowed name.
+        let mut scope = SignatureDb::default();
+        scope.merge_from_package(&db_with_command("dup"), "mypkg");
+        scope.merge_from(&db_with_command("dup"));
+        assert_eq!(scope.command_origin("dup"), None);
+        assert!(scope.command("dup").is_some());
+    }
+
+    #[test]
+    fn later_package_merge_overwrites_origin() {
+        let mut scope = SignatureDb::default();
+        scope.merge_from_package(&db_with_command("shared"), "first");
+        scope.merge_from_package(&db_with_command("shared"), "second");
+        assert_eq!(scope.command_origin("shared"), Some("second"));
+    }
+
+    #[test]
+    fn insert_clears_origin() {
+        let mut scope = SignatureDb::default();
+        scope.merge_from_package(&db_with_command("myfoo"), "mypkg");
+        scope.insert_command("myfoo", CommandSig::default());
+        assert_eq!(scope.command_origin("myfoo"), None);
+    }
+
+    #[test]
+    fn merge_propagates_existing_origins() {
+        // Merging a scope that itself carries origins (a package's own scope
+        // pulled a dependency) keeps them.
+        let mut inner = SignatureDb::default();
+        inner.merge_from_package(&db_with_command("dep"), "deppkg");
+        let mut scope = SignatureDb::default();
+        scope.merge_from(&inner);
+        assert_eq!(scope.command_origin("dep"), Some("deppkg"));
     }
 
     #[test]

@@ -25,7 +25,7 @@
 
 use super::*;
 use crate::ast::{command_name, environment_name};
-use crate::lsp::hover::{arg_summary, lookup_command, lookup_environment};
+use crate::lsp::hover::{arg_summary, lookup_command, lookup_environment, provenance_label};
 use crate::semantic::signature::{ArgKind, ArgSpec};
 use crate::syntax::{SyntaxKind, SyntaxToken};
 use lsp_types::{
@@ -76,34 +76,25 @@ fn signature_help_at(
     let (prefix, args, provenance) = match target.kind {
         OwnerKind::Command => {
             let name = command_name(&target.owner)?;
-            let (sig, user) = lookup_command(scope, &name)?;
+            let (sig, provenance) = lookup_command(scope, &name)?;
             (
                 format!("\\{name}"),
                 sig.args.clone(),
-                kind_word(user, "command"),
+                provenance_label(&provenance, "command"),
             )
         }
         OwnerKind::Environment => {
             let name = environment_name(&target.owner)?;
-            let (sig, user) = lookup_environment(scope, &name)?;
+            let (sig, provenance) = lookup_environment(scope, &name)?;
             (
                 format!("\\begin{{{name}}}"),
                 sig.args.clone(),
-                kind_word(user, "environment"),
+                provenance_label(&provenance, "environment"),
             )
         }
     };
     let active = active_parameter(&args, &target.owner, &target.group)?;
     Some(render_help(&prefix, &args, provenance, active, enc))
-}
-
-/// hover's provenance word: `command` vs `user-defined command`.
-fn kind_word(user_defined: bool, word: &str) -> String {
-    if user_defined {
-        format!("user-defined {word}")
-    } else {
-        word.to_string()
-    }
 }
 
 /// Whose argument the cursor is in: a `COMMAND`'s or a `\begin`'s.

@@ -8,7 +8,8 @@
 //! - **Command / environment signature.** A `\command` control word, or an
 //!   environment name in a `\begin{…}`/`\end{…}`, renders a synthesized prototype
 //!   plus a facts line (arity, argument kinds, sectioning/float/theorem level,
-//!   verbatim/math/list flags, and built-in vs. user/package-defined provenance).
+//!   verbatim/math/list flags, and provenance — built-in, user-defined, or the
+//!   defining local package by name, preserved through the scope merge).
 //!   Looked up scope-first (the document's own + loaded packages' scanned defs),
 //!   then the curated built-in DB, then the bulk CWL tier — mirroring
 //!   [`super::build_completion_items`]'s tiering.
@@ -106,12 +107,12 @@ fn build_hover(
     if let Some(target) = signature_target_at(root, offset) {
         let value = match target.kind {
             TargetKind::Command => {
-                let (sig, user) = lookup_command(scope, &target.name)?;
-                render_command(&target.name, sig, user)
+                let (sig, provenance) = lookup_command(scope, &target.name)?;
+                render_command(&target.name, sig, &provenance)
             }
             TargetKind::Environment => {
-                let (sig, user) = lookup_environment(scope, &target.name)?;
-                render_environment(&target.name, sig, user)
+                let (sig, provenance) = lookup_environment(scope, &target.name)?;
+                render_environment(&target.name, sig, &provenance)
             }
         };
         return Some(markup_hover(value, target.range, idx, text));
@@ -239,33 +240,60 @@ fn name_group_inner(group: &SyntaxNode) -> Option<(String, TextRange)> {
     Some((text, TextRange::new(start?, end?)))
 }
 
-/// A command signature, scope-first then built-in then CWL, with `true` when the hit
-/// came from the local/package scope (rendered as "user-defined").
+/// Where a resolved signature came from, for the rendered provenance label:
+/// the static tiers (built-in/CWL), the document's own definitions, or a loaded
+/// local package (whose file stem the merge recorded).
+pub(super) enum Provenance {
+    Base,
+    Document,
+    Package(SmolStr),
+}
+
+/// The provenance fact line: `command` / `user-defined command` /
+/// ``command defined by package `mypkg` `` (same for `environment`).
+pub(super) fn provenance_label(provenance: &Provenance, word: &str) -> String {
+    match provenance {
+        Provenance::Base => word.to_string(),
+        Provenance::Document => format!("user-defined {word}"),
+        Provenance::Package(pkg) => format!("{word} defined by package `{pkg}`"),
+    }
+}
+
+/// A command signature, scope-first then built-in then CWL, with the scope hit's
+/// provenance (document vs loaded package) preserved for the rendered label.
 pub(super) fn lookup_command<'a>(
     scope: &'a SignatureDb,
     name: &str,
-) -> Option<(&'a CommandSig, bool)> {
+) -> Option<(&'a CommandSig, Provenance)> {
     if let Some(sig) = scope.command(name) {
-        return Some((sig, true));
+        let provenance = match scope.command_origin(name) {
+            Some(origin) => Provenance::Package(SmolStr::from(origin)),
+            None => Provenance::Document,
+        };
+        return Some((sig, provenance));
     }
     builtin()
         .command(name)
         .or_else(|| cwl().command(name))
-        .map(|sig| (sig, false))
+        .map(|sig| (sig, Provenance::Base))
 }
 
 /// An environment signature, with the same tiering as [`lookup_command`].
 pub(super) fn lookup_environment<'a>(
     scope: &'a SignatureDb,
     name: &str,
-) -> Option<(&'a EnvironmentSig, bool)> {
+) -> Option<(&'a EnvironmentSig, Provenance)> {
     if let Some(sig) = scope.environment(name) {
-        return Some((sig, true));
+        let provenance = match scope.environment_origin(name) {
+            Some(origin) => Provenance::Package(SmolStr::from(origin)),
+            None => Provenance::Document,
+        };
+        return Some((sig, provenance));
     }
     builtin()
         .environment(name)
         .or_else(|| cwl().environment(name))
-        .map(|sig| (sig, false))
+        .map(|sig| (sig, Provenance::Base))
 }
 
 /// `{}`/`[]` slot for an argument kind, for the synthesized prototype.
@@ -501,7 +529,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// `\name{}{}` prototype + a `·`-joined facts line.
-pub(super) fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -> String {
+pub(super) fn render_command(name: &str, sig: &CommandSig, provenance: &Provenance) -> String {
     let mut out = String::new();
     let _ = write!(out, "```latex\n\\{name}");
     for arg in sig.args.iter() {
@@ -509,11 +537,7 @@ pub(super) fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -
     }
     out.push_str("\n```\n");
 
-    let mut facts = vec![if user_defined {
-        "user-defined command".to_string()
-    } else {
-        "command".to_string()
-    }];
+    let mut facts = vec![provenance_label(provenance, "command")];
     if let Some(level) = sig.sectioning {
         facts.push(format!("sectioning level {level}"));
     }
@@ -528,7 +552,11 @@ pub(super) fn render_command(name: &str, sig: &CommandSig, user_defined: bool) -
 }
 
 /// `\begin{name} … \end{name}` prototype + a `·`-joined facts line.
-pub(super) fn render_environment(name: &str, sig: &EnvironmentSig, user_defined: bool) -> String {
+pub(super) fn render_environment(
+    name: &str,
+    sig: &EnvironmentSig,
+    provenance: &Provenance,
+) -> String {
     let mut out = String::new();
     let _ = write!(out, "```latex\n\\begin{{{name}}}");
     for arg in sig.args.iter() {
@@ -536,11 +564,7 @@ pub(super) fn render_environment(name: &str, sig: &EnvironmentSig, user_defined:
     }
     let _ = write!(out, " … \\end{{{name}}}\n```\n");
 
-    let mut facts = vec![if user_defined {
-        "user-defined environment".to_string()
-    } else {
-        "environment".to_string()
-    }];
+    let mut facts = vec![provenance_label(provenance, "environment")];
     match sig.outline {
         Some(OutlineKind::Float) => facts.push("float".to_string()),
         Some(OutlineKind::Theorem) => facts.push("theorem-like".to_string()),
@@ -865,6 +889,61 @@ mod tests {
         let md = markdown_at(&db, path, src, offset).expect("hover for \\foo");
         assert!(md.contains("user-defined command"), "provenance: {md}");
         assert!(md.contains("1 required argument"), "arity: {md}");
+    }
+
+    #[test]
+    fn package_defined_command_names_source_package() {
+        let src = "\\usepackage{mypkg}\n\\myfoo{a}\n";
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(Path::new("/p/main.tex"), src.to_string());
+        db.upsert_file(
+            Path::new("/p/mypkg.sty"),
+            "\\newcommand{\\myfoo}[1]{#1}\n".to_string(),
+        );
+        let offset = src.rfind("myfoo").expect("use site");
+        let md =
+            markdown_at(&db, Path::new("/p/main.tex"), src, offset).expect("hover for \\myfoo");
+        assert!(
+            md.contains("command defined by package `mypkg`"),
+            "provenance: {md}"
+        );
+        assert!(!md.contains("user-defined"), "provenance: {md}");
+    }
+
+    #[test]
+    fn package_defined_environment_names_source_package() {
+        let src = "\\usepackage{mypkg}\n\\begin{myenv}\nx\n\\end{myenv}\n";
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(Path::new("/p/main.tex"), src.to_string());
+        db.upsert_file(
+            Path::new("/p/mypkg.sty"),
+            "\\newenvironment{myenv}{}{}\n".to_string(),
+        );
+        let offset = src.find("myenv").expect("begin site");
+        let md = markdown_at(&db, Path::new("/p/main.tex"), src, offset).expect("hover for myenv");
+        assert!(
+            md.contains("environment defined by package `mypkg`"),
+            "provenance: {md}"
+        );
+    }
+
+    #[test]
+    fn document_redefinition_over_package_is_user_defined() {
+        // The document's own \renewcommand shadows the package definition, so the
+        // hover reads "user-defined" again (the merge clears the package origin).
+        let src = "\\usepackage{mypkg}\n\\renewcommand{\\myfoo}[2]{#1#2}\n\\myfoo{a}{b}\n";
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(Path::new("/p/main.tex"), src.to_string());
+        db.upsert_file(
+            Path::new("/p/mypkg.sty"),
+            "\\newcommand{\\myfoo}[1]{#1}\n".to_string(),
+        );
+        let offset = src.rfind("myfoo").expect("use site");
+        let md =
+            markdown_at(&db, Path::new("/p/main.tex"), src, offset).expect("hover for \\myfoo");
+        assert!(md.contains("user-defined command"), "provenance: {md}");
+        assert!(!md.contains("defined by package"), "provenance: {md}");
+        assert!(md.contains("2 required arguments"), "arity: {md}");
     }
 
     #[test]

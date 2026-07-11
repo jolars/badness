@@ -124,8 +124,14 @@ fn strip_changelog_heading(contents: &str) -> &str {
 
 const BENCH_META_MARKER: &str = "{{ benchmark-meta }}";
 const BENCH_RESULTS_MARKER: &str = "{{ benchmark-results }}";
+const BENCH_PROJECT_RESULTS_MARKER: &str = "{{ benchmark-project-results }}";
 const LINT_META_MARKER: &str = "{{ lint-benchmark-meta }}";
 const LINT_RESULTS_MARKER: &str = "{{ lint-benchmark-results }}";
+
+/// The document id the folder (whole-project) benchmark is recorded under; see
+/// `benches/compare_format.sh`. Single-file rows carry any other id, so this is
+/// the split point between the single-file and project charts.
+const PROJECT_DOC_ID: &str = "project";
 
 /// The committed benchmark artifact, deserialized straight from
 /// `benches/benchmark_results.json`. See `benches/compare_format.sh` for the
@@ -172,7 +178,7 @@ struct Tool {
     version: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Document {
     id: String,
     name: String,
@@ -210,9 +216,10 @@ struct ChartPoint {
 /// JSON is read but never regenerated here, so the benchmark is only ever run
 /// manually (via `task bench`), not at site-build time.
 fn insert_benchmarks(book: &mut Book) {
-    const MARKERS: [&str; 4] = [
+    const MARKERS: [&str; 5] = [
         BENCH_META_MARKER,
         BENCH_RESULTS_MARKER,
+        BENCH_PROJECT_RESULTS_MARKER,
         LINT_META_MARKER,
         LINT_RESULTS_MARKER,
     ];
@@ -230,39 +237,79 @@ fn insert_benchmarks(book: &mut Book) {
     }
 
     let path = project_root().join("benches/benchmark_results.json");
-    let (meta, results, lint_meta, lint_results) = match std::fs::read_to_string(&path)
+    let rendered = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str::<Benchmarks>(&s).ok())
-    {
-        Some(b) => (
-            render_meta(&b.meta),
-            render_results(&b.documents, &b.results, FORMAT_CAPTION),
-            render_lint_meta(&b.meta),
-            render_results(&b.documents, &b.lint_results, LINT_CAPTION),
-        ),
-        None => {
+        .map(|b| {
+            // The single-file and whole-project rows share one `documents` list;
+            // split it so each drives its own chart (never mixed in one plot).
+            let single: Vec<Document> = b
+                .documents
+                .iter()
+                .filter(|d| d.id != PROJECT_DOC_ID)
+                .cloned()
+                .collect();
+            let project: Vec<Document> = b
+                .documents
+                .iter()
+                .filter(|d| d.id == PROJECT_DOC_ID)
+                .cloned()
+                .collect();
+            Rendered {
+                meta: render_meta(&b.meta),
+                results: render_results(&single, &b.results, FORMAT_CAPTION),
+                project_results: if project.is_empty() {
+                    "_Whole-project benchmark not measured in this run._".to_string()
+                } else {
+                    render_results(&project, &b.results, FORMAT_PROJECT_CAPTION)
+                },
+                lint_meta: render_lint_meta(&b.meta),
+                lint_results: render_results(&single, &b.lint_results, LINT_CAPTION),
+            }
+        })
+        .unwrap_or_else(|| {
             let note = format!(
                 "_Benchmark data unavailable (`{}` missing or unreadable; run `task bench`)._",
                 path.display()
             );
-            (note.clone(), note.clone(), note.clone(), note)
-        }
-    };
+            Rendered {
+                meta: note.clone(),
+                results: note.clone(),
+                project_results: note.clone(),
+                lint_meta: note.clone(),
+                lint_results: note,
+            }
+        });
 
     book.for_each_chapter_mut(|ch| {
         if ch.content.contains(BENCH_META_MARKER) {
-            ch.content = ch.content.replace(BENCH_META_MARKER, &meta);
+            ch.content = ch.content.replace(BENCH_META_MARKER, &rendered.meta);
         }
         if ch.content.contains(BENCH_RESULTS_MARKER) {
-            ch.content = ch.content.replace(BENCH_RESULTS_MARKER, &results);
+            ch.content = ch.content.replace(BENCH_RESULTS_MARKER, &rendered.results);
+        }
+        if ch.content.contains(BENCH_PROJECT_RESULTS_MARKER) {
+            ch.content =
+                ch.content.replace(BENCH_PROJECT_RESULTS_MARKER, &rendered.project_results);
         }
         if ch.content.contains(LINT_META_MARKER) {
-            ch.content = ch.content.replace(LINT_META_MARKER, &lint_meta);
+            ch.content = ch.content.replace(LINT_META_MARKER, &rendered.lint_meta);
         }
         if ch.content.contains(LINT_RESULTS_MARKER) {
-            ch.content = ch.content.replace(LINT_RESULTS_MARKER, &lint_results);
+            ch.content = ch.content.replace(LINT_RESULTS_MARKER, &rendered.lint_results);
         }
     });
+}
+
+/// The five rendered fragments substituted into the benchmarks page: the two
+/// meta blocks and the three result charts (formatter single-file, formatter
+/// whole-project, linter single-file).
+struct Rendered {
+    meta: String,
+    results: String,
+    project_results: String,
+    lint_meta: String,
+    lint_results: String,
 }
 
 /// Chart caption for the formatter results (`{{ benchmark-results }}`).
@@ -271,6 +318,18 @@ const FORMAT_CAPTION: &str = "Formatting speed relative to <code>badness</code>.
      ratio to <code>badness</code> on a log scale, so <code>badness</code> lies on the \
      dashed baseline at 1, faster tools fall below it and slower tools rise above. Color \
      distinguishes documents; hover a dot for the exact millisecond figures.";
+
+/// Chart caption for the whole-project formatter results
+/// (`{{ benchmark-project-results }}`). Only `badness` and `tex-fmt` appear
+/// (latexindent has no recursive mode), and this is a folder `--check`, a
+/// different mode from the single-file rows.
+const FORMAT_PROJECT_CAPTION: &str =
+    "Whole-project formatting speed relative to <code>badness</code>. Each dot is one tool \
+     running a recursive <code>--check</code> over a real multi-file LaTeX project; the \
+     vertical position is mean wall-clock time as a ratio to <code>badness</code> on a log \
+     scale, so <code>badness</code> lies on the dashed baseline at 1, faster tools fall below \
+     it and slower tools rise above. This is a different mode from the single-file charts—read \
+     its ratio on its own terms. Hover a dot for the exact millisecond figures.";
 
 /// Chart caption for the linter results (`{{ lint-benchmark-results }}`).
 const LINT_CAPTION: &str =

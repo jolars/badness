@@ -33,6 +33,28 @@
     return out;
   }
 
+  // Exact powers of ten spanning the data's ratio range, so the log axis ticks
+  // (and grid) land only on 10ⁿ values the label expression can render cleanly.
+  function powersOfTenTicks(points) {
+    var ratios = points
+      .map(function (p) {
+        return p.ratio;
+      })
+      .filter(function (r) {
+        return r > 0;
+      });
+    if (!ratios.length) {
+      return [1];
+    }
+    var lo = Math.floor(Math.log10(Math.min.apply(null, ratios)));
+    var hi = Math.ceil(Math.log10(Math.max.apply(null, ratios)));
+    var ticks = [];
+    for (var e = lo; e <= hi; e++) {
+      ticks.push(Math.pow(10, e));
+    }
+    return ticks;
+  }
+
   function spec(points) {
     var dark = isDark();
     var fg = dark ? "#c8c9db" : "#333333";
@@ -67,15 +89,20 @@
               sort: formatters,
               axis: { labelAngle: 0 },
             },
-            // Dodge dots of different documents so same-ratio points (all the
-            // badness dots sit at 1.0) don't stack on top of each other.
-            xOffset: { field: "document", type: "nominal", sort: documents },
+            // No xOffset: dots for every document share their tool's x position
+            // so they stack vertically at their respective ratios. Color still
+            // distinguishes documents, and hover disambiguates overlaps.
             y: {
               field: "ratio",
               type: "quantitative",
               title: "Time relative to badness",
               scale: { type: "log" },
-              axis: { format: "~s" },
+              axis: {
+                // Pin ticks to exact powers of ten and label them as plain
+                // decimals (1000, 100, 10, 1, 0.1, …); "~f" trims trailing zeros.
+                values: powersOfTenTicks(points),
+                format: "~f",
+              },
             },
             color: {
               field: "document",

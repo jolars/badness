@@ -27,7 +27,9 @@ re-measured when this site is built or in CI.
 
 [hyperfine]: https://github.com/sharkdp/hyperfine
 
-## How the formatter is measured
+## Formatter
+
+### How the formatter is measured
 
 Each tool is invoked exactly as a user would pipe a document through it:
 
@@ -43,31 +45,43 @@ The corpus is real LaTeX: a committed `small.tex` baseline plus larger documents
 `badness` cannot yet format (parser diagnostics) are skipped, as are comparison
 tools missing from `PATH`.
 
-### Whole-project (folder) benchmark
-
-One entry, `project`, measures **recursive folder formatting** rather than a
-single file: each tool walks a real multi-file LaTeX thesis (the pinned
-[`kks32/phd-thesis-template`], its `.tex` fragments) and formats every file in
-read-only `--check` mode—the folder analog of the `stdin -> stdout` runs above
-(full formatting work, nothing written). Only `badness` and `tex-fmt` appear
-here: `latexindent` has no recursive directory mode, so it is excluded from this
-comparison by design.
+The whole-project benchmark below measures **recursive folder formatting**
+rather than a single file: each tool walks a real multi-file LaTeX thesis (the
+pinned [`kks32/phd-thesis-template`], its `.tex` fragments) and formats every
+file in read-only `--check` mode—the folder analog of the `stdin -> stdout` runs
+above (full formatting work, nothing written). Only `badness` and `tex-fmt`
+appear there: `latexindent` has no recursive directory mode, so it is excluded
+from that comparison by design.
 
   | Tool      | Invocation                          |
   | --------- | ----------------------------------- |
   | `badness` | `badness format --check <dir>`      |
   | `tex-fmt` | `tex-fmt --check --recursive <dir>` |
 
-The benchmark runs against a throwaway copy of the fetched project so both tools
-walk an identical, un-gitignored, `.tex`-only tree (`badness format` is
-`.tex`-only, while `tex-fmt` would otherwise also touch `.bib`/`.cls`). Any file
-`badness` cannot format yet is dropped from *both* tools, keeping the comparison
-symmetric. This is a different mode from the single-file rows, so read its ratio
-on its own terms, not against them.
+The folder benchmark runs against a throwaway copy of the fetched project so
+both tools walk an identical, un-gitignored, `.tex`-only tree (`badness format`
+is `.tex`-only, while `tex-fmt` would otherwise also touch `.bib`/`.cls`). Any
+file `badness` cannot format yet is dropped from *both* tools, keeping the
+comparison symmetric. This is a different mode from the single-file runs, so read
+its ratio on its own terms, not against them.
 
 [`kks32/phd-thesis-template`]: https://github.com/kks32/phd-thesis-template
 
-## How the linter is measured
+### Setup
+
+{{ benchmark-meta }}
+
+### Single-file results
+
+{{ benchmark-results }}
+
+### Whole-project results
+
+{{ benchmark-project-results }}
+
+## Linter
+
+### How the linter is measured
 
 The linter runs over the same single-file corpus. Linters are read-only, so each
 tool is handed the document path directly (no stdin plumbing—`lacheck` only
@@ -88,18 +102,10 @@ There is no folder analog for the linter comparison: neither `lacheck` nor
 `chktex` has a recursive directory mode, so—like `latexindent` in the formatter
 folder benchmark—they would have no counterpart to measure against.
 
-## Formatter setup
-
-{{ benchmark-meta }}
-
-## Formatter results
-
-{{ benchmark-results }}
-
-## Linter setup
+### Setup
 
 {{ lint-benchmark-meta }}
 
-## Linter results
+### Results
 
 {{ lint-benchmark-results }}

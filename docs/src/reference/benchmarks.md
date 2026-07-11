@@ -62,8 +62,8 @@ The folder benchmark runs against a throwaway copy of the fetched project so
 both tools walk an identical, un-gitignored, `.tex`-only tree (`badness format`
 is `.tex`-only, while `tex-fmt` would otherwise also touch `.bib`/`.cls`). Any
 file `badness` cannot format yet is dropped from *both* tools, keeping the
-comparison symmetric. This is a different mode from the single-file runs, so read
-its ratio on its own terms, not against them.
+comparison symmetric. This is a different mode from the single-file runs, so
+read its ratio on its own terms, not against them.
 
 [`kks32/phd-thesis-template`]: https://github.com/kks32/phd-thesis-template
 

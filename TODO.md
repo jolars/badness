@@ -232,11 +232,22 @@ engine.
   gated on the file extension and reading `SemanticModel::provides()`; the "wrong
   kind" case counts as missing). Both are `Warning`, no autofix. The docs renderer
   grew a per-rule `example_path()` so an extension-gated rule's example can lint as a
-  `.sty`. *Still deferred:* **unknown-option** (needs `\usepackage`-option extraction
-  from the CST, a cross-file package-model reachable from a lint rule — today rules
-  see only `ResolvedLabels`/`ResolvedCitations` — and would fire only for a
-  locally-resolvable `.sty` without a `\DeclareOption*` default handler, since no
-  option data ships for system packages) and **macro->package provenance** in hover
+  `.sty`. **`unknown-option`** landed as the third lint: a `\usepackage`/
+  `\RequirePackage` option the target never `\DeclareOption`s, checked only against
+  analyzed member `.sty` files (no option data ships for system packages) through a
+  cross-file `ResolvedPackageOptions` model threaded into `RuleContext` parallel to
+  `ResolvedLabels` (options are read at the load site by
+  `project::package::load_option_args`; per-member facts by
+  `project::options::package_option_facts`, with a per-file salsa firewall
+  `file_package_option_facts` feeding `resolved_package_options` for the LSP path,
+  and the CLI folding facts in `run_lint` Phase 2). Conservative by construction: a
+  `\DeclareOption*` (or dynamic-named `\DeclareOption`), any keyval-family
+  processor (kvoptions/xkeyval/`\ProcessKeyOptions`/…, or loading such a package),
+  an `\input` in the `.sty`, a `key=value` option, or a dynamic bracket silences
+  it; class loads are never checked (an unknown class option is a silent global
+  option, not an error). Warning, no autofix. The docs renderer additionally grew
+  `example_companions()` (synthetic sibling files) so the two-file example renders
+  and fires. *Still deferred:* **macro->package provenance** in hover
   (go-to-definition already resolves package macros via `macro_namespace`; only hover
   lacks the source-package label, which needs provenance preserved through
   `SignatureDb::merge_from`).

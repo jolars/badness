@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use rowan::{TextRange, TextSize};
 
-use crate::project::{ResolvedCitations, ResolvedLabels};
+use crate::project::{ResolvedCitations, ResolvedLabels, ResolvedPackageOptions};
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
@@ -40,6 +40,7 @@ pub mod swallowed_space;
 pub mod times_variable;
 pub mod undefined_citation;
 pub mod undefined_ref;
+pub mod unknown_option;
 pub mod unreferenced_label;
 pub mod verbatim_trailing_text;
 
@@ -66,6 +67,7 @@ pub use swallowed_space::SwallowedSpace;
 pub use times_variable::TimesVariable;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
+pub use unknown_option::UnknownOption;
 pub use unreferenced_label::UnreferencedLabel;
 pub use verbatim_trailing_text::VerbatimTrailingText;
 
@@ -87,6 +89,10 @@ pub struct RuleContext<'a> {
     /// `.bib` resources), or `None` when there is no project view. Gates
     /// `undefined-citation`, the bibliographic analog of `resolution`.
     pub citations: Option<&'a ResolvedCitations>,
+    /// The project's package-option model (each analyzed `.sty` member's
+    /// statically-declared options), or `None` when there is no project view.
+    /// Gates `unknown-option`, the load-graph analog of `resolution`.
+    pub packages: Option<&'a ResolvedPackageOptions>,
     /// Disjoint byte ranges covered by `MATH` nodes, sorted by start. Computed
     /// once per file so the many rules that must ignore math (`e.g.` inside `$…$`
     /// is not sentence punctuation, a `-` there is not a dash, …) share one
@@ -98,13 +104,15 @@ pub struct RuleContext<'a> {
 
 impl<'a> RuleContext<'a> {
     /// Assemble the context for one file, precomputing the shared math-region
-    /// index. `resolution`/`citations` are `None` when there is no project view.
+    /// index. `resolution`/`citations`/`packages` are `None` when there is no
+    /// project view.
     pub fn new(
         path: &'a Path,
         root: &'a SyntaxNode,
         model: &'a SemanticModel,
         resolution: Option<&'a ResolvedLabels>,
         citations: Option<&'a ResolvedCitations>,
+        packages: Option<&'a ResolvedPackageOptions>,
     ) -> Self {
         Self {
             path,
@@ -112,6 +120,7 @@ impl<'a> RuleContext<'a> {
             model,
             resolution,
             citations,
+            packages,
             math_regions: math_regions(root),
         }
     }
@@ -217,6 +226,15 @@ pub trait Rule: Send + Sync {
         "example.tex"
     }
 
+    /// Synthetic `(path, source)` sibling files linted alongside every example
+    /// of the rule — the two-file story a cross-file rule (like
+    /// `unknown-option`, whose example loads a local `.sty`) needs to fire
+    /// under the docs renderer. Paths are relative to the example's directory.
+    /// Defaults to none.
+    fn example_companions(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The `SyntaxKind`s this rule subscribes to. During the driver's single
     /// shared traversal, [`Rule::check`] is invoked once for every element whose
     /// kind appears here. The default (`&[]`) opts out of node dispatch entirely —
@@ -303,6 +321,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(VerbatimTrailingText),
         Box::new(DuplicatePackage),
         Box::new(MissingProvides),
+        Box::new(UnknownOption),
     ]
 }
 
@@ -386,6 +405,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "verbatim-trailing-text",
     "duplicate-package",
     "missing-provides",
+    "unknown-option",
 ];
 
 /// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).

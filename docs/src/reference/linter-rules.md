@@ -672,6 +672,32 @@ warning: missing-provides
   | ^^^^^^^^^^^^^^^ package file lacks `\ProvidesPackage`
 ```
 
+## `unknown-option`
+
+Flag a `\usepackage`/`\RequirePackage` option that the loaded package never declares with `\DeclareOption`, which LaTeX reports as an "Unknown option" error at compile time. Checked only against packages that are analyzed project files (a sibling `.sty`) — no option data ships for system packages — and only when the package's declared set is trustworthy: a `\DeclareOption*` default handler, a key-value option processor (`kvoptions`, `\ProcessKeyOptions`, …), option forwarding, or an `\input` in the package silences the rule, as does a `key=value` option. Class loads (`\documentclass`) are not checked: an unknown class option is not an error, it becomes an unused global option. No autofix: dropping or renaming the option is the author's call.
+
+With a sibling `mypkg.sty`:
+
+```tex
+\ProvidesPackage{mypkg}[2026/01/01 v1.0 Demo package]
+\DeclareOption{draft}{}
+\ProcessOptions\relax
+```
+
+Loading the sibling package with an option it never declares:
+
+```tex
+\usepackage[final]{mypkg}
+```
+
+```text
+warning: unknown-option
+ --> example.tex:1:13
+  |
+1 | \usepackage[final]{mypkg}
+  |             ^^^^^ unknown option `final` for package `mypkg`
+```
+
 ## Configuration
 
 Rules are selected through the `[lint]` table in `badness.toml`, or the matching

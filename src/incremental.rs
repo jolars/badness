@@ -28,10 +28,12 @@ use crate::project::citations::document_cite_names;
 use crate::project::labels::{
     document_glossary_keys, document_label_names, document_ref_names, is_document_root,
 };
+use crate::project::options::resolved_package_options;
 use crate::project::{
-    BibTarget, IncludeEdgeKey, PackageEdgeKey, Project, ProjectMember, ResolvedCitations,
-    ResolvedLabels, collect_bib_resource_targets, collect_include_edge_keys,
-    collect_package_edge_keys, package_graph, resolved_citations, resolved_labels,
+    BibTarget, IncludeEdgeKey, PackageEdgeKey, PackageOptionFacts, Project, ProjectMember,
+    ResolvedCitations, ResolvedLabels, ResolvedPackageOptions, collect_bib_resource_targets,
+    collect_include_edge_keys, collect_package_edge_keys, package_graph, package_option_facts,
+    resolved_citations, resolved_labels,
 };
 use crate::semantic::{
     DocAssociation, SemanticModel, SignatureDb, doc_associations as build_doc_associations,
@@ -102,6 +104,14 @@ pub enum QueryKind {
     /// The cross-file citation resolution ([`crate::project::resolved_citations`]);
     /// a project-level query, not keyed on a single file.
     ResolvedCitations,
+    /// A `.sty` file's statically-declared option surface
+    /// ([`file_package_option_facts`]) — the firewall the cross-file
+    /// package-option resolver consumes.
+    FilePackageOptionFacts,
+    /// The cross-file package-option model
+    /// ([`crate::project::options::resolved_package_options`]); a project-level
+    /// query, not keyed on a single file.
+    ResolvedPackageOptions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -388,6 +398,28 @@ pub fn file_is_document_root(db: &dyn IncrementalDb, file: SourceFile) -> bool {
         file: Some(file),
     });
     is_document_root(&parsed_tree_root(db, file))
+}
+
+/// A `.sty` file's statically-declared option surface
+/// ([`crate::project::package_option_facts`]), or `None` for any other file
+/// kind — the per-file firewall the cross-file package-option resolver
+/// consumes. `Eq` for the same reason as [`file_labels`]: a body edit that
+/// leaves the `\DeclareOption` set and the dynamic-processor signals unchanged
+/// backdates, and the project-level model is not rebuilt.
+#[salsa::tracked(returns(ref))]
+pub fn file_package_option_facts(
+    db: &dyn IncrementalDb,
+    file: SourceFile,
+) -> Option<PackageOptionFacts> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FilePackageOptionFacts,
+        file: Some(file),
+    });
+    package_option_facts(
+        file.path(db),
+        &parsed_tree_root(db, file),
+        semantic_model(db, file),
+    )
 }
 
 /// A `.bib` file's cached parse: the green tree plus parse diagnostics. The bib
@@ -874,6 +906,15 @@ impl Analysis {
     pub fn package_graph(&self, members: Vec<ProjectMember>) -> &crate::project::PackageGraph {
         let project = Project::new(&self.0, members);
         package_graph(&self.0, project)
+    }
+
+    /// Intern `members` as a `Project` and resolve its package-option model
+    /// ([`resolved_package_options`]): which options each analyzed `.sty`
+    /// member statically declares. The `unknown-option` lint consumes this
+    /// through `RuleContext`. Borrows the snapshot's storage.
+    pub fn resolve_package_options(&self, members: Vec<ProjectMember>) -> &ResolvedPackageOptions {
+        let project = Project::new(&self.0, members);
+        resolved_package_options(&self.0, project)
     }
 }
 

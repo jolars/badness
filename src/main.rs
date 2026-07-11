@@ -33,8 +33,9 @@ use badness::cli::{Cli, Command, WrapArg};
 use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
-    CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
-    collect_bib_resource_targets, collect_include_edge_keys,
+    CiteFileFacts, FileFacts, IncludeGraph, PackageOptionFacts, ResolvedCitations, ResolvedLabels,
+    ResolvedPackageOptions, collect_bib_resource_targets, collect_include_edge_keys,
+    package_option_facts,
 };
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
@@ -329,6 +330,9 @@ struct TexAnalysis {
     facts: FileFacts,
     label_input: (PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool),
     cite_fact: CiteFileFacts,
+    /// The file's declared-option surface when it is a `.sty`, feeding the
+    /// cross-file package-option model (`unknown-option`).
+    option_facts: Option<PackageOptionFacts>,
 }
 
 /// Parse and analyze one source. Pure and thread-safe (no shared mutable state,
@@ -390,6 +394,7 @@ fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
                 nocite_all: model.has_wildcard_nocite(),
                 is_document_root: is_document_root(&root),
             };
+            let option_facts = package_option_facts(path, &root, &model);
             FileAnalysis::Tex(Box::new(TexAnalysis {
                 diagnostics,
                 path: path.to_path_buf(),
@@ -398,6 +403,7 @@ fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
                 facts,
                 label_input,
                 cite_fact,
+                option_facts,
             }))
         }
     }
@@ -499,6 +505,7 @@ fn run_lint(
     let mut facts: Vec<FileFacts> = Vec::new();
     let mut label_inputs = Vec::new();
     let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
+    let mut option_facts: Vec<PackageOptionFacts> = Vec::new();
     // Cite keys per analyzed `.bib` path, feeding the cross-file citation resolver.
     let mut bib_keys: HashMap<PathBuf, Vec<SmolStr>> = HashMap::new();
     for analysis in analyses {
@@ -520,11 +527,13 @@ fn run_lint(
                     facts: f,
                     label_input,
                     cite_fact,
+                    option_facts: o,
                 } = *tex;
                 diagnostics.extend(d);
                 facts.push(f);
                 label_inputs.push(label_input);
                 cite_facts.push(cite_fact);
+                option_facts.extend(o);
                 analyzed.push((path, green, model));
             }
         }
@@ -535,6 +544,7 @@ fn run_lint(
     let graph = IncludeGraph::build(&facts, None);
     let resolved = ResolvedLabels::build(&label_inputs, &graph);
     let resolved_citations = ResolvedCitations::build(&cite_facts, &graph, &bib_keys);
+    let resolved_packages = ResolvedPackageOptions::build(option_facts);
 
     // Phase 3 — lint every analyzed file in parallel, sharing the resolution by
     // reference. The red tree is materialized thread-locally from each green node
@@ -550,6 +560,7 @@ fn run_lint(
                 model,
                 Some(&resolved),
                 Some(&resolved_citations),
+                Some(&resolved_packages),
             )
         })
         .collect();

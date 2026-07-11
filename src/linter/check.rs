@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use crate::parser::{LexConfig, parse_with_flavor};
-use crate::project::{ResolvedCitations, ResolvedLabels};
+use crate::project::{ResolvedCitations, ResolvedLabels, ResolvedPackageOptions};
 use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
 
@@ -32,7 +32,7 @@ pub fn check_document(path: &Path, text: &str, config: impl Into<LexConfig>) -> 
         .collect();
     let root = SyntaxNode::new_root(parsed.green);
     let model = SemanticModel::build(&root);
-    diagnostics.extend(lint_document(path, &root, &model, None, None));
+    diagnostics.extend(lint_document(path, &root, &model, None, None, None));
     diagnostics
 }
 
@@ -48,7 +48,7 @@ pub fn check_document_fixable(
     let parsed = parse_with_flavor(text, config);
     let root = SyntaxNode::new_root(parsed.green);
     let model = SemanticModel::build(&root);
-    lint_with(fixable_registry(), path, &root, &model, None, None)
+    lint_with(fixable_registry(), path, &root, &model, None, None, None)
 }
 
 /// Run all built-in rules against `root`/`model`, returning the surviving
@@ -58,17 +58,27 @@ pub fn check_document_fixable(
 /// them from wherever is cheapest: the CLI parses directly, the LSP reuses its
 /// salsa-cached tree and model. `resolution` is the cross-file label model and
 /// `citations` the cross-file bibliography model for the project `path` belongs
-/// to, each `None` when there is no project view — the cross-file rules
-/// (`undefined-ref`, `undefined-citation`, the cross-file branch of
-/// `duplicate-label`) are then inert.
+/// to, and `packages` the package-option model (which options each analyzed
+/// `.sty` member declares), each `None` when there is no project view — the
+/// cross-file rules (`undefined-ref`, `undefined-citation`, the cross-file
+/// branch of `duplicate-label`, `unknown-option`) are then inert.
 pub fn lint_document(
     path: &Path,
     root: &SyntaxNode,
     model: &SemanticModel,
     resolution: Option<&ResolvedLabels>,
     citations: Option<&ResolvedCitations>,
+    packages: Option<&ResolvedPackageOptions>,
 ) -> Vec<Diagnostic> {
-    lint_with(registry(), path, root, model, resolution, citations)
+    lint_with(
+        registry(),
+        path,
+        root,
+        model,
+        resolution,
+        citations,
+        packages,
+    )
 }
 
 /// The shared driver, generic over which [`RuleRegistry`] to run — the full set
@@ -82,8 +92,9 @@ fn lint_with(
     model: &SemanticModel,
     resolution: Option<&ResolvedLabels>,
     citations: Option<&ResolvedCitations>,
+    packages: Option<&ResolvedPackageOptions>,
 ) -> Vec<Diagnostic> {
-    let ctx = RuleContext::new(path, root, model, resolution, citations);
+    let ctx = RuleContext::new(path, root, model, resolution, citations, packages);
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Per-file stateful visitors that ride the one shared walk instead of each
@@ -131,7 +142,7 @@ mod tests {
     fn lint(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        lint_document(Path::new("x.tex"), &root, &model, None, None)
+        lint_document(Path::new("x.tex"), &root, &model, None, None, None)
     }
 
     fn rules_of(src: &str) -> Vec<&'static str> {

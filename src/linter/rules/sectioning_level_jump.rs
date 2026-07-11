@@ -153,7 +153,14 @@ mod tests {
     fn findings(src: &str) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext::new(std::path::Path::new("x.tex"), &root, &model, None, None);
+        let ctx = RuleContext::new(
+            std::path::Path::new("x.tex"),
+            &root,
+            &model,
+            None,
+            None,
+            None,
+        );
         let mut out = Vec::new();
         let mut visitor = SectioningLevelJump.stream().expect("streaming rule");
         for el in root.descendants_with_tokens() {

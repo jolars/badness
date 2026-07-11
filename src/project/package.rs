@@ -22,8 +22,9 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use rowan::TextRange;
+use smol_str::SmolStr;
 
-use crate::ast::{command_name, nth_group_text};
+use crate::ast::{AstNode, Optional, child, command_name, nth_group_text};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 /// Which load command produced an edge. Kept distinct even where resolution is
@@ -173,6 +174,84 @@ fn package_edges_of(command: &SyntaxNode, base_dir: Option<&Path>) -> Vec<Packag
             range,
         }]
     }
+}
+
+/// One literal option inside a load command's `[...]`: its whitespace-trimmed
+/// text and the tight byte range of exactly that trimmed text (the span a
+/// per-option diagnostic underlines).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionArg {
+    pub text: SmolStr,
+    pub range: TextRange,
+}
+
+/// The literal options of `command`'s first `[...]`, split on commas. `None`
+/// when there is no optional at all, or when it holds non-literal content (any
+/// child node — a macro or group makes the whole bracket dynamic, matching
+/// [`nth_group_text`]'s posture). Empty segments (`[,]`, `[ ]`) are dropped, so
+/// `Some(vec![])` means "an options bracket with nothing usable in it".
+///
+/// Commas glob into `WORD` tokens under catcode lexing, so splitting happens on
+/// the accumulated inner *text*; ranges stay exact because the skipped outer
+/// brackets bound a contiguous token run inside the `OPTIONAL` node.
+pub fn load_option_args(command: &SyntaxNode) -> Option<Vec<OptionArg>> {
+    let optional = child::<Optional>(command)?;
+    let mut tokens = Vec::new();
+    for element in optional.syntax().children_with_tokens() {
+        match element {
+            rowan::NodeOrToken::Token(token) => tokens.push(token),
+            rowan::NodeOrToken::Node(_) => return None,
+        }
+    }
+    // Strip only the delimiting brackets; an interior bracket (rare, but legal
+    // text) stays part of the accumulated text so byte offsets keep lining up.
+    let mut tokens: &[_] = &tokens;
+    if let Some((first, rest)) = tokens.split_first()
+        && first.kind() == SyntaxKind::L_BRACKET
+    {
+        tokens = rest;
+    }
+    if let Some((last, rest)) = tokens.split_last()
+        && last.kind() == SyntaxKind::R_BRACKET
+    {
+        tokens = rest;
+    }
+
+    let Some(first) = tokens.first() else {
+        return Some(Vec::new());
+    };
+    let base = usize::from(first.text_range().start());
+    let mut text = String::new();
+    for token in tokens {
+        text.push_str(token.text());
+    }
+
+    let mut args = Vec::new();
+    let mut offset = 0usize;
+    for segment in text.split(',') {
+        let trimmed = segment.trim();
+        if !trimmed.is_empty() {
+            let lead = segment.len() - segment.trim_start().len();
+            let start = base + offset + lead;
+            args.push(OptionArg {
+                text: SmolStr::from(trimmed),
+                range: TextRange::new(
+                    (start as u32).into(),
+                    ((start + trimmed.len()) as u32).into(),
+                ),
+            });
+        }
+        offset += segment.len() + 1;
+    }
+    Some(args)
+}
+
+/// Resolve one load-target name exactly as the edge extractor does: default the
+/// kind's `.sty`/`.cls` extension, then join a relative result onto `base_dir`.
+/// The lint layer shares this with [`collect_package_edges`] so the two can
+/// never disagree on which member file a load points at.
+pub fn resolve_load_target(name: &str, kind: PackageKind, base_dir: Option<&Path>) -> PathBuf {
+    resolve(PathBuf::from(name), kind.extension(), base_dir)
 }
 
 /// The recognized load command for a control-word name (sans backslash).
@@ -365,5 +444,92 @@ mod tests {
         let e = edges("\\usepackage{a,b}\n", None);
         assert_eq!(e.len(), 2);
         assert_eq!(e[0].range, e[1].range);
+    }
+
+    fn option_args(src: &str) -> Option<Vec<OptionArg>> {
+        let root = SyntaxNode::new_root(parse(src).green);
+        let command = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::COMMAND)
+            .expect("a command");
+        load_option_args(&command)
+    }
+
+    fn spans(src: &str) -> Vec<(String, usize, usize)> {
+        option_args(src)
+            .expect("literal options")
+            .into_iter()
+            .map(|o| {
+                (
+                    o.text.to_string(),
+                    usize::from(o.range.start()),
+                    usize::from(o.range.end()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_option_has_tight_range() {
+        // `\usepackage[draft]{mypkg}`: `draft` spans bytes 12..17.
+        let out = spans("\\usepackage[draft]{mypkg}\n");
+        assert_eq!(out, vec![("draft".to_string(), 12, 17)]);
+    }
+
+    #[test]
+    fn glued_comma_list_splits_with_per_segment_ranges() {
+        let out = spans("\\usepackage[a,b]{mypkg}\n");
+        assert_eq!(
+            out,
+            vec![("a".to_string(), 12, 13), ("b".to_string(), 14, 15)]
+        );
+    }
+
+    #[test]
+    fn whitespace_and_newlines_trim_and_shrink_ranges() {
+        // `[ draft ,\n final ]`: ranges cover the trimmed words only.
+        let src = "\\usepackage[ draft ,\n final ]{mypkg}\n";
+        let out = spans(src);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "draft");
+        assert_eq!(&src[out[0].1..out[0].2], "draft");
+        assert_eq!(out[1].0, "final");
+        assert_eq!(&src[out[1].1..out[1].2], "final");
+    }
+
+    #[test]
+    fn empty_segments_are_dropped() {
+        assert_eq!(option_args("\\usepackage[,]{mypkg}\n"), Some(Vec::new()));
+        assert_eq!(option_args("\\usepackage[ ]{mypkg}\n"), Some(Vec::new()));
+        assert_eq!(option_args("\\usepackage[]{mypkg}\n"), Some(Vec::new()));
+    }
+
+    #[test]
+    fn dynamic_bracket_content_is_none() {
+        assert_eq!(option_args("\\usepackage[\\opt]{mypkg}\n"), None);
+        assert_eq!(option_args("\\usepackage[a={b,c}]{mypkg}\n"), None);
+    }
+
+    #[test]
+    fn no_bracket_is_none() {
+        assert_eq!(option_args("\\usepackage{mypkg}\n"), None);
+    }
+
+    #[test]
+    fn resolve_load_target_matches_edge_resolution() {
+        let base = PathBuf::from("/proj");
+        assert_eq!(
+            resolve_load_target("mypkg", PackageKind::UsePackage, Some(&base)),
+            PathBuf::from("/proj/mypkg.sty")
+        );
+        let e = edges("\\usepackage{mypkg}\n", Some(&base));
+        assert_eq!(
+            e[0].target,
+            PackageTarget::Path(resolve_load_target(
+                "mypkg",
+                PackageKind::UsePackage,
+                Some(&base)
+            ))
+        );
     }
 }

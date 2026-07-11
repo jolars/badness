@@ -3019,8 +3019,16 @@ fn analyze_tex(
         .collect();
     let root = snapshot.parsed_tree(file);
     let model = snapshot.semantic_model(file);
+    let packages = snapshot.resolve_package_options(members.clone());
     let (resolution, citations) = snapshot.resolve_project(members);
-    for d in lint_document(&lint_path, &root, model, Some(resolution), Some(citations)) {
+    for d in lint_document(
+        &lint_path,
+        &root,
+        model,
+        Some(resolution),
+        Some(citations),
+        Some(packages),
+    ) {
         if rules.is_active(d.rule) {
             diags.push(lint_to_lsp(&idx, &text, d));
         }
@@ -3175,7 +3183,7 @@ fn fallback_diagnostics(
             }
             let root = parsed.syntax();
             let model = SemanticModel::build(&root);
-            for d in lint_document(path, &root, &model, None, None) {
+            for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
                     diags.push(lint_to_lsp(&idx, text, d));
                 }
@@ -3266,8 +3274,16 @@ fn lint_findings(
             let lint_path = snapshot.file_path(file).to_path_buf();
             let root = snapshot.parsed_tree(file);
             let model = snapshot.semantic_model(file);
+            let packages = snapshot.resolve_package_options(members.clone());
             let (resolution, citations) = snapshot.resolve_project(members);
-            lint_document(&lint_path, &root, model, Some(resolution), Some(citations))
+            lint_document(
+                &lint_path,
+                &root,
+                model,
+                Some(resolution),
+                Some(citations),
+                Some(packages),
+            )
         }
         FileKind::Bib => {
             let root = snapshot.parsed_bib_tree(file);
@@ -3292,7 +3308,7 @@ fn fallback_lint_findings(
             let parsed = parse_with_flavor(text, kind.lex_config());
             let root = parsed.syntax();
             let model = SemanticModel::build(&root);
-            lint_document(path, &root, &model, None, None)
+            lint_document(path, &root, &model, None, None, None)
         }
         FileKind::Bib => {
             let parsed = bib_parse(text);

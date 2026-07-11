@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use badness::linter::docs::{
-    demo_diagnostics_at, explain_rule, render_reference_page, render_rule_doc,
+    demo_diagnostics_with, explain_rule, render_reference_page, render_rule_doc,
 };
 use badness::linter::rules::{ALL_RULE_IDS, all_rules};
 
@@ -47,7 +47,11 @@ fn every_rule_is_documented() {
 fn documented_examples_actually_trigger() {
     for rule in all_rules() {
         for example in rule.examples() {
-            let diagnostics = demo_diagnostics_at(Path::new(rule.example_path()), example.source);
+            let diagnostics = demo_diagnostics_with(
+                Path::new(rule.example_path()),
+                example.source,
+                rule.example_companions(),
+            );
             assert!(
                 diagnostics.iter().any(|d| d.rule == rule.id()),
                 "example for rule `{}` produced no finding of that rule:\n{}",

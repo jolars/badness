@@ -18,6 +18,7 @@ pub mod citations;
 pub mod graph;
 pub mod include;
 pub mod labels;
+pub mod options;
 pub mod package;
 pub mod texmf;
 
@@ -31,8 +32,11 @@ pub use include::{
     collect_bib_resource_targets, collect_include_edge_keys, collect_include_edges,
 };
 pub use labels::{ResolvedLabels, resolved_labels};
+pub use options::{
+    PackageOptionFacts, ResolvedPackageOptions, package_option_facts, resolved_package_options,
+};
 pub use package::{
-    PackageEdge, PackageEdgeKey, PackageKind, PackageTarget, collect_package_edge_keys,
-    collect_package_edges, dtx_source_of,
+    OptionArg, PackageEdge, PackageEdgeKey, PackageKind, PackageTarget, collect_package_edge_keys,
+    collect_package_edges, dtx_source_of, load_option_args, resolve_load_target,
 };
 pub use texmf::{TexmfIndex, global_index};

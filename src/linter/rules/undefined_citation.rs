@@ -127,7 +127,14 @@ mod tests {
     fn findings(src: &str, citations: Option<&ResolvedCitations>) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
         let model = SemanticModel::build(&root);
-        let ctx = RuleContext::new(std::path::Path::new(DOC), &root, &model, None, citations);
+        let ctx = RuleContext::new(
+            std::path::Path::new(DOC),
+            &root,
+            &model,
+            None,
+            citations,
+            None,
+        );
         let mut out = Vec::new();
         UndefinedCitation.check_file(&ctx, &mut out);
         out

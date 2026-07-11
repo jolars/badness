@@ -6,10 +6,14 @@
 
 use std::path::{Path, PathBuf};
 
+use badness::file_discovery::file_kind_or_tex;
 use badness::linter::{Severity, lint_document};
-use badness::parser::{parse, reconstruct};
+use badness::parser::{parse, parse_with_flavor, reconstruct};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
-use badness::project::{FileFacts, IncludeGraph, ResolvedLabels, collect_include_edge_keys};
+use badness::project::{
+    FileFacts, IncludeGraph, ResolvedLabels, ResolvedPackageOptions, collect_include_edge_keys,
+    package_option_facts,
+};
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
 
@@ -17,7 +21,7 @@ use badness::syntax::SyntaxNode;
 fn lint(src: &str) -> Vec<(&'static str, Severity)> {
     let root = SyntaxNode::new_root(parse(src).green);
     let model = SemanticModel::build(&root);
-    lint_document(Path::new("doc.tex"), &root, &model, None, None)
+    lint_document(Path::new("doc.tex"), &root, &model, None, None, None)
         .into_iter()
         .map(|d| (d.rule, d.severity))
         .collect()
@@ -25,13 +29,16 @@ fn lint(src: &str) -> Vec<(&'static str, Severity)> {
 
 /// Lint a whole `(path, source)` project through the driver exactly as the CLI's
 /// `run_lint` does: build every model first, resolve labels across the include
-/// graph, then lint each file with the shared resolution. Returns
-/// `(path, rule, message)` for every finding.
+/// graph and the package-option model across the members, then lint each file
+/// with the shared resolution. Each member parses under its file kind (so a
+/// `.sty` lexes with `@` a letter). Returns `(path, rule, message)` for every
+/// finding.
 fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
     let parsed: Vec<(PathBuf, SyntaxNode, SemanticModel)> = files
         .iter()
         .map(|(path, src)| {
-            let root = SyntaxNode::new_root(parse(src).green);
+            let kind = file_kind_or_tex(Path::new(path));
+            let root = SyntaxNode::new_root(parse_with_flavor(src, kind.lex_config()).green);
             let model = SemanticModel::build(&root);
             (PathBuf::from(path), root, model)
         })
@@ -56,10 +63,22 @@ fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
         })
         .collect();
     let resolved = ResolvedLabels::build(&label_inputs, &IncludeGraph::build(&facts, None));
+    let resolved_packages = ResolvedPackageOptions::build(
+        parsed
+            .iter()
+            .filter_map(|(path, root, model)| package_option_facts(path, root, model)),
+    );
 
     let mut out = Vec::new();
     for (path, root, model) in &parsed {
-        for d in lint_document(path, root, model, Some(&resolved), None) {
+        for d in lint_document(
+            path,
+            root,
+            model,
+            Some(&resolved),
+            None,
+            Some(&resolved_packages),
+        ) {
             out.push((path.display().to_string(), d.rule, d.message));
         }
     }
@@ -107,10 +126,48 @@ fn lint_with_bib(tex: &str, bibs: &[(&str, &str)]) -> Vec<&'static str> {
     }];
     let citations = ResolvedCitations::build(&cite_facts, &graph, &bib_keys);
 
-    lint_document(&tex_path, &root, &model, None, Some(&citations))
+    lint_document(&tex_path, &root, &model, None, Some(&citations), None)
         .into_iter()
         .map(|d| d.rule)
         .collect()
+}
+
+#[test]
+fn unknown_option_fires_against_a_sibling_sty() {
+    let out = lint_project(&[
+        (
+            "/p/main.tex",
+            "\\documentclass{article}\n\\usepackage[typo]{mypkg}\n\\begin{document}\nx\n\\end{document}\n",
+        ),
+        (
+            "/p/mypkg.sty",
+            "\\ProvidesPackage{mypkg}\n\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
+        ),
+    ]);
+    let hits: Vec<_> = out
+        .iter()
+        .filter(|(_, r, _)| *r == "unknown-option")
+        .collect();
+    assert_eq!(hits.len(), 1, "{out:?}");
+    assert!(hits[0].2.contains("typo") && hits[0].2.contains("mypkg"));
+}
+
+#[test]
+fn unknown_option_is_silent_for_a_star_handler_sty() {
+    let out = lint_project(&[
+        ("/p/main.tex", "\\usepackage[anything]{mypkg}\n"),
+        (
+            "/p/mypkg.sty",
+            "\\ProvidesPackage{mypkg}\n\\DeclareOption*{}\n\\ProcessOptions\\relax\n",
+        ),
+    ]);
+    assert!(!rules_only(&out).contains(&"unknown-option"), "{out:?}");
+}
+
+#[test]
+fn unknown_option_is_silent_for_system_packages() {
+    let out = lint_project(&[("/p/main.tex", "\\usepackage[fleqn]{amsmath}\n")]);
+    assert!(!rules_only(&out).contains(&"unknown-option"), "{out:?}");
 }
 
 #[test]
@@ -737,7 +794,7 @@ fn sectioning_level_jump_flags_skipped_level() {
 fn lint_at(path: &str, src: &str) -> Vec<&'static str> {
     let root = SyntaxNode::new_root(parse(src).green);
     let model = SemanticModel::build(&root);
-    lint_document(Path::new(path), &root, &model, None, None)
+    lint_document(Path::new(path), &root, &model, None, None, None)
         .into_iter()
         .map(|d| d.rule)
         .collect()

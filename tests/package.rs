@@ -14,7 +14,10 @@ use badness::file_discovery::FileKind;
 use badness::incremental::{
     IncrementalDatabase, QueryKind, QueryLogEntry, SourceFile, scope_signatures,
 };
-use badness::project::{PackageKind, Project, ProjectMember, package_graph};
+use badness::linter::lint_document;
+use badness::project::{
+    PackageKind, Project, ProjectMember, package_graph, resolved_package_options,
+};
 
 fn count_by_kind(entries: &[QueryLogEntry]) -> HashMap<QueryKind, usize> {
     let mut counts = HashMap::new();
@@ -241,4 +244,88 @@ fn scope_signatures_backdates_on_prose_edit() {
         None,
         "scope signatures must not rebuild on a prose edit"
     );
+}
+
+#[test]
+fn resolved_package_options_maps_a_member_sty() {
+    let (db, main, pkg) = main_pkg(
+        "\\usepackage[typo]{mypkg}\n",
+        "\\ProvidesPackage{mypkg}\n\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
+    );
+    let resolved = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let facts = resolved
+        .get(&fpath(&db, pkg))
+        .expect("member sty in the option model");
+    assert!(facts.declares("draft"));
+    assert!(!facts.declares("typo"));
+    assert!(!facts.handles_unknown);
+}
+
+#[test]
+fn unknown_option_fires_through_the_salsa_path() {
+    // The LSP lint path: salsa-cached tree + model, the resolved option model
+    // passed into the shared driver.
+    let (db, main, pkg) = main_pkg(
+        "\\usepackage[typo]{mypkg}\n",
+        "\\ProvidesPackage{mypkg}\n\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
+    );
+    let resolved = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let root = db.parsed_tree(main);
+    let model = badness::semantic::SemanticModel::build(&root);
+    let findings = lint_document(&fpath(&db, main), &root, &model, None, None, Some(resolved));
+    assert!(
+        findings.iter().any(|d| d.rule == "unknown-option"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn package_option_model_backdates_on_body_edit() {
+    // The firewall: a package body edit that leaves the option surface
+    // unchanged backdates `file_package_option_facts`, so the project-level
+    // option model is not rebuilt.
+    let (mut db, main, pkg) = main_pkg(
+        "\\usepackage[draft]{mypkg}\n",
+        "\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
+    );
+    let _ = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+
+    db.clear_query_log();
+    db.set_file_text(
+        pkg,
+        "\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\nmore code\n",
+    );
+    let _ = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+
+    let counts = count_by_kind(&db.query_log());
+    assert_eq!(counts.get(&QueryKind::FilePackageOptionFacts), Some(&1));
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedPackageOptions),
+        None,
+        "option model must not rebuild on a body edit"
+    );
+}
+
+#[test]
+fn package_option_model_rebuilds_on_option_change() {
+    let (mut db, main, pkg) = main_pkg(
+        "\\usepackage[draft]{mypkg}\n",
+        "\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
+    );
+    let _ = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+
+    db.clear_query_log();
+    db.set_file_text(
+        pkg,
+        "\\DeclareOption{draft}{}\n\\DeclareOption{final}{}\n\\ProcessOptions\\relax\n",
+    );
+    let resolved = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+
+    let counts = count_by_kind(&db.query_log());
+    assert_eq!(
+        counts.get(&QueryKind::ResolvedPackageOptions),
+        Some(&1),
+        "option model must rebuild when a declared option changes"
+    );
+    assert!(resolved.get(&fpath(&db, pkg)).unwrap().declares("final"));
 }

@@ -14,17 +14,19 @@ use std::path::{Path, PathBuf};
 
 use smol_str::SmolStr;
 
+use crate::file_discovery::file_kind_or_tex;
 use crate::linter::check::lint_document;
 use crate::linter::diagnostic::{Diagnostic, Fix};
 use crate::linter::fix::apply_fixes;
 use crate::linter::render::{OutputMode, render_findings};
 use crate::linter::rules::{Rule, all_rules};
-use crate::parser::parse;
+use crate::parser::{parse, parse_with_flavor};
 use crate::project::include::BibTarget;
 use crate::project::labels::{document_label_names, document_ref_names};
 use crate::project::{
-    CiteFileFacts, FileFacts, IncludeGraph, ResolvedCitations, ResolvedLabels,
-    collect_bib_resource_targets, collect_include_edge_keys,
+    CiteFileFacts, FileFacts, IncludeGraph, PackageOptionFacts, ResolvedCitations, ResolvedLabels,
+    ResolvedPackageOptions, collect_bib_resource_targets, collect_include_edge_keys,
+    package_option_facts,
 };
 use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
@@ -54,9 +56,43 @@ pub fn demo_diagnostics(source: &str) -> Vec<Diagnostic> {
 /// pass their [`Rule::example_path`](crate::linter::rules::Rule::example_path) so
 /// their examples fire.
 pub fn demo_diagnostics_at(path: &Path, source: &str) -> Vec<Diagnostic> {
+    demo_diagnostics_with(path, source, &[])
+}
+
+/// Like [`demo_diagnostics_at`] with synthetic sibling files linted alongside
+/// the snippet — the two-file story a cross-file rule like `unknown-option`
+/// needs (its example loads a `.sty` whose declared options live in a
+/// companion). Each companion is parsed under its own file kind and its
+/// package-option facts folded into the project view; companion paths are
+/// relative, so a bare `mypkg.sty` is exactly what the snippet's
+/// `\usepackage{mypkg}` resolves to next to `example.tex`.
+pub fn demo_diagnostics_with(
+    path: &Path,
+    source: &str,
+    companions: &[(&str, &str)],
+) -> Vec<Diagnostic> {
     let path = path.to_path_buf();
     let root = SyntaxNode::new_root(parse(source).green);
     let model = SemanticModel::build(&root);
+
+    let mut option_facts: Vec<PackageOptionFacts> = package_option_facts(&path, &root, &model)
+        .into_iter()
+        .collect();
+    for (companion_path, companion_source) in companions {
+        let companion_path = Path::new(companion_path);
+        let parsed = parse_with_flavor(
+            companion_source,
+            file_kind_or_tex(companion_path).lex_config(),
+        );
+        let companion_root = SyntaxNode::new_root(parsed.green);
+        let companion_model = SemanticModel::build(&companion_root);
+        option_facts.extend(package_option_facts(
+            companion_path,
+            &companion_root,
+            &companion_model,
+        ));
+    }
+    let resolved_packages = ResolvedPackageOptions::build(option_facts);
 
     let facts = [FileFacts {
         path: path.clone(),
@@ -95,6 +131,7 @@ pub fn demo_diagnostics_at(path: &Path, source: &str) -> Vec<Diagnostic> {
         &model,
         Some(&resolved_labels),
         Some(&resolved_citations),
+        Some(&resolved_packages),
     )
 }
 
@@ -113,6 +150,16 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
         let _ = writeln!(out, "{description}");
     }
 
+    // Synthetic sibling files linted alongside every example (the two-file
+    // story of a cross-file rule); rendered once, before the examples.
+    let companions = rule.example_companions();
+    for (companion_path, companion_source) in companions {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "With a sibling `{companion_path}`:");
+        let _ = writeln!(out);
+        fenced(&mut out, "tex", companion_source);
+    }
+
     for example in rule.examples() {
         let _ = writeln!(out);
         if !example.caption.is_empty() {
@@ -122,10 +169,11 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
         fenced(&mut out, "tex", example.source);
 
         // Restrict to this rule so an example can't advertise another's finding.
-        let diagnostics: Vec<Diagnostic> = demo_diagnostics_at(&example_path, example.source)
-            .into_iter()
-            .filter(|d| d.rule == id)
-            .collect();
+        let diagnostics: Vec<Diagnostic> =
+            demo_diagnostics_with(&example_path, example.source, companions)
+                .into_iter()
+                .filter(|d| d.rule == id)
+                .collect();
         let source = example.source.to_string();
         let rendered = render_findings(&diagnostics, OutputMode::Pretty, &|path| {
             (path == example_path.as_path()).then(|| source.clone())

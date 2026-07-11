@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/jolars/badness/compare/v0.7.0...v0.8.0) (2026-07-11)
+
+### Features
+- **lsp:** show source package in macro hover ([`eaf030e`](https://github.com/jolars/badness/commit/eaf030ea9da011ce90b77b64f37155ffab5da665))
+- **lint:** add `unknown-option` rule for local packages ([`f040033`](https://github.com/jolars/badness/commit/f040033e049acb340f27e66eba1eeecc70f68a33))
+- **bib:** document links for doi and url fields ([`e1f15f7`](https://github.com/jolars/badness/commit/e1f15f7f8d0b1afe265f1a5c40f7a28f88437b8f))
+- **completion:** argument-value enum completion ([`f363499`](https://github.com/jolars/badness/commit/f36349970afdb020af52e368051db11d3331b58b))
+- **bench:** add linter speed benchmark vs lacheck and chktex ([`e6a821e`](https://github.com/jolars/badness/commit/e6a821ed159211081fce7030bef567d4f7ae371e))
+- **bench:** add whole-project folder benchmark ([`620c7cc`](https://github.com/jolars/badness/commit/620c7cc5202b47c017ab4135184cd8d54ad5ba76))
+- **bib:** typed AST wrapper layer for BibTeX CST ([`0abe33a`](https://github.com/jolars/badness/commit/0abe33ac3f68f77c390328fc2d7da804cd235f39))
+- **ast:** typed AstNode/AstToken wrapper layer ([`35eae44`](https://github.com/jolars/badness/commit/35eae44b0fd70850aa1e02e8204c098479e6d391))
+
+### Performance Improvements
+- **cli:** parallelize lint --fix across files ([`133a4c3`](https://github.com/jolars/badness/commit/133a4c39ff6a34665e5fa6552cc13f9dc7253a23))
+
 ## [0.7.0](https://github.com/jolars/badness/compare/v0.6.0...v0.7.0) (2026-07-08)
 
 ### Features

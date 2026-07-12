@@ -61,6 +61,10 @@ pub struct EntrySig {
 pub struct BibFieldDb {
     entries: HashMap<SmolStr, EntrySig>,
     fields: HashMap<SmolStr, FieldSig>,
+    /// Classic-BibTeX input-field aliases: alias name -> canonical BibLaTeX field
+    /// (both lowercased). Biber resolves these on input, so the linter treats an
+    /// alias and its canonical field as interchangeable.
+    aliases: HashMap<SmolStr, SmolStr>,
 }
 
 impl BibFieldDb {
@@ -79,6 +83,18 @@ impl BibFieldDb {
     pub fn category(&self, name: &str) -> FieldCategory {
         self.field(name)
             .map_or(FieldCategory::Literal, |sig| sig.category)
+    }
+
+    /// The canonical BibLaTeX field name for `name`, resolving a classic-BibTeX alias
+    /// (e.g. `journal` -> `journaltitle`) one step. A non-alias returns lowercased
+    /// unchanged. Used to compare an entry's fields against required constraints
+    /// spelled in either convention.
+    pub fn canonical(&self, name: &str) -> SmolStr {
+        let lower = name.to_lowercase();
+        self.aliases
+            .get(lower.as_str())
+            .cloned()
+            .unwrap_or_else(|| SmolStr::new(lower))
     }
 
     /// The known entry type names.
@@ -140,6 +156,8 @@ struct RawDb {
     entries: HashMap<String, RawEntry>,
     #[serde(default)]
     fields: HashMap<String, RawField>,
+    #[serde(default)]
+    aliases: HashMap<String, String>,
 }
 
 fn lower(s: String) -> SmolStr {
@@ -197,6 +215,11 @@ fn parse(json: &str) -> serde_json::Result<BibFieldDb> {
             .fields
             .into_iter()
             .map(|(name, sig)| (lower(name), sig.into()))
+            .collect(),
+        aliases: raw
+            .aliases
+            .into_iter()
+            .map(|(alias, canon)| (lower(alias), lower(canon)))
             .collect(),
     })
 }
@@ -326,6 +349,19 @@ mod tests {
             r,
             RequiredField::OneOf(alts) if alts.iter().any(|a| a == "date")
         )));
+    }
+
+    #[test]
+    fn resolves_classic_bibtex_field_aliases() {
+        let db = builtin();
+        // Alias -> canonical, case-insensitively.
+        assert_eq!(db.canonical("journal"), SmolStr::new("journaltitle"));
+        assert_eq!(db.canonical("Journal"), SmolStr::new("journaltitle"));
+        assert_eq!(db.canonical("address"), SmolStr::new("location"));
+        assert_eq!(db.canonical("school"), SmolStr::new("institution"));
+        // A canonical/unknown field resolves to itself (lowercased).
+        assert_eq!(db.canonical("journaltitle"), SmolStr::new("journaltitle"));
+        assert_eq!(db.canonical("Title"), SmolStr::new("title"));
     }
 
     #[test]

@@ -418,5 +418,17 @@
     "volumes": { "category": "literal" },
     "xdata": { "category": "literal" },
     "xref": { "category": "literal" }
+  },
+
+  "_aliases_comment": "Classic-BibTeX input-field aliases, mapping an alias to its canonical BibLaTeX field (biber resolves these on input). Hand-curated overlay (not in blx-dm.def), preserved across syncs. The linter's missing-required check canonicalizes both the entry's fields and the required list through this map, so a classic-BibTeX spelling (e.g. `journal`) satisfies a data-model requirement (`journaltitle`) and vice versa. Date-component aliases (year, month) are omitted: they are handled by the per-type date-or-year `required` alternations, not by field substitution.",
+  "aliases": {
+    "address": "location",
+    "annote": "annotation",
+    "archiveprefix": "eprinttype",
+    "journal": "journaltitle",
+    "key": "sortkey",
+    "school": "institution",
+    "primaryclass": "eprintclass",
+    "pdf": "file"
   }
 }

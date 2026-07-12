@@ -16,7 +16,9 @@ This script keeps those in lockstep with whatever ``biblatex`` is installed. It 
   alphabetically, which would read badly;
 * the classic-BibTeX overlay — any entry type or field present in the JSON but absent
   from the data model (e.g. ``mastersthesis``/``school``, the ``journal`` alias) is
-  treated as an intentional addition and left untouched; and
+  treated as an intentional addition and left untouched;
+* the ``aliases`` map (classic-BibTeX field aliases -> canonical BibLaTeX field), which
+  biber resolves on input and which is not declared in the data model; and
 * the comment headers.
 
 Usage::
@@ -206,7 +208,23 @@ def _dump(doc: OrderedDict) -> str:
         prev_cat = cat
         tail = "" if i == len(fields) - 1 else ","
         out.append(f'    "{name}": {{ "category": "{cat}" }}{tail}')
-    out.append("  }")
+
+    # The classic-BibTeX alias overlay is hand-curated (not in the data model); emit it
+    # verbatim after the fields so a synced file round-trips unchanged.
+    if "aliases" in doc:
+        out.append("  },")
+        out.append("")
+        out.append(
+            f'  "_aliases_comment": {json.dumps(doc["_aliases_comment"], ensure_ascii=False)},'
+        )
+        out.append('  "aliases": {')
+        aliases = list(doc["aliases"].items())
+        for i, (alias, canon) in enumerate(aliases):
+            tail = "" if i == len(aliases) - 1 else ","
+            out.append(f'    "{alias}": "{canon}"{tail}')
+        out.append("  }")
+    else:
+        out.append("  }")
 
     out.append("}")
     return "\n".join(out) + "\n"

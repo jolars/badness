@@ -11,6 +11,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use smol_str::SmolStr;
+
 use crate::bib::ast::{cite_key, entry_type, field_name, fields};
 use crate::bib::semantic::RequiredField;
 use crate::bib::syntax::{SyntaxElement, SyntaxKind};
@@ -46,10 +48,12 @@ impl BibRule for MissingRequiredField {
             return; // Unknown entry type: no signature, no claim.
         };
 
-        // The entry's field names, lowercased (BibTeX is case-insensitive).
-        let present: HashSet<String> = fields(entry)
+        // The entry's field names, canonicalized (lowercased, classic-BibTeX aliases
+        // resolved to their BibLaTeX field, e.g. `journal` -> `journaltitle`), so a
+        // required field is satisfied regardless of which spelling the entry uses.
+        let present: HashSet<SmolStr> = fields(entry)
             .filter_map(|f| field_name(&f))
-            .map(|n| n.to_lowercase())
+            .map(|n| ctx.db.canonical(&n))
             .collect();
 
         // Underline the cite key; fall back to the whole entry on a keyless recovery.
@@ -59,10 +63,10 @@ impl BibRule for MissingRequiredField {
 
         for req in &sig.required {
             let missing_message = match req {
-                RequiredField::One(name) => (!present.contains(name.as_str()))
+                RequiredField::One(name) => (!present.contains(&ctx.db.canonical(name)))
                     .then(|| format!("entry `{ty}` is missing required field `{name}`")),
                 RequiredField::OneOf(alts) => {
-                    let satisfied = alts.iter().any(|a| present.contains(a.as_str()));
+                    let satisfied = alts.iter().any(|a| present.contains(&ctx.db.canonical(a)));
                     (!satisfied).then(|| {
                         let names = alts
                             .iter()
@@ -141,6 +145,34 @@ mod tests {
         let out = findings("@article{k, author = {A}, title = {T}, journaltitle = {J}}\n");
         assert_eq!(out.len(), 1);
         assert!(out[0].message.contains("date") && out[0].message.contains("year"));
+    }
+
+    #[test]
+    fn classic_bibtex_journal_alias_satisfies_journaltitle() {
+        // `@article` requires the data-model field `journaltitle`; classic BibTeX
+        // spells it `journal` (a biber-resolved alias). The alias must satisfy the
+        // requirement rather than triggering a false "missing journaltitle".
+        let out = findings("@article{k, author = {A}, title = {T}, journal = {J}, year = 2020}\n");
+        assert!(
+            out.is_empty(),
+            "journal alias should satisfy journaltitle, got: {:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn canonical_field_satisfies_classic_required_alias() {
+        // The reverse direction: `@mastersthesis` keeps the classic required field
+        // `school`; supplying its canonical BibLaTeX form `institution` must satisfy
+        // it, since the two are aliases.
+        let out = findings(
+            "@mastersthesis{k, author = {A}, title = {T}, institution = {U}, year = 2020}\n",
+        );
+        assert!(
+            out.iter().all(|d| !d.message.contains("school")),
+            "institution should satisfy the school requirement, got: {:?}",
+            out.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]

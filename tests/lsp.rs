@@ -14,7 +14,33 @@
 use std::time::Duration;
 
 use badness::formatter::{FormatStyle, format_with_style};
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+use lsp_server::{
+    Connection, Message, Notification, Request, RequestId, Response, ResponseError, ResponseKind,
+};
+
+/// lsp-server 0.9 replaced `Response`'s `result`/`error` fields with a single
+/// `response_kind` enum. Restore the old field-style accessors as methods so the
+/// tests can keep reading the ok payload or the error uniformly.
+trait ResponseExt {
+    fn result(&self) -> Option<serde_json::Value>;
+    fn error(&self) -> Option<ResponseError>;
+}
+
+impl ResponseExt for Response {
+    fn result(&self) -> Option<serde_json::Value> {
+        match &self.response_kind {
+            ResponseKind::Ok { result } => Some(result.clone()),
+            ResponseKind::Err { .. } => None,
+        }
+    }
+
+    fn error(&self) -> Option<ResponseError> {
+        match &self.response_kind {
+            ResponseKind::Err { error } => Some(error.clone()),
+            ResponseKind::Ok { .. } => None,
+        }
+    }
+}
 use lsp_types::{
     ApplyWorkspaceEditParams, ClientCapabilities, CodeActionContext, CodeActionOrCommand,
     CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
@@ -121,7 +147,7 @@ fn start_server(
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(1));
-    let init: InitializeResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let init: InitializeResult = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert!(
         init.capabilities.document_formatting_provider.is_some(),
         "server must advertise documentFormattingProvider"
@@ -290,7 +316,7 @@ fn start_server_pull() -> (Connection, std::thread::JoinHandle<()>) {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(1));
-    let init: InitializeResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let init: InitializeResult = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert!(
         init.capabilities.diagnostic_provider.is_some(),
         "server must advertise diagnosticProvider (pull diagnostics)"
@@ -329,7 +355,7 @@ fn recv_document_diagnostic_report(client: &Connection, id: i32) -> DocumentDiag
             Message::Response(resp) => {
                 assert_eq!(resp.id, RequestId::from(id));
                 let result: DocumentDiagnosticReportResult =
-                    serde_json::from_value(resp.result.unwrap()).unwrap();
+                    serde_json::from_value(resp.result().unwrap()).unwrap();
                 match result {
                     DocumentDiagnosticReportResult::Report(report) => return report,
                     DocumentDiagnosticReportResult::Partial(_) => {
@@ -469,7 +495,7 @@ fn lsp_formatting_and_diagnostics_transcript() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert_eq!(edits.len(), 1, "expected one whole-document edit");
     let expected = format_with_style(
         messy,
@@ -526,7 +552,7 @@ fn lsp_range_formatting_formats_only_the_selected_block() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     let formatted = apply_edits(doc, &edits);
     assert_eq!(
         formatted, "first paragraph.\n\nsecond    paragraph.\n",
@@ -562,7 +588,7 @@ fn lsp_range_formatting_formats_only_the_selected_block() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(3));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert!(
         edits.is_empty(),
         "an already-formatted selection yields no edits, got {edits:?}"
@@ -605,7 +631,7 @@ fn lsp_range_formatting_reindents_multiline_environment() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     let formatted = apply_edits(doc, &edits);
     assert_eq!(
         formatted,
@@ -655,7 +681,7 @@ fn lsp_on_type_formatting_reindents_on_environment_close() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     let formatted = apply_edits(doc, &edits);
     assert_eq!(
         formatted,
@@ -692,7 +718,7 @@ fn lsp_on_type_formatting_reindents_on_environment_close() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(3));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert!(
         edits.is_empty(),
         "an already-reindented environment yields no edits, got {edits:?}"
@@ -723,7 +749,7 @@ fn lsp_on_type_formatting_ignores_inline_group_close() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert!(
         edits.is_empty(),
         "closing an inline single-line group yields no edits, got {edits:?}"
@@ -759,7 +785,7 @@ fn lsp_on_type_formatting_refuses_when_buffer_has_parse_errors() {
     assert_eq!(resp.id, RequestId::from(2));
     // A refusal serializes to JSON `null`; either that or an empty array means
     // "no change".
-    let edits: Option<Vec<TextEdit>> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Option<Vec<TextEdit>> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert!(
         edits.unwrap_or_default().is_empty(),
         "a buffer with parse errors yields no on-type edits"
@@ -799,7 +825,7 @@ fn lsp_document_symbol_outline() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
     let response: DocumentSymbolResponse =
-        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response");
+        serde_json::from_value(resp.result().unwrap()).expect("a documentSymbol response");
     let DocumentSymbolResponse::Nested(symbols) = response else {
         panic!("expected a nested documentSymbol response");
     };
@@ -870,7 +896,7 @@ fn lsp_document_symbol_numbers_from_aux() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
     let response: DocumentSymbolResponse =
-        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response");
+        serde_json::from_value(resp.result().unwrap()).expect("a documentSymbol response");
     let DocumentSymbolResponse::Nested(symbols) = response else {
         panic!("expected a nested documentSymbol response");
     };
@@ -927,7 +953,7 @@ fn lsp_document_symbol_dtx_documented_macros() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
     let response: DocumentSymbolResponse =
-        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response");
+        serde_json::from_value(resp.result().unwrap()).expect("a documentSymbol response");
     let DocumentSymbolResponse::Nested(symbols) = response else {
         panic!("expected a nested documentSymbol response");
     };
@@ -978,7 +1004,7 @@ fn lsp_folding_ranges() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
     let ranges: Vec<FoldingRange> =
-        serde_json::from_value(resp.result.unwrap()).expect("a foldingRange response");
+        serde_json::from_value(resp.result().unwrap()).expect("a foldingRange response");
 
     let triples: Vec<(u32, u32, Option<FoldingRangeKind>)> = ranges
         .iter()
@@ -1028,7 +1054,7 @@ fn lsp_selection_ranges() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
     let ranges: Vec<SelectionRange> =
-        serde_json::from_value(resp.result.unwrap()).expect("a selectionRange response");
+        serde_json::from_value(resp.result().unwrap()).expect("a selectionRange response");
 
     // One chain per input position.
     assert_eq!(ranges.len(), 1, "one chain per position, got {ranges:?}");
@@ -1124,7 +1150,7 @@ fn lsp_document_links() {
     };
     assert_eq!(resp.id, RequestId::from(2));
     let links: Vec<DocumentLink> =
-        serde_json::from_value(resp.result.unwrap()).expect("a documentLink response");
+        serde_json::from_value(resp.result().unwrap()).expect("a documentLink response");
 
     // Four resolvable targets; the system `amsmath` package is absent, so no link.
     let targets: Vec<Uri> = links.iter().filter_map(|l| l.target.clone()).collect();
@@ -1179,7 +1205,7 @@ fn lsp_bib_document_links() {
     };
     assert_eq!(resp.id, RequestId::from(2));
     let links: Vec<DocumentLink> =
-        serde_json::from_value(resp.result.unwrap()).expect("a documentLink response");
+        serde_json::from_value(resp.result().unwrap()).expect("a documentLink response");
 
     let targets: Vec<String> = links
         .iter()
@@ -1240,7 +1266,7 @@ fn lsp_code_action_quickfix() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
     let actions: Vec<CodeActionOrCommand> =
-        serde_json::from_value(resp.result.unwrap()).expect("a codeAction response");
+        serde_json::from_value(resp.result().unwrap()).expect("a codeAction response");
     let CodeActionOrCommand::CodeAction(action) = actions
         .iter()
         .find(|a| matches!(a, CodeActionOrCommand::CodeAction(a) if a.title.contains("bfseries")))
@@ -1280,7 +1306,7 @@ fn lsp_code_action_quickfix() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(3));
     let actions: Vec<CodeActionOrCommand> =
-        serde_json::from_value(resp.result.unwrap()).expect("a codeAction response");
+        serde_json::from_value(resp.result().unwrap()).expect("a codeAction response");
     assert!(
         actions.is_empty(),
         "a range off the command yields no quick-fix, got {actions:?}"
@@ -1329,7 +1355,7 @@ fn lsp_bib_diagnostics_formatting_and_symbols() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(2));
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert_eq!(edits.len(), 1, "expected one whole-document edit");
     let expected = badness::bib::format_with_style(
         doc,
@@ -1357,7 +1383,7 @@ fn lsp_bib_diagnostics_formatting_and_symbols() {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(3));
     let DocumentSymbolResponse::Nested(symbols) =
-        serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response")
+        serde_json::from_value(resp.result().unwrap()).expect("a documentSymbol response")
     else {
         panic!("expected a nested documentSymbol response");
     };
@@ -1436,9 +1462,9 @@ fn incremental_did_change_splices_buffer() {
     // a `null` result. This still proves the splice took effect (the original
     // clean buffer would have formatted).
     assert!(
-        resp.result.is_none() || resp.result == Some(serde_json::Value::Null),
+        resp.result().is_none() || resp.result() == Some(serde_json::Value::Null),
         "formatter must refuse the now-broken spliced buffer, got {:?}",
-        resp.result
+        resp.result()
     );
 
     shutdown(&client, server_thread);
@@ -1473,7 +1499,7 @@ fn line_width_from_initialization_options() {
         .unwrap(),
     );
     let resp = recv_response(&client);
-    let edits: Vec<TextEdit> = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert_eq!(edits.len(), 1, "the narrow width must reflow the paragraph");
     let expected = format_with_style(
         para,
@@ -1547,7 +1573,7 @@ fn complete(client: &Connection, id: i32, uri: &Uri, position: Position) -> Vec<
     );
     let resp = recv_response(client);
     assert_eq!(resp.id, RequestId::from(id));
-    match serde_json::from_value::<CompletionResponse>(resp.result.unwrap()).unwrap() {
+    match serde_json::from_value::<CompletionResponse>(resp.result().unwrap()).unwrap() {
         CompletionResponse::Array(items) => items,
         CompletionResponse::List(list) => list.items,
     }
@@ -1575,7 +1601,7 @@ fn hover_markdown(client: &Connection, id: i32, uri: &Uri, position: Position) -
     );
     let resp = recv_response(client);
     assert_eq!(resp.id, RequestId::from(id));
-    let result = resp.result.unwrap();
+    let result = resp.result().unwrap();
     if result.is_null() {
         return None;
     }
@@ -1634,7 +1660,7 @@ fn signature_help(
     );
     let resp = recv_response(client);
     assert_eq!(resp.id, RequestId::from(id));
-    match resp.result.unwrap() {
+    match resp.result().unwrap() {
         serde_json::Value::Null => None,
         value => Some(serde_json::from_value(value).expect("valid SignatureHelp")),
     }
@@ -2020,7 +2046,7 @@ fn definition(client: &Connection, id: i32, uri: &Uri, position: Position) -> Ve
         }
     };
     assert_eq!(resp.id, RequestId::from(id));
-    match serde_json::from_value::<GotoDefinitionResponse>(resp.result.unwrap()).unwrap() {
+    match serde_json::from_value::<GotoDefinitionResponse>(resp.result().unwrap()).unwrap() {
         GotoDefinitionResponse::Array(locs) => locs,
         GotoDefinitionResponse::Scalar(loc) => vec![loc],
         GotoDefinitionResponse::Link(_) => panic!("unexpected LocationLink response"),
@@ -2175,7 +2201,7 @@ fn workspace_symbols(client: &Connection, id: i32, query: &str) -> Vec<(String, 
         }
     };
     assert_eq!(resp.id, RequestId::from(id));
-    match serde_json::from_value::<WorkspaceSymbolResponse>(resp.result.unwrap())
+    match serde_json::from_value::<WorkspaceSymbolResponse>(resp.result().unwrap())
         .expect("a workspace/symbol response")
     {
         WorkspaceSymbolResponse::Nested(symbols) => symbols
@@ -2281,7 +2307,7 @@ fn references(
         }
     };
     assert_eq!(resp.id, RequestId::from(id));
-    serde_json::from_value::<Vec<Location>>(resp.result.unwrap()).unwrap()
+    serde_json::from_value::<Vec<Location>>(resp.result().unwrap()).unwrap()
 }
 
 /// Sort locations by (line, character) of their start so assertions don't depend
@@ -2365,7 +2391,7 @@ fn document_highlight(
     };
     assert_eq!(resp.id, RequestId::from(id));
     // An unknown document replies `null`; a resolved-but-empty highlight is `[]`.
-    match resp.result {
+    match resp.result() {
         Some(serde_json::Value::Null) | None => Vec::new(),
         Some(v) => serde_json::from_value(v).unwrap(),
     }
@@ -2569,9 +2595,9 @@ fn recv_apply_edit_then_ok(client: &Connection, id: i32) -> ApplyWorkspaceEditPa
             Message::Response(resp) => {
                 assert_eq!(resp.id, RequestId::from(id));
                 assert!(
-                    resp.error.is_none(),
+                    resp.error().is_none(),
                     "the command must succeed, got {:?}",
-                    resp.error
+                    resp.error()
                 );
                 break;
             }
@@ -2589,7 +2615,7 @@ fn recv_command_error(client: &Connection, id: i32) -> String {
         match recv(client) {
             Message::Response(resp) => {
                 assert_eq!(resp.id, RequestId::from(id));
-                return resp.error.expect("the command must fail").message;
+                return resp.error().expect("the command must fail").message;
             }
             Message::Notification(_) => continue,
             other => panic!("expected an error response, got {other:?}"),
@@ -2863,7 +2889,7 @@ fn prepare_rename(
         }
     };
     assert_eq!(resp.id, RequestId::from(id));
-    resp.result.unwrap()
+    resp.result().unwrap()
 }
 
 /// Send a `textDocument/rename` at `position` and return the resulting per-URI
@@ -2898,7 +2924,7 @@ fn rename(
         }
     };
     assert_eq!(resp.id, RequestId::from(id));
-    match resp.result.unwrap() {
+    match resp.result().unwrap() {
         serde_json::Value::Null => std::collections::HashMap::new(),
         value => serde_json::from_value::<WorkspaceEdit>(value)
             .unwrap()
@@ -3111,7 +3137,7 @@ fn complete_draining(
         }
     };
     assert_eq!(resp.id, RequestId::from(id));
-    match serde_json::from_value::<CompletionResponse>(resp.result.unwrap()).unwrap() {
+    match serde_json::from_value::<CompletionResponse>(resp.result().unwrap()).unwrap() {
         CompletionResponse::Array(items) => items,
         CompletionResponse::List(list) => list.items,
     }
@@ -3683,7 +3709,7 @@ fn lsp_negotiates_utf8_position_encoding() {
     );
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(1));
-    let init: InitializeResult = serde_json::from_value(resp.result.unwrap()).unwrap();
+    let init: InitializeResult = serde_json::from_value(resp.result().unwrap()).unwrap();
     assert_eq!(
         init.capabilities.position_encoding,
         Some(PositionEncodingKind::UTF8),
@@ -3715,7 +3741,7 @@ fn lsp_negotiates_utf8_position_encoding() {
         );
         let resp = recv_response(client);
         assert_eq!(resp.id, RequestId::from(id));
-        match serde_json::from_value(resp.result.unwrap()).expect("a documentSymbol response") {
+        match serde_json::from_value(resp.result().unwrap()).expect("a documentSymbol response") {
             DocumentSymbolResponse::Nested(symbols) => symbols,
             other => panic!("expected a nested documentSymbol response, got {other:?}"),
         }

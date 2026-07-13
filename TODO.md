@@ -277,15 +277,17 @@ capabilities RA has that badness does not. Severity in brackets.
 
 ### Robustness / hardening
 
-- [ ] **[high] Worker thread has no panic guard or death detection**
-  (`lsp.rs:2396`, `handle_job`). A panic in the single write-phase worker
-  (`seed_dir`, `apply_watched_change`, `project_members`, a poisoned-mutex
-  `.expect`) unwinds and kills the worker thread; the main loop keeps running but
-  every `job_tx.send` silently no-ops (`let _ = …`), so the server becomes a
-  quiet zombie — no diagnostics, formatting, or edits, no client notification. RA
-  lets a mutating-handler panic take down the main loop so the client sees the
-  drop and restarts. Fix: `catch_unwind` around `handle_job` (like the read pool,
-  `task_pool.rs:47`), or detect the worker `JoinHandle` finishing and shut down.
+- [x] **[high] Worker thread panic guard** (`lsp.rs`, `Worker::handle_job_guarded`).
+  A panic in the single write-phase worker (`seed_dir`, `apply_watched_change`,
+  `project_members`, a poisoned-mutex `.expect`) used to unwind and kill the
+  worker thread; the main loop kept running but every `job_tx.send` silently
+  no-ops (`let _ = …`), so the server became a quiet zombie. Now the run loop
+  routes every job through `handle_job_guarded`, which `catch_unwind`s the panic
+  and logs it (mirroring the read pool's per-job isolation, `task_pool.rs:47`), so
+  one bad job degrades to a single logged error instead of killing the server.
+  (Follow-up still open: recovering from a *poisoned mutex* — see next item — so a
+  read-pool panic while holding `files`/`query_log` can't leave the worker unable
+  to touch the db.)
 - [ ] **[med] Mutex poisoning cascades a read panic into worker death**
   (`incremental.rs`, the `files`/`query_log` `.expect("… poisoned")`). A read-pool
   job that panics while holding one of these locks poisons it; the next writer
@@ -300,18 +302,20 @@ capabilities RA has that badness does not. Severity in brackets.
   "provably terminating by reading the code" into "cannot hang on adversarial or
   malformed input" — valuable for a tool run over a fuzz/corpus. (Pairs with the
   Fuzzing item under Performance & hardening.)
-- [ ] **[low] No `--fix` post-application losslessness/parse guard**
-  (`main.rs:684`). The fixpoint loop applies edits, re-lints, and writes without
-  asserting the result still parses and `reconstruct == text`. Tenet #1 requires
-  each fix to owe that bar, but it is enforced only per-rule at construction +
-  tests, not by a runtime guard, so a mis-built fix span could write invalid
-  output. A debug-mode reconstruct/parse assertion in the loop would catch it.
-- [ ] **[low] Debug open/close balance assertion.** RA's `Marker` carries a
-  `DropBomb` so a leaked `start()` is caught at the call site (`parser.rs:319`);
-  badness's `open()`/`close()` (`grammar.rs:121`) are raw paired pushes with no
-  balance check, so a future grammar edit that leaks an `open()` fails later and
-  opaquely (a rowan `finish_node` panic or mis-nesting). A debug-only depth
-  assertion would restore that safety.
+- [x] **[low] `--fix` post-application losslessness/parse guard**
+  (`main.rs`, `debug_assert_fixes_preserved`). Before `fix_file` writes the
+  fixpoint result back, a debug-only, kind-aware (LaTeX + bib) guard asserts the
+  output (1) reconstructs losslessly and (2) carries no *new* parse errors vs. the
+  original (`errors_before`), so a mis-built fix span that corrupts structure is
+  caught before it reaches disk. Compiled out of release builds.
+- [x] **[low] Debug open/close balance assertion**
+  (`grammar.rs`, `debug_assert_balanced`). After `parse()` builds the event
+  stream, a debug-only pass walks it (+1 `Start`, -1 `Finish`) and asserts it
+  never goes negative and ends at zero — catching a leaked `open()` or an
+  unbalanced `precede` splice at parse time (counting *all* start/finish events
+  regardless of how emitted), rather than as an opaque rowan `finish_node` panic
+  later. The cheap post-hoc analog of RA's per-`Marker` `DropBomb`; compiled out
+  of release builds.
 
 ### Incrementality (salsa)
 
@@ -360,22 +364,24 @@ capabilities RA has that badness does not. Severity in brackets.
 
 ### Diagnostics / linter model (editor-UX capabilities RA has)
 
-- [ ] **[med] No LSP diagnostic tags.** `lint_to_lsp` (`lsp.rs:3075`) never sets
-  `tags`, and the `Diagnostic` struct (`linter/diagnostic.rs`) has no
-  `unused`/`deprecated` bit to carry one. Textbook candidates render as plain
-  warnings: `unreferenced-label` → `DiagnosticTag::Unnecessary` (editor
-  dim/strike-through), and `deprecated-command`/`obsolete-environment`/
-  `primitive-command` → `Deprecated`. This is a model gap, not just a mapping gap.
+- [x] **[med] LSP diagnostic tags.** `lint_to_lsp` now sets `tags` via
+  `lint_diagnostic_tags`, a presentational rule-id→tag map (kept out of the
+  `Diagnostic` struct so the CLI renderer is untouched): `unreferenced-label` →
+  `Unnecessary` (editor dim), and `deprecated-command`/`obsolete-environment`/
+  `primitive-command` → `Deprecated` (strike-through). Extend the match as more
+  rules earn a tag.
 - [ ] **[med] No `related_information` / secondary spans.** `Diagnostic` has no
   `related` field, so `duplicate-label` (and its cross-file variant) stringifies
   the *known* other-definition location into the message instead of surfacing it
   as a clickable `DiagnosticRelatedInformation` — the exact case RA models with
   `related`.
-- [ ] **[low] No `code_description` (rule doc URL).** Per-rule docs exist
-  (`docs/src/reference/linter-rules.md`) but `lint_to_lsp` sets no
-  `code_description.href`, so editors can't deep-link the rule. RA derives it from
-  `DiagnosticCode::url()`. Cheap UX win; the flat `rule: &'static str` namespace
-  itself is fine for a single linter.
+- [x] **[low] `code_description` (rule doc URL).** `lint_to_lsp` now sets
+  `code_description.href` to `https://badness.dev/reference/linter-rules.html#<rule>`
+  (the mdBook anchor equals the rule id), so editors deep-link the rule's docs.
+  Gated by a `link_docs` flag threaded from the analyze/code-action sites: the
+  LaTeX arms pass `true`, the bib arms `false` (bib rules aren't catalogued on that
+  page yet — the `code` still carries the rule id, just without a link). Wire the
+  bib rules in once they get a reference page.
 - [ ] **[low, latent] Single-span fix model can't express multi-location or
   cross-file fixes.** `Fix { content, start, end, applicability }`
   (`linter/diagnostic.rs`) is one contiguous replacement; RA's `SourceChange`

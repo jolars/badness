@@ -28,6 +28,7 @@ pub(crate) fn code_actions_for_range(
     uri: &Uri,
     request_range: Range,
     enc: PositionEncoding,
+    link_docs: bool,
 ) -> CodeActionResponse {
     let idx = LineIndex::with_encoding(text, enc);
     let req_start = idx.offset_at(
@@ -55,7 +56,7 @@ pub(crate) fn code_actions_for_range(
                 kind: Some(CodeActionKind::QUICKFIX),
                 // Link the action to the finding it fixes, so the client can dim it
                 // once the diagnostic clears.
-                diagnostics: Some(vec![lint_to_lsp(&idx, text, d.clone())]),
+                diagnostics: Some(vec![lint_to_lsp(&idx, text, d.clone(), link_docs)]),
                 edit: Some(WorkspaceEdit {
                     changes: Some(changes),
                     ..Default::default()
@@ -106,6 +107,7 @@ mod tests {
             &uri(),
             full_range(src),
             PositionEncoding::Utf16,
+            true,
         );
         let CodeActionOrCommand::CodeAction(action) = actions
             .iter()
@@ -139,8 +141,14 @@ mod tests {
             start: Position::new(0, 0),
             end: Position::new(0, 0),
         };
-        let actions =
-            code_actions_for_range(&findings(src), src, &uri(), cursor, PositionEncoding::Utf16);
+        let actions = code_actions_for_range(
+            &findings(src),
+            src,
+            &uri(),
+            cursor,
+            PositionEncoding::Utf16,
+            true,
+        );
         assert!(actions.is_empty());
     }
 
@@ -153,6 +161,7 @@ mod tests {
             &uri(),
             full_range(src),
             PositionEncoding::Utf16,
+            true,
         );
         assert!(actions.iter().any(|a| matches!(
             a,

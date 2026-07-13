@@ -688,6 +688,10 @@ fn fix_file(
     rules: &RuleSelection,
 ) -> std::io::Result<usize> {
     let mut content = std::fs::read_to_string(path)?;
+    // Tenet #1: a fix owes correctness — the result still parses and is still
+    // lossless. Snapshot the pre-fix parse-error count so the debug guard below
+    // can assert no fix introduced a *new* syntactic error.
+    let errors_before = debug_parse_error_count(&content, kind);
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
@@ -715,9 +719,61 @@ fn fix_file(
         content = outcome.output;
     }
     if total > 0 {
+        debug_assert_fixes_preserved(path, kind, &content, errors_before);
         std::fs::write(path, &content)?;
     }
     Ok(total)
+}
+
+/// Parse-error count of `content` under `kind`'s flavor, computed only in debug
+/// builds (returns `0` in release, where the guard is compiled out). Feeds
+/// [`debug_assert_fixes_preserved`].
+fn debug_parse_error_count(content: &str, kind: FileKind) -> usize {
+    if !cfg!(debug_assertions) {
+        return 0;
+    }
+    match kind {
+        FileKind::Bib => badness::bib::parse(content).errors.len(),
+        _ => parse_with_flavor(content, kind.lex_config()).errors.len(),
+    }
+}
+
+/// Debug-only tripwire enforcing tenet #1 on the `--fix` output before it is
+/// written back: the fixed text must (1) reconstruct losslessly and (2) carry no
+/// *new* parse errors relative to the original (`errors_before`). A fix is a
+/// textual edit that owes correctness but never layout, so a mis-built fix span
+/// that corrupts structure — deleting a closing brace, splicing at the wrong
+/// offset — is exactly what this catches before it reaches disk. Compiled out of
+/// release builds (`debug_assert!`), so it costs nothing in shipped binaries.
+fn debug_assert_fixes_preserved(path: &Path, kind: FileKind, content: &str, errors_before: usize) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let (reconstructed, errors_after) = match kind {
+        FileKind::Bib => {
+            let parsed = badness::bib::parse(content);
+            (parsed.syntax().to_string(), parsed.errors.len())
+        }
+        _ => {
+            let parsed = parse_with_flavor(content, kind.lex_config());
+            (
+                SyntaxNode::new_root(parsed.green.clone()).to_string(),
+                parsed.errors.len(),
+            )
+        }
+    };
+    debug_assert_eq!(
+        reconstructed,
+        content,
+        "--fix produced non-lossless output for {}",
+        path.display()
+    );
+    debug_assert!(
+        errors_after <= errors_before,
+        "--fix introduced {} new parse error(s) in {} ({errors_before} -> {errors_after})",
+        errors_after.saturating_sub(errors_before),
+        path.display()
+    );
 }
 
 fn plural(n: usize) -> &'static str {

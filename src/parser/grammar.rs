@@ -38,7 +38,38 @@ enum Block {
 pub(crate) fn parse(tokens: &[Token], ctx: &VerbCtx) -> (Vec<Event>, Vec<SyntaxError>) {
     let mut p = Parser::new(tokens, ctx);
     p.document();
+    debug_assert_balanced(&p.events);
     (p.events, p.errors)
+}
+
+/// Debug-only structural tripwire: the event stream must be balanced — every
+/// `Start` matched by a later `Finish`, no `Finish` before its `Start`, and the
+/// document node closed exactly once. This is the cheap analog of
+/// rust-analyzer's per-`Marker` `DropBomb`: a grammar edit that leaks an
+/// [`Parser::open`] without a [`Parser::close`] (or a `precede`-style
+/// `events.insert` that splices an unbalanced `Start`) is caught right here,
+/// counting *all* start/finish events regardless of how they were emitted,
+/// before [`super::tree_builder`] feeds rowan's `GreenNodeBuilder` and fails with
+/// a far more opaque `finish_node` panic. Compiled out of release builds.
+fn debug_assert_balanced(events: &[Event]) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mut depth: i32 = 0;
+    for ev in events {
+        match ev {
+            Event::Start(_) => depth += 1,
+            Event::Finish => {
+                depth -= 1;
+                debug_assert!(depth >= 0, "parser emitted a Finish with no open node");
+            }
+            Event::Tok(_) | Event::SubTok { .. } => {}
+        }
+    }
+    debug_assert_eq!(
+        depth, 0,
+        "parser left {depth} node(s) unclosed at end of parse"
+    );
 }
 
 struct Parser<'t> {

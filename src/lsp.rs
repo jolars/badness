@@ -84,18 +84,19 @@ use lsp_types::request::{
     WorkspaceSymbolRequest,
 };
 use lsp_types::{
-    ApplyWorkspaceEditParams, CodeActionParams, CodeActionProviderCapability, CompletionItem,
-    CompletionItemKind, CompletionList, CompletionOptions, CompletionParams, CompletionResponse,
-    Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
-    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
-    DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
-    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    ExecuteCommandOptions, ExecuteCommandParams, FileChangeType, FileSystemWatcher, FoldingRange,
-    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    ApplyWorkspaceEditParams, CodeActionParams, CodeActionProviderCapability, CodeDescription,
+    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
+    DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
+    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, DocumentLink,
+    DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
+    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
+    DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams,
+    FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
+    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
@@ -2372,9 +2373,9 @@ impl Worker {
             select! {
                 recv(job_rx) -> job => {
                     let Ok(job) = job else { break };  // main dropped `job_tx`
-                    self.handle_job(job);
+                    self.handle_job_guarded(job);
                     while let Ok(j) = job_rx.try_recv() {
-                        self.handle_job(j);
+                        self.handle_job_guarded(j);
                     }
                     self.try_dispatch();
                 }
@@ -2390,6 +2391,25 @@ impl Worker {
                     self.try_dispatch();
                 }
             }
+        }
+    }
+
+    /// Run [`handle_job`](Self::handle_job), catching any panic so one bad job
+    /// can't silently kill the single write-phase worker thread — which would
+    /// leave the server a zombie (the main loop keeps running, but every
+    /// `job_tx.send` then no-ops, so no further diagnostics, formatting, or
+    /// edits reach the db). Mirrors the read pool's per-job isolation
+    /// (`task_pool.rs`). Salsa `Cancelled` never unwinds this far: the writer
+    /// owns the db exclusively, so its writes are never cancelled.
+    fn handle_job_guarded(&mut self, job: WorkerJob) {
+        let guarded = std::panic::AssertUnwindSafe(|| self.handle_job(job));
+        if let Err(panic) = std::panic::catch_unwind(guarded) {
+            let msg = panic
+                .downcast_ref::<&'static str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("<non-string panic payload>");
+            log::error!("LSP worker thread caught panic while handling job: {msg}");
         }
     }
 
@@ -3030,7 +3050,7 @@ fn analyze_tex(
         Some(packages),
     ) {
         if rules.is_active(d.rule) {
-            diags.push(lint_to_lsp(&idx, &text, d));
+            diags.push(lint_to_lsp(&idx, &text, d, true));
         }
     }
     Some(diags)
@@ -3064,7 +3084,7 @@ fn analyze_bib(
     let model = snapshot.bib_semantic_model(file);
     for d in crate::bib::linter::lint_document(path, &root, model) {
         if rules.is_active(d.rule) {
-            diags.push(lint_to_lsp(&idx, &text, d));
+            diags.push(lint_to_lsp(&idx, &text, d, false));
         }
     }
     Some(diags)
@@ -3072,14 +3092,51 @@ fn analyze_bib(
 
 /// Map a linter [`crate::linter::Diagnostic`] (shared by the LaTeX and BibTeX
 /// linters) onto an LSP [`Diagnostic`].
-fn lint_to_lsp(idx: &LineIndex, text: &str, d: crate::linter::Diagnostic) -> Diagnostic {
+/// Base URL of the published LaTeX linter-rules reference; each rule is a
+/// heading whose mdBook anchor is the rule id (`#deprecated-command`), so
+/// `{BASE}#{rule}` deep-links the rule's docs.
+const LATEX_RULES_DOC_URL: &str = "https://badness.dev/reference/linter-rules.html";
+
+/// Convert a linter finding into an LSP diagnostic. `link_docs` attaches a
+/// `code_description` pointing at the rule's entry in the published reference;
+/// only the LaTeX rules are catalogued there today, so the bib arms pass `false`
+/// (their `code` still carries the rule id, just without a doc link).
+fn lint_to_lsp(
+    idx: &LineIndex,
+    text: &str,
+    d: crate::linter::Diagnostic,
+    link_docs: bool,
+) -> Diagnostic {
+    let code_description = link_docs
+        .then(|| format!("{LATEX_RULES_DOC_URL}#{}", d.rule).parse().ok())
+        .flatten()
+        .map(|href| CodeDescription { href });
     Diagnostic {
         range: byte_range_to_lsp(idx, text, d.start, d.end),
         severity: Some(severity_to_lsp(d.severity)),
         code: Some(NumberOrString::String(d.rule.to_owned())),
+        code_description,
         source: Some("badness".to_owned()),
         message: d.message,
+        tags: lint_diagnostic_tags(d.rule),
         ..Default::default()
+    }
+}
+
+/// Map a lint rule id onto the LSP diagnostic tags editors render specially:
+/// `Unnecessary` dims/greys the span (dead code), `Deprecated` strikes it
+/// through. Keyed on the stable rule id rather than a field on
+/// [`crate::linter::Diagnostic`], so it stays a purely presentational LSP concern
+/// (the CLI renderer is untouched). Returns `None` for rules with no tag.
+fn lint_diagnostic_tags(rule: &str) -> Option<Vec<DiagnosticTag>> {
+    match rule {
+        // A label defined but never referenced is a dead definition.
+        "unreferenced-label" => Some(vec![DiagnosticTag::UNNECESSARY]),
+        // Commands/environments superseded by a modern LaTeX equivalent.
+        "deprecated-command" | "obsolete-environment" | "primitive-command" => {
+            Some(vec![DiagnosticTag::DEPRECATED])
+        }
+        _ => None,
     }
 }
 
@@ -3185,7 +3242,7 @@ fn fallback_diagnostics(
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, text, d));
+                    diags.push(lint_to_lsp(&idx, text, d, true));
                 }
             }
         }
@@ -3204,7 +3261,7 @@ fn fallback_diagnostics(
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, text, d));
+                    diags.push(lint_to_lsp(&idx, text, d, false));
                 }
             }
         }
@@ -3233,7 +3290,11 @@ fn run_code_action(
     out_tx: &Sender<Outbound>,
 ) {
     let findings = compute_lint_findings(snapshot, path, text, kind, members, rules);
-    let actions = code_action::code_actions_for_range(&findings, text, uri, range, enc);
+    // Only the LaTeX rules are catalogued in the published reference, so the
+    // echoed diagnostic on a bib quick-fix carries no doc link (mirrors
+    // `analyze_bib`/`lint_to_lsp`).
+    let link_docs = !matches!(kind, FileKind::Bib);
+    let actions = code_action::code_actions_for_range(&findings, text, uri, range, enc, link_docs);
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
 }
@@ -6468,6 +6529,61 @@ mod tests {
 
     fn uri(s: &str) -> Uri {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn lint_tags_map_dead_and_deprecated_rules() {
+        // A dead label definition dims (Unnecessary).
+        assert_eq!(
+            lint_diagnostic_tags("unreferenced-label"),
+            Some(vec![DiagnosticTag::UNNECESSARY])
+        );
+        // Superseded commands/environments strike through (Deprecated).
+        for rule in [
+            "deprecated-command",
+            "obsolete-environment",
+            "primitive-command",
+        ] {
+            assert_eq!(
+                lint_diagnostic_tags(rule),
+                Some(vec![DiagnosticTag::DEPRECATED]),
+                "rule {rule}"
+            );
+        }
+        // An ordinary lint carries no tag.
+        assert_eq!(lint_diagnostic_tags("straight-quotes"), None);
+    }
+
+    #[test]
+    fn lint_to_lsp_links_documented_rules_only() {
+        let d = || crate::linter::Diagnostic {
+            rule: "deprecated-command",
+            severity: crate::linter::Severity::Warning,
+            path: PathBuf::from("x.tex"),
+            start: 0,
+            end: 3,
+            message: "use bfseries".to_owned(),
+            fix: None,
+        };
+        let idx = LineIndex::with_encoding("\\bf x", PositionEncoding::Utf16);
+
+        // LaTeX arm (link_docs = true): the code deep-links the rule's reference
+        // anchor, and the tag still rides along.
+        let latex = lint_to_lsp(&idx, "\\bf x", d(), true);
+        assert_eq!(
+            latex.code_description.map(|c| c.href.to_string()),
+            Some("https://badness.dev/reference/linter-rules.html#deprecated-command".to_owned())
+        );
+        assert_eq!(latex.tags, Some(vec![DiagnosticTag::DEPRECATED]));
+
+        // Bib arm (link_docs = false): the rule id is still the `code`, but with
+        // no doc link (bib rules aren't catalogued yet).
+        let bib = lint_to_lsp(&idx, "\\bf x", d(), false);
+        assert!(bib.code_description.is_none());
+        assert_eq!(
+            bib.code,
+            Some(NumberOrString::String("deprecated-command".to_owned()))
+        );
     }
 
     #[test]

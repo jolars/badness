@@ -354,3 +354,6 @@ TSWLatexianTemp*
 /docs/book/
 /docs/doc-utils/target/
 /test.bib
+
+# rust-analyzer reference checkout (audit only, not part of the project)
+.rust-analyzer-ref/

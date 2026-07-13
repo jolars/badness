@@ -107,7 +107,7 @@ struct Component {
 /// The resolved cross-file label model over a set of analyzed files.
 ///
 /// Holds `HashMap`s/`PathBuf`s, so (like [`IncludeGraph`]) it is neither `Eq` nor
-/// `salsa::Update`; the [`crate::project::resolved_labels`] query is therefore
+/// `salsa::SalsaValue`; the [`crate::project::resolved_labels`] query is therefore
 /// `no_eq`. Built by [`ResolvedLabels::build`].
 #[derive(Debug, Default)]
 pub struct ResolvedLabels {
@@ -273,8 +273,8 @@ impl ResolvedLabels {
 /// The cross-file label resolution for `project`, built from the per-file
 /// [`file_labels`] firewall and the [`project_graph`].
 ///
-/// `no_eq` + `unsafe(non_update_types)` for the same reason as [`project_graph`]:
-/// [`ResolvedLabels`] holds `HashMap`s (not `Eq`/`salsa::Update`) and is a pure
+/// `no_eq` + `unsafe(non_salsa_values)` for the same reason as [`project_graph`]:
+/// [`ResolvedLabels`] holds `HashMap`s (not `Eq`/`salsa::SalsaValue`) and is a pure
 /// function of the interned [`Project`] plus the backdated per-file facts, so it
 /// carries no salsa references. The firewall pays off here: a prose edit leaves
 /// `file_labels`, `file_refs`, `file_is_document_root`, and `include_edges` all
@@ -282,7 +282,7 @@ impl ResolvedLabels {
 /// edit *does* rebuild this query (it changes `file_refs`), because
 /// `unreferenced-label` depends on the cross-file reference union — but a pure
 /// prose edit still backdates both firewalls.
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn resolved_labels<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> ResolvedLabels {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ResolvedLabels,

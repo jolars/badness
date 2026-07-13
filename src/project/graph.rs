@@ -55,7 +55,7 @@ pub struct UnresolvedInclude {
 
 /// The inclusion graph over a set of files.
 ///
-/// Holds `HashMap`s, so it is neither `Eq` nor `salsa::Update`; [`project_graph`]
+/// Holds `HashMap`s, so it is neither `Eq` nor `salsa::SalsaValue`; [`project_graph`]
 /// is therefore `no_eq` (see its doc). Built by [`IncludeGraph::build`].
 #[derive(Debug, Default)]
 pub struct IncludeGraph {
@@ -416,7 +416,7 @@ impl PackageGraph {
 }
 
 /// One member of a project: its tracked input, on-disk path, and which pipeline
-/// it feeds. Plain-derived (no `salsa::Update`) so it can key the interned
+/// it feeds. Plain-derived (no `salsa::SalsaValue`) so it can key the interned
 /// [`Project`]. No `Debug`: `SourceFile` is a salsa input id without a standalone
 /// `Debug` impl.
 ///
@@ -443,7 +443,7 @@ pub struct Project<'db> {
 /// The inclusion graph for `project`, built from the per-file firewall query.
 ///
 /// `no_eq` because its output ([`IncludeGraph`]) holds `HashMap`s that aren't
-/// `salsa::Update`/`Eq`-comparable here; `unsafe(non_update_types)` asserts it
+/// `salsa::SalsaValue`/`Eq`-comparable here; `unsafe(non_salsa_values)` asserts it
 /// carries no salsa references (the graph is a pure function of the interned
 /// membership plus the backdated per-file edges). This costs nothing for the
 /// firewall: a body edit leaves the per-file inputs backdated, so this query
@@ -453,7 +453,7 @@ pub struct Project<'db> {
 /// so reachability is left to a future caller of [`IncludeGraph::build`]. Edges,
 /// reverse map, unresolved targets, and cycles are all order-independent and
 /// populated regardless.
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> IncludeGraph {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ProjectGraph,
@@ -477,10 +477,10 @@ pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
 
 /// The package-load graph for `project`, built from the per-file
 /// [`package_edges`] firewall. The load-graph analog of [`project_graph`]:
-/// `no_eq`/`unsafe(non_update_types)` for the same reason (its [`PackageGraph`]
+/// `no_eq`/`unsafe(non_salsa_values)` for the same reason (its [`PackageGraph`]
 /// output holds `HashMap`s and carries no salsa references), so a body edit that
 /// leaves the per-file load edges backdated never re-executes it.
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn package_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> PackageGraph {
     db.record_query(QueryLogEntry {
         kind: QueryKind::PackageGraph,

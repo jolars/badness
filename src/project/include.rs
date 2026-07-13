@@ -32,7 +32,7 @@ use crate::syntax::{SyntaxKind, SyntaxNode};
 /// Which inclusion command produced an edge. Kept distinct even where resolution
 /// is currently identical, so later passes can honor the semantic differences
 /// (`\include`'s `\clearpage` + main-dir base, `\includeonly` gating).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum IncludeKind {
     Input,
     Include,
@@ -47,7 +47,7 @@ pub enum IncludeKind {
 }
 
 /// The target file of an inclusion command.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum IncludeTarget {
     /// A statically-resolved path: the literal argument with a `.tex` extension
     /// defaulted in and joined onto the including file's directory when relative.
@@ -59,9 +59,9 @@ pub enum IncludeTarget {
 /// An inclusion edge stripped of its byte range — the part the cross-file graph
 /// depends on. Carries no positional data, so a body edit that merely shifts a
 /// command's offset leaves it unchanged and the project-graph memo holds (the
-/// firewall this feeds). It also satisfies `salsa::Update`, which [`IncludeEdge`]
+/// firewall this feeds). It also satisfies `salsa::SalsaValue`, which [`IncludeEdge`]
 /// cannot because of its `TextRange` field.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct IncludeEdgeKey {
     pub kind: IncludeKind,
     pub target: IncludeTarget,
@@ -178,7 +178,7 @@ fn default_tex_extension(path: PathBuf) -> PathBuf {
 /// The target of a bibliography-resource command (`\bibliography`,
 /// `\addbibresource`). Mirrors [`IncludeTarget`]: a statically-resolved `.bib`
 /// path, or [`BibTarget::Dynamic`] for a missing or non-literal argument.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum BibTarget {
     /// A resolved path with a `.bib` extension defaulted in and joined onto the
     /// including file's directory when relative.

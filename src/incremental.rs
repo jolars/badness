@@ -2,7 +2,7 @@
 //!
 //! The CST is cached as a `rowan::GreenNode` (Arc-backed, `Send + Sync`) rather
 //! than a `SyntaxNode` (which holds non-`Send` cursor state and is neither
-//! `Eq` nor `salsa::Update`). Callers materialize a fresh cursor via
+//! `Eq` nor `salsa::SalsaValue`). Callers materialize a fresh cursor via
 //! [`parsed_tree_root`] — a cheap atomic clone — so each consumer gets its own
 //! tree without leaking the salsa cell.
 //!
@@ -132,8 +132,8 @@ pub struct ParseDiagnosticData {
 /// A cached parse: the green tree plus parse diagnostics, computed once per
 /// `(db, file)`.
 ///
-/// The `GreenNode` is not `Eq`/`salsa::Update`, so [`parsed_document`] is
-/// `no_eq, unsafe(non_update_types)`: salsa never compares parse outputs and
+/// The `GreenNode` is not `Eq`/`salsa::SalsaValue`, so [`parsed_document`] is
+/// `no_eq, unsafe(non_salsa_values)`: salsa never compares parse outputs and
 /// relies purely on input (text) change detection to invalidate. That is sound
 /// because the tree is a pure function of the text.
 #[derive(Debug, Clone)]
@@ -143,8 +143,8 @@ pub struct ParsedDocument {
 }
 
 /// A cached `.bib` parse: the green tree plus parse diagnostics. The bib analog
-/// of [`ParsedDocument`], `no_eq, unsafe(non_update_types)` for the identical
-/// reason — `rowan::GreenNode` is neither `Eq` nor `salsa::Update`, so
+/// of [`ParsedDocument`], `no_eq, unsafe(non_salsa_values)` for the identical
+/// reason — `rowan::GreenNode` is neither `Eq` nor `salsa::SalsaValue`, so
 /// [`parsed_bib_document`] relies purely on text-input change detection to
 /// invalidate.
 #[derive(Debug, Clone)]
@@ -158,7 +158,7 @@ pub trait IncrementalDb: salsa::Database {
     fn record_query(&self, entry: QueryLogEntry);
 }
 
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocument {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ParsedDocument,
@@ -203,7 +203,7 @@ pub fn parsed_tree_root(db: &dyn IncrementalDb, file: SourceFile) -> SyntaxNode 
 /// *is* `Eq`, so salsa compares outputs and **backdates** when an edit leaves
 /// the model unchanged (e.g. a prose edit that touches no `\label`/`\ref`),
 /// keeping any downstream query from re-running. (`parsed_document` must be
-/// `no_eq` only because its `GreenNode` is neither `Eq` nor `salsa::Update`, so
+/// `no_eq` only because its `GreenNode` is neither `Eq` nor `salsa::SalsaValue`, so
 /// salsa cannot compare parses and falls back to text-input change detection.)
 /// This is the same firewall [`include_edges`] uses; the future cross-file label
 /// resolver is its first consumer.
@@ -433,13 +433,13 @@ pub fn file_package_option_facts(
 /// A `.bib` file's cached parse: the green tree plus parse diagnostics. The bib
 /// analog of [`parsed_document`].
 ///
-/// `no_eq, unsafe(non_update_types)` for the same reason — `GreenNode` is neither
-/// `Eq` nor `salsa::Update`, so salsa never compares parses and relies on
+/// `no_eq, unsafe(non_salsa_values)` for the same reason — `GreenNode` is neither
+/// `Eq` nor `salsa::SalsaValue`, so salsa never compares parses and relies on
 /// text-input change detection. The same [`SourceFile`] input feeds both this and
 /// [`parsed_document`]: queries dispatch on the function, not the path, so a
 /// buffer's `.bib`-ness is decided by which query the caller runs, not by the
 /// input's synthetic extension.
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn parsed_bib_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedBibDocument {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ParsedBibDocument,
@@ -515,7 +515,7 @@ pub fn file_cite_names(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolStr>
 /// changes neither the resource targets nor the wildcard, so it backdates and the
 /// cross-file resolution memo holds. Resolves relative targets against the file's
 /// own directory (`path.parent()`), like [`include_edges`].
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct FileCiteFacts {
     pub bib_targets: Vec<BibTarget>,
     pub nocite_all: bool,

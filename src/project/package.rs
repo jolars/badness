@@ -31,7 +31,7 @@ use crate::syntax::{SyntaxKind, SyntaxNode};
 /// currently identical, so later passes can honor the differences
 /// (`\LoadClassWithOptions` forwarding the current class options; `\documentclass`
 /// being the unique class root).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum PackageKind {
     UsePackage,
     RequirePackage,
@@ -60,7 +60,7 @@ impl PackageKind {
 }
 
 /// The target file of a load command. Mirrors [`super::include::IncludeTarget`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum PackageTarget {
     /// A statically-resolved path: the literal name with a `.sty`/`.cls` extension
     /// defaulted in and joined onto the loading file's directory when relative.
@@ -72,9 +72,9 @@ pub enum PackageTarget {
 /// A load edge stripped of its byte range — the part the cross-file graph depends
 /// on. Carries no positional data, so a body edit that merely shifts a command's
 /// offset leaves it unchanged and the package-graph memo holds (the firewall this
-/// feeds). It also satisfies `salsa::Update`, which [`PackageEdge`] cannot because
+/// feeds). It also satisfies `salsa::SalsaValue`, which [`PackageEdge`] cannot because
 /// of its `TextRange` field. Mirrors [`super::include::IncludeEdgeKey`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct PackageEdgeKey {
     pub kind: PackageKind,
     pub target: PackageTarget,

@@ -74,7 +74,7 @@ const OPTION_PROCESSOR_PACKAGES: &[&str] = &[
 /// `file_package_option_facts` query backdates when a body edit leaves the
 /// option surface unchanged, so the cross-file model is not rebuilt (the same
 /// firewall reasoning as `file_labels`).
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct PackageOptionFacts {
     /// The `.sty` file these facts describe (the resolved load target key).
     pub path: PathBuf,
@@ -153,7 +153,7 @@ pub fn package_option_facts(
 /// absent from the map is a system package or non-member — the lint skips it.
 ///
 /// Holds `HashMap`s/`PathBuf`s, so (like [`super::ResolvedLabels`]) it is
-/// neither `Eq` nor `salsa::Update`; the incremental wrapper query is `no_eq`.
+/// neither `Eq` nor `salsa::SalsaValue`; the incremental wrapper query is `no_eq`.
 #[derive(Debug, Default)]
 pub struct ResolvedPackageOptions {
     files: HashMap<PathBuf, PackageOptionFacts>,
@@ -177,13 +177,13 @@ impl ResolvedPackageOptions {
 /// The cross-file package-option model for `project`, built from the per-file
 /// [`file_package_option_facts`] firewall.
 ///
-/// `no_eq` + `unsafe(non_update_types)` for the same reason as
+/// `no_eq` + `unsafe(non_salsa_values)` for the same reason as
 /// [`super::resolved_labels`]: [`ResolvedPackageOptions`] holds a `HashMap`
-/// (not `Eq`/`salsa::Update`) and is a pure function of the interned
+/// (not `Eq`/`salsa::SalsaValue`) and is a pure function of the interned
 /// [`Project`] plus the backdated per-file facts. A body edit that leaves a
 /// `.sty`'s option surface unchanged backdates the firewall and this query is
 /// not re-run.
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn resolved_package_options<'db>(
     db: &'db dyn IncrementalDb,
     project: Project<'db>,

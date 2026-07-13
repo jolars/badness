@@ -269,15 +269,15 @@ impl ResolvedCitations {
 /// [`file_cite_names`] (the `.bib` cite-key firewall), [`file_cite_facts`] (the
 /// `.tex` resource/wildcard firewall), and the [`project_graph`].
 ///
-/// `no_eq` + `unsafe(non_update_types)` for the same reason as
+/// `no_eq` + `unsafe(non_salsa_values)` for the same reason as
 /// [`resolved_labels`](crate::project::resolved_labels): [`ResolvedCitations`]
-/// holds `HashMap`s/`HashSet`s (not `Eq`/`salsa::Update`) and is a pure function
+/// holds `HashMap`s/`HashSet`s (not `Eq`/`salsa::SalsaValue`) and is a pure function
 /// of the interned [`Project`] plus the backdated per-file facts, so it carries no
 /// salsa references. The firewall pays off here: a prose or `\cite` edit leaves
 /// `file_cite_names`, `file_cite_facts`, `file_is_document_root`, and
 /// `include_edges` all backdated, so neither [`project_graph`] nor this query
 /// re-executes.
-#[salsa::tracked(returns(ref), no_eq, unsafe(non_update_types))]
+#[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
 pub fn resolved_citations<'db>(
     db: &'db dyn IncrementalDb,
     project: Project<'db>,

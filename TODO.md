@@ -296,15 +296,20 @@ capabilities RA has that badness does not. Severity in brackets.
   guards a plain map/vec mutated atomically per access, with no cross-call
   invariant a panic could leave half-updated. Guarded by
   `poisoned_files_lock_recovers`.
-- [ ] **[med] No global parser step/loop limiter.** RA checks a hard
-  `PARSER_STEP_LIMIT` on every `nth()` (`parser.rs:42`) as a catch-all against a
-  non-advancing loop, independent of grammar correctness. Badness relies on a
-  structural "`pos` only advances through `bump`" argument plus a `debug_assert`
-  (`grammar.rs:116`); several loops advance only indirectly via
-  `element()`/`math_atom()`. A cheap release-mode step counter would convert
-  "provably terminating by reading the code" into "cannot hang on adversarial or
-  malformed input" — valuable for a tool run over a fuzz/corpus. (Pairs with the
-  Fuzzing item under Performance & hardening.)
+- [x] **[med] Global parser step/loop limiter** (`grammar.rs`,
+  `Parser::step` + `PARSER_STEP_LIMIT`). The lookahead primitives (`kind`,
+  `nth_kind`) now tick a peek budget that resets on every cursor advance (via
+  `bump` *or* the math-split `pos += 1` fast path — keyed on `pos`, not `bump`),
+  so the surviving count is the number of *consecutive* peeks with no token
+  consumed. Exceeding the ceiling aborts loudly instead of hanging — the RA
+  catch-all (`parser.rs`), converting "provably terminating by reading the code"
+  into "cannot hang on adversarial or malformed input" (fuzzing, a corrupt corpus
+  file). A **release-mode** guard (real `assert!`, not `debug_assert`); the async
+  callers already recover from a parse panic, so a wedged parse degrades to a
+  logged error. Measured overhead on the 95 KB parse bench: within run-to-run
+  noise (~1-2%). Guarded by `step_guard_trips_when_wedged` and
+  `step_budget_resets_on_cursor_progress`. (Complements the Fuzzing item under
+  Performance & hardening.)
 - [x] **[low] `--fix` post-application losslessness/parse guard**
   (`main.rs`, `debug_assert_fixes_preserved`). Before `fix_file` writes the
   fixpoint result back, a debug-only, kind-aware (LaTeX + bib) guard asserts the

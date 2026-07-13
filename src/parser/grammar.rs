@@ -23,6 +23,17 @@ const END_CMD: &str = "\\end";
 const LEFT_CMD: &str = "\\left";
 const RIGHT_CMD: &str = "\\right";
 
+/// Maximum number of consecutive cursor peeks with **no** token consumed before
+/// the parser aborts as stuck. Modeled on rust-analyzer's `PARSER_STEP_LIMIT`
+/// (`crates/parser/src/parser.rs`), a catch-all against a non-advancing loop that
+/// holds *independent of grammar correctness*. The counter resets on every cursor
+/// advance (see [`Parser::step`]), so in normal parsing only O(1) peeks accrue
+/// between two consumed tokens; this ceiling is astronomically above any real
+/// document and can only be reached by a genuine infinite loop. Unlike the
+/// module's structural "`pos` only advances through `bump`" argument, this holds
+/// even for malformed or adversarial input (fuzzing, a corrupt corpus file).
+const PARSER_STEP_LIMIT: u32 = 15_000_000;
+
 /// A content region that groups its children into `PARAGRAPH` nodes separated
 /// by blank lines. Differs only in how the region terminates.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,6 +95,12 @@ struct Parser<'t> {
     pos: usize,
     events: Vec<Event>,
     errors: Vec<SyntaxError>,
+    /// Consecutive-peek budget for the stuck-loop guard ([`Self::step`]).
+    /// `Cell` because the lookahead primitives that tick it are `&self`.
+    steps: std::cell::Cell<u32>,
+    /// The cursor position at the last [`Self::step`] tick; the budget resets
+    /// whenever `pos` has advanced past it (i.e. real progress was made).
+    last_step_pos: std::cell::Cell<usize>,
 }
 
 impl<'t> Parser<'t> {
@@ -101,17 +118,46 @@ impl<'t> Parser<'t> {
             starts,
             pos: 0,
             events: Vec::new(),
+            steps: std::cell::Cell::new(0),
+            last_step_pos: std::cell::Cell::new(0),
             errors: Vec::new(),
         }
     }
 
     // --- cursor primitives -------------------------------------------------
 
+    /// Tick the stuck-loop guard, called from every lookahead primitive. Resets
+    /// the budget whenever the cursor has advanced since the last tick (real
+    /// progress — via `bump` or the math-split fast path, both of which move
+    /// `pos`), so the surviving count is the number of *consecutive* peeks with no
+    /// token consumed. Exceeding [`PARSER_STEP_LIMIT`] means the parser is wedged
+    /// in a non-advancing loop; abort loudly rather than hang. This can only fire
+    /// on a grammar bug or pathological input, never on a real document, and the
+    /// async callers (the language server's worker + read pool) already recover
+    /// from a parse panic, degrading a wedged parse to a logged error.
+    #[inline]
+    fn step(&self) {
+        if self.pos != self.last_step_pos.get() {
+            self.last_step_pos.set(self.pos);
+            self.steps.set(0);
+        }
+        let steps = self.steps.get();
+        assert!(
+            steps < PARSER_STEP_LIMIT,
+            "parser exceeded {PARSER_STEP_LIMIT} peeks without consuming a token at position {} \
+             — non-advancing loop",
+            self.pos
+        );
+        self.steps.set(steps + 1);
+    }
+
     fn kind(&self) -> Option<SyntaxKind> {
+        self.step();
         self.tokens.get(self.pos).map(|t| t.kind)
     }
 
     fn nth_kind(&self, n: usize) -> Option<SyntaxKind> {
+        self.step();
         self.tokens.get(self.pos + n).map(|t| t.kind)
     }
 
@@ -1261,4 +1307,42 @@ fn peek_end_name(tokens: &[Token], end_pos: usize) -> Option<String> {
         i += 1;
     }
     Some(name.trim().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::lexer::lex;
+
+    /// The stuck-loop guard aborts once `PARSER_STEP_LIMIT` peeks accrue with no
+    /// cursor advance, turning a hypothetical non-advancing loop into a loud
+    /// panic instead of a hang.
+    #[test]
+    fn step_guard_trips_when_wedged() {
+        let tokens = lex("x");
+        let ctx = VerbCtx::default();
+        let p = Parser::new(&tokens, &ctx);
+        // Park one tick short of the ceiling with the cursor pinned, so no reset
+        // fires on the next peeks.
+        p.last_step_pos.set(p.pos);
+        p.steps.set(PARSER_STEP_LIMIT - 1);
+        p.step(); // reaches the ceiling exactly — still allowed
+        let wedged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p.step()));
+        assert!(wedged.is_err(), "the guard must abort a non-advancing loop");
+    }
+
+    /// A real cursor advance resets the budget, so an arbitrarily long *advancing*
+    /// parse never trips the guard.
+    #[test]
+    fn step_budget_resets_on_cursor_progress() {
+        let tokens = lex("xx");
+        let ctx = VerbCtx::default();
+        let mut p = Parser::new(&tokens, &ctx);
+        p.last_step_pos.set(p.pos);
+        p.steps.set(PARSER_STEP_LIMIT - 1);
+        // Advance the cursor as a real consume would; the next peek must reset.
+        p.pos += 1;
+        p.step();
+        assert_eq!(p.steps.get(), 1, "progress should reset the peek budget");
+    }
 }

@@ -401,14 +401,16 @@ capabilities RA has that badness does not. Severity in brackets.
 
 ### Maintainability (not a conformance gap, surfaced by the audit)
 
-- [ ] **[low] Factor the duplicated trivia/blank-line scanners.** The blank-line
-  and comment-bind logic is re-implemented across ~five methods in `grammar.rs`
+- [x] **[low] Factor the duplicated trivia/blank-line scanners.** The blank-line
+  and comment-bind logic was re-implemented across ~five methods in `grammar.rs`
   (`peek_meaningful`, `at_paragraph_break`, `trivia_run_is_separator`,
   `binding_run`, `at_script`), each re-walking trivia with slightly different
   newline-counting and a near-identical `.dtx` margin/guard comment block. RA
-  concentrates the equivalent in one `n_attached_trivias`. A single helper
-  returning `(next_meaningful_kind, saw_blank_line, comment_run)` would remove a
-  real consistency hazard (a rule change must currently be echoed in all five).
+  concentrates the equivalent in one `n_attached_trivias`. Now a single
+  `scan_trivia(from, CommentMode)` helper returns a `TriviaScan` (`next`,
+  `next_kind`, `saw_blank_line`, `comment_start`); all five methods are thin
+  wrappers over it. `CommentMode::Stop` folds in `at_script`'s narrower regime (a
+  comment ends the line and stops the scan) without a second walker.
 
 --------------------------------------------------------------------------------
 

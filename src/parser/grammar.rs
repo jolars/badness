@@ -45,6 +45,37 @@ enum Block {
     Environment,
 }
 
+/// How the shared trivia scanner ([`Parser::scan_trivia`]) treats a `%` comment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommentMode {
+    /// A comment is content that occupies its own line: it resets the newline
+    /// run (without undoing a blank line already seen) and the scan continues
+    /// past it. Used everywhere paragraph structure and leading-comment binds are
+    /// decided.
+    Skip,
+    /// A comment stops the scan and is reported as the next meaningful token.
+    /// Used by [`Parser::at_script`], where a comment ends the line so a `^`/`_`
+    /// script never binds across it.
+    Stop,
+}
+
+/// The result of scanning the contiguous trivia run at a position: everything the
+/// blank-line and comment-bind rules (AGENTS.md #9) need to decide, computed once.
+struct TriviaScan {
+    /// Index of the next meaningful (non-skipped) token, or `tokens.len()` at EOF.
+    next: usize,
+    /// Kind of the token at [`Self::next`], or `None` at EOF.
+    next_kind: Option<SyntaxKind>,
+    /// The run before `next` contains a blank line (≥2 `NEWLINE`s: the `\par`
+    /// boundary).
+    saw_blank_line: bool,
+    /// Start index of the leading own-line `%` comment run immediately preceding
+    /// `next` — the maximal blank-line-free suffix, the start of a
+    /// leading-comment bind. `None` if that suffix has no own-line comment.
+    /// Only populated in [`CommentMode::Skip`].
+    comment_start: Option<usize>,
+}
+
 /// Parse a token stream into parser events and a list of syntax errors.
 pub(crate) fn parse(tokens: &[Token], ctx: &VerbCtx) -> (Vec<Event>, Vec<SyntaxError>) {
     let mut p = Parser::new(tokens, ctx);
@@ -243,32 +274,60 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// Peek the kind of the next non-trivia token and whether the intervening
-    /// trivia contains a paragraph break (a blank line, i.e. ≥2 newlines).
-    /// Does not consume.
-    fn peek_meaningful(&self) -> (Option<SyntaxKind>, bool) {
-        let mut i = self.pos;
+    /// Scan the contiguous trivia run starting at `from`, classifying each token
+    /// so the blank-line and leading-comment-bind rules (AGENTS.md #9) can be
+    /// decided from one walk instead of five near-identical ones. `WHITESPACE`,
+    /// `DOC_MARGIN`, and `GUARD` float (a `.dtx` margin neither counts as a
+    /// newline nor resets the run, so a margin-only line `%\n%\n` still reads as a
+    /// blank line via its two `NEWLINE`s); `NEWLINE`s accumulate into the blank-line
+    /// (`≥2`) test; a `COMMENT` is handled per [`CommentMode`]. Does not consume.
+    fn scan_trivia(&self, from: usize, comment_mode: CommentMode) -> TriviaScan {
+        let mut i = from;
         let mut newlines = 0;
-        let mut had_break = false;
+        let mut saw_blank_line = false;
+        let mut comment_start = None;
         while let Some(t) = self.tokens.get(i) {
             match t.kind {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
-                    had_break |= newlines >= 2;
+                    if newlines >= 2 {
+                        saw_blank_line = true;
+                        // A blank line breaks a leading-comment bind: only a
+                        // comment *after* it can still bind, so drop any comment
+                        // seen before it.
+                        comment_start = None;
+                    }
                 }
-                // A `.dtx` margin or guard floats like whitespace: it neither counts
-                // nor resets the newline run, so a margin-only line (`%\n%\n`) reads
-                // as the doc-layer blank line via its two `NEWLINE`s.
                 SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {}
-                // A comment occupies its own line: it is content, not blank
-                // space, so it resets the run that detects a blank line. It
-                // does not undo a blank line already seen before it.
-                SyntaxKind::COMMENT => newlines = 0,
-                k => return (Some(k), had_break),
+                SyntaxKind::COMMENT if comment_mode == CommentMode::Stop => break,
+                // A comment occupies its own line: it is content, not blank space,
+                // so it resets the newline run (without undoing a blank line
+                // already seen) and, if it starts its line, opens a
+                // leading-comment bind.
+                SyntaxKind::COMMENT => {
+                    newlines = 0;
+                    if comment_start.is_none() && self.comment_starts_line(i) {
+                        comment_start = Some(i);
+                    }
+                }
+                _ => break,
             }
             i += 1;
         }
-        (None, had_break)
+        TriviaScan {
+            next: i,
+            next_kind: self.tokens.get(i).map(|t| t.kind),
+            saw_blank_line,
+            comment_start,
+        }
+    }
+
+    /// Peek the kind of the next non-trivia token and whether the intervening
+    /// trivia contains a paragraph break (a blank line, i.e. ≥2 newlines).
+    /// Does not consume.
+    fn peek_meaningful(&self) -> (Option<SyntaxKind>, bool) {
+        let s = self.scan_trivia(self.pos, CommentMode::Skip);
+        (s.next_kind, s.saw_blank_line)
     }
 
     /// Text of the next non-trivia token at/after `self.pos`, if any. Does not
@@ -287,27 +346,7 @@ impl<'t> Parser<'t> {
 
     /// True if a paragraph break (blank line) begins at the current position.
     fn at_paragraph_break(&self) -> bool {
-        let mut i = self.pos;
-        let mut newlines = 0;
-        while let Some(t) = self.tokens.get(i) {
-            match t.kind {
-                SyntaxKind::NEWLINE => {
-                    newlines += 1;
-                    if newlines >= 2 {
-                        return true;
-                    }
-                }
-                // A `.dtx` margin or guard floats like whitespace (see
-                // `peek_meaningful`).
-                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {}
-                // A comment-only line is content, not a blank line: it breaks
-                // the run of newlines that would otherwise read as a `\par`.
-                SyntaxKind::COMMENT => newlines = 0,
-                _ => return false,
-            }
-            i += 1;
-        }
-        false
+        self.scan_trivia(self.pos, CommentMode::Skip).saw_blank_line
     }
 
     /// True if the comment at `pos` starts its own line: scanning back over
@@ -351,44 +390,17 @@ impl<'t> Parser<'t> {
     /// the maximal blank-line-free suffix binds). See AGENTS.md #9;
     /// `comment_after_blank_line_still_binds` (`tests/parser.rs`) pins the divergence.
     fn binding_run(&self, from: usize) -> Option<(usize, usize, SyntaxKind)> {
-        let mut i = from;
-        let mut newlines = 0;
-        let mut comment_start: Option<usize> = None;
-        while let Some(t) = self.tokens.get(i) {
-            match t.kind {
-                SyntaxKind::NEWLINE => {
-                    newlines += 1;
-                    // A blank line breaks the bind: only a comment *after* it can
-                    // still bind, so drop any comment seen before it.
-                    if newlines >= 2 {
-                        comment_start = None;
-                    }
-                }
-                // A `.dtx` margin or guard floats like whitespace and is *not* a
-                // doc-comment, so it never starts a binding run (decision #9's
-                // leading-comment bind keys on real `COMMENT` tokens, which these
-                // are not).
-                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {}
-                SyntaxKind::COMMENT => {
-                    newlines = 0;
-                    if comment_start.is_none() && self.comment_starts_line(i) {
-                        comment_start = Some(i);
-                    }
-                }
-                SyntaxKind::CONTROL_WORD => {
-                    let start = comment_start?;
-                    let kind = match self.tokens[i].text.as_str() {
-                        BEGIN_CMD => SyntaxKind::ENVIRONMENT,
-                        END_CMD => return None,
-                        _ => SyntaxKind::COMMAND,
-                    };
-                    return Some((start, i, kind));
-                }
-                _ => return None,
-            }
-            i += 1;
+        let s = self.scan_trivia(from, CommentMode::Skip);
+        let start = s.comment_start?;
+        if s.next_kind != Some(SyntaxKind::CONTROL_WORD) {
+            return None;
         }
-        None
+        let kind = match self.tokens[s.next].text.as_str() {
+            BEGIN_CMD => SyntaxKind::ENVIRONMENT,
+            END_CMD => return None,
+            _ => SyntaxKind::COMMAND,
+        };
+        Some((start, s.next, kind))
     }
 
     // --- grammar -----------------------------------------------------------
@@ -497,29 +509,16 @@ impl<'t> Parser<'t> {
     /// paragraphs: it contains a blank line, or only trivia remains before the
     /// block terminator (the `\end`, or EOF).
     fn trivia_run_is_separator(&self, block: Block) -> bool {
-        let mut i = self.pos;
-        let mut newlines = 0;
-        let mut had_break = false;
-        while let Some(t) = self.tokens.get(i) {
-            match t.kind {
-                SyntaxKind::NEWLINE => {
-                    newlines += 1;
-                    had_break |= newlines >= 2;
+        let s = self.scan_trivia(self.pos, CommentMode::Skip);
+        s.saw_blank_line
+            || match s.next_kind {
+                // Only trivia remains before the block terminator (`\end`, or EOF).
+                None => true,
+                Some(SyntaxKind::CONTROL_WORD) => {
+                    block == Block::Environment && self.tokens[s.next].text == END_CMD
                 }
-                // A `.dtx` margin or guard floats like whitespace (see
-                // `peek_meaningful`).
-                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {}
-                // A comment line is content: it resets the blank-line run but
-                // keeps any blank line already seen before it.
-                SyntaxKind::COMMENT => newlines = 0,
-                SyntaxKind::CONTROL_WORD if block == Block::Environment && t.text == END_CMD => {
-                    return true;
-                }
-                _ => return had_break,
+                Some(_) => false,
             }
-            i += 1;
-        }
-        true
     }
 
     /// One element in text mode. Always consumes at least one token.
@@ -906,27 +905,15 @@ impl<'t> Parser<'t> {
     /// script never binds across a comment) and not a blank line (a paragraph
     /// break ends the math).
     fn at_script(&self) -> bool {
-        let mut i = self.pos;
-        let mut newlines = 0;
-        while let Some(t) = self.tokens.get(i) {
-            match t.kind {
-                SyntaxKind::NEWLINE => {
-                    newlines += 1;
-                    if newlines >= 2 {
-                        return false;
-                    }
-                    i += 1;
-                }
-                // A `.dtx` margin or guard is skipped like whitespace, so a script
-                // binds across a doc-layer line continuation (`% x\n% ^2`) but not
-                // across a blank margin line (the `newlines >= 2` guard still ends
-                // the math).
-                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => i += 1,
-                SyntaxKind::CARET | SyntaxKind::UNDERSCORE => return true,
-                _ => return false,
-            }
-        }
-        false
+        // `CommentMode::Stop`: a comment ends the line, so it stops the scan (and
+        // is reported as the next meaningful token, which is not a script), rather
+        // than being skipped as it is elsewhere. A blank line ends the math.
+        let s = self.scan_trivia(self.pos, CommentMode::Stop);
+        !s.saw_blank_line
+            && matches!(
+                s.next_kind,
+                Some(SyntaxKind::CARET | SyntaxKind::UNDERSCORE)
+            )
     }
 
     /// A single base atom: a `{…}` group (parsed in math mode), a command with

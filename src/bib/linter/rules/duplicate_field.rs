@@ -93,6 +93,7 @@ impl BibRule for DuplicateField {
                 end: usize::from(range.end()),
                 message,
                 fix,
+                related: Vec::new(),
             });
         }
     }

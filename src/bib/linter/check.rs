@@ -37,6 +37,7 @@ pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
             end: err.end,
             message: err.message.clone(),
             fix: None,
+            related: Vec::new(),
         })
         .collect();
     let root = parsed.syntax();

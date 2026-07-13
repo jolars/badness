@@ -170,6 +170,7 @@ fn report(
              `@` is not a letter here, so this reads as `{head}` followed by the text `{tail}`"
         ),
         fix: None,
+        related: Vec::new(),
     });
 }
 

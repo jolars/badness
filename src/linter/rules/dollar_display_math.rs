@@ -75,6 +75,7 @@ impl Rule for DollarDisplayMath {
             end: usize::from(range.end()),
             message: "`$$…$$` is plain-TeX display math; use `\\[…\\]`".to_owned(),
             fix: delimiter_swap_fix(math, range),
+            related: Vec::new(),
         });
     }
 }

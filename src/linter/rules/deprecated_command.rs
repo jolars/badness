@@ -104,6 +104,7 @@ impl Rule for DeprecatedCommand {
             end: usize::from(range.end()),
             message: format!("`\\{name}` is deprecated; use `\\{replacement}`"),
             fix,
+            related: Vec::new(),
         });
     }
 }

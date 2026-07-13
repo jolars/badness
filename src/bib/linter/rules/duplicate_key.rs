@@ -36,6 +36,7 @@ impl BibRule for DuplicateKey {
                 end: usize::from(entry.key_range.end()),
                 message: format!("cite key `{}` is defined more than once", entry.key),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

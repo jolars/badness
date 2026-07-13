@@ -78,6 +78,29 @@ impl Fix {
     }
 }
 
+/// A secondary location attached to a [`Diagnostic`]: the "see also" span that
+/// rust-analyzer models with `DiagnosticRelatedInformation` (e.g. the *first*
+/// definition behind a `duplicate-label`). Rendered as an annotate-snippets
+/// context annotation in the CLI and as `DiagnosticRelatedInformation` in LSP.
+///
+/// Unlike the primary [`Diagnostic::path`] (left empty and stamped later), a
+/// related location's `path` is the *real* file it lives in, filled at rule
+/// time — it may differ from the diagnostic's own file (the cross-file case). A
+/// `0..0` range is a deliberate file-level link (the target's exact byte range
+/// is unknown), pointing at the file's start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelatedInfo {
+    /// File the secondary location lives in.
+    pub path: PathBuf,
+    /// Start byte offset into that file's text.
+    pub start: usize,
+    /// End byte offset into that file's text (exclusive). Equal to `start` for a
+    /// file-level link.
+    pub end: usize,
+    /// Human-readable note (e.g. "first definition of `x`").
+    pub message: String,
+}
+
 /// A single lint finding, keyed to a byte range in one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -94,6 +117,9 @@ pub struct Diagnostic {
     /// An autofix for this finding, if one is available. `lint --fix` applies
     /// these; a finding can exist without one.
     pub fix: Option<Fix>,
+    /// Secondary "see also" locations for this finding (possibly in other
+    /// files). Usually empty; `duplicate-label` points at the first definition.
+    pub related: Vec<RelatedInfo>,
 }
 
 impl Diagnostic {
@@ -108,6 +134,7 @@ impl Diagnostic {
             end: error.end,
             message: error.message.clone(),
             fix: None,
+            related: Vec::new(),
         }
     }
 }

@@ -170,6 +170,7 @@ impl Rule for HardCodedReference {
                 "hard-coded reference `{phrase}`; use `\\ref`/`\\cref` to a `\\label` so the number stays in sync"
             ),
             fix: None,
+            related: Vec::new(),
         });
     }
 }

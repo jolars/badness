@@ -22,10 +22,12 @@ use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionRespo
 /// request range (inclusive at the edges, so a zero-width cursor sitting on `\bf`
 /// matches). The edit replaces the fix's byte span verbatim; `Safe` fixes are marked
 /// `is_preferred`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn code_actions_for_range(
     findings: &[crate::linter::Diagnostic],
     text: &str,
     uri: &Uri,
+    self_path: &Path,
     request_range: Range,
     enc: PositionEncoding,
     link_docs: bool,
@@ -56,7 +58,13 @@ pub(crate) fn code_actions_for_range(
                 kind: Some(CodeActionKind::QUICKFIX),
                 // Link the action to the finding it fixes, so the client can dim it
                 // once the diagnostic clears.
-                diagnostics: Some(vec![lint_to_lsp(&idx, text, d.clone(), link_docs)]),
+                diagnostics: Some(vec![lint_to_lsp(
+                    &idx,
+                    text,
+                    d.clone(),
+                    link_docs,
+                    self_path,
+                )]),
                 edit: Some(WorkspaceEdit {
                     changes: Some(changes),
                     ..Default::default()
@@ -105,6 +113,7 @@ mod tests {
             &findings(src),
             src,
             &uri(),
+            std::path::Path::new("x.tex"),
             full_range(src),
             PositionEncoding::Utf16,
             true,
@@ -145,6 +154,7 @@ mod tests {
             &findings(src),
             src,
             &uri(),
+            std::path::Path::new("x.tex"),
             cursor,
             PositionEncoding::Utf16,
             true,
@@ -159,6 +169,7 @@ mod tests {
             &findings(src),
             src,
             &uri(),
+            std::path::Path::new("x.tex"),
             full_range(src),
             PositionEncoding::Utf16,
             true,

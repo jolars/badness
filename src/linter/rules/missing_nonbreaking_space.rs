@@ -218,6 +218,7 @@ impl Rule for MissingNonbreakingSpace {
                 "missing non-breaking space before `\\{name}`; use a tie `~` so the reference stays on the same line"
             ),
             fix,
+            related: Vec::new(),
         });
     }
 }

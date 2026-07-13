@@ -92,6 +92,7 @@ impl Rule for DuplicatePackage {
                 end: usize::from(edge.range.end()),
                 message: format!("package `{name}` is loaded more than once"),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

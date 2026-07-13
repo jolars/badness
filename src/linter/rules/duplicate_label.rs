@@ -13,7 +13,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::linter::diagnostic::{Diagnostic, Severity};
+use rowan::TextRange;
+
+use crate::linter::diagnostic::{Diagnostic, RelatedInfo, Severity};
 
 use super::{Example, Rule, RuleContext};
 
@@ -46,21 +48,32 @@ impl Rule for DuplicateLabel {
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        // Count occurrences of each key. Within a file, flag every definition
-        // past the first — the first is the "canonical" one LaTeX would keep.
-        // On a key's *first* occurrence in this file, the cross-file branch
-        // instead checks whether another file in the namespace defines it (the
-        // intra-file branch already owns the 2nd+ occurrences, so no overlap).
-        let mut seen: HashMap<&str, usize> = HashMap::new();
+        // Count occurrences of each key, remembering the *first* definition's key
+        // range so a later duplicate can point back at it. Within a file, flag
+        // every definition past the first — the first is the "canonical" one
+        // LaTeX would keep. On a key's *first* occurrence in this file, the
+        // cross-file branch instead checks whether another file in the namespace
+        // defines it (the intra-file branch already owns the 2nd+ occurrences, so
+        // no overlap).
+        let mut seen: HashMap<&str, TextRange> = HashMap::new();
         for label in ctx.model.labels() {
-            let count = seen.entry(label.name.as_str()).or_insert(0);
-            *count += 1;
-            let message = if *count > 1 {
-                Some(format!("label `{}` is defined more than once", label.name))
-            } else {
-                ctx.resolution
-                    .and_then(|resolution| cross_file_message(ctx, resolution, &label.name))
+            let (message, related) = match seen.get(label.name.as_str()) {
+                Some(&first) => (
+                    Some(format!("label `{}` is defined more than once", label.name)),
+                    // The secondary points at the first definition, in this file.
+                    vec![RelatedInfo {
+                        path: ctx.path.to_path_buf(),
+                        start: usize::from(first.start()),
+                        end: usize::from(first.end()),
+                        message: format!("first definition of `{}`", label.name),
+                    }],
+                ),
+                None => ctx
+                    .resolution
+                    .and_then(|resolution| cross_file_finding(ctx, resolution, &label.name))
+                    .map_or((None, Vec::new()), |(msg, related)| (Some(msg), related)),
             };
+            seen.entry(label.name.as_str()).or_insert(label.key_range);
             if let Some(message) = message {
                 sink.push(Diagnostic {
                     rule: self.id(),
@@ -70,33 +83,54 @@ impl Rule for DuplicateLabel {
                     end: usize::from(label.range.end()),
                     message,
                     fix: None,
+                    related,
                 });
             }
         }
     }
 }
 
-/// The "also defined in …" message when `name` is defined in another file of
-/// `ctx.path`'s namespace, or `None` when it is unique across files. Other
-/// definers are sorted (from [`ResolvedLabels`]) so the message is deterministic.
-fn cross_file_message(
+/// The cross-file finding when `name` is defined in another file of `ctx.path`'s
+/// namespace: an "also defined in …" message plus one file-level [`RelatedInfo`]
+/// per other definer. `None` when `name` is unique across files. Other definers
+/// are sorted (from [`ResolvedLabels`]) so both message and related list are
+/// deterministic.
+///
+/// The related locations are **file-level** (a `0..0` range pointing at the
+/// file's start): [`ResolvedLabels`] tracks which files define a label, not the
+/// definition's byte range, and it stays that way deliberately (the name-only
+/// `file_labels` firewall keeps cross-file resolution stable under prose edits).
+fn cross_file_finding(
     ctx: &RuleContext<'_>,
     resolution: &crate::project::ResolvedLabels,
     name: &str,
-) -> Option<String> {
-    let others: Vec<String> = resolution
+) -> Option<(String, Vec<RelatedInfo>)> {
+    let others: Vec<&PathBuf> = resolution
         .definers(ctx.path, name)
         .iter()
         .filter(|definer| definer.as_path() != ctx.path)
-        .map(|definer| format!("`{}`", definer.display()))
         .collect();
     if others.is_empty() {
         return None;
     }
-    Some(format!(
+    let message = format!(
         "label `{name}` is also defined in {}",
-        others.join(", ")
-    ))
+        others
+            .iter()
+            .map(|definer| format!("`{}`", definer.display()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let related = others
+        .iter()
+        .map(|definer| RelatedInfo {
+            path: (*definer).clone(),
+            start: 0,
+            end: 0,
+            message: format!("other definition of `{name}`"),
+        })
+        .collect();
+    Some((message, related))
 }
 
 #[cfg(test)]
@@ -130,6 +164,19 @@ mod tests {
         assert_eq!(out[0].rule, "duplicate-label");
         // Points tightly at the second `\label{a}` (bytes 9..18), not beyond.
         assert_eq!((out[0].start, out[0].end), (9, 18));
+    }
+
+    #[test]
+    fn intra_file_related_points_at_the_first_definition() {
+        // The second `\label{a}` is flagged; its related location is the *first*
+        // definition's key (`a`, bytes 7..8), in the same file.
+        let out = findings("\\label{a}\\label{a}\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].related.len(), 1);
+        let ri = &out[0].related[0];
+        assert_eq!(ri.path, std::path::Path::new("x.tex"));
+        assert_eq!((ri.start, ri.end), (7, 8));
+        assert_eq!(ri.message, "first definition of `a`");
     }
 
     #[test]
@@ -224,6 +271,12 @@ mod tests {
             "got: {}",
             out[0].message
         );
+        // The secondary is a file-level link (`0..0`) to the other definer.
+        assert_eq!(out[0].related.len(), 1);
+        let ri = &out[0].related[0];
+        assert_eq!(ri.path, PathBuf::from("other.tex"));
+        assert_eq!((ri.start, ri.end), (0, 0));
+        assert_eq!(ri.message, "other definition of `shared`");
     }
 
     #[test]

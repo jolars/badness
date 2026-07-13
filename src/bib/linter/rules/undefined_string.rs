@@ -39,6 +39,7 @@ impl BibRule for UndefinedString {
                 end: usize::from(use_.range.end()),
                 message: format!("`@string` macro `{}` is used but never defined", use_.name),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

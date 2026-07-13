@@ -82,6 +82,7 @@ impl Rule for UnreferencedLabel {
                     end: usize::from(label.range.end()),
                     message: format!("label `{}` is never referenced", label.name),
                     fix: None,
+                    related: Vec::new(),
                 }),
         );
     }

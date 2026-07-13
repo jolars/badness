@@ -163,6 +163,7 @@ impl Rule for SwallowedSpace {
                 "`\\{name}` swallows the following space; add `{{}}` (`\\{name}{{}}`) or `\\ ` so it prints"
             ),
             fix: Some(fix),
+            related: Vec::new(),
         });
     }
 }

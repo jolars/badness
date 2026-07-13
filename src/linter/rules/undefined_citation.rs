@@ -78,6 +78,7 @@ impl Rule for UndefinedCitation {
                     end: usize::from(cite.range.end()),
                     message: format!("citation of undefined key `{}`", cite.name),
                     fix: None,
+                    related: Vec::new(),
                 }),
         );
     }

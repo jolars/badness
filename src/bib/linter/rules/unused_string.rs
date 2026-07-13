@@ -38,6 +38,7 @@ impl BibRule for UnusedString {
                 end: usize::from(def.range.end()),
                 message: format!("`@string` macro `{}` is defined but never used", def.name),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

@@ -116,6 +116,7 @@ impl Rule for StraightQuotes {
                     "straight double quote; use `` `` `` (opening) or `''` (closing) -- inferred {kind} here"
                 ),
                 fix: Some(fix),
+                related: Vec::new(),
             });
         }
     }

@@ -144,6 +144,7 @@ impl Rule for SpaceBeforeCommand {
                 "spurious space before `\\{name}`; delete it so no stray space is typeset before the command"
             ),
             fix: Some(fix),
+            related: Vec::new(),
         });
     }
 }

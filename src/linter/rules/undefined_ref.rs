@@ -77,6 +77,7 @@ impl Rule for UndefinedRef {
                     end: usize::from(reference.range.end()),
                     message: format!("reference to undefined label `{}`", reference.name),
                     fix: None,
+                    related: Vec::new(),
                 }),
         );
     }

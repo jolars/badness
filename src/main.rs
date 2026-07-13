@@ -356,6 +356,7 @@ fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
                     end: err.end,
                     message: err.message.clone(),
                     fix: None,
+                    related: Vec::new(),
                 })
                 .collect();
             let root = parsed.syntax();

@@ -136,6 +136,7 @@ impl Rule for UnknownOption {
                     end: usize::from(opt.range.end()),
                     message: format!("unknown option `{}` for package `{name}`", opt.text),
                     fix: None,
+                    related: Vec::new(),
                 });
             }
         }

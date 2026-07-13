@@ -174,6 +174,7 @@ fn check_word(word: &SyntaxToken, sink: &mut Vec<Diagnostic>) {
                     "`{abbrev}` is an abbreviation, not a sentence end; use an interword space `\\ ` (`{abbrev}\\ `) so TeX does not widen the gap"
                 ),
                 fix: Some(fix),
+                related: Vec::new(),
             });
         return;
     }
@@ -210,6 +211,7 @@ fn check_word(word: &SyntaxToken, sink: &mut Vec<Diagnostic>) {
                     "capital before sentence-ending punctuation suppresses intersentence spacing; use `\\@` (`Word\\@.`) to restore it"
                         .to_owned(),
                 fix: Some(fix),
+                related: Vec::new(),
             });
     }
 }

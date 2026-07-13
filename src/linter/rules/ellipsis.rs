@@ -145,6 +145,7 @@ impl Rule for Ellipsis {
                 end,
                 message,
                 fix: Some(fix),
+                related: Vec::new(),
             });
         }
     }

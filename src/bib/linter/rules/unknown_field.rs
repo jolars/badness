@@ -78,6 +78,7 @@ impl BibRule for UnknownField {
                 end: usize::from(range.end()),
                 message: format!("unknown field `{name}` on `{ty}` entry"),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

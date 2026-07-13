@@ -54,6 +54,7 @@ impl BibRule for EncodingHints {
                      input encoding (inputenc/fontspec), or use a LaTeX escape"
                 ),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

@@ -94,6 +94,7 @@ impl Rule for VerbatimTrailingText {
             end,
             message: format!("text after `\\end{{{name}}}` on the same line is silently discarded"),
             fix: None,
+            related: Vec::new(),
         });
     }
 }

@@ -86,17 +86,17 @@ use lsp_types::request::{
 use lsp_types::{
     ApplyWorkspaceEditParams, CodeActionParams, CodeActionProviderCapability, CodeDescription,
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
-    DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, DocumentLink,
-    DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
-    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
-    DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams,
-    FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticRelatedInformation,
+    DiagnosticServerCapabilities, DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    ExecuteCommandOptions, ExecuteCommandParams, FileChangeType, FileSystemWatcher, FoldingRange,
+    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
@@ -3050,7 +3050,7 @@ fn analyze_tex(
         Some(packages),
     ) {
         if rules.is_active(d.rule) {
-            diags.push(lint_to_lsp(&idx, &text, d, true));
+            diags.push(lint_to_lsp(&idx, &text, d, true, &lint_path));
         }
     }
     Some(diags)
@@ -3084,7 +3084,7 @@ fn analyze_bib(
     let model = snapshot.bib_semantic_model(file);
     for d in crate::bib::linter::lint_document(path, &root, model) {
         if rules.is_active(d.rule) {
-            diags.push(lint_to_lsp(&idx, &text, d, false));
+            diags.push(lint_to_lsp(&idx, &text, d, false, path));
         }
     }
     Some(diags)
@@ -3106,11 +3106,13 @@ fn lint_to_lsp(
     text: &str,
     d: crate::linter::Diagnostic,
     link_docs: bool,
+    self_path: &Path,
 ) -> Diagnostic {
     let code_description = link_docs
         .then(|| format!("{LATEX_RULES_DOC_URL}#{}", d.rule).parse().ok())
         .flatten()
         .map(|href| CodeDescription { href });
+    let related_information = lint_related_to_lsp(idx, text, self_path, &d.related);
     Diagnostic {
         range: byte_range_to_lsp(idx, text, d.start, d.end),
         severity: Some(severity_to_lsp(d.severity)),
@@ -3118,9 +3120,50 @@ fn lint_to_lsp(
         code_description,
         source: Some("badness".to_owned()),
         message: d.message,
+        related_information,
         tags: lint_diagnostic_tags(d.rule),
         ..Default::default()
     }
+}
+
+/// Turn a finding's [`RelatedInfo`](crate::linter::RelatedInfo) secondary
+/// locations into LSP `DiagnosticRelatedInformation`, the clickable "see also"
+/// links (e.g. the first definition behind a `duplicate-label`). Returns `None`
+/// when there are none, so the field stays absent for the common case.
+///
+/// A secondary in the *current* file (`self_path`) resolves its range against
+/// `idx`/`text`; one in another file is **file-level** — a `0..0` byte range
+/// maps to the document start regardless of encoding, so we need neither that
+/// file's text nor its line index. An entry whose path cannot form a `file://`
+/// URI is skipped (mirrors [`location_for`]).
+fn lint_related_to_lsp(
+    idx: &LineIndex,
+    text: &str,
+    self_path: &Path,
+    related: &[crate::linter::RelatedInfo],
+) -> Option<Vec<DiagnosticRelatedInformation>> {
+    if related.is_empty() {
+        return None;
+    }
+    let items: Vec<DiagnosticRelatedInformation> = related
+        .iter()
+        .filter_map(|ri| {
+            let range = if ri.path == self_path {
+                byte_range_to_lsp(idx, text, ri.start, ri.end)
+            } else {
+                // File-level link: `0..0` at the document start.
+                Range::default()
+            };
+            Some(DiagnosticRelatedInformation {
+                location: Location {
+                    uri: path_to_uri(&ri.path)?,
+                    range,
+                },
+                message: ri.message.clone(),
+            })
+        })
+        .collect();
+    (!items.is_empty()).then_some(items)
 }
 
 /// Map a lint rule id onto the LSP diagnostic tags editors render specially:
@@ -3242,7 +3285,7 @@ fn fallback_diagnostics(
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, text, d, true));
+                    diags.push(lint_to_lsp(&idx, text, d, true, path));
                 }
             }
         }
@@ -3261,7 +3304,7 @@ fn fallback_diagnostics(
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, text, d, false));
+                    diags.push(lint_to_lsp(&idx, text, d, false, path));
                 }
             }
         }
@@ -3294,7 +3337,8 @@ fn run_code_action(
     // echoed diagnostic on a bib quick-fix carries no doc link (mirrors
     // `analyze_bib`/`lint_to_lsp`).
     let link_docs = !matches!(kind, FileKind::Bib);
-    let actions = code_action::code_actions_for_range(&findings, text, uri, range, enc, link_docs);
+    let actions =
+        code_action::code_actions_for_range(&findings, text, uri, path, range, enc, link_docs);
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
 }
@@ -6564,12 +6608,13 @@ mod tests {
             end: 3,
             message: "use bfseries".to_owned(),
             fix: None,
+            related: Vec::new(),
         };
         let idx = LineIndex::with_encoding("\\bf x", PositionEncoding::Utf16);
 
         // LaTeX arm (link_docs = true): the code deep-links the rule's reference
         // anchor, and the tag still rides along.
-        let latex = lint_to_lsp(&idx, "\\bf x", d(), true);
+        let latex = lint_to_lsp(&idx, "\\bf x", d(), true, Path::new("x.tex"));
         assert_eq!(
             latex.code_description.map(|c| c.href.to_string()),
             Some("https://badness.dev/reference/linter-rules.html#deprecated-command".to_owned())
@@ -6578,12 +6623,57 @@ mod tests {
 
         // Bib arm (link_docs = false): the rule id is still the `code`, but with
         // no doc link (bib rules aren't catalogued yet).
-        let bib = lint_to_lsp(&idx, "\\bf x", d(), false);
+        let bib = lint_to_lsp(&idx, "\\bf x", d(), false, Path::new("x.tex"));
         assert!(bib.code_description.is_none());
         assert_eq!(
             bib.code,
             Some(NumberOrString::String("deprecated-command".to_owned()))
         );
+    }
+
+    #[test]
+    fn lint_to_lsp_builds_related_information() {
+        // A same-file secondary resolves its range against the current index; a
+        // cross-file one is a file-level `0..0` link to the other document.
+        let text = "\\label{a}\\label{a}\n";
+        let idx = LineIndex::with_encoding(text, PositionEncoding::Utf16);
+        let d = crate::linter::Diagnostic {
+            rule: "duplicate-label",
+            severity: crate::linter::Severity::Warning,
+            path: PathBuf::from("/p/main.tex"),
+            start: 9,
+            end: 18,
+            message: "label `a` is defined more than once".to_owned(),
+            fix: None,
+            related: vec![
+                crate::linter::RelatedInfo {
+                    path: PathBuf::from("/p/main.tex"),
+                    start: 7,
+                    end: 8,
+                    message: "first definition of `a`".to_owned(),
+                },
+                crate::linter::RelatedInfo {
+                    path: PathBuf::from("/p/other.tex"),
+                    start: 0,
+                    end: 0,
+                    message: "other definition of `a`".to_owned(),
+                },
+            ],
+        };
+        let lsp = lint_to_lsp(&idx, text, d, true, Path::new("/p/main.tex"));
+        let related = lsp.related_information.expect("related present");
+        assert_eq!(related.len(), 2);
+
+        // Same-file: real range (line 0, cols 7..8), self URI.
+        assert_eq!(related[0].message, "first definition of `a`");
+        assert_eq!(related[0].location.uri, uri("file:///p/main.tex"));
+        assert_eq!(related[0].location.range.start, Position::new(0, 7));
+        assert_eq!(related[0].location.range.end, Position::new(0, 8));
+
+        // Cross-file: file-level `0..0` at the other document's start.
+        assert_eq!(related[1].message, "other definition of `a`");
+        assert_eq!(related[1].location.uri, uri("file:///p/other.tex"));
+        assert_eq!(related[1].location.range, Range::default());
     }
 
     #[test]

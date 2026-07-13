@@ -191,6 +191,7 @@ impl Rule for PrimitiveCommand {
                 primitive.suggest
             ),
             fix,
+            related: Vec::new(),
         });
     }
 }

@@ -102,6 +102,7 @@ impl BibRule for TitleCapitalization {
                          to keep case under title-lowercasing styles"
                     ),
                     fix: None,
+                    related: Vec::new(),
                 });
             }
         }

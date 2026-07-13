@@ -133,6 +133,7 @@ impl Rule for DashLength {
                     "--",
                     "Replace with an en dash `--`",
                 )),
+                related: Vec::new(),
             });
         } else if is_letter(before) && is_letter(after) && len == 2 {
             // En dash between capitalized names is a real convention -- an en dash
@@ -157,6 +158,7 @@ impl Rule for DashLength {
                     "en dash `--` between words; use a hyphen `-` for a compound or an em dash `---` for a break"
                         .to_owned(),
                 fix: None,
+                related: Vec::new(),
             });
         }
     }

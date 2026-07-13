@@ -119,6 +119,7 @@ fn orientation_diag(
         end: usize::from(range.end()),
         message,
         fix: None,
+        related: Vec::new(),
     }
 }
 

@@ -117,6 +117,7 @@ impl Rule for TimesVariable {
                 content,
                 format!("Replace `x` with `{content}`"),
             )),
+            related: Vec::new(),
         });
     }
 }

@@ -85,6 +85,47 @@ fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
     out
 }
 
+/// Like [`lint_project`], but keeps the whole [`Diagnostic`] (so callers can
+/// inspect `related` secondary locations), each paired with its owning file.
+fn lint_project_full(files: &[(&str, &str)]) -> Vec<(String, badness::linter::Diagnostic)> {
+    let parsed: Vec<(PathBuf, SyntaxNode, SemanticModel)> = files
+        .iter()
+        .map(|(path, src)| {
+            let kind = file_kind_or_tex(Path::new(path));
+            let root = SyntaxNode::new_root(parse_with_flavor(src, kind.lex_config()).green);
+            let model = SemanticModel::build(&root);
+            (PathBuf::from(path), root, model)
+        })
+        .collect();
+    let facts: Vec<FileFacts> = parsed
+        .iter()
+        .map(|(path, root, _)| FileFacts {
+            path: path.clone(),
+            include_edges: collect_include_edge_keys(root, path.parent()),
+        })
+        .collect();
+    let label_inputs: Vec<_> = parsed
+        .iter()
+        .map(|(path, root, model)| {
+            (
+                path.clone(),
+                document_label_names(model),
+                document_ref_names(model),
+                is_document_root(root),
+            )
+        })
+        .collect();
+    let resolved = ResolvedLabels::build(&label_inputs, &IncludeGraph::build(&facts, None));
+
+    let mut out = Vec::new();
+    for (path, root, model) in &parsed {
+        for d in lint_document(path, root, model, Some(&resolved), None, None) {
+            out.push((path.display().to_string(), d));
+        }
+    }
+    out
+}
+
 fn rules_only(findings: &[(String, &'static str, String)]) -> Vec<&'static str> {
     findings.iter().map(|(_, rule, _)| *rule).collect()
 }
@@ -491,6 +532,26 @@ fn cross_file_duplicate_label_is_reported_in_both_files() {
             .iter()
             .any(|(p, _, m)| p == "chap.tex" && m.contains("`main.tex`"))
     );
+
+    // Each finding also carries a file-level `related` secondary pointing at the
+    // other definer (clickable in an editor), not just the stringified path.
+    let full = lint_project_full(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\input{chap}\n\\label{dup}\\ref{dup}\n",
+        ),
+        ("chap.tex", "\\label{dup}\n"),
+    ]);
+    let related_target = |file: &str| -> Vec<String> {
+        full.iter()
+            .find(|(p, _)| p == file)
+            .into_iter()
+            .flat_map(|(_, d)| d.related.iter())
+            .map(|ri| ri.path.display().to_string())
+            .collect()
+    };
+    assert_eq!(related_target("main.tex"), vec!["chap.tex".to_owned()]);
+    assert_eq!(related_target("chap.tex"), vec!["main.tex".to_owned()]);
 }
 
 #[test]

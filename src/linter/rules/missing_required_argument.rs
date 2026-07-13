@@ -164,6 +164,7 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
             end: usize::from(range.end()),
             message,
             fix: None,
+            related: Vec::new(),
         });
     }
 }

@@ -137,6 +137,7 @@ impl StreamVisitor for SectioningLevelJumpVisitor {
                      (expected `\\{expected}`)"
                 ),
                 fix: None,
+                related: Vec::new(),
             });
         }
         self.prev_level = Some(level);

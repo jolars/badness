@@ -74,6 +74,7 @@ impl BibRule for EmptyField {
             end: usize::from(range.end()),
             message: format!("field `{name}` is empty"),
             fix: super::edits::field_deletion_fix(field, format!("remove empty field `{name}`")),
+            related: Vec::new(),
         });
     }
 }

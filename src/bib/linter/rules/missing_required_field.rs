@@ -86,6 +86,7 @@ impl BibRule for MissingRequiredField {
                     end: usize::from(range.end()),
                     message,
                     fix: None,
+                    related: Vec::new(),
                 });
             }
         }

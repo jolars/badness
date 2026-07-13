@@ -142,6 +142,7 @@ impl Rule for MathOperatorName {
                 content,
                 format!("Replace `{name}` with `\\{name}`"),
             )),
+            related: Vec::new(),
         });
     }
 }

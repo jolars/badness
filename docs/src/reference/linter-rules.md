@@ -69,6 +69,8 @@ The same key defined twice in one file:
 warning: duplicate-label
  --> example.tex:2:14
   |
+1 | \section{One}\label{sec:x}
+  |                     ----- first definition of `sec:x`
 2 | \section{Two}\label{sec:x}
   |              ^^^^^^^^^^^^^ label `sec:x` is defined more than once
 ```

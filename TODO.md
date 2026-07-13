@@ -370,11 +370,20 @@ capabilities RA has that badness does not. Severity in brackets.
   `Unnecessary` (editor dim), and `deprecated-command`/`obsolete-environment`/
   `primitive-command` → `Deprecated` (strike-through). Extend the match as more
   rules earn a tag.
-- [ ] **[med] No `related_information` / secondary spans.** `Diagnostic` has no
-  `related` field, so `duplicate-label` (and its cross-file variant) stringifies
-  the *known* other-definition location into the message instead of surfacing it
-  as a clickable `DiagnosticRelatedInformation` — the exact case RA models with
-  `related`.
+- [x] **[med] `related_information` / secondary spans.** `Diagnostic` now carries
+  a `related: Vec<RelatedInfo>` (`{path, start, end, message}`), populated by
+  `duplicate-label`: the intra-file branch points at the first definition's key
+  range (precise, same file), the cross-file branch at each other definer. It
+  renders as `DiagnosticRelatedInformation` in LSP (`lint_to_lsp` →
+  `lint_related_to_lsp`) and as annotate-snippets context annotations in the CLI
+  (`render_pretty`, cross-file loaded via `source_for`). Messages stay unchanged
+  (additive), so concise output and `related`-blind clients are unaffected.
+  **Cross-file secondaries are file-level (`0..0`, the document start), not the
+  exact `\label` byte range:** `ResolvedLabels` / the `file_labels` firewall
+  deliberately store names→paths only so a label move backdates and doesn't
+  rebuild cross-file resolution (tenet #2). Precise cross-file carets would need a
+  separate per-file name→range query resolved lazily at the render/LSP layer —
+  a possible follow-up.
 - [x] **[low] `code_description` (rule doc URL).** `lint_to_lsp` now sets
   `code_description.href` to `https://badness.dev/reference/linter-rules.html#<rule>`
   (the mdBook anchor equals the rule id), so editors deep-link the rule's docs.

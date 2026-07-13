@@ -105,6 +105,7 @@ impl Rule for MissingProvides {
             end,
             message: format!("{noun} file lacks `\\{command}`"),
             fix: None,
+            related: Vec::new(),
         });
     }
 }

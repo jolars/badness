@@ -88,6 +88,7 @@ impl Rule for ObsoleteEnvironment {
             end: usize::from(range.end()),
             message: format!("`{name}` is obsolete; use `{replacement}`"),
             fix: environment_swap_fix(&env, &begin, &name, replacement),
+            related: Vec::new(),
         });
     }
 }

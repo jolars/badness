@@ -255,6 +255,13 @@ fn comment_after_blank_line_still_binds() {
     // `%a` floats (blank line before `\foo`), but `%b` — with no blank line
     // between it and `\foo` — binds. The bind is the maximal blank-line-free
     // suffix.
+    //
+    // This is the deliberate divergence from RA's `n_attached_trivias`: RA would
+    // peek past the blank line and attach `%a` too (it treats a trailing outer doc
+    // comment `///`/`//!` as continuing across the gap). LaTeX's single catcode-14
+    // `%` has no such intent marker, and attaching `%a` would wrongly glue a
+    // license/copyright header into the construct, so we stop at the blank line.
+    // See AGENTS.md #9 and `Parser::binding_run`.
     insta::assert_snapshot!(tree("%a\n\n%b\n\\foo"));
 }
 

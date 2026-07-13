@@ -347,14 +347,6 @@ capabilities RA has that badness does not. Severity in brackets.
 
 ### CST / AST / trivia
 
-- [ ] **[med] Doc-comment bind has no blank-line continuation.** RA's
-  `n_attached_trivias` (`shortcuts.rs:253`) peeks *past* a blank line and keeps
-  attaching if the next token is an outer doc-comment; badness's `binding_run`
-  (`grammar.rs:280`) unconditionally breaks the bind on `newlines >= 2`, dropping a
-  comment block that a blank line separates from the item. Arguably fine for LaTeX
-  (no `///`-vs-`//` distinction), but it is a real behavioral divergence from the
-  cited RA heuristic — make it a conscious, tested decision rather than an
-  accident.
 - [ ] **[low, perf] `LineIndex` re-scans the buffer per call and requires the
   caller to pass `text` back in** (`text/line_index.rs`). Wide-char *correctness*
   is right (the common bug — verified: UTF-16/UTF-8 column math, astral chars,

@@ -344,6 +344,12 @@ impl<'t> Parser<'t> {
     /// documentable construct. Mirrors rust-analyzer's `n_attached_trivias`
     /// (AGENTS.md #9): comments bind forward to the item they annotate, a blank
     /// line breaks the bind, and a same-line trailing comment never binds.
+    ///
+    /// One deliberate divergence: RA peeks *past* a blank line and keeps attaching
+    /// when the next comment is an outer doc comment (`///`/`//!`). LaTeX's single
+    /// `%` carries no such intent marker, so we always stop at the blank line (only
+    /// the maximal blank-line-free suffix binds). See AGENTS.md #9;
+    /// `comment_after_blank_line_still_binds` (`tests/parser.rs`) pins the divergence.
     fn binding_run(&self, from: usize) -> Option<(usize, usize, SyntaxKind)> {
         let mut i = from;
         let mut newlines = 0;

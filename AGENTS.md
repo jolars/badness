@@ -195,7 +195,14 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      "Documentable" is decided purely on node kind—no signature-DB lookup leaks into
      the parser. A same-line trailing comment (`\foo % x`) never binds.
    - **A blank line (`≥2` newlines, the `\par` boundary) breaks the bind:** comments
-     past it stay floating.
+     past it stay floating. This is a **deliberate divergence** from RA's
+     `n_attached_trivias`, which peeks *past* a blank line and keeps attaching when the
+     next comment is an outer doc comment (`///`/`//!`). That peek keys on the
+     `///`-vs-`//` distinction—a marker of documentation intent that LaTeX's single
+     catcode-14 `%` has no equivalent for. Applied to `%` it would wrongly glue a
+     license or copyright header into the following command's doc comment, so we only
+     bind the maximal blank-line-free suffix. Pinned by `comment_after_blank_line_still_binds`
+     (`tests/parser.rs`).
 
    Whitespace stays a bare leaf token (never wrapped); the bound leading-comment run
    is the one named-node exception. This is a CST-shape convention enforced by tests,

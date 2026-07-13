@@ -579,6 +579,17 @@ impl std::fmt::Debug for IncrementalDatabase {
     }
 }
 
+/// Recover a mutex guard even when the lock was poisoned by a panic in another
+/// thread. The `files` and `query_log` mutexes each guard a plain map/vec that a
+/// single access mutates atomically (one `insert`/`get`/`remove`/`push`), so a
+/// panic can leave no half-updated invariant behind — taking the inner guard is
+/// safe. This keeps a read-pool job that panics while holding one of these locks
+/// from cascading into a poisoned mutex that would then kill the writer thread on
+/// its next `.lock()` (see the language server's single-writer worker).
+fn recover_poison<T>(err: std::sync::PoisonError<T>) -> T {
+    err.into_inner()
+}
+
 /// Lexically normalize `path` for use as a deduplication key: absolutize it
 /// (against the current directory, without touching the filesystem) and collapse
 /// `.` / `..` segments. Purely textual — no symlink resolution, no existence
@@ -632,7 +643,7 @@ impl IncrementalDatabase {
         let existing = self
             .files
             .lock()
-            .expect("file cache mutex poisoned")
+            .unwrap_or_else(recover_poison)
             .get(&key)
             .copied();
         match existing {
@@ -652,7 +663,7 @@ impl IncrementalDatabase {
                 let file = SourceFile::new(self, key.clone(), text);
                 self.files
                     .lock()
-                    .expect("file cache mutex poisoned")
+                    .unwrap_or_else(recover_poison)
                     .insert(key, file);
                 file
             }
@@ -665,7 +676,7 @@ impl IncrementalDatabase {
         let mut files: Vec<(PathBuf, SourceFile)> = self
             .files
             .lock()
-            .expect("file cache mutex poisoned")
+            .unwrap_or_else(recover_poison)
             .iter()
             .map(|(path, &file)| (path.clone(), file))
             .collect();
@@ -680,7 +691,7 @@ impl IncrementalDatabase {
     pub fn lookup_file(&self, path: &Path) -> Option<SourceFile> {
         self.files
             .lock()
-            .expect("file cache mutex poisoned")
+            .unwrap_or_else(recover_poison)
             .get(&normalize_path(path))
             .copied()
     }
@@ -699,7 +710,7 @@ impl IncrementalDatabase {
     pub fn remove_file(&mut self, path: &Path) -> Option<SourceFile> {
         self.files
             .lock()
-            .expect("file cache mutex poisoned")
+            .unwrap_or_else(recover_poison)
             .remove(&normalize_path(path))
     }
 
@@ -782,17 +793,11 @@ impl IncrementalDatabase {
     }
 
     pub fn clear_query_log(&self) {
-        self.query_log
-            .lock()
-            .expect("query log mutex poisoned")
-            .clear();
+        self.query_log.lock().unwrap_or_else(recover_poison).clear();
     }
 
     pub fn query_log(&self) -> Vec<QueryLogEntry> {
-        self.query_log
-            .lock()
-            .expect("query log mutex poisoned")
-            .clone()
+        self.query_log.lock().unwrap_or_else(recover_poison).clone()
     }
 
     /// Mint a read-only [`Analysis`] snapshot: a short-lived db clone wrapped so
@@ -934,7 +939,38 @@ impl IncrementalDb for IncrementalDatabase {
     fn record_query(&self, entry: QueryLogEntry) {
         self.query_log
             .lock()
-            .expect("query log mutex poisoned")
+            .unwrap_or_else(recover_poison)
             .push(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic while holding the `files` lock poisons it, but the database must
+    /// keep working afterward: `recover_poison` takes the inner guard instead of
+    /// re-panicking, so a read-pool job's crash can't cascade into worker death.
+    #[test]
+    fn poisoned_files_lock_recovers() {
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(Path::new("a.tex"), "before".to_owned());
+
+        // Poison the `files` mutex from another thread by panicking while its
+        // guard is held.
+        let files = Arc::clone(&db.files);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = files.lock().expect("first lock is unpoisoned");
+            panic!("boom while holding the files lock");
+        })
+        .join();
+        assert!(poisoned.is_err(), "the helper thread should have panicked");
+        assert!(db.files.is_poisoned(), "the lock should now be poisoned");
+
+        // Every accessor must still work despite the poison, rather than
+        // re-panicking on the `.expect(... poisoned)` the old code used.
+        assert!(db.lookup_file(Path::new("a.tex")).is_some());
+        db.upsert_file(Path::new("b.tex"), "after".to_owned());
+        assert_eq!(db.tracked_files().len(), 2);
     }
 }

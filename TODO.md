@@ -288,11 +288,14 @@ capabilities RA has that badness does not. Severity in brackets.
   (Follow-up still open: recovering from a *poisoned mutex* — see next item — so a
   read-pool panic while holding `files`/`query_log` can't leave the worker unable
   to touch the db.)
-- [ ] **[med] Mutex poisoning cascades a read panic into worker death**
-  (`incremental.rs`, the `files`/`query_log` `.expect("… poisoned")`). A read-pool
-  job that panics while holding one of these locks poisons it; the next writer
-  `.expect()` then panics the worker — feeding the silent-death path above. Same
-  root as the item above.
+- [x] **[med] Mutex poisoning no longer cascades a read panic into worker death**
+  (`incremental.rs`, `recover_poison`). The `files`/`query_log` locks now recover
+  the inner guard on poison (`.lock().unwrap_or_else(recover_poison)`) instead of
+  `.expect("… poisoned")`, so a read-pool job that panics while holding one can't
+  cascade into the writer panicking on its next `.lock()`. Sound because each lock
+  guards a plain map/vec mutated atomically per access, with no cross-call
+  invariant a panic could leave half-updated. Guarded by
+  `poisoned_files_lock_recovers`.
 - [ ] **[med] No global parser step/loop limiter.** RA checks a hard
   `PARSER_STEP_LIMIT` on every `nth()` (`parser.rs:42`) as a catch-all against a
   non-advancing loop, independent of grammar correctness. Badness relies on a

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/jolars/badness/compare/v0.8.0...v0.9.0) (2026-07-14)
+
+### Features
+- **linter:** make fixes carry multiple atomic edits ([`7f52ef5`](https://github.com/jolars/badness/commit/7f52ef54bae11135d0e073978e73b25252f01d86))
+- **linter:** add diagnostic related information ([`ada447b`](https://github.com/jolars/badness/commit/ada447bc4afe3001d1bafe96c5c759e240d5b1f8))
+- **parser:** add a release-mode stuck-loop step limiter ([`f93b1e5`](https://github.com/jolars/badness/commit/f93b1e5043125802a77da462e8305b8748a25036))
+- **lsp:** add diagnostic tags and rule doc links ([`906b0df`](https://github.com/jolars/badness/commit/906b0dfbd43477f8320a06dd1f4807207bfd7e66))
+
+### Bug Fixes
+- **lsp:** recover poisoned db mutexes instead of panicking ([`5844ff2`](https://github.com/jolars/badness/commit/5844ff2c029b207cf8e9fa55124d68ca831c953c))
+- **bib:** resolve field aliases in missing-required check ([`f20283b`](https://github.com/jolars/badness/commit/f20283baabca65eeaadf447ef80bba7ded5de81e))
+
 ## [0.8.0](https://github.com/jolars/badness/compare/v0.7.0...v0.8.0) (2026-07-11)
 
 ### Features

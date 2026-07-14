@@ -77,7 +77,7 @@ mdBook from [`docs/`](docs/)).
 ## Contributing
 
 Architecture, tenets, and conventions are documented in
-[`AGENTS.md`](AGENTS.md), written for both human and AI contributors. In short:
+[`CONTRIBUTING.md`](CONTRIBUTING.md), written for both human and AI contributors. In short:
 keep the syntactic layer free of semantic knowledge, every parser feature needs
 corpus and snapshot tests plus a losslessness assertion, and code stays
 `rustfmt`-clean with `clippy` warnings treated as errors.

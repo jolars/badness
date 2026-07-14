@@ -10,12 +10,8 @@
 \providecommand{\bnCanvasSize}{6.5}  % side of the square canvas (cm)
 \providecommand{\bnFillBg}{0}        % 0 = transparent, 1 = filled with bnPaper
 
-% --- Mark geometry (override defaults from _common.tex) ---
-\providecommand{\bnBarWidth}{3.6}
-\providecommand{\bnJutExtra}{1.05}
-\providecommand{\bnBarHeight}{0.55}
-\providecommand{\bnBarGap}{0.32}
-\providecommand{\bnJutWhich}{3}
+% --- Mark size (shape is canonical in _common.tex) ---
+\providecommand{\bnMarkScale}{1}
 
 % --- Theme ---
 \providecommand{\bnDarkMode}{0}      % font/palette toggle, see _common.tex
@@ -35,8 +31,8 @@
 
   % Centre the mark in the canvas.
   \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}
-  \pgfmathsetmacro{\bnMarkW}{\bnBarWidth+\bnJutExtra}
-  \pgfmathsetmacro{\bnMarkH}{\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap}
+  \pgfmathsetmacro{\bnMarkW}{(\bnBarWidth+\bnJutExtra)*\bnMarkScale}
+  \pgfmathsetmacro{\bnMarkH}{(\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap)*\bnMarkScale}
   \pgfmathsetmacro{\bnShiftX}{(\bnCanvasSize-\bnMarkW)/2}
   \pgfmathsetmacro{\bnShiftY}{(\bnCanvasSize-\bnMarkH)/2}
 

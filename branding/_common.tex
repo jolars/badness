@@ -63,40 +63,50 @@
   \definecolor{bnMuted}  {HTML}{6F665A}
 \fi
 
-% --- Logo geometry (all in cm; tweak freely) --------------------------------
+% --- Logo geometry (all in cm) ----------------------------------------------
+%
+% The mark's SHAPE is canonical and lives here — artifacts must not override
+% the shape knobs, only \bnMarkScale, so the logo is identical everywhere.
 
 \providecommand{\bnBarCount}{4}     % number of horizontal bars
-\providecommand{\bnBarWidth}{4.0}   % length of an in-margin bar
+\providecommand{\bnBarWidth}{3.6}   % length of an in-margin bar
 \providecommand{\bnBarHeight}{0.55} % bar thickness
 \providecommand{\bnBarGap}{0.32}    % vertical gap between bars
 \providecommand{\bnJutWhich}{3}     % 1..bnBarCount — which bar overflows
-\providecommand{\bnJutExtra}{1.15}  % how far it sticks out
+\providecommand{\bnJutExtra}{1.05}  % how far it sticks out
 \providecommand{\bnRound}{0.07}     % corner rounding
 \providecommand{\bnShowMargin}{0}   % 1 = draw the dashed margin guide, 0 = hide
+\providecommand{\bnMarkScale}{1}    % uniform scale factor for the whole mark
 
 % --- The mark itself --------------------------------------------------------
 %
 % Draws into the current tikzpicture, anchored so the bottom-left of the
 % non-jutting bars is at (0,0). The jutting bar extends to the right.
+% Everything (including corner rounding) is multiplied by \bnMarkScale.
 
 \newcommand{\bnDrawMark}{%
   \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}%
-  \pgfmathsetmacro{\bnTotalH}{\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap}%
+  \pgfmathsetmacro{\bnW}{\bnBarWidth*\bnMarkScale}%
+  \pgfmathsetmacro{\bnH}{\bnBarHeight*\bnMarkScale}%
+  \pgfmathsetmacro{\bnG}{\bnBarGap*\bnMarkScale}%
+  \pgfmathsetmacro{\bnJut}{\bnJutExtra*\bnMarkScale}%
+  \pgfmathsetmacro{\bnR}{\bnRound*\bnMarkScale}%
+  \pgfmathsetmacro{\bnTotalH}{\bnBarCount*\bnH + \bnLast*\bnG}%
   \ifnum\bnShowMargin=1
     % The right-margin guide: a dashed vertical line at the in-margin width,
     % running the full height of the bar stack with a touch of overshoot.
     \draw[bnMargin, dashed, line width=0.4pt, dash pattern=on 2pt off 2pt]
-    (\bnBarWidth, -0.12) -- (\bnBarWidth, \bnTotalH+0.12);
+    (\bnW, -0.12*\bnMarkScale) -- (\bnW, \bnTotalH+0.12*\bnMarkScale);
   \fi
   \foreach \i in {0,...,\bnLast}{%
-      \pgfmathsetmacro{\bny}{(\bnLast-\i)*(\bnBarHeight+\bnBarGap)}%
+      \pgfmathsetmacro{\bny}{(\bnLast-\i)*(\bnH+\bnG)}%
       \pgfmathtruncatemacro{\bnNum}{\i+1}%
       \ifnum\bnNum=\bnJutWhich
-        \fill[bnBad, rounded corners=\bnRound cm]
-        (0,\bny) rectangle (\bnBarWidth+\bnJutExtra, \bny+\bnBarHeight);
+        \fill[bnBad, rounded corners=\bnR cm]
+        (0,\bny) rectangle (\bnW+\bnJut, \bny+\bnH);
       \else
-        \fill[bnInk, rounded corners=\bnRound cm]
-        (0,\bny) rectangle (\bnBarWidth, \bny+\bnBarHeight);
+        \fill[bnInk, rounded corners=\bnR cm]
+        (0,\bny) rectangle (\bnW, \bny+\bnH);
       \fi
     }%
 }

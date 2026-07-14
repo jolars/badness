@@ -391,13 +391,18 @@ capabilities RA has that badness does not. Severity in brackets.
   LaTeX arms pass `true`, the bib arms `false` (bib rules aren't catalogued on that
   page yet — the `code` still carries the rule id, just without a link). Wire the
   bib rules in once they get a reference page.
-- [ ] **[low, latent] Single-span fix model can't express multi-location or
-  cross-file fixes.** `Fix { content, start, end, applicability }`
-  (`linter/diagnostic.rs`) is one contiguous replacement; RA's `SourceChange`
-  carries per-file edit sets. Sanctioned by tenet #1 for the current rule set, but
-  a real ceiling if a fix ever needs to touch multiple sites (e.g. rename a label
-  and all its `\ref`s). Overlap safety is handled well at apply time
-  (`linter/fix.rs:27`, sort + drop-on-conflict).
+- [ ] **[low, latent] Fix model can't express cross-file fixes.** `Fix` now
+  carries a set of disjoint edits in the diagnostic's own file
+  (`linter/diagnostic.rs`), applied atomically (`linter/fix.rs`: a fix lands
+  with all its edits or none), so multi-location rewrites are expressible —
+  `dollar-display-math` and `obsolete-environment` swap both delimiters/names
+  in place with the body untouched. What remains of RA's `SourceChange` is the
+  *per-file* dimension: a fix spanning files (e.g. rename a label and its
+  `\ref`s across a multi-file project) has no representation, and the CLI's
+  per-file fixpoint (`main.rs::fix_file`) has no way to apply one. Defer until
+  a rule needs it; when it comes, key edit sets by path (the `RelatedInfo`
+  pattern: real paths stamped at rule time) and teach both apply paths
+  (`lint --fix`, LSP `WorkspaceEdit`) to honor them atomically.
 
 ### Maintainability (not a conformance gap, surfaced by the audit)
 

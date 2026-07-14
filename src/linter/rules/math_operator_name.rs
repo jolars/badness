@@ -204,7 +204,7 @@ mod tests {
         assert_eq!((out[0].start, out[0].end), (1, 4));
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.applicability, Applicability::Unsafe);
-        assert_eq!(fix.content, "\\sin");
+        assert_eq!(fix.edits[0].content, "\\sin");
         // Unsafe: skipped without opt-in, applied with it.
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).applied,
@@ -262,7 +262,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!((out[0].start, out[0].end), (1, 5));
         let fix = out[0].fix.as_ref().expect("a fix");
-        assert_eq!(fix.content, "\\sinh");
+        assert_eq!(fix.edits[0].content, "\\sinh");
     }
 
     #[test]

@@ -364,8 +364,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let fix = out[0].fix.as_ref().expect("should carry a fix");
         // The fix span covers both spaces (6..8) and replaces them with one tie.
-        assert_eq!((fix.start, fix.end), (6, 8));
-        assert_eq!(fix.content, "~");
+        assert_eq!((fix.edits[0].start, fix.edits[0].end), (6, 8));
+        assert_eq!(fix.edits[0].content, "~");
         assert_eq!(fix.applicability, Applicability::Unsafe);
     }
 
@@ -378,8 +378,11 @@ mod tests {
         let out = findings(src);
         let fix = out[0].fix.as_ref().expect("should carry a fix");
         assert_eq!(fix.applicability, Applicability::Unsafe);
-        assert_eq!((fix.start, fix.end), (out[0].start, out[0].end));
-        assert_eq!(fix.content, "~");
+        assert_eq!(
+            (fix.edits[0].start, fix.edits[0].end),
+            (out[0].start, out[0].end)
+        );
+        assert_eq!(fix.edits[0].content, "~");
         // Applied with the unsafe opt-in, the space becomes a tie.
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), true).output,

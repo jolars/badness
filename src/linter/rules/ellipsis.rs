@@ -241,7 +241,7 @@ mod tests {
         assert_eq!((out[0].start, out[0].end), (10, 13));
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.applicability, Applicability::Safe);
-        assert_eq!(fix.content, "\\dots");
+        assert_eq!(fix.edits[0].content, "\\dots");
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).output,
             "one, two, \\dots\n"
@@ -256,7 +256,7 @@ mod tests {
         // Dots at bytes 3..6 inside the `foo...bar` word.
         assert_eq!((out[0].start, out[0].end), (3, 6));
         let fix = out[0].fix.as_ref().expect("a fix");
-        assert_eq!(fix.content, "\\dots ");
+        assert_eq!(fix.edits[0].content, "\\dots ");
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).output,
             "foo\\dots bar\n"
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.applicability, Applicability::Unsafe);
-        assert_eq!(fix.content, "\\cdots");
+        assert_eq!(fix.edits[0].content, "\\cdots");
         // Unsafe fix is skipped without the opt-in, applied with it.
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).applied,
@@ -287,7 +287,7 @@ mod tests {
         // `a,...,b` lexes as one WORD; the in-token comma neighbors pick `\ldots`.
         let out = findings("$a,...,b$\n");
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].fix.as_ref().unwrap().content, "\\ldots");
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "\\ldots");
     }
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
         // `n` forces a space so the control word does not glue.
         let out = findings("$1...n$\n");
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].fix.as_ref().unwrap().content, "\\ldots ");
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "\\ldots ");
     }
 
     #[test]

@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `obsolete-environment`
 
-Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). The autofix swaps the `\begin`/`\end` names, copying the body verbatim, so it is correct by construction.
+Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). The autofix renames the `\begin`/`\end` pair in place, leaving the body untouched, so it is correct by construction.
 
 The superseded `eqnarray` environment:
 

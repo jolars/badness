@@ -27,17 +27,39 @@ pub enum Applicability {
     Unsafe,
 }
 
-/// A code edit that, if applied, fixes the diagnostic in question. A fix is a
-/// single contiguous replacement: substitute `content` for the source bytes in
-/// `start..end`.
+/// One contiguous replacement inside a [`Fix`]: substitute `content` for the
+/// source bytes in `start..end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Fix {
+pub struct Edit {
     /// Replacement text to substitute in.
     pub content: String,
     /// Byte offset of the start of the replacement.
     pub start: usize,
     /// Byte offset of the end of the replacement (exclusive).
     pub end: usize,
+}
+
+impl Edit {
+    pub fn new(start: usize, end: usize, content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            start,
+            end,
+        }
+    }
+}
+
+/// A code edit that, if applied, fixes the diagnostic in question. A fix is a
+/// set of disjoint replacements in the diagnostic's own file, applied
+/// **atomically**: `lint --fix` and the LSP code action apply all of a fix's
+/// edits or none, so a rename that must touch two sites (e.g. a `\begin`/`\end`
+/// pair) can never half-apply. Most fixes carry a single edit. Cross-file fixes
+/// are not expressible (see TODO.md); edits always target the diagnostic's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fix {
+    /// The replacements, each in the diagnostic's own file. Must be mutually
+    /// disjoint (the apply engine drops a fix whose edits overlap each other).
+    pub edits: Vec<Edit>,
     /// Whether applying the fix preserves meaning.
     pub applicability: Applicability,
     /// Human-readable title (e.g. for an LSP code action).
@@ -45,33 +67,41 @@ pub struct Fix {
 }
 
 impl Fix {
-    /// A meaning-preserving fix.
+    /// A meaning-preserving fix with a single contiguous replacement.
     pub fn safe(
         start: usize,
         end: usize,
         content: impl Into<String>,
         description: impl Into<String>,
     ) -> Self {
-        Self {
-            content: content.into(),
-            start,
-            end,
-            applicability: Applicability::Safe,
-            description: description.into(),
-        }
+        Self::safe_edits(vec![Edit::new(start, end, content)], description)
     }
 
-    /// A fix that may change meaning; applied only on explicit opt-in.
+    /// A single-replacement fix that may change meaning; applied only on
+    /// explicit opt-in.
     pub fn unsafe_(
         start: usize,
         end: usize,
         content: impl Into<String>,
         description: impl Into<String>,
     ) -> Self {
+        Self::unsafe_edits(vec![Edit::new(start, end, content)], description)
+    }
+
+    /// A meaning-preserving fix touching one or more disjoint spans.
+    pub fn safe_edits(edits: Vec<Edit>, description: impl Into<String>) -> Self {
         Self {
-            content: content.into(),
-            start,
-            end,
+            edits,
+            applicability: Applicability::Safe,
+            description: description.into(),
+        }
+    }
+
+    /// A multi-span fix that may change meaning; applied only on explicit
+    /// opt-in.
+    pub fn unsafe_edits(edits: Vec<Edit>, description: impl Into<String>) -> Self {
+        Self {
+            edits,
             applicability: Applicability::Unsafe,
             description: description.into(),
         }

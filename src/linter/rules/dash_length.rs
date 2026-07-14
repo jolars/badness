@@ -246,7 +246,7 @@ mod tests {
         assert_eq!((out[0].start, out[0].end), (11, 12));
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.applicability, Applicability::Unsafe);
-        assert_eq!(fix.content, "--");
+        assert_eq!(fix.edits[0].content, "--");
         // Unsafe: skipped without the opt-in, applied with it.
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).applied,
@@ -263,7 +263,7 @@ mod tests {
         let out = findings("pages 5---10\n");
         assert_eq!(out.len(), 1);
         let fix = out[0].fix.as_ref().unwrap();
-        assert_eq!(fix.content, "--");
+        assert_eq!(fix.edits[0].content, "--");
         assert!(out[0].message.contains("em dash between numbers"));
     }
 

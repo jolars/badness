@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(out.len(), 1, "expected exactly one finding");
         let fix = out[0].fix.as_ref().expect("a fix");
         let mut s = src.to_string();
-        s.replace_range(fix.start..fix.end, &fix.content);
+        s.replace_range(fix.edits[0].start..fix.edits[0].end, &fix.edits[0].content);
         s
     }
 

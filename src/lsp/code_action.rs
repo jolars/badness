@@ -48,11 +48,15 @@ pub(crate) fn code_actions_for_range(
             if !byte_ranges_overlap(d.start, d.end, req_start, req_end) {
                 return None;
             }
-            let edit = TextEdit {
-                range: byte_range_to_lsp(&idx, text, fix.start, fix.end),
-                new_text: fix.content.clone(),
-            };
-            let changes = HashMap::from([(uri.clone(), vec![edit])]);
+            let edits: Vec<TextEdit> = fix
+                .edits
+                .iter()
+                .map(|e| TextEdit {
+                    range: byte_range_to_lsp(&idx, text, e.start, e.end),
+                    new_text: e.content.clone(),
+                })
+                .collect();
+            let changes = HashMap::from([(uri.clone(), edits)]);
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.description.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),

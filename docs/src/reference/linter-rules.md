@@ -119,7 +119,7 @@ warning: missing-nonbreaking-space
 
 ## `obsolete-environment`
 
-Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). The autofix swaps the `\begin`/`\end` names, copying the body verbatim, so it is correct by construction.
+Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). The autofix renames the `\begin`/`\end` pair in place, leaving the body untouched, so it is correct by construction.
 
 The superseded `eqnarray` environment:
 
@@ -185,7 +185,7 @@ $x_2$
 
 ## `dollar-display-math`
 
-Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses `amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers users to `\[...\]`. The autofix swaps the delimiters and copies the body verbatim, so it parses and stays lossless; it is withheld when the display math is unclosed.
+Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses `amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers users to `\[...\]`. The autofix swaps the delimiters in place and leaves the body untouched, so it parses and stays lossless; it is withheld when the display math is unclosed.
 
 Plain-TeX display math:
 

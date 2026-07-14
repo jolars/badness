@@ -6,10 +6,10 @@
 //!
 //! Most entries are **report-only**: their LaTeX replacement *restructures
 //! arguments* (`a \over b` becomes `\frac{a}{b}`, `\centerline{x}` becomes a
-//! `\centering` declaration or a `center` environment), so no single contiguous
-//! textual edit can rewrite them correctly by construction — a fix would have to
-//! move the surrounding operands, which is layout, not our job (tenet 1). We
-//! still report the finding.
+//! `\centering` declaration or a `center` environment), so no textual edit set
+//! can rewrite them correctly by construction — a fix would have to decide
+//! where the surrounding operands begin and end and move them, which is
+//! layout, not our job (tenet 1). We still report the finding.
 //!
 //! A few entries carry a **`Safe` fix**: a 1:1 control-word swap for a primitive
 //! whose LaTeX form is a single, meaning-identical token (`\sb`/`\sp`, the plain
@@ -257,8 +257,8 @@ mod tests {
         assert_eq!(fix.applicability, Applicability::Safe);
         // The fix spans just the `\sb` control word (bytes 2..5), swapping it for
         // the LaTeX subscript token while leaving the operand untouched.
-        assert_eq!((fix.start, fix.end), (2, 5));
-        assert_eq!(fix.content, "_");
+        assert_eq!((fix.edits[0].start, fix.edits[0].end), (2, 5));
+        assert_eq!(fix.edits[0].content, "_");
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).output,
             "$x_2$\n"
@@ -269,6 +269,6 @@ mod tests {
     fn superscript_alias_swaps_to_caret() {
         let out = findings("$x\\sp2$\n");
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].fix.as_ref().unwrap().content, "^");
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "^");
     }
 }

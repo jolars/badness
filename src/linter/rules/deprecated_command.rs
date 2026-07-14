@@ -176,8 +176,8 @@ mod tests {
         assert_eq!(fix.applicability, Applicability::Safe);
         // The fix spans just the `\bf` control word (bytes 1..4), swapping it for
         // the modern declaration while leaving the rest of the group untouched.
-        assert_eq!((fix.start, fix.end), (1, 4));
-        assert_eq!(fix.content, "\\bfseries");
+        assert_eq!((fix.edits[0].start, fix.edits[0].end), (1, 4));
+        assert_eq!(fix.edits[0].content, "\\bfseries");
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).output,
             "{\\bfseries hi}\n"

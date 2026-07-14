@@ -170,8 +170,12 @@ not it ships an auto-fix.
      ```
    - Prefer a fix over a **tight, precise span** (e.g. just the control-word
      token), not a whole-node rewrite that could drop a greedily-attached group.
-     `Fix` is a single contiguous `start..end` replacement; withhold it on shapes
-     where you can't isolate that span.
+     A `Fix` carries one or more disjoint `Edit { start..end, content }`
+     replacements in the diagnostic's file, applied atomically (all or none) —
+     use `Fix::safe`/`Fix::unsafe_` for the common single-edit case and
+     `Fix::safe_edits`/`Fix::unsafe_edits` when a rewrite must touch several
+     sites (e.g. a `\begin`/`\end` rename). Cross-file edits are not
+     expressible; withhold the fix on shapes where you can't isolate the spans.
    - Imports: `use super::{Example, Rule, RuleContext};` and
      `use crate::linter::diagnostic::{Diagnostic, Fix, Severity};` plus
      `use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};` as needed.

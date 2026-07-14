@@ -208,8 +208,8 @@ mod tests {
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.applicability, Applicability::Unsafe);
         // A zero-width insertion of `{}` right after `\LaTeX`.
-        assert_eq!((fix.start, fix.end), (6, 6));
-        assert_eq!(fix.content, "{}");
+        assert_eq!((fix.edits[0].start, fix.edits[0].end), (6, 6));
+        assert_eq!(fix.edits[0].content, "{}");
         // Unsafe: skipped without opt-in, applied with it.
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).applied,

@@ -204,7 +204,7 @@ mod tests {
         assert_eq!((out[0].start, out[0].end), (4, 5));
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.applicability, Applicability::Unsafe);
-        assert_eq!(fix.content, "");
+        assert_eq!(fix.edits[0].content, "");
         // Unsafe: skipped without the opt-in, applied with it.
         assert_eq!(
             apply_fixes(src, std::slice::from_ref(fix), false).applied,
@@ -234,8 +234,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let fix = out[0].fix.as_ref().unwrap();
         // The fix span covers both spaces (4..6) and deletes them.
-        assert_eq!((fix.start, fix.end), (4, 6));
-        assert_eq!(fix.content, "");
+        assert_eq!((fix.edits[0].start, fix.edits[0].end), (4, 6));
+        assert_eq!(fix.edits[0].content, "");
     }
 
     #[test]

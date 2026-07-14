@@ -4,11 +4,11 @@
 //! The canonical case is `eqnarray`, which `amsmath` replaced with `align`
 //! decades ago (it mis-spaces relations and is a perennial l2tabu/chktex
 //! warning). As with [`deprecated_command`](super::deprecated_command), the
-//! replacement is a near-mechanical swap carried as a `Safe` autofix: the
-//! `\begin`/`\end` names are rewritten in place and the body copied verbatim, so
-//! it is correct by construction (tenet 1) and never touches layout. The fix is
-//! withheld on the rare shape where the pair is not cleanly matched (an
-//! unterminated or recovery-paired environment).
+//! replacement is a near-mechanical swap carried as a `Safe` autofix: one
+//! atomic two-edit [`Fix`] rewriting the `\begin`/`\end` names in place, so the
+//! body is untouched, it is correct by construction (tenet 1), and it never
+//! touches layout. The fix is withheld on the rare shape where the pair is not
+//! cleanly matched (an unterminated or recovery-paired environment).
 //!
 //! The table lives here, not in `data/signatures.json`: "this environment is
 //! obsolete" is a lint judgment, not the structural arity/math fact the signature
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use crate::ast::{AstNode, Begin, Environment};
 use crate::syntax::{SyntaxElement, SyntaxKind};
 
-use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
+use crate::linter::diagnostic::{Diagnostic, Edit, Fix, Severity};
 
 use super::{Example, Rule, RuleContext};
 
@@ -50,8 +50,9 @@ impl Rule for ObsoleteEnvironment {
         "Flag math environments the community has superseded, naming the modern \
          replacement in the message. The canonical case is `eqnarray`, which \
          `amsmath` replaced with `align` decades ago (it mis-spaces relations and \
-         is a perennial l2tabu warning). The autofix swaps the `\\begin`/`\\end` \
-         names, copying the body verbatim, so it is correct by construction."
+         is a perennial l2tabu warning). The autofix renames the \
+         `\\begin`/`\\end` pair in place, leaving the body untouched, so it is \
+         correct by construction."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -93,15 +94,13 @@ impl Rule for ObsoleteEnvironment {
     }
 }
 
-/// A `Safe` swap of an environment's name at both ends (`eqnarray` → `align`).
-///
-/// A [`Fix`] is a single contiguous replacement, but a rename must touch two
-/// disjoint spans (the `\begin` and `\end` names). We splice the whole
-/// environment: copy its text verbatim and rewrite only the two name spans, so
-/// the body is preserved byte-for-byte and the edit owes only correctness, never
-/// layout (tenet 1). Withheld unless the pair is cleanly matched — no `\end`
-/// (unterminated), or an `\end` naming a different environment (parser recovery)
-/// would make a symmetric swap corrupt the source, so those stay report-only.
+/// A `Safe` swap of an environment's name at both ends (`eqnarray` → `align`):
+/// one atomic [`Fix`] carrying two edits, one per name span, so the body is
+/// never touched and the rename can't half-apply. The edit owes only
+/// correctness, never layout (tenet 1). Withheld unless the pair is cleanly
+/// matched — no `\end` (unterminated), or an `\end` naming a different
+/// environment (parser recovery) would make a symmetric swap corrupt the
+/// source, so those stay report-only.
 fn environment_swap_fix(
     env: &Environment,
     begin: &Begin,
@@ -114,24 +113,15 @@ fn environment_swap_fix(
     }
     let begin_name = begin.name_range()?;
     let end_name = end.name_range()?;
-
-    // `\begin` precedes `\end`, so the name spans are ordered and disjoint.
-    let env_start = env.syntax().text_range().start();
-    let env_text = env.syntax().text().to_string();
-    let bs = usize::from(begin_name.start() - env_start);
-    let be = usize::from(begin_name.end() - env_start);
-    let es = usize::from(end_name.start() - env_start);
-    let ee = usize::from(end_name.end() - env_start);
-    let content = format!(
-        "{}{replacement}{}{replacement}{}",
-        &env_text[..bs],
-        &env_text[be..es],
-        &env_text[ee..],
-    );
-    Some(Fix::safe(
-        usize::from(env_start),
-        usize::from(env.syntax().text_range().end()),
-        content,
+    Some(Fix::safe_edits(
+        vec![
+            Edit::new(
+                begin_name.start().into(),
+                begin_name.end().into(),
+                replacement,
+            ),
+            Edit::new(end_name.start().into(), end_name.end().into(), replacement),
+        ],
         format!("Replace `{name}` with `{replacement}`"),
     ))
 }

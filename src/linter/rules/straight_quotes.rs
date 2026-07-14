@@ -177,9 +177,9 @@ mod tests {
         // Opening quote after the space.
         let open = out[0].fix.as_ref().expect("a fix");
         assert_eq!(open.applicability, Applicability::Unsafe);
-        assert_eq!(open.content, "``");
+        assert_eq!(open.edits[0].content, "``");
         // Closing quote after the `d` of `world`.
-        assert_eq!(out[1].fix.as_ref().unwrap().content, "''");
+        assert_eq!(out[1].fix.as_ref().unwrap().edits[0].content, "''");
         // Unsafe fixes are skipped without the opt-in, applied with it.
         let fixes: Vec<_> = out.iter().map(|d| d.fix.clone().unwrap()).collect();
         assert_eq!(apply_fixes(src, &fixes, false).applied, 0);
@@ -195,15 +195,15 @@ mod tests {
         // reads as an opening context, the `d` before the second as closing.
         let out = findings("(\"quoted\")\n");
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0].fix.as_ref().unwrap().content, "``");
-        assert_eq!(out[1].fix.as_ref().unwrap().content, "''");
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "``");
+        assert_eq!(out[1].fix.as_ref().unwrap().edits[0].content, "''");
     }
 
     #[test]
     fn quote_at_document_start_opens() {
         let out = findings("\"Start.\n");
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].fix.as_ref().unwrap().content, "``");
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "``");
         assert_eq!((out[0].start, out[0].end), (0, 1));
     }
 

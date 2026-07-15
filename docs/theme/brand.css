@@ -1,0 +1,23 @@
+/* Theme-dependent logo swap.
+ *
+ * mdBook themes are a class on <html> (light/rust are light; coal/navy/ayu
+ * are dark), not prefers-color-scheme, so the README's <picture> approach
+ * does not work here. Pages embed both logo variants and CSS shows the one
+ * matching the active theme.
+ */
+
+.logo-dark {
+  display: none;
+}
+
+html.coal .logo-light,
+html.navy .logo-light,
+html.ayu .logo-light {
+  display: none;
+}
+
+html.coal .logo-dark,
+html.navy .logo-dark,
+html.ayu .logo-dark {
+  display: inline;
+}

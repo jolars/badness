@@ -18,7 +18,7 @@ additional-js = [
     "theme/vendor/vega-embed.min.js",
     "theme/bench-charts.js",
 ]
-additional-css = ["theme/bench-charts.css"]
+additional-css = ["theme/bench-charts.css", "theme/brand.css"]
 
 [preprocessor]
 

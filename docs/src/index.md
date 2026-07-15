@@ -1,6 +1,7 @@
 # Badness
 
-<img src="./images/logo.svg" alt="" class="right" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
+<img src="./images/logo.svg" alt="" class="right logo-light" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
+<img src="./images/logo-dark.svg" alt="" class="right logo-dark" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
 
 **Badness** is a language server, formatter, and linter for LaTeX.
 

@@ -177,6 +177,7 @@ tasks:
       # Distribute to consumers (the Taskfile is the only distributor —
       # never hand-copy these).
       - cp logo.svg ../docs/src/images/logo.svg
+      - cp logo-dark.svg ../docs/src/images/logo-dark.svg
       - cp icon.svg ../docs/theme/favicon.svg
       - magick -density 600 icon.pdf -strip -resize 32x32 ../docs/theme/favicon.png
       - cp icon.png ../editors/code/icon.png
@@ -194,6 +195,7 @@ tasks:
       - icon.png
       - icon.svg
       - ../docs/src/images/logo.svg
+      - ../docs/src/images/logo-dark.svg
       - ../docs/theme/favicon.svg
       - ../docs/theme/favicon.png
       - ../editors/code/icon.png

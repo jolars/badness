@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.10.0](https://github.com/jolars/badness/compare/v0.9.0...v0.10.0) (2026-07-15)
+
+### Features
+- add `--force-exclude` to `format` and `lint` ([`05c8e32`](https://github.com/jolars/badness/commit/05c8e32e7da31df9982c533b9f21369f049385c6))
+
 ## [0.9.0](https://github.com/jolars/badness/compare/v0.8.0...v0.9.0) (2026-07-14)
 
 ### Features

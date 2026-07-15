@@ -65,6 +65,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+- [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
+  LaTeX Workshop adds no lint rules of its own (it only shells out to
+  ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to
+  compare against. Badness already covers the high-value territory (ellipsis,
+  dash length, straight quotes, `$$`, space-before-`\footnote`, intersentence
+  spacing); remaining candidates include space before punctuation or
+  parentheses and missing italic correction (`\/`).
+
 ## Semantic layer & signatures
 
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
@@ -89,6 +97,24 @@ comparison is asymmetric, and the framing matters when triaging the items below.
   see the `[x]` items below.)
 - **Deliberately not matched:** the typeset-adjacent features under
   `## Editor integration` (build, clean-aux, chktex passthrough, CSL rendering).
+
+### Feature status vs LaTeX Workshop
+
+A second reference diff, against **LaTeX Workshop** (the dominant VS Code LaTeX
+extension). It is not an LSP: its intellisense, hover, and outline are
+regex-driven extension code, and its formatting and linting shell out
+(latexindent/tex-fmt, ChkTeX/lacheck), so badness already leads on language
+smarts. Coexistence is the deliberate story (docs `guide/editor-setup.md`):
+LaTeX Workshop keeps build, PDF preview, and SyncTeX. The features it has that
+badness lacks and wants are filed in the sections below, tagged *(LW)*:
+citation filter-by-title, command argument placeholders, keyval `label={…}`
+scanning, graphics hover preview, package-doc hover links, a texmf bib
+fallback, and surround/promote-demote code actions. Math-preview-on-hover is
+the one big item needing a design decision (see `### Hover` and Open
+decisions). Not adopted: `@a`-style abbreviation snippets and two-letter
+environment snippets (editor-snippet territory), graphics thumbnails inside
+completion items (VS Code-only), and sub/superscript history completion
+(niche).
 
 ### Configuration & sync
 
@@ -147,10 +173,62 @@ sources below are missing.
   model). Badness's signature DB is flat (curated + CWL + scanned); scoping
   completion to `\usepackage`-loaded packages needs package→command attribution.
   Open question, not a mechanical add.
+- [ ] **Citation completion filterable by title/author *(LW)*.** LaTeX
+  Workshop's `\cite{` completion matches on the entry's title and other fields,
+  not just the key (`intellisense.citation.filterText`)—type a word from the
+  paper's title instead of remembering the key. Badness already resolves
+  entries cross-file and lazily (`lsp/completion_resolve.rs`); widen
+  `filter_text` (and `sort_text`) on citation items to key + title + authors.
+  VS Code truncates `filterText` at 128 chars, so field order matters (key
+  first).
+- [ ] **Command argument placeholder snippets *(LW)*, opt-in.** Environment
+  completion already inserts snippet bodies with tab stops; commands could emit
+  placeholders for required/optional arguments straight from the signature DB
+  (`\frac{$1}{$2}`). Gate on the client's snippet capability and an editor
+  setting—LaTeX Workshop's equivalent (`intellisense.argumentHint.enabled`) is
+  off by default, since placeholder churn annoys as many users as it helps.
+- [ ] **Labels from keyval options *(LW)*.** LaTeX Workshop scans `label={…}`
+  inside environment option blocks (`lstlisting`, beamer frames) and
+  configurable custom label commands (`\linelabel`). Check whether the label
+  scanner catches the keyval form; if not, it is a bounded static pattern for
+  the semantic layer, feeding completion, navigation, and the
+  `undefined-ref`/`unreferenced-label`/`duplicate-label` rules alike.
 
 ### IntelliSense (signature DB)
 
+### Hover
+
+- [ ] **Graphics preview on hover *(LW)*.** Hovering an `\includegraphics`
+  argument returns hover markdown embedding the image itself
+  (`![](file:///…/fig.png)`)—VS Code renders images in hover markdown. No
+  rendering on our side, just a file reference: reuse the target resolution
+  from `lsp/document_link.rs`; png/jpg/svg only, degrading to the resolved
+  path for `.pdf`/`.eps`.
+- [ ] **Documentation link in package hover *(LW)*.** LaTeX Workshop's
+  `\usepackage` hover offers a "View documentation" link via `texdoc`. The
+  shipped CTAN metadata (`data/package_metadata.json`) already carries a
+  `ctan` field—append a documentation link (`https://ctan.org/pkg/<name>`) to
+  the package hover markdown.
+- [ ] *(Design decision)* **Math preview on hover *(LW)*.** LaTeX Workshop's
+  most-loved language feature: hovering math renders it (MathJax,
+  client-side); texlab lacks it too, so it is also a differentiator. Options:
+  (a) skip—LaTeX Workshop covers it, and coexistence is the story; (b) render
+  in the VS Code extension—breaks the thin-client principle and is VS
+  Code-only; (c) server-side SVG via a Rust math renderer (ReX or similar) as
+  a data-URI image in hover markdown—editor-agnostic, but ships a math layout
+  engine, which is typesetting in all but name (pressure on the AGENTS.md
+  non-goal). Lean (a) for now; whichever way, record the decision in
+  AGENTS.md.
+
 ### Code actions
+
+- [ ] **Surround selection with environment/command *(LW)*.** LaTeX Workshop
+  ships these as client-side commands; badness can host them editor-agnostically
+  as code actions or `executeCommand`s alongside `changeEnvironment`
+  (`lsp/code_action.rs`).
+- [ ] **Section promote/demote *(LW)*.** Recursively shift sectioning levels
+  across a selection (`\section` ↔ `\subsection`); the sectioning hierarchy is
+  already in the signature DB, so this is a mechanical rewrite.
 
 ## Package & class infrastructure (`.sty`/`.cls`/`.dtx`/`.ins`)
 
@@ -246,6 +324,14 @@ not re-proposed.
 - [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
   component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
   helper when a third consumer appears.
+- [ ] **Central-bib fallback via the texmf index *(LW)*.** LaTeX Workshop
+  resolves `\bibliography{refs}` through `kpsewhich` (plus a `bibDirs`
+  setting) for users who keep one master `.bib` in their texmf tree. Extend
+  citation resolution to fall back to the read-only texmf index
+  (`project::texmf`) for bib paths that don't resolve project-locally.
+  LSP-only, sanctioned by the AGENTS.md environment-awareness tiers
+  (completion, hover, go-to-definition); the `undefined-citation` lint and the
+  CLI stay hermetic and project-local.
 
 --------------------------------------------------------------------------------
 
@@ -425,3 +511,6 @@ capabilities RA has that badness does not. Severity in brackets.
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
 - [ ] `.dtx` two-layer model: a preprocessor that splits doc/code layers, or a
   single lexer mode with margin-aware tokens? *(Package infrastructure)*
+- [ ] Math preview on hover: skip (LaTeX Workshop covers it), render in the
+  VS Code extension, or a server-side Rust renderer? *(Language server; see
+  `### Hover`)*

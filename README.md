@@ -76,11 +76,7 @@ mdBook from [`docs/`](docs/)).
 
 ## Contributing
 
-Architecture, tenets, and conventions are documented in
-[`CONTRIBUTING.md`](CONTRIBUTING.md), written for both human and AI contributors. In short:
-keep the syntactic layer free of semantic knowledge, every parser feature needs
-corpus and snapshot tests plus a losslessness assertion, and code stays
-`rustfmt`-clean with `clippy` warnings treated as errors.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 

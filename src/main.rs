@@ -72,6 +72,7 @@ fn main() -> ExitCode {
             indent_width,
             wrap,
             exclude,
+            force_exclude,
         } => {
             // Discover/load `badness.toml` from the working directory (one config
             // per invocation). The exclude filter is rooted at
@@ -87,7 +88,7 @@ fn main() -> ExitCode {
                 };
             let exclude_filter =
                 match build_exclude_filter(&config, config_path.as_deref(), &anchor, &exclude) {
-                    Ok(filter) => filter,
+                    Ok(filter) => filter.with_force_exclude(force_exclude),
                     Err(code) => return code,
                 };
 
@@ -129,6 +130,7 @@ fn main() -> ExitCode {
             unsafe_fixes,
             stdin_filepath,
             exclude,
+            force_exclude,
             select,
             ignore,
             explain,
@@ -147,7 +149,7 @@ fn main() -> ExitCode {
                 };
             let exclude_filter =
                 match build_exclude_filter(&config, config_path.as_deref(), &anchor, &exclude) {
-                    Ok(filter) => filter,
+                    Ok(filter) => filter.with_force_exclude(force_exclude),
                     Err(code) => return code,
                 };
             // CLI `--select`/`--ignore` override the configured selection when given.
@@ -458,6 +460,11 @@ fn run_lint(
             }
         };
         if files.is_empty() {
+            // Under `--force-exclude` an empty set is expected (a runner like
+            // pre-commit may pass only excluded files), so it is a clean no-op.
+            if exclude.force() {
+                return ExitCode::SUCCESS;
+            }
             eprintln!(
                 "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
             );
@@ -625,6 +632,9 @@ fn apply_fixes_to_paths(
         }
     };
     if files.is_empty() {
+        if exclude.force() {
+            return Some(ExitCode::SUCCESS);
+        }
         eprintln!("badness: no .tex or .bib files found under the provided input paths");
         return Some(ExitCode::FAILURE);
     }
@@ -971,6 +981,9 @@ fn run_format_paths(
         }
     };
     if files.is_empty() {
+        if exclude.force() {
+            return ExitCode::SUCCESS;
+        }
         eprintln!(
             "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
         );

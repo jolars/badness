@@ -52,6 +52,9 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
 `--exclude <PATTERN>`
 :   Gitignore-style pattern to skip during directory discovery (repeatable). Added on top of any `exclude`/`extend-exclude` from `badness.toml`
 
+`--force-exclude`
+:   Apply exclude patterns to files named explicitly on the command line too (they are normally always processed). For runners like pre-commit that pass staged files as arguments
+
 ## `badness lint`
 
 Lint LaTeX source, reporting parse diagnostics.
@@ -78,6 +81,9 @@ With paths, lints each file. With no paths, reads stdin. Exits non-zero if any d
 
 `--exclude <PATTERN>`
 :   Gitignore-style pattern to skip during directory discovery (repeatable). Added on top of any `exclude`/`extend-exclude` from `badness.toml`
+
+`--force-exclude`
+:   Apply exclude patterns to files named explicitly on the command line too (they are normally always processed). For runners like pre-commit that pass staged files as arguments
 
 `--select <RULE>`
 :   Run only these rules (repeatable). Overrides `[lint] select` from `badness.toml` when given

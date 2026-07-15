@@ -74,6 +74,11 @@ pub enum Command {
         /// Added on top of any `exclude`/`extend-exclude` from `badness.toml`.
         #[arg(long, value_name = "PATTERN")]
         exclude: Vec<String>,
+        /// Apply exclude patterns to files named explicitly on the command line
+        /// too (they are normally always processed). For runners like pre-commit
+        /// that pass staged files as arguments.
+        #[arg(long)]
+        force_exclude: bool,
     },
     /// Lint LaTeX source, reporting parse diagnostics.
     ///
@@ -98,6 +103,11 @@ pub enum Command {
         /// Added on top of any `exclude`/`extend-exclude` from `badness.toml`.
         #[arg(long, value_name = "PATTERN")]
         exclude: Vec<String>,
+        /// Apply exclude patterns to files named explicitly on the command line
+        /// too (they are normally always processed). For runners like pre-commit
+        /// that pass staged files as arguments.
+        #[arg(long)]
+        force_exclude: bool,
         /// Run only these rules (repeatable). Overrides `[lint] select` from
         /// `badness.toml` when given.
         #[arg(long, value_name = "RULE")]

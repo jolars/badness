@@ -17,9 +17,12 @@ use crate::parser::{LatexFlavor, LexConfig};
 ///
 /// Patterns use gitignore semantics and are resolved relative to a root (the
 /// directory containing `badness.toml`, or the working directory when there is no
-/// config). The filter prunes matching directories and files from the walk; it
-/// does **not** affect paths a user names explicitly on the command line (those
-/// are always processed, matching ruff's default, non-`force-exclude` behavior).
+/// config). The filter prunes matching directories and files from the walk; by
+/// default it does **not** affect paths a user names explicitly on the command
+/// line (those are always processed, matching ruff's default behavior). With
+/// `force` set (the `--force-exclude` flag), explicitly named files that match a
+/// pattern are skipped too — for runners like pre-commit that pass staged files
+/// as arguments.
 ///
 /// There is no `use_defaults` flag: badness
 /// folds the built-in [`DEFAULT_EXCLUDE`](crate::config::DEFAULT_EXCLUDE) set into
@@ -29,6 +32,7 @@ use crate::parser::{LatexFlavor, LexConfig};
 #[derive(Debug, Clone)]
 pub struct ExcludeFilter {
     matcher: Option<Gitignore>,
+    force: bool,
 }
 
 /// A malformed exclude pattern, surfaced to the CLI so it can report and exit.
@@ -54,7 +58,10 @@ impl ExcludeFilter {
     /// A filter that excludes nothing. Used by callers that do their own scoping
     /// (the LSP, salsa-internal sibling discovery) or have no config in hand.
     pub fn none() -> Self {
-        Self { matcher: None }
+        Self {
+            matcher: None,
+            force: false,
+        }
     }
 
     /// Compile `patterns` (already including any built-in defaults, in priority
@@ -78,7 +85,31 @@ impl ExcludeFilter {
         })?;
         Ok(Self {
             matcher: Some(matcher),
+            force: false,
         })
+    }
+
+    /// Also apply the patterns to explicitly named files (`--force-exclude`).
+    pub fn with_force_exclude(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+
+    /// Whether explicitly named files are subject to the patterns.
+    pub fn force(&self) -> bool {
+        self.force
+    }
+
+    /// Whether `path`, named explicitly on the command line, should be skipped.
+    /// Always `false` without force mode. Unlike the walk (where pruning an
+    /// excluded directory hides everything beneath it), an explicit file must be
+    /// tested against its ancestors too, so `vendor/` catches `vendor/x.tex`.
+    pub fn force_excludes(&self, path: &Path) -> bool {
+        self.force
+            && match &self.matcher {
+                Some(matcher) => matcher.matched_path_or_any_parents(path, false).is_ignore(),
+                None => false,
+            }
     }
 
     fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
@@ -213,8 +244,11 @@ pub fn collect_lint_files(
 
     for path in paths {
         if path.is_file() {
-            // An explicitly named file is always processed, even if it matches an
-            // exclude pattern (no `force-exclude` mode).
+            // An explicitly named file is processed even if it matches an exclude
+            // pattern, unless the filter is in force mode (`--force-exclude`).
+            if exclude.force_excludes(path) {
+                continue;
+            }
             match lint_file_kind(path) {
                 Some(kind) => files.push((path.clone(), kind)),
                 None => {
@@ -487,6 +521,40 @@ mod tests {
         let filter = ExcludeFilter::new(root, &["vendor/".to_string()]).unwrap();
         let files = collect_lint_files(std::slice::from_ref(&path), &filter).unwrap();
         assert_eq!(files, vec![(path, FileKind::Tex)]);
+    }
+
+    #[test]
+    fn force_exclude_skips_explicitly_named_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("vendor")).unwrap();
+        let excluded = root.join("vendor").join("x.tex");
+        let kept = root.join("a.tex");
+        fs::write(&excluded, "x").unwrap();
+        fs::write(&kept, "a").unwrap();
+
+        let filter = ExcludeFilter::new(root, &["vendor/".to_string()])
+            .unwrap()
+            .with_force_exclude(true);
+        let files = collect_lint_files(&[excluded, kept.clone()], &filter).unwrap();
+        assert_eq!(files, vec![(kept, FileKind::Tex)]);
+    }
+
+    #[test]
+    fn force_exclude_may_leave_no_files() {
+        // The all-excluded set is the caller's success case (pre-commit may stage
+        // only excluded files), so it must come back as `Ok(empty)`, not an error.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("vendor")).unwrap();
+        let path = root.join("vendor").join("x.tex");
+        fs::write(&path, "x").unwrap();
+
+        let filter = ExcludeFilter::new(root, &["vendor/".to_string()])
+            .unwrap()
+            .with_force_exclude(true);
+        let files = collect_lint_files(&[path], &filter).unwrap();
+        assert_eq!(files, vec![]);
     }
 
     #[test]

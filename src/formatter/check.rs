@@ -114,7 +114,7 @@ pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
 /// `.sty`/`.cls` default to `Preserve`), resolved per file below. `sentence`
 /// carries the `sentence`/`semantic` language options (ignored by other modes), so
 /// `--check` matches what `format` would produce. `exclude` prunes directory
-/// discovery (explicitly-named files are never pruned).
+/// discovery (explicitly-named files are pruned only in its force mode).
 pub fn check_paths_with_style(
     paths: &[PathBuf],
     style: FormatStyle,
@@ -128,6 +128,14 @@ pub fn check_paths_with_style(
 
     let files = collect_lint_files(paths, exclude)?;
     if files.is_empty() {
+        // Under `--force-exclude` an empty set is expected (a runner like
+        // pre-commit may pass only excluded files), so it checks clean.
+        if exclude.force() {
+            return Ok(CheckResult {
+                checked_files: 0,
+                changed_files: Vec::new(),
+            });
+        }
         return Err(CheckError::NoFiles);
     }
 

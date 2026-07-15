@@ -60,9 +60,7 @@ badness lint paper.tex
 badness lsp
 ```
 
-Formatter style is set through flags: `--line-width` (default `80`),
-`--indent-width` (default `2`), and `--wrap` (`reflow` by default; also
-`preserve`, `sentence`, and `semantic`). Persistent settings live in a
+Formatting is configurable via a TOML file named
 `badness.toml`. See the documentation for the full reference.
 
 The language server runs over stdio (`badness lsp`); see the [editor setup

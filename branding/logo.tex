@@ -1,5 +1,17 @@
-% Square icon: just the four-bar mark on a transparent canvas.
-% Suitable for favicons, README headers, app icons.
+% The four-bar mark, parametric over canvas shape. One source, two profiles:
+%
+%   tight (default)      \bnCanvasSize = 0: the canvas hugs the mark (at its
+%                        canonical size) plus \bnCanvasMargin on each side.
+%                        Rectangular, transparent — for contexts styled by the
+%                        consumer (README header, docs header).
+%
+%   square icon          \bnCanvasSize > 0: a square canvas of that side; the
+%                        mark is scaled to fill it minus \bnCanvasMargin.
+%                        For raw-display slots (favicon, marketplace icon),
+%                        usually with \bnFillBg = 1.
+%
+% The Taskfile (`brand:logo`) drives both profiles via \def on the pdflatex
+% command line — \providecommand makes those overrides win.
 \documentclass[border=0pt, tikz]{standalone}
 
 % ============================================================================
@@ -7,14 +19,13 @@
 % ============================================================================
 
 % --- Canvas ---
-\providecommand{\bnCanvasSize}{6.5}  % side of the square canvas (cm)
-\providecommand{\bnFillBg}{0}        % 0 = transparent, 1 = filled with bnPaper
-
-% --- Mark size (shape is canonical in _common.tex) ---
-\providecommand{\bnMarkScale}{1}
+\providecommand{\bnCanvasSize}{0}     % 0 = auto (hug the mark); >0 = square side (cm)
+\providecommand{\bnCanvasMargin}{0}   % padding (cm) between mark and canvas edge
+\providecommand{\bnFillBg}{0}         % 0 = transparent, 1 = filled with bnPaper
 
 % --- Theme ---
-\providecommand{\bnDarkMode}{0}      % font/palette toggle, see _common.tex
+\providecommand{\bnDarkMode}{0}
+% font/palette toggle, see _common.tex
 \providecommand{\bnFont}{plex}       % see _common.tex for the menu
 
 \input{_common.tex}
@@ -22,19 +33,35 @@
 % ============================================================================
 \begin{document}
 \begin{tikzpicture}[x=1cm, y=1cm]
-  % Lock a square bounding box.
-  \useasboundingbox (0,0) rectangle (\bnCanvasSize, \bnCanvasSize);
+  \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}
+  \pgfmathsetmacro{\bnMarkWBase}{\bnBarWidth+\bnJutExtra}
+  \pgfmathsetmacro{\bnMarkHBase}{\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap}
+
+  \ifdim\bnCanvasSize cm=0pt
+    % Tight: canonical mark size, canvas derived from mark + margin.
+    \pgfmathsetmacro{\bnMarkW}{\bnMarkWBase*\bnMarkScale}
+    \pgfmathsetmacro{\bnMarkH}{\bnMarkHBase*\bnMarkScale}
+    \pgfmathsetmacro{\bnCanvasW}{\bnMarkW + 2*\bnCanvasMargin}
+    \pgfmathsetmacro{\bnCanvasH}{\bnMarkH + 2*\bnCanvasMargin}
+  \else
+    % Square icon: scale the mark so its larger dimension fills the canvas
+    % minus the margin (\bnMarkScale is derived, not a knob).
+    \pgfmathsetmacro{\bnMarkScale}{(\bnCanvasSize-2*\bnCanvasMargin)/max(\bnMarkWBase, \bnMarkHBase)}
+    \pgfmathsetmacro{\bnMarkW}{\bnMarkWBase*\bnMarkScale}
+    \pgfmathsetmacro{\bnMarkH}{\bnMarkHBase*\bnMarkScale}
+    \pgfmathsetmacro{\bnCanvasW}{\bnCanvasSize}
+    \pgfmathsetmacro{\bnCanvasH}{\bnCanvasSize}
+  \fi
+
+  \useasboundingbox (0,0) rectangle (\bnCanvasW, \bnCanvasH);
 
   \ifnum\bnFillBg=1
-    \fill[bnPaper] (0,0) rectangle (\bnCanvasSize, \bnCanvasSize);
+    \fill[bnPaper] (0,0) rectangle (\bnCanvasW, \bnCanvasH);
   \fi
 
   % Centre the mark in the canvas.
-  \pgfmathtruncatemacro{\bnLast}{\bnBarCount-1}
-  \pgfmathsetmacro{\bnMarkW}{(\bnBarWidth+\bnJutExtra)*\bnMarkScale}
-  \pgfmathsetmacro{\bnMarkH}{(\bnBarCount*\bnBarHeight + \bnLast*\bnBarGap)*\bnMarkScale}
-  \pgfmathsetmacro{\bnShiftX}{(\bnCanvasSize-\bnMarkW)/2}
-  \pgfmathsetmacro{\bnShiftY}{(\bnCanvasSize-\bnMarkH)/2}
+  \pgfmathsetmacro{\bnShiftX}{(\bnCanvasW-\bnMarkW)/2}
+  \pgfmathsetmacro{\bnShiftY}{(\bnCanvasH-\bnMarkH)/2}
 
   \begin{scope}[shift={(\bnShiftX, \bnShiftY)}]
     \bnDrawMark

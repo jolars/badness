@@ -157,13 +157,29 @@ tasks:
     deps: [brand:logo, brand:wordmark, brand:og]
 
   brand:logo:
-    desc: Build logo.pdf + logo.png + logo.svg
+    desc: Build the logo (tight, light + dark) and icon (padded square) renders and copy them to all consumers
     dir: branding
     cmds:
+      # Tight transparent mark (light): README header, docs header.
       - pdflatex -interaction=nonstopmode -halt-on-error logo.tex >/dev/null
       - magick -density 600 logo.pdf -background none -strip logo.png
-      # Vector logo for the README and as the docs favicon/header.
       - dvisvgm --pdf logo.pdf -o logo.svg >/dev/null
+      # Tight transparent mark (dark): README header via <picture>.
+      - pdflatex -interaction=nonstopmode -halt-on-error -jobname=logo-dark '\def\bnDarkMode{1}\input{logo.tex}' >/dev/null
+      - magick -density 600 logo-dark.pdf -background none -strip logo-dark.png
+      - dvisvgm --pdf logo-dark.pdf -o logo-dark.svg >/dev/null
+      # Padded square icon on a filled background, for raw-display slots
+      # (favicon, marketplace icon) — margin ~14% of the side keeps the mark
+      # clear of rounded-corner masks.
+      - pdflatex -interaction=nonstopmode -halt-on-error -jobname=icon '\def\bnCanvasSize{6.5}\def\bnCanvasMargin{0.925}\def\bnFillBg{1}\input{logo.tex}' >/dev/null
+      - dvisvgm --pdf icon.pdf -o icon.svg >/dev/null
+      - magick -density 600 icon.pdf -strip -resize 256x256 icon.png
+      # Distribute to consumers (the Taskfile is the only distributor —
+      # never hand-copy these).
+      - cp logo.svg ../docs/src/images/logo.svg
+      - cp icon.svg ../docs/theme/favicon.svg
+      - magick -density 600 icon.pdf -strip -resize 32x32 ../docs/theme/favicon.png
+      - cp icon.png ../editors/code/icon.png
     sources:
       - logo.tex
       - _common.tex
@@ -171,6 +187,16 @@ tasks:
       - logo.pdf
       - logo.png
       - logo.svg
+      - logo-dark.pdf
+      - logo-dark.png
+      - logo-dark.svg
+      - icon.pdf
+      - icon.png
+      - icon.svg
+      - ../docs/src/images/logo.svg
+      - ../docs/theme/favicon.svg
+      - ../docs/theme/favicon.png
+      - ../editors/code/icon.png
 
   brand:wordmark:
     desc: Build wordmark.pdf + wordmark.png

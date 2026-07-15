@@ -1,4 +1,4 @@
-# Badness <img src='https://raw.githubusercontent.com/jolars/badness/main/branding/logo.svg' align="right" width="120" />
+# Badness <picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jolars/badness/main/branding/logo-dark.svg"><img src="https://raw.githubusercontent.com/jolars/badness/main/branding/logo.svg" align="right" width="120" alt="" /></picture>
 
 [![Build and
 Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/build-and-test.yml)

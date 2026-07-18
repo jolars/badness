@@ -130,7 +130,7 @@ pub fn collect_package_edge_keys(
 /// recognized load command. Package loads (`\usepackage`/`\RequirePackage`) expand
 /// a comma list into one edge per name; class loads produce a single edge. A
 /// missing or non-literal name argument yields one [`PackageTarget::Dynamic`] edge.
-fn package_edges_of(command: &SyntaxNode, base_dir: Option<&Path>) -> Vec<PackageEdge> {
+pub(crate) fn package_edges_of(command: &SyntaxNode, base_dir: Option<&Path>) -> Vec<PackageEdge> {
     let Some(kind) = command_name(command).and_then(|name| package_kind(&name)) else {
         return Vec::new();
     };

@@ -12,6 +12,12 @@
 //! package it pulls in is idempotent in LaTeX, so there is no cross-file branch;
 //! the rule reads only this file's load edges.
 //!
+//! **`\if`/`\else`/`\fi` branch exclusivity.** Two loads that sit in different
+//! branches of the same conditional never both run, so they are not a real
+//! duplicate — `\iftrue\usepackage{pkg}\else\usepackage{pkg}\fi` loads `pkg`
+//! exactly once no matter which branch TeX takes. Only a curated list of
+//! conditional primitives are recognized.
+//!
 //! **No autofix:** removing a duplicate can drop options the surviving load
 //! lacks, and choosing which load to keep is the author's call (mirroring
 //! `duplicate-label`).
@@ -21,13 +27,51 @@
 //! range, so a duplicate that lives inside or across a list underlines the whole
 //! command rather than the individual name token.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::ast::command_name;
 use crate::linter::diagnostic::{Diagnostic, Severity};
-use crate::project::{PackageKind, PackageTarget, collect_package_edges};
+use crate::project::package::package_edges_of;
+use crate::project::{PackageKind, PackageTarget};
+use crate::syntax::SyntaxKind;
 
 use super::{Example, Rule, RuleContext};
+
+/// TeX/eTeX primitive conditionals that open a `\fi`-terminated group
+const CONDITIONAL_OPENERS: &[&str] = &[
+    // The classic 17 plain-TeX conditionals
+    "if",
+    "ifcat",
+    "ifnum",
+    "ifdim",
+    "ifodd",
+    "ifvmode",
+    "ifhmode",
+    "ifmmode",
+    "ifinner",
+    "ifvoid",
+    "ifhbox",
+    "ifvbox",
+    "ifx",
+    "ifeof",
+    "iftrue",
+    "iffalse",
+    "ifcase",
+    // eTeX conditionals
+    "ifdefined",
+    "ifcsname",
+    "iffontchar",
+];
+
+/// One currently-open conditional scope at the point a load command is
+/// visited: `id` identifies the specific `\if...\fi` instance (assigned when
+/// it opens), `branch` counts the `\else`/`\or` seen so far inside it.
+#[derive(Clone, Copy)]
+struct CondGroup {
+    id: u32,
+    branch: u32,
+}
 
 const EXAMPLES: &[Example] = &[Example {
     caption: "The same package loaded twice:",
@@ -64,36 +108,75 @@ impl Rule for DuplicatePackage {
         // no `.sty` namespace with them. `base_dir` is `None`, so a bare name like
         // `amsmath` resolves to `amsmath.sty` and both spellings of the same load
         // collide on one key.
-        let mut seen: HashSet<PathBuf> = HashSet::new();
-        for edge in collect_package_edges(ctx.root, None) {
-            if !matches!(
-                edge.kind,
-                PackageKind::UsePackage | PackageKind::RequirePackage
-            ) {
+        let mut stack: Vec<CondGroup> = Vec::new();
+        let mut next_id = 0u32;
+        // Every prior branch path seen for a target, so a third unconditional
+        // load can still be flagged even when the first two were mutually
+        // exclusive with each other.
+        let mut seen: HashMap<PathBuf, Vec<Vec<CondGroup>>> = HashMap::new();
+
+        for node in ctx.root.descendants() {
+            if node.kind() != SyntaxKind::COMMAND {
                 continue;
             }
-            // A `Dynamic` target (`\usepackage{\pkg}`) is not statically comparable.
-            let PackageTarget::Path(path) = &edge.target else {
+            let Some(name) = command_name(&node) else {
                 continue;
             };
-            if seen.insert(path.clone()) {
+            if CONDITIONAL_OPENERS.contains(&name.as_str()) {
+                stack.push(CondGroup {
+                    id: next_id,
+                    branch: 0,
+                });
+                next_id += 1;
                 continue;
             }
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(str::to_owned)
-                .unwrap_or_else(|| path.display().to_string());
-            sink.push(Diagnostic {
-                rule: self.id(),
-                severity: self.default_severity(),
-                path: PathBuf::new(),
-                start: usize::from(edge.range.start()),
-                end: usize::from(edge.range.end()),
-                message: format!("package `{name}` is loaded more than once"),
-                fix: None,
-                related: Vec::new(),
-            });
+            if name == "else" || name == "or" {
+                if let Some(top) = stack.last_mut() {
+                    top.branch += 1;
+                }
+                continue;
+            }
+            if name == "fi" {
+                stack.pop();
+                continue;
+            }
+
+            for edge in package_edges_of(&node, None) {
+                if !matches!(
+                    edge.kind,
+                    PackageKind::UsePackage | PackageKind::RequirePackage
+                ) {
+                    continue;
+                }
+                // A `Dynamic` target (`\usepackage{\pkg}`) is not statically comparable.
+                let PackageTarget::Path(path) = edge.target else {
+                    continue;
+                };
+                let prior = seen.entry(path.clone()).or_default();
+                // Same `id` at the same depth in different branches means mutually exclusive.
+                if !prior.iter().all(|p| {
+                    p.iter()
+                        .zip(&stack)
+                        .any(|(x, y)| x.id == y.id && x.branch != y.branch)
+                }) {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| path.display().to_string());
+                    sink.push(Diagnostic {
+                        rule: self.id(),
+                        severity: self.default_severity(),
+                        path: PathBuf::new(),
+                        start: usize::from(edge.range.start()),
+                        end: usize::from(edge.range.end()),
+                        message: format!("package `{name}` is loaded more than once"),
+                        fix: None,
+                        related: Vec::new(),
+                    });
+                }
+                prior.push(stack.clone());
+            }
         }
     }
 }
@@ -179,5 +262,47 @@ mod tests {
     #[test]
     fn duplicate_documentclass_is_not_this_rules_concern() {
         assert!(findings("\\documentclass{article}\n\\documentclass{article}\n").is_empty());
+    }
+
+    #[test]
+    fn if_else_branches_are_not_flagged() {
+        assert!(
+            findings("\\iftrue\\usepackage[opt1]{pkg}\\else\\usepackage[opt2]{pkg}\\fi\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ifcase_or_branches_are_not_flagged() {
+        assert!(
+            findings(
+                "\\ifcase 0 \\usepackage{pkg}\\or\\usepackage{pkg}\\or\\usepackage{pkg}\\fi\n"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn same_branch_is_still_flagged() {
+        let out = findings("\\iftrue\\usepackage{a}\\usepackage{a}\\else\\usepackage{b}\\fi\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains('a'), "got: {}", out[0].message);
+    }
+
+    #[test]
+    fn unconditional_load_after_exclusive_pair_is_still_flagged() {
+        // The two conditional loads are mutually exclusive, but the third,
+        // unconditional one can coexist with whichever branch ran.
+        let out =
+            findings("\\iftrue\\usepackage{pkg}\\else\\usepackage{pkg}\\fi\n\\usepackage{pkg}\n");
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn unrecognized_custom_conditional_is_still_flagged() {
+        // `\newif`-defined conditionals aren't in the curated opener list, so
+        // this is a known false positive
+        let out = findings("\\ifmyflag\\usepackage{pkg}\\else\\usepackage{pkg}\\fi\n");
+        assert_eq!(out.len(), 1);
     }
 }

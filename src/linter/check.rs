@@ -177,6 +177,30 @@ mod tests {
     }
 
     #[test]
+    fn node_directive_suppresses_construct_with_arguments() {
+        // Regression: a comment immediately before a bare `\command` (no
+        // enclosing group) binds into a `DOC_COMMENT` that is the *leading
+        // child* of the `COMMAND` node, not a preceding sibling of it.
+        let out = lint(
+            "\\usepackage{amsmath}\n\
+             % badness-ignore duplicate-package: legacy, loaded twice on purpose\n\
+             \\usepackage{amsmath}\n",
+        );
+        assert!(out.is_empty(), "expected suppression, got: {out:?}");
+    }
+
+    #[test]
+    fn node_directive_suppresses_diagnostic_inside_argument() {
+        // Regression: same root cause as above, from the other direction -
+        // `dash-length` flags a token *inside* `\cline{2-7}`'s argument group,
+        // a range the old walk never reached at all (it stopped at the
+        // `\cline` control word).
+        let out =
+            lint("% badness-ignore dash-length: interval, not a numeric range\n\\cline{2-7}\n");
+        assert!(out.is_empty(), "expected suppression, got: {out:?}");
+    }
+
+    #[test]
     fn file_directive_suppresses_all_occurrences() {
         let out = lint("% badness-ignore-file deprecated-command: legacy\n{\\bf x}\n{\\it y}\n");
         assert!(

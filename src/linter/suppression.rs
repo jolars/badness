@@ -98,6 +98,19 @@ fn parse_rule(rest: &str) -> Option<String> {
 /// bubbling up through parents whose remaining siblings are all trivia (e.g. a
 /// comment on its own line under `ROOT`, whose target is the next block).
 fn next_meaningful_sibling(token: &SyntaxToken) -> Option<(usize, usize)> {
+    // A comment bound into a `DOC_COMMENT` node is always the *leading child*
+    // of the `COMMAND`/`ENVIRONMENT` construct it documents, not a sibling
+    // before it. Walking forward from the comment token only ever finds pieces
+    // *inside* that same construct (e.g. just its control word, missing the
+    // construct's own arguments), never the construct as a whole. Target the
+    // whole construct directly in that case.
+    if let Some(parent) = token.parent()
+        && parent.kind() == SyntaxKind::DOC_COMMENT
+    {
+        let construct = parent.parent()?;
+        let range = construct.text_range();
+        return Some((usize::from(range.start()), usize::from(range.end())));
+    }
     let mut current = token.clone();
     loop {
         let parent = current.parent()?;

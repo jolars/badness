@@ -2,7 +2,6 @@
 
 [![Build and
 Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/build-and-test.yml)
-[![Lint](https://github.com/jolars/badness/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/lint.yml)
 [![Documentation](https://github.com/jolars/badness/actions/workflows/docs.yml/badge.svg?branch=main)](https://badness.dev/)
 [![Open
 VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-vsx.org/extension/jolars/badness)

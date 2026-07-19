@@ -126,13 +126,15 @@ fn next_meaningful_sibling(node: &SyntaxNode) -> Option<(usize, usize)> {
             NodeOrToken::Token(t)
                 if matches!(t.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE) => {}
             NodeOrToken::Node(n) if n.kind() == SyntaxKind::COMMENT_ENTRY => {}
-            _ => {
-                let range = element.text_range();
-                return Some((usize::from(range.start()), usize::from(range.end())));
-            }
+            _ => return Some(span(element.text_range())),
         }
     }
     None
+}
+
+/// A rowan `TextRange` as the plain `(start, end)` offsets the map stores.
+fn span(range: rowan::TextRange) -> (usize, usize) {
+    (usize::from(range.start()), usize::from(range.end()))
 }
 
 #[cfg(test)]

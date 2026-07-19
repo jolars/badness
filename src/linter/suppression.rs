@@ -94,9 +94,11 @@ fn parse_rule(rest: &str) -> Option<String> {
     Some(trimmed[..end].to_string())
 }
 
-/// The byte range of the next non-trivia, non-comment element after `token`,
-/// bubbling up through parents whose remaining siblings are all trivia (e.g. a
-/// comment on its own line under `ROOT`, whose target is the next block).
+/// The byte range a node-level directive suppresses: the next non-trivia,
+/// non-comment element after `token`, bubbling up through parents whose
+/// remaining siblings are all trivia (e.g. a comment on its own line under
+/// `ROOT`, whose target is the next block). Exception: a comment bound into a
+/// `DOC_COMMENT` targets the whole construct that owns it, not a sibling.
 fn next_meaningful_sibling(token: &SyntaxToken) -> Option<(usize, usize)> {
     // A comment bound into a `DOC_COMMENT` node is always the *leading child*
     // of the `COMMAND`/`ENVIRONMENT` construct it documents, not a sibling
@@ -108,8 +110,7 @@ fn next_meaningful_sibling(token: &SyntaxToken) -> Option<(usize, usize)> {
         && parent.kind() == SyntaxKind::DOC_COMMENT
     {
         let construct = parent.parent()?;
-        let range = construct.text_range();
-        return Some((usize::from(range.start()), usize::from(range.end())));
+        return Some(span(construct.text_range()));
     }
     let mut current = token.clone();
     loop {
@@ -151,13 +152,15 @@ fn first_meaningful_after(
                     t.kind(),
                     SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT
                 ) => {}
-            _ => {
-                let range = element.text_range();
-                return Some((usize::from(range.start()), usize::from(range.end())));
-            }
+            _ => return Some(span(element.text_range())),
         }
     }
     None
+}
+
+/// A rowan `TextRange` as the plain `(start, end)` offsets the map stores.
+fn span(range: rowan::TextRange) -> (usize, usize) {
+    (usize::from(range.start()), usize::from(range.end()))
 }
 
 #[cfg(test)]

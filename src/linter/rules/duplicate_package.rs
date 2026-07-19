@@ -12,6 +12,16 @@
 //! package it pulls in is idempotent in LaTeX, so there is no cross-file branch;
 //! the rule reads only this file's load edges.
 //!
+//! **Branch exclusivity.** Two loads in different branches of one
+//! `\if…\else…\fi` never both run, so they are not a duplicate —
+//! `\iftrue\usepackage{p}\else\usepackage{p}\fi` loads `p` exactly once no
+//! matter which branch TeX takes. Branch membership comes from the shared
+//! [`crate::linter::conditional`] pre-pass (pair-and-trust: any `if*`-named
+//! conditional counts, `\newif`-defined ones included; see the module docs for
+//! the denylist of brace-argument `if*` macros like `\ifthenelse`, whose
+//! branches are *not* recognized). A load is flagged only when some earlier
+//! load of the same package can coexist with it.
+//!
 //! **No autofix:** removing a duplicate can drop options the surviving load
 //! lacks, and choosing which load to keep is the author's call (mirroring
 //! `duplicate-label`).
@@ -21,9 +31,10 @@
 //! range, so a duplicate that lives inside or across a list underlines the whole
 //! command rather than the individual name token.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::linter::conditional::{Frame, mutually_exclusive};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::project::{PackageKind, PackageTarget, collect_package_edges};
 
@@ -49,7 +60,12 @@ impl Rule for DuplicatePackage {
         "Flag a package loaded more than once in the same file with \
          `\\usepackage`/`\\RequirePackage` (which share one package namespace). \
          LaTeX loads a given package only once; a second load is redundant and, \
-         when the options disagree, an option-clash error. No autofix: removing a \
+         when the options disagree, an option-clash error. Loads in mutually \
+         exclusive branches of a TeX conditional \
+         (`\\iftrue...\\else...\\fi`, `\\newif`-defined conditionals included) \
+         are not duplicates and are not flagged; `if`-named macros that take \
+         brace arguments instead of a `\\fi` terminator (`\\ifthenelse` and \
+         friends) carry no recognized branches. No autofix: removing a \
          load can drop options the survivor lacks, and which load to keep is the \
          author's call. Class loads (`\\documentclass`/`\\LoadClass`) are a \
          separate concern and are not flagged."
@@ -63,8 +79,11 @@ impl Rule for DuplicatePackage {
         // Package loads only (`\usepackage`/`\RequirePackage`); class loads share
         // no `.sty` namespace with them. `base_dir` is `None`, so a bare name like
         // `amsmath` resolves to `amsmath.sty` and both spellings of the same load
-        // collide on one key.
-        let mut seen: HashSet<PathBuf> = HashSet::new();
+        // collide on one key. Per key, every prior load's branch path is kept:
+        // a load is a duplicate only if some prior load can coexist with it, so
+        // a third unconditional load is still flagged even when the first two
+        // were mutually exclusive with each other.
+        let mut seen: HashMap<PathBuf, Vec<&[Frame]>> = HashMap::new();
         for edge in collect_package_edges(ctx.root, None) {
             if !matches!(
                 edge.kind,
@@ -76,7 +95,12 @@ impl Rule for DuplicatePackage {
             let PackageTarget::Path(path) = &edge.target else {
                 continue;
             };
-            if seen.insert(path.clone()) {
+            let path_here = ctx.conditional_path_at(usize::from(edge.range.start()));
+            let priors = seen.entry(path.clone()).or_default();
+            let is_duplicate = priors.iter().any(|p| !mutually_exclusive(p, path_here));
+            // Record after comparing — a load is never compared against itself.
+            priors.push(path_here);
+            if !is_duplicate {
                 continue;
             }
             let name = path
@@ -179,5 +203,120 @@ mod tests {
     #[test]
     fn duplicate_documentclass_is_not_this_rules_concern() {
         assert!(findings("\\documentclass{article}\n\\documentclass{article}\n").is_empty());
+    }
+
+    // --- Conditional branch exclusivity -------------------------------------
+
+    #[test]
+    fn if_else_branches_are_not_flagged() {
+        assert!(
+            findings("\\iftrue\\usepackage[opt1]{pkg}\\else\\usepackage[opt2]{pkg}\\fi\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ifcase_or_branches_are_not_flagged() {
+        assert!(
+            findings(
+                "\\ifcase 0 \\usepackage{pkg}\\or\\usepackage{pkg}\\or\\usepackage{pkg}\\fi\n"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn same_branch_is_still_flagged() {
+        let out = findings("\\iftrue\\usepackage{a}\\usepackage{a}\\else\\usepackage{b}\\fi\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains('a'), "got: {}", out[0].message);
+    }
+
+    #[test]
+    fn unconditional_load_after_exclusive_pair_is_still_flagged() {
+        // The two conditional loads are mutually exclusive, but the third,
+        // unconditional one can coexist with whichever branch ran.
+        let out =
+            findings("\\iftrue\\usepackage{pkg}\\else\\usepackage{pkg}\\fi\n\\usepackage{pkg}\n");
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn unknown_conditional_branches_are_not_flagged() {
+        // Pair-and-trust: a `\newif`-defined conditional's branches are as
+        // exclusive as a primitive's.
+        assert!(findings("\\ifmyflag\\usepackage{pkg}\\else\\usepackage{pkg}\\fi\n").is_empty());
+    }
+
+    #[test]
+    fn unknown_conditionals_else_does_not_shield_a_real_duplicate() {
+        // The `\else` belongs to `\ifmyflag`, so both loads sit in `\iftrue`'s
+        // then-branch and can run together when `myflag` is false.
+        let out = findings("\\iftrue \\usepackage{p} \\ifmyflag \\else \\usepackage{p} \\fi\\fi\n");
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn unknown_conditionals_fi_does_not_break_exclusivity() {
+        // The inner `\ifmyflag x\fi` pairs with itself; the outer pair stays
+        // exclusive.
+        assert!(
+            findings("\\iftrue \\ifmyflag x\\fi \\usepackage{p} \\else \\usepackage{p} \\fi\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn conditional_tokens_in_definition_bodies_are_inert() {
+        // The `\else` inside the `\newcommand` body is carried code, not live
+        // control flow: both loads share `\iftrue`'s then-branch.
+        let out = findings(
+            "\\iftrue \\usepackage{p} \\newcommand{\\rest}{\\else} \\usepackage{p} \\fi\n",
+        );
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn if_named_operands_do_not_open_frames() {
+        // `\iffalse` is `\ifdefined`'s operand, not a conditional here; the
+        // outer `\iftrue…\else` pair stays exclusive.
+        assert!(
+            findings(
+                "\\iftrue \\usepackage{p} \\ifdefined\\iffalse\\fi \\else \\usepackage{p} \\fi\n"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn iftex_engine_dispatch_is_not_flagged() {
+        // The kernel-provided iftex conditionals are the most common wrapper
+        // for exactly this alternative-load pattern.
+        assert!(
+            findings("\\ifLuaTeX\\usepackage{fontspec}\\else\\usepackage{fontspec}\\fi\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ifthenelse_arguments_carry_no_recognized_branches() {
+        // `\ifthenelse`'s brace arguments are exclusive at runtime, but it is
+        // a macro, not a `\fi`-terminated conditional: denylisted, so the two
+        // loads are flagged as before (a documented limitation).
+        let out = findings("\\ifthenelse{\\boolean{x}}{\\usepackage{a}}{\\usepackage{a}}\n");
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn math_iff_does_not_disturb_tracking() {
+        assert!(findings("$a \\iff b$\n\\usepackage{x}\n\\usepackage{y}\n").is_empty());
+    }
+
+    #[test]
+    fn newif_declaration_does_not_suppress_a_real_duplicate() {
+        // `\newif\ifmyflag` declares a conditional; it must not open a frame
+        // that would make the two unconditional loads look exclusive.
+        let out = findings("\\newif\\ifmyflag\n\\usepackage{a}\n\\usepackage{a}\n");
+        assert_eq!(out.len(), 1);
     }
 }

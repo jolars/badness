@@ -638,7 +638,7 @@ warning: verbatim-trailing-text
 
 ## `duplicate-package`
 
-Flag a package loaded more than once in the same file with `\usepackage`/`\RequirePackage` (which share one package namespace). LaTeX loads a given package only once; a second load is redundant and, when the options disagree, an option-clash error. No autofix: removing a load can drop options the survivor lacks, and which load to keep is the author's call. Class loads (`\documentclass`/`\LoadClass`) are a separate concern and are not flagged.
+Flag a package loaded more than once in the same file with `\usepackage`/`\RequirePackage` (which share one package namespace). LaTeX loads a given package only once; a second load is redundant and, when the options disagree, an option-clash error. Loads in mutually exclusive branches of a TeX conditional (`\iftrue...\else...\fi`, `\newif`-defined conditionals included) are not duplicates and are not flagged; `if`-named macros that take brace arguments instead of a `\fi` terminator (`\ifthenelse` and friends) carry no recognized branches. No autofix: removing a load can drop options the survivor lacks, and which load to keep is the author's call. Class loads (`\documentclass`/`\LoadClass`) are a separate concern and are not flagged.
 
 The same package loaded twice:
 

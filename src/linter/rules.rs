@@ -100,6 +100,12 @@ pub struct RuleContext<'a> {
     /// ancestor chain per token. Mirrors the formatter's `expl3_regions` side
     /// channel: a read-only, precomputed range set derived purely from the tree.
     math_regions: Vec<TextRange>,
+    /// The `\if…\else…\fi` branch path per byte offset, precomputed once so the
+    /// duplicate-detection rules share one conditional tracker instead of each
+    /// interpreting `\else`/`\fi` tokens themselves (see
+    /// [`crate::linter::conditional`]). Same posture as `math_regions`: a
+    /// read-only side index derived purely from the tree.
+    conditionals: super::conditional::ConditionalIndex,
 }
 
 impl<'a> RuleContext<'a> {
@@ -122,7 +128,16 @@ impl<'a> RuleContext<'a> {
             citations,
             packages,
             math_regions: math_regions(root),
+            conditionals: super::conditional::ConditionalIndex::compute(root),
         }
+    }
+
+    /// The conditional branch path in effect at byte `offset` — empty when the
+    /// offset is not inside any `\if…\fi`. Compare two sites with
+    /// [`crate::linter::conditional::mutually_exclusive`]. `pub(crate)` (unlike
+    /// [`RuleContext::in_math`]) so `Frame` stays out of the crate's public API.
+    pub(crate) fn conditional_path_at(&self, offset: usize) -> &[super::conditional::Frame] {
+        self.conditionals.path_at(offset)
     }
 
     /// Whether byte `offset` falls inside a `MATH` node. `O(log n)` over the

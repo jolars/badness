@@ -7,6 +7,7 @@
 //! an autofix engine ([`fix::apply_fixes`]) backing `lint --fix`.
 
 pub mod check;
+pub(crate) mod conditional;
 pub mod diagnostic;
 pub mod docs;
 pub mod fix;

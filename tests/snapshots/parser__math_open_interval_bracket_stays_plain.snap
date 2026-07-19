@@ -1,0 +1,19 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$]0;\\num{0.5}[$\")"
+---
+ROOT@0..15
+  PARAGRAPH@0..15
+    INLINE_MATH@0..15
+      DOLLAR@0..1 "$"
+      MATH@1..14
+        R_BRACKET@1..2 "]"
+        WORD@2..4 "0;"
+        COMMAND@4..13
+          CONTROL_WORD@4..8 "\\num"
+          GROUP@8..13
+            L_BRACE@8..9 "{"
+            WORD@9..12 "0.5"
+            R_BRACE@12..13 "}"
+        L_BRACKET@13..14 "["
+      DOLLAR@14..15 "$"

@@ -1,0 +1,20 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$\\sqrt[3]{x}$\")"
+---
+ROOT@0..13
+  PARAGRAPH@0..13
+    INLINE_MATH@0..13
+      DOLLAR@0..1 "$"
+      MATH@1..12
+        COMMAND@1..12
+          CONTROL_WORD@1..6 "\\sqrt"
+          OPTIONAL@6..9
+            L_BRACKET@6..7 "["
+            WORD@7..8 "3"
+            R_BRACKET@8..9 "]"
+          GROUP@9..12
+            L_BRACE@9..10 "{"
+            WORD@10..11 "x"
+            R_BRACE@11..12 "}"
+      DOLLAR@12..13 "$"

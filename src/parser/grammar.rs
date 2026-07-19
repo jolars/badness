@@ -532,11 +532,11 @@ impl<'t> Parser<'t> {
             | SyntaxKind::GUARD => self.bump(),
             SyntaxKind::CONTROL_WORD => {
                 if self.at_command(BEGIN_CMD) {
-                    self.environment();
+                    self.environment(false);
                 } else if self.at_command(END_CMD) {
                     self.stray_end();
                 } else {
-                    self.command();
+                    self.command(false);
                 }
             }
             SyntaxKind::CONTROL_SYMBOL => {
@@ -570,11 +570,13 @@ impl<'t> Parser<'t> {
     ///
     /// Arity is unknown without the semantic layer, so we attach every trailing
     /// `{…}` / `[…]` group, allowing intervening trivia but stopping at a
-    /// paragraph break (see `AGENTS.md`, Core decision #8).
-    fn command(&mut self) {
+    /// paragraph break (see `AGENTS.md`, Core decision #8). `math` gates the
+    /// `[…]` attachment on a closing `]` reachable before the math ends (see
+    /// [`Self::attach_arguments`]).
+    fn command(&mut self, math: bool) {
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
-        self.attach_arguments();
+        self.attach_arguments(math);
         self.close();
     }
 
@@ -607,7 +609,13 @@ impl<'t> Parser<'t> {
     /// open node, allowing intervening trivia but stopping at a paragraph break.
     /// Shared by `\foo` commands and `\begin{env}` (see `AGENTS.md`, Core
     /// decision #8). Arity is unknown without the semantic layer.
-    fn attach_arguments(&mut self) {
+    ///
+    /// With `math` set (the construct sits in math mode), a `[` is attached only
+    /// when [`Self::bracket_closes_before_math_end`] finds its `]`; otherwise it
+    /// is left for the math loop as an ordinary atom, so open-interval notation
+    /// (`$]0;\num{0.5}[$`) does not swallow the math closer as an optional-
+    /// argument body.
+    fn attach_arguments(&mut self, math: bool) {
         loop {
             let (next, paragraph_break) = self.peek_meaningful();
             if paragraph_break {
@@ -619,6 +627,10 @@ impl<'t> Parser<'t> {
                     self.group();
                 }
                 Some(SyntaxKind::L_BRACKET) => {
+                    let open = self.scan_trivia(self.pos, CommentMode::Skip).next;
+                    if math && !self.bracket_closes_before_math_end(open) {
+                        break;
+                    }
                     self.skip_trivia();
                     self.optional();
                 }
@@ -701,6 +713,49 @@ impl<'t> Parser<'t> {
             }
         }
         self.close();
+    }
+
+    /// True if the `[` at token index `open` is closed by a `]` before a token
+    /// that would end the enclosing math. Mirrors [`Self::optional`]'s bail
+    /// anchors (an unbalanced `}`, `\begin`/`\end`, a paragraph break, EOF) and
+    /// adds the math closers (`$`, `\]`, `\)`), which `optional` cannot stop at
+    /// in text mode (`\item[$x$]` is legit) but which inside math mean the `[`
+    /// is not an argument at all — e.g. the open-interval notation
+    /// `$]0;\num{0.5}[$`. A `]` counts only outside `{…}` nesting, matching how
+    /// `optional` consumes whole groups via `element`. Does not consume.
+    fn bracket_closes_before_math_end(&self, open: usize) -> bool {
+        let mut depth = 0usize;
+        let mut newlines = 0;
+        for t in &self.tokens[open + 1..] {
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    if newlines >= 2 {
+                        return false;
+                    }
+                    continue;
+                }
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => continue,
+                SyntaxKind::L_BRACE => depth += 1,
+                SyntaxKind::R_BRACE => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                SyntaxKind::R_BRACKET if depth == 0 => return true,
+                SyntaxKind::DOLLAR => return false,
+                SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
+                    return false;
+                }
+                SyntaxKind::CONTROL_WORD if matches!(t.text.as_str(), BEGIN_CMD | END_CMD) => {
+                    return false;
+                }
+                _ => {}
+            }
+            newlines = 0;
+        }
+        false
     }
 
     /// Inline `$ … $` or display `$$ … $$` math. The body's atoms are wrapped in
@@ -924,7 +979,7 @@ impl<'t> Parser<'t> {
             Some(SyntaxKind::L_BRACE) => self.math_group(),
             Some(SyntaxKind::CONTROL_WORD) => {
                 if self.at_command(BEGIN_CMD) {
-                    self.environment();
+                    self.environment(true);
                 } else if self.at_command(END_CMD) {
                     self.stray_end();
                 } else if self.at_command(LEFT_CMD) {
@@ -932,7 +987,7 @@ impl<'t> Parser<'t> {
                 } else if self.at_command(RIGHT_CMD) {
                     self.stray_right();
                 } else {
-                    self.command();
+                    self.command(true);
                 }
             }
             // `\\` line break (with its tightly-bound `*`/`[len]`) vs. a bare
@@ -1084,7 +1139,7 @@ impl<'t> Parser<'t> {
     }
 
     /// `\begin{name} … \end{name}`, with environment-mismatch recovery.
-    fn environment(&mut self) {
+    fn environment(&mut self, math: bool) {
         self.open(SyntaxKind::ENVIRONMENT);
 
         let begin_start = self.starts[self.pos];
@@ -1094,7 +1149,7 @@ impl<'t> Parser<'t> {
         // Span of the opener `\begin{name}` (before any trailing arguments), so
         // an unclosed environment points back at the `\begin`, not at EOF.
         let opener = (begin_start, self.starts[self.pos]);
-        self.attach_arguments(); // `\begin{tabular}{ll}`, `[options]`, etc.
+        self.attach_arguments(math); // `\begin{tabular}{ll}`, `[options]`, etc.
         self.close(); // BEGIN
 
         if name

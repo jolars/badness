@@ -181,6 +181,31 @@ fn math_script_missing_argument_at_eof_recovers() {
 }
 
 #[test]
+fn math_open_interval_bracket_stays_plain() {
+    // French open-interval notation (#23): the `[` after `\num{0.5}` has no `]`
+    // before the math ends, so it is an ordinary math atom, not the start of an
+    // optional argument — no errors, and the closing `$` is not swallowed.
+    insta::assert_snapshot!(tree(r"$]0;\num{0.5}[$"));
+}
+
+#[test]
+fn math_optional_attaches_when_closed() {
+    // A `[` with its `]` inside the math still attaches as an optional argument
+    // (the interval gate must not over-fire).
+    insta::assert_snapshot!(tree(r"$\sqrt[3]{x}$"));
+}
+
+#[test]
+fn text_unclosed_optional_still_reports() {
+    // In text mode the gate does not apply: an unclosed `[` after a command is
+    // attached greedily and reported, as before.
+    let parsed = parse(r"\cmd[oops");
+    assert_eq!(parsed.syntax().to_string(), r"\cmd[oops");
+    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(messages, ["unclosed `[`"]);
+}
+
+#[test]
 fn paragraphs_split_on_blank_lines() {
     insta::assert_snapshot!(tree("First line,\nsame paragraph.\n\nSecond paragraph."));
 }

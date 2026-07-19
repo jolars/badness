@@ -8,6 +8,16 @@
 //! duplicate regardless of any unanalyzed includes (adding files only reveals
 //! *more* duplicates).
 //!
+//! **Branch exclusivity (intra-file).** Two definitions in different branches
+//! of one `\if…\else…\fi` never both run, so they are not a duplicate —
+//! `\iftrue\label{a}\else\label{a}\fi` defines `a` exactly once. Branch
+//! membership comes from the shared [`crate::linter::conditional`] pre-pass
+//! (pair-and-trust; see its docs for the `\ifthenelse`-style denylist). A
+//! definition is flagged only when some earlier definition of the same key can
+//! coexist with it, and the related location points at the first such
+//! coexisting definition. The cross-file branch stays name-only by design and
+//! is untouched.
+//!
 //! [`ResolvedLabels`]: crate::project::ResolvedLabels
 
 use std::collections::HashMap;
@@ -15,6 +25,7 @@ use std::path::PathBuf;
 
 use rowan::TextRange;
 
+use crate::linter::conditional::{Frame, mutually_exclusive};
 use crate::linter::diagnostic::{Diagnostic, RelatedInfo, Severity};
 
 use super::{Example, Rule, RuleContext};
@@ -39,8 +50,11 @@ impl Rule for DuplicateLabel {
         "Flag a `\\label{key}` defined more than once in the same label \
          namespace -- within one file, or across files that share a document \
          when a project view is available. LaTeX itself only warns and silently \
-         keeps the last definition. No autofix: resolving a collision (rename \
-         vs delete) is the author's call."
+         keeps the last definition. Definitions in mutually exclusive branches \
+         of a TeX conditional (`\\iftrue...\\else...\\fi`, `\\newif`-defined \
+         conditionals included) are not duplicates and are not flagged. No \
+         autofix: resolving a collision (rename vs delete) is the author's \
+         call."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -48,19 +62,27 @@ impl Rule for DuplicateLabel {
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        // Count occurrences of each key, remembering the *first* definition's key
-        // range so a later duplicate can point back at it. Within a file, flag
-        // every definition past the first — the first is the "canonical" one
-        // LaTeX would keep. On a key's *first* occurrence in this file, the
-        // cross-file branch instead checks whether another file in the namespace
-        // defines it (the intra-file branch already owns the 2nd+ occurrences, so
-        // no overlap).
-        let mut seen: HashMap<&str, TextRange> = HashMap::new();
+        // Track every prior definition of each key with its conditional branch
+        // path. Within a file, flag a definition only when some earlier one can
+        // coexist with it (all-exclusive priors mean at most one runs), and
+        // point the secondary at the first coexisting prior — the definition
+        // LaTeX would actually clash with. On a key's *first* occurrence in
+        // this file, the cross-file branch instead checks whether another file
+        // in the namespace defines it (the intra-file branch already owns the
+        // 2nd+ occurrences, so no overlap).
+        let mut seen: HashMap<&str, Vec<(TextRange, &[Frame])>> = HashMap::new();
         for label in ctx.model.labels() {
-            let (message, related) = match seen.get(label.name.as_str()) {
-                Some(&first) => (
+            let path_here = ctx.conditional_path_at(usize::from(label.range.start()));
+            let priors = seen.entry(label.name.as_str()).or_default();
+            let coexisting = priors
+                .iter()
+                .find(|(_, p)| !mutually_exclusive(p, path_here))
+                .map(|&(key_range, _)| key_range);
+            let (message, related) = match coexisting {
+                Some(first) => (
                     Some(format!("label `{}` is defined more than once", label.name)),
-                    // The secondary points at the first definition, in this file.
+                    // The secondary points at the first coexisting definition,
+                    // in this file.
                     vec![RelatedInfo {
                         path: ctx.path.to_path_buf(),
                         start: usize::from(first.start()),
@@ -68,12 +90,15 @@ impl Rule for DuplicateLabel {
                         message: format!("first definition of `{}`", label.name),
                     }],
                 ),
-                None => ctx
+                None if priors.is_empty() => ctx
                     .resolution
                     .and_then(|resolution| cross_file_finding(ctx, resolution, &label.name))
                     .map_or((None, Vec::new()), |(msg, related)| (Some(msg), related)),
+                // Later definitions that are exclusive with every prior get no
+                // finding at all (and no cross-file re-report).
+                None => (None, Vec::new()),
             };
-            seen.entry(label.name.as_str()).or_insert(label.key_range);
+            priors.push((label.key_range, path_here));
             if let Some(message) = message {
                 sink.push(Diagnostic {
                     rule: self.id(),
@@ -196,6 +221,61 @@ mod tests {
     #[test]
     fn three_definitions_flag_two() {
         assert_eq!(findings("\\label{a}\\label{a}\\label{a}\n").len(), 2);
+    }
+
+    // --- Conditional branch exclusivity -------------------------------------
+
+    #[test]
+    fn if_else_branches_are_not_flagged() {
+        assert!(findings("\\iftrue\\label{a}\\else\\label{a}\\fi\n").is_empty());
+    }
+
+    #[test]
+    fn same_branch_is_still_flagged() {
+        assert_eq!(
+            findings("\\iftrue\\label{a}\\label{a}\\else x\\fi\n").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn unknown_conditional_branches_are_not_flagged() {
+        assert!(findings("\\ifmyflag\\label{a}\\else\\label{a}\\fi\n").is_empty());
+    }
+
+    #[test]
+    fn unconditional_definition_after_exclusive_pair_is_flagged_once() {
+        // The two conditional definitions are mutually exclusive, but the
+        // third, unconditional one can coexist with whichever branch ran; its
+        // related location is the *first* coexisting prior (the then-branch
+        // definition's key, bytes 15..16).
+        let src = "\\iftrue\\label{a}\\else\\label{a}\\fi\\label{a}\n";
+        let out = findings(src);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].related.len(), 1);
+        let ri = &out[0].related[0];
+        assert_eq!((ri.start, ri.end), (14, 15));
+        assert_eq!(&src[ri.start..ri.end], "a");
+    }
+
+    #[test]
+    fn ifthenelse_arguments_carry_no_recognized_branches() {
+        // `\ifthenelse` is a brace-argument macro, not a `\fi`-terminated
+        // conditional: denylisted, so the pair is flagged as before.
+        assert_eq!(
+            findings("\\ifthenelse{\\boolean{x}}{\\label{a}}{\\label{a}}\n").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn conditional_tokens_in_definition_bodies_are_inert() {
+        // The `\else` inside the `\newcommand` body must not make the two
+        // same-branch definitions look exclusive.
+        assert_eq!(
+            findings("\\iftrue\\label{a}\\newcommand{\\x}{\\else}\\label{a}\\fi\n").len(),
+            1
+        );
     }
 
     // --- Cross-file branch (needs a `ResolvedLabels`) -----------------------

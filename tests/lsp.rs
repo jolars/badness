@@ -14,13 +14,11 @@
 use std::time::Duration;
 
 use badness::formatter::{FormatStyle, format_with_style};
-use lsp_server::{
-    Connection, Message, Notification, Request, RequestId, Response, ResponseError, ResponseKind,
-};
+use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
 
-/// lsp-server 0.9 replaced `Response`'s `result`/`error` fields with a single
-/// `response_kind` enum. Restore the old field-style accessors as methods so the
-/// tests can keep reading the ok payload or the error uniformly.
+/// lsp-server 0.10 replaced `Response`'s `response_kind` enum with a plain
+/// `response_result: Result<_, _>`. Restore the old field-style accessors as
+/// methods so the tests can keep reading the ok payload or the error uniformly.
 trait ResponseExt {
     fn result(&self) -> Option<serde_json::Value>;
     fn error(&self) -> Option<ResponseError>;
@@ -28,17 +26,11 @@ trait ResponseExt {
 
 impl ResponseExt for Response {
     fn result(&self) -> Option<serde_json::Value> {
-        match &self.response_kind {
-            ResponseKind::Ok { result } => Some(result.clone()),
-            ResponseKind::Err { .. } => None,
-        }
+        self.response_result.as_ref().ok().cloned()
     }
 
     fn error(&self) -> Option<ResponseError> {
-        match &self.response_kind {
-            ResponseKind::Err { error } => Some(error.clone()),
-            ResponseKind::Ok { .. } => None,
-        }
+        self.response_result.as_ref().err().cloned()
     }
 }
 use lsp_types::{

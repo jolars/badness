@@ -472,6 +472,18 @@ fn key_arguments_do_not_trip_the_math_shape_rules() {
 }
 
 #[test]
+fn rule_spans_do_not_trip_dash_length() {
+    // Issue #34: `1-3` in `\cline` (and booktabs `\cmidrule`, including the
+    // detached `(lr){2-3}` shape) is a column span, not a typeset number range.
+    let src = "\\cline{1-3} \\cmidrule(lr){2-3} here.\n";
+    assert!(
+        lint(src).iter().all(|(rule, _)| *rule != "dash-length"),
+        "rule spans must not trip dash-length: {:?}",
+        lint(src)
+    );
+}
+
+#[test]
 fn primitive_command_reports_and_swaps_end_to_end() {
     // `\over` restructures its operands, so it is report-only (no fix); the
     // plain-TeX subscript alias `\sb` carries a safe 1:1 swap to `_`.

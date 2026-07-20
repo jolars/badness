@@ -2538,7 +2538,10 @@ fn token_is_rule_word(token: &SyntaxToken, cx: LowerCtx<'_>) -> bool {
 
 /// Whether `token` is a booktabs `\cmidrule` paren trim spec — a `WORD` of the form
 /// `(l)`, `(r)`, `(lr)`, or `(rl)` (catcode-12 text the lexer globs into one token).
-fn is_paren_trim_word(token: &SyntaxToken) -> bool {
+/// `pub(crate)` because the linter's rule-span gate
+/// ([`crate::linter::rules::in_rule_span_argument`]) recognizes the same shape;
+/// single-sourced so the two never drift.
+pub(crate) fn is_paren_trim_word(token: &SyntaxToken) -> bool {
     if token.kind() != SyntaxKind::WORD {
         return false;
     }

@@ -211,6 +211,25 @@ fn paragraphs_split_on_blank_lines() {
 }
 
 #[test]
+fn blank_line_in_dollar_math_names_the_cause() {
+    // #35: a blank line inside `$…$` in a tabular cell. Real TeX rejects this
+    // too (a blank line is a `\par`, and `\par` in math mode is "Missing $
+    // inserted" — alignment-cell scanning does not make it inert), so the
+    // parse errors stand; the message names the blank line as the terminator.
+    let text = "\\begin{tabular}{c}\n  $a =\n\n  b$ \\\\\n\\end{tabular}\n";
+    let parsed = parse(text);
+    assert_eq!(parsed.syntax().to_string(), text);
+    assert!(
+        parsed
+            .errors
+            .iter()
+            .any(|e| e.message == "unclosed `$` (a blank line ends math)"),
+        "blank-line cause is named: {:?}",
+        parsed.errors
+    );
+}
+
+#[test]
 fn comment_line_does_not_split_paragraph() {
     // `\n %comment \n` is two line-ends around a comment-only line, not a
     // blank line, so it must stay one paragraph (not a `\par` boundary).

@@ -809,7 +809,14 @@ impl<'t> Parser<'t> {
                 }
                 _ => {
                     if self.at_paragraph_break() {
-                        self.error_at(opener, format!("unclosed `{label}`"));
+                        // Faithful to TeX: a blank line is a `\par`, and `\par`
+                        // in math mode is "Missing $ inserted" — even inside an
+                        // alignment cell (#35). Name the cause so the opener
+                        // span isn't read as a bogus report.
+                        self.error_at(
+                            opener,
+                            format!("unclosed `{label}` (a blank line ends math)"),
+                        );
                         break;
                     }
                     self.math_element();
@@ -857,7 +864,11 @@ impl<'t> Parser<'t> {
                 }
                 _ => {
                     if self.at_paragraph_break() {
-                        self.error_at(opener_span, format!("unclosed `{opener}`"));
+                        // Same rationale as in `dollar_math`: `\par` ends math.
+                        self.error_at(
+                            opener_span,
+                            format!("unclosed `{opener}` (a blank line ends math)"),
+                        );
                         break;
                     }
                     self.math_element();

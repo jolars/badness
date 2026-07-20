@@ -457,6 +457,21 @@ fn math_operator_name_fires_end_to_end_and_its_fix_is_correct() {
 }
 
 #[test]
+fn key_arguments_do_not_trip_the_math_shape_rules() {
+    // Issue #25: `max` in `$\label{eq:thing_max}$` is part of an opaque label
+    // key, not typeset math; the same gate keeps `\ref{fig:3x3}` out of
+    // `times-variable`.
+    let src = "$\\label{eq:thing_max}$ and \\ref{eq:thing_max}, see \\ref{fig:3x3}.\n";
+    assert!(
+        lint(src)
+            .iter()
+            .all(|(rule, _)| *rule != "math-operator-name" && *rule != "times-variable"),
+        "key arguments must not trip math-operator-name/times-variable: {:?}",
+        lint(src)
+    );
+}
+
+#[test]
 fn primitive_command_reports_and_swaps_end_to_end() {
     // `\over` restructures its operands, so it is report-only (no fix); the
     // plain-TeX subscript alias `\sb` carries a safe 1:1 swap to `_`.

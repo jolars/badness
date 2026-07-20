@@ -267,6 +267,22 @@ pub(crate) fn is_glossary_ref_command(name: &str) -> bool {
     false
 }
 
+/// Whether `name` is a command whose arguments hold opaque keys, identifiers, or
+/// text rather than typeset math — the `\label`/`\ref`/`\cite`/`\gls`/color
+/// families plus `\tag` (amsmath, text content) and `\hyperref` (key plus link
+/// text). The union of the family predicates above, kept here so the name sets
+/// stay single-sourced; shared with the linter's key-argument gate
+/// (`crate::linter::rules::in_key_argument`), which uses it to keep identifier
+/// keys like `\label{eq:thing_max}` out of the math-shape rules' scope.
+pub(crate) fn key_argument_command(name: &str) -> bool {
+    matches!(name, "label" | "tag" | "hyperref")
+        || ref_command(name).is_some()
+        || is_cite_command(name)
+        || is_glossary_ref_command(name)
+        || glossary_definer(name).is_some()
+        || color_definer(name).is_some()
+}
+
 /// Split a group's inner text into keys paired with their precise byte ranges in
 /// the source. When `split` (key-list commands, citations), keys are comma-
 /// separated; otherwise the whole inner is one key (`\label`, single-key refs).

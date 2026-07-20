@@ -13,13 +13,19 @@
 //! leaving ordinary words that merely *begin* with a function name alone
 //! (`since`, `cosine`), and preferring the longest match (`sinh` over `sin`).
 //!
-//! **Conservative gating.** Two guards keep false positives down:
+//! **Conservative gating.** Three guards keep false positives down:
 //!   - Only inside math mode (an ancestor `MATH`); a bare `sin` in text is just
 //!     the English word.
 //!   - Never inside a `SUBSCRIPT`/`SUPERSCRIPT`, where a name like `max` in
 //!     `x_{max}` is almost always a *label* ("the maximum"), not the operator.
 //!     The base of `\lim_{n}` is still flagged: `lim` there is the WORD base, not
 //!     inside the script.
+//!   - Never inside a key argument (`super::in_key_argument`): the `max` in
+//!     `$\label{eq:thing_max}$` or `\eqref{eq:max}` is part of an opaque
+//!     identifier, not typeset math. Math-content arguments (`\frac{sin x}{2}`)
+//!     are still in scope — the gate is a curated name-family list
+//!     (`semantic::builder::key_argument_command`), not a blanket
+//!     argument skip.
 //!
 //! The fix inserts the backslash in front of the matched prefix (`sin` →
 //! `\sin`), a single contiguous splice that re-parses and stays lossless (tenet
@@ -84,9 +90,11 @@ impl Rule for MathOperatorName {
          starts a `WORD` and ends at a word boundary, catching both `$sin x$` and \
          the glued `$sin(x)$`, while leaving words that merely begin with one \
          (`since`) alone and preferring the longest match (`sinh` over `sin`). To \
-         stay conservative it only fires inside math mode and never inside a \
+         stay conservative it only fires inside math mode, never inside a \
          subscript or superscript, where `max` in `x_{max}` is almost always a \
-         label rather than the operator. The fix inserts the backslash \
+         label rather than the operator, and never inside a key argument such as \
+         `\\label{eq:thing_max}` or `\\eqref{eq:max}`, whose content is an opaque \
+         identifier rather than typeset math. The fix inserts the backslash \
          (`sin` -> `\\sin`); it is **unsafe** because it changes the typeset output \
          (upright glyph and operator spacing) and a bare `sin` is occasionally a \
          real product, so `--fix` leaves it alone while `--unsafe-fixes` and the \
@@ -118,6 +126,11 @@ impl Rule for MathOperatorName {
             }
         }
         if !in_math {
+            return;
+        }
+        // A key argument (`\label{eq:thing_max}`, `\eqref`, `\cite`, …) holds an
+        // opaque identifier, not typeset math.
+        if super::in_key_argument(tok) {
             return;
         }
 
@@ -263,6 +276,25 @@ mod tests {
         assert_eq!((out[0].start, out[0].end), (1, 5));
         let fix = out[0].fix.as_ref().expect("a fix");
         assert_eq!(fix.edits[0].content, "\\sinh");
+    }
+
+    #[test]
+    fn label_key_in_math_is_left_alone() {
+        // Issue #25: `max` in the label key is an opaque identifier, not math.
+        assert!(findings("$\\label{eq:thing_max}$\n").is_empty());
+    }
+
+    #[test]
+    fn ref_and_cite_keys_in_math_are_left_alone() {
+        assert!(findings("$\\eqref{max_norm}$\n").is_empty());
+        assert!(findings("$x \\cite{max2000}$\n").is_empty());
+    }
+
+    #[test]
+    fn math_content_argument_is_still_flagged() {
+        // The key gate is a name-family list, not a blanket argument skip:
+        // `\frac`'s arguments are math content, so a bare `sin` there fires.
+        assert_eq!(findings("$\\frac{sin x}{2}$\n").len(), 1);
     }
 
     #[test]

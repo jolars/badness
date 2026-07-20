@@ -14,7 +14,9 @@
 //! and hex literals (`0xFF` carries a non-digit; `0x12` is excluded by the extra
 //! guard that the leading number is not a lone `0`, the `0x` hex marker). The
 //! rule reads only `WORD` tokens, so comments, `\verb`, and verbatim (which never
-//! lex as `WORD`) are untouched.
+//! lex as `WORD`) are untouched. Key arguments (`\label{fig:3x3}`, `\ref`,
+//! `\cite`, …) are skipped via the shared `super::in_key_argument` gate: the `x`
+//! there is part of an opaque identifier, never a cross.
 //!
 //! The fix is `Unsafe` (an intent heuristic -- a bare `x` between numbers is
 //! *usually* a cross, but occasionally a real variable) and its content depends
@@ -68,7 +70,9 @@ impl Rule for TimesVariable {
          rather than the `\\times` cross, so it reads wrong. The rule only fires \
          when the whole word is `digits x digits` -- one lowercase `x` with ASCII \
          digits on both sides and nothing else -- so ordinary words (`matrix`), \
-         spaced products (`n x m`), and hex literals (`0xFF`, `0x12`) are left \
+         spaced products (`n x m`), hex literals (`0xFF`, `0x12`), and key \
+         arguments such as `\\label{fig:3x3}` or `\\ref{fig:3x3}` (where the `x` \
+         is part of an opaque identifier) are left \
          alone. The fix is **unsafe** (a bare `x` between numbers is usually a \
          cross but occasionally a real variable): inside math it rewrites the `x` \
          to `\\times`, and in text it wraps it as `$\\times$` so the result still \
@@ -92,6 +96,11 @@ impl Rule for TimesVariable {
         let Some(xi) = times_x_position(text) else {
             return;
         };
+        // A key argument (`\label{fig:3x3}`, `\ref`, `\cite`, …) holds an opaque
+        // identifier — the `x` there is part of a key, never a cross.
+        if super::in_key_argument(tok) {
+            return;
+        }
         let base = usize::from(tok.text_range().start());
         let start = base + xi;
         let end = start + 1;
@@ -214,6 +223,14 @@ mod tests {
     #[test]
     fn flags_small_product() {
         assert_eq!(findings("a 3x3 matrix\n").len(), 1);
+    }
+
+    #[test]
+    fn label_and_ref_keys_are_left_alone() {
+        // The `x` in a key is part of an opaque identifier, never a cross —
+        // in text and in math alike.
+        assert!(findings("\\label{fig:3x3}\n").is_empty());
+        assert!(findings("$\\ref{fig:3x3}$\n").is_empty());
     }
 
     #[test]

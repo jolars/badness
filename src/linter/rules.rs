@@ -184,8 +184,9 @@ fn math_regions(root: &SyntaxNode) -> Vec<TextRange> {
 /// the `\ref`/`\cite`/`\gls`/color families, `\tag`, `\hyperref` (see
 /// [`crate::semantic::builder::key_argument_command`]) — whose content is an
 /// opaque key or text rather than typeset math. The shared gate the math-shape
-/// rules (`math-operator-name`, `times-variable`) use to keep identifier keys
-/// like `\label{eq:thing_max}` out of scope. *All* argument groups of such a
+/// rules (`math-operator-name`, `times-variable`) and `dash-length` use to keep
+/// identifier keys like `\label{eq:thing_max}` and `\cite{smith2020-1}` out of
+/// scope. *All* argument groups of such a
 /// command are skipped, not just the key slot: argument attachment is greedy
 /// (arity is unknown at parse time, AGENTS.md decision #8), so index mapping is
 /// unreliable, and a false negative beats flagging a key.

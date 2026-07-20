@@ -29,10 +29,11 @@
 //! leading/trailing option flags (`--verbose`), all of which lex with the run at a
 //! word edge or alongside other runs. The rule reads only `WORD` tokens, so
 //! comments, `\verb`, and verbatim (which never lex as `WORD`) are untouched, and
-//! math is skipped (a `-` there is a minus, not a dash). A rule-command span
+//! math is skipped (a `-` there is a minus, not a dash). Two argument contexts
+//! are skipped via the shared gates in `super`: a rule-command span
 //! (`\cline{1-3}`, `\cmidrule(lr){2-3}` — the `n-m` is a column span, issue #34)
-//! is skipped via the shared `super::in_rule_span_argument` gate: it is a spec,
-//! not typeset text.
+//! and a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}` — an opaque
+//! identifier), neither of which is typeset text.
 
 use std::path::PathBuf;
 
@@ -82,9 +83,10 @@ impl Rule for DashLength {
          inside a single word with content on both sides and is the only dash run \
          in that word, so dates (`2020-01-15`), ISBNs, spaced dashes, and option \
          flags (`--verbose`) are left alone. Column spans in rule commands \
-         (`\\cline{1-3}`, `\\cmidrule(lr){2-3}`) are specs rather than typeset \
-         ranges, so they are skipped too. Comments, verbatim, and math are never \
-         touched."
+         (`\\cline{1-3}`, `\\cmidrule(lr){2-3}`) and key arguments \
+         (`\\label{fig:1-3}`, `\\cite{smith2020-1}`) are specs and opaque \
+         identifiers rather than typeset ranges, so they are skipped too. \
+         Comments, verbatim, and math are never touched."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -112,8 +114,9 @@ impl Rule for DashLength {
             return;
         };
         // A column span in a rule command (`\cline{1-3}`, `\cmidrule(lr){2-3}`)
-        // is a spec, never a typeset range.
-        if super::in_rule_span_argument(tok) {
+        // and a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}`) hold a
+        // spec or an opaque identifier, never a typeset range.
+        if super::in_rule_span_argument(tok) || super::in_key_argument(tok) {
             return;
         }
         let before = text[..run_start].chars().next_back();
@@ -351,6 +354,14 @@ mod tests {
         assert!(findings("\\cmidrule[0.5pt]{4-5}\n").is_empty());
         assert!(findings("\\cmidrule(lr){2-3}\n").is_empty());
         assert!(findings("\\cmidrule(lr){2-3} \\cmidrule(r){4-5}\n").is_empty());
+    }
+
+    #[test]
+    fn key_arguments_are_left_alone() {
+        // A label or cite key is an opaque identifier, not a typeset range.
+        assert!(findings("\\label{fig:1-3}\n").is_empty());
+        assert!(findings("\\cite{smith2020-1}\n").is_empty());
+        assert!(findings("See \\ref{sec:2-4} now.\n").is_empty());
     }
 
     #[test]

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.11.0](https://github.com/jolars/badness/compare/v0.10.0...v0.11.0) (2026-07-20)
+
+### Breaking changes
+- **lsp:** move texmf config to editor settings ([`2f83a84`](https://github.com/jolars/badness/commit/2f83a844a6876906e69843053cafb59ed6e5232b))
+
+### Features
+- **lsp:** move texmf config to editor settings ([`2f83a84`](https://github.com/jolars/badness/commit/2f83a844a6876906e69843053cafb59ed6e5232b))
+- **formatter:** hang nested blocks in align grids ([`5103bab`](https://github.com/jolars/badness/commit/5103babda2aa884f8dc5abe1b55a7fd2d3402fa5))
+- **linter:** document bib rules in --explain and docs ([`a2a742c`](https://github.com/jolars/badness/commit/a2a742ccd9db648ae60d90359a8118364fdd60b7)), closes [#24](https://github.com/jolars/badness/issues/24)
+
+### Bug Fixes
+- **tests:** adapt to `lsp-server` 0.10 `Response` API ([`5f1e889`](https://github.com/jolars/badness/commit/5f1e889969c92a4d2f58fc3d4fb6365ed6b696d2))
+- **linter:** skip script labels inside argument groups ([`1f8c0eb`](https://github.com/jolars/badness/commit/1f8c0ebed5e3ae93d617dc23195288446720ae46)), closes [#37](https://github.com/jolars/badness/issues/37)
+- **parser:** name blank line as math terminator ([`2751787`](https://github.com/jolars/badness/commit/2751787acad3f69588eb66dfc562bb293e743a7f)), ref [#35](https://github.com/jolars/badness/issues/35)
+- **linter:** ignore key arguments in dash-length ([`506e5f0`](https://github.com/jolars/badness/commit/506e5f0a365d1f5d988cdcd99706edab7ed435a8))
+- **linter:** ignore rule-command spans in dash-length ([`adeecf6`](https://github.com/jolars/badness/commit/adeecf69d79cfb38d52f4187184104385feaad71)), closes [#34](https://github.com/jolars/badness/issues/34)
+- **linter:** ignore key arguments in math-shape rules ([`387810a`](https://github.com/jolars/badness/commit/387810a7fbca8a9fd298634659c06dbb18ac0b6e)), closes [#25](https://github.com/jolars/badness/issues/25)
+- **parser:** keep unmatched `[` a plain atom in math ([`c185c13`](https://github.com/jolars/badness/commit/c185c1338aa830646db53c344dd2638240ebbb0f)), closes [#23](https://github.com/jolars/badness/issues/23)
+- **linter:** ignore labels in exclusive conditional branches ([`a6e0c22`](https://github.com/jolars/badness/commit/a6e0c228c177d25bd071a3ea8062ad8c9484c0aa))
+- **linter:** ignore package loads in exclusive branches ([`d16d3d1`](https://github.com/jolars/badness/commit/d16d3d1a71c3abe6bca1fb78ee46e18d3b8aff33)), closes [#27](https://github.com/jolars/badness/issues/27)
+- **linter:** target the whole construct for DOC_COMMENT-bound suppressions ([`cd647fa`](https://github.com/jolars/badness/commit/cd647fae218e61335ca080bda065d2c2b3425387)), fixes [#26](https://github.com/jolars/badness/issues/26)
+
 ## [0.10.0](https://github.com/jolars/badness/compare/v0.9.0...v0.10.0) (2026-07-15)
 
 ### Features

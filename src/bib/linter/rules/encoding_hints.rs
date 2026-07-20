@@ -16,7 +16,12 @@ use crate::bib::ast::field_value;
 use crate::bib::syntax::{SyntaxElement, SyntaxKind};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "An accented name entered as raw UTF-8:",
+    source: "@article{erdos47, author = {Erd\u{151}s, Paul}}\n",
+}];
 
 pub struct EncodingHints;
 
@@ -27,6 +32,20 @@ impl BibRule for EncodingHints {
 
     fn default_severity(&self) -> Severity {
         Severity::Hint
+    }
+
+    fn description(&self) -> &'static str {
+        "Surface non-ASCII text in a field value as a hint (accented text is \
+         perfectly valid in a UTF-8 setup, hence not a warning). Raw non-ASCII \
+         renders correctly only when the file is UTF-8 and the document loads \
+         a matching input encoding (`inputenc` with pdfLaTeX, `fontspec` with \
+         Xe/LuaLaTeX); legacy toolchains may mangle it. Either confirm the \
+         encoding or use a LaTeX escape (`\\'e` for `\u{e9}`). Report-only -- the \
+         right fix depends on the project's toolchain."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

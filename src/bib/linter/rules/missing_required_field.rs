@@ -18,7 +18,13 @@ use crate::bib::semantic::RequiredField;
 use crate::bib::syntax::{SyntaxElement, SyntaxKind};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "An `@article` without its required `journaltitle`:",
+    source: "@article{doe2020,\n  author = {Doe, Jane},\n  title  = {A study},\n  \
+             year   = 2020\n}\n",
+}];
 
 pub struct MissingRequiredField;
 
@@ -29,6 +35,19 @@ impl BibRule for MissingRequiredField {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a regular entry lacking a field its type requires, per the \
+         biblatex data model. An alternation like `date` *or* `year` is \
+         satisfied by either, and classic-BibTeX aliases count (`journal` \
+         satisfies `journaltitle`). An entry type the built-in database does \
+         not know carries no signature and is never flagged. Report-only -- \
+         field content cannot be invented."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

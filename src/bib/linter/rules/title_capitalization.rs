@@ -31,7 +31,7 @@ use crate::bib::ast::{field_name, field_value};
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
 
 /// Field names whose value is title-like prose subject to style lowercasing.
 const TITLE_FIELDS: &[&str] = &[
@@ -48,6 +48,11 @@ const TITLE_FIELDS: &[&str] = &[
     "shorttitle",
 ];
 
+const EXAMPLES: &[Example] = &[Example {
+    caption: "An unprotected acronym a title-lowercasing style would render as `dna`:",
+    source: "@article{watson53, title = {Molecular structure of DNA}}\n",
+}];
+
 pub struct TitleCapitalization;
 
 impl BibRule for TitleCapitalization {
@@ -57,6 +62,22 @@ impl BibRule for TitleCapitalization {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag an unprotected acronym or mid-word capital in a title-like field \
+         (`title`, `booktitle`, `journaltitle`, ...). Many bibliography styles \
+         lowercase unprotected title text, so `DNA` renders as `dna` unless \
+         written `{DNA}`. Flagged are runs of two or more capitals and the \
+         camelCase brand pattern (a first capital mid-way through a \
+         lowercase-initial word, like `iPhone`); ordinary Title Case, name \
+         particles (`McDonald`), and mixed-case tokens (`LaTeX`) stay quiet, \
+         as does anything already inside a `{...}` group. Report-only -- \
+         choosing what to protect is the author's call."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

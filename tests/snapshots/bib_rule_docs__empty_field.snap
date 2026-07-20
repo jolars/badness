@@ -1,0 +1,32 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `empty-field`
+
+Flag a field whose value is empty or whitespace-only (`title = {}`, `note = ""`). An empty field carries no data, and some styles still emit punctuation around it. The safe autofix deletes the field along with its separating comma.
+
+An empty `note` left behind by an edit:
+
+```bib
+@misc{knuth84,
+  title = {Draft},
+  note  = {}
+}
+```
+
+```text
+warning: empty-field
+ --> references.bib:3:3
+  |
+3 |   note  = {}
+  |   ^^^^^^^^^^ field `note` is empty
+```
+
+After applying the fix:
+
+```bib
+@misc{knuth84,
+  title = {Draft}
+}
+```

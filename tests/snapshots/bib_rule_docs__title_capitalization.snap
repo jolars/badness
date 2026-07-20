@@ -1,0 +1,21 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `title-capitalization`
+
+Flag an unprotected acronym or mid-word capital in a title-like field (`title`, `booktitle`, `journaltitle`, ...). Many bibliography styles lowercase unprotected title text, so `DNA` renders as `dna` unless written `{DNA}`. Flagged are runs of two or more capitals and the camelCase brand pattern (a first capital mid-way through a lowercase-initial word, like `iPhone`); ordinary Title Case, name particles (`McDonald`), and mixed-case tokens (`LaTeX`) stay quiet, as does anything already inside a `{...}` group. Report-only -- choosing what to protect is the author's call.
+
+An unprotected acronym a title-lowercasing style would render as `dna`:
+
+```bib
+@article{watson53, title = {Molecular structure of DNA}}
+```
+
+```text
+warning: title-capitalization
+ --> references.bib:1:52
+  |
+1 | @article{watson53, title = {Molecular structure of DNA}}
+  |                                                    ^^^ unprotected capitals `DNA` in `title`; wrap in braces (`{DNA}`) to keep case under title-lowercasing styles
+```

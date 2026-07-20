@@ -285,9 +285,13 @@ fn run_lsp() -> ExitCode {
 const MAX_FIX_ITERATIONS: usize = 10;
 
 /// Print a rule's description and examples (`lint --explain <rule>`), then exit.
-/// Unknown ids exit `2` after listing the known built-in rule ids.
+/// The id is looked up in the LaTeX registry first, then the bib registry (the
+/// two share one namespace, so at most one matches). Unknown ids exit `2` after
+/// listing every known built-in rule id across both linters.
 fn run_explain(id: &str) -> ExitCode {
-    match badness::linter::docs::explain_rule(id) {
+    let doc = badness::linter::docs::explain_rule(id)
+        .or_else(|| badness::bib::linter::docs::explain_rule(id));
+    match doc {
         Some(doc) => {
             print!("{doc}");
             ExitCode::SUCCESS
@@ -296,7 +300,9 @@ fn run_explain(id: &str) -> ExitCode {
             eprintln!("badness: unknown lint rule `{id}`");
             eprintln!(
                 "known rules: {}",
-                badness::linter::rules::ALL_RULE_IDS.join(", ")
+                badness::linter::rules::all_known_rule_ids()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             ExitCode::from(2)
         }

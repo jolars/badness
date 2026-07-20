@@ -1,0 +1,22 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `duplicate-key`
+
+Flag a cite key defined by more than one entry in the same `.bib` file. Keys are compared case-insensitively, matching BibTeX, which silently keeps only one of the colliding entries; every definition after the first is flagged. No autofix: resolving the collision (rename vs delete) is the author's call.
+
+The same cite key defined by two entries:
+
+```bib
+@misc{knuth84, title = {Draft}}
+@book{knuth84, title = {Book}}
+```
+
+```text
+warning: duplicate-key
+ --> references.bib:2:7
+  |
+2 | @book{knuth84, title = {Book}}
+  |       ^^^^^^^ cite key `knuth84` is defined more than once
+```

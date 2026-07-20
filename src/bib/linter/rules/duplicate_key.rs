@@ -13,7 +13,12 @@ use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "The same cite key defined by two entries:",
+    source: "@misc{knuth84, title = {Draft}}\n@book{knuth84, title = {Book}}\n",
+}];
 
 pub struct DuplicateKey;
 
@@ -24,6 +29,18 @@ impl BibRule for DuplicateKey {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a cite key defined by more than one entry in the same `.bib` \
+         file. Keys are compared case-insensitively, matching BibTeX, which \
+         silently keeps only one of the colliding entries; every definition \
+         after the first is flagged. No autofix: resolving the collision \
+         (rename vs delete) is the author's call."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn check_file(&self, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {

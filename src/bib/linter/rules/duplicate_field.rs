@@ -25,7 +25,19 @@ use crate::bib::ast::{entry_type, field_name, field_value, fields};
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[
+    Example {
+        caption: "Two `note` fields with identical values -- deleting the redundant copy is safe:",
+        source: "@misc{knuth84,\n  note = {Draft},\n  note = {Draft}\n}\n",
+    },
+    Example {
+        caption: "Differing values are report-only (which copy the engine keeps is \
+                  style-dependent, so dropping either would change meaning):",
+        source: "@misc{knuth84,\n  note = {First draft},\n  note = {Second draft}\n}\n",
+    },
+];
 
 pub struct DuplicateField;
 
@@ -36,6 +48,21 @@ impl BibRule for DuplicateField {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a field name appearing more than once on a single entry (names \
+         compared case-insensitively). BibTeX and Biber keep only one \
+         occurrence and silently discard the rest, so a duplicate is almost \
+         always a merge or copy-paste mistake; every occurrence after the \
+         first is flagged. When the repeated value is byte-identical to the \
+         kept one, a safe autofix deletes the redundant copy; when the values \
+         differ, which one wins is engine-dependent, so the finding is \
+         report-only."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

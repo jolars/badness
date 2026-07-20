@@ -1,0 +1,22 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `unused-string`
+
+Flag an `@string` macro defined in the file but never referenced by any field value. For the common self-contained `.bib` an unused macro is dead weight; in a multi-file bibliography it may be referenced from another `.bib`, so treat cross-file setups with care -- cross-file `@string` resolution is not modeled yet. Report-only: deleting a definition is a meaning-level edit left to the author.
+
+A defined macro no field value references:
+
+```bib
+@string{cup = {Cambridge University Press}}
+@book{turing50, title = {Draft}, publisher = {Springer}}
+```
+
+```text
+warning: unused-string
+ --> references.bib:1:9
+  |
+1 | @string{cup = {Cambridge University Press}}
+  |         ^^^ `@string` macro `cup` is defined but never used
+```

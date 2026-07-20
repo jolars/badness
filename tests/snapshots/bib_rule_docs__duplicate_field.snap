@@ -1,0 +1,49 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `duplicate-field`
+
+Flag a field name appearing more than once on a single entry (names compared case-insensitively). BibTeX and Biber keep only one occurrence and silently discard the rest, so a duplicate is almost always a merge or copy-paste mistake; every occurrence after the first is flagged. When the repeated value is byte-identical to the kept one, a safe autofix deletes the redundant copy; when the values differ, which one wins is engine-dependent, so the finding is report-only.
+
+Two `note` fields with identical values -- deleting the redundant copy is safe:
+
+```bib
+@misc{knuth84,
+  note = {Draft},
+  note = {Draft}
+}
+```
+
+```text
+warning: duplicate-field
+ --> references.bib:3:3
+  |
+3 |   note = {Draft}
+  |   ^^^^ duplicate field `note` on `misc` entry
+```
+
+After applying the fix:
+
+```bib
+@misc{knuth84,
+  note = {Draft}
+}
+```
+
+Differing values are report-only (which copy the engine keeps is style-dependent, so dropping either would change meaning):
+
+```bib
+@misc{knuth84,
+  note = {First draft},
+  note = {Second draft}
+}
+```
+
+```text
+warning: duplicate-field
+ --> references.bib:3:3
+  |
+3 |   note = {Second draft}
+  |   ^^^^ duplicate field `note` on `misc` entry
+```

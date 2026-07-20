@@ -26,6 +26,7 @@
 //! [`apply_fixes`]: crate::linter::apply_fixes
 
 pub mod check;
+pub mod docs;
 pub mod rules;
 pub mod suppression;
 

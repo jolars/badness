@@ -27,7 +27,12 @@ use crate::bib::ast::{field_name, field_value};
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "An empty `note` left behind by an edit:",
+    source: "@misc{knuth84,\n  title = {Draft},\n  note  = {}\n}\n",
+}];
 
 pub struct EmptyField;
 
@@ -38,6 +43,17 @@ impl BibRule for EmptyField {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a field whose value is empty or whitespace-only (`title = {}`, \
+         `note = \"\"`). An empty field carries no data, and some styles still \
+         emit punctuation around it. The safe autofix deletes the field along \
+         with its separating comma."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

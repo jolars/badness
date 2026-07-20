@@ -431,7 +431,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
 /// registries. Without the bib half, every bib finding's id reads as "not active"
 /// and the CLI silently drops it (the LSP, which doesn't post-filter, still shows
 /// them — the source of the CLI/LSP divergence).
-fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
+pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
     ALL_RULE_IDS
         .iter()
         .copied()

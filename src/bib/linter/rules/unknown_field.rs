@@ -20,7 +20,13 @@ use crate::bib::semantic::RequiredField;
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A typo'd field name (`pubisher` for `publisher`):",
+    source: "@book{turing50,\n  author   = {Turing, Alan},\n  title    = {A book},\n  \
+             pubisher = {Elsevier},\n  year     = 1950\n}\n",
+}];
 
 pub struct UnknownField;
 
@@ -31,6 +37,19 @@ impl BibRule for UnknownField {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag a field that is neither required nor optional for its entry type \
+         and carries no global field metadata -- usually a typo, or data \
+         misplaced from another entry type. BibLaTeX silently ignores fields \
+         it does not know, so the mistake otherwise vanishes without a trace. \
+         Only entry types the built-in database knows are checked. Report-only \
+         -- deleting the field would discard data."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn interests(&self) -> &'static [SyntaxKind] {

@@ -20,7 +20,8 @@ this page never drifts from the rules' actual behavior.
 
 This page covers the **LaTeX** linter. BibTeX files have a parallel set of rules
 (a separate `BibRule` registry under `src/bib/linter/`), selectable through the
-same `[lint]` config but not yet catalogued here.
+same `[lint]` config and catalogued in
+[BibTeX Linter Rules](bib-linter-rules.md).
 
 ## `abbreviation-spacing`
 

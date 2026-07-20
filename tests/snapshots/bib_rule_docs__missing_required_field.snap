@@ -1,0 +1,25 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `missing-required-field`
+
+Flag a regular entry lacking a field its type requires, per the biblatex data model. An alternation like `date` *or* `year` is satisfied by either, and classic-BibTeX aliases count (`journal` satisfies `journaltitle`). An entry type the built-in database does not know carries no signature and is never flagged. Report-only -- field content cannot be invented.
+
+An `@article` without its required `journaltitle`:
+
+```bib
+@article{doe2020,
+  author = {Doe, Jane},
+  title  = {A study},
+  year   = 2020
+}
+```
+
+```text
+warning: missing-required-field
+ --> references.bib:1:10
+  |
+1 | @article{doe2020,
+  |          ^^^^^^^ entry `article` is missing required field `journaltitle`
+```

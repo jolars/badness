@@ -16,7 +16,13 @@ use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A typo'd macro name (`cpu` for `cup`):",
+    source: "@string{cup = {Cambridge University Press}}\n\
+             @book{turing50, title = {Draft}, publisher = cpu}\n",
+}];
 
 pub struct UndefinedString;
 
@@ -27,6 +33,21 @@ impl BibRule for UndefinedString {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag an `@string` macro used in a field value but defined nowhere in \
+         the file (the twelve month macros `jan`..`dec` are predefined). \
+         Usually a typo'd macro name or a missing `@string` definition; BibTeX \
+         errors on it at build time. In a multi-file bibliography the \
+         definition may live in another `.bib`, so a use resolved there is a \
+         false positive -- cross-file `@string` resolution is not modeled yet. \
+         Report-only: the fix (define the macro or correct the name) is a \
+         meaning-level edit left to the author."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn check_file(&self, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {

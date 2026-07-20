@@ -21,6 +21,9 @@ use std::path::Path;
 use crate::bib::semantic::{BibFieldDb, Model};
 use crate::bib::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::{Diagnostic, Severity};
+// The example shape is language-agnostic (a caption plus a source snippet), so the
+// bib rules reuse the LaTeX linter's `Example` rather than duplicating it.
+pub use crate::linter::rules::Example;
 
 pub mod duplicate_field;
 pub mod duplicate_key;
@@ -75,6 +78,23 @@ pub trait BibRule: Send + Sync {
     /// The severity a rule emits unless it overrides per-finding.
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    /// One-paragraph (markdown) description of what the rule flags and why, used
+    /// to generate the rule reference. Empty means "not yet documented"; the
+    /// `every_bib_rule_is_documented` test (`tests/bib_rule_docs.rs`) requires a
+    /// non-empty value for every shipped rule.
+    fn description(&self) -> &'static str {
+        ""
+    }
+
+    /// Worked examples for the rule reference. Each `source` is linted live and
+    /// rendered with its diagnostics (and autofix before/after) by
+    /// [`crate::bib::linter::docs::render_rule_doc`]. The default is empty; the
+    /// docs tests require at least one example per rule, and that each one
+    /// actually triggers the rule.
+    fn examples(&self) -> &'static [Example] {
+        &[]
     }
 
     /// The bib `SyntaxKind`s this rule subscribes to. The default (`&[]`) opts out

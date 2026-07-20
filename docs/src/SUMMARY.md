@@ -15,6 +15,7 @@
 
 - [CLI Reference](reference/cli.md)
 - [Linter Rules](reference/linter-rules.md)
+- [BibTeX Linter Rules](reference/bib-linter-rules.md)
 - [Wrap Modes](reference/wrap-modes.md)
 - [Benchmarks](reference/benchmarks.md)
 

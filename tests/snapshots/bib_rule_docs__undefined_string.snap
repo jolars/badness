@@ -1,0 +1,22 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `undefined-string`
+
+Flag an `@string` macro used in a field value but defined nowhere in the file (the twelve month macros `jan`..`dec` are predefined). Usually a typo'd macro name or a missing `@string` definition; BibTeX errors on it at build time. In a multi-file bibliography the definition may live in another `.bib`, so a use resolved there is a false positive -- cross-file `@string` resolution is not modeled yet. Report-only: the fix (define the macro or correct the name) is a meaning-level edit left to the author.
+
+A typo'd macro name (`cpu` for `cup`):
+
+```bib
+@string{cup = {Cambridge University Press}}
+@book{turing50, title = {Draft}, publisher = cpu}
+```
+
+```text
+warning: undefined-string
+ --> references.bib:2:46
+  |
+2 | @book{turing50, title = {Draft}, publisher = cpu}
+  |                                              ^^^ `@string` macro `cpu` is used but never defined
+```

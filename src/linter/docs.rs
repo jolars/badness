@@ -19,7 +19,7 @@ use crate::linter::check::lint_document;
 use crate::linter::diagnostic::{Diagnostic, Fix};
 use crate::linter::fix::apply_fixes;
 use crate::linter::render::{OutputMode, render_findings};
-use crate::linter::rules::{Rule, all_rules};
+use crate::linter::rules::{Example, Rule, all_rules};
 use crate::parser::{parse, parse_with_flavor};
 use crate::project::include::BibTarget;
 use crate::project::labels::{document_label_names, document_ref_names};
@@ -135,16 +135,32 @@ pub fn demo_diagnostics_with(
     )
 }
 
-/// Render the reference *section* for a single rule: an `## \`id\`` heading, the
-/// rule's `description()`, and each example rendered with its live diagnostics
-/// and (for a safe autofix) the after state.
-pub fn render_rule_doc(rule: &dyn Rule) -> String {
+/// The language-agnostic inputs for one rule's reference section: the rule's
+/// metadata, the synthetic path its snippets are linted under, and the fence
+/// language. Linting itself is supplied by the caller, so the same renderer
+/// serves both the LaTeX rules and the bib rules
+/// ([`crate::bib::linter::docs`]).
+pub(crate) struct RuleDocSection<'a> {
+    pub id: &'a str,
+    pub description: &'a str,
+    pub examples: &'a [Example],
+    pub companions: &'a [(&'static str, &'static str)],
+    pub example_path: &'a Path,
+    pub lang: &'a str,
+}
+
+/// Render one rule's reference section from its inputs: an `## \`id\`` heading,
+/// the description, and each example rendered with its live diagnostics (via
+/// `lint`) and (for a safe autofix) the after state.
+pub(crate) fn render_rule_section(
+    section: &RuleDocSection<'_>,
+    lint: &dyn Fn(&str) -> Vec<Diagnostic>,
+) -> String {
     let mut out = String::new();
-    let id = rule.id();
-    let example_path = PathBuf::from(rule.example_path());
+    let id = section.id;
     let _ = writeln!(out, "## `{id}`");
 
-    let description = rule.description().trim();
+    let description = section.description.trim();
     if !description.is_empty() {
         let _ = writeln!(out);
         let _ = writeln!(out, "{description}");
@@ -152,31 +168,29 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
 
     // Synthetic sibling files linted alongside every example (the two-file
     // story of a cross-file rule); rendered once, before the examples.
-    let companions = rule.example_companions();
-    for (companion_path, companion_source) in companions {
+    for (companion_path, companion_source) in section.companions {
         let _ = writeln!(out);
         let _ = writeln!(out, "With a sibling `{companion_path}`:");
         let _ = writeln!(out);
-        fenced(&mut out, "tex", companion_source);
+        fenced(&mut out, section.lang, companion_source);
     }
 
-    for example in rule.examples() {
+    for example in section.examples {
         let _ = writeln!(out);
         if !example.caption.is_empty() {
             let _ = writeln!(out, "{}", example.caption);
             let _ = writeln!(out);
         }
-        fenced(&mut out, "tex", example.source);
+        fenced(&mut out, section.lang, example.source);
 
         // Restrict to this rule so an example can't advertise another's finding.
-        let diagnostics: Vec<Diagnostic> =
-            demo_diagnostics_with(&example_path, example.source, companions)
-                .into_iter()
-                .filter(|d| d.rule == id)
-                .collect();
+        let diagnostics: Vec<Diagnostic> = lint(example.source)
+            .into_iter()
+            .filter(|d| d.rule == id)
+            .collect();
         let source = example.source.to_string();
         let rendered = render_findings(&diagnostics, OutputMode::Pretty, &|path| {
-            (path == example_path.as_path()).then(|| source.clone())
+            (path == section.example_path).then(|| source.clone())
         });
         let _ = writeln!(out);
         fenced(&mut out, "text", &rendered);
@@ -188,11 +202,30 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
             let _ = writeln!(out);
             let _ = writeln!(out, "After applying the fix:");
             let _ = writeln!(out);
-            fenced(&mut out, "tex", &after.output);
+            fenced(&mut out, section.lang, &after.output);
         }
     }
 
     out
+}
+
+/// Render the reference *section* for a single LaTeX rule: an `## \`id\``
+/// heading, the rule's `description()`, and each example rendered with its live
+/// diagnostics and (for a safe autofix) the after state.
+pub fn render_rule_doc(rule: &dyn Rule) -> String {
+    let example_path = PathBuf::from(rule.example_path());
+    let companions = rule.example_companions();
+    render_rule_section(
+        &RuleDocSection {
+            id: rule.id(),
+            description: rule.description(),
+            examples: rule.examples(),
+            companions,
+            example_path: &example_path,
+            lang: "tex",
+        },
+        &|source| demo_diagnostics_with(&example_path, source, companions),
+    )
 }
 
 /// Render the reference section for the rule with `id`, or `None` if no built-in
@@ -253,7 +286,8 @@ this page never drifts from the rules' actual behavior.
 
 This page covers the **LaTeX** linter. BibTeX files have a parallel set of rules
 (a separate `BibRule` registry under `src/bib/linter/`), selectable through the
-same `[lint]` config but not yet catalogued here.
+same `[lint]` config and catalogued in
+[BibTeX Linter Rules](bib-linter-rules.md).
 ";
 
 const FOOTER: &str = "\

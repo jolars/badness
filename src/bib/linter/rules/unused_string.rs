@@ -15,7 +15,13 @@ use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
 
-use super::{BibRule, BibRuleContext};
+use super::{BibRule, BibRuleContext, Example};
+
+const EXAMPLES: &[Example] = &[Example {
+    caption: "A defined macro no field value references:",
+    source: "@string{cup = {Cambridge University Press}}\n\
+             @book{turing50, title = {Draft}, publisher = {Springer}}\n",
+}];
 
 pub struct UnusedString;
 
@@ -26,6 +32,19 @@ impl BibRule for UnusedString {
 
     fn default_severity(&self) -> Severity {
         Severity::Warning
+    }
+
+    fn description(&self) -> &'static str {
+        "Flag an `@string` macro defined in the file but never referenced by \
+         any field value. For the common self-contained `.bib` an unused macro \
+         is dead weight; in a multi-file bibliography it may be referenced \
+         from another `.bib`, so treat cross-file setups with care -- \
+         cross-file `@string` resolution is not modeled yet. Report-only: \
+         deleting a definition is a meaning-level edit left to the author."
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        EXAMPLES
     }
 
     fn check_file(&self, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {

@@ -1,0 +1,26 @@
+---
+source: tests/bib_rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `unknown-field`
+
+Flag a field that is neither required nor optional for its entry type and carries no global field metadata -- usually a typo, or data misplaced from another entry type. BibLaTeX silently ignores fields it does not know, so the mistake otherwise vanishes without a trace. Only entry types the built-in database knows are checked. Report-only -- deleting the field would discard data.
+
+A typo'd field name (`pubisher` for `publisher`):
+
+```bib
+@book{turing50,
+  author   = {Turing, Alan},
+  title    = {A book},
+  pubisher = {Elsevier},
+  year     = 1950
+}
+```
+
+```text
+warning: unknown-field
+ --> references.bib:4:3
+  |
+4 |   pubisher = {Elsevier},
+  |   ^^^^^^^^ unknown field `pubisher` on `book` entry
+```

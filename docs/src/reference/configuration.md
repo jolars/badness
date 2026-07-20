@@ -23,9 +23,9 @@ its default.
 ## Discovery
 
 For each input, badness walks from the file's directory upward and uses the
-first `badness.toml` it finds. The walk stops at a directory containing a
-`.git` entry (the repository root), so a config outside your repository is
-never picked up. If no file is found, built-in defaults apply.
+first `badness.toml` it finds. The walk stops at a directory containing a `.git`
+entry (the repository root), so a config outside your repository is never picked
+up. If no file is found, built-in defaults apply.
 
 Two global CLI flags override discovery:
 
@@ -81,8 +81,7 @@ takes precedence for a single run.
 
 ### `line-width`
 
-Maximum line width before the formatter breaks a line. Must be between 1
-and 1000.
+Maximum line width before the formatter breaks a line. Must be between 1 and 1000.
 
 **Default value**: `80`
 
@@ -122,25 +121,24 @@ structure—only where soft line breaks fall.
   | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                 |
   | `semantic` | [Semantic line breaks](https://sembr.org): keep the author's soft breaks *and* add a break after each sentence. |
 
-Both `sentence` and `semantic` split a paragraph at sentence boundaries,
-one sentence per line. Boundary detection is a small per-language rule engine
-over the words: a `.`, `!`, or `?` ends a sentence *unless* the word is a known
+Both `sentence` and `semantic` split a paragraph at sentence boundaries, one
+sentence per line. Boundary detection is a small per-language rule engine over
+the words: a `.`, `!`, or `?` ends a sentence *unless* the word is a known
 abbreviation (`e.g.`, `Fig.`, `Dr.`, …), an ellipsis (`...`, `…`), or a
-contextual abbreviation whose following word signals that the sentence
-continues (`U.S. Government` stays together, `U.S. However` splits). The
-abbreviation profile is chosen by [`lang`](#lang) and extended by
+contextual abbreviation whose following word signals that the sentence continues
+(`U.S. Government` stays together, `U.S. However` splits). The abbreviation
+profile is chosen by [`lang`](#lang) and extended by
 [`no-break-abbreviations`](#no-break-abbreviations).
 
-`semantic` additionally **preserves the author's own line breaks** on top of
-the sentence breaks (the [sembr](https://sembr.org) convention). It does not
-detect clause boundaries itself—a break after a comma or `and` survives only
-where the author placed a newline. A run-on sentence on a single source line is
-still sentence-split.
+`semantic` additionally **preserves the author's own line breaks** on top of the
+sentence breaks (the [sembr](https://sembr.org) convention). It does not detect
+clause boundaries itself—a break after a comma or `and` survives only where the
+author placed a newline. A run-on sentence on a single source line is still
+sentence-split.
 
 When omitted, the formatter uses each file kind's default: `.tex` and `.bib`
-files reflow, while code-heavy `.sty`, `.cls`, `.dtx`, and `.ins` files
-preserve authored line breaks. Setting `wrap` applies the same mode to every
-file kind.
+files reflow, while code-heavy `.sty`, `.cls`, `.dtx`, and `.ins` files preserve
+authored line breaks. Setting `wrap` applies the same mode to every file kind.
 
 **Default value**: unset (per file kind: `.tex`/`.bib` → `reflow`,
 `.sty`/`.cls`/`.dtx`/`.ins` → `preserve`)
@@ -159,9 +157,9 @@ wrap = "sentence"
 Document language as a BCP-47-style code (`en`, `de`, `pt-BR`, …), used by the
 `sentence` and `semantic` wrap modes to pick the sentence-boundary abbreviation
 profile. Built-in profiles cover English (default), Czech, German, Spanish, and
-French; the region subtag is folded away, and an unknown or unset language
-falls back to English. (Automatic detection from `babel`/`polyglossia` is not
-yet implemented.)
+French; the region subtag is folded away, and an unknown or unset language falls
+back to English. (Automatic detection from `babel`/`polyglossia` is not yet
+implemented.)
 
 **Default value**: unset (English)
 
@@ -196,8 +194,8 @@ de = ["bzw.", "Abb."]       # applied only when lang resolves to German
 ## `[lint]`
 
 Rule selection for `badness lint`, shared by the [LaTeX](linter-rules.md) and
-[BibTeX](bib-linter-rules.md) rule sets. Every rule is on by default. An
-unknown rule id is reported at lint time, not rejected at config-parse time.
+[BibTeX](bib-linter-rules.md) rule sets. Every rule is on by default. An unknown
+rule id is reported at lint time, not rejected at config-parse time.
 
 ### `select`
 
@@ -216,8 +214,8 @@ select = ["deprecated-command", "dollar-display-math"]
 
 ### `ignore`
 
-Rule ids to disable, applied on top of either [`select`](#select) or the
-default rule set.
+Rule ids to disable, applied on top of either [`select`](#select) or the default
+rule set.
 
 **Default value**: `[]`
 

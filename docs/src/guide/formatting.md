@@ -16,8 +16,8 @@ badness format --check paper.tex  # report, don't write; non-zero if unformatted
 
 The style flags---`--line-width`, `--indent-width`, and `--wrap`---mirror the
 `[format]` section of `badness.toml` and override it for a single run. Each
-option's default and meaning is listed in the
-[Configuration reference](../reference/configuration.md#format).
+option's default and meaning is listed in the [Configuration
+reference](../reference/configuration.md#format).
 
 For persistent settings, badness reads a `badness.toml` discovered from the
 working directory upward; pass `--config <PATH>` to point at a specific file or

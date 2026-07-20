@@ -24,12 +24,12 @@ The language server is also the sole consumer of the `[build]` section of
 
 ## TEXMF discovery
 
-How the language server discovers the installed TeX tree for package
-resolution: document links, package hover, go-to-definition, and installed-set
-completion. Where a TeX installation lives is a fact about the machine, not the
-project, so these settings come from the editor rather than `badness.toml`, and
-they never affect `badness format` or `badness lint`, whose output stays a pure
-function of the input regardless of what is installed.
+How the language server discovers the installed TeX tree for package resolution:
+document links, package hover, go-to-definition, and installed-set completion.
+Where a TeX installation lives is a fact about the machine, not the project, so
+these settings come from the editor rather than `badness.toml`, and they never
+affect `badness format` or `badness lint`, whose output stays a pure function of
+the input regardless of what is installed.
 
 A `texmf` object with three keys, all optional:
 

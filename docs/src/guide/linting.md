@@ -31,14 +31,9 @@ or print a single rule's description and examples from the terminal:
 badness lint --explain deprecated-command
 ```
 
-Every rule is on by default. Narrow the active set through the `[lint]` table or
-the matching CLI flags:
-
-```toml
-[lint]
-select = ["deprecated-command", "dollar-display-math"]  # allowlist
-ignore = ["missing-nonbreaking-space"]                  # turn off
-```
+Every rule is on by default. Narrow the active set through the `[lint]` table
+in `badness.toml` or the matching `--select`/`--ignore` CLI flags; see the
+[Configuration reference](../reference/configuration.md#lint).
 
 Suppress a rule at one site with a comment directive:
 

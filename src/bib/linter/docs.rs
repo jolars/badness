@@ -91,7 +91,8 @@ share one id namespace with the [LaTeX rules](linter-rules.md), so the same
 `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target both.
 
 Every rule is **on by default**; narrowing happens only through `select`/`ignore`
-(see [Configuration](#configuration)). Where a rewrite is unambiguous a rule
+in the `[lint]` table (see the
+[Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
 carries an **auto-fix**: a *safe* fix (shown below as \"After applying the fix\")
 is applied by `badness lint --fix`.
 
@@ -100,18 +101,7 @@ this page never drifts from the rules' actual behavior.
 ";
 
 const FOOTER: &str = "\
-## Configuration
-
-Rules are selected through the `[lint]` table in `badness.toml`, or the matching
-CLI flags -- one selection spanning the LaTeX and BibTeX rule sets:
-
-```toml
-[lint]
-# When present, an allowlist: only these rules run.
-select = [\"duplicate-key\", \"missing-required-field\"]
-# Applied on top of select (or the default set): these are turned off.
-ignore = [\"title-capitalization\"]
-```
+## Suppression
 
 BibTeX has no line-comment token, so per-site suppression rides a structured
 `@comment` entry instead of the LaTeX `%` directive. A plain directive

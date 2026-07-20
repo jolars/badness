@@ -20,6 +20,9 @@ additional-js = [
 ]
 additional-css = ["theme/bench-charts.css", "theme/brand.css"]
 
+[output.html.redirect]
+"/reference/wrap-modes.html" = "configuration.html#wrap"
+
 [preprocessor]
 
 [preprocessor.doc-utils]

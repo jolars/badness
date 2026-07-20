@@ -14,17 +14,15 @@ badness format --check paper.tex  # report, don't write; non-zero if unformatted
 
 ## Style Options
 
-  | Flag                 | Default  | Meaning                                                                                        |
-  | -------------------- | -------- | ---------------------------------------------------------------------------------------------- |
-  | `--line-width <N>`   | `80`     | Maximum line width before the formatter breaks a line.                                         |
-  | `--indent-width <N>` | `2`      | Spaces per indent step.                                                                        |
-  | `--wrap <mode>`      | `reflow` | How line breaks inside a paragraph are laid out. See [Wrap Modes](../reference/wrap-modes.md). |
+The style flags---`--line-width`, `--indent-width`, and `--wrap`---mirror the
+`[format]` section of `badness.toml` and override it for a single run. Each
+option's default and meaning is listed in the
+[Configuration reference](../reference/configuration.md#format).
 
-These flags override the defaults for a single run. For persistent settings,
-badness reads a `badness.toml` discovered from the working directory upward (its
-`[format]` section mirrors these options); pass `--config <PATH>` to point at a
-specific file or `--no-config` to ignore any discovered one. Run `badness init`
-to write a starter `badness.toml`.
+For persistent settings, badness reads a `badness.toml` discovered from the
+working directory upward; pass `--config <PATH>` to point at a specific file or
+`--no-config` to ignore any discovered one. Run `badness init` to write a
+starter `badness.toml`.
 
 ## Guarantees
 

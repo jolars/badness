@@ -275,7 +275,8 @@ diagnostic, what `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target,
 and what a `% badness-ignore <id>` comment suppresses.
 
 Every rule is **on by default**; narrowing happens only through `select`/`ignore`
-(see [Configuration](#configuration)). Where a rewrite is unambiguous a rule
+in the `[lint]` table (see the
+[Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
 carries an **auto-fix**: a *safe* fix (shown below as \"After applying the fix\")
 is applied by `badness lint --fix`; an *unsafe* fix, one that may change output
 such as inserting a line-breaking tie, is applied only with `--unsafe-fixes` or
@@ -291,20 +292,8 @@ same `[lint]` config and catalogued in
 ";
 
 const FOOTER: &str = "\
-## Configuration
+## Suppression
 
-Rules are selected through the `[lint]` table in `badness.toml`, or the matching
-CLI flags:
-
-```toml
-[lint]
-# When present, an allowlist: only these rules run.
-select = [\"deprecated-command\", \"dollar-display-math\"]
-# Applied on top of select (or the default set): these are turned off.
-ignore = [\"missing-nonbreaking-space\"]
-```
-
-An unknown rule id is reported at lint time, not rejected at config-parse time.
 To suppress a rule at a single site, use a comment directive:
 
 ```tex

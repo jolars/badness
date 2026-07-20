@@ -17,6 +17,11 @@ fallback: a discovered `badness.toml` always wins outright, and absent one, your
 editor's tab size (sent with each formatting request) overrides the indent
 width.
 
+The language server is also the sole consumer of the `[texmf]` and `[build]`
+sections of `badness.toml`, which control TEXMF-tree indexing for package
+navigation and where the compile's `.aux` artifacts are found; see the
+[Configuration reference](../reference/configuration.md#texmf).
+
 ## Neovim
 
 With the built-in `vim.lsp` client (Neovim 0.11+):

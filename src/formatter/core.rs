@@ -2019,10 +2019,30 @@ fn is_math_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// (`1` for an ordinary cell, `n` for `\multicolumn{n}{…}{…}`), and an optional
 /// alignment override (a `\multicolumn`'s own `{spec}`; `None` means "use the
 /// column's declared alignment").
+///
+/// A *block* cell (`block` is `Some`, math grids only) is a cell that cannot
+/// collapse to one line because it holds a nested multi-line construct — a block
+/// environment (`\begin{aligned}…`, `\begin{cases}…`, a matrix), possibly inside
+/// a `\left…\right` pair or a group. Its IR replaces `text` (which stays empty):
+/// the first line continues the row and every later line hangs at the breaking
+/// node's start column ([`Ir::Align`]), so a bare nested environment gets its
+/// `\end{…}` directly under its `\begin{…}` and the body one indent step deeper.
+/// A block cell is only ever the last cell of its row, never defines a column
+/// width, and simply overflows — the same posture as a spanning cell.
 struct Cell {
     text: String,
     span: usize,
     align: Option<ColAlign>,
+    block: Option<BlockCell>,
+}
+
+/// The rendered IR of a block cell (see [`Cell`]) plus its hang offset: the flat
+/// width of the cell content *before* the breaking node (`= ` in
+/// `= \begin{aligned}…`), which the renderer adds to the cell's start column so
+/// the hanging lines anchor at the node itself.
+struct BlockCell {
+    hang: usize,
+    ir: Ir,
 }
 
 /// One row of an alignment grid: its rendered cells, the flat text of the `\\` that
@@ -2155,10 +2175,11 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 let aligns = column_alignments(node, cx).unwrap_or_default();
                 render_alignment_rows(&items, &aligns)
             }
-            // A grid we cannot lay out on aligned rows (a nested block, a mid-row
-            // comment, a blank line): fall back to the generic environment lowering,
-            // exactly as [`lower_aligned_environment`] does — the nested block keeps
-            // its own structured layout rather than being flattened.
+            // A grid we cannot lay out on aligned rows (a mid-row comment, a blank
+            // line, a nested block that is not the last cell of its row): fall back
+            // to the generic environment lowering, exactly as
+            // [`lower_aligned_environment`] does. A *trailing* nested block keeps
+            // the grid — it renders as a hanging block cell (see [`Cell::block`]).
             _ => return lower_environment(node, cx),
         }
     } else {
@@ -2196,7 +2217,11 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// Returns `None` when [`flatten_alignment_body`] rejects the body (a blank-line
 /// break), when a cell carries a forced break that cannot collapse to one line (a
 /// nested block, or a blank line inside the cell — a lone continuation newline is
-/// joined, not a fallback), or on a mid-row comment.
+/// joined, not a fallback), or on a mid-row comment. Exception: in a *math* grid, a
+/// cell whose forced break comes from a nested block environment (`aligned`,
+/// `cases`, a matrix) becomes a multi-line *block* cell ([`Cell::block`]) instead of
+/// a fallback, provided it is the last cell of its row — the grid survives and the
+/// nested environment's lines hang at its `\begin{…}` column.
 ///
 /// `math` is `true` for math grids (`align`, `pmatrix`, …) whose body the parser
 /// wrapped in a `MATH` node: the flattener descends that node and each cell lowers
@@ -2260,8 +2285,46 @@ fn build_alignment_grid(
         //
         // A math cell lowers through the role-aware sequencer, which already collapses
         // an interior whitespace/newline run to a single space (so a continuation line
-        // joins) and applies operator spacing; a blank line or a nested block's break
-        // still surfaces as a forced break and (correctly) falls back below.
+        // joins) and applies operator spacing; a blank line still surfaces as a forced
+        // break and (correctly) falls back below, but a nested block environment's
+        // break yields a *block* cell instead (see [`Cell::block`]) so the grid
+        // survives a `\begin{aligned}…`/`\begin{cases}…`/matrix cell.
+        //
+        // Block eligibility is read off the elements before they are drained. The
+        // anchor is the first *node* child whose own lowering cannot stay flat —
+        // a nested block environment, possibly wrapped in `\left…\right` or a
+        // group. Only node children can carry a forced break here (comments
+        // bailed above, a `\\` never lands inside a cell), so any break in the
+        // full cell IR below is that node's structured layout, safe to hang at
+        // its column. A verbatim-bodied environment anywhere in the cell's
+        // subtree, or a blank line of the cell's own, still falls back.
+        let first_block = if math {
+            cell.iter().position(|e| {
+                e.as_node().is_some() && lower_math_element(e.clone(), cx).contains_forced_break()
+            })
+        } else {
+            None
+        };
+        let block_eligible = first_block.is_some()
+            && !cell.iter().filter_map(|e| e.as_node()).any(|n| {
+                n.descendants()
+                    .any(|d| d.kind() == SyntaxKind::ENVIRONMENT && has_verbatim_body(&d))
+            })
+            && !cell_has_blank_line(cell);
+        // The hang offset anchors a block cell's continuation lines at the
+        // breaking node's start column: the flat width of the cell content before
+        // it, plus the one joining space the sequencer places before it (a
+        // relation/operator prefix like `= ` always gets one; the tight operand
+        // juxtaposition `2\begin{…}` would not, costing one cosmetic column in
+        // that unwritten shape). Computed before the drain below.
+        let hang = match first_block.filter(|_| block_eligible) {
+            None | Some(0) => 0,
+            Some(i) => {
+                let prefix = lower_math_seq(cell[..i].iter().cloned(), cx);
+                let width = printer.print_flat(&prefix).trim().chars().count();
+                if width == 0 { 0 } else { width + 1 }
+            }
+        };
         let ir = if math {
             lower_math_seq(cell.drain(..), cx)
         } else {
@@ -2278,12 +2341,22 @@ fn build_alignment_grid(
             Ir::concat(joined)
         };
         if ir.contains_forced_break() {
-            return None;
+            if !block_eligible {
+                return None;
+            }
+            cells.push(Cell {
+                text: String::new(),
+                span,
+                align,
+                block: Some(BlockCell { hang, ir }),
+            });
+            return Some(());
         }
         cells.push(Cell {
             text: printer.print_flat(&ir).trim().to_string(),
             span,
             align,
+            block: None,
         });
         Some(())
     }
@@ -2366,6 +2439,12 @@ fn build_alignment_grid(
         match &inline[idx] {
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::AMPERSAND => {
                 finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
+                // A block cell may only end its row: a `&` after one would need
+                // the next cell to align past the block's last line, which the
+                // grid cannot lay out — fall back.
+                if cells.last().is_some_and(|c| c.block.is_some()) {
+                    return None;
+                }
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
                 finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
@@ -2406,7 +2485,10 @@ fn build_alignment_grid(
     // the prior row without adding a blank line; otherwise it is a real last row.
     if !final_pushed {
         finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
-        let final_is_empty = cells.len() == 1 && cells[0].text.is_empty() && cells[0].span == 1;
+        let final_is_empty = cells.len() == 1
+            && cells[0].text.is_empty()
+            && cells[0].block.is_none()
+            && cells[0].span == 1;
         if !final_is_empty {
             items.push(GridItem::Row(AlignRow {
                 cells,
@@ -2566,6 +2648,27 @@ fn cell_is_blank(cell: &[SyntaxElement]) -> bool {
         e.as_token()
             .is_some_and(|t| is_collapsible_trivia(t.kind()))
     })
+}
+
+/// Whether the cell's own top-level trivia contains a blank line (two newlines
+/// with only inline whitespace between them, the `\par` boundary). A blank line
+/// inside a *child* node (a nested environment's body) is that node's own
+/// business and is not seen here.
+fn cell_has_blank_line(cell: &[SyntaxElement]) -> bool {
+    let mut run_newlines = 0;
+    for e in cell {
+        match e.as_token().map(SyntaxToken::kind) {
+            Some(SyntaxKind::NEWLINE) => {
+                run_newlines += 1;
+                if run_newlines >= 2 {
+                    return true;
+                }
+            }
+            Some(SyntaxKind::WHITESPACE) => {}
+            _ => run_newlines = 0,
+        }
+    }
+    false
 }
 
 /// Whether the boundary trivia accumulated since the last grid token includes a
@@ -2741,7 +2844,7 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
         let GridItem::Row(row) = item else { continue };
         let mut c = 0;
         for cell in &row.cells {
-            if cell.span == 1 {
+            if cell.span == 1 && cell.block.is_none() {
                 widen(c, cell.text.chars().count());
             }
             c += cell.span;
@@ -2763,11 +2866,30 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
             GridItem::Row(row) => row,
         };
         let mut line = String::new();
+        // A block cell (always the row's last, see [`Cell::block`]): its later
+        // lines hang at the nested environment's start column, so its IR goes
+        // inside an [`Ir::align`] whose width is the flat prefix already on the
+        // line plus the cell's own hang offset. It takes no padding and no
+        // width — like a spanning cell, it overflows.
+        let mut block: Option<Ir> = None;
         let last = row.cells.len().saturating_sub(1);
         let mut c = 0;
         for (idx, cell) in row.cells.iter().enumerate() {
             if idx > 0 {
-                line.push_str(SEP);
+                // A row never opens with the separator's leading space: when
+                // everything before this `&` is empty (an `aligned`/`split` body
+                // whose rows all start at `&`, so the leading column's width is
+                // 0), there is nothing to separate and the `&` is the line's
+                // first character. A *padded* empty cell (its column is nonzero
+                // elsewhere) has already pushed its pad, keeping the `&` aligned.
+                line.push_str(if line.is_empty() { "& " } else { SEP });
+            }
+            if let Some(block_cell) = &cell.block {
+                block = Some(Ir::align(
+                    line.chars().count() + block_cell.hang,
+                    block_cell.ir.clone(),
+                ));
+                break;
             }
             let field = field_width(c, cell.span);
             let text_width = cell.text.chars().count();
@@ -2788,17 +2910,24 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
             line.push_str(&" ".repeat(trailing));
             c += cell.span;
         }
+        let mut tail = String::new();
         if let Some(line_break) = &row.line_break {
-            line.push(' ');
-            line.push_str(line_break);
+            tail.push(' ');
+            tail.push_str(line_break);
         }
         // The trailing comment always follows the `\\` so the break is never
         // commented out.
         if let Some(comment) = &row.trailing_comment {
-            line.push(' ');
-            line.push_str(comment);
+            tail.push(' ');
+            tail.push_str(comment);
         }
-        Ir::text(line)
+        match block {
+            Some(block) => Ir::concat([Ir::text(line), block, Ir::text(tail)]),
+            None => {
+                line.push_str(&tail);
+                Ir::text(line)
+            }
+        }
     });
     Ir::join(Ir::hard_line(), lines)
 }
@@ -3735,14 +3864,17 @@ fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>) -> Ir {
     }
 }
 
-/// Lower a `{…}` math group: keep the braces, format the body in math mode.
+/// Lower a `{…}` math group: keep the braces, format the body in math mode. The
+/// body sits one column past the `{` ([`Ir::align`]), so a multi-line body (a
+/// nested block environment) hangs at its own start column — its `\end{…}` under
+/// its `\begin{…}` — instead of at the `{`. A single-line body is unaffected.
 fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let inner = node
         .children_with_tokens()
         .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE));
     Ir::concat([
         Ir::verbatim("{"),
-        lower_math_seq(inner, cx),
+        Ir::align(1, lower_math_seq(inner, cx)),
         Ir::verbatim("}"),
     ])
 }
@@ -3757,23 +3889,43 @@ fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// what keeps a control-word delimiter from gluing onto the body (`\left\langle x`
 /// stays two tokens, never `\left\langlex`). An empty body stays tight
 /// (`\left.\right.`).
+///
+/// The body sits just inside the opening delimiter, and its [`Ir::align`] width is
+/// that flat opening width — so a multi-line body (a nested block environment)
+/// hangs at its own start column, its `\end{…}` under its `\begin{…}` rather than
+/// under the `\left`. A single-line body is unaffected.
 fn lower_left_right(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    Ir::concat(node.children_with_tokens().filter_map(|el| match el {
-        SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
-        SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
-            if math_body_is_empty(&n) {
-                None
-            } else {
-                Some(Ir::concat([
-                    Ir::verbatim(" "),
-                    lower_math_body(&n, cx),
-                    Ir::verbatim(" "),
-                ]))
+    let mut parts: Vec<Ir> = Vec::new();
+    // The flat width of the opening run (`\left(`, `\left\langle`, …): every
+    // delimiter token seen before the body.
+    let mut open_width = 0usize;
+    let mut seen_body = false;
+    for el in node.children_with_tokens() {
+        match el {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
+                seen_body = true;
+                if !math_body_is_empty(&n) {
+                    parts.push(Ir::align(
+                        open_width + 1,
+                        Ir::concat([
+                            Ir::verbatim(" "),
+                            lower_math_body(&n, cx),
+                            Ir::verbatim(" "),
+                        ]),
+                    ));
+                }
             }
+            SyntaxElement::Token(t) => {
+                if !seen_body {
+                    open_width += t.text().chars().count();
+                }
+                parts.push(Ir::verbatim(t.text()));
+            }
+            SyntaxElement::Node(n) => parts.push(lower_node(&n, cx)),
         }
-        SyntaxElement::Token(t) => Some(Ir::verbatim(t.text())),
-        SyntaxElement::Node(n) => Some(lower_node(&n, cx)),
-    }))
+    }
+    Ir::concat(parts)
 }
 
 /// Whether a math body has no visible content (only whitespace/newlines), so a

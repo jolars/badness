@@ -301,8 +301,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Alignment-aware formatting: an `align`/matrix-family environment lays its `&`
     // columns into a grid (left-aligned, single space around `&`, last cell never
     // padded), preserving the row break (with its `[len]`). A lone interior newline
-    // in a cell is a continuation line and joins onto its aligned row; a cell that
-    // still cannot sit on one aligned line (a nested block, or a blank line inside
+    // in a cell is a continuation line and joins onto its aligned row. A nested
+    // block environment (`aligned`, `cases`, a matrix) in the *last* cell of a row
+    // keeps the grid: the cell renders multi-line, its later lines hanging at the
+    // nested `\begin{…}` column (so the `\end{…}` sits directly under it), and
+    // takes no part in column widths. A cell that still
+    // cannot sit on the grid (a nested block before a `&`, or a blank line inside
     // the cell) falls back to the plain indented body — while a nested alignment
     // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
@@ -310,7 +314,20 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("align_columns_linebreak_optional", WrapMode::Preserve, 80),
     ("align_continuation_join", WrapMode::Preserve, 80),
     ("pmatrix_columns", WrapMode::Preserve, 80),
-    ("align_nested_block_fallback", WrapMode::Preserve, 80),
+    ("align_nested_block_cell", WrapMode::Preserve, 80),
+    ("align_nested_aligned_cell", WrapMode::Preserve, 80),
+    // The block-cell layout recurses (a grid inside a grid inside a grid) and
+    // survives a wrapper around the nested environment (`\left…\right`, a group):
+    // the hang anchors at the first node of the cell that cannot stay flat, and
+    // the wrapper's own body alignment keeps the nested `\end{…}` under its
+    // `\begin{…}` (one column inside the opening delimiter).
+    ("align_nested_recursive", WrapMode::Preserve, 80),
+    ("align_nested_left_right_cell", WrapMode::Preserve, 80),
+    (
+        "align_nested_block_mid_row_fallback",
+        WrapMode::Preserve,
+        80,
+    ),
     ("align_blank_line_in_cell_fallback", WrapMode::Preserve, 80),
     // Comments and rule lines in an alignment grid: a comment-only line is kept as
     // a passthrough between rows (not counted toward column widths); an end-of-line

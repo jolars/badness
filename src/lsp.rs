@@ -122,7 +122,7 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::config::{BuildConfig, Config, LintConfig, TexmfConfig};
+use crate::config::{BuildConfig, Config, LintConfig};
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
@@ -133,7 +133,7 @@ use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{parse, parse_with_flavor};
 use crate::project::aux::AuxData;
-use crate::project::texmf::TexmfIndex;
+use crate::project::texmf::{TexmfConfig, TexmfIndex};
 use crate::project::{PackageGraph, ProjectMember, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{
     DefSiteKind, OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline,
@@ -354,14 +354,21 @@ struct GlobalState {
     position_encoding: PositionEncoding,
 }
 
-/// Formatting settings supplied by the editor, as `initializationOptions` at
-/// startup or via `workspace/didChangeConfiguration`. A fallback beneath the
-/// per-request [`FormattingOptions`].
+/// Settings supplied by the editor, as `initializationOptions` at startup or via
+/// `workspace/didChangeConfiguration`. The width knobs are a fallback beneath a
+/// discovered `badness.toml` and the per-request [`FormattingOptions`]; `texmf` is
+/// *machine* configuration with no `badness.toml` counterpart — the editor is its
+/// only source, and the file-wins rule does not apply to it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct EditorSettings {
     line_width: Option<u32>,
     indent_width: Option<u32>,
+    /// Installed-tree discovery for LSP package resolution (see [`TexmfConfig`]).
+    /// Session-stable in practice: the
+    /// [`texmf::global_index`](crate::project::texmf::global_index) it drives is
+    /// first-config-wins.
+    texmf: TexmfConfig,
 }
 
 impl EditorSettings {
@@ -415,12 +422,6 @@ struct ResolvedSettings {
     /// `[format.no-break-abbreviations]`. Held owned so a worker job can borrow it
     /// when building a [`SentenceOptions`] at format time.
     sentence_no_break: Vec<String>,
-    /// The `[texmf]` settings governing installed-tree package resolution. Consumed
-    /// only by LSP navigation (links/hover/completion), never the formatter — so it
-    /// cannot affect `badness format` output. Session-stable in practice (the
-    /// [`texmf::global_index`](crate::project::texmf::global_index) it drives is
-    /// first-config-wins).
-    texmf: TexmfConfig,
     /// The `[build]` settings locating the compiler's `.aux` artifacts. Consumed
     /// only by label hover and document symbols (resolved numbers), never the
     /// formatter — so it cannot affect `badness format` output.
@@ -448,7 +449,6 @@ impl ResolvedSettings {
                 exclude: ExcludeFilter::none(),
                 sentence_lang,
                 sentence_no_break,
-                texmf: config.texmf.clone(),
                 build: config.build.clone(),
             }
         } else {
@@ -467,7 +467,6 @@ impl ResolvedSettings {
             exclude: ExcludeFilter::none(),
             sentence_lang: SentenceLanguage::default(),
             sentence_no_break: Vec::new(),
-            texmf: TexmfConfig::default(),
             build: BuildConfig::default(),
         }
     }
@@ -1570,8 +1569,9 @@ fn on_document_link(
     let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    // Resolve `[texmf]` for this document (session-stable; the index is first-wins).
-    let texmf = state.resolve_settings(&uri).texmf;
+    // `texmf` is editor (machine) configuration, not resolved per document
+    // (session-stable; the index is first-wins).
+    let texmf = state.editor_settings.texmf.clone();
     let _ = job_tx.send(WorkerJob::DocumentLink {
         id,
         path,
@@ -1680,8 +1680,9 @@ fn on_completion(
         return;
     };
     let text = doc.text.clone();
-    // Resolve `[texmf]` for the installed-set completion tier (session-stable).
-    let texmf = state.resolve_settings(&uri).texmf;
+    // The editor's `texmf` settings gate the installed-set completion tier
+    // (session-stable).
+    let texmf = state.editor_settings.texmf.clone();
     let _ = job_tx.send(WorkerJob::Completion {
         id,
         uri,
@@ -1896,9 +1897,9 @@ fn on_goto_definition(
         return;
     }
     let text = doc.text.clone();
-    // Resolve `[texmf]` for the file-target fallback (an include/package argument
-    // jumps to its resolved source, TEXMF-aware like document links).
-    let texmf = state.resolve_settings(&uri).texmf;
+    // The editor's `texmf` settings gate the file-target fallback (an include/package
+    // argument jumps to its resolved source, TEXMF-aware like document links).
+    let texmf = state.editor_settings.texmf.clone();
     let _ = job_tx.send(WorkerJob::GotoDefinition {
         id,
         path,
@@ -6784,6 +6785,22 @@ mod tests {
         assert_eq!(s.indent_width, None);
     }
 
+    #[test]
+    fn editor_settings_texmf() {
+        let value = serde_json::json!({
+            "texmf": { "enabled": false, "roots": ["/opt/texmf"], "useKpsewhich": false }
+        });
+        let s = EditorSettings::from_client_value(&value);
+        assert!(!s.texmf.enabled);
+        assert!(!s.texmf.use_kpsewhich);
+        assert_eq!(s.texmf.roots, vec![PathBuf::from("/opt/texmf")]);
+        // Omitted entirely: the defaults (enabled, kpsewhich discovery).
+        let s = EditorSettings::from_client_value(&serde_json::json!({ "lineWidth": 80 }));
+        assert!(s.texmf.enabled);
+        assert!(s.texmf.use_kpsewhich);
+        assert!(s.texmf.roots.is_empty());
+    }
+
     /// A bare [`GlobalState`] with the given editor settings and an empty cache, for
     /// exercising [`GlobalState::resolve_settings`].
     fn state_with_editor(editor: EditorSettings) -> GlobalState {
@@ -6817,6 +6834,7 @@ mod tests {
         let mut state = state_with_editor(EditorSettings {
             line_width: Some(40),
             indent_width: Some(3),
+            ..Default::default()
         });
         let resolved = state.resolve_settings(&file_uri_in(dir.path()));
         assert!(resolved.config_present);
@@ -6830,6 +6848,7 @@ mod tests {
         let mut state = state_with_editor(EditorSettings {
             line_width: Some(40),
             indent_width: None,
+            ..Default::default()
         });
         let resolved = state.resolve_settings(&file_uri_in(dir.path()));
         assert!(!resolved.config_present);
@@ -6931,6 +6950,7 @@ mod tests {
         let mut state = state_with_editor(EditorSettings {
             line_width: Some(40),
             indent_width: None,
+            ..Default::default()
         });
         let uri = file_uri_in(dir.path());
         assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
@@ -6947,6 +6967,7 @@ mod tests {
         let mut state = state_with_editor(EditorSettings {
             line_width: Some(55),
             indent_width: None,
+            ..Default::default()
         });
         let resolved = state.resolve_settings(&uri("untitled:Untitled-1"));
         assert!(!resolved.config_present);

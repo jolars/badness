@@ -33,7 +33,39 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::TexmfConfig;
+/// The `texmf` editor settings: how the language server discovers the installed TeX
+/// tree for *LSP-only* package resolution (document links, hover, go-to-definition,
+/// and installed-set completion). This never feeds the formatter — `badness format`
+/// stays hermetic regardless of what is installed (see `AGENTS.md`).
+///
+/// Where an installation lives is a fact about the *machine*, not the project, so
+/// these settings come from the editor (`initializationOptions` or
+/// `workspace/didChangeConfiguration`, camelCase JSON), never from `badness.toml` —
+/// a committed project config can't point at paths that only exist on one
+/// contributor's system.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TexmfConfig {
+    /// Whether to scan the TEXMF tree at all. When `false`, package resolution stays
+    /// local to the document's directory.
+    pub enabled: bool,
+    /// Extra TEXMF root directories to index in addition to (and ahead of) the
+    /// discovered ones. Useful for a non-standard install `kpsewhich` can't see.
+    pub roots: Vec<PathBuf>,
+    /// Whether to shell out to `kpsewhich -var-value=…` to discover the tree roots.
+    /// When `false`, discovery falls back to default-path heuristics only.
+    pub use_kpsewhich: bool,
+}
+
+impl Default for TexmfConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            roots: Vec::new(),
+            use_kpsewhich: true,
+        }
+    }
+}
 
 /// File extensions the index tracks: package/class sources and their literate `.dtx`.
 const INDEXED_EXTS: &[&str] = &["sty", "cls", "dtx"];

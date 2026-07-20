@@ -39,4 +39,4 @@ pub use package::{
     OptionArg, PackageEdge, PackageEdgeKey, PackageKind, PackageTarget, collect_package_edge_keys,
     collect_package_edges, dtx_source_of, load_option_args, resolve_load_target,
 };
-pub use texmf::{TexmfIndex, global_index};
+pub use texmf::{TexmfConfig, TexmfIndex, global_index};

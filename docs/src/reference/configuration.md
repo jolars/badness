@@ -230,62 +230,6 @@ default rule set.
 ignore = ["missing-nonbreaking-space"]
 ```
 
-## `[texmf]`
-
-How the **language server** discovers the installed TeX tree for package
-resolution: document links, package hover, go-to-definition, and installed-set
-completion. This section never affects `badness format` or `badness lint`,
-whose output stays a pure function of the input regardless of what is
-installed.
-
-### `enabled`
-
-Whether to scan the TEXMF tree at all. When `false`, package resolution stays
-local to the document's directory.
-
-**Default value**: `true`
-
-**Type**: boolean
-
-**Example**:
-
-```toml
-[texmf]
-enabled = false
-```
-
-### `roots`
-
-Extra TEXMF root directories to index in addition to (and ahead of) the
-discovered ones. Useful for a non-standard install that `kpsewhich` can't see.
-
-**Default value**: `[]`
-
-**Type**: array of paths
-
-**Example**:
-
-```toml
-[texmf]
-roots = ["/opt/texmf"]
-```
-
-### `use-kpsewhich`
-
-Whether to shell out to `kpsewhich` to discover the TEXMF tree roots. When
-`false`, discovery falls back to default-path heuristics only.
-
-**Default value**: `true`
-
-**Type**: boolean
-
-**Example**:
-
-```toml
-[texmf]
-use-kpsewhich = false
-```
-
 ## `[build]`
 
 Where the TeX compiler leaves its artifacts. Read by the **language server**
@@ -309,3 +253,9 @@ unset, each document's `.aux` is expected next to it, as in plain
 [build]
 aux-dir = "out"
 ```
+
+> **Note**: TEXMF-tree discovery (the former `[texmf]` section) is configured
+> through your editor's LSP settings, not `badness.toml`. Where a TeX
+> installation lives is a fact about the machine, not the project, so it does
+> not belong in a file shared across contributors. See [Editor
+> Setup](../guide/editor-setup.md#texmf-discovery).

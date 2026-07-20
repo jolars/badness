@@ -10,17 +10,41 @@ The server speaks the Language Server Protocol over **stdio**. Point your
 editor's LSP client at the `badness` binary with the `lsp` argument and
 associate it with LaTeX (`.tex`) and BibTeX (`.bib`) files.
 
-Formatter width settings can be supplied as `initializationOptions` at startup
-or through `workspace/didChangeConfiguration`: `lineWidth` and `indentWidth`,
-either as a bare object or namespaced under a `badness` key. They act as a
-fallback: a discovered `badness.toml` always wins outright, and absent one, your
-editor's tab size (sent with each formatting request) overrides the indent
-width.
+Settings can be supplied as `initializationOptions` at startup or through
+`workspace/didChangeConfiguration`, either as a bare object or namespaced under
+a `badness` key.
 
-The language server is also the sole consumer of the `[texmf]` and `[build]`
-sections of `badness.toml`, which control TEXMF-tree indexing for package
-navigation and where the compile's `.aux` artifacts are found; see the
-[Configuration reference](../reference/configuration.md#texmf).
+**Formatter widths**: `lineWidth` and `indentWidth`. They act as a fallback: a
+discovered `badness.toml` always wins outright, and absent one, your editor's
+tab size (sent with each formatting request) overrides the indent width.
+
+The language server is also the sole consumer of the `[build]` section of
+`badness.toml`, which locates the compile's `.aux` artifacts; see the
+[Configuration reference](../reference/configuration.md#build).
+
+## TEXMF discovery
+
+How the language server discovers the installed TeX tree for package
+resolution: document links, package hover, go-to-definition, and installed-set
+completion. Where a TeX installation lives is a fact about the machine, not the
+project, so these settings come from the editor rather than `badness.toml`, and
+they never affect `badness format` or `badness lint`, whose output stays a pure
+function of the input regardless of what is installed.
+
+A `texmf` object with three keys, all optional:
+
+- `enabled` (boolean, default `true`): whether to scan the TEXMF tree at all.
+  When `false`, package resolution stays local to the document's directory.
+- `roots` (array of paths, default `[]`): extra TEXMF root directories to index
+  in addition to (and ahead of) the discovered ones. Useful for a non-standard
+  install that `kpsewhich` can't see.
+- `useKpsewhich` (boolean, default `true`): whether to shell out to `kpsewhich`
+  to discover the TEXMF tree roots. When `false`, discovery falls back to
+  default-path heuristics only.
+
+```json
+{ "texmf": { "enabled": true, "roots": ["/opt/texmf"], "useKpsewhich": true } }
+```
 
 ## Neovim
 

@@ -1110,11 +1110,6 @@ fn lsp_document_links() {
     // Disable the installed-tree (TEXMF) fallback so this test stays hermetic: it
     // asserts the *local-only* contract, and a machine with TeX installed would
     // otherwise resolve the system `amsmath` and add a fifth link.
-    std::fs::write(
-        dir.path().join("badness.toml"),
-        "[texmf]\nenabled = false\n",
-    )
-    .unwrap();
     let main_path = dir.path().join("main.tex");
     // `\usepackage{amsmath}` has no local file, so it must NOT be linked.
     let main = "\\input{part}\n\
@@ -1124,7 +1119,8 @@ fn lsp_document_links() {
         \\includegraphics{fig}\n";
     std::fs::write(&main_path, main).unwrap();
 
-    let (client, server_thread) = start_server(None);
+    let (client, server_thread) =
+        start_server(Some(serde_json::json!({ "texmf": { "enabled": false } })));
     let uri = path_to_file_uri(&main_path);
     did_open(&client, &uri, 1, main);
     let _ = recv_diagnostics(&client);
@@ -1839,14 +1835,10 @@ fn lsp_completion_package_names() {
     // Disable the installed-tree tier so the test is hermetic (a machine with TeX
     // would otherwise fold thousands of installed stems into the results). The
     // local + baked contract under test is unaffected.
-    std::fs::write(
-        dir.path().join("badness.toml"),
-        "[texmf]\nenabled = false\n",
-    )
-    .unwrap();
 
     let uri = path_to_file_uri(&dir.path().join("main.tex"));
-    let (client, server_thread) = start_server(None);
+    let (client, server_thread) =
+        start_server(Some(serde_json::json!({ "texmf": { "enabled": false } })));
 
     // `\usepackage{|}` at column 12: local `.sty` files (as MODULE names, extension
     // stripped) and baked package names, all deduped.
@@ -2137,16 +2129,13 @@ fn lsp_definition_jumps_to_include_and_package_files() {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("part.tex"), "\\label{a}\n").unwrap();
     std::fs::write(dir.path().join("mypkg.sty"), "% pkg\n").unwrap();
-    std::fs::write(
-        dir.path().join("badness.toml"),
-        "[texmf]\nenabled = false\n",
-    )
-    .unwrap();
+
     let main_path = dir.path().join("main.tex");
     let main = "\\usepackage{mypkg}\n\\input{part}\n";
     std::fs::write(&main_path, main).unwrap();
 
-    let (client, server_thread) = start_server(None);
+    let (client, server_thread) =
+        start_server(Some(serde_json::json!({ "texmf": { "enabled": false } })));
     let uri = path_to_file_uri(&main_path);
     did_open(&client, &uri, 1, main);
     let _ = recv_diagnostics(&client);

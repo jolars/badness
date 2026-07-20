@@ -41,10 +41,12 @@ are implemented.
 **Configuration (`badness.toml`).** Discovered by an ancestor walk from each input
 (`config.rs`); the **CLI is the only consumer**—the library API takes a fully-resolved
 `FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`, `wrap`,
-`lang`, `no-break-abbreviations`), `[texmf]`, and `[build]` (`aux-dir`). Excludes follow
+`lang`, `no-break-abbreviations`), and `[build]` (`aux-dir`). Excludes follow
 the Ruff model (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
 additive). `wrap` is optional and resolves per file kind when omitted. This keeps the
-formatter hermetic (config is local project data, not the environment).
+formatter hermetic (config is local project data, not the environment). TEXMF discovery
+is deliberately **not** a section here: where a TeX installation lives is machine state,
+not project data, so it arrives via the LSP editor settings (below), never `badness.toml`.
 
 ## Tenets
 
@@ -346,7 +348,9 @@ no typesetting):
 The distinction the old TODO conflated: a **runtime distro query feeding the
 formatter** stays a non-goal (it would break the hermeticism above); a **read-only
 index/metadata feeding LSP navigation** is sanctioned. The index is gated by
-`[texmf]` config (`enabled`/`roots`/`use-kpsewhich`) and is **never** wired into
+the `texmf` editor settings (`enabled`/`roots`/`useKpsewhich`, supplied as
+`initializationOptions` or via `didChangeConfiguration`—machine config, so it lives in
+the editor, not `badness.toml`; `project::texmf::TexmfConfig`) and is **never** wired into
 `scope_signatures`/`DiskPackageSource` (guarded by
 `formatter_scope_never_reaches_the_texmf_tree`).
 

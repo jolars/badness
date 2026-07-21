@@ -107,6 +107,15 @@ pub(crate) enum Ir {
     /// (every `Line` flat or every `Line` broken), and a conditional group picks
     /// among whole-layout candidates — neither wraps word-by-word.
     Fill(Rc<[Ir]>),
+    /// A paragraph fill whose gaps remember which ones were authored newlines.
+    /// The printer selects a global minimum-cost layout: overflow first, then
+    /// short lines relative to `target`, changed authored breaks, displacement,
+    /// raggedness, and line count. `preferred.len() == atoms.len() - 1`.
+    PreferredFill {
+        atoms: Rc<[Ir]>,
+        preferred: Rc<[bool]>,
+        target: usize,
+    },
     /// Re-emit `prefix` at column 0 on every line `inner` produces. While the
     /// printer lays out `inner`, each line break (and the first line) writes
     /// `prefix` flush at the left margin immediately after the newline, and
@@ -240,6 +249,29 @@ impl Ir {
         }
     }
 
+    /// Build a source-break-aware paragraph fill. `preferred[i]` describes the
+    /// gap between atoms `i` and `i + 1`.
+    pub(crate) fn preferred_fill(
+        atoms: impl IntoIterator<Item = Ir>,
+        preferred: Vec<bool>,
+        target: usize,
+    ) -> Ir {
+        let atoms: Vec<Ir> = atoms
+            .into_iter()
+            .filter(|i| !matches!(i, Ir::Nil))
+            .collect();
+        debug_assert_eq!(preferred.len(), atoms.len().saturating_sub(1));
+        match atoms.len() {
+            0 => Ir::Nil,
+            1 => atoms.into_iter().next().unwrap(),
+            _ => Ir::PreferredFill {
+                atoms: atoms.into(),
+                preferred: preferred.into(),
+                target,
+            },
+        }
+    }
+
     pub(crate) fn indent(inner: Ir) -> Ir {
         Ir::Indent(Rc::new(inner))
     }
@@ -312,6 +344,7 @@ impl Ir {
             Ir::Group { .. } | Ir::ConditionalGroup(_) | Ir::ConditionalGroupAllLines(_) => true,
             Ir::Concat(items) => items.iter().any(Ir::contains_group),
             Ir::Fill(parts) => parts.iter().any(Ir::contains_group),
+            Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_group),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
             Ir::MarginPrefix { inner, .. } => inner.contains_group(),
             Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
@@ -352,6 +385,7 @@ impl Ir {
             // A fill's separators are soft `Line`s; only its atoms could carry a
             // forced break (none do under reflow lowering, but stay correct).
             Ir::Fill(parts) => parts.iter().any(Ir::contains_forced_break),
+            Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_forced_break),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
             Ir::MarginPrefix { inner, .. } => inner.contains_forced_break(),
             Ir::Group { inner, expand, .. } => *expand || inner.contains_forced_break(),

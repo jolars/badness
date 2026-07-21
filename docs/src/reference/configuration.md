@@ -12,8 +12,9 @@ its default.
 
 [format]
 # line-width = 80
+# wrap-target = 70  # soft target used only by wrap = "minimal"
 # indent-width = 2
-# wrap = "reflow"  # reflow | sentence | semantic | preserve
+# wrap = "reflow"  # reflow | minimal | sentence | semantic | preserve
 
 [lint]
 # select = ["..."]  # if set, only these rules run
@@ -94,6 +95,26 @@ Maximum line width before the formatter breaks a line. Must be between 1 and 100
 line-width = 100
 ```
 
+### `wrap-target`
+
+Soft line-length target used by [`wrap = "minimal"`](#wrap). The hard maximum
+remains [`line-width`](#line-width); this target determines when an authored
+line break is already close enough to equilibrium to preserve. When omitted,
+it defaults to ten columns below `line-width`, floored at one column. It must be
+between 1 and `line-width`.
+
+**Default value**: `line-width - 10` (at least `1`)
+
+**Type**: integer
+
+**Example**:
+
+```toml
+[format]
+line-width = 100
+wrap-target = 85
+```
+
 ### `indent-width`
 
 Spaces per indent step. Must be between 1 and 1000.
@@ -117,6 +138,7 @@ structure—only where soft line breaks fall.
   | Mode       | Behavior                                                                                                        |
   | ---------- | --------------------------------------------------------------------------------------------------------------- |
   | `reflow`   | Greedy fill: pack words up to `line-width`, breaking only where the next word would overflow.                   |
+  | `minimal`  | Preserve acceptable authored breaks and rebalance only text that no longer fits.                               |
   | `preserve` | Leave the authored line breaks untouched.                                                                       |
   | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                 |
   | `semantic` | [Semantic line breaks](https://sembr.org): keep the author's soft breaks *and* add a break after each sentence. |
@@ -136,6 +158,16 @@ clause boundaries itself—a break after a comma or `and` survives only where th
 author placed a newline. A run-on sentence on a single source line is still
 sentence-split.
 
+`minimal` also preserves authored line breaks, but treats them as preferred
+anchors rather than hard boundaries. Each prose run is solved as one global
+layout problem. Candidate layouts are compared lexicographically by total
+overflow, underflow below `wrap-target`, changed authored breaks, displacement
+from the nearest authored break, raggedness around `wrap-target`, and line
+count. This makes the hard width non-negotiable before minimizing source churn,
+while a short final line remains unpenalized. Blank lines and command-only lines
+bound each independently optimized run, and code-like statement bodies retain
+ordinary greedy fill.
+
 When omitted, the formatter uses each file kind's default: `.tex` and `.bib`
 files reflow, while code-heavy `.sty`, `.cls`, `.dtx`, and `.ins` files preserve
 authored line breaks. Setting `wrap` applies the same mode to every file kind.
@@ -143,13 +175,14 @@ authored line breaks. Setting `wrap` applies the same mode to every file kind.
 **Default value**: unset (per file kind: `.tex`/`.bib` → `reflow`,
 `.sty`/`.cls`/`.dtx`/`.ins` → `preserve`)
 
-**Type**: `"reflow" | "sentence" | "semantic" | "preserve"`
+**Type**: `"reflow" | "minimal" | "sentence" | "semantic" | "preserve"`
 
 **Example**:
 
 ```toml
 [format]
-wrap = "sentence"
+wrap = "minimal"
+wrap-target = 70
 ```
 
 ### `lang`

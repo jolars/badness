@@ -122,7 +122,7 @@ completion items (VS Code-only), and sub/superscript history completion
   (`GlobalState::resolve_settings`, cached by anchor dir, cleared on
   `didChangeConfiguration`). A discovered config wins outright
   (file-wins); editor settings are the fallback. Both `[format]` (`line-width`,
-  `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
+  `wrap-target`, `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
   `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
   follow-ups remain:
   - Deliberately *not* done: plumbing `wrap` (or other knobs) through
@@ -135,6 +135,11 @@ completion items (VS Code-only), and sub/superscript history completion
   drive interactive diagnostics through `textDocument/diagnostic` meanwhile.
 
 ### Formatting
+
+- [x] Minimal-diff paragraph wrapping: `wrap = "minimal"` retains authored
+  equilibrium breaks and uses `wrap-target` as a soft target under the hard
+  `line-width`; implemented as source-aware `PreferredFill` IR with global
+  lexicographic layout selection, preserving the formatter-engine boundary.
 
 ### Navigation & structure
 

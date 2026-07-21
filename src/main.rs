@@ -51,6 +51,7 @@ use smol_str::SmolStr;
 fn wrap_mode(arg: WrapArg) -> WrapMode {
     match arg {
         WrapArg::Reflow => WrapMode::Reflow,
+        WrapArg::Minimal => WrapMode::Minimal,
         WrapArg::Sentence => WrapMode::Sentence,
         WrapArg::Semantic => WrapMode::Semantic,
         WrapArg::Preserve => WrapMode::Preserve,
@@ -69,6 +70,7 @@ fn main() -> ExitCode {
             check,
             stdin_filepath,
             line_width,
+            wrap_target,
             indent_width,
             wrap,
             exclude,
@@ -95,6 +97,9 @@ fn main() -> ExitCode {
             let mut style = FormatStyle::from(&config.format);
             if let Some(w) = line_width {
                 style.line_width = w;
+            }
+            if let Some(w) = wrap_target {
+                style.wrap_target = Some(w);
             }
             if let Some(w) = indent_width {
                 style.indent_width = w;
@@ -233,8 +238,9 @@ const STARTER_CONFIG: &str = "\
 
 [format]
 # line-width = 80
+# wrap-target = 70  # soft target used only by wrap = \"minimal\"
 # indent-width = 2
-# wrap = \"reflow\"  # reflow | sentence | semantic | preserve
+# wrap = \"reflow\"  # reflow | minimal | sentence | semantic | preserve
                      # omit to use each file kind's default
                      # (.tex -> reflow, .sty/.cls/.dtx/.ins -> preserve)
 

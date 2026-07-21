@@ -1,7 +1,9 @@
 //! The layout engine: walks an [`Ir`] tree and renders it to a string, deciding
 //! for each [`Ir::Group`] whether it fits flat on the current line or must break.
 //!
-//! This is a language-agnostic Wadler/Prettier-style layout engine.
+//! This is a language-agnostic Wadler/Prettier-style layout engine. Alongside
+//! ordinary greedy fills it supports source-break-aware preferred fills whose
+//! gaps are selected by a global lexicographic cost.
 
 // `print_at` is part of the engine but unused by the identity lowering;
 // keep it ready for real rules.
@@ -9,6 +11,31 @@
 
 use super::ir::Ir;
 use super::style::FormatStyle;
+use std::rc::Rc;
+
+/// Lexicographic cost for a source-break-aware paragraph layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct LayoutCost {
+    overflow: usize,
+    underflow: usize,
+    changed_breaks: usize,
+    displacement: usize,
+    raggedness: usize,
+    lines: usize,
+}
+
+impl LayoutCost {
+    fn add(self, other: Self) -> Self {
+        Self {
+            overflow: self.overflow.saturating_add(other.overflow),
+            underflow: self.underflow.saturating_add(other.underflow),
+            changed_breaks: self.changed_breaks.saturating_add(other.changed_breaks),
+            displacement: self.displacement.saturating_add(other.displacement),
+            raggedness: self.raggedness.saturating_add(other.raggedness),
+            lines: self.lines.saturating_add(other.lines),
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -18,9 +45,8 @@ enum Mode {
 
 /// A unit of pending work on the printer's layout stack. Most IR nodes are a
 /// plain [`Cmd::Node`]; [`Ir::Fill`] is processed incrementally as a
-/// [`Cmd::Fill`] carrying the not-yet-laid-out remainder of its alternating
-/// `[atom, sep, …]` list, so each gap is decided one at a time (see
-/// [`Printer::step_fill`]).
+/// [`Cmd::Fill`], while [`Ir::PreferredFill`] carries the globally selected break
+/// plan through [`Cmd::PreferredFill`].
 enum Cmd<'a> {
     Node {
         indent: usize,
@@ -35,6 +61,14 @@ enum Cmd<'a> {
         indent: usize,
         mode: Mode,
         parts: &'a [Ir],
+        prefix: Option<&'a str>,
+    },
+    PreferredFill {
+        indent: usize,
+        mode: Mode,
+        atoms: &'a [Ir],
+        breaks: Rc<[bool]>,
+        index: usize,
         prefix: Option<&'a str>,
     },
 }
@@ -232,6 +266,39 @@ impl Printer {
                     self.step_fill(&w, indent, mode, parts, prefix, &mut stack);
                     continue;
                 }
+                Cmd::PreferredFill {
+                    indent,
+                    mode,
+                    atoms,
+                    breaks,
+                    index,
+                    prefix,
+                } => {
+                    if index > 0 {
+                        if mode == Mode::Break && breaks[index - 1] {
+                            w.newline(indent, prefix);
+                        } else {
+                            w.write_text(" ");
+                        }
+                    }
+                    if index + 1 < atoms.len() {
+                        stack.push(Cmd::PreferredFill {
+                            indent,
+                            mode,
+                            atoms,
+                            breaks: Rc::clone(&breaks),
+                            index: index + 1,
+                            prefix,
+                        });
+                    }
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode: Mode::Flat,
+                        node: &atoms[index],
+                        prefix,
+                    });
+                    continue;
+                }
             };
             match node {
                 Ir::Nil => {}
@@ -254,6 +321,32 @@ impl Printer {
                     parts: &parts[..],
                     prefix,
                 }),
+                Ir::PreferredFill {
+                    atoms,
+                    preferred,
+                    target,
+                } => {
+                    let breaks = if mode == Mode::Flat {
+                        vec![false; atoms.len().saturating_sub(1)].into()
+                    } else {
+                        self.minimal_breaks(
+                            w.current_col(),
+                            indent,
+                            prefix,
+                            atoms,
+                            preferred,
+                            *target,
+                        )
+                    };
+                    stack.push(Cmd::PreferredFill {
+                        indent,
+                        mode,
+                        atoms,
+                        breaks,
+                        index: 0,
+                        prefix,
+                    });
+                }
                 Ir::Indent(inner) => {
                     stack.push(Cmd::Node {
                         indent: indent + self.indent_unit,
@@ -356,6 +449,135 @@ impl Printer {
             }
         }
         w.out
+    }
+
+    /// Choose all breaks for a [`Ir::PreferredFill`] together. Authored breaks are
+    /// stable once a line reaches `target` (or the next atom would reach it), but
+    /// overflow always wins; ties minimize changed breaks and their displacement.
+    fn minimal_breaks(
+        &self,
+        first_col: usize,
+        indent: usize,
+        prefix: Option<&str>,
+        atoms: &[Ir],
+        preferred: &[bool],
+        target: usize,
+    ) -> Rc<[bool]> {
+        let n = atoms.len();
+        if n < 2 {
+            return Vec::new().into();
+        }
+        debug_assert_eq!(preferred.len(), n - 1);
+
+        let widths: Vec<usize> = atoms
+            .iter()
+            .map(|atom| {
+                self.flat_width(atom)
+                    .unwrap_or(self.line_width.saturating_add(1))
+            })
+            .collect();
+        let mut sums = Vec::with_capacity(n + 1);
+        sums.push(0usize);
+        for &width in &widths {
+            sums.push(sums.last().copied().unwrap_or(0).saturating_add(width));
+        }
+        // Source positions of the gaps in the normalized, space-joined run. They
+        // are used only to rank displacement from the nearest authored anchor.
+        let gap_positions: Vec<usize> = (0..n - 1)
+            .map(|gap| sums[gap + 1].saturating_add(gap + 1))
+            .collect();
+        let authored_positions: Vec<usize> = preferred
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &is_authored)| is_authored.then_some(gap_positions[i]))
+            .collect();
+        let continuation_col = prefix.map_or(indent, |p| p.chars().count());
+        let target = target.clamp(1, self.line_width.max(1));
+
+        let mut costs: Vec<Option<LayoutCost>> = vec![None; n + 1];
+        let mut previous: Vec<Option<usize>> = vec![None; n + 1];
+        costs[0] = Some(LayoutCost::default());
+
+        for start in 0..n {
+            let Some(base_cost) = costs[start] else {
+                continue;
+            };
+            let base_col = if start == 0 {
+                first_col
+            } else {
+                continuation_col
+            };
+            let mut saw_non_overflow = false;
+            for end in start + 1..=n {
+                let content_width = sums[end]
+                    .saturating_sub(sums[start])
+                    .saturating_add(end.saturating_sub(start + 1));
+                let length = base_col.saturating_add(content_width);
+                let next_length =
+                    (end < n).then(|| length.saturating_add(1).saturating_add(widths[end]));
+                let final_line = end == n;
+                let overflow = length.saturating_sub(self.line_width);
+                if overflow == 0 {
+                    saw_non_overflow = true;
+                } else if saw_non_overflow {
+                    break;
+                }
+
+                let removed_anchors = if end > start + 1 {
+                    preferred[start..end - 1]
+                        .iter()
+                        .filter(|&&is_authored| is_authored)
+                        .count()
+                } else {
+                    0
+                };
+                let new_break = usize::from(!final_line && !preferred[end - 1]);
+                let displacement = if new_break == 0 || authored_positions.is_empty() {
+                    0
+                } else {
+                    authored_positions
+                        .iter()
+                        .map(|&anchor| anchor.abs_diff(gap_positions[end - 1]))
+                        .min()
+                        .unwrap_or(0)
+                };
+                let underflow = if final_line
+                    || length >= target
+                    || next_length.is_some_and(|next| next >= target)
+                {
+                    0
+                } else {
+                    target - length
+                };
+                let segment = LayoutCost {
+                    overflow,
+                    underflow,
+                    changed_breaks: removed_anchors + new_break,
+                    displacement,
+                    raggedness: if final_line {
+                        0
+                    } else {
+                        target.abs_diff(length)
+                    },
+                    lines: 1,
+                };
+                let candidate = base_cost.add(segment);
+                if costs[end].is_none_or(|cost| candidate < cost) {
+                    costs[end] = Some(candidate);
+                    previous[end] = Some(start);
+                }
+            }
+        }
+
+        let mut breaks = vec![false; n - 1];
+        let mut cursor = n;
+        while let Some(prior) = previous[cursor] {
+            if prior > 0 {
+                breaks[prior - 1] = true;
+            }
+            cursor = prior;
+        }
+        breaks.into()
     }
 
     /// One step of laying out an [`Ir::Fill`] — the Wadler/Prettier greedy fill.
@@ -464,6 +686,10 @@ impl Printer {
                 Ir::Line => total += 1,
                 Ir::Concat(items) => stack.extend(items.iter()),
                 Ir::Fill(parts) => stack.extend(parts.iter()),
+                Ir::PreferredFill { atoms, .. } => {
+                    total = total.saturating_add(atoms.len().saturating_sub(1));
+                    stack.extend(atoms.iter());
+                }
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
                 Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
@@ -637,6 +863,16 @@ impl Printer {
                         stack.push(item);
                     }
                 }
+                Ir::PreferredFill { atoms, .. } => {
+                    let gaps = atoms.len().saturating_sub(1);
+                    if gaps > remaining {
+                        return false;
+                    }
+                    remaining -= gaps;
+                    for atom in atoms.iter().rev() {
+                        stack.push(atom);
+                    }
+                }
             }
         }
         true
@@ -706,6 +942,15 @@ impl Printer {
                         stack.push(item);
                     }
                 }
+                Ir::PreferredFill { atoms, .. } => {
+                    col = col.saturating_add(atoms.len().saturating_sub(1));
+                    if col > self.line_width {
+                        return false;
+                    }
+                    for atom in atoms.iter().rev() {
+                        stack.push(atom);
+                    }
+                }
             }
         }
         // Phase 2: the rest of the line, each command in its decided mode, until
@@ -732,6 +977,11 @@ impl Printer {
                     for part in parts.iter().rev() {
                         work.push((*mode, part));
                     }
+                }
+                Cmd::PreferredFill {
+                    mode, atoms, index, ..
+                } => {
+                    work.push((*mode, &atoms[*index]));
                 }
             }
         }
@@ -787,6 +1037,15 @@ impl Printer {
                 Ir::Fill(parts) => {
                     for item in parts.iter().rev() {
                         work.push((mode, item));
+                    }
+                }
+                Ir::PreferredFill { atoms, .. } => {
+                    col = col.saturating_add(atoms.len().saturating_sub(1));
+                    if col > self.line_width {
+                        return false;
+                    }
+                    for atom in atoms.iter().rev() {
+                        work.push((Mode::Flat, atom));
                     }
                 }
             }
@@ -875,6 +1134,15 @@ impl Printer {
                 Ir::Fill(parts) => {
                     for item in parts.iter().rev() {
                         stack.push((mode, item));
+                    }
+                }
+                Ir::PreferredFill { atoms, .. } => {
+                    col = col.saturating_add(atoms.len().saturating_sub(1));
+                    if col > self.line_width {
+                        return false;
+                    }
+                    for atom in atoms.iter().rev() {
+                        stack.push((Mode::Flat, atom));
                     }
                 }
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
@@ -1085,6 +1353,13 @@ mod tests {
         let printer = Printer::new(FormatStyle::default());
         let ir = Ir::fill([Ir::text("a"), Ir::text("b"), Ir::text("c")]);
         assert_eq!(printer.print(&ir), "a b c");
+    }
+
+    #[test]
+    fn fill_drops_nil_atoms_without_phantom_spaces() {
+        let printer = Printer::new(FormatStyle::default());
+        let ir = Ir::fill([Ir::text("a"), Ir::Nil, Ir::text("b")]);
+        assert_eq!(printer.print(&ir), "a b");
     }
 
     #[test]

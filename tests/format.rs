@@ -775,6 +775,92 @@ fn preserve_keeps_author_breaks_while_reflow_joins() {
     );
 }
 
+#[test]
+fn minimal_preserves_an_equilibrium_break_that_reflow_removes() {
+    let input = "Alpha beta gamma delta epsilon.\nZeta eta theta iota kappa lambda.\n";
+    let minimal = FormatStyle {
+        line_width: 40,
+        wrap_target: Some(30),
+        wrap: WrapMode::Minimal,
+        ..FormatStyle::default()
+    };
+    assert_eq!(
+        format_with_style(input, minimal).expect("minimal formats"),
+        input,
+        "an authored break at the soft target must remain stable"
+    );
+
+    let reflow = FormatStyle {
+        line_width: 40,
+        wrap: WrapMode::Reflow,
+        ..FormatStyle::default()
+    };
+    assert_ne!(
+        format_with_style(input, reflow).expect("reflow formats"),
+        input,
+        "canonical reflow should not prefer the authored boundary"
+    );
+}
+
+#[test]
+fn minimal_repairs_overflow_locally_and_is_idempotent() {
+    let input = "This stable opening line reaches the target today.\n\
+This edited middle line is now much too long for the configured hard width here.\n\
+This following boundary reaches the target safely today.\n";
+    let style = FormatStyle {
+        line_width: 60,
+        wrap_target: Some(50),
+        wrap: WrapMode::Minimal,
+        ..FormatStyle::default()
+    };
+    let formatted = format_with_style(input, style).expect("minimal formats");
+    assert!(
+        formatted.starts_with("This stable opening line reaches the target today.\n"),
+        "the preceding equilibrium boundary should remain fixed: {formatted:?}"
+    );
+    assert!(
+        formatted.lines().all(|line| line.chars().count() <= 60),
+        "minimal wrapping must honor the hard width: {formatted:?}"
+    );
+    assert_eq!(
+        format_with_style(&formatted, style).expect("reformat"),
+        formatted,
+        "minimal wrapping must be idempotent"
+    );
+}
+
+#[test]
+fn minimal_rebalances_only_unequilibrated_regions() {
+    let input = "The opening line is already safely within the accepted range today.\n\
+This edited middle line has become too long for the configured width here.\n\
+while this following line can donate some nearby space today.\n\
+Finally this boundary should remain exactly where it is.\n\n\
+This second opening line is also an acceptable stable anchor today.\n\
+A shortened line now needs a few more nearby words.\n\
+from this following line which has enough content to share with it today.\n\
+The final short line remains a valid paragraph ending.\n";
+    let expected = "The opening line is already safely within the accepted range today.\n\
+This edited middle line has become too long for the configured width\n\
+here. while this following line can donate some nearby space today.\n\
+Finally this boundary should remain exactly where it is.\n\n\
+This second opening line is also an acceptable stable anchor today.\n\
+A shortened line now needs a few more nearby words. from\n\
+this following line which has enough content to share with it today.\n\
+The final short line remains a valid paragraph ending.\n";
+    let style = FormatStyle {
+        line_width: 70,
+        wrap_target: Some(60),
+        wrap: WrapMode::Minimal,
+        ..FormatStyle::default()
+    };
+    let formatted = format_with_style(input, style).expect("minimal formats");
+    assert_eq!(formatted, expected);
+    assert_eq!(
+        format_with_style(&formatted, style).expect("reformat"),
+        formatted
+    );
+}
+
 /// A collapsible, inline-flagged command (the cite family) formats identically
 /// regardless of how the author broke its key list across source lines: the same
 /// meaning must yield the same output (determinism). The single-line form is the

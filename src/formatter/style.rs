@@ -17,6 +17,9 @@ pub enum WrapMode {
     /// word would not fit. The default.
     #[default]
     Reflow,
+    /// Preserve acceptable authored breaks and redistribute only the smallest
+    /// region needed to satisfy `line_width` and approach `wrap_target`.
+    Minimal,
     /// Wrap after each sentence (one sentence per line). Line width is ignored — a
     /// long sentence stays on one line.
     Sentence,
@@ -35,6 +38,9 @@ pub struct FormatStyle {
     pub line_width: usize,
     pub indent_width: usize,
     pub wrap: WrapMode,
+    /// Soft line-length target used only by [`WrapMode::Minimal`]. `None` uses
+    /// ten columns below `line_width` (clamped to at least one column).
+    pub wrap_target: Option<usize>,
 }
 
 impl Default for FormatStyle {
@@ -43,6 +49,17 @@ impl Default for FormatStyle {
             line_width: 80,
             indent_width: 2,
             wrap: WrapMode::default(),
+            wrap_target: None,
         }
+    }
+}
+
+impl FormatStyle {
+    /// Effective soft target for minimal wrapping. It can never exceed the hard
+    /// line width, including for styles constructed directly by API callers.
+    pub(crate) fn effective_wrap_target(self) -> usize {
+        self.wrap_target
+            .unwrap_or_else(|| self.line_width.saturating_sub(10).max(1))
+            .clamp(1, self.line_width.max(1))
     }
 }

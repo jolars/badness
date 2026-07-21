@@ -6875,6 +6875,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_settings_minimal_wrap_and_target_from_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            "[format]\nline-width = 100\nwrap = \"minimal\"\nwrap-target = 85\n",
+        )
+        .expect("write config");
+        let mut state = state_with_editor(EditorSettings::default());
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+        assert_eq!(resolved.wrap_override, Some(WrapMode::Minimal));
+        assert_eq!(resolved.style.wrap_target, Some(85));
+    }
+
+    #[test]
     fn resolve_settings_applies_lint_selection() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(

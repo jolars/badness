@@ -6875,6 +6875,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_settings_stable_wrap_from_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            "[format]\nline-width = 100\nwrap = \"stable\"\n",
+        )
+        .expect("write config");
+        let mut state = state_with_editor(EditorSettings::default());
+        let resolved = state.resolve_settings(&file_uri_in(dir.path()));
+        assert_eq!(resolved.wrap_override, Some(WrapMode::Stable));
+    }
+
+    #[test]
     fn resolve_settings_applies_lint_selection() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(

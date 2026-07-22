@@ -51,6 +51,7 @@ use smol_str::SmolStr;
 fn wrap_mode(arg: WrapArg) -> WrapMode {
     match arg {
         WrapArg::Reflow => WrapMode::Reflow,
+        WrapArg::Stable => WrapMode::Stable,
         WrapArg::Sentence => WrapMode::Sentence,
         WrapArg::Semantic => WrapMode::Semantic,
         WrapArg::Preserve => WrapMode::Preserve,
@@ -234,7 +235,7 @@ const STARTER_CONFIG: &str = "\
 [format]
 # line-width = 80
 # indent-width = 2
-# wrap = \"reflow\"  # reflow | sentence | semantic | preserve
+# wrap = \"reflow\"  # reflow | stable | sentence | semantic | preserve
                      # omit to use each file kind's default
                      # (.tex -> reflow, .sty/.cls/.dtx/.ins -> preserve)
 

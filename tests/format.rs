@@ -775,6 +775,191 @@ fn preserve_keeps_author_breaks_while_reflow_joins() {
     );
 }
 
+#[test]
+fn stable_preserves_an_equilibrium_break_that_reflow_removes() {
+    // The soft target is `line_width - 15` (see `FormatStyle::stable_wrap_target`),
+    // so a width of 40 targets column 25.
+    let input = "Alpha beta gamma delta epsilon.\nZeta eta theta iota kappa lambda.\n";
+    let stable = FormatStyle {
+        line_width: 40,
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    assert_eq!(
+        format_with_style(input, stable).expect("stable formats"),
+        input,
+        "an authored break at the soft target must remain stable"
+    );
+
+    let reflow = FormatStyle {
+        line_width: 40,
+        wrap: WrapMode::Reflow,
+        ..FormatStyle::default()
+    };
+    assert_ne!(
+        format_with_style(input, reflow).expect("reflow formats"),
+        input,
+        "canonical reflow should not prefer the authored boundary"
+    );
+}
+
+#[test]
+fn stable_repairs_overflow_locally_and_is_idempotent() {
+    // Width 60 targets column 45 (`line_width - 15`).
+    let input = "This stable opening line reaches the target today.\n\
+This edited middle line is now much too long for the configured hard width here.\n\
+This following boundary reaches the target safely today.\n";
+    let style = FormatStyle {
+        line_width: 60,
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    let formatted = format_with_style(input, style).expect("stable formats");
+    assert!(
+        formatted.starts_with("This stable opening line reaches the target today.\n"),
+        "the preceding equilibrium boundary should remain fixed: {formatted:?}"
+    );
+    assert!(
+        formatted.lines().all(|line| line.chars().count() <= 60),
+        "stable wrapping must honor the hard width: {formatted:?}"
+    );
+    assert_eq!(
+        format_with_style(&formatted, style).expect("reformat"),
+        formatted,
+        "stable wrapping must be idempotent"
+    );
+}
+
+#[test]
+fn stable_rebalances_only_unequilibrated_regions() {
+    let input = "The opening line is already safely within the accepted range today.\n\
+This edited middle line has become too long for the configured width here.\n\
+while this following line can donate some nearby space today.\n\
+Finally this boundary should remain exactly where it is.\n\n\
+This second opening line is also an acceptable stable anchor today.\n\
+A shortened line now needs a few more nearby words.\n\
+from this following line which has enough content to share with it today.\n\
+The final short line remains a valid paragraph ending.\n";
+    let expected = "The opening line is already safely within the accepted range today.\n\
+This edited middle line has become too long for the configured width\n\
+here. while this following line can donate some nearby space today.\n\
+Finally this boundary should remain exactly where it is.\n\n\
+This second opening line is also an acceptable stable anchor today.\n\
+A shortened line now needs a few more nearby words. from\n\
+this following line which has enough content to share with it today.\n\
+The final short line remains a valid paragraph ending.\n";
+    // Width 70 targets column 55 (`line_width - 15`).
+    let style = FormatStyle {
+        line_width: 70,
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    let formatted = format_with_style(input, style).expect("stable formats");
+    assert_eq!(formatted, expected);
+    assert_eq!(
+        format_with_style(&formatted, style).expect("reformat"),
+        formatted
+    );
+}
+
+/// Stable wrapping claims idempotence. The cost model is idempotent by
+/// construction (a solver output `b` is the unique global lex-min once fed back
+/// as the `preferred` set), so the only residual risk is parse-stability: that
+/// the reformatted text re-lexes to the same atoms and run segmentation. This
+/// fuzzes that empirically over many pseudo-random prose paragraphs, widths, and
+/// authored-break placements, asserting `fmt(fmt(x)) == fmt(x)`, the hard-width
+/// bound (modulo unbreakable long words), and losslessness of the output.
+#[test]
+fn stable_wrapping_is_idempotent_over_random_prose() {
+    // A tiny deterministic LCG (Numerical Recipes constants) — no dev-dep on a
+    // PRNG crate, and reproducible across platforms/runs.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 16
+        }
+        fn below(&mut self, bound: usize) -> usize {
+            (self.next() as usize) % bound.max(1)
+        }
+    }
+
+    // Build a paragraph of random words separated by a space or a newline, with a
+    // sprinkling of blank-line paragraph breaks. Words are lowercase-letter runs so
+    // they never re-lex into something exotic (no commands, math, or comments).
+    fn random_prose(rng: &mut Lcg) -> String {
+        let mut out = String::new();
+        let paragraphs = 1 + rng.below(3);
+        for p in 0..paragraphs {
+            if p > 0 {
+                out.push_str("\n\n");
+            }
+            let words = 4 + rng.below(40);
+            for w in 0..words {
+                if w > 0 {
+                    // Roughly one in three gaps is an authored newline.
+                    out.push(if rng.below(3) == 0 { '\n' } else { ' ' });
+                }
+                let len = 1 + rng.below(12);
+                for _ in 0..len {
+                    out.push((b'a' + rng.below(26) as u8) as char);
+                }
+            }
+        }
+        out.push('\n');
+        out
+    }
+
+    let mut rng = Lcg(0x1234_5678_9abc_def0);
+    for case in 0..400 {
+        let input = random_prose(&mut rng);
+        // Vary the hard width; the soft target rides along at `width - 10`.
+        for &line_width in &[24usize, 40, 60, 72, 90] {
+            let style = FormatStyle {
+                line_width,
+                wrap: WrapMode::Stable,
+                ..FormatStyle::default()
+            };
+            let once = format_with_style(&input, style)
+                .unwrap_or_else(|e| panic!("case {case} @ {line_width}: format failed: {e:?}"));
+            let twice = format_with_style(&once, style)
+                .unwrap_or_else(|e| panic!("case {case} @ {line_width}: reformat failed: {e:?}"));
+            assert_eq!(
+                twice, once,
+                "stable wrap not idempotent (case {case} @ width {line_width})\ninput:  {input:?}\nonce:   {once:?}\ntwice:  {twice:?}"
+            );
+
+            // Hard width holds except where a single unbreakable word exceeds it.
+            for line in once.lines() {
+                let cols = line.chars().count();
+                let widest_word = line
+                    .split_whitespace()
+                    .map(|w| w.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                assert!(
+                    cols <= line_width || widest_word > line_width,
+                    "line over hard width with a breakable layout (case {case} @ {line_width}): {line:?}"
+                );
+            }
+
+            // The output is a clean, lossless document.
+            assert!(
+                parse(&once).errors.is_empty(),
+                "stable output should parse cleanly (case {case} @ {line_width}): {once:?}"
+            );
+            assert_eq!(
+                reconstruct(&once),
+                once,
+                "stable output should round-trip losslessly (case {case} @ {line_width})"
+            );
+        }
+    }
+}
+
 /// A collapsible, inline-flagged command (the cite family) formats identically
 /// regardless of how the author broke its key list across source lines: the same
 /// meaning must yield the same output (determinism). The single-line form is the

@@ -16,6 +16,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 pub enum WrapArg {
     /// Greedy fill: wrap words to the line width (default).
     Reflow,
+    /// Preserve acceptable authored breaks and rebalance only nearby text
+    /// (revision-stable wrapping).
+    Stable,
     /// One sentence per line (line width ignored).
     Sentence,
     /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at

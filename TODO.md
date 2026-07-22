@@ -136,6 +136,14 @@ completion items (VS Code-only), and sub/superscript history completion
 
 ### Formatting
 
+- [x] Revision-stable paragraph wrapping: `wrap = "stable"` retains authored
+  equilibrium breaks and uses a hard-coded soft target (`line-width - 15`, see
+  `FormatStyle::stable_wrap_target`) under the hard `line-width`; implemented as
+  source-aware `PreferredFill` IR with global lexicographic layout selection,
+  preserving the formatter-engine boundary. Follow-up: expose the soft target as a
+  config knob only if a concrete need appears; reserve `wrap = "minimal"` for a
+  truly minimal mode that only reflows over-long lines.
+
 ### Navigation & structure
 
 - [x] Selection ranges (`textDocument/selectionRange`)—expand-selection from

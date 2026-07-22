@@ -340,6 +340,7 @@ fn format_root(
     let profile = ctx.sentence().resolved();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
+        stable_target: ctx.style().stable_wrap_target(),
         signatures: Signatures::new(&user),
         expl3_regions: &regions,
         profile,
@@ -406,6 +407,9 @@ fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
 #[derive(Clone, Copy)]
 struct LowerCtx<'a> {
     wrap: WrapMode,
+    /// Soft equilibrium line target for [`WrapMode::Stable`]. Already derived and
+    /// clamped against the hard width by [`FormatStyle::stable_wrap_target`].
+    stable_target: usize,
     signatures: Signatures<'a>,
     /// Sorted, non-overlapping byte ranges of the document's expl3 regions (see
     /// [`expl3_regions`]). Inside these, source whitespace is catcode-9 (ignored)
@@ -416,8 +420,8 @@ struct LowerCtx<'a> {
     /// The sentence-boundary profile (built-in language plus user no-break
     /// abbreviations) for the [`WrapMode::Sentence`]/[`WrapMode::Semantic`] modes.
     /// `Copy`, borrowing the merged slice owned by [`format_root`]. Never consulted
-    /// under [`WrapMode::Reflow`]/[`WrapMode::Preserve`], so an English default
-    /// (see [`SentenceOptions::default`]) is harmless there.
+    /// under [`WrapMode::Reflow`]/[`WrapMode::Stable`]/[`WrapMode::Preserve`], so an
+    /// English default (see [`SentenceOptions::default`]) is harmless there.
     profile: ResolvedProfile<'a>,
     /// Range-formatting emission filter. When `Some`, only the [`SyntaxKind::ROOT`]
     /// children overlapping this byte range are lowered (the in-range top-level
@@ -436,7 +440,7 @@ impl<'a> LowerCtx<'a> {
     fn wraps_prose(self) -> bool {
         matches!(
             self.wrap,
-            WrapMode::Reflow | WrapMode::Sentence | WrapMode::Semantic
+            WrapMode::Reflow | WrapMode::Stable | WrapMode::Sentence | WrapMode::Semantic
         )
     }
 
@@ -474,8 +478,8 @@ impl<'a> LowerCtx<'a> {
 
 /// Lower a CST node to IR. Most nodes lower generically (see
 /// [`lower_element_stream`]); an [`SyntaxKind::ENVIRONMENT`] is special-cased to
-/// indent its body (see [`lower_environment`]), and under [`WrapMode::Reflow`] a
-/// [`SyntaxKind::PARAGRAPH`] is wrapped to the line width (see
+/// indent its body (see [`lower_environment`]), and under each prose-wrapping mode a
+/// [`SyntaxKind::PARAGRAPH`] is routed through its line policy (see
 /// [`lower_paragraph_reflow`]). The [`LowerCtx`] (wrap mode + signature overlay) is
 /// threaded through so it reaches every nested paragraph (including environment and
 /// group bodies).
@@ -746,10 +750,13 @@ const DTX_DOC_MARGIN: &str = "% ";
 /// One committed atom of a logical-line run: the printed [`Ir`] plus the atom's
 /// source `text`, retained so the [`WrapMode::Sentence`]/[`WrapMode::Semantic`]
 /// renderer can run sentence-boundary detection over the words. Under
-/// [`WrapMode::Reflow`] only the `ir` is used.
+/// [`WrapMode::Reflow`]/[`WrapMode::Stable`] only the layout fields are used.
 struct RunAtom {
     ir: Ir,
     text: String,
+    /// Whether the gap immediately before this atom was a source newline. False
+    /// for the first atom and for ordinary inter-word whitespace.
+    preferred_break_before: bool,
 }
 
 /// How a completed logical-line run is rendered into a single segment.
@@ -758,6 +765,8 @@ enum RunRender<'a> {
     /// Greedy width fill (reflow): one [`Ir::fill`] over the run's atoms, the
     /// printer breaking word-by-word at the line width.
     Fill,
+    /// Source-break-aware optimal fill used by [`WrapMode::Stable`].
+    Stable { target: usize },
     /// One sentence per line (sentence/semantic): cut the run at sentence
     /// boundaries and lay each sentence flat (space-joined), separating sentences
     /// with a hard break. Width is ignored — a long sentence stays on one line.
@@ -813,6 +822,8 @@ struct LineBuilder<'a> {
     /// Glued pieces of the atom in progress (its [`Ir`] and its source text).
     atom: Vec<Ir>,
     atom_text: String,
+    /// Source-newline preference to attach to the next committed atom.
+    preferred_break_before_next: bool,
     /// Atoms of the current run (the current logical line).
     run: Vec<RunAtom>,
     /// Completed lines (fills/sentences and blocks), interleaved with `seps` at the
@@ -835,6 +846,7 @@ impl<'a> LineBuilder<'a> {
         Self {
             atom: Vec::new(),
             atom_text: String::new(),
+            preferred_break_before_next: false,
             run: Vec::new(),
             lines: Vec::new(),
             seps: Vec::new(),
@@ -856,7 +868,15 @@ impl<'a> LineBuilder<'a> {
             self.run.push(RunAtom {
                 ir: Ir::concat(self.atom.drain(..)),
                 text: std::mem::take(&mut self.atom_text),
+                preferred_break_before: std::mem::take(&mut self.preferred_break_before_next),
             });
+        }
+    }
+
+    /// Mark the next inter-atom gap as an authored line break.
+    fn prefer_next_break(&mut self) {
+        if !self.run.is_empty() {
+            self.preferred_break_before_next = true;
         }
     }
 
@@ -880,6 +900,14 @@ impl<'a> LineBuilder<'a> {
         let run = std::mem::take(&mut self.run);
         let body = match self.render {
             RunRender::Fill => Ir::fill(run.into_iter().map(|a| a.ir)),
+            RunRender::Stable { target } => {
+                let preferred: Vec<bool> = run
+                    .iter()
+                    .skip(1)
+                    .map(|atom| atom.preferred_break_before)
+                    .collect();
+                Ir::preferred_fill(run.into_iter().map(|a| a.ir), preferred, target)
+            }
             RunRender::Sentence(profile) => render_sentences(run, profile),
         };
         let segment = match self.margin {
@@ -921,6 +949,9 @@ fn reflow_elements(
     // Sentence/semantic segmentation applies to *prose* runs; a `Statement` run is
     // code (a `\newcommand` body), so it keeps the width fill regardless of mode.
     let render = match cx.wrap {
+        WrapMode::Stable if kind != ReflowKind::Statement => RunRender::Stable {
+            target: cx.stable_target,
+        },
         WrapMode::Sentence | WrapMode::Semantic if kind != ReflowKind::Statement => {
             RunRender::Sentence(cx.profile)
         }
@@ -966,6 +997,9 @@ fn reflow_elements(
                         b.end_line();
                     } else {
                         b.flush_atom();
+                        if cx.wrap == WrapMode::Stable {
+                            b.prefer_next_break();
+                        }
                     }
                     line_all_commands = true;
                     line_has_content = false;
@@ -1788,7 +1822,7 @@ enum FlatItem {
 /// the body indent. The framing (`\begin`/`\end`, the indented body with
 /// leading/trailing `hard_line`) matches [`lower_environment`].
 ///
-/// Only reached under [`WrapMode::Reflow`] (see [`lower_node`]). Falls back to the
+/// Only reached under a prose-wrapping mode (see [`lower_node`]). Falls back to the
 /// plain [`lower_environment`] when the body has no `\item` to anchor on, so an
 /// unusual shape degrades to today's indented body rather than misformatting.
 fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
@@ -2982,11 +3016,12 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
     // width instead of forcing the printer to break the innermost nested prose
     // group (the only soft break a rigid `lower_element_stream` body would expose).
     // Optional `[…]` bodies and the non-reflow modes keep the generic stream.
-    let body = if cx.wrap == WrapMode::Reflow && open == SyntaxKind::L_BRACE {
-        reflow_elements(body_elements.into_iter(), cx, ReflowKind::Statement)
-    } else {
-        Ir::concat(lower_element_stream(body_elements.into_iter(), cx))
-    };
+    let body =
+        if matches!(cx.wrap, WrapMode::Reflow | WrapMode::Stable) && open == SyntaxKind::L_BRACE {
+            reflow_elements(body_elements.into_iter(), cx, ReflowKind::Statement)
+        } else {
+            Ir::concat(lower_element_stream(body_elements.into_iter(), cx))
+        };
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {

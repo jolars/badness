@@ -41,7 +41,7 @@ are implemented.
 **Configuration (`badness.toml`).** Discovered by an ancestor walk from each input
 (`config.rs`); the **CLI is the only consumer**—the library API takes a fully-resolved
 `FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`, `wrap`,
-`lang`, `no-break-abbreviations`), and `[build]` (`aux-dir`). Excludes follow
+`lang`, `no-break-abbreviations`) and `[build]` (`aux-dir`). Excludes follow
 the Ruff model (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
 additive). `wrap` is optional and resolves per file kind when omitted. This keeps the
 formatter hermetic (config is local project data, not the environment). TEXMF discovery
@@ -269,17 +269,22 @@ never match.
   and fights tower-lsp's async `&self` model. `text/line_index.rs` uses
   `lsp_types::Position`.
 - **Formatter engine:** a Wadler/Prettier-style `Doc` IR (`formatter::ir::Ir`), whose
-  core variants are `Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent` plus an
-  `Ir::Fill` node (per-gap greedy break decisions) for paragraph reflow. The enum also
+  core variants are `Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent` plus
+  `Ir::Fill` (per-gap greedy break decisions) and `Ir::PreferredFill`
+  (source-break-aware global minimum-cost decisions) for paragraph reflow. The enum also
   carries `Align`, `IfBreak`, `ConditionalGroup`(`AllLines`), `Verbatim`, `ColumnZero`,
   `MarginPrefix`, and `Nil`—see `ir.rs` for the authoritative list.
 - **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
-  `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling **panache**
-  formatter and mechanized through the `Doc` IR (`Fill`), not a separate line-filler.
-  All four are implemented: `Reflow` width-fills, `Preserve` keeps authored breaks,
+  `Stable`, `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling
+  **panache** formatter and mechanized through the `Doc` IR, not a separate line-filler.
+  All five are implemented: `Reflow` width-fills, `Stable` keeps acceptable authored
+  breaks while optimizing overflow/underflow/change/displacement/raggedness against a
+  hard-coded soft target (`FormatStyle::stable_wrap_target`, `line-width - 15`; not yet
+  configurable), `Preserve` keeps authored breaks,
   and `Sentence`/`Semantic` split one sentence per line (width ignored) through the
   shared `reflow_elements` engine—each completed prose run is rendered as a `Fill`
-  (reflow) or as space-joined sentences (sentence/semantic). `Semantic` additionally
+  (reflow), a `PreferredFill` (stable), or as space-joined sentences
+  (sentence/semantic). `Semantic` additionally
   ends a line at every authored newline (sembr; no clause detection). Sentence-boundary
   detection is a per-language abbreviation profile (`formatter::sentence`, ported from
   panache) resolved from `[format] lang` + `[format.no-break-abbreviations]` into a

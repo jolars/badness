@@ -13,7 +13,7 @@ its default.
 [format]
 # line-width = 80
 # indent-width = 2
-# wrap = "reflow"  # reflow | sentence | semantic | preserve
+# wrap = "reflow"  # reflow | stable | sentence | semantic | preserve
 
 [lint]
 # select = ["..."]  # if set, only these rules run
@@ -117,6 +117,7 @@ structure—only where soft line breaks fall.
   | Mode       | Behavior                                                                                                        |
   | ---------- | --------------------------------------------------------------------------------------------------------------- |
   | `reflow`   | Greedy fill: pack words up to `line-width`, breaking only where the next word would overflow.                   |
+  | `stable`   | Preserve acceptable authored breaks and rebalance only text that no longer fits (keeps revision diffs small).   |
   | `preserve` | Leave the authored line breaks untouched.                                                                       |
   | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                 |
   | `semantic` | [Semantic line breaks](https://sembr.org): keep the author's soft breaks *and* add a break after each sentence. |
@@ -136,6 +137,18 @@ clause boundaries itself—a break after a comma or `and` survives only where th
 author placed a newline. A run-on sentence on a single source line is still
 sentence-split.
 
+`stable` also preserves authored line breaks, but treats them as preferred
+anchors rather than hard boundaries. It is aimed at keeping revision diffs
+small: a small prose edit perturbs the smallest possible region. Each prose run
+is solved as one global layout problem. Candidate layouts are compared
+lexicographically by total overflow, underflow below a soft target
+(`line-width - 15`), changed authored breaks, displacement from the nearest
+authored break, raggedness around that target, and line count. This makes the
+hard width non-negotiable before minimizing source churn, while a short final
+line remains unpenalized. Blank lines and command-only lines bound each
+independently optimized run, and code-like statement bodies retain ordinary
+greedy fill. (The soft target is not currently configurable.)
+
 When omitted, the formatter uses each file kind's default: `.tex` and `.bib`
 files reflow, while code-heavy `.sty`, `.cls`, `.dtx`, and `.ins` files preserve
 authored line breaks. Setting `wrap` applies the same mode to every file kind.
@@ -143,13 +156,13 @@ authored line breaks. Setting `wrap` applies the same mode to every file kind.
 **Default value**: unset (per file kind: `.tex`/`.bib` → `reflow`,
 `.sty`/`.cls`/`.dtx`/`.ins` → `preserve`)
 
-**Type**: `"reflow" | "sentence" | "semantic" | "preserve"`
+**Type**: `"reflow" | "stable" | "sentence" | "semantic" | "preserve"`
 
 **Example**:
 
 ```toml
 [format]
-wrap = "sentence"
+wrap = "stable"
 ```
 
 ### `lang`

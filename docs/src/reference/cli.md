@@ -36,9 +36,6 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
 `--line-width <LINE_WIDTH>`
 :   Maximum line width before the formatter breaks a line
 
-`--wrap-target <WRAP_TARGET>`
-:   Soft line-length target used by `--wrap minimal`
-
 `--indent-width <INDENT_WIDTH>`
 :   Number of spaces per indent step
 
@@ -48,7 +45,7 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
     Possible values:
 
     - `reflow`: Greedy fill: wrap words to the line width (default)
-    - `minimal`: Preserve acceptable authored breaks and rebalance only nearby text
+    - `stable`: Preserve acceptable authored breaks and rebalance only nearby text (revision-stable wrapping)
     - `sentence`: One sentence per line (line width ignored)
     - `semantic`: Semantic line breaks (sembr.org): keep authored breaks and add breaks at sentence boundaries
     - `preserve`: Leave authored line breaks untouched

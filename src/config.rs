@@ -99,10 +99,6 @@ pub struct FormatConfig {
     pub line_width: u32,
     #[serde(default = "default_indent_width")]
     pub indent_width: u32,
-    /// Soft line-length target for `wrap = "minimal"`. When omitted, minimal
-    /// wrapping targets ten columns below `line-width`.
-    #[serde(default)]
-    pub wrap_target: Option<u32>,
     /// The paragraph line-break policy. See [`WrapModeConfig`]. When omitted, the
     /// formatter uses each file kind's default
     /// ([`FileKind::default_wrap`](crate::file_discovery::FileKind::default_wrap)):
@@ -134,7 +130,6 @@ impl Default for FormatConfig {
         Self {
             line_width: DEFAULT_LINE_WIDTH,
             indent_width: DEFAULT_INDENT_WIDTH,
-            wrap_target: None,
             wrap: None,
             math_wrap: None,
             lang: None,
@@ -152,8 +147,9 @@ impl Default for FormatConfig {
 pub enum WrapModeConfig {
     /// Greedy fill: wrap words to the line width.
     Reflow,
-    /// Prefer acceptable authored breaks, changing the smallest possible region.
-    Minimal,
+    /// Prefer acceptable authored breaks, changing the smallest possible region
+    /// (revision-stable wrapping).
+    Stable,
     /// One sentence per line (width ignored).
     Sentence,
     /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at
@@ -167,7 +163,7 @@ impl From<WrapModeConfig> for WrapMode {
     fn from(value: WrapModeConfig) -> Self {
         match value {
             WrapModeConfig::Reflow => WrapMode::Reflow,
-            WrapModeConfig::Minimal => WrapMode::Minimal,
+            WrapModeConfig::Stable => WrapMode::Stable,
             WrapModeConfig::Sentence => WrapMode::Sentence,
             WrapModeConfig::Semantic => WrapMode::Semantic,
             WrapModeConfig::Preserve => WrapMode::Preserve,
@@ -210,19 +206,6 @@ impl FormatConfig {
     pub fn validate(&self, path: Option<&Path>) -> Result<(), ConfigError> {
         validate_width("line-width", self.line_width, path)?;
         validate_width("indent-width", self.indent_width, path)?;
-        if let Some(target) = self.wrap_target {
-            validate_width("wrap-target", target, path)?;
-            if target > self.line_width {
-                return Err(ConfigError::InvalidValue {
-                    path: path.map(Path::to_path_buf),
-                    field: "wrap-target",
-                    message: format!(
-                        "must not exceed line-width ({}), got {target}",
-                        self.line_width
-                    ),
-                });
-            }
-        }
         Ok(())
     }
 }
@@ -277,7 +260,6 @@ impl From<&FormatConfig> for FormatStyle {
             // configured value (or `Auto`) maps straight through, and `Auto`
             // resolves against the effective wrap inside the formatter.
             math_wrap: config.math_wrap.map_or(MathWrap::Auto, Into::into),
-            wrap_target: config.wrap_target.map(|width| width as usize),
         }
     }
 }
@@ -621,7 +603,7 @@ mod tests {
     fn parses_wrap_variants() {
         for (key, expected) in [
             ("reflow", WrapModeConfig::Reflow),
-            ("minimal", WrapModeConfig::Minimal),
+            ("stable", WrapModeConfig::Stable),
             ("sentence", WrapModeConfig::Sentence),
             ("semantic", WrapModeConfig::Semantic),
             ("preserve", WrapModeConfig::Preserve),
@@ -636,7 +618,7 @@ mod tests {
     fn expected_wrap_mode(key: &str) -> WrapMode {
         match key {
             "reflow" => WrapMode::Reflow,
-            "minimal" => WrapMode::Minimal,
+            "stable" => WrapMode::Stable,
             "sentence" => WrapMode::Sentence,
             "semantic" => WrapMode::Semantic,
             "preserve" => WrapMode::Preserve,
@@ -679,33 +661,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_wrap_target() {
-        let config = parse("[format]\nline-width = 100\nwrap = \"minimal\"\nwrap-target = 85\n")
-            .expect("parse");
+    fn stable_wrap_target_sits_below_line_width() {
+        let config = parse("[format]\nline-width = 100\nwrap = \"stable\"\n").expect("parse");
         let style = FormatStyle::from(&config.format);
-        assert_eq!(config.format.wrap, Some(WrapModeConfig::Minimal));
-        assert_eq!(style.wrap_target, Some(85));
-    }
-
-    #[test]
-    fn minimal_wrap_target_defaults_below_line_width() {
-        let config = parse("[format]\nline-width = 100\nwrap = \"minimal\"\n").expect("parse");
-        let style = FormatStyle::from(&config.format);
-        assert_eq!(style.wrap_target, None);
-        assert_eq!(style.effective_wrap_target(), 90);
-    }
-
-    #[test]
-    fn rejects_wrap_target_above_line_width() {
-        let err = parse("[format]\nline-width = 80\nwrap-target = 81\n")
-            .expect_err("target above hard width");
-        assert!(matches!(
-            err,
-            ConfigError::InvalidValue {
-                field: "wrap-target",
-                ..
-            }
-        ));
+        assert_eq!(config.format.wrap, Some(WrapModeConfig::Stable));
+        assert_eq!(style.stable_wrap_target(), 85);
     }
 
     #[test]

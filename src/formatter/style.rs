@@ -18,8 +18,10 @@ pub enum WrapMode {
     #[default]
     Reflow,
     /// Preserve acceptable authored breaks and redistribute only the smallest
-    /// region needed to satisfy `line_width` and approach `wrap_target`.
-    Minimal,
+    /// region needed to satisfy `line_width` and approach the soft equilibrium
+    /// target ([`FormatStyle::stable_wrap_target`]). Aimed at keeping revision
+    /// diffs small: a small prose edit perturbs the smallest possible region.
+    Stable,
     /// Wrap after each sentence (one sentence per line). Line width is ignored — a
     /// long sentence stays on one line.
     Sentence,
@@ -79,9 +81,6 @@ pub struct FormatStyle {
     pub indent_width: usize,
     pub wrap: WrapMode,
     pub math_wrap: MathWrap,
-    /// Soft line-length target used only by [`WrapMode::Minimal`]. `None` uses
-    /// ten columns below `line_width` (clamped to at least one column).
-    pub wrap_target: Option<usize>,
 }
 
 impl Default for FormatStyle {
@@ -91,17 +90,27 @@ impl Default for FormatStyle {
             indent_width: 2,
             wrap: WrapMode::default(),
             math_wrap: MathWrap::default(),
-            wrap_target: None,
         }
     }
 }
 
+/// Columns below `line_width` that [`WrapMode::Stable`] aims for as its soft
+/// equilibrium target. A larger offset widens the acceptable band
+/// `[target, line_width]`, so more authored breaks fall inside it and survive
+/// untouched — which is the whole point of the mode (minimize revision diffs).
+/// Deliberately *not* configurable yet: keeping the config surface minimal (see
+/// the maintainer discussion on the PR). Promote this to a `FormatStyle`/config
+/// field if a concrete user need for tuning it appears.
+pub(crate) const STABLE_WRAP_TARGET_OFFSET: usize = 15;
+
 impl FormatStyle {
-    /// Effective soft target for minimal wrapping. It can never exceed the hard
-    /// line width, including for styles constructed directly by API callers.
-    pub(crate) fn effective_wrap_target(self) -> usize {
-        self.wrap_target
-            .unwrap_or_else(|| self.line_width.saturating_sub(10).max(1))
+    /// Soft equilibrium target for [`WrapMode::Stable`]: [`STABLE_WRAP_TARGET_OFFSET`]
+    /// columns below the hard `line_width`, clamped to at least one column. It can
+    /// never exceed the hard width, including for styles built directly by API
+    /// callers.
+    pub(crate) fn stable_wrap_target(self) -> usize {
+        self.line_width
+            .saturating_sub(STABLE_WRAP_TARGET_OFFSET)
             .clamp(1, self.line_width.max(1))
     }
 }

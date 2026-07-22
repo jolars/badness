@@ -340,7 +340,7 @@ fn format_root(
     let profile = ctx.sentence().resolved();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
-        wrap_target: ctx.style().effective_wrap_target(),
+        stable_target: ctx.style().stable_wrap_target(),
         signatures: Signatures::new(&user),
         expl3_regions: &regions,
         profile,
@@ -407,9 +407,9 @@ fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
 #[derive(Clone, Copy)]
 struct LowerCtx<'a> {
     wrap: WrapMode,
-    /// Effective soft line target for [`WrapMode::Minimal`]. Already defaulted
-    /// and clamped against the hard width by [`FormatStyle`].
-    wrap_target: usize,
+    /// Soft equilibrium line target for [`WrapMode::Stable`]. Already derived and
+    /// clamped against the hard width by [`FormatStyle::stable_wrap_target`].
+    stable_target: usize,
     signatures: Signatures<'a>,
     /// Sorted, non-overlapping byte ranges of the document's expl3 regions (see
     /// [`expl3_regions`]). Inside these, source whitespace is catcode-9 (ignored)
@@ -420,8 +420,8 @@ struct LowerCtx<'a> {
     /// The sentence-boundary profile (built-in language plus user no-break
     /// abbreviations) for the [`WrapMode::Sentence`]/[`WrapMode::Semantic`] modes.
     /// `Copy`, borrowing the merged slice owned by [`format_root`]. Never consulted
-    /// under [`WrapMode::Reflow`]/[`WrapMode::Minimal`]/[`WrapMode::Preserve`], so an English default
-    /// (see [`SentenceOptions::default`]) is harmless there.
+    /// under [`WrapMode::Reflow`]/[`WrapMode::Stable`]/[`WrapMode::Preserve`], so an
+    /// English default (see [`SentenceOptions::default`]) is harmless there.
     profile: ResolvedProfile<'a>,
     /// Range-formatting emission filter. When `Some`, only the [`SyntaxKind::ROOT`]
     /// children overlapping this byte range are lowered (the in-range top-level
@@ -440,7 +440,7 @@ impl<'a> LowerCtx<'a> {
     fn wraps_prose(self) -> bool {
         matches!(
             self.wrap,
-            WrapMode::Reflow | WrapMode::Minimal | WrapMode::Sentence | WrapMode::Semantic
+            WrapMode::Reflow | WrapMode::Stable | WrapMode::Sentence | WrapMode::Semantic
         )
     }
 
@@ -750,7 +750,7 @@ const DTX_DOC_MARGIN: &str = "% ";
 /// One committed atom of a logical-line run: the printed [`Ir`] plus the atom's
 /// source `text`, retained so the [`WrapMode::Sentence`]/[`WrapMode::Semantic`]
 /// renderer can run sentence-boundary detection over the words. Under
-/// [`WrapMode::Reflow`]/[`WrapMode::Minimal`] only the layout fields are used.
+/// [`WrapMode::Reflow`]/[`WrapMode::Stable`] only the layout fields are used.
 struct RunAtom {
     ir: Ir,
     text: String,
@@ -765,8 +765,8 @@ enum RunRender<'a> {
     /// Greedy width fill (reflow): one [`Ir::fill`] over the run's atoms, the
     /// printer breaking word-by-word at the line width.
     Fill,
-    /// Source-break-aware optimal fill used by [`WrapMode::Minimal`].
-    Minimal { target: usize },
+    /// Source-break-aware optimal fill used by [`WrapMode::Stable`].
+    Stable { target: usize },
     /// One sentence per line (sentence/semantic): cut the run at sentence
     /// boundaries and lay each sentence flat (space-joined), separating sentences
     /// with a hard break. Width is ignored — a long sentence stays on one line.
@@ -900,7 +900,7 @@ impl<'a> LineBuilder<'a> {
         let run = std::mem::take(&mut self.run);
         let body = match self.render {
             RunRender::Fill => Ir::fill(run.into_iter().map(|a| a.ir)),
-            RunRender::Minimal { target } => {
+            RunRender::Stable { target } => {
                 let preferred: Vec<bool> = run
                     .iter()
                     .skip(1)
@@ -949,8 +949,8 @@ fn reflow_elements(
     // Sentence/semantic segmentation applies to *prose* runs; a `Statement` run is
     // code (a `\newcommand` body), so it keeps the width fill regardless of mode.
     let render = match cx.wrap {
-        WrapMode::Minimal if kind != ReflowKind::Statement => RunRender::Minimal {
-            target: cx.wrap_target,
+        WrapMode::Stable if kind != ReflowKind::Statement => RunRender::Stable {
+            target: cx.stable_target,
         },
         WrapMode::Sentence | WrapMode::Semantic if kind != ReflowKind::Statement => {
             RunRender::Sentence(cx.profile)
@@ -997,7 +997,7 @@ fn reflow_elements(
                         b.end_line();
                     } else {
                         b.flush_atom();
-                        if cx.wrap == WrapMode::Minimal {
+                        if cx.wrap == WrapMode::Stable {
                             b.prefer_next_break();
                         }
                     }
@@ -3017,7 +3017,7 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
     // group (the only soft break a rigid `lower_element_stream` body would expose).
     // Optional `[…]` bodies and the non-reflow modes keep the generic stream.
     let body =
-        if matches!(cx.wrap, WrapMode::Reflow | WrapMode::Minimal) && open == SyntaxKind::L_BRACE {
+        if matches!(cx.wrap, WrapMode::Reflow | WrapMode::Stable) && open == SyntaxKind::L_BRACE {
             reflow_elements(body_elements.into_iter(), cx, ReflowKind::Statement)
         } else {
             Ir::concat(lower_element_stream(body_elements.into_iter(), cx))

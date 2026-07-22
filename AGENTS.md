@@ -40,8 +40,8 @@ are implemented.
 
 **Configuration (`badness.toml`).** Discovered by an ancestor walk from each input
 (`config.rs`); the **CLI is the only consumer**—the library API takes a fully-resolved
-`FormatStyle`. Sections include `[format]` (`line-width`, `wrap-target`, `indent-width`,
-`wrap`, `lang`, `no-break-abbreviations`) and `[build]` (`aux-dir`). Excludes follow
+`FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`, `wrap`,
+`lang`, `no-break-abbreviations`) and `[build]` (`aux-dir`). Excludes follow
 the Ruff model (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
 additive). `wrap` is optional and resolves per file kind when omitted. This keeps the
 formatter hermetic (config is local project data, not the environment). TEXMF discovery
@@ -275,14 +275,15 @@ never match.
   carries `Align`, `IfBreak`, `ConditionalGroup`(`AllLines`), `Verbatim`, `ColumnZero`,
   `MarginPrefix`, and `Nil`—see `ir.rs` for the authoritative list.
 - **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
-  `Minimal`, `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling
+  `Stable`, `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling
   **panache** formatter and mechanized through the `Doc` IR, not a separate line-filler.
-  All five are implemented: `Reflow` width-fills, `Minimal` keeps acceptable authored
-  breaks while optimizing overflow/underflow/change/displacement/raggedness against
-  `[format] wrap-target` (default `line-width - 10`), `Preserve` keeps authored breaks,
+  All five are implemented: `Reflow` width-fills, `Stable` keeps acceptable authored
+  breaks while optimizing overflow/underflow/change/displacement/raggedness against a
+  hard-coded soft target (`FormatStyle::stable_wrap_target`, `line-width - 15`; not yet
+  configurable), `Preserve` keeps authored breaks,
   and `Sentence`/`Semantic` split one sentence per line (width ignored) through the
   shared `reflow_elements` engine—each completed prose run is rendered as a `Fill`
-  (reflow), a `PreferredFill` (minimal), or as space-joined sentences
+  (reflow), a `PreferredFill` (stable), or as space-joined sentences
   (sentence/semantic). `Semantic` additionally
   ends a line at every authored newline (sembr; no clause detection). Sentence-boundary
   detection is a per-language abbreviation profile (`formatter::sentence`, ported from

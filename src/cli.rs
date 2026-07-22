@@ -16,8 +16,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 pub enum WrapArg {
     /// Greedy fill: wrap words to the line width (default).
     Reflow,
-    /// Preserve acceptable authored breaks and rebalance only nearby text.
-    Minimal,
+    /// Preserve acceptable authored breaks and rebalance only nearby text
+    /// (revision-stable wrapping).
+    Stable,
     /// One sentence per line (line width ignored).
     Sentence,
     /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at
@@ -66,9 +67,6 @@ pub enum Command {
         /// Maximum line width before the formatter breaks a line.
         #[arg(long)]
         line_width: Option<usize>,
-        /// Soft line-length target used by `--wrap minimal`.
-        #[arg(long)]
-        wrap_target: Option<usize>,
         /// Number of spaces per indent step.
         #[arg(long)]
         indent_width: Option<usize>,

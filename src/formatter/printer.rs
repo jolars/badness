@@ -329,7 +329,7 @@ impl Printer {
                     let breaks = if mode == Mode::Flat {
                         vec![false; atoms.len().saturating_sub(1)].into()
                     } else {
-                        self.minimal_breaks(
+                        self.stable_breaks(
                             w.current_col(),
                             indent,
                             prefix,
@@ -454,7 +454,7 @@ impl Printer {
     /// Choose all breaks for a [`Ir::PreferredFill`] together. Authored breaks are
     /// stable once a line reaches `target` (or the next atom would reach it), but
     /// overflow always wins; ties minimize changed breaks and their displacement.
-    fn minimal_breaks(
+    fn stable_breaks(
         &self,
         first_col: usize,
         indent: usize,

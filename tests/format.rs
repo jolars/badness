@@ -156,6 +156,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // is rendered on its own line above `\section` / `\begin`, at the construct's
     // indentation — not lifted onto the header line the way a same-line `%` is.
     ("comment_binds_leading_to_construct", WrapMode::Reflow, 80),
+    // A `%` glued directly onto a forced-break block (a doc-commented command, an
+    // `\end{…}`) rides the block's last line instead of dropping to its own line:
+    // an own-line `%` would bind *leading* into the next command on reparse and
+    // cascade one line further per pass (issue #38).
+    ("trailing_comment_rides_block", WrapMode::Reflow, 80),
     // A class-defined verbatim environment (jss's `Code`) has its body preserved
     // byte-for-byte — never reindented or reflowed.
     ("verbatim_jss_code_environment", WrapMode::Preserve, 80),

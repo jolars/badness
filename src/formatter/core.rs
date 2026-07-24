@@ -868,6 +868,15 @@ impl<'a> LineBuilder<'a> {
         self.lines.push(content);
     }
 
+    /// Glue `ir` onto the end of the last committed line (a trailing comment riding
+    /// a block segment). No-op when no line has been committed.
+    fn append_to_last_line(&mut self, ir: Ir) {
+        if let Some(last) = self.lines.last_mut() {
+            let prev = std::mem::replace(last, Ir::Nil);
+            *last = Ir::concat([prev, ir]);
+        }
+    }
+
     /// End the current logical line: flush the atom and, when the run is non-empty,
     /// render it (a fill under reflow, sentences under sentence/semantic) and commit
     /// it. Under `.dtx` prose reflow (`margin` set) the segment is wrapped in an
@@ -934,9 +943,17 @@ fn reflow_elements(
     // reset at every physical-line boundary.
     let mut line_all_commands = true;
     let mut line_has_content = false;
+    // Whether the previous element was a forced-break node committed via
+    // `push_segment` (a doc-commented command, an environment, …). A `COMMENT`
+    // glued directly onto such a block (`\end{center}%`) must ride the block's
+    // last line: committing it as its own line changes spacing semantics and,
+    // because an own-line `%` binds forward as a doc comment on reparse, breaks
+    // idempotence (issue #38).
+    let mut prev_was_block = false;
 
     let mut idx = 0;
     while idx < elements.len() {
+        let after_block = std::mem::take(&mut prev_was_block);
         match &elements[idx] {
             // Whitespace / newline run: a physical-line and atom boundary.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
@@ -980,11 +997,17 @@ fn reflow_elements(
             // own line: end the current line first so the preceding prose run commits
             // separately, instead of reflowing the bare `%` up into that run.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
-                if !line_has_content {
+                if after_block {
+                    // Glued directly to the preceding block segment: ride its
+                    // last line instead of starting one of its own.
+                    b.append_to_last_line(Ir::verbatim(token.text()));
+                } else {
+                    if !line_has_content {
+                        b.end_line();
+                    }
+                    b.push_atom_piece(Ir::verbatim(token.text()), token.text());
                     b.end_line();
                 }
-                b.push_atom_piece(Ir::verbatim(token.text()), token.text());
-                b.end_line();
                 line_all_commands = true;
                 line_has_content = false;
             }
@@ -1041,6 +1064,7 @@ fn reflow_elements(
                     b.push_segment(ir);
                     line_all_commands = true;
                     line_has_content = false;
+                    prev_was_block = true;
                 } else {
                     // A block-level `COMMAND` keeps the line command-only; an inline
                     // command (`\citep`, `\ref`, …) is running-text content, as is any

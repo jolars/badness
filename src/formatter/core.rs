@@ -3746,10 +3746,18 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
         parts.push(piece.ir.clone());
     }
+    // A multi-line left-hand side (a nested matrix/`aligned`/`cases` environment)
+    // has no meaningful flat width — using it as the relation column would push
+    // every hanging line dozens of columns right. Anchor the relations at the
+    // base indent instead, and break before the first relation so the segment's
+    // hanging indent still corresponds to real columns.
+    let lhs_multiline = pieces[..anchor]
+        .iter()
+        .any(|p| p.ir.contains_forced_break());
     // The relation column: the left-hand side sits flat on the opening line, and
     // the first relation follows one space later. Every top-level relation aligns
     // here.
-    let rel_col = if anchor == 0 {
+    let rel_col = if anchor == 0 || lhs_multiline {
         0
     } else {
         flat_width(&Ir::concat(parts.clone())) + 1
@@ -3764,7 +3772,9 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let mut first_segment = true;
     while i < pieces.len() {
         if first_segment {
-            if anchor > 0 {
+            if lhs_multiline {
+                parts.push(Ir::hard_line());
+            } else if anchor > 0 {
                 parts.push(space_sep(anchor));
             }
         } else {

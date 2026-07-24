@@ -296,6 +296,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // inline seq path), and an operator nested in parentheses is not a top-level
     // break point (the `-` of `(1 - \gamma)` must not split across lines).
     ("math_display_break_paren_tight", WrapMode::Preserve, 80),
+    // A multi-line left-hand side (a nested matrix environment) has no meaningful
+    // flat width, so the relations anchor at the base indent and the first
+    // relation breaks onto its own line instead of continuing the `\end{…}` line
+    // (issue #39: the LHS's joined flat width used to become the relation column,
+    // pushing the matrix bodies dozens of columns right).
+    ("math_display_multiline_lhs", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A
     // control-word delimiter (`\langle`) keeps one space so the body cannot glue

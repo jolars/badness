@@ -41,7 +41,7 @@ are implemented.
 **Configuration (`badness.toml`).** Discovered by an ancestor walk from each input
 (`config.rs`); the **CLI is the only consumer**—the library API takes a fully-resolved
 `FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`, `wrap`,
-`lang`, `no-break-abbreviations`), and `[build]` (`aux-dir`). Excludes follow
+`math-wrap`, `lang`, `no-break-abbreviations`), and `[build]` (`aux-dir`). Excludes follow
 the Ruff model (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
 additive). `wrap` is optional and resolves per file kind when omitted. This keeps the
 formatter hermetic (config is local project data, not the environment). TEXMF discovery
@@ -286,6 +286,12 @@ never match.
   `SentenceOptions` threaded on `FormatContext`; babel/polyglossia auto-detection is
   deferred. The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
   *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
+  **Display-math line breaks** have their own knob, `MathWrap` (`[format] math-wrap`:
+  `auto`/`preserve`/`single-line`/`break`), scoped to single-formula display bodies
+  (`\[…\]`, `$$…$$`, non-grid `equation`; grids and inline math untouched). `auto`
+  (the default) resolves against the effective `WrapMode` at `LowerCtx` construction
+  (`Preserve` → preserve authored breaks, else the amsmath-style breaker), so
+  per-file-kind wrap defaults carry over to math for free.
 - **Table column alignment** (`tabular`/`array`) is a formatter concern (layout, so
   the formatter owns it—tenet #1). The `{lcr}` column spec is parsed by
   `formatter::colspec` into per-column `ColAlign`s, reading only the static argument

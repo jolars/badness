@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::collections::BTreeMap;
 
 use badness::formatter::{
-    FormatStyle, SentenceOptions, WrapMode, format, format_node_range_with_signatures,
+    FormatStyle, MathWrap, SentenceOptions, WrapMode, format, format_node_range_with_signatures,
     format_with_style, format_with_style_flavored, format_with_style_flavored_sentence,
 };
 use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
@@ -685,40 +685,105 @@ fn formatter_fixtures_match_expected() {
         let style = FormatStyle {
             wrap,
             line_width,
+            // This table predates `math-wrap`; pin the breaker so its many
+            // Preserve-wrap math fixtures keep testing it (`Auto` would flip
+            // them to math preserve). [`MATH_WRAP_FIXTURES`] exercises the knob.
+            math_wrap: MathWrap::Break,
             ..FormatStyle::default()
         };
-        let input = fs::read_to_string(fixture_path(name, "input.tex"))
-            .unwrap_or_else(|e| panic!("read {name}/input.tex: {e}"));
-        let expected = fs::read_to_string(fixture_path(name, "expected.tex"))
-            .unwrap_or_else(|e| panic!("read {name}/expected.tex: {e}"));
-
-        // The input must parse cleanly (the formatter only handles clean parses).
-        assert!(
-            parse(&input).errors.is_empty(),
-            "fixture {name} input must parse without diagnostics"
-        );
-
-        let formatted =
-            format_with_style(&input, style).unwrap_or_else(|e| panic!("format {name}: {e}"));
-        assert_eq!(formatted, expected, "fixture {name} output mismatch");
-
-        // The formatted output is idempotent (under the same style), clean, and
-        // lossless.
-        assert_eq!(
-            format_with_style(&formatted, style).expect("reformat"),
-            formatted,
-            "fixture {name} is not idempotent"
-        );
-        assert!(
-            parse(&formatted).errors.is_empty(),
-            "fixture {name} formatted output must parse cleanly"
-        );
-        assert_eq!(
-            reconstruct(&formatted),
-            formatted,
-            "fixture {name} formatted output must round-trip"
-        );
+        assert_fixture(name, style);
     }
+}
+
+/// Fixtures for the `math-wrap` knob (display-math break policy) and its `auto`
+/// derivation from the wrap mode. Scope: `\[…\]`, `$$…$$`, and non-grid math
+/// environments; grids and inline math are untouched by the knob.
+const MATH_WRAP_FIXTURES: &[(&str, WrapMode, MathWrap, usize)] = &[
+    // `Auto` under a Preserve wrap resolves to math preserve: authored line
+    // breaks inside the display body survive as hard breaks at the body indent
+    // (width ignored), while in-line content still normalizes (operator
+    // spacing, brace stripping). Issue #42's motivating equation: the
+    // `\qtextq{for all} m \in \bN^*` qualifier stays on its authored line
+    // instead of chaining into the relation column.
+    (
+        "math_wrap_preserve_authored",
+        WrapMode::Preserve,
+        MathWrap::Auto,
+        80,
+    ),
+    // The same policy through the non-grid `equation` environment route.
+    (
+        "math_wrap_preserve_equation_env",
+        WrapMode::Preserve,
+        MathWrap::Auto,
+        80,
+    ),
+    // `single-line` never inserts breaks: a long body joins onto one line and
+    // overflows the width, matching inline math's behavior.
+    (
+        "math_wrap_single_line",
+        WrapMode::Preserve,
+        MathWrap::SingleLine,
+        80,
+    ),
+    // An explicit `break` decouples from the Preserve wrap: prose keeps
+    // authored breaks while display math still re-breaks at its operators.
+    (
+        "math_wrap_break_under_preserve",
+        WrapMode::Preserve,
+        MathWrap::Break,
+        80,
+    ),
+];
+
+#[test]
+fn math_wrap_fixtures_match_expected() {
+    for &(name, wrap, math_wrap, line_width) in MATH_WRAP_FIXTURES {
+        let style = FormatStyle {
+            wrap,
+            math_wrap,
+            line_width,
+            ..FormatStyle::default()
+        };
+        assert_fixture(name, style);
+    }
+}
+
+/// Run one `input.tex`/`expected.tex` fixture pair under `style`, asserting the
+/// output matches and holds the formatter invariants (idempotence, clean parse,
+/// losslessness).
+fn assert_fixture(name: &str, style: FormatStyle) {
+    let input = fs::read_to_string(fixture_path(name, "input.tex"))
+        .unwrap_or_else(|e| panic!("read {name}/input.tex: {e}"));
+    let expected = fs::read_to_string(fixture_path(name, "expected.tex"))
+        .unwrap_or_else(|e| panic!("read {name}/expected.tex: {e}"));
+
+    // The input must parse cleanly (the formatter only handles clean parses).
+    assert!(
+        parse(&input).errors.is_empty(),
+        "fixture {name} input must parse without diagnostics"
+    );
+
+    let formatted =
+        format_with_style(&input, style).unwrap_or_else(|e| panic!("format {name}: {e}"));
+    assert_eq!(formatted, expected, "fixture {name} output mismatch");
+
+    // The formatted output is idempotent (under the same style), clean, and
+    // lossless.
+    assert_eq!(
+        format_with_style(&formatted, style).expect("reformat"),
+        formatted,
+        "fixture {name} is not idempotent"
+    );
+    assert!(
+        parse(&formatted).errors.is_empty(),
+        "fixture {name} formatted output must parse cleanly"
+    );
+    assert_eq!(
+        reconstruct(&formatted),
+        formatted,
+        "fixture {name} formatted output must round-trip"
+    );
 }
 
 /// The `sentence`/`semantic` language profile is config-driven: the German profile

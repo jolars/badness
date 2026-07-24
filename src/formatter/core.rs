@@ -61,7 +61,7 @@ use super::context::FormatContext;
 use super::ir::Ir;
 use super::printer::Printer;
 use super::sentence::{ResolvedProfile, SentenceOptions, is_sentence_boundary_text};
-use super::style::{FormatStyle, WrapMode};
+use super::style::{FormatStyle, MathWrap, WrapMode};
 
 /// Why a document could not be formatted. The formatter only operates on a clean
 /// parse: anything the parser flagged, or any `ERROR` token, is refused rather
@@ -340,6 +340,9 @@ fn format_root(
     let profile = ctx.sentence().resolved();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
+        // Resolved here (never `Auto` past this point), so per-file-kind wrap
+        // defaults and library callers get the derivation for free.
+        math_wrap: ctx.style().math_wrap.resolve(ctx.style().wrap),
         signatures: Signatures::new(&user),
         expl3_regions: &regions,
         profile,
@@ -406,6 +409,9 @@ fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
 #[derive(Clone, Copy)]
 struct LowerCtx<'a> {
     wrap: WrapMode,
+    /// Display-math break policy, pre-resolved against `wrap` in
+    /// [`format_root`] — never [`MathWrap::Auto`] here.
+    math_wrap: MathWrap,
     signatures: Signatures<'a>,
     /// Sorted, non-overlapping byte ranges of the document's expl3 regions (see
     /// [`expl3_regions`]). Inside these, source whitespace is catcode-9 (ignored)
@@ -2207,7 +2213,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             _ => return lower_environment(node, cx),
         }
     } else {
-        trim_trailing_break(lower_display_math_body(math_node, cx))
+        trim_trailing_break(lower_display_formula(math_node, cx))
     };
 
     Ir::concat([
@@ -2344,13 +2350,13 @@ fn build_alignment_grid(
         let hang = match first_block.filter(|_| block_eligible) {
             None | Some(0) => 0,
             Some(i) => {
-                let prefix = lower_math_seq(cell[..i].iter().cloned(), cx);
+                let prefix = lower_math_seq(cell[..i].iter().cloned(), cx, false);
                 let width = printer.print_flat(&prefix).trim().chars().count();
                 if width == 0 { 0 } else { width + 1 }
             }
         };
         let ir = if math {
-            lower_math_seq(cell.drain(..), cx)
+            lower_math_seq(cell.drain(..), cx, false)
         } else {
             let joined = lower_element_stream(cell.drain(..), cx)
                 .into_iter()
@@ -3396,7 +3402,7 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         match element {
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
                 body_empty = math_body_is_empty(&n);
-                body = trim_trailing_break(lower_display_math_body(&n, cx));
+                body = trim_trailing_break(lower_display_formula(&n, cx));
                 seen_body = true;
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
@@ -3429,7 +3435,28 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// let a `%` comment force a line break (so a trailing comment never swallows the
 /// closing delimiter).
 fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    lower_math_seq(node.children_with_tokens(), cx)
+    lower_math_seq(node.children_with_tokens(), cx, false)
+}
+
+/// [`lower_math_body`], but keeping the author's line breaks
+/// ([`MathWrap::Preserve`]): a trivia run spanning a newline becomes a hard
+/// break; everything within each authored line is still normalized.
+fn lower_math_body_preserved(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    lower_math_seq(node.children_with_tokens(), cx, true)
+}
+
+/// Lower a single-formula display-math body per the resolved [`MathWrap`]
+/// policy (`LowerCtx::math_wrap`): `Break` routes through the amsmath-style
+/// breaker, `SingleLine` through the plain collapsing body (overflowing if too
+/// long, like inline math), and `Preserve` keeps authored newlines as hard
+/// breaks. `Auto` is resolved away in [`format_root`] and cannot reach here;
+/// map it to the breaker defensively rather than panic.
+fn lower_display_formula(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    match cx.math_wrap {
+        MathWrap::Auto | MathWrap::Break => lower_display_math_body(node, cx),
+        MathWrap::SingleLine => lower_math_body(node, cx),
+        MathWrap::Preserve => lower_math_body_preserved(node, cx),
+    }
 }
 
 /// The line-breaking role of a top-level math atom (see [`lower_display_math_body`]).
@@ -3877,7 +3904,18 @@ fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// line break; a trailing break (a comment at the body's end) is emitted rather
 /// than trimmed so the caller's closing delimiter lands on its own line, while a
 /// trailing space is dropped.
-fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+///
+/// With `preserve_newlines` ([`MathWrap::Preserve`]) a trivia run spanning at
+/// least one newline becomes a hard break instead of a space — the author's
+/// line structure survives while in-line spacing is still normalized. A blank
+/// run (≥2 newlines, invalid inside math anyway) also collapses to a single
+/// break, and an edge run is still trimmed (the caller's delimiters own their
+/// lines).
+fn lower_math_seq(
+    elements: impl Iterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+    preserve_newlines: bool,
+) -> Ir {
     let mut out: Vec<Ir> = Vec::new();
     let mut started = false;
     // Start as a non-operand so a leading `+`/`-` reads as unary (see
@@ -3885,22 +3923,27 @@ fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_
     let mut prev_role = MathRole::Relation;
     let mut pending_space = false; // authored whitespace since the last atom
     let mut pending_break = false; // a comment forced a hard line break
+    let mut pending_newline = false; // a preserved authored line break
     let mut iter = elements.peekable();
     while let Some(el) = iter.next() {
         match el {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                consume_trivia_run(&t, &mut iter);
+                let (newlines, _) = consume_trivia_run(&t, &mut iter);
                 if started {
                     pending_space = true;
+                    pending_newline = preserve_newlines && newlines > 0;
                 }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
-                if pending_space {
+                if pending_newline {
+                    out.push(Ir::hard_line());
+                } else if pending_space {
                     out.push(Ir::verbatim(" "));
                 }
                 out.push(Ir::verbatim(t.text()));
                 started = true;
                 pending_space = false;
+                pending_newline = false;
                 pending_break = true;
             }
             other => {
@@ -3916,7 +3959,7 @@ fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_
                 );
                 if !started {
                     // no separator before the first atom
-                } else if pending_break {
+                } else if pending_break || pending_newline {
                     out.push(Ir::hard_line());
                 } else if role != MathRole::Operand
                     || prev_role != MathRole::Operand
@@ -3929,6 +3972,7 @@ fn lower_math_seq(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_
                 out.push(lower_math_element(other, cx));
                 started = true;
                 pending_space = false;
+                pending_newline = false;
                 pending_break = is_line_break;
                 prev_role = role;
             }
@@ -3969,7 +4013,7 @@ fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE));
     Ir::concat([
         Ir::verbatim("{"),
-        Ir::align(1, lower_math_seq(inner, cx)),
+        Ir::align(1, lower_math_seq(inner, cx, false)),
         Ir::verbatim("}"),
     ])
 }

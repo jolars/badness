@@ -152,6 +152,31 @@ authored line breaks. Setting `wrap` applies the same mode to every file kind.
 wrap = "sentence"
 ```
 
+### `math-wrap`
+
+How the formatter lays out line breaks inside *display math*: `\[…\]`, `$$…$$`,
+and single-formula math environments such as `equation`. Alignment-grid
+environments (`align`, `gather`, matrices) and inline `$…$` math are not
+affected.
+
+  | Mode          | Behavior                                                                                                              |
+  | ------------- | --------------------------------------------------------------------------------------------------------------------- |
+  | `auto`        | Derive from the effective [`wrap`](#wrap): `preserve` keeps authored math breaks, every other mode breaks (amsmath).  |
+  | `preserve`    | Keep the authored line breaks inside the body. Spacing within each line is still normalized.                          |
+  | `single-line` | Never insert breaks: the body stays on one line, overflowing `line-width` if too long (like inline math).             |
+  | `break`       | Break a too-long body before its top-level relations and binary operators, aligning a relation chain (amsmath style). |
+
+**Default value**: `"auto"`
+
+**Type**: `"auto" | "preserve" | "single-line" | "break"`
+
+**Example**:
+
+```toml
+[format]
+math-wrap = "preserve"
+```
+
 ### `lang`
 
 Document language as a BCP-47-style code (`en`, `de`, `pt-BR`, …), used by the

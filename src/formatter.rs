@@ -23,4 +23,4 @@ pub use core::{
     format_with_style_flavored_with_signatures,
 };
 pub use sentence::SentenceOptions;
-pub use style::{FormatStyle, WrapMode};
+pub use style::{FormatStyle, MathWrap, WrapMode};

@@ -20,7 +20,7 @@ use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
 use badness::formatter::{
-    FormatStyle, SentenceOptions, WrapMode, check_paths_with_style,
+    FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
 };
 use badness::linter::{
@@ -29,7 +29,7 @@ use badness::linter::{
 };
 use std::collections::HashMap;
 
-use badness::cli::{Cli, Command, WrapArg};
+use badness::cli::{Cli, Command, MathWrapArg, WrapArg};
 use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
@@ -57,6 +57,17 @@ fn wrap_mode(arg: WrapArg) -> WrapMode {
     }
 }
 
+/// Lower the CLI [`MathWrapArg`] to the formatter's [`MathWrap`] (same orphan-rule
+/// story as [`wrap_mode`]).
+fn math_wrap_mode(arg: MathWrapArg) -> MathWrap {
+    match arg {
+        MathWrapArg::Auto => MathWrap::Auto,
+        MathWrapArg::Preserve => MathWrap::Preserve,
+        MathWrapArg::SingleLine => MathWrap::SingleLine,
+        MathWrapArg::Break => MathWrap::Break,
+    }
+}
+
 fn main() -> ExitCode {
     let Cli {
         command,
@@ -71,6 +82,7 @@ fn main() -> ExitCode {
             line_width,
             indent_width,
             wrap,
+            math_wrap,
             exclude,
             force_exclude,
         } => {
@@ -105,6 +117,13 @@ fn main() -> ExitCode {
             // Reflow), resolved per file at dispatch.
             let wrap_override: Option<WrapMode> =
                 wrap.map(wrap_mode).or(config.format.wrap.map(Into::into));
+            // Math-wrap precedence: `--math-wrap` > config `math-wrap` > `auto`.
+            // The style already carries the config value (or `Auto`); the flag
+            // just overwrites it. `Auto` resolves against the effective wrap
+            // inside the formatter, so no per-file dispatch is needed here.
+            if let Some(mw) = math_wrap {
+                style.math_wrap = math_wrap_mode(mw);
+            }
             // The `sentence`/`semantic` language profile, resolved once from
             // `[format] lang` + `[format.no-break-abbreviations]`; `scratch` owns the
             // merged entries for the whole format run. Ignored by other wrap modes.
@@ -237,6 +256,9 @@ const STARTER_CONFIG: &str = "\
 # wrap = \"reflow\"  # reflow | sentence | semantic | preserve
                      # omit to use each file kind's default
                      # (.tex -> reflow, .sty/.cls/.dtx/.ins -> preserve)
+# math-wrap = \"auto\"  # auto | preserve | single-line | break
+                        # display-math line breaking; auto derives from wrap
+                        # (preserve -> preserve, else break)
 
 [lint]
 # select = [\"...\"]  # if set, only these rules run

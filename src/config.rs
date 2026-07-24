@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::formatter::{FormatStyle, WrapMode};
+use crate::formatter::{FormatStyle, MathWrap, WrapMode};
 
 pub const CONFIG_FILE_NAME: &str = "badness.toml";
 
@@ -99,6 +99,12 @@ pub struct FormatConfig {
     /// `.sty`/`.cls`/`.dtx`/`.ins` → `preserve`, `.tex` → `reflow`.
     #[serde(default)]
     pub wrap: Option<WrapModeConfig>,
+    /// The display-math line-break policy. See [`MathWrapConfig`]. When omitted
+    /// (or `auto`), it derives from the effective `wrap`: `preserve` keeps
+    /// authored math breaks, every other wrap mode uses the amsmath-style
+    /// breaker.
+    #[serde(default)]
+    pub math_wrap: Option<MathWrapConfig>,
     /// Document language (a BCP-47-style code, e.g. `en`, `de`, `pt-BR`), used by
     /// the `sentence`/`semantic` wrap modes to pick the sentence-boundary
     /// abbreviation profile. Unknown or absent languages fall back to English.
@@ -119,6 +125,7 @@ impl Default for FormatConfig {
             line_width: DEFAULT_LINE_WIDTH,
             indent_width: DEFAULT_INDENT_WIDTH,
             wrap: None,
+            math_wrap: None,
             lang: None,
             no_break_abbreviations: BTreeMap::new(),
         }
@@ -150,6 +157,35 @@ impl From<WrapModeConfig> for WrapMode {
             WrapModeConfig::Sentence => WrapMode::Sentence,
             WrapModeConfig::Semantic => WrapMode::Semantic,
             WrapModeConfig::Preserve => WrapMode::Preserve,
+        }
+    }
+}
+
+/// The `math-wrap` key under `[format]`. A serde-named mirror of [`MathWrap`],
+/// the same split as [`WrapModeConfig`]. Scope: single-formula display math
+/// (`\[…\]`, `$$…$$`, a non-grid `equation`); grid environments and inline
+/// `$…$` are unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MathWrapConfig {
+    /// Derive from the effective `wrap`: `preserve` → `preserve`, else `break`.
+    Auto,
+    /// Keep authored line breaks inside the body (in-line spacing still
+    /// normalized).
+    Preserve,
+    /// Never insert breaks; a long body overflows the line width.
+    SingleLine,
+    /// Break a too-long body before its top-level operators (amsmath style).
+    Break,
+}
+
+impl From<MathWrapConfig> for MathWrap {
+    fn from(value: MathWrapConfig) -> Self {
+        match value {
+            MathWrapConfig::Auto => MathWrap::Auto,
+            MathWrapConfig::Preserve => MathWrap::Preserve,
+            MathWrapConfig::SingleLine => MathWrap::SingleLine,
+            MathWrapConfig::Break => MathWrap::Break,
         }
     }
 }
@@ -210,6 +246,10 @@ impl From<&FormatConfig> for FormatStyle {
             line_width: config.line_width as usize,
             indent_width: config.indent_width as usize,
             wrap: WrapMode::default(),
+            // Unlike `wrap`, `math-wrap` has no per-file-kind default: the
+            // configured value (or `Auto`) maps straight through, and `Auto`
+            // resolves against the effective wrap inside the formatter.
+            math_wrap: config.math_wrap.map_or(MathWrap::Auto, Into::into),
         }
     }
 }
@@ -460,6 +500,34 @@ mod tests {
     #[test]
     fn rejects_unknown_wrap() {
         let err = parse("[format]\nwrap = \"smart\"\n").expect_err("unknown variant");
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn parses_math_wrap_variants() {
+        for (key, expected) in [
+            ("auto", MathWrapConfig::Auto),
+            ("preserve", MathWrapConfig::Preserve),
+            ("single-line", MathWrapConfig::SingleLine),
+            ("break", MathWrapConfig::Break),
+        ] {
+            let text = format!("[format]\nmath-wrap = \"{key}\"\n");
+            let config = parse(&text).unwrap_or_else(|e| panic!("parse {key}: {e}"));
+            assert_eq!(config.format.math_wrap, Some(expected), "for {key}");
+        }
+    }
+
+    #[test]
+    fn math_wrap_defaults_to_none_and_maps_to_auto() {
+        let config = parse("[format]\n").expect("parse");
+        assert_eq!(config.format.math_wrap, None);
+        let style = FormatStyle::from(&config.format);
+        assert_eq!(style.math_wrap, MathWrap::Auto);
+    }
+
+    #[test]
+    fn rejects_unknown_math_wrap() {
+        let err = parse("[format]\nmath-wrap = \"never\"\n").expect_err("unknown variant");
         assert!(matches!(err, ConfigError::Parse { .. }));
     }
 

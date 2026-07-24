@@ -49,6 +49,16 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
     - `semantic`: Semantic line breaks (sembr.org): keep authored breaks and add breaks at sentence boundaries
     - `preserve`: Leave authored line breaks untouched
 
+`--math-wrap <MATH_WRAP>`
+:   How to lay out line breaks inside display math
+
+    Possible values:
+
+    - `auto`: Derive from the effective wrap mode: preserve → preserve, else break (default)
+    - `preserve`: Keep authored line breaks inside display-math bodies
+    - `single-line`: Never insert breaks; a long body overflows the line width
+    - `break`: Break a too-long body before its top-level operators (amsmath style)
+
 `--exclude <PATTERN>`
 :   Gitignore-style pattern to skip during directory discovery (repeatable). Added on top of any `exclude`/`extend-exclude` from `badness.toml`
 

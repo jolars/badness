@@ -30,11 +30,52 @@ pub enum WrapMode {
     Preserve,
 }
 
+/// How a single-formula *display-math* body (`\[…\]`, `$$…$$`, a non-grid
+/// `equation`) is line-broken. Grid environments (`align`, `gather`, matrices)
+/// and inline `$…$` are unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MathWrap {
+    /// Derive from the resolved [`WrapMode`]: [`WrapMode::Preserve`] gives
+    /// [`MathWrap::Preserve`], every other wrap mode gives [`MathWrap::Break`].
+    /// The default.
+    #[default]
+    Auto,
+    /// Keep the author's line breaks inside the body. Content within each
+    /// authored line is still normalized (operator spacing, script tightening),
+    /// and lines sit at the body indent.
+    Preserve,
+    /// Never insert breaks: the body stays on one line, overflowing the line
+    /// width if too long (matching inline math's behavior).
+    SingleLine,
+    /// Break a too-long body before its top-level binary/relation operators
+    /// (amsmath style).
+    Break,
+}
+
+impl MathWrap {
+    /// Resolve [`MathWrap::Auto`] against the effective wrap mode. Never
+    /// returns `Auto`.
+    #[must_use]
+    pub fn resolve(self, wrap: WrapMode) -> Self {
+        match self {
+            Self::Auto => {
+                if wrap == WrapMode::Preserve {
+                    Self::Preserve
+                } else {
+                    Self::Break
+                }
+            }
+            other => other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FormatStyle {
     pub line_width: usize,
     pub indent_width: usize,
     pub wrap: WrapMode,
+    pub math_wrap: MathWrap,
 }
 
 impl Default for FormatStyle {
@@ -43,6 +84,7 @@ impl Default for FormatStyle {
             line_width: 80,
             indent_width: 2,
             wrap: WrapMode::default(),
+            math_wrap: MathWrap::default(),
         }
     }
 }

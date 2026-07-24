@@ -402,7 +402,9 @@ impl EditorSettings {
 /// from the editor settings. Cached per anchor dir in [`GlobalState::config_cache`].
 #[derive(Debug, Clone)]
 struct ResolvedSettings {
-    /// Width knobs set; `wrap` is the [`WrapMode::default`] placeholder.
+    /// Width knobs and `math_wrap` set; `wrap` is the [`WrapMode::default`]
+    /// placeholder. `math_wrap` needs no per-file resolution here: its `Auto`
+    /// default resolves against the effective wrap inside the formatter.
     style: FormatStyle,
     /// Configured paragraph wrap, if any. `None` ⇒ the file-kind default applies.
     wrap_override: Option<WrapMode>,

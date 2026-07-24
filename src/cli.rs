@@ -25,6 +25,21 @@ pub enum WrapArg {
     Preserve,
 }
 
+/// CLI surface for `formatter::MathWrap` (display-math line breaking). Kept
+/// here for the same reason as [`WrapArg`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MathWrapArg {
+    /// Derive from the effective wrap mode: preserve → preserve, else break
+    /// (default).
+    Auto,
+    /// Keep authored line breaks inside display-math bodies.
+    Preserve,
+    /// Never insert breaks; a long body overflows the line width.
+    SingleLine,
+    /// Break a too-long body before its top-level operators (amsmath style).
+    Break,
+}
+
 #[derive(Parser)]
 #[command(
     name = "badness",
@@ -70,6 +85,9 @@ pub enum Command {
         /// How to lay out line breaks inside a paragraph.
         #[arg(long, value_enum)]
         wrap: Option<WrapArg>,
+        /// How to lay out line breaks inside display math.
+        #[arg(long, value_enum)]
+        math_wrap: Option<MathWrapArg>,
         /// Gitignore-style pattern to skip during directory discovery (repeatable).
         /// Added on top of any `exclude`/`extend-exclude` from `badness.toml`.
         #[arg(long, value_name = "PATTERN")]

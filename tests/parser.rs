@@ -196,6 +196,49 @@ fn math_optional_attaches_when_closed() {
 }
 
 #[test]
+fn math_spaced_bracket_stays_content() {
+    // #43: inside math a `[` separated from its command by whitespace is a
+    // delimiter or interval, not an optional argument — `\bE [ x + y ]` keeps
+    // the brackets as plain math atoms. (Real math optionals are written
+    // tight: `\sqrt[3]{x}`.)
+    insta::assert_snapshot!(tree(r"$\bE [ x + y ] .$"));
+}
+
+#[test]
+fn big_delimiter_bracket_is_never_an_optional() {
+    // #43: the delimiter-size commands size the delimiter that follows, so
+    // even a tight `\Big[ … \Big]` never attaches the bracket as an optional
+    // argument.
+    insta::assert_snapshot!(tree(r"$\Big[ x + y \Big]$"));
+}
+
+#[test]
+fn spaced_bracket_in_text_body_nested_in_math_stays_content() {
+    // #43: an unknown environment's body parses in text mode, but lexically it
+    // still sits inside `\[ … \]` — the math gate (spaced `[` is content)
+    // must keep applying there, or `\Big [ … ]` inside a user alignment
+    // environment turns into a bogus optional argument.
+    insta::assert_snapshot!(tree(
+        "\\[ \\begin{myaligned}[t] \\bE \\Big [ x + y \\Big ] \\end{myaligned} \\]"
+    ));
+}
+
+#[test]
+fn optional_never_attaches_across_newline() {
+    // #43: a next-line `[` is content, never an argument — `\begin{align}`
+    // followed by a newline and `[\partial_\mu V]_1` must not pull the bracket
+    // into the BEGIN and orphan the subscript.
+    insta::assert_snapshot!(tree("\\begin{align}\n[a]_1 & = b\n\\end{align}"));
+}
+
+#[test]
+fn text_spaced_optional_still_attaches() {
+    // The math gate is math-only: in prose a same-line spaced `[…]` after a
+    // command still attaches greedily (`\item [label]` stays an optional).
+    insta::assert_snapshot!(tree(r"\item [label] text"));
+}
+
+#[test]
 fn text_unclosed_optional_still_reports() {
     // In text mode the gate does not apply: an unclosed `[` after a command is
     // attached greedily and reported, as before.

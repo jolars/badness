@@ -1,0 +1,23 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$\\Big[ x + y \\Big]$\")"
+---
+ROOT@0..19
+  PARAGRAPH@0..19
+    INLINE_MATH@0..19
+      DOLLAR@0..1 "$"
+      MATH@1..18
+        COMMAND@1..5
+          CONTROL_WORD@1..5 "\\Big"
+        L_BRACKET@5..6 "["
+        WHITESPACE@6..7 " "
+        WORD@7..8 "x"
+        WHITESPACE@8..9 " "
+        WORD@9..10 "+"
+        WHITESPACE@10..11 " "
+        WORD@11..12 "y"
+        WHITESPACE@12..13 " "
+        COMMAND@13..17
+          CONTROL_WORD@13..17 "\\Big"
+        R_BRACKET@17..18 "]"
+      DOLLAR@18..19 "$"

@@ -184,7 +184,21 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
 
 8. **Argument grouping is greedy and generic.** The CST greedily attaches trailing
    `{…}`/`[…]` groups as argument nodes (texlab-style). Arity is unknown at parse time;
-   the semantic layer refines it.
+   the semantic layer refines it. **`[…]` attachment is shape-gated** (issue #43) —
+   `[`/`]` are not real grouping in TeX, so a bracket is an argument only when it reads
+   as one, decided from static shape facts, never meaning (`parser::grammar`,
+   `BracketPolicy` + `attach_arguments`):
+   - *Lexically inside math* (a `math_depth` that persists into text-mode bodies of
+     unknown environments nested in math), a `[` attaches only when it directly abuts
+     the command (`\sqrt[3]{x}`; a spaced `\bE [ x ]` is a delimiter) and its `]`
+     closes before the math ends (open-interval notation `$]0;\num{0.5}[$`).
+   - A *curated math environment's* `\begin` likewise attaches only a directly-abutting
+     bracket (`\begin{aligned}[t]`; a detached `[a]_1` on the next line is body
+     content). Non-math environments stay greedy across trivia — the xparse-signature
+     glue relies on a next-line `[Warning]` still attaching to `\begin{note}`.
+   - The *delimiter-size commands* (`\big`…`\Bigg` + `l`/`m`/`r`) never take a bracket
+     argument: their `[` is the delimiter being sized (`\Big[ x \Big]`), mirroring the
+     `\left`/`\right` special case.
 
 9. **Trivia attachment follows the rust-analyzer rule: comments bind *forward*,
    whitespace floats, blank lines break the bind.** Trivia is never dropped, so the

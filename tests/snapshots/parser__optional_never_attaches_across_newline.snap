@@ -1,0 +1,34 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{align}\\n[a]_1 & = b\\n\\\\end{align}\")"
+---
+ROOT@0..37
+  ENVIRONMENT@0..37
+    BEGIN@0..13
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..13
+        L_BRACE@6..7 "{"
+        WORD@7..12 "align"
+        R_BRACE@12..13 "}"
+    MATH@13..26
+      NEWLINE@13..14 "\n"
+      L_BRACKET@14..15 "["
+      WORD@15..16 "a"
+      SCRIPTED@16..19
+        R_BRACKET@16..17 "]"
+        SUBSCRIPT@17..19
+          UNDERSCORE@17..18 "_"
+          WORD@18..19 "1"
+      WHITESPACE@19..20 " "
+      AMPERSAND@20..21 "&"
+      WHITESPACE@21..22 " "
+      WORD@22..23 "="
+      WHITESPACE@23..24 " "
+      WORD@24..25 "b"
+      NEWLINE@25..26 "\n"
+    END@26..37
+      CONTROL_WORD@26..30 "\\end"
+      NAME_GROUP@30..37
+        L_BRACE@30..31 "{"
+        WORD@31..36 "align"
+        R_BRACE@36..37 "}"

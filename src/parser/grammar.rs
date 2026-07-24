@@ -23,6 +23,39 @@ const END_CMD: &str = "\\end";
 const LEFT_CMD: &str = "\\left";
 const RIGHT_CMD: &str = "\\right";
 
+/// How [`Parser::attach_arguments`] treats a trailing `[…]` (issue #43).
+/// `[`/`]` are not real grouping in TeX, so bracket attachment is a heuristic;
+/// the policy is the caller's shape knowledge about the construct being
+/// attached to. The in-math gates apply on top of it — see
+/// [`Parser::attach_arguments`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BracketPolicy {
+    /// Attach across intervening trivia (decision #8's default).
+    Greedy,
+    /// Attach only a directly-abutting `[` (a curated math environment's
+    /// `\begin`: its math body starts right after, so a detached `[` is
+    /// content).
+    Tight,
+    /// Never attach one (the delimiter-size commands: their `[` is the
+    /// delimiter being sized).
+    Forbid,
+}
+
+/// The delimiter-size commands (`\big`…`\Bigg` and their `l`/`m`/`r` variants).
+/// A closed, curated set of TeX/amsmath primitives whose sole "argument" is the
+/// delimiter token that follows (`\Big[`, `\bigl(`, `\Bigg|`), so a `[…]` after
+/// one is never an optional argument (issue #43). The static-fact posture
+/// mirrors `\left`/`\right` (`AGENTS.md`, decision #1).
+fn is_big_delimiter_command(text: &str) -> bool {
+    let Some(name) = text.strip_prefix('\\') else {
+        return false;
+    };
+    ["bigg", "Bigg", "big", "Big"].iter().any(|s| {
+        name.strip_prefix(s)
+            .is_some_and(|rest| matches!(rest, "" | "l" | "m" | "r"))
+    })
+}
+
 /// Maximum number of consecutive cursor peeks with **no** token consumed before
 /// the parser aborts as stuck. Modeled on rust-analyzer's `PARSER_STEP_LIMIT`
 /// (`crates/parser/src/parser.rs`), a catch-all against a non-advancing loop that
@@ -132,6 +165,14 @@ struct Parser<'t> {
     /// The cursor position at the last [`Self::step`] tick; the budget resets
     /// whenever `pos` has advanced past it (i.e. real progress was made).
     last_step_pos: std::cell::Cell<usize>,
+    /// Depth of lexically enclosing math bodies (`$…$`, `\[…\]`, `\(…\)`, math
+    /// environments). Unlike the `math` routing flags threaded through the
+    /// grammar, this *persists* into the text-mode body of an unknown
+    /// environment nested inside math (`\[ … \begin{myaligned} … \]`): the
+    /// grammar can't verify such a body is math, but the enclosing delimiters
+    /// are a static lexical fact, and optional-argument attachment uses it to
+    /// treat a spaced `[` as content (see [`Self::attach_arguments`]).
+    math_depth: usize,
 }
 
 impl<'t> Parser<'t> {
@@ -152,7 +193,15 @@ impl<'t> Parser<'t> {
             steps: std::cell::Cell::new(0),
             last_step_pos: std::cell::Cell::new(0),
             errors: Vec::new(),
+            math_depth: 0,
         }
+    }
+
+    /// True when the cursor sits lexically inside a math body — including inside
+    /// a text-mode block (unknown environment, `\text{…}`-style group) nested in
+    /// one. See the `math_depth` field.
+    fn in_math(&self) -> bool {
+        self.math_depth > 0
     }
 
     // --- cursor primitives -------------------------------------------------
@@ -532,11 +581,11 @@ impl<'t> Parser<'t> {
             | SyntaxKind::GUARD => self.bump(),
             SyntaxKind::CONTROL_WORD => {
                 if self.at_command(BEGIN_CMD) {
-                    self.environment(false);
+                    self.environment();
                 } else if self.at_command(END_CMD) {
                     self.stray_end();
                 } else {
-                    self.command(false);
+                    self.command();
                 }
             }
             SyntaxKind::CONTROL_SYMBOL => {
@@ -569,14 +618,20 @@ impl<'t> Parser<'t> {
     /// `\foo` followed by its greedily-attached argument groups.
     ///
     /// Arity is unknown without the semantic layer, so we attach every trailing
-    /// `{…}` / `[…]` group, allowing intervening trivia but stopping at a
-    /// paragraph break (see `AGENTS.md`, Core decision #8). `math` gates the
-    /// `[…]` attachment on a closing `]` reachable before the math ends (see
-    /// [`Self::attach_arguments`]).
-    fn command(&mut self, math: bool) {
+    /// `{…}` / `[…]` group (see `AGENTS.md`, Core decision #8, and
+    /// [`Self::attach_arguments`] for the `[…]` shape gates). The one curated
+    /// exception: a delimiter-size command (`\Big`, `\bigl`, …) never takes a
+    /// `[…]` argument — its `[` is the delimiter it sizes (`\Big[ x \Big]`),
+    /// mirroring the `\left`/`\right` special case.
+    fn command(&mut self) {
+        let bracket = if is_big_delimiter_command(self.text()) {
+            BracketPolicy::Forbid
+        } else {
+            BracketPolicy::Greedy
+        };
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
-        self.attach_arguments(math);
+        self.attach_arguments(bracket);
         self.close();
     }
 
@@ -610,12 +665,28 @@ impl<'t> Parser<'t> {
     /// Shared by `\foo` commands and `\begin{env}` (see `AGENTS.md`, Core
     /// decision #8). Arity is unknown without the semantic layer.
     ///
-    /// With `math` set (the construct sits in math mode), a `[` is attached only
-    /// when [`Self::bracket_closes_before_math_end`] finds its `]`; otherwise it
-    /// is left for the math loop as an ordinary atom, so open-interval notation
-    /// (`$]0;\num{0.5}[$`) does not swallow the math closer as an optional-
-    /// argument body.
-    fn attach_arguments(&mut self, math: bool) {
+    /// `[…]` attachment is additionally shape-gated (issue #43) — `[`/`]` are
+    /// not real grouping in TeX, so a bracket is an argument only when it reads
+    /// as one:
+    /// - **Lexically inside math, only when it directly abuts.** Real math
+    ///   optionals are written tight (`\sqrt[3]{x}`, `\\[2ex]`); a spaced `[`
+    ///   is a delimiter or interval (`\bE [ x ]`). This uses [`Self::in_math`],
+    ///   so it also covers text-mode bodies of unknown environments nested in
+    ///   math (`\[ … \begin{myaligned} \Big [ … \]`).
+    /// - **Inside math, only when [`Self::bracket_closes_before_math_end`]
+    ///   finds its `]`**; otherwise it is left for the math loop as an ordinary
+    ///   atom, so open-interval notation (`$]0;\num{0.5}[$`) does not swallow
+    ///   the math closer as an optional-argument body.
+    /// - **Per the caller's [`BracketPolicy`]:** `Tight` (a curated math
+    ///   environment's `\begin` — its math body starts right after, so a
+    ///   detached `[` is content: `\begin{align}` + newline + `[a]_1`) demands
+    ///   a directly-abutting `[` even outside math; `Forbid` (the
+    ///   delimiter-size commands, [`Self::command`]) never attaches one.
+    ///   `Greedy` — everything else — keeps decision #8's trivia-crossing
+    ///   attachment, which the semantic layer legitimizes downstream (the
+    ///   xparse-signature glue relies on a next-line `[Warning]` still
+    ///   attaching to `\begin{note}`).
+    fn attach_arguments(&mut self, bracket: BracketPolicy) {
         loop {
             let (next, paragraph_break) = self.peek_meaningful();
             if paragraph_break {
@@ -627,8 +698,15 @@ impl<'t> Parser<'t> {
                     self.group();
                 }
                 Some(SyntaxKind::L_BRACKET) => {
-                    let open = self.scan_trivia(self.pos, CommentMode::Skip).next;
-                    if math && !self.bracket_closes_before_math_end(open) {
+                    if bracket == BracketPolicy::Forbid {
+                        break;
+                    }
+                    let scan = self.scan_trivia(self.pos, CommentMode::Skip);
+                    let tight_only = self.in_math() || bracket == BracketPolicy::Tight;
+                    if tight_only && scan.next != self.pos {
+                        break;
+                    }
+                    if self.in_math() && !self.bracket_closes_before_math_end(scan.next) {
                         break;
                     }
                     self.skip_trivia();
@@ -778,6 +856,7 @@ impl<'t> Parser<'t> {
             self.bump(); // second $
         }
         self.open(SyntaxKind::MATH);
+        self.math_depth += 1;
         loop {
             match self.kind() {
                 None => {
@@ -823,6 +902,7 @@ impl<'t> Parser<'t> {
                 }
             }
         }
+        self.math_depth -= 1;
         self.close(); // MATH
         if self.kind() == Some(SyntaxKind::DOLLAR) {
             self.bump(); // closing $
@@ -841,6 +921,7 @@ impl<'t> Parser<'t> {
         self.open(kind);
         self.bump(); // \[ or \(
         self.open(SyntaxKind::MATH);
+        self.math_depth += 1;
         loop {
             match self.kind() {
                 None => {
@@ -875,6 +956,7 @@ impl<'t> Parser<'t> {
                 }
             }
         }
+        self.math_depth -= 1;
         self.close(); // MATH
         if self.kind() == Some(SyntaxKind::CONTROL_SYMBOL) && self.text() == closer {
             self.bump(); // \] or \)
@@ -990,7 +1072,7 @@ impl<'t> Parser<'t> {
             Some(SyntaxKind::L_BRACE) => self.math_group(),
             Some(SyntaxKind::CONTROL_WORD) => {
                 if self.at_command(BEGIN_CMD) {
-                    self.environment(true);
+                    self.environment();
                 } else if self.at_command(END_CMD) {
                     self.stray_end();
                 } else if self.at_command(LEFT_CMD) {
@@ -998,7 +1080,7 @@ impl<'t> Parser<'t> {
                 } else if self.at_command(RIGHT_CMD) {
                     self.stray_right();
                 } else {
-                    self.command(true);
+                    self.command();
                 }
             }
             // `\\` line break (with its tightly-bound `*`/`[len]`) vs. a bare
@@ -1150,7 +1232,7 @@ impl<'t> Parser<'t> {
     }
 
     /// `\begin{name} … \end{name}`, with environment-mismatch recovery.
-    fn environment(&mut self, math: bool) {
+    fn environment(&mut self) {
         self.open(SyntaxKind::ENVIRONMENT);
 
         let begin_start = self.starts[self.pos];
@@ -1160,7 +1242,16 @@ impl<'t> Parser<'t> {
         // Span of the opener `\begin{name}` (before any trailing arguments), so
         // an unclosed environment points back at the `\begin`, not at EOF.
         let opener = (begin_start, self.starts[self.pos]);
-        self.attach_arguments(math); // `\begin{tabular}{ll}`, `[options]`, etc.
+        // `\begin{tabular}{ll}`, `[options]`, etc. A curated math environment's
+        // body starts right after its `\begin`, so only a directly-abutting
+        // `[t]`-style optional attaches; a detached bracket is body content
+        // (`\begin{align}` + newline + `[\partial_\mu V]_1`, issue #43).
+        let bracket = if name.as_deref().is_some_and(is_math_environment) {
+            BracketPolicy::Tight
+        } else {
+            BracketPolicy::Greedy
+        };
+        self.attach_arguments(bracket);
         self.close(); // BEGIN
 
         if name
@@ -1229,9 +1320,11 @@ impl<'t> Parser<'t> {
     /// into [`Self::math_scripted`], whose atom parser always consumes a token.
     fn math_environment_body(&mut self) {
         self.open(SyntaxKind::MATH);
+        self.math_depth += 1;
         while !self.at_block_end(Block::Environment) {
             self.math_element();
         }
+        self.math_depth -= 1;
         self.close(); // MATH
     }
 

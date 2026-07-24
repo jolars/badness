@@ -319,6 +319,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_left_right", WrapMode::Preserve, 80),
     ("math_left_right_control_word_delim", WrapMode::Preserve, 80),
     ("math_left_right_nested_scripted", WrapMode::Preserve, 80),
+    // Brackets in math are content unless they read as an optional argument
+    // (issue #43): a spaced `\Big [ … \Big ]` never becomes an OPTIONAL group
+    // (no break after `[` / before `]`), a math environment's next-line
+    // `[\partial_\mu V]_1` stays a row cell with its subscript, and only
+    // `multlined`'s directly-abutting `[t]` attaches to its `\begin`.
+    ("math_bracket_not_optional", WrapMode::Preserve, 80),
     // Alignment-aware formatting: an `align`/matrix-family environment lays its `&`
     // columns into a grid (left-aligned, single space around `&`, last cell never
     // padded), preserving the row break (with its `[len]`). A lone interior newline

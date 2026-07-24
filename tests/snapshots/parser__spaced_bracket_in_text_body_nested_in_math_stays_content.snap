@@ -1,0 +1,50 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\[ \\\\begin{myaligned}[t] \\\\bE \\\\Big [ x + y \\\\Big ] \\\\end{myaligned} \\\\]\")"
+---
+ROOT@0..66
+  PARAGRAPH@0..66
+    DISPLAY_MATH@0..66
+      CONTROL_SYMBOL@0..2 "\\["
+      MATH@2..64
+        WHITESPACE@2..3 " "
+        ENVIRONMENT@3..63
+          BEGIN@3..23
+            CONTROL_WORD@3..9 "\\begin"
+            NAME_GROUP@9..20
+              L_BRACE@9..10 "{"
+              WORD@10..19 "myaligned"
+              R_BRACE@19..20 "}"
+            OPTIONAL@20..23
+              L_BRACKET@20..21 "["
+              WORD@21..22 "t"
+              R_BRACKET@22..23 "]"
+          PARAGRAPH@23..47
+            WHITESPACE@23..24 " "
+            COMMAND@24..27
+              CONTROL_WORD@24..27 "\\bE"
+            WHITESPACE@27..28 " "
+            COMMAND@28..32
+              CONTROL_WORD@28..32 "\\Big"
+            WHITESPACE@32..33 " "
+            L_BRACKET@33..34 "["
+            WHITESPACE@34..35 " "
+            WORD@35..36 "x"
+            WHITESPACE@36..37 " "
+            WORD@37..38 "+"
+            WHITESPACE@38..39 " "
+            WORD@39..40 "y"
+            WHITESPACE@40..41 " "
+            COMMAND@41..45
+              CONTROL_WORD@41..45 "\\Big"
+            WHITESPACE@45..46 " "
+            R_BRACKET@46..47 "]"
+          WHITESPACE@47..48 " "
+          END@48..63
+            CONTROL_WORD@48..52 "\\end"
+            NAME_GROUP@52..63
+              L_BRACE@52..53 "{"
+              WORD@53..62 "myaligned"
+              R_BRACE@62..63 "}"
+        WHITESPACE@63..64 " "
+      CONTROL_SYMBOL@64..66 "\\]"

@@ -19,6 +19,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.
   Group bodies normalized (`x^{a+b}` -> `x^{a + b}`). Scientific notation (`1e-5`)
   is a known non-special-cased limitation.
+- [ ] **Math operator spacing is inconsistent between script args and command
+  args** (surfaced by issue #42's examples). A braced script argument is lowered
+  through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
+  `\sum_{i = 1}^m`, `\Big \}^{1/2}` -> `\}^{1 / 2}`), while a command argument in
+  math mode (`\frac{1}{n^{m+1}}`) is left untouched — the two should agree.
+  Related conventions question: `/` (and arguably `*`) is conventionally set
+  tight (`1/2`, per Knuth), and script-size content is conventionally tight
+  overall, so the likely resolution is tight `/` everywhere and no operator
+  spacing inside `^`/`_` arguments — decide, then make both paths agree.
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on

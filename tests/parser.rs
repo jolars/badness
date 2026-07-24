@@ -597,6 +597,44 @@ fn nested_mismatch_unwinds_to_two_errors() {
     assert_eq!(unclosed, 1, "only `b` is unclosed; `a` matches");
 }
 
+// --- environment-definition bodies (issue #45) -------------------------------
+
+#[test]
+fn newenvironment_split_begin_end_bodies() {
+    // The begin-code opens `center` and the end-code closes it: valid LaTeX
+    // (the two need not balance within one group), so `\begin`/`\end` parse as
+    // plain commands inside the definition bodies and no errors are reported.
+    insta::assert_snapshot!(tree(r"\newenvironment{wrap}{\begin{center}}{\end{center}}"));
+}
+
+#[test]
+fn xparse_environment_split_bodies_parse_clean() {
+    let parsed = parse(r"\NewDocumentEnvironment{wrap}{O{x}}{\begin{center}}{\end{center}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn newenvironment_split_bodies_in_optional_default() {
+    let parsed = parse(r"\newenvironment{w}[1][\begin{center}]{a}{b}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn env_def_body_flag_does_not_leak_to_siblings() {
+    // The environment *after* the definition still parses as a real
+    // ENVIRONMENT: the definition-body treatment ends with the attached
+    // arguments.
+    let parsed = parse(
+        "\\newenvironment{w}{\\begin{center}}{\\end{center}}\n\\begin{itemize}x\\end{itemize}",
+    );
+    assert_eq!(parsed.errors, vec![]);
+    let kinds: Vec<SyntaxKind> = parsed.syntax().descendants().map(|n| n.kind()).collect();
+    assert!(
+        kinds.contains(&SyntaxKind::ENVIRONMENT),
+        "itemize is a real environment"
+    );
+}
+
 // --- block-vs-inline paragraph wrapping --------------------------------------
 
 /// The kinds of the root's direct child *nodes* (trivia tokens are skipped, as

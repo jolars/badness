@@ -1,0 +1,30 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\newenvironment{wrap}{\\begin{center}}{\\end{center}}\")"
+---
+ROOT@0..51
+  PARAGRAPH@0..51
+    COMMAND@0..51
+      CONTROL_WORD@0..15 "\\newenvironment"
+      GROUP@15..21
+        L_BRACE@15..16 "{"
+        WORD@16..20 "wrap"
+        R_BRACE@20..21 "}"
+      GROUP@21..37
+        L_BRACE@21..22 "{"
+        COMMAND@22..36
+          CONTROL_WORD@22..28 "\\begin"
+          GROUP@28..36
+            L_BRACE@28..29 "{"
+            WORD@29..35 "center"
+            R_BRACE@35..36 "}"
+        R_BRACE@36..37 "}"
+      GROUP@37..51
+        L_BRACE@37..38 "{"
+        COMMAND@38..50
+          CONTROL_WORD@38..42 "\\end"
+          GROUP@42..50
+            L_BRACE@42..43 "{"
+            WORD@43..49 "center"
+            R_BRACE@49..50 "}"
+        R_BRACE@50..51 "}"

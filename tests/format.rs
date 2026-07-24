@@ -296,6 +296,16 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // inline seq path), and an operator nested in parentheses is not a top-level
     // break point (the `-` of `(1 - \gamma)` must not split across lines).
     ("math_display_break_paren_tight", WrapMode::Preserve, 80),
+    // The colon-relation family (`\coloneq` and friends) anchors the relation
+    // column like `=` (issue #42: unrecognized, it let an interior relation
+    // anchor instead, producing a bizarre deep alignment column).
+    ("math_display_break_coloneq", WrapMode::Preserve, 80),
+    // Escaped-brace and named delimiters count toward bracket depth, so a
+    // relation or operator inside a set-builder `\{ … \}` is interior: no anchor,
+    // no break point. A body whose only break opportunities sit inside delimiters
+    // overflows its line instead of breaking mid-set (issue #42). The `\}` of
+    // `\Big \}^{1/2}` rides inside a `SCRIPTED` atom and still closes the depth.
+    ("math_display_brace_delims_tight", WrapMode::Preserve, 80),
     // A multi-line left-hand side (a nested matrix environment) has no meaningful
     // flat width, so the relations anchor at the base indent and the first
     // relation breaks onto its own line instead of continuing the `\end{…}` line

@@ -3453,27 +3453,75 @@ struct MathPiece {
     /// spacing exactly as [`lower_math_seq`] does, so a tight command boundary
     /// (`\gamma)`, `}.`) stays tight rather than gaining a spurious space.
     space_before: bool,
-    /// Net change in bracket nesting (`(`/`[` vs `)`/`]`) contributed by this
-    /// atom's own text — nonzero only for the bare `WORD` atoms the math split
-    /// leaves (`(1`, `c)`). Used to suppress operator breaks inside a
-    /// parenthesized subexpression (`(1 - \gamma)` must not break at `-`).
+    /// Net change in bracket nesting (`(`/`[`/`\{`/named delimiters vs their
+    /// closers) contributed by this atom's own text. Used to suppress operator
+    /// breaks inside a bracketed subexpression (`(1 - \gamma)` must not break at
+    /// `-`, and a relation inside a set-builder `\{ … \}` is not an anchor).
     bracket_delta: i32,
 }
 
-/// Net bracket-nesting change of a math atom's surface text: `(`/`[` open, `)`/`]`
-/// close. A stray delimiter can ride inside a node atom too (a bare script binds
-/// the whole following `WORD`, so the `)` of `f(x, y_i)` glues into the `y_i)`
-/// script), so count over the atom's full source text, not just bare tokens.
+/// Delimiter control words (the `\` stripped) that open/close a bracketed
+/// subexpression, alongside the bare `(`/`[` characters and the escaped braces
+/// `\{`/`\}`. Bare `|` is deliberately absent: its open and close forms are the
+/// same character, so it cannot be depth-counted statically.
+const OPEN_DELIMITER_COMMANDS: &[&str] = &[
+    "lbrace", "langle", "lvert", "lVert", "lfloor", "lceil", "lgroup", "lbrack",
+];
+const CLOSE_DELIMITER_COMMANDS: &[&str] = &[
+    "rbrace", "rangle", "rvert", "rVert", "rfloor", "rceil", "rgroup", "rbrack",
+];
+
+/// Net bracket-nesting change of a math atom's surface text: bare `(`/`[` open
+/// and `)`/`]` close, as do the escaped braces `\{`/`\}` and the named delimiter
+/// commands (`\lbrace`, `\langle`, `\lvert`, …). A stray delimiter can ride
+/// inside a node atom too (a bare script binds the whole following `WORD`, so the
+/// `)` of `f(x, y_i)` glues into the `y_i)` script, and the `\}` of
+/// `\Big \}^{1/2}` rides inside the `SCRIPTED` node), so scan the atom's full
+/// source text, consuming control sequences so an unrelated control symbol
+/// (`\\[2ex]`'s `\\`) is never miscounted. A mixed `\left\{ … \right.` pair
+/// leaves a positive residue, which only *suppresses* later breaks —
+/// conservative in the direction that matters.
 fn bracket_delta(el: &SyntaxElement) -> i32 {
-    let count = |acc: i32, c: char| match c {
-        '(' | '[' => acc + 1,
-        ')' | ']' => acc - 1,
-        _ => acc,
+    let text = match el {
+        SyntaxElement::Token(t) => t.text().to_string(),
+        SyntaxElement::Node(n) => n.text().to_string(),
     };
-    match el {
-        SyntaxElement::Token(t) => t.text().chars().fold(0, count),
-        SyntaxElement::Node(n) => n.text().to_string().chars().fold(0, count),
+    let mut acc = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '(' | '[' => acc += 1,
+            ')' | ']' => acc -= 1,
+            '\\' => match chars.peek() {
+                Some(c2) if c2.is_ascii_alphabetic() => {
+                    let mut name = String::new();
+                    while let Some(&c3) = chars.peek() {
+                        if !c3.is_ascii_alphabetic() {
+                            break;
+                        }
+                        name.push(c3);
+                        chars.next();
+                    }
+                    if OPEN_DELIMITER_COMMANDS.contains(&name.as_str()) {
+                        acc += 1;
+                    } else if CLOSE_DELIMITER_COMMANDS.contains(&name.as_str()) {
+                        acc -= 1;
+                    }
+                }
+                Some(&c2) => {
+                    chars.next();
+                    match c2 {
+                        '{' => acc += 1,
+                        '}' => acc -= 1,
+                        _ => {}
+                    }
+                }
+                None => {}
+            },
+            _ => {}
+        }
     }
+    acc
 }
 
 /// Relation control words (the `\` stripped) that anchor alignment / break a long
@@ -3539,8 +3587,21 @@ const MATH_RELATION_COMMANDS: &[&str] = &[
     "hookrightarrow",
     "hookleftarrow",
     "triangleq",
+    // The mathtools/kernel colon-relation family (`\coloneq` is the modern
+    // kernel spelling of `:=`; issue #42 anchored on the wrong relation
+    // because it was missing).
+    "coloneq",
+    "Coloneq",
     "coloneqq",
+    "Coloneqq",
+    "eqcolon",
+    "Eqcolon",
     "eqqcolon",
+    "Eqqcolon",
+    "colonapprox",
+    "Colonapprox",
+    "colonsim",
+    "Colonsim",
     "lesssim",
     "gtrsim",
 ];

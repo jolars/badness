@@ -38,10 +38,10 @@ first existing file among
 The global file uses the same schema as a project `badness.toml` and is a
 whole-file fallback, never merged with a project config. Relative `exclude`
 patterns in it resolve against the working directory (CLI) or the document's
-directory (language server) rather than the config's own directory. The
-language server uses the same resolution, so the global file is the easiest way
-to set editor-wide defaults such as `wrap = "preserve"` (an edit to it is picked
-up when the server restarts). If neither a project nor a global file is found,
+directory (language server) rather than the config's own directory. The language
+server uses the same resolution, so the global file is the easiest way to set
+editor-wide defaults such as `wrap = "preserve"` (an edit to it is picked up
+when the server restarts). If neither a project nor a global file is found,
 built-in defaults apply.
 
 Two global CLI flags override discovery:

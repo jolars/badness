@@ -483,7 +483,8 @@ impl ResolvedSettings {
 impl GlobalState {
     /// Resolve (and cache) the [`ResolvedSettings`] for `uri`'s document: discover a
     /// `badness.toml` from the document's anchor directory (its parent), falling back
-    /// to the editor settings when none is found. Cached by anchor dir, so repeated
+    /// to the global user config (`~/.config/badness/config.toml`), then to the
+    /// editor settings when neither is found. Cached by anchor dir, so repeated
     /// format/lint requests in a workspace pay the filesystem walk once.
     ///
     /// A non-`file` buffer (untitled) or a directory-less / unreadable / malformed
@@ -499,16 +500,18 @@ impl GlobalState {
         }
         let resolved = match Config::resolve(None, false, &anchor) {
             Ok((config, source)) => {
-                let present = source.is_some();
+                let present = source.path().is_some();
                 let mut resolved =
                     ResolvedSettings::from_config(&config, present, &self.editor_settings);
                 if present {
                     // Compile the sibling-discovery exclude filter, rooted at the
-                    // config's directory (the same rule as the CLI's
-                    // `build_exclude_filter`; the LSP contributes no `--exclude`).
-                    // A malformed pattern leaves the exclude-nothing default rather
-                    // than failing resolution — there is no good channel to report it.
-                    let root = source.as_deref().and_then(Path::parent).unwrap_or(&anchor);
+                    // config's directory — or at the document's directory for the
+                    // global user config (the same `ConfigSource::exclude_root` rule
+                    // as the CLI's `build_exclude_filter`; the LSP contributes no
+                    // `--exclude`). A malformed pattern leaves the exclude-nothing
+                    // default rather than failing resolution — there is no good
+                    // channel to report it.
+                    let root = source.exclude_root(&anchor);
                     if let Ok(filter) = ExcludeFilter::new(root, &config.exclude_patterns(&[])) {
                         resolved.exclude = filter;
                     }

@@ -25,12 +25,29 @@ its default.
 For each input, badness walks from the file's directory upward and uses the
 first `badness.toml` it finds. The walk stops at a directory containing a `.git`
 entry (the repository root), so a config outside your repository is never picked
-up. If no file is found, built-in defaults apply.
+up.
+
+If no project file is found, badness falls back to a global user config: the
+first existing file among
+
+1. `$XDG_CONFIG_HOME/badness/config.toml`
+2. `~/.config/badness/config.toml`
+3. the platform config directory (`%APPDATA%\badness\config.toml` on Windows,
+   `~/Library/Application Support/badness/config.toml` on macOS)
+
+The global file uses the same schema as a project `badness.toml` and is a
+whole-file fallback, never merged with a project config. Relative `exclude`
+patterns in it resolve against the working directory (CLI) or the document's
+directory (language server) rather than the config's own directory. The
+language server uses the same resolution, so the global file is the easiest way
+to set editor-wide defaults such as `wrap = "preserve"` (an edit to it is picked
+up when the server restarts). If neither a project nor a global file is found,
+built-in defaults apply.
 
 Two global CLI flags override discovery:
 
 - `--config <PATH>` uses that file instead of discovering one.
-- `--no-config` ignores any discovered file and uses built-in defaults.
+- `--no-config` ignores any project or global file and uses built-in defaults.
 
 CLI flags for individual options (`--line-width`, `--wrap`, `--select`, …)
 override the corresponding config values for a single run.

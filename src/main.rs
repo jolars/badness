@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use badness::config::Config;
+use badness::config::{Config, ConfigSource};
 use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
@@ -87,19 +87,20 @@ fn main() -> ExitCode {
             force_exclude,
         } => {
             // Discover/load `badness.toml` from the working directory (one config
-            // per invocation). The exclude filter is rooted at
-            // the config's directory so its patterns resolve relative to it.
+            // per invocation), falling back to the global user config. The exclude
+            // filter is rooted at the config's directory so its patterns resolve
+            // relative to it.
             let anchor = match cwd_anchor() {
                 Ok(anchor) => anchor,
                 Err(code) => return code,
             };
-            let (config, config_path) =
+            let (config, config_source) =
                 match resolve_config(config_arg.as_deref(), no_config, &anchor) {
                     Ok(resolved) => resolved,
                     Err(code) => return code,
                 };
             let exclude_filter =
-                match build_exclude_filter(&config, config_path.as_deref(), &anchor, &exclude) {
+                match build_exclude_filter(&config, &config_source, &anchor, &exclude) {
                     Ok(filter) => filter.with_force_exclude(force_exclude),
                     Err(code) => return code,
                 };
@@ -161,13 +162,13 @@ fn main() -> ExitCode {
                 Ok(anchor) => anchor,
                 Err(code) => return code,
             };
-            let (mut config, config_path) =
+            let (mut config, config_source) =
                 match resolve_config(config_arg.as_deref(), no_config, &anchor) {
                     Ok(resolved) => resolved,
                     Err(code) => return code,
                 };
             let exclude_filter =
-                match build_exclude_filter(&config, config_path.as_deref(), &anchor, &exclude) {
+                match build_exclude_filter(&config, &config_source, &anchor, &exclude) {
                     Ok(filter) => filter.with_force_exclude(force_exclude),
                     Err(code) => return code,
                 };
@@ -213,7 +214,7 @@ fn resolve_config(
     explicit: Option<&Path>,
     no_config: bool,
     anchor: &Path,
-) -> Result<(Config, Option<PathBuf>), ExitCode> {
+) -> Result<(Config, ConfigSource), ExitCode> {
     Config::resolve(explicit, no_config, anchor).map_err(|err| {
         eprintln!("badness: {err}");
         ExitCode::from(2)
@@ -222,19 +223,17 @@ fn resolve_config(
 
 /// Build the directory-discovery exclude filter from the resolved config plus any
 /// `--exclude` CLI patterns. Patterns resolve relative to the directory holding
-/// `badness.toml` (or `anchor` when there is no config file).
+/// `badness.toml`, or relative to `anchor` for the global user config and the
+/// no-config case ([`ConfigSource::exclude_root`]).
 fn build_exclude_filter(
     config: &Config,
-    config_path: Option<&Path>,
+    source: &ConfigSource,
     anchor: &Path,
     cli_excludes: &[String],
 ) -> Result<ExcludeFilter, ExitCode> {
-    let root = config_path
-        .and_then(Path::parent)
-        .unwrap_or(anchor)
-        .to_path_buf();
+    let root = source.exclude_root(anchor);
     let patterns = config.exclude_patterns(cli_excludes);
-    ExcludeFilter::new(&root, &patterns).map_err(|err| {
+    ExcludeFilter::new(root, &patterns).map_err(|err| {
         eprintln!("badness: {err}");
         ExitCode::from(2)
     })

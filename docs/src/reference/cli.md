@@ -10,7 +10,7 @@ A formatter, linter, and language server for LaTeX
 :   Path to a `badness.toml` to use instead of discovering one. Applies to `format` and `lint`; ignored by `parse`, `lsp`, and `init`
 
 `--no-config`
-:   Ignore any `badness.toml` and use built-in defaults
+:   Ignore any `badness.toml` (project or global) and use built-in defaults
 
 ## `badness format`
 

@@ -1,5 +1,5 @@
-//! `badness.toml` configuration: schema, file loading, and ancestor-walk
-//! discovery.
+//! `badness.toml` configuration: schema, file loading, ancestor-walk
+//! discovery, and the global user-config fallback.
 //!
 //! The CLI is the only consumer; the library API (`format_with_style`,
 //! `check_paths_with_style`, the linter) continues to take a fully-resolved
@@ -340,7 +340,8 @@ impl Config {
     /// Walk `start` and its ancestors looking for a `badness.toml`. Stops at the
     /// first match or at a directory that contains a `.git` entry (repo root),
     /// whichever comes first. Returns `None` if neither is found before the
-    /// filesystem root.
+    /// filesystem root. The global user config is *not* consulted here; that
+    /// fallback lives in [`resolve`](Self::resolve).
     pub fn discover(start: &Path) -> Result<Option<(PathBuf, Self)>, ConfigError> {
         let canonical = start.canonicalize().map_err(|source| ConfigError::Io {
             path: start.to_path_buf(),
@@ -359,27 +360,112 @@ impl Config {
         Ok(None)
     }
 
-    /// CLI resolution. Returns the final config plus the source path of the loaded
-    /// file (for diagnostics and to root exclude patterns), if any. CLI flag
-    /// overrides for the formatter/lint knobs are applied by the caller after this
-    /// returns.
+    /// Config resolution for the CLI and the language server. Precedence:
+    /// an explicit `--config` path, then a discovered project `badness.toml`,
+    /// then the [global user config](global_config_path), then built-in
+    /// defaults. Whole-file fallback, never a merge. `no_config` skips every
+    /// file (project and global). CLI flag overrides for the formatter/lint
+    /// knobs are applied by the caller after this returns.
     pub fn resolve(
         explicit: Option<&Path>,
         no_config: bool,
         anchor: &Path,
-    ) -> Result<(Self, Option<PathBuf>), ConfigError> {
+    ) -> Result<(Self, ConfigSource), ConfigError> {
+        Self::resolve_with_global(explicit, no_config, anchor, global_config_path().as_deref())
+    }
+
+    /// [`resolve`](Self::resolve) with the global-config path injected, so tests
+    /// can exercise the fallback without touching the real home directory.
+    fn resolve_with_global(
+        explicit: Option<&Path>,
+        no_config: bool,
+        anchor: &Path,
+        global: Option<&Path>,
+    ) -> Result<(Self, ConfigSource), ConfigError> {
         if no_config {
-            return Ok((Self::default(), None));
+            return Ok((Self::default(), ConfigSource::None));
         }
         if let Some(path) = explicit {
             let config = Self::load_from(path)?;
-            return Ok((config, Some(path.to_path_buf())));
+            return Ok((config, ConfigSource::Explicit(path.to_path_buf())));
         }
-        match Self::discover(anchor)? {
-            Some((path, config)) => Ok((config, Some(path))),
-            None => Ok((Self::default(), None)),
+        if let Some((path, config)) = Self::discover(anchor)? {
+            return Ok((config, ConfigSource::Discovered(path)));
+        }
+        // A broken global config is a hard error, same as a discovered one:
+        // it is the config that would apply, and silently falling through to
+        // built-in defaults would hide the typo indefinitely.
+        if let Some(path) = global {
+            let config = Self::load_from(path)?;
+            return Ok((config, ConfigSource::Global(path.to_path_buf())));
+        }
+        Ok((Self::default(), ConfigSource::None))
+    }
+}
+
+/// Which configuration source [`Config::resolve`] loaded, carrying its path.
+///
+/// The distinction matters for relative exclude patterns: a project-local file
+/// anchors them at its own directory, while the global config has no project
+/// location and anchors at the caller's directory instead (see
+/// [`exclude_root`](Self::exclude_root)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// Loaded from an explicit `--config <path>`.
+    Explicit(PathBuf),
+    /// Discovered by the ancestor walk from the input's directory.
+    Discovered(PathBuf),
+    /// The global user config (e.g. `~/.config/badness/config.toml`), used when
+    /// no project config is discovered.
+    Global(PathBuf),
+    /// No config file found; built-in defaults are in use.
+    None,
+}
+
+impl ConfigSource {
+    /// Path of the resolved config file, if any.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Explicit(p) | Self::Discovered(p) | Self::Global(p) => Some(p),
+            Self::None => None,
         }
     }
+
+    /// The directory relative exclude patterns resolve against: the config
+    /// file's own directory for a project-local file, or `anchor` (the CLI
+    /// working directory, or the document's directory in the LSP) for the
+    /// global config and the no-config case, which have no project location.
+    pub fn exclude_root<'a>(&'a self, anchor: &'a Path) -> &'a Path {
+        match self {
+            Self::Explicit(p) | Self::Discovered(p) => p.parent().unwrap_or(anchor),
+            Self::Global(_) | Self::None => anchor,
+        }
+    }
+}
+
+/// Path to the global user config, the fallback when no project `badness.toml`
+/// is discovered: the first existing file among
+/// `$XDG_CONFIG_HOME/badness/config.toml`, `~/.config/badness/config.toml`, and
+/// `<platform config dir>/badness/config.toml` (Windows `%APPDATA%`, macOS
+/// `~/Library/Application Support`). The `~/.config` candidate is checked on
+/// every platform so the CLI-dotfile convention works on macOS and Windows too.
+fn global_config_path() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
+        && !xdg.is_empty()
+    {
+        candidates.push(PathBuf::from(xdg));
+    }
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".config"));
+    }
+    if let Some(config) = dirs::config_dir() {
+        candidates.push(config);
+    }
+    candidates
+        .into_iter()
+        .map(|dir| dir.join("badness").join("config.toml"))
+        .find(|path| path.is_file())
 }
 
 fn validate_width(field: &'static str, value: u32, path: Option<&Path>) -> Result<(), ConfigError> {
@@ -786,7 +872,7 @@ mod tests {
         .unwrap();
         let (config, source) = Config::resolve(None, true, dir.path()).expect("resolve");
         assert_eq!(config, Config::default());
-        assert!(source.is_none());
+        assert_eq!(source, ConfigSource::None);
     }
 
     #[test]
@@ -803,7 +889,7 @@ mod tests {
         let (config, source) =
             Config::resolve(Some(&explicit), false, dir.path()).expect("resolve");
         assert_eq!(config.format.line_width, 40);
-        assert_eq!(source.as_deref(), Some(explicit.as_path()));
+        assert_eq!(source, ConfigSource::Explicit(explicit.clone()));
     }
 
     #[test]
@@ -816,6 +902,92 @@ mod tests {
         .unwrap();
         let (config, source) = Config::resolve(None, false, dir.path()).expect("resolve");
         assert_eq!(config.format.line_width, 50);
-        assert!(source.is_some());
+        assert!(matches!(source, ConfigSource::Discovered(_)));
+    }
+
+    /// A project directory bounded by a `.git` entry, so the discovery walk in
+    /// the global-fallback tests never escapes the tempdir.
+    fn bounded_project() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        (dir, repo)
+    }
+
+    fn write_global(dir: &Path) -> PathBuf {
+        let global = dir.join("config-home").join("badness").join("config.toml");
+        fs::create_dir_all(global.parent().unwrap()).unwrap();
+        fs::write(&global, "[format]\nline-width = 66\n").unwrap();
+        global
+    }
+
+    #[test]
+    fn resolve_falls_back_to_global_config() {
+        let (dir, repo) = bounded_project();
+        let global = write_global(dir.path());
+
+        let (config, source) =
+            Config::resolve_with_global(None, false, &repo, Some(&global)).expect("resolve");
+        assert_eq!(config.format.line_width, 66);
+        assert_eq!(source, ConfigSource::Global(global.clone()));
+        // Global config has no project location: excludes anchor at the caller.
+        assert_eq!(source.exclude_root(&repo), repo.as_path());
+    }
+
+    #[test]
+    fn discovered_config_beats_global() {
+        let (dir, repo) = bounded_project();
+        let global = write_global(dir.path());
+        fs::write(repo.join(CONFIG_FILE_NAME), "[format]\nline-width = 50\n").unwrap();
+
+        let (config, source) =
+            Config::resolve_with_global(None, false, &repo, Some(&global)).expect("resolve");
+        assert_eq!(config.format.line_width, 50);
+        assert!(matches!(source, ConfigSource::Discovered(_)));
+    }
+
+    #[test]
+    fn no_config_skips_global() {
+        let (dir, repo) = bounded_project();
+        let global = write_global(dir.path());
+
+        let (config, source) =
+            Config::resolve_with_global(None, true, &repo, Some(&global)).expect("resolve");
+        assert_eq!(config, Config::default());
+        assert_eq!(source, ConfigSource::None);
+    }
+
+    #[test]
+    fn broken_global_config_is_an_error() {
+        let (dir, repo) = bounded_project();
+        let global = dir
+            .path()
+            .join("config-home")
+            .join("badness")
+            .join("config.toml");
+        fs::create_dir_all(global.parent().unwrap()).unwrap();
+        fs::write(&global, "[format]\nline-widht = 80\n").unwrap();
+
+        let err = Config::resolve_with_global(None, false, &repo, Some(&global))
+            .expect_err("typo'd global config must not be silently ignored");
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn exclude_root_for_project_config_is_its_directory() {
+        let source = ConfigSource::Discovered(PathBuf::from("/proj/badness.toml"));
+        assert_eq!(
+            source.exclude_root(Path::new("/elsewhere")),
+            Path::new("/proj")
+        );
+        let explicit = ConfigSource::Explicit(PathBuf::from("/proj/custom.toml"));
+        assert_eq!(
+            explicit.exclude_root(Path::new("/elsewhere")),
+            Path::new("/proj")
+        );
+        assert_eq!(
+            ConfigSource::None.exclude_root(Path::new("/elsewhere")),
+            Path::new("/elsewhere")
+        );
     }
 }

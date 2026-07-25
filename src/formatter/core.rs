@@ -576,8 +576,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::GROUP if spans_multiple_lines(node) => {
             return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
         }
-        SyntaxKind::OPTIONAL if spans_multiple_lines(node) => {
-            return lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
+        SyntaxKind::OPTIONAL => {
+            if let Some(ir) = lower_optional(node, cx) {
+                return ir;
+            }
         }
         _ => {}
     }
@@ -3051,6 +3053,31 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
             Ir::hard_line(),
             close_ir,
         ])
+    }
+}
+
+/// Lower an [`SyntaxKind::OPTIONAL`] argument group, or `None` to leave it on the
+/// generic inline path (a single-line optional). A multi-line optional collapses
+/// to one line when it fits the width — a source line break inside `[…]` is
+/// incidental, so `\foo[a=1,\nb=2]` formats as `\foo[a=1, b=2]` (issue #47), the
+/// interior newlines becoming single spaces ([`collapse_arg_group`], a
+/// TeX-identical exchange) — and keeps the indented block form
+/// ([`lower_bracketed`]) when it does not. The fit decision is the enclosing
+/// [`Ir::group`]'s rest-aware measurement, so trailing same-line content (`]{c}`)
+/// counts toward it. A body that is not safely collapsible (a blank line, a `%`
+/// comment, nested block content) keeps the block form outright. Inert under
+/// [`WrapMode::Preserve`], which keeps the pre-existing block layout.
+fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Ir> {
+    if !spans_multiple_lines(node) {
+        return None;
+    }
+    let block = lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
+    if !cx.wraps_prose() {
+        return Some(block);
+    }
+    match collapse_arg_group(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx) {
+        Some(collapsed) => Some(Ir::group(Ir::if_break(collapsed, block))),
+        None => Some(block),
     }
 }
 

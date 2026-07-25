@@ -267,6 +267,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // into the paragraph fill as an atom instead of being kept as a command-only
     // line, with its `{key}` left exactly as authored.
     ("reflow_ref_flows", WrapMode::Reflow, 80),
+    // Optional-argument layout (issue #47): a multi-line `[…]` collapses to one
+    // line when it fits the width (`\foo[a=1,\nb=2]` -> `\foo[a=1, b=2]`, the
+    // interior newlines becoming spaces) and keeps the indented block form when
+    // it does not.
+    ("optional_collapse_fits", WrapMode::Reflow, 30),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts, and strip redundant
     // braces around a single-token script argument (only where the following

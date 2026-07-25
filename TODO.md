@@ -42,6 +42,30 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on
   its own separators rather than the paragraph fill.
+- [ ] **Keyval-aware optional-argument layout (parked; grew out of issue #47).**
+  The landed fix only collapses a fitting multi-line `[…]`; commas pass through
+  wherever the author put them. The Black/Ruff *magic trailing comma* (a trailing
+  `,` before `]` forcing one-key-per-line) was prototyped and **declined by
+  design**: it is deterministic but not canonical — content steering layout
+  conflicts with the formatter-is-sole-authority tenet. The parked replacement,
+  two independent pieces:
+  - *Count-based expansion:* expand one key per line when a `[…]` has more than N
+    top-level keys (or overflows the width); else collapse. Canonical — layout is
+    a pure function of content + width. Splits must stay meaning-safe: only at a
+    top-level comma already followed by whitespace (whitespace ↔ newline is
+    TeX-identical); a glued `[a=1,b=2,…]` has no safe split point and stays
+    inline. Semantics to settle: N (default, knob or fixed), and that comma count
+    is a proxy for keyval-ness (a comma-rich textual optional would expand too).
+  - *Formatter-owned trailing comma, signature-gated:* for an argument the
+    signature DB can *prove* keyval (a new `ContentKind::Keyval` or flag), add
+    the trailing comma when expanded and drop it when collapsed, Black-style —
+    safe because keyval/xkeyval/pgfkeys/l3keys and `\ProcessOptions` clists all
+    ignore empty entries. Data: curated built-ins first (`\usepackage`,
+    `\includegraphics`, `tcolorbox`, `minted`, …); the CWL corpus marks these via
+    `#keyvals:` sections, which `gen_cwl_signatures.py` currently skips. Content
+    insertion on a wrong flag changes typeset output, so hold it to the curated
+    standard of the math-env routing; never for scanned user definitions, never
+    for unknown commands.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---

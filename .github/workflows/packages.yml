@@ -36,6 +36,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+      id-token: write # mint the OIDC token for keyless provenance signing
+      attestations: write # store the build provenance attestation
     strategy:
       fail-fast: false
       matrix:
@@ -145,6 +147,11 @@ jobs:
           cp README.md dist/
           tar czf badness-${{ matrix.target }}.tar.gz -C dist .
           rm -rf dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum badness-${{ matrix.target }}.tar.gz > badness-${{ matrix.target }}.tar.gz.sha256
+          else
+            shasum -a 256 badness-${{ matrix.target }}.tar.gz > badness-${{ matrix.target }}.tar.gz.sha256
+          fi
 
       - name: Create archive (Windows)
         if: runner.os == 'Windows'
@@ -156,6 +163,9 @@ jobs:
           Copy-Item README.md dist/
           Compress-Archive -Path dist/* -DestinationPath badness-${{ matrix.target }}.zip
           Remove-Item -Recurse -Force dist
+          $asset = "badness-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash -Path $asset -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$asset.sha256" -Value "$hash  $asset" -Encoding ascii
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v7
@@ -164,6 +174,22 @@ jobs:
           path: |
             badness-${{ matrix.target }}.tar.gz
             badness-${{ matrix.target }}.zip
+            badness-${{ matrix.target }}.tar.gz.sha256
+            badness-${{ matrix.target }}.zip.sha256
+
+      # Sign a build provenance attestation for the archive, verifiable with
+      # `gh attestation verify`. Only on real release uploads.
+      - name: Attest build provenance (Unix)
+        if: inputs.upload == 'true' && runner.os != 'Windows'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: badness-${{ matrix.target }}.tar.gz
+
+      - name: Attest build provenance (Windows)
+        if: inputs.upload == 'true' && runner.os == 'Windows'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: badness-${{ matrix.target }}.zip
 
       - name: Upload binary to release
         if: inputs.upload == 'true'
@@ -171,10 +197,42 @@ jobs:
         run: |
           TAG="${{ inputs.tag }}"
           if [ -f badness-${{ matrix.target }}.tar.gz ]; then
-            gh release upload --clobber "$TAG" badness-${{ matrix.target }}.tar.gz
+            gh release upload --clobber "$TAG" \
+              badness-${{ matrix.target }}.tar.gz \
+              badness-${{ matrix.target }}.tar.gz.sha256
           fi
           if [ -f badness-${{ matrix.target }}.zip ]; then
-            gh release upload --clobber "$TAG" badness-${{ matrix.target }}.zip
+            gh release upload --clobber "$TAG" \
+              badness-${{ matrix.target }}.zip \
+              badness-${{ matrix.target }}.zip.sha256
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish a SHA256SUMS manifest covering every asset attached to the release.
+  # Runs after all per-target build jobs so all assets are already uploaded.
+  # Guards against accidental corruption and lets installers verify downloads;
+  # it is not a substitute for signing/provenance.
+  checksums:
+    name: Publish SHA256SUMS
+    needs: build-binaries
+    if: inputs.upload == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Generate and upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          # Pull every asset already on the release, dropping any SHA256SUMS
+          # from a prior run so the manifest never checksums itself.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --clobber
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload --repo "$GITHUB_REPOSITORY" --clobber "$TAG" SHA256SUMS

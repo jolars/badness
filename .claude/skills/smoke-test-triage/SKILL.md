@@ -28,11 +28,17 @@ especially idempotency and losslessness regressions.
    - report excerpt and the approximate diff start line
 
 2. Reproduce in a local clone of the target repository:
+   - the issue's `logs/…` paths (sample log, report, and the idempotency
+     `input`/`once`/`twice` dumps) are relative to the run artifact; fetch it
+     with `gh run download <run-id> -n debug-format-repo-scan-results` (the
+     run id is in the issue's workflow-run link)
    - checkout the exact target commit from the report
    - run:
      - `badness debug format --checks all --report <sample-file>`
    - if needed, collect pass artifacts with:
      - `badness debug format --checks all --dump-dir <dir> --dump-passes <file>`
+   - `badness` here means the current checkout's binary — `cargo run
+     --release --` or `target/release/badness` — not an installed release
    - the scan runs with the target repo's own `badness.toml` when it has one
      (falling back to `--no-config` only when that config is invalid), so
      reproduce under the same config.
@@ -78,6 +84,12 @@ especially idempotency and losslessness regressions.
    - **`timeout` ⇒ a hang or pathological slowness.** Reproduce with the
      `/profile` skill's micro-bench; never-infinite-loop on unexpected input
      is a parser invariant.
+   - **`unknown` ⇒ read the sample log before assuming a badness bug.** The
+     scan buckets any failure whose output matches no known label here —
+     typically read or discovery errors (non-UTF-8 content, or a filename
+     like a bare `.tex` dotfile that git's glob matches but file discovery
+     rejects). Those are scan noise: fix or exclude them in the workflow and
+     close the issue; there is nothing to fix in badness.
    - If uncertain, state the best hypothesis and why before implementing —
      and include the relevant `badness parse` output in the hypothesis.
 

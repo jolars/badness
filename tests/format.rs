@@ -61,6 +61,12 @@ const CLEAN_CASES: &[&str] = &[
     r"$\left[ \left( a \right) \right]^2 + \left\langle x \right\rangle$",
     "a % comment\nb",
     r"\begin{itemize}\item one\end{itemize}",
+    // Own-line `%`s in a list body (issue #48): a multi-line comment run bound
+    // leading into the next `\item`, and a floating comment isolated between
+    // blank lines — neither may glue onto neighbouring content, and both must
+    // stay idempotent.
+    "\\begin{itemize}\n\\item a\n% one\n% two\n\\item b\n\\end{itemize}\n",
+    "\\begin{itemize}\n\\item a\n\n% c\n\n\\item b\n\\end{itemize}\n",
     "unicode: café — naïve ∑∫ 𝕏",
     r"\\ \{ \} \% \, \;",
     "trailing backslash \\",
@@ -216,6 +222,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_list_item_label", WrapMode::Reflow, 60),
     ("reflow_list_nested", WrapMode::Reflow, 50),
     ("reflow_list_blank_between_items", WrapMode::Reflow, 80),
+    // An own-line `%` in a list body stays on its own line (at the item body's
+    // hanging indent) instead of gluing onto the preceding content or a nested
+    // `\end{…}`; a `%` run bound leading into a `\item` (the parser's
+    // `DOC_COMMENT`) renders on its own line(s) above the marker at the item
+    // indent (issue #48).
+    ("reflow_list_comment_own_line", WrapMode::Reflow, 80),
+    ("reflow_list_doc_comment_item", WrapMode::Reflow, 80),
     // Prose-argument reflow: a signature-marked prose argument reflows like a
     // paragraph — joined when short, wrapped when long — while non-prose groups
     // (`\newcommand` body, `\label`) are left exactly as authored. An `inline`-

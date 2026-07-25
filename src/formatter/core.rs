@@ -1814,6 +1814,10 @@ fn is_list_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// chunk). `blank_before` records whether a blank line separated this item from the
 /// previous one, so it is reproduced.
 struct ListItem {
+    /// The comment lines of a `DOC_COMMENT` bound leading into the `\item`
+    /// (`% note` on its own line directly above), rendered one per line above
+    /// the marker at the item indent.
+    doc_lines: Vec<String>,
     marker: String,
     hang: usize,
     chunks: Vec<Vec<SyntaxElement>>,
@@ -1887,13 +1891,9 @@ fn lower_list_body(
                 }
             }
             FlatItem::El(el) if is_item_command(&el) => {
-                let (marker, hang, leading) = split_item_marker(&el, cx);
-                items.push(ListItem {
-                    marker,
-                    hang,
-                    chunks: vec![leading],
-                    blank_before: blank_pending,
-                });
+                let mut item = split_item_marker(&el, cx);
+                item.blank_before = blank_pending;
+                items.push(item);
                 blank_pending = false;
             }
             FlatItem::El(el) => {
@@ -1936,18 +1936,25 @@ fn lower_list_body(
     Some(Ir::concat(result))
 }
 
-/// Render one [`ListItem`]: the marker, then a space and the item's body reflowed
-/// inside an [`Ir::align`] whose width is the item's `hang` (the control word plus
-/// the separating space — `\item `), so wrapped lines hang under where the body
-/// would start after a bare `\item`, regardless of how wide the `[label]` is. An
-/// empty item (marker with no body) renders as the bare marker.
+/// Render one [`ListItem`]: any bound doc-comment lines on their own lines above,
+/// then the marker, then a space and the item's body reflowed inside an
+/// [`Ir::align`] whose width is the item's `hang` (the control word plus the
+/// separating space — `\item `), so wrapped lines hang under where the body would
+/// start after a bare `\item`, regardless of how wide the `[label]` is. An empty
+/// item (marker with no body) renders as the bare marker.
 fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
     let content = reflow_chunks(&item.chunks, cx);
     let marker = Ir::verbatim(item.marker.clone());
-    if matches!(content, Ir::Nil) {
-        return marker;
+    let body = if matches!(content, Ir::Nil) {
+        marker
+    } else {
+        Ir::concat([marker, Ir::verbatim(" "), Ir::align(item.hang, content)])
+    };
+    if item.doc_lines.is_empty() {
+        return body;
     }
-    Ir::concat([marker, Ir::verbatim(" "), Ir::align(item.hang, content)])
+    let doc = item.doc_lines.iter().map(|line| Ir::verbatim(line.clone()));
+    Ir::concat([Ir::join(Ir::hard_line(), doc), Ir::hard_line(), body])
 }
 
 /// Reflow each paragraph chunk of an item body and join the (non-empty) results
@@ -1962,35 +1969,54 @@ fn reflow_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
 }
 
 /// Flatten a list-environment body into a stream of inline elements, reifying each
-/// paragraph boundary (a blank line) as a [`FlatItem::Blank`]. Body-level trivia
-/// between paragraphs is dropped — the boundary it represents is already carried
-/// by the `Blank` inserted before each non-first paragraph.
+/// paragraph boundary as a [`FlatItem::Blank`]. Body-level trivia is classified by
+/// its newline count: a blank-line run (`≥2` newlines) becomes the `Blank` (its
+/// tokens are dropped — the boundary carries them), while a single-newline run is
+/// kept in the stream so [`reflow_elements`] still sees the line break — dropping
+/// it would glue a body-level own-line `%` onto the preceding content or a nested
+/// `\end{…}` (issue #48). Leading and trailing runs (against `\begin`/`\end`) are
+/// dropped either way; the list framing re-supplies those breaks.
 fn flatten_list_body(
     body_elements: &[SyntaxElement],
     lifted: Option<&SyntaxToken>,
 ) -> Vec<FlatItem> {
     let mut out: Vec<FlatItem> = Vec::new();
     let mut started = false;
+    // Pending body-level trivia run: its tokens and how many newlines it spans.
+    let mut run: Vec<SyntaxElement> = Vec::new();
+    let mut run_newlines = 0usize;
     for element in body_elements {
         match element {
-            SyntaxElement::Node(p) if p.kind() == SyntaxKind::PARAGRAPH => {
-                if started {
-                    out.push(FlatItem::Blank);
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                if t.kind() == SyntaxKind::NEWLINE {
+                    run_newlines += 1;
                 }
+                run.push(element.clone());
+                continue;
+            }
+            other if is_lifted_comment(other, lifted) => continue,
+            _ => {}
+        }
+        if started {
+            if run_newlines >= 2 {
+                out.push(FlatItem::Blank);
+            } else {
+                out.extend(run.drain(..).map(FlatItem::El));
+            }
+        }
+        run.clear();
+        run_newlines = 0;
+        match element {
+            SyntaxElement::Node(p) if p.kind() == SyntaxKind::PARAGRAPH => {
                 out.extend(
                     p.children_with_tokens()
                         .filter(|e| !is_lifted_comment(e, lifted))
                         .map(FlatItem::El),
                 );
-                started = true;
             }
-            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
-            other if is_lifted_comment(other, lifted) => {}
-            other => {
-                out.push(FlatItem::El(other.clone()));
-                started = true;
-            }
+            other => out.push(FlatItem::El(other.clone())),
         }
+        started = true;
     }
     out
 }
@@ -2003,15 +2029,18 @@ fn is_item_command(el: &SyntaxElement) -> bool {
     })
 }
 
-/// Split a `\item` command node into its rendered marker string (the control word
-/// plus any leading optional `[label]`, the only argument an item marker takes),
-/// the *hang* width for continuation lines (the control word's rendered width plus
-/// one for the separating space — deliberately excluding the `[label]` so a wide
-/// `description` label does not deepen the body indent), and the trailing elements
-/// that are really body content — a `{…}` group the greedy parser over-attached,
-/// which belongs to the item body, not the marker.
-fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, usize, Vec<SyntaxElement>) {
+/// Split a `\item` command node into a [`ListItem`] (`blank_before` is the
+/// caller's to set): the rendered marker string (the control word plus any leading
+/// optional `[label]`, the only argument an item marker takes), the *hang* width
+/// for continuation lines (the control word's rendered width plus one for the
+/// separating space — deliberately excluding the `[label]` so a wide `description`
+/// label does not deepen the body indent), and the trailing elements that are
+/// really body content — a `{…}` group the greedy parser over-attached, which
+/// belongs to the item body, not the marker. A `DOC_COMMENT` bound leading into
+/// the `\item` yields the item's `doc_lines`, never marker or content.
+fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> ListItem {
     let node = el.as_node().expect("item command is a node");
+    let mut doc_lines: Vec<String> = Vec::new();
     let mut marker_parts: Vec<Ir> = Vec::new();
     let mut content: Vec<SyntaxElement> = Vec::new();
     let mut hang = 1; // the space separating the marker from the body
@@ -2022,6 +2051,14 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, usize, Ve
             continue;
         }
         match &child {
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::DOC_COMMENT => {
+                doc_lines.extend(
+                    n.children_with_tokens()
+                        .filter_map(|e| e.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::COMMENT)
+                        .map(|t| t.text().to_string()),
+                );
+            }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::CONTROL_WORD => {
                 hang += t.text().chars().count();
                 marker_parts.push(Ir::verbatim(t.text()));
@@ -2040,7 +2077,13 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> (String, usize, Ve
         }
     }
     let marker = Printer::new(FormatStyle::default()).print_flat(&Ir::concat(marker_parts));
-    (marker, hang, content)
+    ListItem {
+        doc_lines,
+        marker,
+        hang,
+        chunks: vec![content],
+        blank_before: false,
+    }
 }
 
 /// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks

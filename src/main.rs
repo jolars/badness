@@ -29,7 +29,7 @@ use badness::linter::{
 };
 use std::collections::HashMap;
 
-use badness::cli::{Cli, Command, MathWrapArg, WrapArg};
+use badness::cli::{Cli, Command, DebugChecksArg, DebugCommand, MathWrapArg, WrapArg};
 use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
@@ -105,26 +105,8 @@ fn main() -> ExitCode {
                     Err(code) => return code,
                 };
 
-            let mut style = FormatStyle::from(&config.format);
-            if let Some(w) = line_width {
-                style.line_width = w;
-            }
-            if let Some(w) = indent_width {
-                style.indent_width = w;
-            }
-            // Wrap precedence: `--wrap` > config `wrap` > file-kind default. The
-            // override is `None` only when neither is set, leaving each file on its
-            // kind's default wrap (`.sty`/`.cls`/`.dtx`/`.ins` → Preserve, `.tex` →
-            // Reflow), resolved per file at dispatch.
-            let wrap_override: Option<WrapMode> =
-                wrap.map(wrap_mode).or(config.format.wrap.map(Into::into));
-            // Math-wrap precedence: `--math-wrap` > config `math-wrap` > `auto`.
-            // The style already carries the config value (or `Auto`); the flag
-            // just overwrites it. `Auto` resolves against the effective wrap
-            // inside the formatter, so no per-file dispatch is needed here.
-            if let Some(mw) = math_wrap {
-                style.math_wrap = math_wrap_mode(mw);
-            }
+            let (style, wrap_override) =
+                resolve_style(&config, line_width, indent_width, wrap, math_wrap);
             // The `sentence`/`semantic` language profile, resolved once from
             // `[format] lang` + `[format.no-break-abbreviations]`; `scratch` owns the
             // merged entries for the whole format run. Ignored by other wrap modes.
@@ -196,7 +178,83 @@ fn main() -> ExitCode {
         Command::Parse { path } => run_parse(path.as_deref()),
         Command::Lsp => run_lsp(),
         Command::Init { force } => run_init(force),
+        Command::Debug { command } => match command {
+            DebugCommand::Format {
+                paths,
+                checks,
+                report,
+                dump_dir,
+                dump_passes,
+                exclude,
+                force_exclude,
+            } => {
+                let anchor = match cwd_anchor() {
+                    Ok(anchor) => anchor,
+                    Err(code) => return code,
+                };
+                let (config, config_source) =
+                    match resolve_config(config_arg.as_deref(), no_config, &anchor) {
+                        Ok(resolved) => resolved,
+                        Err(code) => return code,
+                    };
+                let exclude_filter =
+                    match build_exclude_filter(&config, &config_source, &anchor, &exclude) {
+                        Ok(filter) => filter.with_force_exclude(force_exclude),
+                        Err(code) => return code,
+                    };
+                let (style, wrap_override) = resolve_style(&config, None, None, None, None);
+                let mut abbrev_scratch = Vec::new();
+                let sentence = SentenceOptions::resolve(
+                    config.format.lang.as_deref(),
+                    &config.format.no_break_abbreviations,
+                    &mut abbrev_scratch,
+                );
+                run_debug_format(
+                    &paths,
+                    checks,
+                    report,
+                    dump_dir.as_deref(),
+                    dump_passes,
+                    style,
+                    wrap_override,
+                    sentence,
+                    &exclude_filter,
+                )
+            }
+        },
     }
+}
+
+/// Resolve the effective [`FormatStyle`] and wrap override from the config plus
+/// the CLI flags (each `None` when not given).
+///
+/// Wrap precedence: `--wrap` > config `wrap` > file-kind default. The override
+/// is `None` only when neither is set, leaving each file on its kind's default
+/// wrap (`.sty`/`.cls`/`.dtx`/`.ins` → Preserve, `.tex` → Reflow), resolved per
+/// file at dispatch. Math-wrap precedence: `--math-wrap` > config `math-wrap` >
+/// `auto`; the style already carries the config value (or `Auto`), the flag
+/// just overwrites it, and `Auto` resolves against the effective wrap inside
+/// the formatter, so no per-file dispatch is needed here.
+fn resolve_style(
+    config: &Config,
+    line_width: Option<usize>,
+    indent_width: Option<usize>,
+    wrap: Option<WrapArg>,
+    math_wrap: Option<MathWrapArg>,
+) -> (FormatStyle, Option<WrapMode>) {
+    let mut style = FormatStyle::from(&config.format);
+    if let Some(w) = line_width {
+        style.line_width = w;
+    }
+    if let Some(w) = indent_width {
+        style.indent_width = w;
+    }
+    let wrap_override: Option<WrapMode> =
+        wrap.map(wrap_mode).or(config.format.wrap.map(Into::into));
+    if let Some(mw) = math_wrap {
+        style.math_wrap = math_wrap_mode(mw);
+    }
+    (style, wrap_override)
 }
 
 /// The directory to anchor config discovery and exclude-pattern roots at: the
@@ -1068,5 +1126,488 @@ fn run_format_paths(
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+// --- `debug format`: per-file invariant checks for the CI smoke test --------
+//
+// The output strings below are load-bearing: the smoke-test workflow
+// (`.github/workflows/smoke-test.yml`) classifies failures by grepping logs and
+// reports for `idempotency`/`losslessness`/`format-error` and extracts
+// `Approx. diff start line: N` from the report. Keep them stable, and keep the
+// `format-error` wording free of the substrings `idempot` and `lossless` so a
+// formatter refusal is never misclassified as an invariant regression.
+
+/// One invariant (or the failure to even run it) checked per file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckKind {
+    Losslessness,
+    Idempotency,
+    FormatError,
+}
+
+impl CheckKind {
+    fn label(self) -> &'static str {
+        match self {
+            CheckKind::Losslessness => "losslessness",
+            CheckKind::Idempotency => "idempotency",
+            CheckKind::FormatError => "format-error",
+        }
+    }
+}
+
+/// A failed check: the two texts whose divergence is the finding. For
+/// `format-error`, `left` is the formatter's error message and `right` is
+/// empty (there is nothing to diff).
+struct DebugFailure {
+    kind: CheckKind,
+    left: String,
+    right: String,
+}
+
+/// Everything one file's check run produced: the pass texts (for `--dump-dir`)
+/// plus any failures.
+#[derive(Default)]
+struct DebugArtifacts {
+    /// `(input, parsed-reconstruction)` when the losslessness check ran.
+    losslessness: Option<(String, String)>,
+    /// `(input, once, twice)` when the idempotency check ran to completion.
+    idempotency: Option<(String, String, String)>,
+    failures: Vec<DebugFailure>,
+}
+
+/// The `--checks` value as it appears in output (report header and the
+/// all-passed line).
+fn checks_label(checks: DebugChecksArg) -> &'static str {
+    match checks {
+        DebugChecksArg::Idempotency => "idempotency",
+        DebugChecksArg::Losslessness => "losslessness",
+        DebugChecksArg::All => "all",
+    }
+}
+
+/// Map every character outside `[A-Za-z0-9._-]` to `_`, matching the smoke-test
+/// workflow's `sed 's/[^[:alnum:]._-]/_/g'` so it can predict artifact names
+/// from a repo-relative path.
+fn sanitize_path_for_filename(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// 1-based line number of the first difference between two texts. When the
+/// visible lines all match (the difference is only in trailing newline
+/// material) this points just past the common lines; identical texts return 1,
+/// which never occurs on a failure.
+fn first_diff_line(left: &str, right: &str) -> usize {
+    let mut left_lines = left.lines();
+    let mut right_lines = right.lines();
+    let mut line = 1;
+    loop {
+        match (left_lines.next(), right_lines.next()) {
+            (Some(a), Some(b)) if a == b => line += 1,
+            _ => return line,
+        }
+    }
+}
+
+/// Render a minimal diff body: a few common context lines, then the two sides'
+/// remaining lines as `-`/`+` runs starting at the first difference, capped so
+/// a whole-file divergence stays readable. The smoke-test workflow never
+/// parses this block (only `Approx. diff start line`), so first-mismatch
+/// granularity is enough — no diff dependency needed.
+fn render_window_diff(left: &str, right: &str, out: &mut String) {
+    const CONTEXT: usize = 3;
+    const MAX_SIDE: usize = 40;
+    let start = first_diff_line(left, right) - 1;
+    let context_start = start.saturating_sub(CONTEXT);
+    for line in left.lines().skip(context_start).take(start - context_start) {
+        out.push(' ');
+        out.push_str(line);
+        out.push('\n');
+    }
+    for (side, text) in [('-', left), ('+', right)] {
+        let mut lines = text.lines().skip(start);
+        for line in lines.by_ref().take(MAX_SIDE) {
+            out.push(side);
+            out.push_str(line);
+            out.push('\n');
+        }
+        if lines.next().is_some() {
+            out.push(side);
+            out.push_str(" [truncated]\n");
+        }
+    }
+}
+
+/// Build the `--report` Markdown. Contract with the smoke-test workflow: the
+/// `### k. \`file\` (kind)` headings carry the parenthesized failure label, and
+/// each diffable failure has an `Approx. diff start line: N` bullet.
+fn build_debug_report(
+    checks: DebugChecksArg,
+    files_checked: usize,
+    failures: &[(String, DebugFailure)],
+) -> String {
+    let mut out = String::new();
+    out.push_str("# Debug-format regression report\n\n");
+    out.push_str(&format!(
+        "- Checks: `{}`\n- Files checked: {files_checked}\n- Failures: {}\n\n",
+        checks_label(checks),
+        failures.len()
+    ));
+    if failures.is_empty() {
+        out.push_str("All checks passed.\n");
+        return out;
+    }
+    out.push_str("## Failures\n\n");
+    for (idx, (file, failure)) in failures.iter().enumerate() {
+        out.push_str(&format!(
+            "### {}. `{}` ({})\n\n",
+            idx + 1,
+            file,
+            failure.kind.label()
+        ));
+        if failure.kind == CheckKind::FormatError {
+            out.push_str(&format!("- Error: {}\n\n", failure.left));
+            continue;
+        }
+        out.push_str(&format!(
+            "- Approx. diff start line: {}\n\n",
+            first_diff_line(&failure.left, &failure.right)
+        ));
+        out.push_str("```diff\n");
+        render_window_diff(&failure.left, &failure.right, &mut out);
+        out.push_str("```\n\n");
+    }
+    out
+}
+
+/// Write one file's pass texts and failure sides into `dump_dir`. Pass texts
+/// are written when their check failed, or always under `--dump-passes`. The
+/// `{stem}.idempotency.{input,once,twice}.txt` names are the contract the
+/// smoke-test workflow's artifact lookup depends on.
+fn write_debug_artifacts(
+    dump_dir: &Path,
+    stem: &str,
+    artifacts: &DebugArtifacts,
+    dump_passes: bool,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dump_dir)?;
+    let failed = |kind: CheckKind| artifacts.failures.iter().any(|f| f.kind == kind);
+
+    if let Some((input, parsed)) = artifacts.losslessness.as_ref()
+        && (dump_passes || failed(CheckKind::Losslessness))
+    {
+        std::fs::write(
+            dump_dir.join(format!("{stem}.losslessness.input.txt")),
+            input,
+        )?;
+        std::fs::write(
+            dump_dir.join(format!("{stem}.losslessness.parsed.txt")),
+            parsed,
+        )?;
+    }
+
+    if let Some((input, once, twice)) = artifacts.idempotency.as_ref()
+        && (dump_passes || failed(CheckKind::Idempotency))
+    {
+        std::fs::write(
+            dump_dir.join(format!("{stem}.idempotency.input.txt")),
+            input,
+        )?;
+        std::fs::write(dump_dir.join(format!("{stem}.idempotency.once.txt")), once)?;
+        std::fs::write(
+            dump_dir.join(format!("{stem}.idempotency.twice.txt")),
+            twice,
+        )?;
+    }
+
+    for failure in &artifacts.failures {
+        let kind = failure.kind.label();
+        std::fs::write(
+            dump_dir.join(format!("{stem}.{kind}.left.txt")),
+            &failure.left,
+        )?;
+        std::fs::write(
+            dump_dir.join(format!("{stem}.{kind}.right.txt")),
+            &failure.right,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Run the selected checks over one file's content.
+///
+/// Losslessness parses under the file's own lex config (like
+/// [`debug_assert_fixes_preserved`]) so `.sty`/`.dtx` are checked under their
+/// real catcode regime, and compares the CST's text to the input.
+///
+/// Idempotency formats twice through the same pipeline `badness format` uses.
+/// A first-pass [`FormatError`] is a `format-error` finding (the invariant
+/// could not be evaluated); a second-pass error on the first pass's own output
+/// *is* a fixed-point violation and is reported as `idempotency`.
+fn run_debug_checks_for_file(
+    path: &Path,
+    kind: FileKind,
+    content: &str,
+    style: FormatStyle,
+    wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
+    checks: DebugChecksArg,
+) -> DebugArtifacts {
+    let mut artifacts = DebugArtifacts::default();
+
+    if matches!(checks, DebugChecksArg::Losslessness | DebugChecksArg::All) {
+        let reconstructed = match kind {
+            FileKind::Bib => badness::bib::parse(content).syntax().to_string(),
+            _ => parse_with_flavor(content, kind.lex_config())
+                .syntax()
+                .to_string(),
+        };
+        artifacts.losslessness = Some((content.to_string(), reconstructed.clone()));
+        if reconstructed != content {
+            artifacts.failures.push(DebugFailure {
+                kind: CheckKind::Losslessness,
+                left: content.to_string(),
+                right: reconstructed,
+            });
+        }
+    }
+
+    if matches!(checks, DebugChecksArg::Idempotency | DebugChecksArg::All) {
+        let mut style = style;
+        style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+        let fmt = |input: &str| match kind {
+            FileKind::Bib => {
+                badness::bib::format_with_style(input, style).map_err(|e| e.to_string())
+            }
+            _ => {
+                format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
+                    .map_err(|e| e.to_string())
+            }
+        };
+        match fmt(content) {
+            Err(msg) => artifacts.failures.push(DebugFailure {
+                kind: CheckKind::FormatError,
+                left: msg,
+                right: String::new(),
+            }),
+            Ok(once) => match fmt(&once) {
+                Ok(twice) => {
+                    artifacts.idempotency =
+                        Some((content.to_string(), once.clone(), twice.clone()));
+                    if once != twice {
+                        artifacts.failures.push(DebugFailure {
+                            kind: CheckKind::Idempotency,
+                            left: once,
+                            right: twice,
+                        });
+                    }
+                }
+                Err(msg) => {
+                    artifacts.idempotency =
+                        Some((content.to_string(), once.clone(), String::new()));
+                    artifacts.failures.push(DebugFailure {
+                        kind: CheckKind::Idempotency,
+                        left: once,
+                        right: format!("second pass failed to format: {msg}"),
+                    });
+                }
+            },
+        }
+    }
+
+    artifacts
+}
+
+/// `badness debug format`: check invariants over the discovered files, writing
+/// nothing back. Exit 0 when everything passes, 1 on any failure or unreadable
+/// file (config and discovery errors keep their usual codes upstream).
+#[allow(clippy::too_many_arguments)]
+fn run_debug_format(
+    paths: &[PathBuf],
+    checks: DebugChecksArg,
+    report: bool,
+    dump_dir: Option<&Path>,
+    dump_passes: bool,
+    style: FormatStyle,
+    wrap_override: Option<WrapMode>,
+    sentence: SentenceOptions<'_>,
+    exclude: &ExcludeFilter,
+) -> ExitCode {
+    if paths.is_empty() {
+        eprintln!("badness: debug format requires at least one file or directory");
+        return ExitCode::from(2);
+    }
+    let files = match collect_lint_files(paths, exclude) {
+        Ok(files) => files,
+        Err(err) => {
+            report_discovery_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
+    if files.is_empty() {
+        if exclude.force() {
+            return ExitCode::SUCCESS;
+        }
+        eprintln!(
+            "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // Checks are pure functions of the file content, so they parallelize like
+    // `run_format_paths`; the order-preserving collect keeps output and report
+    // numbering deterministic.
+    let outcomes: Vec<(String, Result<DebugArtifacts, String>)> = files
+        .par_iter()
+        .map(|(path, kind)| {
+            let label = path.display().to_string();
+            let outcome = match std::fs::read_to_string(path) {
+                Ok(content) => Ok(run_debug_checks_for_file(
+                    path,
+                    *kind,
+                    &content,
+                    style,
+                    wrap_override,
+                    sentence,
+                    checks,
+                )),
+                Err(err) => Err(format!("badness: cannot read {label}: {err}")),
+            };
+            (label, outcome)
+        })
+        .collect();
+
+    let mut files_checked = 0usize;
+    let mut io_failed = false;
+    let mut collected: Vec<(String, DebugFailure)> = Vec::new();
+    for (label, outcome) in outcomes {
+        match outcome {
+            Err(msg) => {
+                eprintln!("{msg}");
+                io_failed = true;
+            }
+            Ok(artifacts) => {
+                files_checked += 1;
+                if let Some(dir) = dump_dir {
+                    let stem = sanitize_path_for_filename(&label);
+                    if let Err(err) = write_debug_artifacts(dir, &stem, &artifacts, dump_passes) {
+                        eprintln!(
+                            "badness: cannot write debug artifacts to {}: {err}",
+                            dir.display()
+                        );
+                        io_failed = true;
+                    }
+                }
+                for failure in artifacts.failures {
+                    if !report {
+                        eprintln!("Debug check failed ({}) in {label}", failure.kind.label());
+                        if failure.kind == CheckKind::FormatError {
+                            eprintln!("  {}", failure.left);
+                        }
+                    }
+                    collected.push((label.clone(), failure));
+                }
+            }
+        }
+    }
+
+    if report {
+        print!("{}", build_debug_report(checks, files_checked, &collected));
+    } else if collected.is_empty() && !io_failed {
+        println!(
+            "All checks passed (checks: {}, files: {files_checked})",
+            checks_label(checks)
+        );
+    }
+    if collected.is_empty() && !io_failed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_matches_the_workflow_sed_class() {
+        assert_eq!(
+            sanitize_path_for_filename("sub dir/a b.tex"),
+            "sub_dir_a_b.tex"
+        );
+        assert_eq!(sanitize_path_for_filename("ok-1.2_x.bib"), "ok-1.2_x.bib");
+        // Non-ASCII maps per *character* (`å`, `/`, `ü` → three `_`). GNU sed in
+        // a UTF-8 locale may instead keep non-ASCII alnums; the workflow's
+        // artifact lookups are existence-guarded, so that divergence only
+        // drops the artifact link for such paths.
+        assert_eq!(sanitize_path_for_filename("å/ü.tex"), "___.tex");
+    }
+
+    #[test]
+    fn first_diff_line_finds_the_first_mismatch() {
+        assert_eq!(first_diff_line("a\nb\nc\n", "a\nB\nc\n"), 2);
+        assert_eq!(first_diff_line("a\n", "a\nb\n"), 2);
+        assert_eq!(first_diff_line("x", "y"), 1);
+        // Difference past the last visible line (trailing newline material).
+        assert_eq!(first_diff_line("a\nb", "a\nb\n\n"), 3);
+    }
+
+    #[test]
+    fn report_carries_the_ci_contract_strings() {
+        let failures = vec![(
+            "sub/file.tex".to_string(),
+            DebugFailure {
+                kind: CheckKind::Idempotency,
+                left: "a\nb\nc\n".to_string(),
+                right: "a\nB\nc\n".to_string(),
+            },
+        )];
+        let report = build_debug_report(DebugChecksArg::All, 3, &failures);
+        assert!(report.contains("# Debug-format regression report"));
+        assert!(report.contains("- Files checked: 3"));
+        assert!(report.contains("### 1. `sub/file.tex` (idempotency)"));
+        assert!(report.contains("- Approx. diff start line: 2"));
+        assert!(report.contains("```diff\n a\n-b\n-c\n+B\n+c\n```"));
+    }
+
+    #[test]
+    fn report_on_all_passing_files_has_no_failure_sections() {
+        let report = build_debug_report(DebugChecksArg::All, 2, &[]);
+        assert!(report.contains("- Failures: 0"));
+        assert!(report.contains("All checks passed."));
+        assert!(!report.contains("## Failures"));
+    }
+
+    #[test]
+    fn format_error_report_entry_avoids_the_invariant_substrings() {
+        let failures = vec![(
+            "bad.tex".to_string(),
+            DebugFailure {
+                kind: CheckKind::FormatError,
+                left:
+                    "input contains 1 parser diagnostic(s); formatter only supports parseable input"
+                        .to_string(),
+                right: String::new(),
+            },
+        )];
+        let report = build_debug_report(DebugChecksArg::Idempotency, 1, &failures);
+        assert!(report.contains("### 1. `bad.tex` (format-error)"));
+        let lower = report.to_lowercase();
+        // `- Checks: `idempotency`` is the run configuration, not a failure
+        // label; strip the header before asserting the classification
+        // guarantee on the failure section.
+        let failure_section = &lower[lower.find("## failures").unwrap()..];
+        assert!(!failure_section.contains("idempot"));
+        assert!(!failure_section.contains("lossless"));
     }
 }

@@ -382,6 +382,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("align_comment_mid_row_fallback", WrapMode::Preserve, 80),
     ("tabular_hline", WrapMode::Preserve, 80),
     ("tabular_booktabs", WrapMode::Preserve, 80),
+    // A comment-only line directly above a rule command binds into it as a
+    // `DOC_COMMENT` (issue #49): the passthrough then spans physical lines,
+    // each of which keeps the grid indent.
+    ("tabular_rule_doc_comment", WrapMode::Preserve, 80),
     // A rule command (`\toprule`) on its own line whose next line opens with a
     // braced cell (`{Scenario}`): the greedy parser glues the `{…}` onto the rule
     // as a bogus argument, but arity refinement peels it back so the rule stays a

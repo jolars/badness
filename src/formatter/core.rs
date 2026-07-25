@@ -2909,7 +2909,17 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
 
     let lines = items.iter().map(|item| {
         let row = match item {
-            GridItem::Passthrough(text) => return Ir::text(text.clone()),
+            GridItem::Passthrough(text) => {
+                // A passthrough spans physical lines when a comment-only line
+                // binds into a rule command as its `DOC_COMMENT` (issue #49):
+                // flat-printing keeps the doc comment's break as a raw newline,
+                // which a single `Ir::text` would emit without re-applying the
+                // grid indent. Split so every physical line is indented.
+                return Ir::join(
+                    Ir::hard_line(),
+                    text.lines().map(|line| Ir::text(line.trim().to_string())),
+                );
+            }
             GridItem::Row(row) => row,
         };
         let mut line = String::new();

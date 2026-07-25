@@ -151,6 +151,16 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // idiom) rides the `\begin` header instead of dropping to its own indented
     // line; a `%` the author put on its own line is left there.
     ("environment_begin_trailing_comment", WrapMode::Reflow, 80),
+    // The same `\begin`-line `%` lift for every *specialized* environment layout —
+    // the alignment grid (`tabular`), math formula (`equation`), math grid
+    // (`align`), list (`itemize`), and display math (`\[`), plus the empty-body
+    // shapes — none of which may relocate the comment onto its own body line
+    // (issue #38, second report).
+    (
+        "begin_trailing_comment_special_layouts",
+        WrapMode::Reflow,
+        80,
+    ),
     // A `%` run on its *own* line(s) immediately before a command or environment
     // binds *leading* into that construct (the parser's leading comment-bind) and
     // is rendered on its own line above `\section` / `\begin`, at the construct's

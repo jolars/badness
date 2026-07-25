@@ -1420,11 +1420,29 @@ fn lower_environment_leading(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
 }
 
-fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+/// The decomposition every environment lowering starts from: the elements before
+/// `\begin` (lowered), the lowered `\begin` header, the raw body elements, and
+/// the lowered `\end`. A `%` that trails the `\begin{…}` header on the same
+/// source line belongs to that line (the space-suppression idiom), not the body,
+/// so it is lifted onto `begin` *here* — once, for every layout path — rather
+/// than in each lowering, where a path that forgot the lift would relocate the
+/// comment onto its own body line and change its meaning (issue #38). The lifted
+/// token still sits (nested) in `body`; consumers drop it by identity — the
+/// stream path via [`lower_body_dropping_leading_comment`], the flattening paths
+/// via [`is_lifted_comment`].
+struct EnvParts {
+    leading: Ir,
+    begin: Ir,
+    body: Vec<SyntaxElement>,
+    end: Ir,
+    lifted: Option<SyntaxToken>,
+}
+
+fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
     let leading = lower_environment_leading(node, cx);
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
-    let mut body_elements: Vec<SyntaxElement> = Vec::new();
+    let mut body: Vec<SyntaxElement> = Vec::new();
     let mut seen_begin = false;
     for element in node.children_with_tokens() {
         match &element {
@@ -1436,27 +1454,48 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 end = lower_node(child, cx);
             }
             _ if !seen_begin => {}
-            _ => body_elements.push(element),
+            _ => body.push(element),
         }
     }
+    let lifted = leading_inline_comment(&body);
+    if let Some(comment) = &lifted {
+        begin = Ir::concat([begin, Ir::verbatim(comment.text())]);
+    }
+    EnvParts {
+        leading,
+        begin,
+        body,
+        end,
+        lifted,
+    }
+}
 
-    // A `%` that trails the `\begin{…}` header on the same source line belongs to
-    // that line (the space-suppression idiom), not the indented body. Lift it onto
-    // the `\begin` line and drop it from the body so it is not emitted twice. A
-    // comment the author placed on its own line is left in the body untouched.
-    let (begin, body) = match leading_inline_comment(&body_elements) {
-        Some(comment) => {
-            let begin = Ir::concat([begin, Ir::verbatim(comment.text())]);
-            (
-                begin,
-                lower_body_dropping_leading_comment(body_elements, cx),
-            )
-        }
-        None => (
-            begin,
-            Ir::concat(lower_element_stream(body_elements.into_iter(), cx)),
-        ),
-    };
+/// Whether `el` is the [`EnvParts::lifted`] `\begin`-line comment, compared by
+/// token identity so the flattening body consumers (list, alignment grid, math
+/// formula) drop exactly the token that was lifted and nothing else.
+fn is_lifted_comment(el: &SyntaxElement, lifted: Option<&SyntaxToken>) -> bool {
+    lifted.is_some_and(|l| el.as_token() == Some(l))
+}
+
+/// Lower [`EnvParts::body`] through the generic element stream, dropping the
+/// lifted `\begin`-line comment when one was taken.
+fn lower_env_body(body: Vec<SyntaxElement>, lifted: bool, cx: LowerCtx<'_>) -> Ir {
+    if lifted {
+        lower_body_dropping_leading_comment(body, cx)
+    } else {
+        Ir::concat(lower_element_stream(body.into_iter(), cx))
+    }
+}
+
+fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let EnvParts {
+        leading,
+        begin,
+        body,
+        end,
+        lifted,
+    } = split_environment(node, cx);
+    let body = lower_env_body(body, lifted.is_some(), cx);
     // Trim the body's own edge breaks (the indenter re-supplies them), but if the
     // author left a blank line touching `\begin`/`\end`, preserve it as a single
     // blank line — LaTeX blank lines are deliberate visual spacing, so we keep one
@@ -1551,45 +1590,22 @@ fn split_closing_frame(body: &mut Vec<SyntaxElement>) -> Option<Vec<SyntaxElemen
 /// prose-layer environment it is margin lines, each pinned to column 0 by
 /// [`Ir::column_zero`].
 fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let leading = lower_environment_leading(node, cx);
-    let mut begin = Ir::Nil;
-    let mut end = Ir::Nil;
-    let mut body_elements: Vec<SyntaxElement> = Vec::new();
-    let mut seen_begin = false;
-    for element in node.children_with_tokens() {
-        match &element {
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                seen_begin = true;
-                begin = lower_begin(child, cx);
-            }
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
-                end = lower_node(child, cx);
-            }
-            _ if !seen_begin => {}
-            _ => body_elements.push(element),
-        }
-    }
+    let EnvParts {
+        leading,
+        begin,
+        mut body,
+        end,
+        lifted,
+    } = split_environment(node, cx);
 
     // Pull the `%␣␣␣␣` that frames `\end` onto the `\end` line; what remains is the
     // real body.
-    let frame = split_closing_frame(&mut body_elements);
+    let frame = split_closing_frame(&mut body);
     let frame_ir = frame
         .map(|f| Ir::concat(lower_element_stream(f.into_iter(), cx)))
         .filter(|ir| !matches!(ir, Ir::Nil));
 
-    // A `%` trailing the `\begin{…}` header on the same line is the space-suppression
-    // idiom: lift it onto the `\begin` line, as [`lower_environment`] does, so it is
-    // not relocated to its own line.
-    let (begin, body) = match leading_inline_comment(&body_elements) {
-        Some(comment) => (
-            Ir::concat([begin, Ir::verbatim(comment.text())]),
-            lower_body_dropping_leading_comment(body_elements, cx),
-        ),
-        None => (
-            begin,
-            Ir::concat(lower_element_stream(body_elements.into_iter(), cx)),
-        ),
-    };
+    let body = lower_env_body(body, lifted.is_some(), cx);
     let (lead_blank, body) = peel_leading_break(body);
     let (trail_blank, body) = peel_trailing_break(body);
     let lead = if lead_blank {
@@ -1822,26 +1838,15 @@ enum FlatItem {
 /// plain [`lower_environment`] when the body has no `\item` to anchor on, so an
 /// unusual shape degrades to today's indented body rather than misformatting.
 fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let leading = lower_environment_leading(node, cx);
-    let mut begin = Ir::Nil;
-    let mut end = Ir::Nil;
-    let mut body_elements: Vec<SyntaxElement> = Vec::new();
-    let mut seen_begin = false;
-    for element in node.children_with_tokens() {
-        match &element {
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                seen_begin = true;
-                begin = lower_begin(child, cx);
-            }
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
-                end = lower_node(child, cx);
-            }
-            _ if !seen_begin => {}
-            _ => body_elements.push(element),
-        }
-    }
+    let EnvParts {
+        leading,
+        begin,
+        body,
+        end,
+        lifted,
+    } = split_environment(node, cx);
 
-    let Some(body) = lower_list_body(&body_elements, cx) else {
+    let Some(body) = lower_list_body(&body, cx, lifted.as_ref()) else {
         return lower_environment(node, cx);
     };
     Ir::concat([
@@ -1856,8 +1861,12 @@ fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// Build the body IR of a list environment: split into items at each top-level
 /// `\item` and render each as `\item` + a hanging-indented reflow of its content.
 /// Returns `None` (caller falls back) when the body carries no `\item`.
-fn lower_list_body(body_elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Ir> {
-    let flat = flatten_list_body(body_elements);
+fn lower_list_body(
+    body_elements: &[SyntaxElement],
+    cx: LowerCtx<'_>,
+    lifted: Option<&SyntaxToken>,
+) -> Option<Ir> {
+    let flat = flatten_list_body(body_elements, lifted);
 
     // Content before the first `\item` (usually just trivia); kept as its own
     // leading segment so nothing is dropped.
@@ -1954,7 +1963,10 @@ fn reflow_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
 /// paragraph boundary (a blank line) as a [`FlatItem::Blank`]. Body-level trivia
 /// between paragraphs is dropped — the boundary it represents is already carried
 /// by the `Blank` inserted before each non-first paragraph.
-fn flatten_list_body(body_elements: &[SyntaxElement]) -> Vec<FlatItem> {
+fn flatten_list_body(
+    body_elements: &[SyntaxElement],
+    lifted: Option<&SyntaxToken>,
+) -> Vec<FlatItem> {
     let mut out: Vec<FlatItem> = Vec::new();
     let mut started = false;
     for element in body_elements {
@@ -1963,10 +1975,15 @@ fn flatten_list_body(body_elements: &[SyntaxElement]) -> Vec<FlatItem> {
                 if started {
                     out.push(FlatItem::Blank);
                 }
-                out.extend(p.children_with_tokens().map(FlatItem::El));
+                out.extend(
+                    p.children_with_tokens()
+                        .filter(|e| !is_lifted_comment(e, lifted))
+                        .map(FlatItem::El),
+                );
                 started = true;
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            other if is_lifted_comment(other, lifted) => {}
             other => {
                 out.push(FlatItem::El(other.clone()));
                 started = true;
@@ -2108,26 +2125,15 @@ enum GridItem {
 /// fallback is always available, so an unhandled shape degrades to today's plain
 /// indented body, never a panic or corruption.
 fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let leading = lower_environment_leading(node, cx);
-    let mut begin = Ir::Nil;
-    let mut end = Ir::Nil;
-    let mut body_elements: Vec<SyntaxElement> = Vec::new();
-    let mut seen_begin = false;
-    for element in node.children_with_tokens() {
-        match &element {
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                seen_begin = true;
-                begin = lower_begin(child, cx);
-            }
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
-                end = lower_node(child, cx);
-            }
-            _ if !seen_begin => {}
-            _ => body_elements.push(element),
-        }
-    }
+    let EnvParts {
+        leading,
+        begin,
+        body,
+        end,
+        lifted,
+    } = split_environment(node, cx);
 
-    let Some(items) = build_alignment_grid(&body_elements, cx, false) else {
+    let Some(items) = build_alignment_grid(&body, cx, false, lifted.as_ref()) else {
         return lower_environment(node, cx);
     };
     if !items.iter().any(|item| matches!(item, GridItem::Row(_))) {
@@ -2164,24 +2170,13 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// from the parser's built-in one — it falls back to [`lower_environment`] rather than
 /// mislaying the body.
 fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let leading = lower_environment_leading(node, cx);
-    let mut begin = Ir::Nil;
-    let mut end = Ir::Nil;
-    let mut body_elements: Vec<SyntaxElement> = Vec::new();
-    let mut seen_begin = false;
-    for element in node.children_with_tokens() {
-        match &element {
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
-                seen_begin = true;
-                begin = lower_begin(child, cx);
-            }
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
-                end = lower_node(child, cx);
-            }
-            _ if !seen_begin => {}
-            _ => body_elements.push(element),
-        }
-    }
+    let EnvParts {
+        leading,
+        begin,
+        body: body_elements,
+        end,
+        lifted,
+    } = split_environment(node, cx);
 
     let Some(math_node) = body_elements
         .iter()
@@ -2200,7 +2195,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .any(|e| matches!(e.kind(), SyntaxKind::AMPERSAND | SyntaxKind::LINE_BREAK));
 
     let body = if is_grid {
-        match build_alignment_grid(&body_elements, cx, true) {
+        match build_alignment_grid(&body_elements, cx, true, lifted.as_ref()) {
             Some(items) if items.iter().any(|item| matches!(item, GridItem::Row(_))) => {
                 let aligns = column_alignments(node, cx).unwrap_or_default();
                 render_alignment_rows(&items, &aligns)
@@ -2213,7 +2208,22 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             _ => return lower_environment(node, cx),
         }
     } else {
-        trim_trailing_break(lower_display_formula(math_node, cx))
+        // Drop the lifted `\begin`-line comment (the `MATH` node's first token)
+        // before the formula lowering, which would otherwise re-emit it.
+        let elements: Vec<SyntaxElement> = math_node
+            .children_with_tokens()
+            .filter(|e| !is_lifted_comment(e, lifted.as_ref()))
+            .collect();
+        if elements.iter().all(|e| {
+            e.as_token()
+                .is_some_and(|t| is_collapsible_trivia(t.kind()))
+        }) {
+            // Empty body (possibly only after the lift): `\begin` and `\end` on
+            // adjacent lines, as [`lower_environment`]'s empty-body branch does,
+            // rather than framing an empty indented line.
+            return Ir::concat([leading, begin, Ir::hard_line(), end]);
+        }
+        trim_trailing_break(lower_display_formula_elements(&elements, cx))
     };
 
     Ir::concat([
@@ -2263,8 +2273,13 @@ fn build_alignment_grid(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
     math: bool,
+    lifted: Option<&SyntaxToken>,
 ) -> Option<Vec<GridItem>> {
-    let inline = flatten_alignment_body(body_elements, cx, math)?;
+    let mut inline = flatten_alignment_body(body_elements, cx, math)?;
+    // The `\begin`-line trailing comment was lifted onto the header
+    // ([`split_environment`]); drop it here so it is not re-emitted as a
+    // passthrough line of its own.
+    inline.retain(|e| !is_lifted_comment(e, lifted));
     let printer = Printer::new(FormatStyle::default());
 
     /// Render the accumulated cell elements flat and trimmed, pushing the result
@@ -3398,11 +3413,28 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let mut body = Ir::Nil;
     let mut body_empty = true;
     let mut seen_body = false;
+    let mut open_has_comment = false;
     for element in node.children_with_tokens() {
         match element {
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
-                body_empty = math_body_is_empty(&n);
-                body = trim_trailing_break(lower_display_formula(&n, cx));
+                // A `%` trailing the opening delimiter on the same source line
+                // rides that line, exactly as an environment's `\begin`-line
+                // comment does ([`split_environment`]), and is dropped from the
+                // body by identity.
+                let lifted = leading_inline_comment(&[SyntaxElement::Node(n.clone())]);
+                if let Some(comment) = &lifted {
+                    open.push_str(comment.text());
+                    open_has_comment = true;
+                }
+                let elements: Vec<SyntaxElement> = n
+                    .children_with_tokens()
+                    .filter(|e| !is_lifted_comment(e, lifted.as_ref()))
+                    .collect();
+                body_empty = elements.iter().all(|e| {
+                    e.as_token()
+                        .is_some_and(|t| is_collapsible_trivia(t.kind()))
+                });
+                body = trim_trailing_break(lower_display_formula_elements(&elements, cx));
                 seen_body = true;
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
@@ -3418,7 +3450,13 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
 
     if body_empty {
-        Ir::concat([Ir::verbatim(open), Ir::verbatim(close)])
+        if open_has_comment {
+            // The lifted comment runs to end of line, so the closing delimiter
+            // must not collapse onto it (it would be commented out).
+            Ir::concat([Ir::verbatim(open), Ir::hard_line(), Ir::verbatim(close)])
+        } else {
+            Ir::concat([Ir::verbatim(open), Ir::verbatim(close)])
+        }
     } else {
         Ir::concat([
             Ir::verbatim(open),
@@ -3438,24 +3476,19 @@ fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     lower_math_seq(node.children_with_tokens(), cx, false)
 }
 
-/// [`lower_math_body`], but keeping the author's line breaks
-/// ([`MathWrap::Preserve`]): a trivia run spanning a newline becomes a hard
-/// break; everything within each authored line is still normalized.
-fn lower_math_body_preserved(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    lower_math_seq(node.children_with_tokens(), cx, true)
-}
-
 /// Lower a single-formula display-math body per the resolved [`MathWrap`]
 /// policy (`LowerCtx::math_wrap`): `Break` routes through the amsmath-style
 /// breaker, `SingleLine` through the plain collapsing body (overflowing if too
 /// long, like inline math), and `Preserve` keeps authored newlines as hard
 /// breaks. `Auto` is resolved away in [`format_root`] and cannot reach here;
-/// map it to the breaker defensively rather than panic.
-fn lower_display_formula(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+/// map it to the breaker defensively rather than panic. Takes the `MATH` node's
+/// elements rather than the node itself so a caller can drop the lifted
+/// opener-line comment ([`split_environment`]) before the lowering.
+fn lower_display_formula_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     match cx.math_wrap {
-        MathWrap::Auto | MathWrap::Break => lower_display_math_body(node, cx),
-        MathWrap::SingleLine => lower_math_body(node, cx),
-        MathWrap::Preserve => lower_math_body_preserved(node, cx),
+        MathWrap::Auto | MathWrap::Break => lower_display_math_body(elements, cx),
+        MathWrap::SingleLine => lower_math_seq(elements.iter().cloned(), cx, false),
+        MathWrap::Preserve => lower_math_seq(elements.iter().cloned(), cx, true),
     }
 }
 
@@ -3717,13 +3750,13 @@ fn math_atom_role(el: &SyntaxElement, prev: MathRole) -> MathRole {
 /// signalling the caller to take the plain non-breaking path — when the body
 /// holds a comment (a comment forces its own break, which does not compose with
 /// the operator-break layout) or has fewer than two atoms (nothing to break).
-fn collect_math_pieces(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<MathPiece>> {
+fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<MathPiece>> {
     let mut pieces: Vec<MathPiece> = Vec::new();
     // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
     // and glues to its operand rather than becoming a break point — e.g. `-x`.
     let mut prev_role = MathRole::Relation;
     let mut pending_space = false;
-    let mut iter = node.children_with_tokens().peekable();
+    let mut iter = elements.iter().cloned().peekable();
     while let Some(el) = iter.next() {
         match el {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
@@ -3759,9 +3792,9 @@ fn collect_math_pieces(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<MathPi
 /// relation stay flat on the opening line. The whole body is one [`Ir::group`], so
 /// it stays on a single line whenever it fits — degrading to [`lower_math_body`]
 /// otherwise.
-fn lower_display_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let Some(pieces) = collect_math_pieces(node, cx) else {
-        return lower_math_body(node, cx);
+fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
+    let Some(pieces) = collect_math_pieces(elements, cx) else {
+        return lower_math_seq(elements.iter().cloned(), cx, false);
     };
 
     let flat_width = |ir: &Ir| {

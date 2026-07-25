@@ -66,6 +66,39 @@ The language server runs over stdio (`badness lsp`); see the [editor setup
 guide](https://badness.dev/guide/editor-setup.html) for Neovim and VS Code
 wiring.
 
+## Pre-commit hook
+
+[badness-pre-commit](https://github.com/jolars/badness-pre-commit) provides
+[pre-commit](https://pre-commit.com) hooks for linting and formatting. It
+installs a prebuilt binary wheel from PyPI, so no Rust toolchain or LaTeX
+distribution is required:
+
+```yaml
+repos:
+  - repo: https://github.com/jolars/badness-pre-commit
+    # badness version
+    rev: v0.11.0
+    hooks:
+      # Lint .tex, .sty, .cls, .dtx, .ins, and .bib files
+      - id: badness-lint
+      # Format the same files in place
+      - id: badness-format
+```
+
+## GitHub Actions
+
+[badness-action](https://github.com/jolars/badness-action) installs badness and
+runs format and lint checks in CI:
+
+```yaml
+jobs:
+  badness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jolars/badness-action@v1
+```
+
 ## Documentation
 
 Full documentation lives at **<https://badness.dev/>** (built with

@@ -75,6 +75,13 @@ jobs:
             repo_sha="$(git -C "$repo_dir" rev-parse HEAD)"
 
             while IFS= read -r -d '' rel_file; do
+              # Skip dotfile basenames like a bare `.tex`: git's `*.tex` glob
+              # matches them, but badness's file discovery rejects a stemless
+              # dotfile, which would bucket as a bogus `unknown` failure
+              # (issue #59).
+              case "$(basename "$rel_file")" in
+                .*) continue ;;
+              esac
               file_key="$(printf '%s' "${repo}:${rel_file}" | sha256sum | awk '{print $1}')"
               log_path="$LOGS_DIR/$file_key.log"
               report_path="$LOGS_DIR/$file_key.report.md"

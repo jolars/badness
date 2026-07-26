@@ -312,6 +312,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // (`1e-5`) is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
     ("math_strip_single_token_braces", WrapMode::Preserve, 80),
+    // A binary/relation operator atom directly after the braced script does not
+    // block the strip: the sequencer spaces it (`a_{p}/b` -> `a_p / b`), so
+    // nothing glues and the strip already lands on the first pass (issue #56's
+    // idempotency drift).
+    ("math_strip_braces_before_operator", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),
     // Display math (`\[…\]`, `$$…$$`) is a block: the delimiters land on their own

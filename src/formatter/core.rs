@@ -4327,9 +4327,19 @@ fn is_lone_control_word(node: &SyntaxNode) -> bool {
 /// True if the token following `group` in the tree would not glue onto a stripped
 /// single-token argument. `letter_only` (for a control-word argument) forbids only
 /// a following ASCII letter; otherwise any word character forbids the strip.
+///
+/// A binary/relation operator atom (the parser's math word split, decision #3) is
+/// always safe even though its characters are word characters: the math sequencer
+/// spaces every operator that follows an operand, and a scripted atom is an
+/// operand, so `a_{p}/b` renders as `a_p / b` — nothing glues.
 fn next_token_safe_after(group: &SyntaxNode, letter_only: bool) -> bool {
-    let next = group.last_token().and_then(|t| t.next_token());
-    match next.as_ref().and_then(|t| t.text().chars().next()) {
+    let Some(next) = group.last_token().and_then(|t| t.next_token()) else {
+        return true;
+    };
+    if classify_math_op_text(next.text()) != MathRole::Operand {
+        return true;
+    }
+    match next.text().chars().next() {
         None => true,
         Some(c) if letter_only => !c.is_ascii_alphabetic(),
         Some(c) => !crate::parser::lexer::is_word_char(c),

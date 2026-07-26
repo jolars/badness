@@ -388,6 +388,41 @@ fn definition_split_across_macrocode_chunks_parses_cleanly() {
 }
 
 #[test]
+fn end_frame_with_trailing_comment_still_terminates_macrocode() {
+    // doc.sty's terminator is a delimited match on `%    \end{macrocode}`, so a
+    // trailing `%` on the frame line (a guard against a stray trailing space —
+    // matze/mtheme, issue #62) still ends the chunk. Without this, the body
+    // swallows the doc layer's `% \end{macro}` and the `macro` environment
+    // diagnoses as unclosed.
+    let input = "\
+% \\begin{macro}{\\foo}\n\
+%    \\begin{macrocode}\n\
+\\newcommand{\\foo}{bar}\n\
+%    \\end{macrocode}%\n\
+% \\end{macro}\n";
+    let (root, errors) = parse_dtx_with_errors(input);
+    assert_eq!(errors, 0, "trailing `%` on the end frame must not diagnose");
+    // The `macro` doc environment and the `macrocode` chunk both pair.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 2);
+    // The tail lexes as an ordinary comment, not part of the frame.
+    assert!(tokens(&root).contains(&(SyntaxKind::COMMENT, "%".to_string())));
+}
+
+#[test]
+fn begin_frame_with_trailing_comment_is_not_a_frame() {
+    // A begin frame stays strict: same-line text after `\begin{macrocode}` is
+    // captured into the body by `\xmacro@code`, so a `%` tail means the line is
+    // not the documented frame shape. The next line then lexes in the doc
+    // layer's Document regime (`@` not a letter), not as macrocode body code.
+    let root = parse_dtx("%    \\begin{macrocode}%\n\\a@b\n");
+    assert!(
+        !tokens(&root)
+            .iter()
+            .any(|(k, t)| *k == SyntaxKind::CONTROL_WORD && t == "\\a@b")
+    );
+}
+
+#[test]
 fn bare_end_primitive_in_macrocode_is_a_plain_command() {
     // Kernel code uses the `\end` TeX primitive inside `macrocode`; only the
     // margin-framed `\end{macrocode}` line terminates the chunk.

@@ -732,7 +732,12 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
 /// Unlike a verbatim environment, the body is *not* captured here: it lexes as
 /// ordinary code in the main loop (under the package regime). The frame line must
 /// hold nothing but trailing whitespace after the name group, so a stray
-/// `\begin{macrocode}{x}` is not mistaken for a frame.
+/// `\begin{macrocode}{x}` is not mistaken for a frame. The *end* frame also
+/// tolerates a trailing `%` comment (`%    \end{macrocode}%`, a guard against a
+/// stray trailing space): doc.sty's terminator is a delimited match on the
+/// `%    \end{macrocode}` string, so anything after it on the line is doc-layer
+/// material. A begin frame stays strict — same-line text there is captured into
+/// the body by `\xmacro@code`, not doc prose.
 fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Option<usize> {
     let after_pct = rest.strip_prefix('%')?;
     let ws_len = after_pct
@@ -751,14 +756,17 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
     if name != "macrocode" && name != "macrocode*" {
         return None;
     }
-    // The frame line carries nothing but trailing whitespace after `}`.
+    // The frame line carries nothing but trailing whitespace after `}` — plus,
+    // on an end frame, an optional `%` comment tail (lexed as an ordinary
+    // `COMMENT` by the main loop).
     let after_close = &after_open[close + 1..];
     let trailing = after_close
         .bytes()
         .take_while(|&b| b == b' ' || b == b'\t')
         .count();
     let tail = &after_close[trailing..];
-    if !(tail.is_empty() || tail.starts_with('\n') || tail.starts_with('\r')) {
+    let comment_tail = !want_begin && tail.starts_with('%');
+    if !(tail.is_empty() || tail.starts_with('\n') || tail.starts_with('\r') || comment_tail) {
         return None;
     }
 

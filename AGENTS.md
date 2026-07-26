@@ -141,6 +141,28 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      one chunk and closes it chunks later, issue #57; matched pairs still form
      `GROUP`s, via a per-chunk brace pre-scan, `parser::grammar::macrocode_body`),
      and a `[` attaches as an optional only when its `]` closes inside the chunk.
+   - **`^^A` doc comments (`.dtx`).** ltxdoc/l3doc set `` \catcode`\^^A=14 ``, and
+     the l3 sources lean on it for editor-balance hacks in doc-margin prose
+     (`^^A{` paired with a verb `|}|`, a commented-out `^^A\end{function}` —
+     issue #60), so on a *doc-margin line* the literal `^^A` lexes as a comment
+     to end of line. Scoped to doc lines only: inside `macrocode` bodies `^^A`
+     is live code (`` \char_set_catcode:nn { `\^^A } `` must keep its line), and
+     unmargined driver lines lex normally.
+   - **l3doc delimited name arguments.** l3doc's `macro`/`function`/`variable`
+     take an xparse `v`-type name argument (`{ O{} +v }`), curated as
+     `verbatimArg` in the signature DB. The delimited form
+     (`\begin{macro}+\@@_compile_{:+`) is chosen by upstream precisely when the
+     name holds unbalanced braces, so the lexer captures the span as one opaque
+     `VERB` token (same-line, punctuation delimiter, directly abutting); the
+     braced form lexes normally. The parser attaches the abutting `VERB` into
+     the `BEGIN` node like any verbatim command argument.
+   - **Char-constant isolation.** After a `\char`/`\catcode`-family primitive
+     (a closed curated set, `parser::lexer::is_char_constant_command`), a
+     backtick opens TeX's char-constant number notation: the next character is
+     *data* (`` \char`$ ``, `` \char`} `` — issue #60), lexed with its backtick
+     as one plain `WORD` token so it can never open math or close a group. The
+     escaped form (`` \char`\$ ``) lexes benignly and needs no isolation. Same
+     family as the `\left`/`\right` delimiter isolation.
    - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
      DB, never executed.
 

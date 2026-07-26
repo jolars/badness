@@ -37,20 +37,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   flags it, the fix is one line: `"verbatimDelimited": true` on `path` in
   `data/signatures.json` — but that reopens the TikZ collision, so it likely
   wants the definition-shadowing item above instead.
-- [ ] **`^^A` comment convention in `.dtx` doc prose (issue #60 follow-up, next
-  format-error cluster in the latex3 scan).** ltxdoc/l3doc set
-  `\catcode`\^^A=14`, and the l3 sources lean on it for editor-balance hacks in
-  doc-margin prose: `^^A{` paired with a verb `|}|` (l3basics @3583, l3token),
-  a commented-out `^^A\end{function}` (l3str), and `^^A $` balancing a
-  `\char`$` (l3regex). Badness lexes `^^A` as ordinary characters, so the
-  hidden `{`/`$`/`\end` cascade into unclosed-group and unclosed-environment
-  diagnostics. Treating `^^A` as comment-to-EOL is a bounded static fact in
-  the same family as the on-by-default `|` short verb in `.dtx` mode
-  (AGENTS.md decision #1) — but it must be scoped to **doc-margin prose
-  lines only**: inside `macrocode` bodies `^^A` is live code
-  (`\char_set_catcode:nn { `\^^A }` would otherwise swallow the rest of its
-  line, including a real `}`). Would fix `l3basics.dtx`, `l3token.dtx`,
-  `l3str.dtx`, and partially `l3regex.dtx`.
+- [x] **`^^A` comment convention in `.dtx` doc prose (issue #60 follow-up).**
+  ltxdoc/l3doc set `\catcode`\^^A=14`; on a doc-margin line the literal `^^A`
+  now lexes as a comment to end of line, scoped to doc lines only (inside
+  `macrocode` bodies `^^A` stays live code). Landed together with two sibling
+  facts the same sweep surfaced: the l3doc `v`-type *delimited* name argument
+  (`\begin{macro}+\@@_compile_{:+`, captured as one opaque `VERB` via the
+  curated `verbatimArg` env facet) and char-constant backtick isolation
+  (`` \char`$ ``/`` \char`} `` lex with their backtick as one plain `WORD`,
+  a closed `\char`/`\catcode`-family set). Together they fixed `l3basics.dtx`,
+  `l3token.dtx`, `l3str.dtx`, `l3regex.dtx`, and `l3styleguide.tex` (latex3
+  sweep 30 -> 25 failures, strict subset). See AGENTS.md decision #1.
 - [ ] **doc.sty-family escape-character swaps are statically unparseable
   (issue #60, record-only).** `doc.sty`/`doc-2016`/`doc-2021`/`source2edoc.cls`
   self-document with `\catcode`\!=0`/`\catcode`\|=0` regions where `!` and `|`

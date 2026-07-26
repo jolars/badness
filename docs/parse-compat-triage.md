@@ -129,6 +129,11 @@ one diverging:
 - `\iffalse…\fi` (`conditionals.tex`): badness reads the body as generic
   commands (no TeX evaluation, a non-goal); texlab's conditional handling drops
   `\section`'s group.
+- Char-constant backtick notation (`char_constant.tex`, smoke-test issue #60):
+  after a `\char`/`\catcode`-family primitive, a backtick makes the next
+  character data, so `` \char`$ ``/`` \char`} `` lex as one plain `WORD` and
+  never open math or close a group. texlab has no char-constant model and
+  errors on both; the file is also on the parse_oracle exception list.
 
 ## One gauge limitation worth noting (not a parser issue)
 

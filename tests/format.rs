@@ -582,6 +582,11 @@ const DTX_FIXTURES: &[&str] = &[
     // still documentation: an open expl3 region owns only `macrocode` bodies,
     // so the following `% \subsection` keeps its column-0 margin.
     "dtx_expl3_unmargined_doc_line",
+    // Doc-prose display math (`% \[…\]`) holding a matrix/array: the nested
+    // environment must keep its `%` margins verbatim rather than being re-broken
+    // off column 0 (issue #61, l3backend-draw.dtx / l3color.dtx). Covers both a
+    // margin-framed `bmatrix` and a `\left\{\begin{array}` opened mid-line.
+    "dtx_doc_margin_math",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

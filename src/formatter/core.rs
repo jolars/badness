@@ -676,8 +676,16 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // `% \begin{itemize}`): the body is never indented and the closing frame is
         // kept whole at column 0. Routed before the alignment/list lowerers so a
         // margin-framed environment never reaches a layout that would reindent its
-        // frame margins.
-        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_margin_framed(node) => {
+        // frame margins. A *math* environment is excluded: a `bmatrix`/`array` whose
+        // `\begin` happens to open a `%␣␣␣␣` line inside a `% \[…\]` doc-math block
+        // (l3backend-draw.dtx, l3ldb.dtx) is doc-comment prose, not a docstrip frame —
+        // margin-framing it re-breaks `\end{bmatrix}` off its `%` margin and leaves the
+        // block's `\]` unparseable on pass 2. It falls through to the generic stream,
+        // which keeps the authored margins verbatim (same margin rule as the math /
+        // group / optional arms below).
+        SyntaxKind::ENVIRONMENT
+            if !has_verbatim_body(node) && is_margin_framed(node) && !is_math_env(node, cx) =>
+        {
             return lower_margin_framed_environment(node, cx);
         }
         // A named math environment (`equation`, `align`, `gather`, matrix, …) — its
@@ -685,7 +693,13 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // generic alignment arm so a math *grid* (`align`/`pmatrix`, both `math` and
         // `align`) takes the math-aware path; a non-math grid (`tabular`/`array`,
         // `align` but not `math`) still falls through to `lower_aligned_environment`.
-        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_math_env(node, cx) => {
+        // The `contains_doc_margin` gate is the same margin rule as the generic
+        // arm below: a `bmatrix` nested in a `% \[…\]` doc-math block (l3backend-draw.dtx)
+        // must keep its `%` margins verbatim, or the re-broken `\end{bmatrix}` drops
+        // off column 0 and the block's closing `\]` is unparseable on pass 2.
+        SyntaxKind::ENVIRONMENT
+            if !has_verbatim_body(node) && is_math_env(node, cx) && !contains_doc_margin(node) =>
+        {
             return lower_math_environment(node, cx);
         }
         // A doc-layer grid rides `%` margins (`% 10 & 1.0pt \\`): column padding
@@ -703,7 +717,17 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             return lower_list_environment(node, cx);
         }
-        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) => {
+        // Same margin rule as the math/group/optional arms below: an environment
+        // continuing across `.dtx` doc-margined lines is never re-laid. A
+        // *margin-framed* environment (its `\begin`/`\end` on `%` frame lines) took
+        // the `is_margin_framed` arm above; what reaches here is an environment
+        // merely *nested* in doc-margined prose — an `array` inside a `% \[…\]`
+        // display-math block (l3color.dtx). Re-breaking its `\begin`/body/`\end`
+        // onto fresh lines would push `\end{array}` off its `%` margin, a meaning
+        // change (a column-0 line stops being a comment at package-load time) that
+        // leaves the orphaned `\]` unparseable on pass 2. The generic stream keeps
+        // the authored margins verbatim.
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && !contains_doc_margin(node) => {
             return lower_environment(node, cx);
         }
         SyntaxKind::COMMAND if cx.wraps_prose() && command_has_managed_arg(node, cx) => {

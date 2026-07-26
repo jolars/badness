@@ -1,0 +1,20 @@
+% \begin{macro}{\decompose}
+%   Decompose a matrix into rotations and a scaling:
+%   \[
+%     \begin{bmatrix}
+%       A & B \\ C & D
+%     \end{bmatrix}
+%     =
+%     \begin{bmatrix}
+%       \cos\beta & \sin\beta \\ -\sin\beta & \cos\beta
+%     \end{bmatrix}
+%   \]
+%   Convert sRGB values with
+%   \[ x_{\mathrm{standard}} = \left\{\begin{array}{ll}
+%   12.92 \cdot x & x<0.0031308 \\
+%   1.055 \cdot x^{1/2.4} - 0.055 & x\ge0.0031308
+%   \end{array}\right. \]
+%    \begin{macrocode}
+\def\decompose{x}
+%    \end{macrocode}
+% \end{macro}

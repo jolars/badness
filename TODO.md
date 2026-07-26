@@ -75,17 +75,37 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [ ] **Environment relayout inside margined `.dtx` doc math drops the `%`
-  margin (issue #61, the remaining latex3 idempotency cluster).** In
-  l3color.dtx (also l3backend-draw.dtx, l3ldb.dtx), doc-prose display math
-  spans margined lines and holds an `array`: the `DISPLAY_MATH`/`MATH` arms
-  are `contains_doc_margin`-gated, but the nested `ENVIRONMENT` falls to
-  `lower_environment`, which re-breaks `\begin`/body/`\end` onto fresh lines
-  — pushing `\end{array}` off its `%` margin (a *meaning change*: the line
-  becomes live code at package-load time) and leaving pass 2 unparseable.
-  Fix direction: gate the generic `lower_environment` (and any other
-  re-breaking arm) on `contains_doc_margin`, like the math/group/optional
-  arms already are.
+- [x] **Environment relayout inside margined `.dtx` doc math drops the `%`
+  margin (issue #61, l3color.dtx + l3backend-draw.dtx).** Doc-prose display
+  math spans margined lines and holds a matrix/array: the `DISPLAY_MATH`/`MATH`
+  arms are `contains_doc_margin`-gated, but the nested `ENVIRONMENT` reached a
+  re-breaking arm, pushing `\end{array}`/`\end{bmatrix}` off its `%` margin (a
+  *meaning change*: the line becomes live code at package-load time) and
+  leaving pass 2 unparseable. Fixed by gating the two re-breaking arms the
+  nested environment could still reach on `contains_doc_margin`/`!is_math_env`:
+  the generic `lower_environment` arm (`\left\{\begin{array}` opened mid-line,
+  l3color) and the `is_margin_framed` arm (a `bmatrix` whose `\begin` opens a
+  `%␣␣␣␣` line is doc prose, not a docstrip frame — l3backend-draw). Regression
+  fixture `dtx_doc_margin_math` (`tests/format.rs`). The margin-framed math-env
+  gate rests on the curated `math` flag, mirroring the other structural routes.
+- [ ] **expl3 continuation-group indent is non-idempotent when a docstrip
+  guard splits the group body (issue #61, the last latex3 idempotency
+  straggler, l3ldb.dtx).** A `%<*trace>`/`%</trace>`/inline-`%<trace>` guard
+  inside a `\cs_new:Npn \foo … { … }` body is doc-layer (subtracted from the
+  expl3 region), so it splits the `lower_expl_paragraph` run. The
+  continuation-group indent (d53f064) folds a step into the group's line only
+  when `!lines.is_empty()` — but the guard-induced run split shifts whether the
+  head statement and its `{` land in the same run, so pass 1 indents the group
+  one step and pass 2 flattens it (the fixed point is flat). Minimal repro: a
+  macrocode chunk with `\ExplSyntaxOn`, two `\cs_new` blocks where the second's
+  body carries standalone `%<*trace>`/`%</trace>` guards around a multi-line
+  nested group plus a trailing inline-guard group `{ %<trace> … { … } }` — the
+  second block's outer `{` drifts col 2 → col 0. Fix direction: make the
+  continuation-indent decision independent of run segmentation (decide it from
+  the group's own line-start position, not the accumulated `lines`), or treat a
+  guard-split group body as a single continuation unit. Deferred: a fix here
+  reaches into the just-landed `lower_expl_code` continuation logic and needs a
+  guard-free run-segmentation invariant, so it wants its own focused change.
 - [x] **Math operator spacing.** A single space around each binary/relation atom
   (`a+2*1^5` -> `a + 2 * 1^5`, `x=-b` -> `x = -b`); unary signs and `^`/`_` scripts
   stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.

@@ -399,7 +399,69 @@ fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
         // true to EOF).
         regions.push(TextRange::new(start, root.text_range().end()));
     }
+    let regions = intersect_macrocode_bodies(root, regions);
     subtract_doc_margin_lines(root, regions)
+}
+
+/// In a `.dtx` (any `DOC_MARGIN` token present), restrict the expl3 regions to
+/// `macrocode`/`macrocode*` chunk *bodies* — the only lines docstrip extracts as
+/// code. The margin subtraction below removes doc lines that carry their `%` in
+/// column 0, but the doc part is not obliged to margin every line (a stray
+/// `␣%` comment, issue #58): any non-chunk line is documentation regardless of
+/// its first column, so relayout must never own it. A no-op for non-`.dtx`
+/// documents, where an unmargined `\begin{macrocode}` is just an ordinary
+/// user environment.
+fn intersect_macrocode_bodies(root: &SyntaxNode, regions: Vec<TextRange>) -> Vec<TextRange> {
+    if regions.is_empty()
+        || !root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::DOC_MARGIN)
+    {
+        return regions;
+    }
+    // `macrocode` never nests, so the bodies are disjoint and in document order.
+    // A body runs from the end of the `\begin` frame to the start of the `\end`
+    // frame's `\end` (or the chunk end when the frame is missing at EOF); the
+    // frame line's own margin/whitespace inside that span is removed by the
+    // margin subtraction pass.
+    let bodies: Vec<TextRange> = root
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .filter_map(Environment::cast)
+        .filter(|e| matches!(e.name().as_deref(), Some("macrocode" | "macrocode*")))
+        .filter_map(|e| {
+            let start = e.begin()?.syntax().text_range().end();
+            let end = e
+                .end()
+                .map(|end| end.syntax().text_range().start())
+                .unwrap_or_else(|| e.syntax().text_range().end());
+            (start < end).then_some(TextRange::new(start, end))
+        })
+        .collect();
+    let mut out = Vec::with_capacity(regions.len());
+    let mut b = bodies.iter().peekable();
+    for region in regions {
+        while let Some(&&body) = b.peek() {
+            if body.end() <= region.start() {
+                b.next();
+                continue;
+            }
+            if body.start() >= region.end() {
+                break;
+            }
+            let start = region.start().max(body.start());
+            let end = region.end().min(body.end());
+            if start < end {
+                out.push(TextRange::new(start, end));
+            }
+            if body.end() >= region.end() {
+                break;
+            }
+            b.next();
+        }
+    }
+    out
 }
 
 /// Remove every `.dtx` documentation line from the expl3 regions. In a `.dtx`,
@@ -4914,5 +4976,46 @@ mod expl3_region_tests {
     #[test]
     fn toggle_inside_comment_is_not_a_region() {
         assert!(regions("% \\ExplSyntaxOn\ntext").is_empty());
+    }
+
+    /// The expl3 regions of `input` parsed as a `.dtx`, as `(start, end)` pairs.
+    fn regions_dtx(input: &str) -> Vec<(usize, usize)> {
+        let config = crate::parser::LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        };
+        let parsed = parse_with_flavor(input, config);
+        assert!(parsed.errors.is_empty(), "test input should parse cleanly");
+        expl3_regions(&parsed.syntax())
+            .into_iter()
+            .map(|r| (r.start().into(), r.end().into()))
+            .collect()
+    }
+
+    #[test]
+    fn dtx_region_owns_only_macrocode_bodies() {
+        // The unmargined `␣%` line between the chunks is documentation, not code
+        // (issue #58): the region intersects with the chunk bodies, so neither it
+        // nor the margined doc line is formatter-owned.
+        let input = "%    \\begin{macrocode}\n\
+                     \\ExplSyntaxOn\n\
+                     %    \\end{macrocode}\n\
+                     \x20%\n\
+                     % doc\n\
+                     %    \\begin{macrocode}\n\
+                     \\foo\n\
+                     %    \\end{macrocode}\n";
+        let first_frame = input.find("%    \\end{macrocode}").unwrap();
+        // The `\begin` frame line's hole spans through its newline, so the second
+        // region opens at the body's first code token.
+        let second_body = input.find("\\foo").unwrap();
+        let second_frame = input.rfind("%    \\end{macrocode}").unwrap();
+        assert_eq!(
+            regions_dtx(input),
+            vec![
+                (input.find("\\ExplSyntaxOn").unwrap(), first_frame),
+                (second_body, second_frame),
+            ]
+        );
     }
 }

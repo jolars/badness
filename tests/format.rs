@@ -565,6 +565,10 @@ const DTX_FIXTURES: &[&str] = &[
     "dtx_driver",
     "dtx_margin_blank_line",
     "dtx_expl3_chunks",
+    // An unmargined doc-part line (a stray `␣%` between chunks, issue #58) is
+    // still documentation: an open expl3 region owns only `macrocode` bodies,
+    // so the following `% \subsection` keeps its column-0 margin.
+    "dtx_expl3_unmargined_doc_line",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

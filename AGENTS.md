@@ -202,6 +202,20 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    resulting operator *spacing* is a formatter concern (tenet #1): a single space
    around each binary/relation atom, unary signs and scripts tight.
 
+   **`$` shape gate (sanctioned).** `$`/`$$` are data in macro code at least as often
+   as they are math delimiters (a tabular preamble's `>{$}`, an expl3 token list's
+   `{ $ }`, catcode comparisons in `\def` bodies — smoke-test issue #60), so a dollar
+   opens math only when it *reads* as math: a matching closer must be reachable before
+   an unbalanced `}`, an `\end` not owed to an intervening `\begin` (plain commands in
+   definition bodies, so neither anchors nor nests there), a paragraph break, the
+   macrocode chunk end, or EOF (`parser::grammar::dollar_closes`, mirroring the
+   issue #43/#55 `[…]` gates). A gated dollar stays an ordinary token — no math node
+   and **no diagnostic**: in code the shape is routine, so it is not statically an
+   error (parser diagnostics gate the formatter, so they must be high-precision;
+   a likely-typo lone `$` in prose is linter territory). A closing `$` counts only
+   outside `{…}` nesting (`math_group` consumes a nested dollar as an ordinary atom).
+   `\[`/`\(` stay optimistic — an unmatched one still diagnoses.
+
 4. **Parser emits an event stream, not a tree directly.** `lexer → flat token stream →
    parser emits events (Start/Tok(idx)/Finish) → tree_builder re-attaches trivia and
    feeds rowan's GreenNodeBuilder`. Tokens are referenced by index; there is **no

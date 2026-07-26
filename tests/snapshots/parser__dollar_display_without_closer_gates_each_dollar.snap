@@ -1,0 +1,14 @@
+---
+source: tests/parser.rs
+assertion_line: 785
+expression: "tree(r\"{ $$ }\")"
+---
+ROOT@0..6
+  PARAGRAPH@0..6
+    GROUP@0..6
+      L_BRACE@0..1 "{"
+      WHITESPACE@1..2 " "
+      DOLLAR@2..3 "$"
+      DOLLAR@3..4 "$"
+      WHITESPACE@4..5 " "
+      R_BRACE@5..6 "}"

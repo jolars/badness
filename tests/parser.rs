@@ -162,21 +162,19 @@ fn math_script_missing_argument_recovers() {
 }
 
 #[test]
-fn math_script_missing_argument_at_eof_recovers() {
-    // `^` at end of input inside unclosed math: a missing-argument error and an
-    // unclosed-math error, and nothing is corrupted.
-    let parsed = parse(r"$x^");
-    assert_eq!(parsed.syntax().to_string(), r"$x^");
+fn math_script_missing_argument_at_math_end_recovers() {
+    // `^` right before the closing `$`: a missing-argument error, and nothing
+    // is corrupted. (A bare `$x^` at EOF no longer opens math at all — the
+    // `$` shape gate keeps a closer-less dollar plain — so the closing `$` is
+    // what routes this through math recovery.)
+    let parsed = parse(r"$x^$");
+    assert_eq!(parsed.syntax().to_string(), r"$x^$");
     assert!(
         parsed
             .errors
             .iter()
             .any(|e| e.message == "missing argument after `^`/`_`"),
         "missing-argument is reported"
-    );
-    assert!(
-        parsed.errors.iter().any(|e| e.message == "unclosed `$`"),
-        "unclosed math is reported"
     );
 }
 
@@ -254,21 +252,18 @@ fn paragraphs_split_on_blank_lines() {
 }
 
 #[test]
-fn blank_line_in_dollar_math_names_the_cause() {
-    // #35: a blank line inside `$…$` in a tabular cell. Real TeX rejects this
-    // too (a blank line is a `\par`, and `\par` in math mode is "Missing $
-    // inserted" — alignment-cell scanning does not make it inert), so the
-    // parse errors stand; the message names the blank line as the terminator.
+fn blank_line_in_dollar_math_keeps_the_dollars_plain() {
+    // #35: a blank line inside would-be `$…$` in a tabular cell. A blank line
+    // bounds the `$` shape gate's closer scan (as it bounds math in TeX), so
+    // neither dollar opens math: both stay ordinary tokens, the cell and the
+    // tabular parse intact, and nothing downstream is corrupted.
     let text = "\\begin{tabular}{c}\n  $a =\n\n  b$ \\\\\n\\end{tabular}\n";
     let parsed = parse(text);
     assert_eq!(parsed.syntax().to_string(), text);
-    assert!(
-        parsed
-            .errors
-            .iter()
-            .any(|e| e.message == "unclosed `$` (a blank line ends math)"),
-        "blank-line cause is named: {:?}",
-        parsed.errors
+    assert_eq!(
+        parsed.errors,
+        [],
+        "gated dollars are plain tokens, not errors"
     );
 }
 
@@ -592,15 +587,15 @@ fn stray_end_at_top_level() {
 
 #[test]
 fn unclosed_dollar_math_in_group_does_not_escape() {
-    // `$`-math cannot span the enclosing group's `}`: the brace closes the
-    // group, the math reports a single "unclosed `$`", and nothing downstream
-    // is corrupted (no spurious "unmatched `}`" / "unclosed environment").
-    // `\foo` is an ordinary (non-verbatim) command, so its argument is real
-    // math — contrast `\code`, whose argument is captured verbatim.
+    // `$`-math cannot span the enclosing group's `}`, so the shape gate never
+    // opens math here: the `$` stays a plain token inside the argument group
+    // and nothing downstream is corrupted (no spurious "unmatched `}`" /
+    // "unclosed environment"). `\foo` is an ordinary (non-verbatim) command,
+    // so its argument group is really parsed — contrast `\code`, whose
+    // argument is captured verbatim.
     let parsed = parse("\\begin{a}\\foo{$ x}\\end{a}");
     assert_eq!(parsed.syntax().to_string(), "\\begin{a}\\foo{$ x}\\end{a}");
-    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
-    assert_eq!(messages, ["unclosed `$`"], "only the open math is reported");
+    assert_eq!(parsed.errors, [], "a gated dollar is not an error");
 }
 
 #[test]
@@ -758,4 +753,43 @@ fn lone_unknown_environment_stays_wrapped() {
         root_node_kinds("\\begin{myenv}\nx\n\\end{myenv}"),
         [SyntaxKind::PARAGRAPH]
     );
+}
+
+#[test]
+fn dollar_without_reachable_closer_stays_plain() {
+    // The `$` shape gate (smoke-test issue #60): a dollar whose closer is not
+    // reachable before the enclosing group closes is macro-code data — the
+    // tabular preamble `>{$}` injects math per cell — not a math delimiter.
+    // It parses as an ordinary token: no math node, no diagnostic.
+    insta::assert_snapshot!(tree(r"\begin{tabular}{>{$}c<{$}} a \end{tabular}"));
+}
+
+#[test]
+fn lone_dollar_in_group_stays_plain() {
+    // An expl3 token list holding a literal dollar (l3htoks: `{ $ }`).
+    insta::assert_snapshot!(tree(r"\tl_put:Nn \l_tmpa_tl { $ }"));
+}
+
+#[test]
+fn unclosed_dollar_before_paragraph_break_stays_plain() {
+    // A paragraph break bounds the closer scan: the dollar cannot pair with
+    // one in a later paragraph, so it stays plain rather than swallowing the
+    // rest of its paragraph as math.
+    insta::assert_snapshot!(tree("a $ b\n\nc $ d\n\ne"));
+}
+
+#[test]
+fn dollar_display_without_closer_gates_each_dollar() {
+    // `{ $$ }`: no `$$` closer is reachable, so the display opener is not
+    // math; each `$` re-enters the gate independently and both stay plain.
+    insta::assert_snapshot!(tree(r"{ $$ }"));
+}
+
+#[test]
+fn dollar_math_still_pairs_across_groups_and_environments() {
+    // The gate must not regress legit math: a closer past balanced `{…}`
+    // nesting and a balanced `\begin…\end` still opens math.
+    insta::assert_snapshot!(tree(
+        r"${a}^2$ and $\begin{smallmatrix} a \end{smallmatrix}$"
+    ));
 }

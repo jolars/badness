@@ -197,11 +197,20 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_display_math_reports_without_a_fix() {
-        // No closing `$$` to swap — report only, withhold the fix (tenet 1).
-        let out = findings("$$x = y\n");
-        assert_eq!(out.len(), 1);
-        assert!(out[0].fix.is_none());
+    fn unclosed_dollar_dollar_is_not_display_math() {
+        // With no reachable closer the dollars are macro-code data, not math
+        // delimiters (the parser's `$` shape gate): no `DISPLAY_MATH` node is
+        // built, so there is nothing to flag — and nothing to fix.
+        assert!(findings("$$x = y\n").is_empty());
+    }
+
+    #[test]
+    fn unclosed_display_math_with_late_closer_reports_without_a_fix() {
+        // A closer reachable only past a lone `$` still parses as `$$` math,
+        // but the rule withholds the delimiter swap when the shape is not the
+        // clean `$$ … $$` pair — report only (tenet 1).
+        let out = findings("$$x = y$ z$$w\n");
+        assert!(!out.is_empty());
     }
 
     #[test]

@@ -713,7 +713,18 @@ impl<'t> Parser<'t> {
                 }
                 self.bump();
             }
-            SyntaxKind::DOLLAR => self.dollar_math(),
+            SyntaxKind::DOLLAR => {
+                let display = self.nth_kind(1) == Some(SyntaxKind::DOLLAR);
+                if self.dollar_closes(self.pos, display) {
+                    self.dollar_math();
+                } else {
+                    // No reachable closer: this dollar is macro-code data
+                    // (`>{$}`, `{ $ }`), not a math delimiter — an ordinary
+                    // token, no math, no diagnostic. Each `$` of an ungated
+                    // `$$` re-enters here and is gated independently.
+                    self.bump();
+                }
+            }
             // WORD, brackets, & # ^ _ ~, ERROR: ordinary tokens in text mode.
             _ => self.bump(),
         }
@@ -1034,9 +1045,84 @@ impl<'t> Parser<'t> {
         false
     }
 
+    /// True if the `$` (or `$$`) opener at token index `open` is closed by a
+    /// matching delimiter before a token that would end the math. `$`/`$$` are
+    /// data in macro code at least as often as they are math delimiters (a
+    /// tabular preamble's `>{$}`, an expl3 token list's `{ $ }`, catcode
+    /// comparisons in `\def` bodies), so — like `[…]` attachment (issue #43) —
+    /// a dollar opens math only when it *reads* as math: a closer must be
+    /// reachable. Mirrors [`Self::dollar_math`]'s recovery anchors (an
+    /// unbalanced `}`, an `\end` not owed to an intervening `\begin`, a
+    /// paragraph break, EOF, the macrocode chunk end). A closing `$` counts
+    /// only outside `{…}` nesting — [`Self::math_group`] consumes a nested
+    /// dollar as an ordinary atom, never as the closer — and for `$$` a lone
+    /// `$` is skipped exactly as `dollar_math` skips it (malformed but
+    /// consumed). Inside a definition body `\begin`/`\end` are plain commands
+    /// (issue #45), so neither anchors nor nests there. Does not consume.
+    fn dollar_closes(&self, open: usize, display: bool) -> bool {
+        let mut depth = 0usize;
+        let mut envs = 0usize;
+        let mut newlines = 0;
+        let start = open + if display { 2 } else { 1 };
+        let end = self
+            .macrocode_end
+            .unwrap_or(self.tokens.len())
+            .min(self.tokens.len());
+        let mut i = start;
+        while i < end {
+            let t = &self.tokens[i];
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    if newlines >= 2 {
+                        return false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                SyntaxKind::DOLLAR if depth == 0 => {
+                    if !display
+                        || self.tokens.get(i + 1).map(|t| t.kind) == Some(SyntaxKind::DOLLAR)
+                    {
+                        return true;
+                    }
+                }
+                SyntaxKind::CONTROL_WORD if !self.in_def_body => {
+                    if t.text.as_str() == BEGIN_CMD {
+                        envs += 1;
+                    } else if t.text.as_str() == END_CMD {
+                        if envs == 0 {
+                            return false;
+                        }
+                        envs -= 1;
+                    }
+                }
+                _ => {}
+            }
+            newlines = 0;
+            i += 1;
+        }
+        false
+    }
+
     /// Inline `$ … $` or display `$$ … $$` math. The body's atoms are wrapped in
     /// a `MATH` node (the delimiters stay direct children of the math node); the
     /// atoms themselves are parsed in math mode (see [`Self::math_element`]).
+    /// Entry is gated by [`Self::dollar_closes`]: the caller has already
+    /// verified a closer is reachable, so the unclosed-math recovery paths
+    /// below fire only for shapes the gate scan cannot see (they remain as
+    /// belt-and-braces recovery, never the expected path).
     fn dollar_math(&mut self) {
         let display = self.nth_kind(1) == Some(SyntaxKind::DOLLAR);
         let (kind, label) = if display {

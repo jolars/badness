@@ -1,0 +1,31 @@
+% A regression corpus file for the `$` shape gate (smoke-test issue #60):
+% dollars are macro-code data at least as often as they are math delimiters,
+% so a `$`/`$$` with no reachable closer parses as an ordinary token — no
+% math node, no diagnostic. Sourced from latex3: tabular preambles that
+% inject math per cell, expl3 token lists holding a literal `$`, and
+% catcode-comparison tricks in macro code.
+\documentclass{article}
+\begin{document}
+
+\begin{tabular}{@{}>{$}r<{$}@{\,}l@{}}
+  1 & 2 \\
+  3 & 4 \\
+\end{tabular}
+
+\ExplSyntaxOn
+\tl_gput_right:Nn \g_result_tl { $ } %^^A $
+\str_const:Nn \c_escape_name_not_str { ! " $ & ' } %$
+\ExplSyntaxOff
+
+\def\reserved@a{x}
+\ifcat_\expandafter\reserved@a\meaning\reserved@b$ $_%
+  \relax
+\fi
+
+A display pair whose opener lost its closer stays plain: { $$ } and so
+does a lone dollar before a paragraph break: $
+
+Real math still pairs: $x+y$ and $$a - b$$ and
+$\begin{smallmatrix} a & b \end{smallmatrix}$ and ${a}^2$.
+
+\end{document}

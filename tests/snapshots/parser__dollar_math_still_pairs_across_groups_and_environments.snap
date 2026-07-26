@@ -1,0 +1,43 @@
+---
+source: tests/parser.rs
+assertion_line: 792
+expression: "tree(r\"${a}^2$ and $\\begin{smallmatrix} a \\end{smallmatrix}$\")"
+---
+ROOT@0..53
+  PARAGRAPH@0..53
+    INLINE_MATH@0..7
+      DOLLAR@0..1 "$"
+      MATH@1..6
+        SCRIPTED@1..6
+          GROUP@1..4
+            L_BRACE@1..2 "{"
+            WORD@2..3 "a"
+            R_BRACE@3..4 "}"
+          SUPERSCRIPT@4..6
+            CARET@4..5 "^"
+            WORD@5..6 "2"
+      DOLLAR@6..7 "$"
+    WHITESPACE@7..8 " "
+    WORD@8..11 "and"
+    WHITESPACE@11..12 " "
+    INLINE_MATH@12..53
+      DOLLAR@12..13 "$"
+      MATH@13..52
+        ENVIRONMENT@13..52
+          BEGIN@13..32
+            CONTROL_WORD@13..19 "\\begin"
+            NAME_GROUP@19..32
+              L_BRACE@19..20 "{"
+              WORD@20..31 "smallmatrix"
+              R_BRACE@31..32 "}"
+          MATH@32..35
+            WHITESPACE@32..33 " "
+            WORD@33..34 "a"
+            WHITESPACE@34..35 " "
+          END@35..52
+            CONTROL_WORD@35..39 "\\end"
+            NAME_GROUP@39..52
+              L_BRACE@39..40 "{"
+              WORD@40..51 "smallmatrix"
+              R_BRACE@51..52 "}"
+      DOLLAR@52..53 "$"

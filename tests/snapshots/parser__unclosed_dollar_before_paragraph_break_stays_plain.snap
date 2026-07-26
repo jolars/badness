@@ -1,0 +1,24 @@
+---
+source: tests/parser.rs
+assertion_line: 778
+expression: "tree(\"a $ b\\n\\nc $ d\\n\\ne\")"
+---
+ROOT@0..15
+  PARAGRAPH@0..5
+    WORD@0..1 "a"
+    WHITESPACE@1..2 " "
+    DOLLAR@2..3 "$"
+    WHITESPACE@3..4 " "
+    WORD@4..5 "b"
+  NEWLINE@5..6 "\n"
+  NEWLINE@6..7 "\n"
+  PARAGRAPH@7..12
+    WORD@7..8 "c"
+    WHITESPACE@8..9 " "
+    DOLLAR@9..10 "$"
+    WHITESPACE@10..11 " "
+    WORD@11..12 "d"
+  NEWLINE@12..13 "\n"
+  NEWLINE@13..14 "\n"
+  PARAGRAPH@14..15
+    WORD@14..15 "e"

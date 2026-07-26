@@ -1518,7 +1518,13 @@ fn lower_expl_code(
             }
             // A comment ends its line (it must terminate the source line). One
             // trailing a multi-line block glues onto the block's closing line
-            // (see `after_block` above), spaced when the source spaced it.
+            // (see `after_block` above), spaced when the source spaced it. One
+            // trailing code rides the committed line *outside* its width fill
+            // — zero-width, rustfmt-style: the line may overflow, but prose
+            // length never re-breaks code, and relocating the comment would
+            // rebind it as the next statement's leading doc comment on the
+            // second pass (decision #9), changing its attachment. An own-line
+            // comment stays its own line.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 if after_block {
                     let block = lines.pop().expect("after_block implies a pushed line");
@@ -1529,7 +1535,7 @@ fn lower_expl_code(
                         vec![block, Ir::verbatim(token.text())]
                     }));
                     after_block = false;
-                } else {
+                } else if atom.is_empty() && parts.is_empty() {
                     atom.push(Ir::verbatim(token.text()));
                     commit_line(
                         &mut atom,
@@ -1539,6 +1545,28 @@ fn lower_expl_code(
                         &mut seps,
                         &mut pending_sep,
                     );
+                } else {
+                    // A non-empty `atom` means the comment directly abuts it
+                    // (any trivia would have flushed the atom); an empty one
+                    // means source whitespace preceded, kept as one space.
+                    let spaced = atom.is_empty();
+                    commit_line(
+                        &mut atom,
+                        &mut parts,
+                        &mut sep_before_next,
+                        &mut lines,
+                        &mut seps,
+                        &mut pending_sep,
+                    );
+                    let line = lines
+                        .pop()
+                        .expect("trailing comment follows committed code");
+                    let comment = if spaced {
+                        format!(" {}", token.text())
+                    } else {
+                        token.text().to_string()
+                    };
+                    lines.push(Ir::concat(vec![line, Ir::zero_width(comment)]));
                 }
             }
             SyntaxElement::Token(token) => {

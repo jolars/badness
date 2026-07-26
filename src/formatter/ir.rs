@@ -72,6 +72,15 @@ pub(crate) enum Ir {
     /// stay flat (used for comments and for multi-line bridged renderings);
     /// otherwise it behaves as opaque inline text of its own width.
     Verbatim { text: Rc<str>, force_break: bool },
+    /// Pre-rendered trailing text that contributes **zero width** to every fit
+    /// measurement (a rustfmt-style trailing comment): the printer splices
+    /// `text` verbatim, but the flat/fill/rest measurements skip it entirely,
+    /// so its length never influences how the code before it breaks — the
+    /// rendered line may simply overflow. Must sit immediately before a line
+    /// break (the text ends its physical line, e.g. a `%` comment); it is the
+    /// caller's job to guarantee nothing follows on the same line. Build via
+    /// [`Ir::zero_width`].
+    ZeroWidth(Rc<str>),
     /// A verbatim chunk pinned to column 0: before splicing `text` the printer
     /// discards any pending indent so the chunk starts flush at the line's left
     /// margin. Used for a `.dtx` documentation margin (`%`) or docstrip guard
@@ -283,6 +292,12 @@ impl Ir {
         Ir::ColumnZero(s.into())
     }
 
+    /// A zero-width trailing chunk (a trailing comment); see [`Ir::ZeroWidth`].
+    /// `text` must never contain a newline.
+    pub(crate) fn zero_width(s: impl Into<Rc<str>>) -> Ir {
+        Ir::ZeroWidth(s.into())
+    }
+
     /// Re-emit `prefix` at column 0 on every line `inner` produces; see
     /// [`Ir::MarginPrefix`]. A [`Ir::Nil`] body degenerates to `Nil`.
     pub(crate) fn margin_prefix(prefix: impl Into<Rc<str>>, inner: Ir) -> Ir {
@@ -318,6 +333,7 @@ impl Ir {
             Ir::Text(_)
             | Ir::Verbatim { .. }
             | Ir::ColumnZero(_)
+            | Ir::ZeroWidth(_)
             | Ir::HardLine
             | Ir::EmptyLine
             | Ir::Line
@@ -362,6 +378,7 @@ impl Ir {
             }
             Ir::Text(_)
             | Ir::ColumnZero(_)
+            | Ir::ZeroWidth(_)
             | Ir::Line
             | Ir::SoftLine
             | Ir::IfBreak { .. }

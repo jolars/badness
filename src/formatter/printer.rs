@@ -237,6 +237,7 @@ impl Printer {
                 Ir::Nil => {}
                 Ir::Text(s) => w.write_text(s),
                 Ir::Verbatim { text, .. } => w.write_verbatim(text),
+                Ir::ZeroWidth(text) => w.write_verbatim(text),
                 Ir::ColumnZero(text) => w.write_column_zero(text),
                 Ir::Concat(items) => {
                     for item in items.iter().rev() {
@@ -452,7 +453,7 @@ impl Printer {
         let mut stack: Vec<&Ir> = vec![node];
         while let Some(node) = stack.pop() {
             match node {
-                Ir::Nil | Ir::SoftLine => {}
+                Ir::Nil | Ir::SoftLine | Ir::ZeroWidth(_) => {}
                 Ir::Text(s) | Ir::ColumnZero(s) => total += s.chars().count(),
                 Ir::Verbatim { text, .. } => {
                     if text.contains('\n') {
@@ -567,7 +568,7 @@ impl Printer {
         let mut stack: Vec<&Ir> = vec![node];
         while let Some(node) = stack.pop() {
             match node {
-                Ir::Nil | Ir::SoftLine => {}
+                Ir::Nil | Ir::SoftLine | Ir::ZeroWidth(_) => {}
                 Ir::Text(s) | Ir::ColumnZero(s) => {
                     let w = s.chars().count();
                     if w > remaining {
@@ -657,7 +658,7 @@ impl Printer {
         let mut stack: Vec<&Ir> = vec![inner];
         while let Some(node) = stack.pop() {
             match node {
-                Ir::Nil | Ir::SoftLine => {}
+                Ir::Nil | Ir::SoftLine | Ir::ZeroWidth(_) => {}
                 Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
                     if col > self.line_width {
@@ -738,7 +739,7 @@ impl Printer {
         while let Some((mode, node)) = work.pop() {
             match node {
                 Ir::Nil | Ir::SoftLine if mode == Mode::Flat => {}
-                Ir::Nil => {}
+                Ir::Nil | Ir::ZeroWidth(_) => {}
                 Ir::SoftLine => return true,
                 Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
@@ -810,7 +811,7 @@ impl Printer {
         let mut stack: Vec<(Mode, &Ir)> = vec![(Mode::Flat, node)];
         while let Some((mode, node)) = stack.pop() {
             match node {
-                Ir::Nil => {}
+                Ir::Nil | Ir::ZeroWidth(_) => {}
                 Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
                     if col > self.line_width {

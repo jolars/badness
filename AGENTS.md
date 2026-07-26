@@ -207,6 +207,12 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    newline is inert whitespace and only the width fill breaks (otherwise a fill-broken argument
    would read as a new statement on the next pass and never reach a fixed point)—and a single
    inserted space at any preserved token boundary keeps re-lexing from merging two tokens.
+   A *trailing comment* rides its statement line **zero-width** (`Ir::ZeroWidth`,
+   rustfmt-style): the line may overflow, but prose length never re-breaks code, and the
+   comment is never relocated—moving it would rebind it as the *next* statement's leading
+   doc comment on the second pass (decision #9), changing its attachment. gofmt/rustfmt
+   never relocate trailing comments either; ruff exempts pragma comments from width for
+   the same reason.
    In a `.dtx`, a region regularly spans several `macrocode` chunks (`\ExplSyntaxOn` in one,
    the `Off` chunks later), so the doc-margined lines in between—doc prose and the frame lines
    themselves—are subtracted from the regions (`subtract_doc_margin_lines`): only code lines

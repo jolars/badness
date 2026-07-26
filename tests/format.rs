@@ -177,6 +177,17 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // an own-line `%` would bind *leading* into the next command on reparse and
     // cascade one line further per pass (issue #38).
     ("trailing_comment_rides_block", WrapMode::Reflow, 80),
+    // The same ride when inline *whitespace* separates the `%` from the block
+    // (`\newcommand{…}{…} % note` under a doc comment): the space must not strand
+    // the comment on its own line, where it would re-bind as the next command's
+    // doc comment on reparse (issue #54, HoTT/book `macros.tex`).
+    ("trailing_comment_after_block_space", WrapMode::Reflow, 80),
+    // A trailing `%` never becomes a fill atom of its own: even when the line
+    // overflows the width, the comment rides the end of its line rather than
+    // wrapping, which would leave an own-line `%` that re-binds as the next
+    // command's doc comment on reparse and cascades one line further per pass
+    // (issue #54, HoTT/book `opt-*.tex`).
+    ("reflow_trailing_comment_never_wraps", WrapMode::Reflow, 80),
     // A class-defined verbatim environment (jss's `Code`) has its body preserved
     // byte-for-byte — never reindented or reflowed.
     ("verbatim_jss_code_environment", WrapMode::Preserve, 80),
@@ -393,6 +404,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("align_comment_only_line", WrapMode::Preserve, 80),
     ("align_trailing_comment", WrapMode::Preserve, 80),
     ("align_comment_mid_row_fallback", WrapMode::Preserve, 80),
+    // A final row whose trailing comment is followed by comment-only lines keeps
+    // the grid: the first comment trails the row, the rest are passthrough lines.
+    // Falling back instead diverged across passes under `Reflow` — the fallback
+    // merged the comment lines into one, which the *second* pass then laid out as
+    // a grid, spacing the `&` (issue #54, HoTT/book `equivalences.tex`).
+    ("align_trailing_comment_lines", WrapMode::Reflow, 80),
     ("tabular_hline", WrapMode::Preserve, 80),
     ("tabular_booktabs", WrapMode::Preserve, 80),
     // A comment-only line directly above a rule command binds into it as a

@@ -876,6 +876,30 @@ impl<'a> LineBuilder<'a> {
         self.lines.push(content);
     }
 
+    /// Glue a trailing comment onto the run so it rides the end of its line: onto
+    /// the atom in progress when one is open (a directly-glued `word%…`, whose
+    /// missing space is the space-suppression idiom), else onto the last committed
+    /// atom with the single separating space restored (`word %…`). The comment must
+    /// never become a fill atom of its own — a width break before it would commit
+    /// it to the next line, where the own-line `%` re-binds as the next command's
+    /// doc comment on reparse and breaks idempotence.
+    fn append_trailing_comment(&mut self, text: &str) {
+        if !self.atom.is_empty() {
+            self.push_atom_piece(Ir::verbatim(text), text);
+            return;
+        }
+        if let Some(last) = self.run.last_mut() {
+            let prev = std::mem::replace(&mut last.ir, Ir::Nil);
+            last.ir = Ir::concat([prev, Ir::verbatim(" "), Ir::verbatim(text)]);
+            last.text.push(' ');
+            last.text.push_str(text);
+            return;
+        }
+        // Empty run (the caller guards with `line_has_content`, so this is a
+        // safety net): the comment becomes the line's only atom.
+        self.push_atom_piece(Ir::verbatim(text), text);
+    }
+
     /// Glue `ir` onto the end of the last committed line (a trailing comment riding
     /// a block segment). No-op when no line has been committed.
     fn append_to_last_line(&mut self, ir: Ir) {
@@ -953,15 +977,20 @@ fn reflow_elements(
     let mut line_has_content = false;
     // Whether the previous element was a forced-break node committed via
     // `push_segment` (a doc-commented command, an environment, …). A `COMMENT`
-    // glued directly onto such a block (`\end{center}%`) must ride the block's
-    // last line: committing it as its own line changes spacing semantics and,
-    // because an own-line `%` binds forward as a doc comment on reparse, breaks
-    // idempotence (issue #38).
+    // on the same physical line as such a block — glued directly
+    // (`\end{center}%`) or after inline whitespace (`\newcommand{…}{…} % note`)
+    // — must ride the block's last line: committing it as its own line changes
+    // spacing semantics in the glued case and, because an own-line `%` binds
+    // forward as a doc comment on reparse, breaks idempotence (issue #38).
+    // `block_gap` records that inline whitespace separated the two, so the
+    // riding comment keeps a single space before it.
     let mut prev_was_block = false;
+    let mut block_gap = false;
 
     let mut idx = 0;
     while idx < elements.len() {
         let after_block = std::mem::take(&mut prev_was_block);
+        let after_block_gap = std::mem::take(&mut block_gap);
         match &elements[idx] {
             // Whitespace / newline run: a physical-line and atom boundary.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
@@ -996,7 +1025,13 @@ fn reflow_elements(
                     line_has_content = false;
                 } else {
                     // Pure inline whitespace: an atom boundary within the line.
+                    // It stays on the block's physical line, so a comment next
+                    // keeps riding the block (with the space restored).
                     b.flush_atom();
+                    if after_block {
+                        prev_was_block = true;
+                        block_gap = true;
+                    }
                 }
                 continue;
             }
@@ -1006,13 +1041,24 @@ fn reflow_elements(
             // separately, instead of reflowing the bare `%` up into that run.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 if after_block {
-                    // Glued directly to the preceding block segment: ride its
-                    // last line instead of starting one of its own.
-                    b.append_to_last_line(Ir::verbatim(token.text()));
+                    // On the block segment's last physical line: ride it instead
+                    // of starting a line of its own. A directly-glued comment
+                    // (`\end{center}%`) stays glued — the `%` is the
+                    // space-suppression idiom — while one separated by inline
+                    // whitespace keeps a single space.
+                    let comment = if after_block_gap {
+                        Ir::concat([Ir::verbatim(" "), Ir::verbatim(token.text())])
+                    } else {
+                        Ir::verbatim(token.text())
+                    };
+                    b.append_to_last_line(comment);
+                } else if line_has_content {
+                    // Trailing content on this physical line: ride its end (never
+                    // a fill atom of its own — see `append_trailing_comment`).
+                    b.append_trailing_comment(token.text());
+                    b.end_line();
                 } else {
-                    if !line_has_content {
-                        b.end_line();
-                    }
+                    b.end_line();
                     b.push_atom_piece(Ir::verbatim(token.text()), token.text());
                     b.end_line();
                 }
@@ -2295,9 +2341,10 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// of comments and/or horizontal-rule commands (`\hline`, `\midrule`, …) is kept as
 /// a [`GridItem::Passthrough`] line, not a cell. A comment at the end of a row's
 /// last physical line — directly after the row's `\\`, or trailing the final row —
-/// is attached as the row's `trailing_comment`. A comment in the *middle* of a row
-/// (with more cells after it) cannot sit on an aligned line — its text runs to end
-/// of line, commenting out the rest — so it returns `None` and falls back.
+/// is attached as the row's `trailing_comment`; comment-only lines after it are
+/// passthrough lines like any other. A comment in the *middle* of a row (with more
+/// cells after it) cannot sit on an aligned line — its text runs to end of line,
+/// commenting out the rest — so it returns `None` and falls back.
 ///
 /// Returns `None` when [`flatten_alignment_body`] rejects the body (a blank-line
 /// break), when a cell carries a forced break that cannot collapse to one line (a
@@ -2488,7 +2535,6 @@ fn build_alignment_grid(
     let mut items: Vec<GridItem> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell: Vec<SyntaxElement> = Vec::new();
-    let mut final_pushed = false;
 
     let mut idx = 0;
     while idx < inline.len() {
@@ -2550,9 +2596,12 @@ fn build_alignment_grid(
             }
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 // A comment that is *not* at a boundary trails cell content. It is
-                // clean only when nothing more in the body belongs to the row;
-                // otherwise it would comment out later cells — fall back.
-                if !rest_is_only_trivia(&inline, idx + 1) {
+                // clean only when nothing more of the row can follow: trivia and
+                // own-line comments (each a passthrough line, handled by the
+                // boundary branch above on later iterations) may remain; anything
+                // else would be commented out by joining onto this line — fall
+                // back.
+                if !rest_is_trivia_and_comment_lines(&inline, idx + 1) {
                     return None;
                 }
                 let text = token.text().trim_end().to_string();
@@ -2562,30 +2611,27 @@ fn build_alignment_grid(
                     line_break: None,
                     trailing_comment: Some(text),
                 }));
-                final_pushed = true;
-                break;
             }
             _ => cell.push(inline[idx].clone()),
         }
         idx += 1;
     }
 
-    // The final segment (content after the last `\\`). Drop it when it is a single
-    // empty cell — the "body ended in `\\`" case — so the trailing break stays on
-    // the prior row without adding a blank line; otherwise it is a real last row.
-    if !final_pushed {
-        finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
-        let final_is_empty = cells.len() == 1
-            && cells[0].text.is_empty()
-            && cells[0].block.is_none()
-            && cells[0].span == 1;
-        if !final_is_empty {
-            items.push(GridItem::Row(AlignRow {
-                cells,
-                line_break: None,
-                trailing_comment: None,
-            }));
-        }
+    // The final segment (content after the last `\\` or trailing comment). Drop it
+    // when it is a single empty cell — the "body ended in `\\`" (or in a
+    // trailing-comment row) case — so the trailing break stays on the prior row
+    // without adding a blank line; otherwise it is a real last row.
+    finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
+    let final_is_empty = cells.len() == 1
+        && cells[0].text.is_empty()
+        && cells[0].block.is_none()
+        && cells[0].span == 1;
+    if !final_is_empty {
+        items.push(GridItem::Row(AlignRow {
+            cells,
+            line_break: None,
+            trailing_comment: None,
+        }));
     }
 
     Some(items)
@@ -2771,13 +2817,26 @@ fn cell_has_newline(cell: &[SyntaxElement]) -> bool {
     })
 }
 
-/// Whether everything from `from` onward is collapsible trivia — nothing of the
-/// row remains, so a comment at the current position is a clean trailing comment.
-fn rest_is_only_trivia(inline: &[SyntaxElement], from: usize) -> bool {
-    inline[from..].iter().all(|e| {
-        e.as_token()
-            .is_some_and(|t| is_collapsible_trivia(t.kind()))
-    })
+/// Whether everything from `from` onward is collapsible trivia or `%` comments
+/// that each start their own physical line — nothing more of the *row* remains,
+/// so a comment at the current position is a clean trailing comment, and any
+/// following comment-only lines render as passthrough lines. A comment that does
+/// not sit on its own line, or any non-trivia element, disqualifies the rest
+/// (joining it onto the row's line would comment it out).
+fn rest_is_trivia_and_comment_lines(inline: &[SyntaxElement], from: usize) -> bool {
+    let mut own_line = false;
+    for element in &inline[from..] {
+        let Some(token) = element.as_token() else {
+            return false;
+        };
+        match token.kind() {
+            SyntaxKind::NEWLINE => own_line = true,
+            SyntaxKind::WHITESPACE => {}
+            SyntaxKind::COMMENT if own_line => own_line = false,
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Flatten an alignment environment's body into a single stream of inline

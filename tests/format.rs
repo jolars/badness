@@ -508,6 +508,13 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // #58): the boundary begins a fresh line, and the run-final newline feeds
     // that separator instead of stacking into a growing blank line.
     ("expl_region_midline_open", "sty"),
+    // An own-line comment binds leading into the next command (decision #9);
+    // inside a region the comment lines commit as their own lines and the
+    // command continues the statement — never an opaque block, which would
+    // strand a blank line and split the statement head (issue #61,
+    // l3bigint.dtx). A trailing comment moved onto its own line by pass 1
+    // must reach this same fixed point on pass 2.
+    ("expl_doc_comment_statement", "sty"),
 ];
 
 #[test]

@@ -1545,6 +1545,49 @@ fn lower_expl_code(
                 after_block = false;
                 atom.push(lower_loose_token(token));
             }
+            // A command with a bound leading `DOC_COMMENT` (decision #9: an
+            // own-line comment binds forward). Rendered as an opaque block it
+            // would strand a blank line after the comment (the comment's own
+            // newline stacking with the block separator) and split the
+            // statement — a shape the next parse reads differently, breaking
+            // idempotence. Instead each comment line commits as its own line
+            // and the command's remaining children continue the statement.
+            SyntaxElement::Node(child)
+                if child.kind() == SyntaxKind::COMMAND
+                    && child
+                        .first_child()
+                        .is_some_and(|c| c.kind() == SyntaxKind::DOC_COMMENT) =>
+            {
+                after_block = false;
+                commit_line(
+                    &mut atom,
+                    &mut parts,
+                    &mut sep_before_next,
+                    &mut lines,
+                    &mut seps,
+                    &mut pending_sep,
+                );
+                let mut rest: Vec<SyntaxElement> = Vec::new();
+                for el in child.children_with_tokens() {
+                    match &el {
+                        SyntaxElement::Node(n) if n.kind() == SyntaxKind::DOC_COMMENT => {
+                            for t in n.children_with_tokens() {
+                                if let SyntaxElement::Token(t) = t
+                                    && t.kind() == SyntaxKind::COMMENT
+                                {
+                                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                                    lines.push(Ir::verbatim(t.text()));
+                                }
+                            }
+                        }
+                        _ => rest.push(el.clone()),
+                    }
+                }
+                let ir = lower_expl_code(rest.into_iter(), cx, Statements::Ignore);
+                if !matches!(ir, Ir::Nil) {
+                    atom.push(ir);
+                }
+            }
             SyntaxElement::Node(child) => {
                 after_block = false;
                 let ir = lower_node(child, cx);

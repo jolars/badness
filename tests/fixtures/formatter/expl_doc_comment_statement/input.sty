@@ -1,0 +1,7 @@
+\ProvidesExplPackage{demo}{2026-07-26}{0.1}{Doc-comment statements}
+\cs_new:Npn \demo_aux:Nw #1 { \demo_use:n #1 } % the comment ends the statement line.
+% now the smallest tree is in front.
+\cs_new:Npn \demo_vi:Nw #1#2
+  {
+    \demo_use:n { #1 #2 }
+  }

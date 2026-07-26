@@ -147,6 +147,14 @@ pub struct EnvironmentSig {
     /// `true` for environments whose body is raw text (`verbatim`, `lstlisting`,
     /// `minted`, …) and must never be reflowed.
     pub verbatim_body: bool,
+    /// `true` for environments whose *name argument* is xparse `v`-type (l3doc's
+    /// `macro`/`function`/`variable`, declared `{ O{} +v }`): besides the usual
+    /// braced form, the argument may be delimited `\verb`-style
+    /// (`\begin{macro}+\@@_compile_{:+`), chosen precisely when the name holds
+    /// unbalanced braces. The lexer captures that delimited form as one opaque
+    /// `VERB` token; the braced form lexes normally. Curated only — a wrong
+    /// grant swallows real text, so the CWL/user tiers never set it.
+    pub verbatim_arg: bool,
     /// `true` for math environments (`equation`, `align`, …).
     pub math: bool,
     /// `true` for environments whose body is *real parsed code*, not prose —
@@ -259,6 +267,9 @@ pub(crate) const fn environment(
     EnvironmentSig {
         args: Cow::Borrowed(args),
         verbatim_body,
+        // The codegen (CWL) tier is arity-only, so the verbatim-argument facet —
+        // like every behavior flag — never comes from it.
+        verbatim_arg: false,
         math,
         code,
         align,
@@ -826,6 +837,8 @@ struct RawEnvironment {
     args: Vec<RawArg>,
     #[serde(default, rename = "verbatimBody")]
     verbatim_body: bool,
+    #[serde(default, rename = "verbatimArg")]
+    verbatim_arg: bool,
     #[serde(default)]
     math: bool,
     #[serde(default)]
@@ -849,6 +862,7 @@ impl From<RawEnvironment> for EnvironmentSig {
         EnvironmentSig {
             args: Cow::Owned(raw.args.into_iter().map(ArgSpec::from).collect()),
             verbatim_body: raw.verbatim_body,
+            verbatim_arg: raw.verbatim_arg,
             math: raw.math,
             code: raw.code,
             align: raw.align,

@@ -1,0 +1,11 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\catcode`\\\\%=12\")"
+---
+ROOT@0..14
+  PARAGRAPH@0..14
+    COMMAND@0..8
+      CONTROL_WORD@0..8 "\\catcode"
+    WORD@8..9 "`"
+    CONTROL_SYMBOL@9..11 "\\%"
+    WORD@11..14 "=12"

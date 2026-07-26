@@ -210,6 +210,18 @@ fn is_definition_keyword(text: &str) -> bool {
     )
 }
 
+/// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
+/// whose following number is conventionally written in backtick char-constant
+/// notation (`` \char`$ ``, `` \catcode`\%=12 ``): after it, a backtick makes
+/// the next character *data*, never syntax. A closed curated set; reads only
+/// the static keyword, no macro meaning.
+fn is_char_constant_command(text: &str) -> bool {
+    matches!(
+        text,
+        "\\char" | "\\catcode" | "\\lccode" | "\\uccode" | "\\sfcode" | "\\mathcode" | "\\delcode"
+    )
+}
+
 /// An expl3 catcode-mode toggle recognized purely by its control-word spelling.
 /// Shared by the lexer (which flips its `expl_syntax` flag) and the formatter's
 /// region pre-pass ([`crate::formatter`] recomputes in-region byte spans), so the
@@ -283,6 +295,11 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     // restored on exit.
     let mut in_macrocode = false;
     let mut saved_at_letter = at_letter;
+    // True while lexing the remainder of a `.dtx` documentation line (a line whose
+    // column-0 `%` was emitted as a `DOC_MARGIN` above). On such lines the ltxdoc/
+    // l3doc `\catcode`\^^A=14` convention applies, so a literal `^^A` reads as a
+    // comment to end of line. Cleared at every physical line boundary.
+    let mut in_doc_line = false;
     // True when the previous meaningful token was `\left`/`\right`, so the next
     // delimiter must be isolated as a single token (it carries across whitespace,
     // which TeX skips before the delimiter).
@@ -295,6 +312,13 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     // consumed. Without this, a command flagged verbatim in pass 1 would have its own
     // definition's first group captured as a `VERB` in pass 2.
     let mut pending_def = false;
+    // True right after a `\char`/`\catcode`-family primitive (across inline
+    // whitespace), where a backtick opens TeX's char-constant number notation:
+    // the character after the backtick is data (`` \char`$ ``, `` \char`} ``),
+    // never a math opener or group brace. The doc layer writes the notation in
+    // prose (issue #60), so without this the hidden `$`/`{` cascade into
+    // unclosed-math and unclosed-group diagnostics.
+    let mut pending_char_constant = false;
     while pos < input.len() {
         let rest = &input[pos..];
 
@@ -371,11 +395,24 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             });
             pos += 1;
             at_line_start = false;
+            in_doc_line = true;
             continue;
         }
 
         // Verbatim-like environment: emit `\begin{name}` then a raw body token.
         if let Some(consumed) = lex_verbatim_environment(rest, ctx, &mut out) {
+            pos += consumed;
+            pending_delim = false;
+            pending_def = false;
+            at_line_start = false;
+            continue;
+        }
+
+        // l3doc `v`-type name argument in delimited form (`\begin{macro}+…+`):
+        // capture the span as one opaque `VERB` token so its unbalanced braces
+        // stay data. Gated off inside a `macrocode` body, where a `\begin` is
+        // plain macro code, not an l3doc environment.
+        if !in_macrocode && let Some(consumed) = lex_verbatim_arg_environment(rest, &mut out) {
             pos += consumed;
             pending_delim = false;
             pending_def = false;
@@ -418,6 +455,51 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             });
             pos += len;
             at_line_start = false;
+            pending_def = false;
+            continue;
+        }
+
+        // TeX char-constant backtick notation: after a `\char`/`\catcode`-family
+        // primitive, a backtick makes the next character data (`` \char`$ ``,
+        // `` \char`} ``), so emit the backtick and that character as one plain
+        // `WORD` token — a `$`/`{` there must not open math or a group. The
+        // escaped form (`` \char`\$ ``) falls through and lexes benignly
+        // (backtick, then a control symbol).
+        if pending_char_constant
+            && let Some(after) = rest.strip_prefix('`')
+            && let Some(c) = after.chars().next()
+            && !matches!(c, '\\' | '\n' | '\r')
+        {
+            let len = 1 + c.len_utf8();
+            out.push(Token {
+                kind: SyntaxKind::WORD,
+                text: SmolStr::new(&rest[..len]),
+            });
+            pos += len;
+            at_line_start = false;
+            pending_char_constant = false;
+            pending_delim = false;
+            pending_def = false;
+            continue;
+        }
+
+        // `.dtx` `^^A` comment: ltxdoc/l3doc set `\catcode`\^^A=14`, and the doc
+        // layer leans on it for editor-balance hacks in prose (`^^A{` paired with
+        // a verb `|}|`, a commented-out `^^A\end{function}`), so on a doc-margin
+        // line the literal `^^A` sequence is a comment to end of line — a bounded
+        // static fact like the on-by-default `|` short verb (`AGENTS.md` decision
+        // #1). Scoped to doc lines only: inside a `macrocode` body `^^A` is live
+        // code (`\char_set_catcode:nn { `\^^A }` must not swallow its line), and
+        // unmargined driver lines keep ordinary lexing.
+        if in_doc_line && rest.starts_with("^^A") {
+            let len = run_len(rest, |c| c != '\n' && c != '\r');
+            out.push(Token {
+                kind: SyntaxKind::COMMENT,
+                text: SmolStr::new(&rest[..len]),
+            });
+            pos += len;
+            at_line_start = false;
+            pending_delim = false;
             pending_def = false;
             continue;
         }
@@ -486,6 +568,13 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             SyntaxKind::CONTROL_WORD if text == "\\left" || text == "\\right" => true,
             _ => false,
         };
+        pending_char_constant = match kind {
+            // TeX skips spaces before the number, so the notation may be spaced
+            // (`\char `$`); a line break conventionally ends the shape.
+            SyntaxKind::WHITESPACE => pending_char_constant,
+            SyntaxKind::CONTROL_WORD if is_char_constant_command(text) => true,
+            _ => false,
+        };
         pending_def = match kind {
             // A definition keyword arms the suppression for the name that follows.
             SyntaxKind::CONTROL_WORD if is_definition_keyword(text) => true,
@@ -506,6 +595,9 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         // 0 either way, so a `.dtx` margin there must still be recognized. Any
         // other token (whitespace included) leaves the cursor mid-line.
         at_line_start = kind == SyntaxKind::NEWLINE || text.ends_with('\n') || text.ends_with('\r');
+        if at_line_start {
+            in_doc_line = false;
+        }
         pos += len;
     }
     out
@@ -720,6 +812,71 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
         });
     }
     Some(prefix_len + args_len + body_len)
+}
+
+/// If `rest` starts with `\begin{name}` for an environment whose name argument is
+/// xparse `v`-type (`verbatim_arg` in the curated DB: l3doc's `macro`/`function`/
+/// `variable`, declared `{ O{} +v }`) *and* that argument uses the delimited form
+/// (`\begin{macro}+\@@_compile_{:+`), emit the `\begin{name}` tokens, a leading
+/// `[…]` optional as ordinary tokens, and the delimited span as one opaque `VERB`
+/// token, returning the bytes consumed. The braced form returns `None` and lexes
+/// normally — only the delimited form needs capture, because upstream chooses it
+/// precisely when the name holds unbalanced braces (`\@@_compile_}:`), which
+/// would otherwise corrupt group pairing for the rest of the file. Same-line
+/// only, like `\verb`, and the delimiter must directly abut and be punctuation
+/// that cannot open another argument shape (never `\`, a brace or bracket, `%`,
+/// `*`, or `$`), so an ordinary `\begin{macro}` followed by prose, a braced
+/// name, or code never captures. The parser attaches the abutting `VERB` into
+/// the `BEGIN` node like any verbatim command argument (`attach_arguments`).
+fn lex_verbatim_arg_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
+    let after_begin = rest.strip_prefix("\\begin{")?;
+    let close = after_begin.find('}')?;
+    let name = &after_begin[..close];
+    builtin().environment(name).filter(|e| e.verbatim_arg)?;
+
+    let prefix_len = "\\begin{".len() + name.len() + "}".len();
+    // A leading `[…]` optional (the `O{}` slot, `\begin{macro}[EXP]+…+`) is
+    // structured, not verbatim; it lexes normally below. Same-line, unnested.
+    let region = &rest[prefix_len..];
+    let mut args_len = 0;
+    if let Some(after) = region.strip_prefix('[') {
+        let i = after.find([']', '\n', '\r'])?;
+        if after.as_bytes()[i] != b']' {
+            return None;
+        }
+        args_len = 1 + i + 1;
+    }
+    let arg_region = &region[args_len..];
+    let delim = arg_region.chars().next()?;
+    if !delim.is_ascii_punctuation()
+        || matches!(delim, '\\' | '{' | '}' | '[' | ']' | '%' | '*' | '$')
+    {
+        return None;
+    }
+    let verb_len = delimited_len(arg_region)?;
+
+    out.push(Token {
+        kind: SyntaxKind::CONTROL_WORD,
+        text: SmolStr::new("\\begin"),
+    });
+    out.push(Token {
+        kind: SyntaxKind::L_BRACE,
+        text: SmolStr::new("{"),
+    });
+    out.push(Token {
+        kind: SyntaxKind::WORD,
+        text: SmolStr::new(name),
+    });
+    out.push(Token {
+        kind: SyntaxKind::R_BRACE,
+        text: SmolStr::new("}"),
+    });
+    lex_into(&region[..args_len], out);
+    out.push(Token {
+        kind: SyntaxKind::VERB,
+        text: SmolStr::new(&arg_region[..verb_len]),
+    });
+    Some(prefix_len + args_len + verb_len)
 }
 
 /// A `.dtx` `macrocode` frame line, at a line start: `%␣*\begin{macrocode}` (when

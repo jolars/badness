@@ -27,6 +27,10 @@ const TEXLAB_KNOWN_DIVERGENT: &[&str] = &[
     // doc's `\MakeShortVerb{\|}` short verbs: `|}|` and `|\begin{document}|` are
     // opaque VERB spans for badness (issue #57), unmatched braces for texlab.
     "doc_shortverb.tex",
+    // TeX char-constant backtick notation (issue #60): `` \char`$ ``/`` \char`} ``
+    // are plain data for badness, an unclosed math opener and an unmatched brace
+    // for texlab.
+    "char_constant.tex",
 ];
 
 #[test]

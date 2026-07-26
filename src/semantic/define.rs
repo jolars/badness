@@ -751,6 +751,9 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
     EnvironmentSig {
         args: args.into(),
         verbatim_body: false,
+        // The delimited-verbatim name argument is a curated l3doc fact; a
+        // scanned definition never earns it.
+        verbatim_arg: false,
         math: false,
         code: false,
         align: false,

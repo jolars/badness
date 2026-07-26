@@ -1,0 +1,29 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\item[\\\\char`$ or z] and {\\\\char`} too}\")"
+---
+ROOT@0..37
+  PARAGRAPH@0..37
+    COMMAND@0..19
+      CONTROL_WORD@0..5 "\\item"
+      OPTIONAL@5..19
+        L_BRACKET@5..6 "["
+        COMMAND@6..11
+          CONTROL_WORD@6..11 "\\char"
+        WORD@11..13 "`$"
+        WHITESPACE@13..14 " "
+        WORD@14..16 "or"
+        WHITESPACE@16..17 " "
+        WORD@17..18 "z"
+        R_BRACKET@18..19 "]"
+    WHITESPACE@19..20 " "
+    WORD@20..23 "and"
+    WHITESPACE@23..24 " "
+    GROUP@24..37
+      L_BRACE@24..25 "{"
+      COMMAND@25..30
+        CONTROL_WORD@25..30 "\\char"
+      WORD@30..32 "`}"
+      WHITESPACE@32..33 " "
+      WORD@33..36 "too"
+      R_BRACE@36..37 "}"

@@ -149,7 +149,9 @@
     "lstlisting": { "args": ["opt"], "verbatimBody": true, "block": true },
     "minted": { "args": ["opt", "req"], "verbatimBody": true, "block": true },
 
-    "macro": { "args": ["req"], "block": true },
+    "macro": { "args": ["req"], "block": true, "verbatimArg": true },
+    "function": { "args": ["req"], "block": true, "verbatimArg": true },
+    "variable": { "args": ["req"], "block": true, "verbatimArg": true },
     "environment": { "args": ["req"], "block": true },
     "macrocode": { "code": true, "block": true },
     "macrocode*": { "code": true, "block": true },

@@ -492,3 +492,96 @@ fn control_symbol_swallowing_its_newline_keeps_the_next_margin() {
     assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 2);
     assert_eq!(count_token(&root, SyntaxKind::COMMENT), 0);
 }
+
+#[test]
+fn caret_caret_a_is_a_comment_on_doc_lines() {
+    // ltxdoc/l3doc set `\catcode`\^^A=14`, and the l3 sources lean on it for
+    // editor-balance hacks in doc-margin prose (issue #60): `^^A{` hides a `{`
+    // whose visual pair is inside a verb span, and `^^A\end{function}` comments
+    // an `\end` out. On a doc line, `^^A` is a comment to end of line.
+    let (root, errors) = parse_dtx_with_errors(
+        "% namely a ^^A{\n\
+         % |}| if standard category codes apply.\n\
+         % \\begin{function}{\\foo}\n\
+         %   body\n\
+         % ^^A\\end{function}\n\
+         % \\end{function}\n",
+    );
+    assert_eq!(errors, 0, "the hidden `{{` and `\\end` must not diagnose");
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::COMMENT, "^^A{".to_string())));
+    assert!(toks.contains(&(SyntaxKind::COMMENT, "^^A\\end{function}".to_string())));
+    // Only the real `\end{function}` closes the environment.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+}
+
+#[test]
+fn caret_caret_a_in_macrocode_is_live_code() {
+    // Inside a `macrocode` body `^^A` is live code — `\char_set_catcode:nn
+    // { `\^^A } { 14 }` must not have its line (including the real closing
+    // braces) swallowed as a comment.
+    let (root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         \\char_set_catcode:nn { `\\^^A } { 14 }\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    let toks = tokens(&root);
+    assert!(
+        !toks
+            .iter()
+            .any(|(k, t)| *k == SyntaxKind::COMMENT && t.contains("^^A")),
+        "macrocode `^^A` must stay code, got {toks:?}"
+    );
+}
+
+#[test]
+fn delimited_macro_name_argument_captures_as_verb() {
+    // l3doc's `macro`/`function`/`variable` take a `v`-type name argument
+    // (`{ O{} +v }`), and upstream uses the delimited form precisely when the
+    // name holds unbalanced braces (`\begin{macro}+\@@_compile_{:+`, issue
+    // #60). The span captures as one opaque `VERB` attached to the `BEGIN`.
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{macro}+\\@@_compile_{:+\n\
+         %   doc prose\n\
+         % \\end{macro}\n\
+         % \\begin{macro}+\\@@_compile_}:+\n\
+         %   doc prose\n\
+         % \\end{macro}\n",
+    );
+    assert_eq!(
+        errors, 0,
+        "the unbalanced brace in the name must not diagnose"
+    );
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 2);
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::VERB, "+\\@@_compile_{:+".to_string())));
+    assert!(toks.contains(&(SyntaxKind::VERB, "+\\@@_compile_}:+".to_string())));
+    // The captured argument attaches into the `BEGIN` node like any verbatim
+    // command argument, so the environment body starts after it.
+    let begin = root
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::BEGIN)
+        .expect("a BEGIN node");
+    assert!(
+        begin
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::VERB),
+        "the VERB argument belongs to the BEGIN node"
+    );
+}
+
+#[test]
+fn braced_macro_name_argument_still_lexes_normally() {
+    // The braced form of the `v`-type argument is balanced text and keeps its
+    // ordinary `GROUP` shape (the dtx outline reads it off the `BEGIN`).
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{macro}{\\foo}\n\
+         %   doc prose\n\
+         % \\end{macro}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count_token(&root, SyntaxKind::VERB), 0);
+    assert_eq!(count(&root, SyntaxKind::GROUP), 1);
+}

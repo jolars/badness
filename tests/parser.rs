@@ -870,3 +870,19 @@ fn spaced_name_group_still_reads_as_an_environment() {
     // spacing (expl3 sources): a word-only name group still pairs.
     insta::assert_snapshot!(tree(r"\begin { myenv } x \end { myenv }"));
 }
+
+#[test]
+fn char_constant_backtick_keeps_the_next_character_plain() {
+    // TeX char-constant notation (smoke-test issue #60): after `\char`/
+    // `\catcode`-family primitives, a backtick makes the next character data —
+    // `\char`$` must not open math and `\char`}` must not close a group. The
+    // backtick and its character lex as one plain `WORD` token.
+    insta::assert_snapshot!(tree("\\item[\\char`$ or z] and {\\char`} too}"));
+}
+
+#[test]
+fn char_constant_escaped_form_lexes_benignly() {
+    // The escaped form keeps its ordinary shape: a backtick word, then the
+    // `\$` control symbol.
+    insta::assert_snapshot!(tree("\\catcode`\\%=12"));
+}

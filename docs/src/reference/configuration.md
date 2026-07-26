@@ -29,10 +29,10 @@ up.
 
 If no project file is found, badness next checks the `BADNESS_CONFIG`
 environment variable. When set (and non-empty), it names a config file to use
-instead of the global user config below—handy for keeping one config on a
-synced drive and pointing every machine at it. A set `BADNESS_CONFIG` shadows
-the global config entirely, and a missing or malformed file is a hard error
-rather than a silent fall-through, so a typo'd path can't go unnoticed.
+instead of the global user config below—handy for keeping one config on a synced
+drive and pointing every machine at it. A set `BADNESS_CONFIG` shadows the
+global config entirely, and a missing or malformed file is a hard error rather
+than a silent fall-through, so a typo'd path can't go unnoticed.
 
 If `BADNESS_CONFIG` is unset, badness falls back to a global user config: the
 first existing file among
@@ -43,13 +43,13 @@ first existing file among
    `~/Library/Application Support/badness/config.toml` on macOS)
 
 The `BADNESS_CONFIG` and global files use the same schema as a project
-`badness.toml` and are whole-file fallbacks, never merged with a project
-config. Relative `exclude` patterns in them resolve against the working
-directory (CLI) or the document's directory (language server) rather than the
-config's own directory. The language server uses the same resolution, so both
-are easy ways to set editor-wide defaults such as `wrap = "preserve"` (an edit
-is picked up when the server restarts). If none of these files is found,
-built-in defaults apply.
+`badness.toml` and are whole-file fallbacks, never merged with a project config.
+Relative `exclude` patterns in them resolve against the working directory (CLI)
+or the document's directory (language server) rather than the config's own
+directory. The language server uses the same resolution, so both are easy ways
+to set editor-wide defaults such as `wrap = "preserve"` (an edit is picked up
+when the server restarts). If none of these files is found, built-in defaults
+apply.
 
 Two global CLI flags override discovery:
 

@@ -634,9 +634,10 @@ fn short_verb_char(after: &str) -> Option<char> {
 }
 
 /// Whether the `{name}` argument following `\documentclass`/`\LoadClass` names a
-/// curated documentation class that makes `|` a short verb (`ltxdoc` calls
-/// `\MakeShortVerb{\|}`; `ltxguide` and `ltnews` define the equivalent active
-/// `|`). A leading `[options]` group is skipped; a trailing `[date]` is ignored.
+/// curated documentation class that makes `|` a short verb (`ltxdoc` and `l3doc`
+/// call `\MakeShortVerb` on `\|`; `ltxguide` and `ltnews` define the equivalent
+/// active `|`). A leading `[options]` group is skipped; a trailing `[date]` is
+/// ignored.
 fn doc_class_enables_bar(after: &str) -> bool {
     let mut s = after.trim_start_matches([' ', '\t']);
     if let Some(rest) = s.strip_prefix('[') {
@@ -651,7 +652,10 @@ fn doc_class_enables_bar(after: &str) -> bool {
     let Some(close) = rest.find('}') else {
         return false;
     };
-    matches!(rest[..close].trim(), "ltxdoc" | "ltxguide" | "ltnews")
+    matches!(
+        rest[..close].trim(),
+        "ltxdoc" | "ltxguide" | "ltnews" | "l3doc"
+    )
 }
 
 /// If `rest` starts with `\begin{name}` for a verbatim-like `name`, emit the
@@ -1382,13 +1386,14 @@ mod tests {
 
     #[test]
     fn documentclass_ltxguide_enables_the_pipe_short_verb() {
-        // The curated doc classes (`ltxdoc`, `ltxguide`, `ltnews`) make `|` a
-        // short verb themselves, so loading one enables the capture — options
-        // and trailing release dates included.
+        // The curated doc classes (`ltxdoc`, `ltxguide`, `ltnews`, `l3doc`)
+        // make `|` a short verb themselves, so loading one enables the
+        // capture — options and trailing release dates included.
         for preamble in [
             "\\documentclass{ltxguide}",
             "\\documentclass[a4paper]{ltxdoc}",
             "\\documentclass{ltxguide}[1994/11/20]",
+            "\\documentclass{l3doc}",
         ] {
             let input = format!("{preamble}\n|}}| done");
             let toks = lex(&input);

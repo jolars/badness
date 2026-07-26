@@ -148,14 +148,33 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      to end of line. Scoped to doc lines only: inside `macrocode` bodies `^^A`
      is live code (`` \char_set_catcode:nn { `\^^A } `` must keep its line), and
      unmargined driver lines lex normally.
-   - **l3doc delimited name arguments.** l3doc's `macro`/`function`/`variable`
+   - **l3doc verbatim name arguments.** l3doc's `macro`/`function`/`variable`
      take an xparse `v`-type name argument (`{ O{} +v }`), curated as
      `verbatimArg` in the signature DB. The delimited form
      (`\begin{macro}+\@@_compile_{:+`) is chosen by upstream precisely when the
      name holds unbalanced braces, so the lexer captures the span as one opaque
-     `VERB` token (same-line, punctuation delimiter, directly abutting); the
-     braced form lexes normally. The parser attaches the abutting `VERB` into
-     the `BEGIN` node like any verbatim command argument.
+     `VERB` token (same-line, punctuation delimiter, directly abutting). The
+     braced form keeps its `{`/`}` as real brace tokens (the parser still builds
+     the ordinary name `GROUP`) with the balanced content between them as one
+     `VERB`: a v-arg is raw data in either form, so `\begin{macro}{\]}` never
+     draws an orphan-closer diagnostic (issue #60). Both same-line only; a
+     multi-line braced name falls back to normal lexing. The parser attaches
+     the abutting `VERB` or name group into the `BEGIN` node like any verbatim
+     command argument.
+   - **expl3 regions are macro code.** Inside an expl3 region (`\ExplSyntaxOn`
+     …`\ExplSyntaxOff`, `\ProvidesExpl*` to EOF), token lists pass `\begin`/
+     `\end` around as data — l3prefixes.tex builds a longtable across two
+     `\tl_set:Nn`/`\tl_put_right:Nn` bodies (issue #60) — so in-region they
+     parse as plain `COMMAND`s exactly as in a definition body, and an orphan
+     `\]`/`\)` is data with no diagnostic (`\char_set_catcode_letter:N \)`;
+     the rule also applies in definition bodies and macrocode chunks). The
+     parser pre-scans the same fixed toggle set the lexer flips
+     (`parser::lexer::expl_toggle`, so the two never drift) and gates by token
+     position (`parser::grammar::in_macro_code`). `.dtx` doc-margin lines are
+     exempt: a region regularly spans macrocode chunks, and the doc-layer
+     markup between them (`\begin{macro}` prose, the frame lines) must keep
+     pairing — the same doc-line subtraction the formatter applies to region
+     ownership.
    - **Char-constant isolation.** After a `\char`/`\catcode`-family primitive
      (a closed curated set, `parser::lexer::is_char_constant_command`), a
      backtick opens TeX's char-constant number notation: the next character is

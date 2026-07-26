@@ -37,34 +37,55 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   flags it, the fix is one line: `"verbatimDelimited": true` on `path` in
   `data/signatures.json` — but that reopens the TikZ collision, so it likely
   wants the definition-shadowing item above instead.
-- [x] **`^^A` comment convention in `.dtx` doc prose (issue #60 follow-up).**
-  ltxdoc/l3doc set `\catcode`\^^A=14`; on a doc-margin line the literal `^^A`
-  now lexes as a comment to end of line, scoped to doc lines only (inside
-  `macrocode` bodies `^^A` stays live code). Landed together with two sibling
-  facts the same sweep surfaced: the l3doc `v`-type *delimited* name argument
-  (`\begin{macro}+\@@_compile_{:+`, captured as one opaque `VERB` via the
-  curated `verbatimArg` env facet) and char-constant backtick isolation
-  (`` \char`$ ``/`` \char`} `` lex with their backtick as one plain `WORD`,
-  a closed `\char`/`\catcode`-family set). Together they fixed `l3basics.dtx`,
-  `l3token.dtx`, `l3str.dtx`, `l3regex.dtx`, and `l3styleguide.tex` (latex3
-  sweep 30 -> 25 failures, strict subset). See AGENTS.md decision #1.
 - [ ] **doc.sty-family escape-character swaps are statically unparseable
   (issue #60, record-only).** `doc.sty`/`doc-2016`/`doc-2021`/`source2edoc.cls`
   self-document with `\catcode`\!=0`/`\catcode`\|=0` regions where `!` and `|`
   are the escape characters (`!    \begin{macrocode*}`,
-  `|gdef|xmacro@code#1%`), and `shortvrb.sty`/`latexrelease.sty` play similar
-  catcode games. General `\catcode` handling is a non-goal (AGENTS.md decision
-  #1), so these files stay format-error; nothing to fix in badness. Candidate
-  for a scan-level allowlist if the recurring issue noise matters.
+  `|gdef|xmacro@code#1%`), and `shortvrb.sty`/`latexrelease.sty`/`ltxdoc.cls`
+  play similar catcode games (ltxdoc makes `/` an escape character to define
+  its old-comments scanner). General `\catcode` handling is a non-goal
+  (AGENTS.md decision #1), so these files stay format-error; nothing to fix in
+  badness. Candidate for a scan-level allowlist if the recurring issue noise
+  matters.
 - [ ] **docstrip's `\catcode`\%=12` trick defeats the comment lexer (issue
   #60, record-only).** `docstrip.tex` (both copies) does
   `{\catcode`\%=12 \gdef\perCent{%}}` — with `%` demoted to "other", the body
   `{%}` is three ordinary characters, but badness's lexer reads the `%` as a
   comment that swallows the closing `}`, leaving one unclosed-`{` diagnostic.
   Same non-goal boundary as the doc.sty item; record, don't fix.
+- [ ] **Documents closed by macro expansion or conditionals (issue #60,
+  record-only).** The last latex3 format-error stragglers all need TeX
+  evaluation (a non-goal) or are genuinely broken upstream:
+  - *Macro-ended documents:* driver.tex ends with l3build's `\END`,
+    xinitials-test.tex with `\stop`, nfssfont.tex with a custom
+    `\def\bye{\end{document}}` — no literal `\end{document}`, so the
+    `document` environment is statically unclosed (and nfssfont's in-body
+    `\end{document}` sits in a `\def` body whose name is a control *word*,
+    outside the control-symbol rule of decision #3).
+  - *Conditional-branch structure:* xo-pfloat.tex opens `table*` in one
+    `\ifnum` branch and `table`+`minipage` in the other, closing them in a
+    matching conditional later; testpage.tex hides `\end{document}` in an
+    `\ifthenelse` branch group; xo-balance.tex has a second `\end{document}`
+    past the first (dead content TeX never reads).
+  - *Genuinely broken upstream:* xo-page.dtx double-opens `\begin{macro}` and
+    comments out the balancing close (`%% \end{macro}` — the second `%` is a
+    real comment even in the doc layer); galley2.dtx's doc layer carries an
+    early-exit `% \end{document}` whose `\begin` lives in the (already
+    closed) driver section.
 
 ## Formatter
 
+- [ ] **Environment relayout inside margined `.dtx` doc math drops the `%`
+  margin (issue #61, the remaining latex3 idempotency cluster).** In
+  l3color.dtx (also l3backend-draw.dtx, l3ldb.dtx), doc-prose display math
+  spans margined lines and holds an `array`: the `DISPLAY_MATH`/`MATH` arms
+  are `contains_doc_margin`-gated, but the nested `ENVIRONMENT` falls to
+  `lower_environment`, which re-breaks `\begin`/body/`\end` onto fresh lines
+  — pushing `\end{array}` off its `%` margin (a *meaning change*: the line
+  becomes live code at package-load time) and leaving pass 2 unparseable.
+  Fix direction: gate the generic `lower_environment` (and any other
+  re-breaking arm) on `contains_doc_margin`, like the math/group/optional
+  arms already are.
 - [x] **Math operator spacing.** A single space around each binary/relation atom
   (`a+2*1^5` -> `a + 2 * 1^5`, `x=-b` -> `x = -b`); unary signs and `^`/`_` scripts
   stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.

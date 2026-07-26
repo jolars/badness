@@ -503,6 +503,10 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // (`{ #1 }`), and `#1#2` parameters glue tight.
     ("expl_function_def", "sty"),
     ("expl_inline_vs_block_groups", "sty"),
+    // A region opening mid-line (`\protected\def\ProvidesExplPackage`, issue
+    // #58): the boundary begins a fresh line, and the run-final newline feeds
+    // that separator instead of stacking into a growing blank line.
+    ("expl_region_midline_open", "sty"),
 ];
 
 #[test]

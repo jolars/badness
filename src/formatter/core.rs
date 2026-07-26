@@ -1331,6 +1331,20 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             i += 1;
         }
+        // The trailing half of the boundary-trivia rule above: trivia at the end
+        // of a run also feeds the separator. Left inside the run, a preserved
+        // run-final newline would stack with the hard-line separator into a blank
+        // line the next pass keeps growing. (Skipped for an all-trivia run, so
+        // `i` always advances.)
+        if i < elements.len() {
+            let mut end = i;
+            while end > start && is_collapsible_trivia_element(&elements[end - 1]) {
+                end -= 1;
+            }
+            if end > start {
+                i = end;
+            }
+        }
         let run = elements[start..i].iter().cloned();
         let ir = if in_region {
             lower_expl_code(run, cx, Statements::SplitAtNewlines)

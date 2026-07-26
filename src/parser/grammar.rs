@@ -800,6 +800,11 @@ impl<'t> Parser<'t> {
     ///   finds its `]`**; otherwise it is left for the math loop as an ordinary
     ///   atom, so open-interval notation (`$]0;\num{0.5}[$`) does not swallow
     ///   the math closer as an optional-argument body.
+    /// - **In text mode, only when [`Self::bracket_closes_in_text`] finds its
+    ///   `]`** (issue #60): macro code tests for and re-emits lone brackets
+    ///   (`\@ifnextchar [\@xmpar\@ympar`), so a `[` whose closer is not
+    ///   reachable stays an ordinary token — no `OPTIONAL`, no diagnostic —
+    ///   mirroring the `$` shape gate ([`Self::dollar_closes`]).
     /// - **Per the caller's [`BracketPolicy`]:** `Tight` (a curated math
     ///   environment's `\begin` — its math body starts right after, so a
     ///   detached `[` is content: `\begin{align}` + newline + `[a]_1`) demands
@@ -843,6 +848,18 @@ impl<'t> Parser<'t> {
                     // freely, and an optional must never consume the frame.
                     if self.macrocode_end.is_some()
                         && !self.bracket_closes_before_macrocode_end(scan.next)
+                    {
+                        break;
+                    }
+                    // In text mode, a `[` is an argument only when its `]` is
+                    // reachable ([`Self::bracket_closes_in_text`]): macro code
+                    // tests for and re-emits lone brackets at least as often as
+                    // prose writes real optionals (`\@ifnextchar [\@xmpar\@ympar`,
+                    // issue #60), so an unreachable closer means the bracket is
+                    // data, not an argument.
+                    if !self.in_math()
+                        && self.macrocode_end.is_none()
+                        && !self.bracket_closes_in_text(scan.next)
                     {
                         break;
                     }
@@ -1035,6 +1052,66 @@ impl<'t> Parser<'t> {
                     return false;
                 }
                 SyntaxKind::CONTROL_WORD if matches!(t.text.as_str(), BEGIN_CMD | END_CMD) => {
+                    return false;
+                }
+                SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL => abuts_command = true,
+                _ => {}
+            }
+            newlines = 0;
+        }
+        false
+    }
+
+    /// True if the `[` at token index `open` is closed by a `]` before a token
+    /// that would make [`Self::optional`] bail in text mode. `[`/`]` are not
+    /// real grouping in TeX, and macro code tests for and re-emits lone
+    /// brackets (`\@ifnextchar [\@xmpar\@ympar`, `\def\@xfloat#1[#2]{…}`
+    /// re-implementations — issue #60) at least as often as prose writes real
+    /// optionals, so — like the `$` shape gate ([`Self::dollar_closes`]) — a
+    /// bracket attaches only when it *reads* as an argument: its closer must be
+    /// reachable. Mirrors `optional`'s bail anchors (an unbalanced `}`,
+    /// `\begin`/`\end` outside a definition body, a paragraph break, EOF). A
+    /// `]` counts only outside `{…}` nesting (matching how `optional` consumes
+    /// whole groups via `element`) and only past the `]`s owed to intervening
+    /// *command-abutting* `[`s, exactly as in
+    /// [`Self::bracket_closes_before_math_end`] (issue #55). A gated bracket
+    /// stays an ordinary token with **no diagnostic**: in code the shape is
+    /// routine, so it is not statically an error. Does not consume.
+    fn bracket_closes_in_text(&self, open: usize) -> bool {
+        let mut depth = 0usize;
+        let mut brackets = 0usize;
+        let mut newlines = 0;
+        let mut abuts_command = false;
+        for (off, t) in self.tokens[open + 1..].iter().enumerate() {
+            let idx = open + 1 + off;
+            let prev_abuts_command = abuts_command;
+            abuts_command = false;
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    if newlines >= 2 {
+                        return false;
+                    }
+                    continue;
+                }
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => continue,
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&idx) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&idx) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                SyntaxKind::L_BRACKET if depth == 0 && prev_abuts_command => brackets += 1,
+                SyntaxKind::R_BRACKET if depth == 0 => {
+                    if brackets == 0 {
+                        return true;
+                    }
+                    brackets -= 1;
+                }
+                SyntaxKind::CONTROL_WORD
+                    if !self.in_def_body && matches!(t.text.as_str(), BEGIN_CMD | END_CMD) =>
+                {
                     return false;
                 }
                 SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL => abuts_command = true,

@@ -252,6 +252,14 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      the `]`s claimed by intervening command-abutting `[`s, so in
      `\P[\gamma[0, \infty) \cap A = \emptyset]` the lone `]` belongs to `\gamma[` and
      the outer `\P[` stays an ordinary atom (issue #55).
+   - *In text mode* (issue #60, mirroring the `$` shape gate in decision #3), a `[`
+     attaches only when its `]` is reachable before an unbalanced `}`, a
+     `\begin`/`\end` outside a definition body, a paragraph break, or EOF — net of the
+     `]`s claimed by intervening command-abutting `[`s, as in the math gate. Macro code
+     tests for and re-emits lone brackets (`\@ifnextchar [\@xmpar\@ympar`) at least as
+     often as prose writes real optionals, so a gated bracket stays an ordinary token
+     with **no diagnostic**. (In a macrocode chunk the chunk-scoped gate in decision #1
+     applies instead.)
    - A *curated math environment's* `\begin` likewise attaches only a directly-abutting
      bracket (`\begin{aligned}[t]`; a detached `[a]_1` on the next line is body
      content). Non-math environments stay greedy across trivia — the xparse-signature

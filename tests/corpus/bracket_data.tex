@@ -1,0 +1,27 @@
+% A regression corpus file for the text-mode `[` shape gate (smoke-test
+% issue #60): brackets are macro-code data at least as often as they are
+% optional-argument delimiters, so a `[` with no reachable `]` parses as an
+% ordinary token — no OPTIONAL node, no diagnostic. Sourced from latex2e's
+% kernel sources: `\@ifnextchar` tests for a literal `[`, and body
+% re-implementations re-emit one.
+\documentclass{article}
+\begin{document}
+
+\def\marginpar{\ifinner\@parmoderr\fi
+  \begingroup \@ifnextchar [\@xmpar\@ympar}
+
+\def\@dblarg#1{\kernel@ifnextchar[{#1}{\@xdblarg{#1}}}
+
+\makeatletter
+\def\@testopt#1#2{%
+  \kernel@ifnextchar[{#1}{#1[{#2}]}}
+\makeatother
+
+A lone bracket before a paragraph break stays plain: \cmd[
+
+Real optionals still attach: \item[label] and \sqrt[3]{x} and a spaced
+\item [label] and a next-line
+\includegraphics
+[width=\textwidth]{fig} and nested \cmd[\emph[a] b].
+
+\end{document}

@@ -237,13 +237,26 @@ fn text_spaced_optional_still_attaches() {
 }
 
 #[test]
-fn text_unclosed_optional_still_reports() {
-    // In text mode the gate does not apply: an unclosed `[` after a command is
-    // attached greedily and reported, as before.
+fn text_unreachable_bracket_stays_plain() {
+    // #60: the text-mode bracket gate — a `[` with no reachable `]` (here EOF)
+    // is data, not an argument: it stays an ordinary token, no OPTIONAL and no
+    // diagnostic, mirroring the `$` shape gate.
     let parsed = parse(r"\cmd[oops");
     assert_eq!(parsed.syntax().to_string(), r"\cmd[oops");
-    let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
-    assert_eq!(messages, ["unclosed `[`"]);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    insta::assert_snapshot!(tree(r"\cmd[oops"));
+}
+
+#[test]
+fn ifnextchar_bracket_stays_plain() {
+    // #60: `\@ifnextchar [\@xmpar\@ympar}` inside a `\def` body — the `[` is
+    // the character being tested for, and its scan hits the unbalanced `}`
+    // before any `]`, so it must not attach and swallow the group closer.
+    let src = r"\def\marginpar{\begingroup \@ifnextchar [\@xmpar\@ympar}";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    insta::assert_snapshot!(tree(src));
 }
 
 #[test]

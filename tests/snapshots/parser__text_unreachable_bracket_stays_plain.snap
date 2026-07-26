@@ -1,0 +1,11 @@
+---
+source: tests/parser.rs
+assertion_line: 247
+expression: "tree(r\"\\cmd[oops\")"
+---
+ROOT@0..9
+  PARAGRAPH@0..9
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\cmd"
+    L_BRACKET@4..5 "["
+    WORD@5..9 "oops"

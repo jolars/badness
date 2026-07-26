@@ -1,0 +1,25 @@
+---
+source: tests/parser.rs
+assertion_line: 259
+expression: tree(src)
+---
+ROOT@0..56
+  PARAGRAPH@0..56
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\def"
+    COMMAND@4..56
+      CONTROL_WORD@4..14 "\\marginpar"
+      GROUP@14..56
+        L_BRACE@14..15 "{"
+        COMMAND@15..26
+          CONTROL_WORD@15..26 "\\begingroup"
+        WHITESPACE@26..27 " "
+        CONTROL_SYMBOL@27..29 "\\@"
+        WORD@29..39 "ifnextchar"
+        WHITESPACE@39..40 " "
+        L_BRACKET@40..41 "["
+        CONTROL_SYMBOL@41..43 "\\@"
+        WORD@43..48 "xmpar"
+        CONTROL_SYMBOL@48..50 "\\@"
+        WORD@50..55 "ympar"
+        R_BRACE@55..56 "}"

@@ -676,9 +676,16 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
 /// The verbatim argument's form is decided by its first non-blank character,
 /// matching how these commands actually parse: a brace introduces a balanced
 /// `{…}` group (`\code{…}`, `\url{…}`); any other character is a `\verb`-style
-/// delimiter run (`\lstinline|…|`). `\verb`/`\verb*` are deliberately excluded —
-/// they are delimiter-only and handled in [`lex_control`]. Like the verbatim
-/// environment path, this reads only static signature data (decision #1).
+/// delimiter run (`\lstinline|…|`), but only for built-ins whose signature
+/// grants the delimiter form (`verbatim_delimited`). For braced-only commands —
+/// `\code`, `\path`, and every scanner-discovered user command — a non-brace
+/// follower means this occurrence is not a verbatim argument (the name may be an
+/// unrelated user macro: `\code` as a math operator, TikZ's `\path (0,0)`), so
+/// we return `None` and lex normally; a missed capture is benign where a wrong
+/// delimiter capture swallows text across the line. `\verb`/`\verb*` are
+/// deliberately excluded — they are delimiter-only and handled in
+/// [`lex_control`]. Like the verbatim environment path, this reads only static
+/// signature data (decision #1).
 fn lex_verbatim_command(
     rest: &str,
     at_letter: bool,
@@ -701,9 +708,14 @@ fn lex_verbatim_command(
     }
     // A user-defined catcode-verbatim command (from `ctx`) wins over the built-in DB;
     // either way we read only the static leading-argument shape, never macro meaning.
-    let leading = match ctx.leading_args(name) {
-        Some(args) => args,
-        None => &builtin().command(name).filter(|c| c.verbatim)?.args,
+    // Discovered commands are `\newcommand`-style braced definitions, so they never
+    // get the delimiter form.
+    let (leading, delimited): (&[ArgSpec], bool) = match ctx.leading_args(name) {
+        Some(args) => (args, false),
+        None => {
+            let sig = builtin().command(name).filter(|c| c.verbatim)?;
+            (&sig.args, sig.verbatim_delimited)
+        }
     };
 
     // Leading arguments precede the verbatim one (e.g. `\mintinline{lang}{code}`).
@@ -722,8 +734,8 @@ fn lex_verbatim_command(
         Some(b'{') => balanced_group_len(arg_region, b'}')?,
         // A `\verb`-style delimiter run: the first character delimits, and the
         // argument may not span a line break.
-        Some(_) => delimited_len(arg_region)?,
-        None => return None,
+        Some(_) if delimited => delimited_len(arg_region)?,
+        _ => return None,
     };
 
     out.push(Token {

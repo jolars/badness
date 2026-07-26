@@ -1,0 +1,22 @@
+% Braced-only verbatim commands (\code, \path) must not capture a
+% \verb-style delimiter run: the name may be an unrelated user macro.
+% Minimized from HoTT/book basics.tex (issue #53), where \code is
+% \newcommand{\code}{\ensuremath{\mathsf{code}}\xspace}.
+We will define a type family $\code:A+B\to\type$ and show that
+$\prd{x:A+B} (\eqv{(\inl(a_0)=x)}{\code(x)})$.
+We should have $\code(\inl(a)) = (a_0=a)$, and also
+$\code (\inr(b)) = \emptyt$ by definition of \code.
+\begin{align*}
+  \code(\inl(a)) &\defeq (a_0=a),\\
+  \code(\inr(b)) &\defeq \emptyt.
+\end{align*}
+
+TikZ's \path collides with the url package's braced-only \path the
+same way:
+\begin{tikzpicture}
+  \path (0,0) -- (1,1);
+\end{tikzpicture}
+
+The braced forms still capture verbatim bodies:
+\code{$ pip install x_y} and \url{http://example.com/a_b} and
+\lstinline|x_$y$| keep their raw text.

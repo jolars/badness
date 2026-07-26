@@ -81,11 +81,11 @@
     "DescribeEnv": { "args": ["req"] },
     "StopEventually": { "args": ["req"] },
 
-    "verb": { "verbatim": true },
-    "verb*": { "verbatim": true },
-    "lstinline": { "args": ["opt"], "verbatim": true },
-    "mintinline": { "args": ["opt", "req"], "verbatim": true },
-    "url": { "verbatim": true },
+    "verb": { "verbatim": true, "verbatimDelimited": true },
+    "verb*": { "verbatim": true, "verbatimDelimited": true },
+    "lstinline": { "args": ["opt"], "verbatim": true, "verbatimDelimited": true },
+    "mintinline": { "args": ["opt", "req"], "verbatim": true, "verbatimDelimited": true },
+    "url": { "verbatim": true, "verbatimDelimited": true },
     "path": { "verbatim": true },
     "code": { "verbatim": true },
 

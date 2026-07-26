@@ -94,11 +94,18 @@ pub struct CommandSig {
     pub sectioning: Option<u8>,
     /// `true` for commands whose final argument is raw text the formatter must
     /// not reshape (`\verb`, `\lstinline`, `\url`, `\code`). The lexer captures
-    /// that argument as one `VERB` token — a balanced `{…}` group or a
-    /// `\verb`-style delimiter run, chosen by its first character. Any leading,
-    /// non-verbatim arguments (e.g. `\mintinline`'s language) are declared in
-    /// `args`; the verbatim argument itself is implicit and not listed there.
+    /// that argument as one `VERB` token. Any leading, non-verbatim arguments
+    /// (e.g. `\mintinline`'s language) are declared in `args`; the verbatim
+    /// argument itself is implicit and not listed there.
     pub verbatim: bool,
+    /// `true` when the verbatim argument may also be a `\verb`-style delimiter
+    /// run (`\lstinline|…|`, `\url|…|`) instead of a balanced `{…}` group.
+    /// Braced-only commands (`\code`, `\path`) capture nothing when no brace
+    /// follows and lex normally — the name may be an unrelated user macro
+    /// (`\code` as a math operator, TikZ's `\path (0,0)`), and a wrong
+    /// delimiter capture swallows text across the line. Only meaningful when
+    /// `verbatim` is set.
+    pub verbatim_delimited: bool,
     /// `true` for horizontal-rule commands (`\hline`, `\midrule`, `\toprule`, …).
     /// In an alignment environment a physical line made up solely of rule
     /// commands is a *passthrough* line the formatter keeps between grid rows
@@ -227,6 +234,9 @@ pub(crate) const fn command(
         args: Cow::Borrowed(args),
         sectioning,
         verbatim,
+        // The codegen (CWL) tier is arity-only, so the delimiter facet — like
+        // every behavior flag — never comes from it.
+        verbatim_delimited: false,
         rule,
         inline,
     }
@@ -770,6 +780,8 @@ struct RawCommand {
     sectioning: Option<u8>,
     #[serde(default)]
     verbatim: bool,
+    #[serde(default, rename = "verbatimDelimited")]
+    verbatim_delimited: bool,
     #[serde(default)]
     rule: bool,
     #[serde(default)]
@@ -782,6 +794,7 @@ impl From<RawCommand> for CommandSig {
             args: Cow::Owned(raw.args.into_iter().map(ArgSpec::from).collect()),
             sectioning: raw.sectioning,
             verbatim: raw.verbatim,
+            verbatim_delimited: raw.verbatim_delimited,
             rule: raw.rule,
             inline: raw.inline,
         }
@@ -975,6 +988,12 @@ mod tests {
         assert!(builtin().command("verb").unwrap().verbatim);
         assert!(builtin().command("lstinline").unwrap().verbatim);
         assert!(!builtin().command("textbf").unwrap().verbatim);
+        // The delimiter form is opt-in: `\lstinline|…|` has it, the braced-only
+        // `\code`/`\path` (jss, url) do not — their names collide with common
+        // user macros (issue #53).
+        assert!(builtin().command("lstinline").unwrap().verbatim_delimited);
+        assert!(!builtin().command("code").unwrap().verbatim_delimited);
+        assert!(!builtin().command("path").unwrap().verbatim_delimited);
     }
 
     #[test]

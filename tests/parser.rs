@@ -391,6 +391,24 @@ fn brace_verbatim_command_is_opaque() {
 }
 
 #[test]
+fn braced_only_verbatim_command_without_brace_lexes_normally() {
+    // The delimiter form is opt-in per signature. `\code` is braced-only (jss),
+    // so a non-brace follower means this `\code` is some unrelated user macro —
+    // here the HoTT book's math operator (issue #53). Capturing `:A+B\to\type$ …`
+    // as a `:`-delimited verb run would swallow the closing `$` and cascade into
+    // unbalanced-delimiter diagnostics.
+    let out = tree(r"a family $\code:A+B\to\type$ and $\code(\inl(a))$ here");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(!out.contains("VERB@"), "{out}");
+
+    // TikZ's `\path (0,0) …` collides with the url package's braced-only `\path`
+    // the same way.
+    let out = tree(r"\path (0,0) -- (1,1);");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(!out.contains("VERB@"), "{out}");
+}
+
+#[test]
 fn delimiter_verbatim_command_is_opaque() {
     // The `VERB` body attaches *into* the command (a child, like any greedy
     // argument — decision #8), not as a stranded sibling.

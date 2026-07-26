@@ -122,6 +122,10 @@ enum Block {
     /// An environment body; ends at the next `\end` (any name — the caller
     /// checks the name and decides whether to consume it).
     Environment,
+    /// A `.dtx` `macrocode` body: macro code, so a bare `\end` in the code is a
+    /// plain command, and the block ends *positionally* at the pre-scanned frame
+    /// terminator ([`Parser::macrocode_end`]), never at an arbitrary `\end`.
+    Macrocode,
 }
 
 /// How the shared trivia scanner ([`Parser::scan_trivia`]) treats a `%` comment.
@@ -228,6 +232,20 @@ struct Parser<'t> {
     /// [`Self::attach_arguments`] in [`Self::command`], so it covers the whole
     /// definition subtree (nested groups included) and nothing after it.
     in_def_body: bool,
+    /// Inside a `.dtx` `macrocode` body: the token index of the terminating
+    /// frame `\end` (or `tokens.len()` when the frame is missing), pre-scanned
+    /// by [`Self::macrocode_body`]. `None` outside a macrocode body. The frame
+    /// is the *only* terminator of the chunk (docstrip is line-oriented), so
+    /// [`Self::at_block_end`] and the bracket/optional guards read it to keep
+    /// any construct from consuming past the frame.
+    macrocode_end: Option<usize>,
+    /// Brace tokens inside the current `macrocode` body with no match within
+    /// the chunk. A `macrocode` chunk is macro code: a definition regularly
+    /// opens a `{` in one chunk and closes it in a later one (`\def\foo#1{%` …
+    /// frame … `bar}`), so an unmatched brace is an ordinary token — no
+    /// `GROUP`, no unclosed/unmatched diagnostic. Matched pairs still parse as
+    /// groups. Computed per chunk by [`Self::macrocode_body`].
+    plain_braces: std::collections::HashSet<usize>,
 }
 
 impl<'t> Parser<'t> {
@@ -250,6 +268,8 @@ impl<'t> Parser<'t> {
             errors: Vec::new(),
             math_depth: 0,
             in_def_body: false,
+            macrocode_end: None,
+            plain_braces: std::collections::HashSet::new(),
         }
     }
 
@@ -607,7 +627,14 @@ impl<'t> Parser<'t> {
     }
 
     fn at_block_end(&self, block: Block) -> bool {
-        self.at_end() || (block == Block::Environment && self.at_command(END_CMD))
+        self.at_end()
+            || match block {
+                Block::Document => false,
+                Block::Environment => self.at_command(END_CMD),
+                // `>=` (not `==`): defensive against an element overshooting the
+                // pre-scanned terminator, so the loop still stops.
+                Block::Macrocode => self.macrocode_end.is_some_and(|end| self.pos >= end),
+            }
     }
 
     /// True if the contiguous trivia run at the current position should separate
@@ -615,15 +642,22 @@ impl<'t> Parser<'t> {
     /// block terminator (the `\end`, or EOF).
     fn trivia_run_is_separator(&self, block: Block) -> bool {
         let s = self.scan_trivia(self.pos, CommentMode::Skip);
-        s.saw_blank_line
-            || match s.next_kind {
-                // Only trivia remains before the block terminator (`\end`, or EOF).
-                None => true,
-                Some(SyntaxKind::CONTROL_WORD) => {
-                    block == Block::Environment && self.tokens[s.next].text == END_CMD
-                }
-                Some(_) => false,
+        if s.saw_blank_line {
+            return true;
+        }
+        // A macrocode body ends positionally at the frame terminator; trivia
+        // reaching it (the frame line's own margin and indent) is a separator.
+        if block == Block::Macrocode {
+            return s.next_kind.is_none() || self.macrocode_end.is_some_and(|end| s.next >= end);
+        }
+        match s.next_kind {
+            // Only trivia remains before the block terminator (`\end`, or EOF).
+            None => true,
+            Some(SyntaxKind::CONTROL_WORD) => {
+                block == Block::Environment && self.tokens[s.next].text == END_CMD
             }
+            Some(_) => false,
+        }
     }
 
     /// One element in text mode. Always consumes at least one token.
@@ -663,9 +697,20 @@ impl<'t> Parser<'t> {
                     _ => self.bump(),
                 }
             }
-            SyntaxKind::L_BRACE => self.group(),
+            // A brace unmatched within a `macrocode` chunk is an ordinary macro-
+            // code token (the definition it belongs to spans chunks): no `GROUP`,
+            // no diagnostic.
+            SyntaxKind::L_BRACE => {
+                if self.plain_braces.contains(&self.pos) {
+                    self.bump();
+                } else {
+                    self.group();
+                }
+            }
             SyntaxKind::R_BRACE => {
-                self.error("unmatched `}`");
+                if !self.plain_braces.contains(&self.pos) {
+                    self.error("unmatched `}`");
+                }
                 self.bump();
             }
             SyntaxKind::DOLLAR => self.dollar_math(),
@@ -761,6 +806,12 @@ impl<'t> Parser<'t> {
             }
             match next {
                 Some(SyntaxKind::L_BRACE) => {
+                    // A chunk-unmatched macrocode brace is a plain token, never
+                    // an argument group (`\gdef\foo{%` … next chunk).
+                    let scan = self.scan_trivia(self.pos, CommentMode::Skip);
+                    if self.plain_braces.contains(&scan.next) {
+                        break;
+                    }
                     self.skip_trivia();
                     self.group();
                 }
@@ -776,6 +827,14 @@ impl<'t> Parser<'t> {
                     if self.in_math() && !self.bracket_closes_before_math_end(scan.next) {
                         break;
                     }
+                    // In a macrocode body, a `[` is an argument only when its `]`
+                    // closes inside the chunk: macro code uses bare brackets
+                    // freely, and an optional must never consume the frame.
+                    if self.macrocode_end.is_some()
+                        && !self.bracket_closes_before_macrocode_end(scan.next)
+                    {
+                        break;
+                    }
                     self.skip_trivia();
                     self.optional();
                 }
@@ -785,14 +844,17 @@ impl<'t> Parser<'t> {
                 // child like any other argument (decision #8) instead of leaving it
                 // a sibling. A *standalone* `\verb…`/`\verb*…` token (its text starts
                 // with `\`) is self-contained and belongs to no command — never
-                // capture it. Only `lex_verbatim_command` emits a non-`\` `VERB`, and
-                // always directly after its own command, so the open node here owns it.
+                // capture it. `lex_verbatim_command` emits its non-`\` `VERB`
+                // *directly* after its own command tokens, so only a directly
+                // abutting `VERB` attaches: a spaced one is a doc short-verb span
+                // (`\emph{x} |y|`), a freestanding sibling that must keep its
+                // interword space.
                 Some(SyntaxKind::VERB)
-                    if !self
-                        .peek_meaningful_text()
-                        .is_some_and(|t| t.starts_with('\\')) =>
+                    if self.scan_trivia(self.pos, CommentMode::Skip).next == self.pos
+                        && !self
+                            .peek_meaningful_text()
+                            .is_some_and(|t| t.starts_with('\\')) =>
                 {
-                    self.skip_trivia();
                     self.bump(); // the VERB argument
                 }
                 _ => break,
@@ -852,7 +914,11 @@ impl<'t> Parser<'t> {
                     break;
                 }
                 _ => {
-                    if self.at_paragraph_break() {
+                    // The macrocode frame terminator is absolute: an optional
+                    // still open there is abandoned, never consumes the frame.
+                    if self.at_paragraph_break()
+                        || self.macrocode_end.is_some_and(|end| self.pos >= end)
+                    {
                         self.error_at(opener, "unclosed `[`");
                         break;
                     }
@@ -861,6 +927,49 @@ impl<'t> Parser<'t> {
             }
         }
         self.close();
+    }
+
+    /// True if the `[` at token index `open` is closed by a `]` before the
+    /// current macrocode chunk's frame terminator. Depth-tracks only the braces
+    /// that really form groups (chunk-matched ones — [`Self::plain_braces`] are
+    /// plain tokens), and gives up at a *blank line* — the same paragraph-break
+    /// bail as [`Self::optional`], so an optional the formatter has re-wrapped
+    /// over several lines still attaches on the second pass. Keeps a code
+    /// bracket (`\@tempcnta[` with no `]` in the chunk) an ordinary token
+    /// instead of an optional that would swallow the frame.
+    fn bracket_closes_before_macrocode_end(&self, open: usize) -> bool {
+        let Some(end) = self.macrocode_end else {
+            return true;
+        };
+        let mut depth = 0usize;
+        let mut newline_run = 0;
+        for (off, t) in self.tokens[open + 1..end.min(self.tokens.len())]
+            .iter()
+            .enumerate()
+        {
+            let idx = open + 1 + off;
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newline_run += 1;
+                    if newline_run >= 2 {
+                        return false;
+                    }
+                    continue;
+                }
+                SyntaxKind::WHITESPACE => continue,
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&idx) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&idx) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                SyntaxKind::R_BRACKET if depth == 0 => return true,
+                _ => {}
+            }
+            newline_run = 0;
+        }
+        false
     }
 
     /// True if the `[` at token index `open` is closed by a `]` before a token
@@ -1325,6 +1434,7 @@ impl<'t> Parser<'t> {
     fn environment(&mut self) {
         self.open(SyntaxKind::ENVIRONMENT);
 
+        let begin_pos = self.pos;
         let begin_start = self.starts[self.pos];
         self.open(SyntaxKind::BEGIN);
         self.bump(); // \begin
@@ -1332,6 +1442,15 @@ impl<'t> Parser<'t> {
         // Span of the opener `\begin{name}` (before any trailing arguments), so
         // an unclosed environment points back at the `\begin`, not at EOF.
         let opener = (begin_start, self.starts[self.pos]);
+        // A frame-lexed `.dtx` macrocode `\begin` (it rides a `DOC_MARGIN`, so
+        // this never fires on a stray `\begin{macrocode}` in a plain document).
+        // The frame line holds nothing but the name (`lex_macrocode_frame`), so
+        // it takes *no* arguments — the next line's `{` is body macro code, not
+        // an attachment — and the body routes to `macrocode_body` below.
+        let macrocode_frame = name
+            .as_deref()
+            .is_some_and(|n| matches!(n, "macrocode" | "macrocode*"))
+            && self.frame_margin_before(begin_pos);
         // `\begin{tabular}{ll}`, `[options]`, etc. A curated math environment's
         // body starts right after its `\begin`, so only a directly-abutting
         // `[t]`-style optional attaches; a detached bracket is body content
@@ -1341,7 +1460,9 @@ impl<'t> Parser<'t> {
         } else {
             BracketPolicy::Greedy
         };
-        self.attach_arguments(bracket);
+        if !macrocode_frame {
+            self.attach_arguments(bracket);
+        }
         self.close(); // BEGIN
 
         if name
@@ -1351,10 +1472,88 @@ impl<'t> Parser<'t> {
             self.verbatim_body(name.as_deref().expect("verbatim name"));
         } else if name.as_deref().is_some_and(is_math_environment) {
             self.math_environment_body();
+        } else if macrocode_frame {
+            // A frame-lexed macrocode body is macro code, not document
+            // structure (see `macrocode_frame` above).
+            self.macrocode_body(name.as_deref().expect("macrocode name"));
         } else {
             self.parse_block(Block::Environment);
         }
         self.finish_environment(&name, opener);
+    }
+
+    /// True if the token at `pos` sits on a `.dtx` frame line: walking back over
+    /// inline whitespace, the preceding token is a `DOC_MARGIN`. Margins never
+    /// occur *inside* a macrocode body (code lines own their `%`), so this
+    /// fingerprint distinguishes the frame `\begin`/`\end{macrocode}` from any
+    /// look-alike in the code. Pinned by
+    /// `macrocode_frame_margins_sit_where_the_formatter_expects` (`tests/dtx.rs`).
+    fn frame_margin_before(&self, pos: usize) -> bool {
+        let mut i = pos;
+        while i > 0 {
+            i -= 1;
+            match self.tokens[i].kind {
+                SyntaxKind::WHITESPACE => continue,
+                SyntaxKind::DOC_MARGIN => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// The body of a `.dtx` `macrocode`/`macrocode*` environment: macro code
+    /// whose one true terminator is the frame line (`%    \end{macrocode}`),
+    /// a line-oriented docstrip fact. TeX places no balance requirements on the
+    /// chunk — a definition regularly opens a brace in one chunk and closes it
+    /// several chunks later, and kernel code uses the `\end` primitive — so,
+    /// like the definition bodies of decision #1 (issues #45/#55):
+    /// - `\begin`/`\end` inside parse as plain commands ([`Self::in_def_body`]),
+    /// - chunk-unmatched braces are plain tokens with no diagnostics
+    ///   ([`Self::plain_braces`]; matched pairs still parse as `GROUP`s),
+    /// - a `[` attaches as an optional only when it closes inside the chunk.
+    ///
+    /// The terminator is pre-scanned here (the first `\end` on a margin whose
+    /// name matches — [`Self::frame_margin_before`]) and parsing stops
+    /// positionally at it ([`Block::Macrocode`]); [`Self::finish_environment`]
+    /// then consumes and name-checks it as usual. Nesting is impossible (the
+    /// lexer never opens a frame inside a body), but state is saved/restored
+    /// anyway so a malformed tree cannot leak it.
+    fn macrocode_body(&mut self, name: &str) {
+        let mut end = self.tokens.len();
+        for i in self.pos..self.tokens.len() {
+            if self.tokens[i].kind == SyntaxKind::CONTROL_WORD
+                && self.tokens[i].text == END_CMD
+                && self.frame_margin_before(i)
+                && peek_end_name(self.tokens, i).as_deref() == Some(name)
+            {
+                end = i;
+                break;
+            }
+        }
+
+        let saved_plain = std::mem::take(&mut self.plain_braces);
+        let saved_end = self.macrocode_end;
+        let saved_def = self.in_def_body;
+
+        let mut open_stack = Vec::new();
+        for i in self.pos..end {
+            match self.tokens[i].kind {
+                SyntaxKind::L_BRACE => open_stack.push(i),
+                SyntaxKind::R_BRACE if open_stack.pop().is_none() => {
+                    self.plain_braces.insert(i);
+                }
+                _ => {}
+            }
+        }
+        self.plain_braces.extend(open_stack);
+        self.macrocode_end = Some(end);
+        self.in_def_body = true;
+
+        self.parse_block(Block::Macrocode);
+
+        self.plain_braces = saved_plain;
+        self.macrocode_end = saved_end;
+        self.in_def_body = saved_def;
     }
 
     /// Consume the matching `\end`, or recover. `parse_block` / `verbatim_body`

@@ -1,0 +1,23 @@
+% \section{Implementation}
+%    \begin{macrocode}
+\ExplSyntaxOn
+\tl_new:N \l_@@_restores_tl
+%    \end{macrocode}
+%
+% And restore the silenced error messages.
+% \changes{v1.0q}{2025/01/31}
+%         {Unsilence \cs{NewSocket} and \cs{NewSocketPlug} error message
+%          after rollback}
+%
+%    \begin{macrocode}
+\long\def\@iiiparbox#1{
+  %
+  \@parboxto{
+    \let\hss\vss\let\unhbox\unvbox
+    \csname bm@#1\endcsname
+  }%
+  \@end@tempboxa%
+  \UseTaggingSocket{ parbox/after }
+}
+\ExplSyntaxOff
+%    \end{macrocode}

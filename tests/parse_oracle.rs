@@ -20,6 +20,15 @@ use std::path::Path;
 use badness::parser::parse;
 use parse_skeleton::texlab_has_error;
 
+/// Corpus files badness legitimately parses cleanly but texlab cannot, each with
+/// the modeled feature texlab lacks. Recorded here per the module contract above
+/// rather than weakening the gate.
+const TEXLAB_KNOWN_DIVERGENT: &[&str] = &[
+    // doc's `\MakeShortVerb{\|}` short verbs: `|}|` and `|\begin{document}|` are
+    // opaque VERB spans for badness (issue #57), unmatched braces for texlab.
+    "doc_shortverb.tex",
+];
+
 #[test]
 fn texlab_accepts_badness_clean_corpus() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -40,6 +49,9 @@ fn texlab_accepts_badness_clean_corpus() {
         }
 
         let name = path.file_name().unwrap().to_string_lossy();
+        if TEXLAB_KNOWN_DIVERGENT.contains(&name.as_ref()) {
+            continue;
+        }
         assert!(
             !texlab_has_error(&text),
             "texlab reported a parse error for badness-clean corpus file `{name}`"

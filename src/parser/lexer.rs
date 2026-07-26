@@ -266,6 +266,16 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     // documentation margin. Any token — including whitespace — clears it, matching
     // docstrip's rule that only a `%` in *column 0* is a margin.
     let mut at_line_start = true;
+    // doc-package short-verb characters (`\MakeShortVerb{\|}`): while a char is
+    // enabled, `<c>…<c>` on one line captures as a single opaque `VERB` token,
+    // exactly like `\verb<c>…<c>`. A sanctioned static lexer mode (`AGENTS.md`
+    // decision #1): the toggles are the explicit `\MakeShortVerb`/
+    // `\DeleteShortVerb` calls (left-to-right, like `\makeatletter`), plus the
+    // curated doc classes that enable `|` themselves (`\documentclass{ltxdoc}`
+    // and friends, see [`doc_class_enables_bar`]). The `.dtx` documentation
+    // layer gets `|` from the start — dtx files are typeset under `ltxdoc`, and
+    // the driver holding the `\documentclass` may live in a separate file.
+    let mut short_verbs: Vec<char> = if config.dtx { vec!['|'] } else { Vec::new() };
     // True while inside a `macrocode`/`macrocode*` environment body (between its
     // frame lines). There, code lines carry no margin, a line-leading `%` is an
     // ordinary code comment (not a margin), and `@` is a letter (`macrocode` runs
@@ -388,11 +398,46 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             continue;
         }
 
+        // Short-verb span (`|…|` under doc's `\MakeShortVerb{\|}`): capture the
+        // delimited run as one opaque `VERB` token, same-line only (like `\verb`).
+        // Gated off inside a `macrocode` body (a code layer, where `|` is an
+        // ordinary catcode-12 character) and after `\left`/`\right` (whose next
+        // character is a delimiter, `\left|x\right|`). With no closing delimiter
+        // on the line, fall through: the word-run truncation below still emits
+        // the lone character as its own token.
+        if !short_verbs.is_empty()
+            && !in_macrocode
+            && !pending_delim
+            && let Some(c) = rest.chars().next()
+            && short_verbs.contains(&c)
+            && let Some(len) = delimited_len(rest)
+        {
+            out.push(Token {
+                kind: SyntaxKind::VERB,
+                text: SmolStr::new(&rest[..len]),
+            });
+            pos += len;
+            at_line_start = false;
+            pending_def = false;
+            continue;
+        }
+
         let (kind, mut len) = next_token(rest, at_letter, expl_syntax);
         // A `\left`/`\right` delimiter that lexes as a word run: keep only its
         // first character so it does not glue into the following text.
         if pending_delim && kind == SyntaxKind::WORD {
             len = rest.chars().next().expect("rest is non-empty").len_utf8();
+        }
+        // An enabled short-verb char never joins a word run: split it off so a
+        // mid-word `x|y|` still opens a capture on the next iteration, and an
+        // unclosed `|` stands alone rather than gluing into the following text.
+        if kind == SyntaxKind::WORD
+            && !short_verbs.is_empty()
+            && let Some((i, c)) = rest[..len]
+                .char_indices()
+                .find(|(_, c)| short_verbs.contains(c))
+        {
+            len = if i == 0 { c.len_utf8() } else { i };
         }
         debug_assert!(len > 0, "lexer made no progress at byte {pos}");
         let text = &rest[..len];
@@ -400,6 +445,31 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             match text {
                 "\\makeatletter" => at_letter = true,
                 "\\makeatother" => at_letter = false,
+                // doc's short-verb toggles: `\MakeShortVerb{\|}` (or the `*` and
+                // unbraced forms) enables the char, `\DeleteShortVerb{\|}`
+                // disables it. Read as static facts left-to-right; a definition
+                // site (`\def\MakeShortVerb{…`) never matches the `\c` argument
+                // shape, so it does not toggle.
+                "\\MakeShortVerb" => {
+                    if let Some(c) = short_verb_char(&rest[len..])
+                        && !short_verbs.contains(&c)
+                    {
+                        short_verbs.push(c);
+                    }
+                }
+                "\\DeleteShortVerb" => {
+                    if let Some(c) = short_verb_char(&rest[len..]) {
+                        short_verbs.retain(|&x| x != c);
+                    }
+                }
+                // The curated doc classes make `|` a short verb themselves
+                // (`ltxdoc` via `\MakeShortVerb`, and the `ltxguide`/`ltnews`
+                // internal equivalents), so loading one enables `|`.
+                "\\documentclass" | "\\LoadClass" => {
+                    if doc_class_enables_bar(&rest[len..]) && !short_verbs.contains(&'|') {
+                        short_verbs.push('|');
+                    }
+                }
                 // `\ExplSyntaxOn`/`Off`, and the `\ProvidesExpl*` declarations which
                 // open expl3 syntax for the rest of the file (they appear at the top
                 // of an expl3 package/class) so left-to-right they act as an On.
@@ -430,9 +500,12 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             kind,
             text: SmolStr::new(text),
         });
-        // A new physical line begins right after a `NEWLINE`; any other token
-        // (whitespace included) leaves the cursor mid-line.
-        at_line_start = kind == SyntaxKind::NEWLINE;
+        // A new physical line begins right after a `NEWLINE` — or after any
+        // token that swallows its trailing line break, like the `\<newline>`
+        // control symbol (`… \LaTeX\` at end of line): the next byte is column
+        // 0 either way, so a `.dtx` margin there must still be recognized. Any
+        // other token (whitespace included) leaves the cursor mid-line.
+        at_line_start = kind == SyntaxKind::NEWLINE || text.ends_with('\n') || text.ends_with('\r');
         pos += len;
     }
     out
@@ -531,6 +604,54 @@ fn delimited_len(after: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// The character argument of `\MakeShortVerb`/`\DeleteShortVerb`, read from the
+/// text following the control word: an optional `*`, inline whitespace, then
+/// `{\c}` or a bare `\c`. Returns `None` when the shape does not match (e.g. at
+/// the command's own definition site, `\def\MakeShortVerb{…`), so a non-call
+/// never toggles. Same-line only — the argument conventionally abuts the call.
+fn short_verb_char(after: &str) -> Option<char> {
+    let s = after.strip_prefix('*').unwrap_or(after);
+    let s = s.trim_start_matches([' ', '\t']);
+    let (body, braced) = match s.strip_prefix('{') {
+        Some(inner) => (inner.trim_start_matches([' ', '\t']), true),
+        None => (s, false),
+    };
+    let arg = body.strip_prefix('\\')?;
+    let c = arg.chars().next()?;
+    if c == '\n' || c == '\r' {
+        return None;
+    }
+    if braced
+        && !arg[c.len_utf8()..]
+            .trim_start_matches([' ', '\t'])
+            .starts_with('}')
+    {
+        return None;
+    }
+    Some(c)
+}
+
+/// Whether the `{name}` argument following `\documentclass`/`\LoadClass` names a
+/// curated documentation class that makes `|` a short verb (`ltxdoc` calls
+/// `\MakeShortVerb{\|}`; `ltxguide` and `ltnews` define the equivalent active
+/// `|`). A leading `[options]` group is skipped; a trailing `[date]` is ignored.
+fn doc_class_enables_bar(after: &str) -> bool {
+    let mut s = after.trim_start_matches([' ', '\t']);
+    if let Some(rest) = s.strip_prefix('[') {
+        match rest.find(']') {
+            Some(i) => s = rest[i + 1..].trim_start_matches([' ', '\t', '\n', '\r']),
+            None => return false,
+        }
+    }
+    let Some(rest) = s.strip_prefix('{') else {
+        return false;
+    };
+    let Some(close) = rest.find('}') else {
+        return false;
+    };
+    matches!(rest[..close].trim(), "ltxdoc" | "ltxguide" | "ltnews")
 }
 
 /// If `rest` starts with `\begin{name}` for a verbatim-like `name`, emit the
@@ -1243,5 +1364,63 @@ mod tests {
             toks.iter()
                 .any(|t| t.kind == SyntaxKind::VERBATIM_BODY && t.text.contains("[1,2,3]"))
         );
+    }
+
+    #[test]
+    fn make_short_verb_toggles_pipe_capture() {
+        // Before the toggle a `|…|` is ordinary text; after `\MakeShortVerb{\|}`
+        // it captures as one opaque `VERB`; `\DeleteShortVerb{\|}` turns it off.
+        let toks = lex("|a| \\MakeShortVerb{\\|} |$| \\DeleteShortVerb{\\|} |b|");
+        let verbs: Vec<_> = toks
+            .iter()
+            .filter(|t| t.kind == SyntaxKind::VERB)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(verbs, ["|$|"]);
+        assert_lossless("|a| \\MakeShortVerb{\\|} |$| \\DeleteShortVerb{\\|} |b|");
+    }
+
+    #[test]
+    fn documentclass_ltxguide_enables_the_pipe_short_verb() {
+        // The curated doc classes (`ltxdoc`, `ltxguide`, `ltnews`) make `|` a
+        // short verb themselves, so loading one enables the capture — options
+        // and trailing release dates included.
+        for preamble in [
+            "\\documentclass{ltxguide}",
+            "\\documentclass[a4paper]{ltxdoc}",
+            "\\documentclass{ltxguide}[1994/11/20]",
+        ] {
+            let input = format!("{preamble}\n|}}| done");
+            let toks = lex(&input);
+            assert!(
+                toks.iter()
+                    .any(|t| t.kind == SyntaxKind::VERB && t.text == "|}|"),
+                "no VERB captured after {preamble}"
+            );
+        }
+        // An unrelated class leaves `|` alone.
+        let toks = lex("\\documentclass{article}\n|x| done");
+        assert!(!toks.iter().any(|t| t.kind == SyntaxKind::VERB));
+    }
+
+    #[test]
+    fn short_verb_never_captures_a_left_right_delimiter() {
+        // `\left|x\right|` in math: the bars are delimiters, not a verb span.
+        let toks = lex("\\MakeShortVerb{\\|} $\\left|x\\right|$");
+        assert!(!toks.iter().any(|t| t.kind == SyntaxKind::VERB));
+        assert_lossless("\\MakeShortVerb{\\|} $\\left|x\\right|$");
+    }
+
+    #[test]
+    fn unclosed_short_verb_char_stands_alone() {
+        // With no closing partner on the line, the enabled char is a lone
+        // one-character word (never gluing into the following text).
+        let toks = lex("\\MakeShortVerb{\\|} a|b\nc");
+        assert!(!toks.iter().any(|t| t.kind == SyntaxKind::VERB));
+        assert!(
+            toks.iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "|")
+        );
+        assert_lossless("\\MakeShortVerb{\\|} a|b\nc");
     }
 }

@@ -399,7 +399,78 @@ fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
         // true to EOF).
         regions.push(TextRange::new(start, root.text_range().end()));
     }
-    regions
+    subtract_doc_margin_lines(root, regions)
+}
+
+/// Remove every `.dtx` documentation line from the expl3 regions. In a `.dtx`,
+/// an `\ExplSyntaxOn` in one `macrocode` chunk is regularly matched by the
+/// `\ExplSyntaxOff` several chunks later, so the lexical region spans the
+/// documentation in between — margined doc lines and the `%    \end{macrocode}`
+/// frame lines themselves. Those lines are *not* expl3 code (at package-load
+/// time they are `%` comments; the margin must stay in column 0), so relayout
+/// must never own them: subtract each doc-margined line (its `DOC_MARGIN` opens
+/// the line by construction — the lexer emits margins at line start only)
+/// through its terminating newline. Code lines inside chunk bodies carry no
+/// margin and stay in-region. A no-op for non-`.dtx` documents (no `DOC_MARGIN`
+/// tokens, and the common all-code case short-circuits on the first hole scan).
+fn subtract_doc_margin_lines(root: &SyntaxNode, regions: Vec<TextRange>) -> Vec<TextRange> {
+    if regions.is_empty() {
+        return regions;
+    }
+    // One pass over the leaves: a DOC_MARGIN opens a hole, the next NEWLINE
+    // (inclusive) closes it.
+    let mut holes: Vec<TextRange> = Vec::new();
+    let mut hole_start: Option<TextSize> = None;
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        match token.kind() {
+            SyntaxKind::DOC_MARGIN => {
+                hole_start.get_or_insert(token.text_range().start());
+            }
+            SyntaxKind::NEWLINE => {
+                if let Some(start) = hole_start.take() {
+                    holes.push(TextRange::new(start, token.text_range().end()));
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = hole_start.take() {
+        holes.push(TextRange::new(start, root.text_range().end()));
+    }
+    if holes.is_empty() {
+        return regions;
+    }
+    // Interval subtraction; both lists are sorted and disjoint, so the output is
+    // too (the binary-search lookups rely on that).
+    let mut out = Vec::with_capacity(regions.len());
+    let mut h = holes.iter().peekable();
+    for region in regions {
+        let mut cursor = region.start();
+        while let Some(&&hole) = h.peek() {
+            if hole.end() <= cursor {
+                h.next();
+                continue;
+            }
+            if hole.start() >= region.end() {
+                break;
+            }
+            if hole.start() > cursor {
+                out.push(TextRange::new(cursor, hole.start()));
+            }
+            cursor = cursor.max(hole.end());
+            if cursor >= region.end() {
+                break;
+            }
+            h.next();
+        }
+        if cursor < region.end() {
+            out.push(TextRange::new(cursor, region.end()));
+        }
+    }
+    out
 }
 
 /// The state threaded through every lowering call: the active [`WrapMode`] plus the
@@ -518,7 +589,12 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             // fill so the arguments break independently (only an over-long one
             // detonates) rather than the generic concat breaking every group.
             SyntaxKind::COMMAND if cx.in_expl3_region(node.text_range().start()) => {
-                return lower_expl_code(node.children_with_tokens(), cx);
+                // `Statements::Ignore`: within one command's attached arguments a
+                // source newline is just catcode-9 whitespace, not a statement
+                // boundary — the width fill alone decides the breaks. Otherwise a
+                // fill-broken argument would read as a new statement on the next
+                // pass and the layout would never reach a fixed point.
+                return lower_expl_code(node.children_with_tokens(), cx, Statements::Ignore);
             }
             _ => {}
         }
@@ -550,7 +626,14 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_math_env(node, cx) => {
             return lower_math_environment(node, cx);
         }
-        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && is_alignment_env(node, cx) => {
+        // A doc-layer grid rides `%` margins (`% 10 & 1.0pt \\`): column padding
+        // would land before the margins and push them off column 0, so a
+        // margin-carrying grid keeps the generic environment layout instead.
+        SyntaxKind::ENVIRONMENT
+            if !has_verbatim_body(node)
+                && is_alignment_env(node, cx)
+                && !contains_doc_margin(node) =>
+        {
             return lower_aligned_environment(node, cx);
         }
         SyntaxKind::ENVIRONMENT
@@ -564,19 +647,30 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::COMMAND if cx.wraps_prose() && command_has_managed_arg(node, cx) => {
             return lower_command(node, cx);
         }
-        SyntaxKind::INLINE_MATH => {
+        // Like the multi-line group below, math continuing across `.dtx`
+        // doc-margined lines is never re-laid: math relayout indents its body,
+        // which would push a `%` margin off column 0 (a meaning change — only a
+        // column-0 `%` is a margin). The generic stream keeps margins pinned.
+        SyntaxKind::INLINE_MATH if !contains_doc_margin(node) => {
             return lower_math(node, cx);
         }
-        SyntaxKind::DISPLAY_MATH => {
+        SyntaxKind::DISPLAY_MATH if !contains_doc_margin(node) => {
             return lower_display_math(node, cx);
         }
-        SyntaxKind::MATH => {
+        SyntaxKind::MATH if !contains_doc_margin(node) => {
             return lower_math_body(node, cx);
         }
-        SyntaxKind::GROUP if spans_multiple_lines(node) => {
+        // A `.dtx` doc-layer group continuing across margined lines
+        // (`\changes{…}{…\n%  …}`) is excluded: re-laying it out would move
+        // content off its `%` margin — a meaning change (the line stops being a
+        // comment at package-load time). Such a group falls through to the
+        // generic stream, which keeps the authored margins verbatim.
+        SyntaxKind::GROUP if spans_multiple_lines(node) && !contains_doc_margin(node) => {
             return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
         }
-        SyntaxKind::OPTIONAL => {
+        // Same margin rule as the group above: a `[…]` continuing across
+        // doc-margined lines keeps its authored margins.
+        SyntaxKind::OPTIONAL if !contains_doc_margin(node) => {
             if let Some(ir) = lower_optional(node, cx) {
                 return ir;
             }
@@ -1145,8 +1239,29 @@ fn reflow_elements(
 fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
     let mut segments: Vec<Ir> = Vec::new();
+    let mut seps: Vec<Ir> = Vec::new();
     let mut i = 0;
     while i < elements.len() {
+        // Trivia straddling a run boundary feeds the join separator (one break,
+        // or a preserved blank line), never the run itself: the separator
+        // already begins the fresh line, so a leading newline inside the run
+        // would double it — and each pass would grow a blank line.
+        let mut boundary_newlines = 0;
+        if !segments.is_empty() {
+            while i < elements.len() {
+                let SyntaxElement::Token(t) = &elements[i] else {
+                    break;
+                };
+                if !is_collapsible_trivia(t.kind()) {
+                    break;
+                }
+                boundary_newlines += t.text().matches('\n').count();
+                i += 1;
+            }
+            if i >= elements.len() {
+                break;
+            }
+        }
         let in_region = cx.in_expl3_region(elements[i].text_range().start());
         let start = i;
         while i < elements.len()
@@ -1156,17 +1271,40 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
         let run = elements[start..i].iter().cloned();
         let ir = if in_region {
-            lower_expl_code(run, cx)
+            lower_expl_code(run, cx, Statements::SplitAtNewlines)
         } else if cx.wraps_prose() {
             reflow_elements(run, cx, ReflowKind::Prose)
         } else {
             Ir::concat(lower_element_stream(run, cx))
         };
         if !matches!(ir, Ir::Nil) {
+            if !segments.is_empty() {
+                seps.push(if boundary_newlines >= 2 {
+                    Ir::empty_line()
+                } else {
+                    Ir::hard_line()
+                });
+            }
             segments.push(ir);
         }
     }
-    Ir::join(Ir::hard_line(), segments)
+    let mut result = Vec::with_capacity(segments.len().saturating_mul(2));
+    for (n, seg) in segments.into_iter().enumerate() {
+        if n > 0 {
+            result.push(seps[n - 1].clone());
+        }
+        result.push(seg);
+    }
+    Ir::concat(result)
+}
+
+/// How [`lower_expl_code`] reads a source newline: as a statement boundary (the
+/// expl3 one-call-per-line convention), or as inert catcode-9 whitespace (within
+/// one command's attached arguments, where the width fill owns the breaks).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Statements {
+    SplitAtNewlines,
+    Ignore,
 }
 
 /// Lay out a stream of elements known to be inside an expl3 region as expl3 code.
@@ -1178,7 +1316,10 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 ///   logical line (the expl3 convention is one call per line). This sidesteps the
 ///   unsolvable problem of grouping a multi-token call (`\cs_new:Npn \foo:n #1 {…}`
 ///   is several sibling CST nodes, not one) and stays idempotent: a flushed
-///   continuation re-parses to a line already at the same indent.
+///   continuation re-parses to a line already at the same indent. The exception
+///   is *within one command's attached arguments* ([`Statements::Ignore`]),
+///   where a newline is inert whitespace and only the width fill breaks —
+///   see the `COMMAND` arm in [`lower_node`].
 /// - **Inter-token spacing** collapses to a single space (any catcode-9 run is
 ///   inert, and one space keeps the token boundary so re-lexing never merges two
 ///   tokens).
@@ -1190,7 +1331,11 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 ///   (an inner block indents; a fitting one stays inline). A multi-line block lands
 ///   on its own line(s) (Allman), like the block-amid-prose rule in
 ///   [`reflow_elements`].
-fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Ir {
+fn lower_expl_code(
+    elements: impl Iterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+    statements: Statements,
+) -> Ir {
     let elements: Vec<SyntaxElement> = elements.collect();
     let mut lines: Vec<Ir> = Vec::new();
     let mut seps: Vec<Ir> = Vec::new();
@@ -1245,6 +1390,13 @@ fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
         *sep_before_next = None;
     }
 
+    // True right after a multi-line block was pushed as its own line, surviving
+    // an inline (newline-free) whitespace run: a trailing comment there rides
+    // the block's closing line (`}%`, the macro-code continuation idiom).
+    // Stranding it would mint a fresh *own-line* comment, which the next parse
+    // binds *leading* into the following command (decision #9) — a different
+    // shape, so a different layout: idempotence would break.
+    let mut after_block = false;
     let mut idx = 0;
     while idx < elements.len() {
         match &elements[idx] {
@@ -1253,7 +1405,8 @@ fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
             // (breakable) space before the next atom.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let newlines = consume_trivia_run_slice(&elements, &mut idx);
-                if newlines >= 1 {
+                if newlines >= 1 && statements == Statements::SplitAtNewlines {
+                    after_block = false;
                     commit_line(
                         &mut atom,
                         &mut parts,
@@ -1266,6 +1419,11 @@ fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                         pending_sep = Ir::empty_line();
                     }
                 } else {
+                    // A trailing comment glues only to a directly-abutting `}`,
+                    // never across a line break.
+                    if newlines >= 1 {
+                        after_block = false;
+                    }
                     flush_atom(&mut atom, &mut parts, &mut sep_before_next);
                     // Keep a tie's soft break if one is already pending.
                     if sep_before_next.is_none() {
@@ -1277,28 +1435,26 @@ fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
             // `~`: a literal space. Glue it to the end of the current atom, then
             // close the atom with a soft break (flat: nothing; broken: newline).
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::TILDE => {
+                after_block = false;
                 atom.push(Ir::verbatim(token.text()));
                 flush_atom(&mut atom, &mut parts, &mut sep_before_next);
                 sep_before_next = Some(Ir::SoftLine);
             }
-            // A comment ends its line (it must terminate the source line).
+            // A comment ends its line (it must terminate the source line). One
+            // trailing a multi-line block glues onto the block's closing line
+            // (see `after_block` above), spaced when the source spaced it.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
-                atom.push(Ir::verbatim(token.text()));
-                commit_line(
-                    &mut atom,
-                    &mut parts,
-                    &mut sep_before_next,
-                    &mut lines,
-                    &mut seps,
-                    &mut pending_sep,
-                );
-            }
-            SyntaxElement::Token(token) => atom.push(lower_loose_token(token)),
-            SyntaxElement::Node(child) => {
-                let ir = lower_node(child, cx);
-                if ir.contains_forced_break() {
-                    // A multi-line block (group, environment, display math): end the
-                    // current line and place the block on its own line(s) (Allman).
+                if after_block {
+                    let block = lines.pop().expect("after_block implies a pushed line");
+                    let spaced = sep_before_next.take().is_some();
+                    lines.push(Ir::concat(if spaced {
+                        vec![block, Ir::verbatim(" "), Ir::verbatim(token.text())]
+                    } else {
+                        vec![block, Ir::verbatim(token.text())]
+                    }));
+                    after_block = false;
+                } else {
+                    atom.push(Ir::verbatim(token.text()));
                     commit_line(
                         &mut atom,
                         &mut parts,
@@ -1307,8 +1463,49 @@ fn lower_expl_code(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'
                         &mut seps,
                         &mut pending_sep,
                     );
-                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
-                    lines.push(ir);
+                }
+            }
+            SyntaxElement::Token(token) => {
+                after_block = false;
+                atom.push(lower_loose_token(token));
+            }
+            SyntaxElement::Node(child) => {
+                after_block = false;
+                let ir = lower_node(child, cx);
+                if ir.contains_forced_break() {
+                    if !atom.is_empty() {
+                        // A block hanging off a *directly-abutting* atom stays
+                        // glued (`\cs_if_exist:NF\tag_if_active:T { … }` with a
+                        // multi-line body): committing the atom alone would split
+                        // the abutting pair — but on the pass before, when the
+                        // body still fit softly, they rendered glued, so the two
+                        // passes would never agree. Gluing is the fixed point:
+                        // the pair abuts identically on every pass.
+                        atom.push(ir);
+                        commit_line(
+                            &mut atom,
+                            &mut parts,
+                            &mut sep_before_next,
+                            &mut lines,
+                            &mut seps,
+                            &mut pending_sep,
+                        );
+                    } else {
+                        // A multi-line block (group, environment, display math):
+                        // end the current line and place the block on its own
+                        // line(s) (Allman).
+                        commit_line(
+                            &mut atom,
+                            &mut parts,
+                            &mut sep_before_next,
+                            &mut lines,
+                            &mut seps,
+                            &mut pending_sep,
+                        );
+                        seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                        lines.push(ir);
+                    }
+                    after_block = true;
                 } else {
                     atom.push(ir);
                 }
@@ -1363,12 +1560,28 @@ fn lower_expl_group(
             _ => body_elements.push(element),
         }
     }
+    // A body holding a `%` comment can never flatten: inline, everything after
+    // the comment on the line — the closing bracket included — would be
+    // swallowed into the comment on the next parse (`{ …% }`). Force the
+    // broken form so the comment keeps terminating its own line.
+    let has_comment = node
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == SyntaxKind::COMMENT);
     let body = trim_trailing_break(trim_leading_break(lower_expl_code(
         body_elements.into_iter(),
         cx,
+        Statements::SplitAtNewlines,
     )));
     if matches!(body, Ir::Nil) {
         Ir::concat([open_ir, close_ir])
+    } else if has_comment {
+        Ir::concat([
+            open_ir,
+            Ir::indent(Ir::concat([Ir::hard_line(), body])),
+            Ir::hard_line(),
+            close_ir,
+        ])
     } else {
         Ir::group(Ir::concat([
             open_ir,
@@ -1801,10 +2014,19 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .and_then(|name| cx.signatures.environment(&name))
         .map(|sig| sig.args.len())
         .unwrap_or(0);
+    // A header carrying a `%` comment is left to the generic path: gluing
+    // across it would let it swallow the next line. A `.dtx` doc margin or
+    // guard likewise — both must open their own line, so a header whose
+    // arguments continue on margined lines is preserved, never glued.
     let has_comment = begin
         .children_with_tokens()
         .filter_map(|element| element.into_token())
-        .any(|token| token.kind() == SyntaxKind::COMMENT);
+        .any(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::COMMENT | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD
+            )
+        });
     if arity == 0 || has_comment {
         return lower_node(begin, cx);
     }
@@ -4367,6 +4589,18 @@ fn spans_multiple_lines(node: &SyntaxNode) -> bool {
     node.children_with_tokens()
         .filter_map(|e| e.into_token())
         .any(|t| t.kind() == SyntaxKind::NEWLINE)
+}
+
+/// True if `node` contains a `.dtx` documentation margin or docstrip guard at
+/// any depth — a construct continuing across margined or guarded lines. Both
+/// tokens are line-oriented column-0 facts (a `%` or `%<…>` recognized at line
+/// start only), so any relayout that merges or re-indents their lines silently
+/// turns them into ordinary comments on the next parse. Always false outside
+/// the `.dtx` lexer mode (only it emits these kinds).
+fn contains_doc_margin(node: &SyntaxNode) -> bool {
+    node.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD))
 }
 
 /// True if `node` directly contains a `VERBATIM_BODY` token — i.e. it is a

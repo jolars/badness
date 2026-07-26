@@ -1,0 +1,65 @@
+% \iffalse meta-comment
+%
+% A regression corpus file for issue #57: `.dtx` macrocode bodies are macro
+% code. Definitions split across chunks, bare end primitives, short verbs,
+% and a backslash-newline control symbol before a margin must all parse
+% cleanly and losslessly.
+%
+% \fi
+%
+% \section{Introduction}
+%
+% Note that |$| just produces a dollar sign, and |{\ttfamily <text>}| keeps
+% its braces; the color is restored just \emph{after} the final |}|.
+% A verb can even hold |\begin{document}| without opening anything.
+%
+% \title{Hook management\thanks{This file has version \LaTeX\
+%    Project.}}
+%
+% \begin{macro}{\g@remfrom@specials}
+%    The macro takes one argument, the character to be removed.
+%    \begin{macrocode}
+\def\g@remfrom@specials#1{%
+%    \end{macrocode}
+%    We build up a new list in |\@new@specials|.
+%    \begin{macrocode}
+  \def\@new@specials{}
+%    \end{macrocode}
+%    The command |\@remove| compares its argument with the argument of\\
+%    |\g@remfrom@specials|.
+%    \begin{macrocode}
+  \def\@remove##1{%
+    \ifx##1#1\else
+%    \end{macrocode}
+%    When they are not the same the argument is added to the new list.
+%    \begin{macrocode}
+    \g@addto@macro\@new@specials{\do ##1}\fi}
+  \let\do\@remove\dospecials
+  \let\dospecials\@new@specials
+  }
+%    \end{macrocode}
+% \end{macro}
+%
+% \changes{v1.0q}{2025/01/31}
+%         {Unsilence \cs{NewSocket} and \cs{NewSocketPlug} error message
+%          after rollback}
+%
+%    \begin{macrocode}
+\newcommand\part{%
+  \if@openright
+    \cleardoublepage
+  \fi
+%    \end{macrocode}
+%    The heading is set with a bare end primitive further down.
+%    \begin{macrocode}
+    {\parindent \z@ \raggedright
+     \normalfont
+%    \end{macrocode}
+%    And the closing braces arrive in a later chunk.
+%    \begin{macrocode}
+     \huge\bfseries #1\par}%
+  \vfil\newpage}
+\def\stop@here{\end}
+%    \end{macrocode}
+%
+% \Finale

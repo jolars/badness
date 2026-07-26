@@ -1,0 +1,21 @@
+% Regression corpus for issue #57: the doc-package short verb `|…|`.
+\documentclass{ltxguide}
+
+\begin{document}
+
+\section{Short verbs}
+
+In |{\ttfamily <text>}| the font is restored just before the |}|, whereas in
+|{\color{green} <text>}| the color is restored after the final |}|. Note that
+|$| just produces a dollar sign, and |\begin{document}| is plain text here.
+Even a lone | pipe with no closing partner stays an ordinary character.
+
+\DeleteShortVerb{\|}
+
+After deleting, a $|x|$ in math is just two bars again.
+
+\MakeShortVerb{\+}
+
+Now +\emph{this}+ is verbatim with a different character.
+
+\end{document}

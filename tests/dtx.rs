@@ -345,3 +345,115 @@ fn full_self_extracting_dtx_needs_no_driver_machinery() {
     assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\bar@baz".to_string())));
     assert_eq!(count_token(&root, SyntaxKind::VERBATIM_BODY), 0);
 }
+
+/// Parse under the docstrip config and return the diagnostics too.
+fn parse_dtx_with_errors(input: &str) -> (SyntaxNode, usize) {
+    let config = LexConfig {
+        flavor: LatexFlavor::Document,
+        dtx: true,
+    };
+    let parsed = parse_with_flavor(input, config);
+    let root = parsed.syntax();
+    assert_eq!(
+        root.to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    (root, parsed.errors.len())
+}
+
+#[test]
+fn definition_split_across_macrocode_chunks_parses_cleanly() {
+    // A `macrocode` chunk is macro code (issue #57): a `\def` regularly opens a
+    // brace in one chunk and closes it several chunks later. The chunk-unmatched
+    // braces are plain tokens — no `GROUP`, no diagnostics — and every frame
+    // still pairs.
+    let input = "\
+% \\begin{macro}{\\foo}\n\
+%    \\begin{macrocode}\n\
+\\def\\foo#1{%\n\
+%    \\end{macrocode}\n\
+% some docs\n\
+%    \\begin{macrocode}\n\
+  bar}\n\
+%    \\end{macrocode}\n\
+% \\end{macro}\n";
+    let (root, errors) = parse_dtx_with_errors(input);
+    assert_eq!(errors, 0, "chunk-split braces must not diagnose");
+    // The `macro` doc environment and both `macrocode` chunks all pair.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 3);
+    // The unmatched braces are plain tokens, not `GROUP`s (the only group is
+    // the `{\foo}` argument of `\begin{macro}`).
+    assert_eq!(count(&root, SyntaxKind::GROUP), 1);
+}
+
+#[test]
+fn bare_end_primitive_in_macrocode_is_a_plain_command() {
+    // Kernel code uses the `\end` TeX primitive inside `macrocode`; only the
+    // margin-framed `\end{macrocode}` line terminates the chunk.
+    let input = "\
+%    \\begin{macrocode}\n\
+\\def\\stop@here{\\end}\n\
+\\let\\@@end\\end\n\
+%    \\end{macrocode}\n";
+    let (root, errors) = parse_dtx_with_errors(input);
+    assert_eq!(errors, 0, "a bare \\end primitive must not diagnose");
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+}
+
+#[test]
+fn macrocode_frame_begin_attaches_no_arguments() {
+    // The frame line holds nothing but the name, so the next code line's `{`
+    // is body macro code — never an argument of `\begin{macrocode}`.
+    let input = "\
+%    \\begin{macrocode}\n\
+    {\\parindent \\z@ \\raggedright\n\
+     \\normalfont\n\
+%    \\end{macrocode}\n";
+    let (root, errors) = parse_dtx_with_errors(input);
+    assert_eq!(errors, 0);
+    let begin = root
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::BEGIN)
+        .expect("begin");
+    assert_eq!(
+        begin
+            .children()
+            .filter(|c| c.kind() == SyntaxKind::GROUP)
+            .count(),
+        0,
+        "the frame `\\begin` must not steal the body's brace as an argument"
+    );
+}
+
+#[test]
+fn short_verb_captures_in_the_doc_layer_but_not_in_macrocode() {
+    // `.dtx` documentation is typeset under ltxdoc, where `|…|` is a short verb
+    // (`\MakeShortVerb{\|}`), so `|$|` is an opaque VERB — while inside a
+    // `macrocode` body `|` is an ordinary catcode-12 character.
+    let (root, errors) = parse_dtx_with_errors(
+        "% Note that |$| just produces a dollar sign.\n\
+         %    \\begin{macrocode}\n\
+         \\def\\pipe{|}\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0, "the `$` inside a short verb must not open math");
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::VERB, "|$|".to_string())));
+    // The code-layer `|` stays a plain word token.
+    assert!(toks.contains(&(SyntaxKind::WORD, "|".to_string())));
+}
+
+#[test]
+fn control_symbol_swallowing_its_newline_keeps_the_next_margin() {
+    // `… \LaTeX\` at end of line lexes the backslash-newline as one control
+    // symbol; the next line still begins in column 0, so its `%` is a margin
+    // (not a comment that would swallow the closing braces).
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\title{Hooks\\thanks{version \\LaTeX\\\n\
+         %    Project.}}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count_token(&root, SyntaxKind::DOC_MARGIN), 2);
+    assert_eq!(count_token(&root, SyntaxKind::COMMENT), 0);
+}

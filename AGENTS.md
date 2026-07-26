@@ -121,6 +121,26 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      `[…]` optionals. A grammar routing decision on a closed, curated command-name set
      (`parser::grammar::is_definition_body_command`, a parser flag scoped to the
      attached arguments); the bodies stay generic macro code, never executed.
+   - **Short verbs.** The doc package's `\MakeShortVerb{\|}`/`\DeleteShortVerb{\|}`
+     toggle a character's short-verb catcode; while enabled, `<c>…<c>` on one line
+     captures as a single opaque `VERB` token, exactly like `\verb<c>…<c>`. A lexer
+     mode toggled left-to-right like `\makeatletter` (issue #57). Also enabled by
+     loading a curated doc class (`\documentclass{ltxdoc|ltxguide|ltnews}`—those
+     classes enable `|` themselves) and on for `|` from the start in `.dtx` mode
+     (dtx files are typeset under ltxdoc; the driver may live elsewhere). Gated off
+     inside `macrocode` bodies (a code layer) and after `\left`/`\right` (the `|`
+     is a delimiter). A span with no closing character on its line falls back to an
+     ordinary lone character.
+   - **Macrocode chunk bodies (`.dtx`).** A frame-lexed `macrocode`/`macrocode*`
+     body is *macro code* whose only terminator is the frame line
+     (`%    \end{macrocode}`, a line-oriented docstrip fact; the frame `\begin` is
+     fingerprinted by its `DOC_MARGIN`, and attaches no arguments—the next line's
+     `{` is body code). Like definition bodies above: `\begin`/`\end` inside parse
+     as plain `COMMAND`s (kernel code uses the `\end` *primitive*), chunk-unmatched
+     braces are plain tokens with no diagnostics (a `\def` regularly opens `{` in
+     one chunk and closes it chunks later, issue #57; matched pairs still form
+     `GROUP`s, via a per-chunk brace pre-scan, `parser::grammar::macrocode_body`),
+     and a `[` attaches as an optional only when its `]` closes inside the chunk.
    - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
      DB, never executed.
 
@@ -142,8 +162,17 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    losslessness is unaffected; the reformatted output is a different valid text with the same
    meaning. Statement boundaries follow *source newlines* (the expl3 one-call-per-line
    convention; a multi-token call like `\cs_new:Npn \foo:n #1 {…}` is several sibling CST
-   nodes, not one structural unit), and a single inserted space at any preserved token boundary
-   keeps re-lexing from merging two tokens.
+   nodes, not one structural unit)—except *within one command's attached arguments*, where a
+   newline is inert whitespace and only the width fill breaks (otherwise a fill-broken argument
+   would read as a new statement on the next pass and never reach a fixed point)—and a single
+   inserted space at any preserved token boundary keeps re-lexing from merging two tokens.
+   In a `.dtx`, a region regularly spans several `macrocode` chunks (`\ExplSyntaxOn` in one,
+   the `Off` chunks later), so the doc-margined lines in between—doc prose and the frame lines
+   themselves—are subtracted from the regions (`subtract_doc_margin_lines`): only code lines
+   are formatter-owned, and a `%` margin stays in column 0. More generally, the line-oriented
+   `.dtx` tokens (`DOC_MARGIN`, `GUARD`) are only margins/guards *at line start*, so no
+   relayout may merge or re-indent their lines (the `contains_doc_margin` gates in
+   `formatter::core`, issue #57).
 
 2. **Two layers: syntactic vs. semantic.** The *syntactic* layer is the generic CST
    and knows nothing about what a command means. The *semantic* layer is a

@@ -564,6 +564,7 @@ const DTX_FIXTURES: &[&str] = &[
     "dtx_guards",
     "dtx_driver",
     "dtx_margin_blank_line",
+    "dtx_expl3_chunks",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

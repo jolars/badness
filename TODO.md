@@ -62,6 +62,26 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   open forms — the same set `bracket_delta` recognizes) should count as a
   non-operand `prev` role so a following `+`/`-` degrades to unary, mirroring the
   existing leading-sign rule (`-x`, `x=-b`).
+- [ ] **Multi-line group relayout inserts a real space token in normal-catcode
+  macro code (surfaced by the issue #57 review).** `lower_bracketed` places a
+  break directly after the opening `{` even where the source glued it to the
+  first body token (`\@parboxto{\let…` → `{` + newline + `\let…`). In normal
+  catcodes an end-of-line after a non-control-word token tokenizes as a *space*
+  (TeX reading state M), so a `\def` body gains a space token the author didn't
+  write — a silent meaning change in any context where space tokens matter
+  (horizontal mode; harmless only in vertical/math mode or before
+  `\ignorespaces`). The break *before* `}` and the mid-body breaks are safe:
+  they fall after control words, where state S skips the EOL. Pre-existing
+  (reproduces on the pre-#57 baseline with `\def\x{\aaa\bbb`/`\ccc}` in a plain
+  `.sty` and in `.dtx` macrocode alike) and invisible to the oracles — the
+  output is perfectly idempotent and lossless; no invariant checks *token*
+  equivalence. Inside expl3 regions the same layout is sound (`\ExplSyntaxOn`
+  sets `\endlinechar` to a catcode-9 space), so this item is about non-expl3
+  code only. Fix direction: outside expl3 regions, only place a break at a
+  boundary where the source already had whitespace (whitespace ↔ newline is
+  TeX-identical there), or emit `%` protection the way authors write `{%` — and
+  expect deliberate fixture churn, since the current Allman `{`-break is pinned
+  by several formatter fixtures.
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on

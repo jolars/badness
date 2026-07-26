@@ -281,8 +281,8 @@ fn resolve_config(
 
 /// Build the directory-discovery exclude filter from the resolved config plus any
 /// `--exclude` CLI patterns. Patterns resolve relative to the directory holding
-/// `badness.toml`, or relative to `anchor` for the global user config and the
-/// no-config case ([`ConfigSource::exclude_root`]).
+/// `badness.toml`, or relative to `anchor` for the env and global user configs
+/// and the no-config case ([`ConfigSource::exclude_root`]).
 fn build_exclude_filter(
     config: &Config,
     source: &ConfigSource,

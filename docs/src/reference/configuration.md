@@ -27,7 +27,14 @@ first `badness.toml` it finds. The walk stops at a directory containing a `.git`
 entry (the repository root), so a config outside your repository is never picked
 up.
 
-If no project file is found, badness falls back to a global user config: the
+If no project file is found, badness next checks the `BADNESS_CONFIG`
+environment variable. When set (and non-empty), it names a config file to use
+instead of the global user config below—handy for keeping one config on a
+synced drive and pointing every machine at it. A set `BADNESS_CONFIG` shadows
+the global config entirely, and a missing or malformed file is a hard error
+rather than a silent fall-through, so a typo'd path can't go unnoticed.
+
+If `BADNESS_CONFIG` is unset, badness falls back to a global user config: the
 first existing file among
 
 1. `$XDG_CONFIG_HOME/badness/config.toml`
@@ -35,19 +42,20 @@ first existing file among
 3. the platform config directory (`%APPDATA%\badness\config.toml` on Windows,
    `~/Library/Application Support/badness/config.toml` on macOS)
 
-The global file uses the same schema as a project `badness.toml` and is a
-whole-file fallback, never merged with a project config. Relative `exclude`
-patterns in it resolve against the working directory (CLI) or the document's
-directory (language server) rather than the config's own directory. The language
-server uses the same resolution, so the global file is the easiest way to set
-editor-wide defaults such as `wrap = "preserve"` (an edit to it is picked up
-when the server restarts). If neither a project nor a global file is found,
+The `BADNESS_CONFIG` and global files use the same schema as a project
+`badness.toml` and are whole-file fallbacks, never merged with a project
+config. Relative `exclude` patterns in them resolve against the working
+directory (CLI) or the document's directory (language server) rather than the
+config's own directory. The language server uses the same resolution, so both
+are easy ways to set editor-wide defaults such as `wrap = "preserve"` (an edit
+is picked up when the server restarts). If none of these files is found,
 built-in defaults apply.
 
 Two global CLI flags override discovery:
 
 - `--config <PATH>` uses that file instead of discovering one.
-- `--no-config` ignores any project or global file and uses built-in defaults.
+- `--no-config` ignores any project, `BADNESS_CONFIG`, or global file and uses
+  built-in defaults.
 
 CLI flags for individual options (`--line-width`, `--wrap`, `--select`, …)
 override the corresponding config values for a single run.

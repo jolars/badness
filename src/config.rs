@@ -1,5 +1,5 @@
 //! `badness.toml` configuration: schema, file loading, ancestor-walk
-//! discovery, and the global user-config fallback.
+//! discovery, and the `BADNESS_CONFIG`/global user-config fallbacks.
 //!
 //! The CLI is the only consumer; the library API (`format_with_style`,
 //! `check_paths_with_style`, the linter) continues to take a fully-resolved
@@ -29,6 +29,12 @@ use serde::Deserialize;
 use crate::formatter::{FormatStyle, MathWrap, WrapMode};
 
 pub const CONFIG_FILE_NAME: &str = "badness.toml";
+
+/// Environment variable naming a config file to use when no project
+/// `badness.toml` is discovered. Sits between project discovery and the
+/// [global user config](global_config_path) in [`Config::resolve`]'s
+/// precedence, and shadows the global file entirely when set.
+pub const CONFIG_ENV_VAR: &str = "BADNESS_CONFIG";
 
 const MIN_WIDTH: u32 = 1;
 const MAX_WIDTH: u32 = 1000;
@@ -362,24 +368,33 @@ impl Config {
 
     /// Config resolution for the CLI and the language server. Precedence:
     /// an explicit `--config` path, then a discovered project `badness.toml`,
-    /// then the [global user config](global_config_path), then built-in
-    /// defaults. Whole-file fallback, never a merge. `no_config` skips every
-    /// file (project and global). CLI flag overrides for the formatter/lint
+    /// then a file named by [`$BADNESS_CONFIG`](CONFIG_ENV_VAR), then the
+    /// [global user config](global_config_path), then built-in defaults.
+    /// Whole-file fallback, never a merge. `no_config` skips every file
+    /// (project, env, and global). CLI flag overrides for the formatter/lint
     /// knobs are applied by the caller after this returns.
     pub fn resolve(
         explicit: Option<&Path>,
         no_config: bool,
         anchor: &Path,
     ) -> Result<(Self, ConfigSource), ConfigError> {
-        Self::resolve_with_global(explicit, no_config, anchor, global_config_path().as_deref())
+        Self::resolve_with_fallbacks(
+            explicit,
+            no_config,
+            anchor,
+            env_config_path().as_deref(),
+            global_config_path().as_deref(),
+        )
     }
 
-    /// [`resolve`](Self::resolve) with the global-config path injected, so tests
-    /// can exercise the fallback without touching the real home directory.
-    fn resolve_with_global(
+    /// [`resolve`](Self::resolve) with the env and global fallback paths
+    /// injected, so tests can exercise them without touching the real
+    /// environment or home directory.
+    fn resolve_with_fallbacks(
         explicit: Option<&Path>,
         no_config: bool,
         anchor: &Path,
+        env: Option<&Path>,
         global: Option<&Path>,
     ) -> Result<(Self, ConfigSource), ConfigError> {
         if no_config {
@@ -392,9 +407,16 @@ impl Config {
         if let Some((path, config)) = Self::discover(anchor)? {
             return Ok((config, ConfigSource::Discovered(path)));
         }
-        // A broken global config is a hard error, same as a discovered one:
-        // it is the config that would apply, and silently falling through to
-        // built-in defaults would hide the typo indefinitely.
+        // A set `$BADNESS_CONFIG` shadows the global config entirely, and a
+        // missing or broken file is a hard error rather than a fall-through:
+        // it is the config that would apply, and silently ignoring it would
+        // hide a typo'd path indefinitely.
+        if let Some(path) = env {
+            let config = Self::load_from(path)?;
+            return Ok((config, ConfigSource::Env(path.to_path_buf())));
+        }
+        // Same rationale: a broken global config is a hard error, not a
+        // silent fall-through to built-in defaults.
         if let Some(path) = global {
             let config = Self::load_from(path)?;
             return Ok((config, ConfigSource::Global(path.to_path_buf())));
@@ -415,8 +437,11 @@ pub enum ConfigSource {
     Explicit(PathBuf),
     /// Discovered by the ancestor walk from the input's directory.
     Discovered(PathBuf),
+    /// Named by the [`$BADNESS_CONFIG`](CONFIG_ENV_VAR) environment variable,
+    /// used when no project config is discovered.
+    Env(PathBuf),
     /// The global user config (e.g. `~/.config/badness/config.toml`), used when
-    /// no project config is discovered.
+    /// no project config is discovered and `$BADNESS_CONFIG` is unset.
     Global(PathBuf),
     /// No config file found; built-in defaults are in use.
     None,
@@ -426,7 +451,7 @@ impl ConfigSource {
     /// Path of the resolved config file, if any.
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Self::Explicit(p) | Self::Discovered(p) | Self::Global(p) => Some(p),
+            Self::Explicit(p) | Self::Discovered(p) | Self::Env(p) | Self::Global(p) => Some(p),
             Self::None => None,
         }
     }
@@ -434,13 +459,25 @@ impl ConfigSource {
     /// The directory relative exclude patterns resolve against: the config
     /// file's own directory for a project-local file, or `anchor` (the CLI
     /// working directory, or the document's directory in the LSP) for the
-    /// global config and the no-config case, which have no project location.
+    /// env and global configs and the no-config case, which have no project
+    /// location.
     pub fn exclude_root<'a>(&'a self, anchor: &'a Path) -> &'a Path {
         match self {
             Self::Explicit(p) | Self::Discovered(p) => p.parent().unwrap_or(anchor),
-            Self::Global(_) | Self::None => anchor,
+            Self::Env(_) | Self::Global(_) | Self::None => anchor,
         }
     }
+}
+
+/// Path named by the [`$BADNESS_CONFIG`](CONFIG_ENV_VAR) environment variable,
+/// or `None` when unset or empty (an empty value counts as unset, the usual
+/// shell convention).
+fn env_config_path() -> Option<PathBuf> {
+    let value = std::env::var_os(CONFIG_ENV_VAR)?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
 }
 
 /// Path to the global user config, the fallback when no project `badness.toml`
@@ -927,7 +964,8 @@ mod tests {
         let global = write_global(dir.path());
 
         let (config, source) =
-            Config::resolve_with_global(None, false, &repo, Some(&global)).expect("resolve");
+            Config::resolve_with_fallbacks(None, false, &repo, None, Some(&global))
+                .expect("resolve");
         assert_eq!(config.format.line_width, 66);
         assert_eq!(source, ConfigSource::Global(global.clone()));
         // Global config has no project location: excludes anchor at the caller.
@@ -941,7 +979,8 @@ mod tests {
         fs::write(repo.join(CONFIG_FILE_NAME), "[format]\nline-width = 50\n").unwrap();
 
         let (config, source) =
-            Config::resolve_with_global(None, false, &repo, Some(&global)).expect("resolve");
+            Config::resolve_with_fallbacks(None, false, &repo, None, Some(&global))
+                .expect("resolve");
         assert_eq!(config.format.line_width, 50);
         assert!(matches!(source, ConfigSource::Discovered(_)));
     }
@@ -952,7 +991,8 @@ mod tests {
         let global = write_global(dir.path());
 
         let (config, source) =
-            Config::resolve_with_global(None, true, &repo, Some(&global)).expect("resolve");
+            Config::resolve_with_fallbacks(None, true, &repo, None, Some(&global))
+                .expect("resolve");
         assert_eq!(config, Config::default());
         assert_eq!(source, ConfigSource::None);
     }
@@ -968,8 +1008,92 @@ mod tests {
         fs::create_dir_all(global.parent().unwrap()).unwrap();
         fs::write(&global, "[format]\nline-widht = 80\n").unwrap();
 
-        let err = Config::resolve_with_global(None, false, &repo, Some(&global))
+        let err = Config::resolve_with_fallbacks(None, false, &repo, None, Some(&global))
             .expect_err("typo'd global config must not be silently ignored");
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    fn write_env_config(dir: &Path) -> PathBuf {
+        let env = dir.join("synced").join("badness.toml");
+        fs::create_dir_all(env.parent().unwrap()).unwrap();
+        fs::write(&env, "[format]\nline-width = 44\n").unwrap();
+        env
+    }
+
+    #[test]
+    fn env_config_beats_global() {
+        let (dir, repo) = bounded_project();
+        let env = write_env_config(dir.path());
+        let global = write_global(dir.path());
+
+        let (config, source) =
+            Config::resolve_with_fallbacks(None, false, &repo, Some(&env), Some(&global))
+                .expect("resolve");
+        assert_eq!(config.format.line_width, 44);
+        assert_eq!(source, ConfigSource::Env(env.clone()));
+        // Env config has no project location: excludes anchor at the caller.
+        assert_eq!(source.exclude_root(&repo), repo.as_path());
+    }
+
+    #[test]
+    fn discovered_config_beats_env() {
+        let (dir, repo) = bounded_project();
+        let env = write_env_config(dir.path());
+        fs::write(repo.join(CONFIG_FILE_NAME), "[format]\nline-width = 50\n").unwrap();
+
+        let (config, source) =
+            Config::resolve_with_fallbacks(None, false, &repo, Some(&env), None).expect("resolve");
+        assert_eq!(config.format.line_width, 50);
+        assert!(matches!(source, ConfigSource::Discovered(_)));
+    }
+
+    #[test]
+    fn explicit_config_beats_env() {
+        let (dir, repo) = bounded_project();
+        let env = write_env_config(dir.path());
+        let explicit = dir.path().join("custom.toml");
+        fs::write(&explicit, "[format]\nline-width = 40\n").unwrap();
+
+        let (config, source) =
+            Config::resolve_with_fallbacks(Some(&explicit), false, &repo, Some(&env), None)
+                .expect("resolve");
+        assert_eq!(config.format.line_width, 40);
+        assert_eq!(source, ConfigSource::Explicit(explicit.clone()));
+    }
+
+    #[test]
+    fn no_config_skips_env() {
+        let (dir, repo) = bounded_project();
+        let env = write_env_config(dir.path());
+
+        let (config, source) =
+            Config::resolve_with_fallbacks(None, true, &repo, Some(&env), None).expect("resolve");
+        assert_eq!(config, Config::default());
+        assert_eq!(source, ConfigSource::None);
+    }
+
+    #[test]
+    fn missing_env_config_is_an_error() {
+        let (dir, repo) = bounded_project();
+        let env = dir.path().join("nowhere").join("badness.toml");
+        let global = write_global(dir.path());
+
+        // A set but dangling `$BADNESS_CONFIG` must not silently fall through
+        // to the global config or the defaults.
+        let err = Config::resolve_with_fallbacks(None, false, &repo, Some(&env), Some(&global))
+            .expect_err("typo'd $BADNESS_CONFIG path must not be silently ignored");
+        assert!(matches!(err, ConfigError::Io { .. }));
+    }
+
+    #[test]
+    fn broken_env_config_is_an_error() {
+        let (dir, repo) = bounded_project();
+        let env = dir.path().join("synced").join("badness.toml");
+        fs::create_dir_all(env.parent().unwrap()).unwrap();
+        fs::write(&env, "[format]\nline-widht = 80\n").unwrap();
+
+        let err = Config::resolve_with_fallbacks(None, false, &repo, Some(&env), None)
+            .expect_err("broken $BADNESS_CONFIG file must not be silently ignored");
         assert!(matches!(err, ConfigError::Parse { .. }));
     }
 

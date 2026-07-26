@@ -53,7 +53,8 @@ pub struct Cli {
     /// `format` and `lint`; ignored by `parse`, `lsp`, and `init`.
     #[arg(long, value_name = "PATH", global = true, conflicts_with = "no_config")]
     pub config: Option<PathBuf>,
-    /// Ignore any `badness.toml` (project or global) and use built-in defaults.
+    /// Ignore any `badness.toml` (project, `$BADNESS_CONFIG`, or global) and
+    /// use built-in defaults.
     #[arg(long, global = true)]
     pub no_config: bool,
 }

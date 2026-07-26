@@ -315,7 +315,8 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // A binary/relation operator atom directly after the braced script does not
     // block the strip: the sequencer spaces it (`a_{p}/b` -> `a_p / b`), so
     // nothing glues and the strip already lands on the first pass (issue #56's
-    // idempotency drift).
+    // idempotency drift). The script content may itself be an operator character
+    // (`\mathcal{A}_{+}/…` -> `\mathcal{A}_+ / …`, issue #66).
     ("math_strip_braces_before_operator", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),

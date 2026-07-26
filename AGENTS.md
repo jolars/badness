@@ -212,7 +212,14 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    comment is never relocated—moving it would rebind it as the *next* statement's leading
    doc comment on the second pass (decision #9), changing its attachment. gofmt/rustfmt
    never relocate trailing comments either; ruff exempts pragma comments from width for
-   the same reason.
+   the same reason. A *continuation group*—a brace group starting its statement line
+   (a function body, a `\tl_set:Nn` value on its own line)—indents **one step** under
+   its head statement (`\cs_new:Npn \foo:n #1` / `␣␣{ body }`, the l3styleguide shape).
+   The step wraps the break and *the group alone* in one `Indent` (as a folded statement
+   separator, or a folded fill gap for a mid-statement group): the rest of the line stays
+   at base, because a width break re-reads its atoms as ordinary base-indent statements
+   on the next pass—break and group body must land at the same column either way for the
+   layout to be a fixed point.
    In a `.dtx`, a region regularly spans several `macrocode` chunks (`\ExplSyntaxOn` in one,
    the `Off` chunks later), so the doc-margined lines in between—doc prose and the frame lines
    themselves—are subtracted from the regions (`subtract_doc_margin_lines`): only code lines

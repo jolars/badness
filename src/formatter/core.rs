@@ -1618,6 +1618,24 @@ fn lower_expl_code(
             }
             SyntaxElement::Node(child) => {
                 after_block = false;
+                // A brace group *starting* its statement line is a continuation
+                // (a function body, a value argument on its own line): the line
+                // indents one step under its head statement (l3 house style),
+                // whether the group stays inline or detonates to a block.
+                // A brace group starting a statement line is a *continuation*
+                // (a function body, a `\tl_set:Nn` value on its own line): it
+                // indents one step under its head statement, the l3 house
+                // style (`\cs_new:Npn \foo:n #1` / `  { body }`). The step is
+                // carried by an `Indent` folded around the break *and the
+                // group alone* — never the rest of the line, whose atoms the
+                // reparse reads as ordinary base-indent statements when a
+                // width break separates them (the group's own internal lines
+                // must sit at the deeper level either way, so break and body
+                // travel together).
+                let continuation_group = statements == Statements::SplitAtNewlines
+                    && child.kind() == SyntaxKind::GROUP
+                    && atom.is_empty();
+                let starts_line = parts.is_empty();
                 let ir = lower_node(child, cx);
                 if ir.contains_forced_break() {
                     if !atom.is_empty() {
@@ -1640,7 +1658,10 @@ fn lower_expl_code(
                     } else {
                         // A multi-line block (group, environment, display math):
                         // end the current line and place the block on its own
-                        // line(s) (Allman).
+                        // line(s) (Allman). A continuation group folds its line
+                        // separator into the `Indent` (the seps slot gets `Nil`
+                        // so the two stay paired); the run's first line has no
+                        // separator to fold and stays at the current level.
                         commit_line(
                             &mut atom,
                             &mut parts,
@@ -1649,10 +1670,28 @@ fn lower_expl_code(
                             &mut seps,
                             &mut pending_sep,
                         );
-                        seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
-                        lines.push(ir);
+                        if continuation_group && !lines.is_empty() {
+                            let sep = std::mem::replace(&mut pending_sep, Ir::hard_line());
+                            seps.push(Ir::Nil);
+                            lines.push(Ir::indent(Ir::concat(vec![sep, ir])));
+                        } else {
+                            seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                            lines.push(ir);
+                        }
                     }
                     after_block = true;
+                } else if continuation_group && starts_line && !lines.is_empty() {
+                    // Line-initial: fold the statement separator in; the
+                    // `commit_line` seps slot then carries `Nil`.
+                    let sep = std::mem::replace(&mut pending_sep, Ir::Nil);
+                    atom.push(Ir::indent(Ir::concat(vec![sep, ir])));
+                } else if continuation_group && !starts_line {
+                    // Mid-statement: if the width fill breaks at this gap, the
+                    // group starts a continuation line. Flat, the leading
+                    // `Line` is the single inter-token space (the `Nil`
+                    // separator adds nothing).
+                    sep_before_next = Some(Ir::Nil);
+                    atom.push(Ir::indent(Ir::concat(vec![Ir::Line, ir])));
                 } else {
                     atom.push(ir);
                 }

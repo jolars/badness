@@ -134,6 +134,12 @@ one diverging:
   character data, so `` \char`$ ``/`` \char`} `` lex as one plain `WORD` and
   never open math or close a group. texlab has no char-constant model and
   errors on both; the file is also on the parse_oracle exception list.
+- expl3-region `\begin`/`\end` (`expl3_region_env_tokens.tex`, smoke-test
+  issue #60): an expl3 region is code, and token lists pass `\begin`/`\end`
+  around as data (l3prefixes.tex builds a longtable across two
+  `\tl_set`/`\tl_put_right` bodies), so in-region they parse as plain
+  commands — the same rule as definition bodies. texlab pairs the
+  `\begin { longtable }` into an env that swallows the rest of the region.
 
 ## One gauge limitation worth noting (not a parser issue)
 

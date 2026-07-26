@@ -886,3 +886,22 @@ fn char_constant_escaped_form_lexes_benignly() {
     // `\$` control symbol.
     insta::assert_snapshot!(tree("\\catcode`\\%=12"));
 }
+
+#[test]
+fn expl3_region_begin_end_is_plain_macro_code() {
+    // Inside an expl3 region, token lists pass `\begin`/`\end` around as data
+    // (l3prefixes.tex builds a longtable across two token-list bodies, issue
+    // #60): both parse as plain commands — no pairing, no diagnostics.
+    insta::assert_snapshot!(tree(
+        "\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl { \\begin { longtable } { ll } }\n\\tl_put_right:Nn \\l_tmpa_tl { \\end { longtable } }\n\\ExplSyntaxOff\n"
+    ));
+}
+
+#[test]
+fn environments_pair_again_after_expl_syntax_off() {
+    // The region gate ends at `\ExplSyntaxOff`: document markup after it
+    // pairs as usual.
+    insta::assert_snapshot!(tree(
+        "\\ExplSyntaxOn \\foo:n \\ExplSyntaxOff\n\\begin{itemize}\n\\item x\n\\end{itemize}\n"
+    ));
+}

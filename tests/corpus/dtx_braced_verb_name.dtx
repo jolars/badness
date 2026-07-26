@@ -1,0 +1,14 @@
+% \begin{macro}{\[}
+% \begin{macro}{\]}
+%    The braced form of the l3doc v-type name argument is raw data
+%    (xo-grid.dtx, issue #60): a display-math closer in a name is no
+%    orphan, and a char-catcode closer in the code below is plain data.
+% \end{macro}
+% \end{macro}
+%
+%    \begin{macrocode}
+\group_begin:
+  \char_set_catcode_letter:N \)
+  \cs_new:Npn \@@_parse_infix_):N #1 { #1 }
+\group_end:
+%    \end{macrocode}

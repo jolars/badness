@@ -1,0 +1,37 @@
+---
+source: tests/parser.rs
+assertion_line: 904
+expression: "tree(\"\\\\ExplSyntaxOn \\\\foo:n \\\\ExplSyntaxOff\\n\\\\begin{itemize}\\n\\\\item x\\n\\\\end{itemize}\\n\")"
+---
+ROOT@0..74
+  PARAGRAPH@0..73
+    COMMAND@0..13
+      CONTROL_WORD@0..13 "\\ExplSyntaxOn"
+    WHITESPACE@13..14 " "
+    COMMAND@14..20
+      CONTROL_WORD@14..20 "\\foo:n"
+    WHITESPACE@20..21 " "
+    COMMAND@21..35
+      CONTROL_WORD@21..35 "\\ExplSyntaxOff"
+    NEWLINE@35..36 "\n"
+    ENVIRONMENT@36..73
+      BEGIN@36..51
+        CONTROL_WORD@36..42 "\\begin"
+        NAME_GROUP@42..51
+          L_BRACE@42..43 "{"
+          WORD@43..50 "itemize"
+          R_BRACE@50..51 "}"
+      PARAGRAPH@51..59
+        NEWLINE@51..52 "\n"
+        COMMAND@52..57
+          CONTROL_WORD@52..57 "\\item"
+        WHITESPACE@57..58 " "
+        WORD@58..59 "x"
+      NEWLINE@59..60 "\n"
+      END@60..73
+        CONTROL_WORD@60..64 "\\end"
+        NAME_GROUP@64..73
+          L_BRACE@64..65 "{"
+          WORD@65..72 "itemize"
+          R_BRACE@72..73 "}"
+  NEWLINE@73..74 "\n"

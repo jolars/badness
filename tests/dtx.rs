@@ -573,15 +573,71 @@ fn delimited_macro_name_argument_captures_as_verb() {
 }
 
 #[test]
-fn braced_macro_name_argument_still_lexes_normally() {
-    // The braced form of the `v`-type argument is balanced text and keeps its
-    // ordinary `GROUP` shape (the dtx outline reads it off the `BEGIN`).
+fn braced_macro_name_argument_captures_content_as_verb() {
+    // The braced form of the `v`-type argument keeps its ordinary `GROUP`
+    // shape (the dtx outline reads it off the `BEGIN`), but the content
+    // between the real brace tokens is one opaque `VERB` — a v-arg is raw
+    // data in either form (issue #60).
     let (root, errors) = parse_dtx_with_errors(
         "% \\begin{macro}{\\foo}\n\
          %   doc prose\n\
          % \\end{macro}\n",
     );
     assert_eq!(errors, 0);
-    assert_eq!(count_token(&root, SyntaxKind::VERB), 0);
     assert_eq!(count(&root, SyntaxKind::GROUP), 1);
+    assert!(tokens(&root).contains(&(SyntaxKind::VERB, "\\foo".to_string())));
+}
+
+#[test]
+fn braced_v_arg_name_holding_a_closer_is_no_orphan() {
+    // xo-grid.dtx documents `\[`/`\]` themselves (issue #60): the braced
+    // v-type name is raw data, so the closer draws no orphan diagnostic and
+    // both `macro` environments still pair.
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{macro}{\\[}\n\
+         % \\begin{macro}{\\]}\n\
+         %   doc prose\n\
+         % \\end{macro}\n\
+         % \\end{macro}\n",
+    );
+    assert_eq!(errors, 0);
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::VERB, "\\[".to_string())));
+    assert!(toks.contains(&(SyntaxKind::VERB, "\\]".to_string())));
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 2);
+}
+
+#[test]
+fn orphan_closer_in_macrocode_is_plain_data() {
+    // `\char_set_catcode_letter:N \)` in a macrocode chunk (l3bigint.dtx,
+    // issue #60): in macro code an orphan `\)`/`\]` is data — an ordinary
+    // token, no diagnostic.
+    let (_root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         \\char_set_catcode_letter:N \\)\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn doc_margin_envs_still_pair_inside_a_spanning_expl_region() {
+    // An expl3 region regularly spans macrocode chunks (`\ExplSyntaxOn` in
+    // one chunk, the `Off` chunks later). The doc-layer markup between them
+    // — `\begin{macro}` prose and the frames themselves — sits on doc-margin
+    // lines and must keep pairing; only in-region *code* is macro code.
+    let (root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         \\ExplSyntaxOn\n\
+         %    \\end{macrocode}\n\
+         % \\begin{macro}{\\foo}\n\
+         %   doc prose\n\
+         % \\end{macro}\n\
+         %    \\begin{macrocode}\n\
+         \\ExplSyntaxOff\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    // Two macrocode chunks plus the doc-layer `macro` environment.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 3);
 }

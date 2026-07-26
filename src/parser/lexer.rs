@@ -816,18 +816,26 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
 
 /// If `rest` starts with `\begin{name}` for an environment whose name argument is
 /// xparse `v`-type (`verbatim_arg` in the curated DB: l3doc's `macro`/`function`/
-/// `variable`, declared `{ O{} +v }`) *and* that argument uses the delimited form
-/// (`\begin{macro}+\@@_compile_{:+`), emit the `\begin{name}` tokens, a leading
-/// `[…]` optional as ordinary tokens, and the delimited span as one opaque `VERB`
-/// token, returning the bytes consumed. The braced form returns `None` and lexes
-/// normally — only the delimited form needs capture, because upstream chooses it
-/// precisely when the name holds unbalanced braces (`\@@_compile_}:`), which
-/// would otherwise corrupt group pairing for the rest of the file. Same-line
-/// only, like `\verb`, and the delimiter must directly abut and be punctuation
-/// that cannot open another argument shape (never `\`, a brace or bracket, `%`,
-/// `*`, or `$`), so an ordinary `\begin{macro}` followed by prose, a braced
-/// name, or code never captures. The parser attaches the abutting `VERB` into
-/// the `BEGIN` node like any verbatim command argument (`attach_arguments`).
+/// `variable`, declared `{ O{} +v }`), emit the `\begin{name}` tokens, a leading
+/// `[…]` optional as ordinary tokens, and the name argument as one opaque `VERB`
+/// token, returning the bytes consumed. Both argument forms capture:
+/// - The *delimited* form (`\begin{macro}+\@@_compile_{:+`) captures the whole
+///   delimited span as the `VERB`. Upstream chooses this form precisely when the
+///   name holds unbalanced braces (`\@@_compile_}:`), which would otherwise
+///   corrupt group pairing for the rest of the file. The delimiter must directly
+///   abut and be punctuation that cannot open another argument shape (never `\`,
+///   a brace or bracket, `%`, `*`, or `$`), so an ordinary `\begin{macro}`
+///   followed by prose or code never captures.
+/// - The *braced* form (`\begin{macro}{\]}`) keeps its `{`/`}` as ordinary brace
+///   tokens (the parser still builds the usual name `GROUP`) with the balanced
+///   content between them as the `VERB`: the content is raw data, so a `\]`,
+///   `\(`, or `$` in a name never opens math or draws an orphan-closer
+///   diagnostic (issue #60). Balance tracking skips escaped braces (`\{`, `\}`
+///   are part of a name, not group delimiters).
+///
+/// Same-line only, like `\verb`, in both forms. The parser attaches the abutting
+/// `VERB` or name group into the `BEGIN` node like any verbatim command argument
+/// (`attach_arguments`).
 fn lex_verbatim_arg_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
     let after_begin = rest.strip_prefix("\\begin{")?;
     let close = after_begin.find('}')?;
@@ -848,12 +856,16 @@ fn lex_verbatim_arg_environment(rest: &str, out: &mut Vec<Token>) -> Option<usiz
     }
     let arg_region = &region[args_len..];
     let delim = arg_region.chars().next()?;
-    if !delim.is_ascii_punctuation()
-        || matches!(delim, '\\' | '{' | '}' | '[' | ']' | '%' | '*' | '$')
-    {
-        return None;
-    }
-    let verb_len = delimited_len(arg_region)?;
+    let braced_content_len = if delim == '{' {
+        Some(braced_verb_content_len(&arg_region[1..])?)
+    } else {
+        if !delim.is_ascii_punctuation()
+            || matches!(delim, '\\' | '}' | '[' | ']' | '%' | '*' | '$')
+        {
+            return None;
+        }
+        None
+    };
 
     out.push(Token {
         kind: SyntaxKind::CONTROL_WORD,
@@ -872,11 +884,61 @@ fn lex_verbatim_arg_environment(rest: &str, out: &mut Vec<Token>) -> Option<usiz
         text: SmolStr::new("}"),
     });
     lex_into(&region[..args_len], out);
-    out.push(Token {
-        kind: SyntaxKind::VERB,
-        text: SmolStr::new(&arg_region[..verb_len]),
-    });
+    let verb_len = match braced_content_len {
+        // Braced form: `{` VERB(content) `}` — the braces stay real tokens so
+        // the parser builds the ordinary name `GROUP`.
+        Some(content_len) => {
+            out.push(Token {
+                kind: SyntaxKind::L_BRACE,
+                text: SmolStr::new("{"),
+            });
+            out.push(Token {
+                kind: SyntaxKind::VERB,
+                text: SmolStr::new(&arg_region[1..1 + content_len]),
+            });
+            out.push(Token {
+                kind: SyntaxKind::R_BRACE,
+                text: SmolStr::new("}"),
+            });
+            1 + content_len + 1
+        }
+        None => {
+            let verb_len = delimited_len(arg_region)?;
+            out.push(Token {
+                kind: SyntaxKind::VERB,
+                text: SmolStr::new(&arg_region[..verb_len]),
+            });
+            verb_len
+        }
+    };
     Some(prefix_len + args_len + verb_len)
+}
+
+/// Length of the brace-balanced content of a braced `v`-type name argument,
+/// starting just past the opening `{`. Same-line only; escaped braces (`\{`,
+/// `\}`) are name characters, not delimiters. `None` when the closing `}` is
+/// not on the line (falls back to normal lexing) or the content is empty
+/// (nothing to capture; a bare `{}` lexes normally).
+fn braced_verb_content_len(content: &str) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut chars = content.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next()?;
+            }
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (i > 0).then_some(i);
+                }
+            }
+            '\n' | '\r' => return None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A `.dtx` `macrocode` frame line, at a line start: `%␣*\begin{macrocode}` (when

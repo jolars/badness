@@ -120,9 +120,24 @@ pub fn first_group_range(command: &SyntaxNode) -> TextRange {
     }
 }
 
-/// The control-word name of a single `COMMAND` wrapped in `group`.
+/// The control-word name of a single `COMMAND` wrapped in `group`. A braced
+/// l3doc `v`-type name argument (`\begin{macro}{\foo}`) captures its content as
+/// one opaque `VERB` token instead of a `COMMAND` (issue #60); a control-word-
+/// shaped `VERB` (`\` + letters, nothing else) reads as the same name.
 pub fn group_command_name(group: &SyntaxNode) -> Option<String> {
-    child::<Command>(group).and_then(|c| c.name())
+    if let Some(name) = child::<Command>(group).and_then(|c| c.name()) {
+        return Some(name);
+    }
+    let verb = group
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| t.kind() == SyntaxKind::VERB)?;
+    let name = verb.text().trim().strip_prefix('\\')?;
+    (!name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '@' || c == '_' || c == ':'))
+    .then(|| name.to_owned())
 }
 
 /// The raw inner source of `group` with its outer braces dropped, nested braces kept.

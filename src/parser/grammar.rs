@@ -15,7 +15,9 @@
 
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
-use crate::parser::lexer::{Token, VerbCtx, is_block_environment, is_math_environment};
+use crate::parser::lexer::{
+    ExplToggle, Token, VerbCtx, expl_toggle, is_block_environment, is_math_environment,
+};
 use crate::syntax::SyntaxKind;
 
 const BEGIN_CMD: &str = "\\begin";
@@ -259,15 +261,32 @@ struct Parser<'t> {
     /// `GROUP`, no unclosed/unmatched diagnostic. Matched pairs still parse as
     /// groups. Computed per chunk by [`Self::macrocode_body`].
     plain_braces: std::collections::HashSet<usize>,
+    /// expl3 catcode-mode toggle tokens, ascending: `(token index, state after
+    /// the toggle)`. The same fixed toggle set the lexer flips
+    /// ([`expl_toggle`]), pre-scanned once so [`Self::in_expl_region`] is a
+    /// binary search. An expl3 region is *code* — token lists pass
+    /// `\begin`/`\end` around as data (`\tl_set:Nn { \begin{longtable} … }`,
+    /// issue #60) — so inside one, `\begin`/`\end` parse as plain commands
+    /// exactly as in a definition body ([`Self::plain_env`]). `.dtx` doc-margin
+    /// lines are exempt: a region regularly spans macrocode chunks, and the
+    /// doc-layer markup between them (`\begin{macro}`, the frames) must keep
+    /// pairing.
+    expl_toggles: Vec<(usize, bool)>,
 }
 
 impl<'t> Parser<'t> {
     fn new(tokens: &'t [Token], ctx: &'t VerbCtx) -> Self {
         let mut starts = Vec::with_capacity(tokens.len() + 1);
         let mut off = 0;
-        for t in tokens {
+        let mut expl_toggles = Vec::new();
+        for (i, t) in tokens.iter().enumerate() {
             starts.push(off);
             off += t.text.len();
+            if t.kind == SyntaxKind::CONTROL_WORD
+                && let Some(toggle) = expl_toggle(&t.text)
+            {
+                expl_toggles.push((i, toggle == ExplToggle::On));
+            }
         }
         starts.push(off);
         Self {
@@ -283,7 +302,36 @@ impl<'t> Parser<'t> {
             in_def_body: false,
             macrocode_end: None,
             plain_braces: std::collections::HashSet::new(),
+            expl_toggles,
         }
+    }
+
+    /// True when token `idx` sits inside an expl3 region (after an
+    /// `\ExplSyntaxOn`/`\ProvidesExpl*` with no intervening `\ExplSyntaxOff`).
+    /// The toggle token itself is outside its own region.
+    fn in_expl_region(&self, idx: usize) -> bool {
+        let n = self.expl_toggles.partition_point(|&(i, _)| i < idx);
+        n > 0 && self.expl_toggles[n - 1].1
+    }
+
+    /// True when token `idx` lies on a `.dtx` doc-margin line (a `DOC_MARGIN`
+    /// opens its physical line). Walks back to the preceding `NEWLINE`; doc
+    /// lines are short, and the check runs only at `\begin`/`\end` tokens.
+    fn on_doc_margin_line(&self, idx: usize) -> bool {
+        self.tokens[..idx]
+            .iter()
+            .rev()
+            .take_while(|t| t.kind != SyntaxKind::NEWLINE)
+            .any(|t| t.kind == SyntaxKind::DOC_MARGIN)
+    }
+
+    /// True when token `idx` sits in *macro code*: inside a definition body
+    /// (issues #45/#55) or inside an expl3 region (issue #60; `.dtx` doc-margin
+    /// lines exempt, see [`Self::expl_toggles`]). There `\begin`/`\end` are
+    /// plain commands that need not pair, and an orphan `\]`/`\)` is data
+    /// (`AGENTS.md` decision #1).
+    fn in_macro_code(&self, idx: usize) -> bool {
+        self.in_def_body || (self.in_expl_region(idx) && !self.on_doc_margin_line(idx))
     }
 
     /// True when the cursor sits lexically inside a math body — including inside
@@ -720,17 +768,17 @@ impl<'t> Parser<'t> {
             | SyntaxKind::DOC_MARGIN
             | SyntaxKind::GUARD => self.bump(),
             SyntaxKind::CONTROL_WORD => {
-                // Inside a definition body, `\begin`/`\end` are
-                // plain commands: the two need not balance within one group
-                // (issue #45), so neither opens an environment nor is stray.
-                // A brace-less `\begin`/`\end` is likewise a plain command
-                // (`env_name_follows`).
-                if !self.in_def_body
+                // Inside a definition body or an expl3 region, `\begin`/`\end`
+                // are plain commands: the two need not balance within one group
+                // (issues #45/#60), so neither opens an environment nor is
+                // stray. A brace-less `\begin`/`\end` is likewise a plain
+                // command (`env_name_follows`).
+                if !self.in_macro_code(self.pos)
                     && self.at_command(BEGIN_CMD)
                     && self.env_name_follows(self.pos)
                 {
                     self.environment();
-                } else if !self.in_def_body
+                } else if !self.in_macro_code(self.pos)
                     && self.at_command(END_CMD)
                     && self.env_name_follows(self.pos)
                 {
@@ -761,7 +809,15 @@ impl<'t> Parser<'t> {
                         }
                     }
                     "\\]" | "\\)" => {
-                        self.error(format!("unmatched `{sym}`"));
+                        // In macro code (a definition body, macrocode chunk,
+                        // or expl3 region) an orphan closer is data, not a
+                        // stray delimiter (`\char_set_catcode_letter:N \)`,
+                        // issue #60) — an ordinary token, no diagnostic. In
+                        // prose it still diagnoses, catching a `\[…\]` typo'd
+                        // across a paragraph break on its closer.
+                        if !self.in_macro_code(self.pos) {
+                            self.error(format!("unmatched `{sym}`"));
+                        }
                         self.bump();
                     }
                     // `\\` line break, with its tightly-bound `*` / `[len]`.
@@ -1022,11 +1078,11 @@ impl<'t> Parser<'t> {
                     self.bump();
                     break;
                 }
-                // In a definition body `\begin`/`\end` are plain
-                // commands (issue #45), so they don't signal a runaway `[` —
-                // nor does a brace-less one (issue #60).
+                // In a definition body or expl3 region `\begin`/`\end` are
+                // plain commands (issues #45/#60), so they don't signal a
+                // runaway `[` — nor does a brace-less one (issue #60).
                 Some(SyntaxKind::CONTROL_WORD)
-                    if !self.in_def_body
+                    if !self.in_macro_code(self.pos)
                         && (self.at_command(BEGIN_CMD) || self.at_command(END_CMD))
                         && self.env_name_follows(self.pos) =>
                 {
@@ -1206,7 +1262,7 @@ impl<'t> Parser<'t> {
                     brackets -= 1;
                 }
                 SyntaxKind::CONTROL_WORD
-                    if !self.in_def_body
+                    if !self.in_macro_code(idx)
                         && matches!(t.text.as_str(), BEGIN_CMD | END_CMD)
                         && self.env_name_follows(idx) =>
                 {
@@ -1273,7 +1329,7 @@ impl<'t> Parser<'t> {
                         return true;
                     }
                 }
-                SyntaxKind::CONTROL_WORD if !self.in_def_body => {
+                SyntaxKind::CONTROL_WORD if !self.in_macro_code(i) => {
                     if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
                         envs += 1;
                     } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
@@ -1336,7 +1392,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::CONTROL_SYMBOL if depth == 0 && t.text.as_str() == closer => {
                     return true;
                 }
-                SyntaxKind::CONTROL_WORD if !self.in_def_body => {
+                SyntaxKind::CONTROL_WORD if !self.in_macro_code(i) => {
                     if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
                         envs += 1;
                     } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
@@ -1597,14 +1653,14 @@ impl<'t> Parser<'t> {
         match self.kind() {
             Some(SyntaxKind::L_BRACE) => self.math_group(),
             Some(SyntaxKind::CONTROL_WORD) => {
-                // Same definition-body and brace-less gates as
+                // Same definition-body/expl3-region and brace-less gates as
                 // [`Self::element`] (issues #45/#60).
-                if !self.in_def_body
+                if !self.in_macro_code(self.pos)
                     && self.at_command(BEGIN_CMD)
                     && self.env_name_follows(self.pos)
                 {
                     self.environment();
-                } else if !self.in_def_body
+                } else if !self.in_macro_code(self.pos)
                     && self.at_command(END_CMD)
                     && self.env_name_follows(self.pos)
                 {

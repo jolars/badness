@@ -1,0 +1,20 @@
+% Token lists pass `\begin`/`\end` around as data inside an expl3 region
+% (latex3's l3prefixes.tex builds a longtable across two token-list bodies,
+% issue #60): in-region `\begin`/`\end` are plain commands, no pairing.
+\documentclass{article}
+\usepackage{longtable}
+\ExplSyntaxOn
+\cs_new_protected:Npn \PrintTable
+  {
+    \tl_set:Nn \l_tmpa_tl
+      {
+        \begin { longtable } { @{} l l @{} }
+        Prefix & Module \\
+      }
+    \tl_put_right:Nn \l_tmpa_tl { \end { longtable } }
+    \tl_use:N \l_tmpa_tl
+  }
+\ExplSyntaxOff
+\begin{document}
+\PrintTable
+\end{document}

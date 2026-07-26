@@ -1,0 +1,62 @@
+---
+source: tests/parser.rs
+assertion_line: 895
+expression: "tree(\"\\\\ExplSyntaxOn\\n\\\\tl_set:Nn \\\\l_tmpa_tl { \\\\begin { longtable } { ll } }\\n\\\\tl_put_right:Nn \\\\l_tmpa_tl { \\\\end { longtable } }\\n\\\\ExplSyntaxOff\\n\")"
+---
+ROOT@0..134
+  PARAGRAPH@0..133
+    COMMAND@0..13
+      CONTROL_WORD@0..13 "\\ExplSyntaxOn"
+    NEWLINE@13..14 "\n"
+    COMMAND@14..24
+      CONTROL_WORD@14..24 "\\tl_set:Nn"
+    WHITESPACE@24..25 " "
+    COMMAND@25..67
+      CONTROL_WORD@25..35 "\\l_tmpa_tl"
+      WHITESPACE@35..36 " "
+      GROUP@36..67
+        L_BRACE@36..37 "{"
+        WHITESPACE@37..38 " "
+        COMMAND@38..65
+          CONTROL_WORD@38..44 "\\begin"
+          WHITESPACE@44..45 " "
+          GROUP@45..58
+            L_BRACE@45..46 "{"
+            WHITESPACE@46..47 " "
+            WORD@47..56 "longtable"
+            WHITESPACE@56..57 " "
+            R_BRACE@57..58 "}"
+          WHITESPACE@58..59 " "
+          GROUP@59..65
+            L_BRACE@59..60 "{"
+            WHITESPACE@60..61 " "
+            WORD@61..63 "ll"
+            WHITESPACE@63..64 " "
+            R_BRACE@64..65 "}"
+        WHITESPACE@65..66 " "
+        R_BRACE@66..67 "}"
+    NEWLINE@67..68 "\n"
+    COMMAND@68..84
+      CONTROL_WORD@68..84 "\\tl_put_right:Nn"
+    WHITESPACE@84..85 " "
+    COMMAND@85..118
+      CONTROL_WORD@85..95 "\\l_tmpa_tl"
+      WHITESPACE@95..96 " "
+      GROUP@96..118
+        L_BRACE@96..97 "{"
+        WHITESPACE@97..98 " "
+        COMMAND@98..116
+          CONTROL_WORD@98..102 "\\end"
+          WHITESPACE@102..103 " "
+          GROUP@103..116
+            L_BRACE@103..104 "{"
+            WHITESPACE@104..105 " "
+            WORD@105..114 "longtable"
+            WHITESPACE@114..115 " "
+            R_BRACE@115..116 "}"
+        WHITESPACE@116..117 " "
+        R_BRACE@117..118 "}"
+    NEWLINE@118..119 "\n"
+    COMMAND@119..133
+      CONTROL_WORD@119..133 "\\ExplSyntaxOff"
+  NEWLINE@133..134 "\n"

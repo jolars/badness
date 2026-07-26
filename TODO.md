@@ -37,6 +37,34 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   flags it, the fix is one line: `"verbatimDelimited": true` on `path` in
   `data/signatures.json` — but that reopens the TikZ collision, so it likely
   wants the definition-shadowing item above instead.
+- [ ] **`^^A` comment convention in `.dtx` doc prose (issue #60 follow-up, next
+  format-error cluster in the latex3 scan).** ltxdoc/l3doc set
+  `\catcode`\^^A=14`, and the l3 sources lean on it for editor-balance hacks in
+  doc-margin prose: `^^A{` paired with a verb `|}|` (l3basics @3583, l3token),
+  a commented-out `^^A\end{function}` (l3str), and `^^A $` balancing a
+  `\char`$` (l3regex). Badness lexes `^^A` as ordinary characters, so the
+  hidden `{`/`$`/`\end` cascade into unclosed-group and unclosed-environment
+  diagnostics. Treating `^^A` as comment-to-EOL is a bounded static fact in
+  the same family as the on-by-default `|` short verb in `.dtx` mode
+  (AGENTS.md decision #1) — but it must be scoped to **doc-margin prose
+  lines only**: inside `macrocode` bodies `^^A` is live code
+  (`\char_set_catcode:nn { `\^^A }` would otherwise swallow the rest of its
+  line, including a real `}`). Would fix `l3basics.dtx`, `l3token.dtx`,
+  `l3str.dtx`, and partially `l3regex.dtx`.
+- [ ] **doc.sty-family escape-character swaps are statically unparseable
+  (issue #60, record-only).** `doc.sty`/`doc-2016`/`doc-2021`/`source2edoc.cls`
+  self-document with `\catcode`\!=0`/`\catcode`\|=0` regions where `!` and `|`
+  are the escape characters (`!    \begin{macrocode*}`,
+  `|gdef|xmacro@code#1%`), and `shortvrb.sty`/`latexrelease.sty` play similar
+  catcode games. General `\catcode` handling is a non-goal (AGENTS.md decision
+  #1), so these files stay format-error; nothing to fix in badness. Candidate
+  for a scan-level allowlist if the recurring issue noise matters.
+- [ ] **docstrip's `\catcode`\%=12` trick defeats the comment lexer (issue
+  #60, record-only).** `docstrip.tex` (both copies) does
+  `{\catcode`\%=12 \gdef\perCent{%}}` — with `%` demoted to "other", the body
+  `{%}` is three ordinary characters, but badness's lexer reads the `%` as a
+  comment that swallows the closing `}`, leaving one unclosed-`{` diagnostic.
+  Same non-goal boundary as the doc.sty item; record, don't fix.
 
 ## Formatter
 

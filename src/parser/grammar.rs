@@ -870,11 +870,23 @@ impl<'t> Parser<'t> {
     /// in text mode (`\item[$x$]` is legit) but which inside math mean the `[`
     /// is not an argument at all — e.g. the open-interval notation
     /// `$]0;\num{0.5}[$`. A `]` counts only outside `{…}` nesting, matching how
-    /// `optional` consumes whole groups via `element`. Does not consume.
+    /// `optional` consumes whole groups via `element` — and only past the `]`s
+    /// owed to intervening *command-abutting* `[`s: such a `[` is itself
+    /// argument-shaped (or a `\left`/`\Big` delimiter) and will claim the next
+    /// `]` when parsed, so that `]` cannot also satisfy the outer `[`
+    /// (`\P[\gamma[0, \infty) \cap A = \emptyset]`, issue #55 — the lone `]`
+    /// belongs to `\gamma[`, so `\P[` stays an ordinary atom). A `[` abutting
+    /// anything else (`x[i]`, the interval `[0, \infty)`) parses as an ordinary
+    /// atom and claims nothing, so it adds no nesting here either. Does not
+    /// consume.
     fn bracket_closes_before_math_end(&self, open: usize) -> bool {
         let mut depth = 0usize;
+        let mut brackets = 0usize;
         let mut newlines = 0;
+        let mut abuts_command = false;
         for t in &self.tokens[open + 1..] {
+            let prev_abuts_command = abuts_command;
+            abuts_command = false;
             match t.kind {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
@@ -891,7 +903,13 @@ impl<'t> Parser<'t> {
                     }
                     depth -= 1;
                 }
-                SyntaxKind::R_BRACKET if depth == 0 => return true,
+                SyntaxKind::L_BRACKET if depth == 0 && prev_abuts_command => brackets += 1,
+                SyntaxKind::R_BRACKET if depth == 0 => {
+                    if brackets == 0 {
+                        return true;
+                    }
+                    brackets -= 1;
+                }
                 SyntaxKind::DOLLAR => return false,
                 SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
                     return false;
@@ -899,6 +917,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::CONTROL_WORD if matches!(t.text.as_str(), BEGIN_CMD | END_CMD) => {
                     return false;
                 }
+                SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL => abuts_command = true,
                 _ => {}
             }
             newlines = 0;

@@ -671,6 +671,31 @@ fn newcommand_body_splits_end_begin() {
     insta::assert_snapshot!(tree(r"\newcommand{\newpg}{\end{page}\begin{page}}"));
 }
 
+// --- nested command-abutting brackets in math (issue #55) --------------------
+
+#[test]
+fn math_bracket_claimed_by_inner_command_stays_atom() {
+    // The lone `]` is claimed by `\gamma[`, so the outer `\P[` must not
+    // attach as an optional argument (it would end up unclosed): it stays an
+    // ordinary math atom and the parse is clean.
+    insta::assert_snapshot!(tree(
+        r"\[0 < \P[\gamma[0, \infty) \cap A = \emptyset] < 1\]"
+    ));
+}
+
+#[test]
+fn math_bracket_with_own_closer_still_attaches_past_interval() {
+    // A `[` not abutting a command (the interval `[0, 1)`) claims no `]`, so
+    // the outer bracket still reads as an argument and attaches.
+    let parsed = parse(r"$\E[[0, 1) \cap A]$");
+    assert_eq!(parsed.errors, vec![]);
+    let kinds: Vec<SyntaxKind> = parsed.syntax().descendants().map(|n| n.kind()).collect();
+    assert!(
+        kinds.contains(&SyntaxKind::OPTIONAL),
+        "the outer bracket attaches to `\\E`"
+    );
+}
+
 // --- block-vs-inline paragraph wrapping --------------------------------------
 
 /// The kinds of the root's direct child *nodes* (trivia tokens are skipped, as

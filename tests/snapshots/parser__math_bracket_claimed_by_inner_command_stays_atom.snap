@@ -1,0 +1,42 @@
+---
+source: tests/parser.rs
+assertion_line: 681
+expression: "tree(r\"\\[0 < \\P[\\gamma[0, \\infty) \\cap A = \\emptyset] < 1\\]\")"
+---
+ROOT@0..52
+  PARAGRAPH@0..52
+    DISPLAY_MATH@0..52
+      CONTROL_SYMBOL@0..2 "\\["
+      MATH@2..50
+        WORD@2..3 "0"
+        WHITESPACE@3..4 " "
+        WORD@4..5 "<"
+        WHITESPACE@5..6 " "
+        COMMAND@6..8
+          CONTROL_WORD@6..8 "\\P"
+        L_BRACKET@8..9 "["
+        COMMAND@9..46
+          CONTROL_WORD@9..15 "\\gamma"
+          OPTIONAL@15..46
+            L_BRACKET@15..16 "["
+            WORD@16..18 "0,"
+            WHITESPACE@18..19 " "
+            COMMAND@19..25
+              CONTROL_WORD@19..25 "\\infty"
+            WORD@25..26 ")"
+            WHITESPACE@26..27 " "
+            COMMAND@27..31
+              CONTROL_WORD@27..31 "\\cap"
+            WHITESPACE@31..32 " "
+            WORD@32..33 "A"
+            WHITESPACE@33..34 " "
+            WORD@34..35 "="
+            WHITESPACE@35..36 " "
+            COMMAND@36..45
+              CONTROL_WORD@36..45 "\\emptyset"
+            R_BRACKET@45..46 "]"
+        WHITESPACE@46..47 " "
+        WORD@47..48 "<"
+        WHITESPACE@48..49 " "
+        WORD@49..50 "1"
+      CONTROL_SYMBOL@50..52 "\\]"

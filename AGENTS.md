@@ -205,7 +205,10 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    - *Lexically inside math* (a `math_depth` that persists into text-mode bodies of
      unknown environments nested in math), a `[` attaches only when it directly abuts
      the command (`\sqrt[3]{x}`; a spaced `\bE [ x ]` is a delimiter) and its `]`
-     closes before the math ends (open-interval notation `$]0;\num{0.5}[$`).
+     closes before the math ends (open-interval notation `$]0;\num{0.5}[$`) — net of
+     the `]`s claimed by intervening command-abutting `[`s, so in
+     `\P[\gamma[0, \infty) \cap A = \emptyset]` the lone `]` belongs to `\gamma[` and
+     the outer `\P[` stays an ordinary atom (issue #55).
    - A *curated math environment's* `\begin` likewise attaches only a directly-abutting
      bracket (`\begin{aligned}[t]`; a detached `[a]_1` on the next line is body
      content). Non-math environments stay greedy across trivia — the xparse-signature

@@ -1532,14 +1532,37 @@ fn lower_expl_code(
     Ir::concat(result)
 }
 
+/// Whether an expl3-region group's *flat* form carries the l3 house style's
+/// canonical inner spaces (`{ value }`, per the l3styleguide) or stays tight
+/// (`{parbox/after}`). Spaced when the group is the attached argument of an
+/// expl3-*named* command — the name contains `_` or `:`, a purely lexical fact
+/// (no signature or meaning lookup) — or a bare code block (an expl3 function
+/// body). Tight when it belongs to an embedded LaTeX2e-named command
+/// (`\UseTaggingSocket`, `\@parboxto`), whose authors write tight braces; the
+/// house style governs expl3 functions, not 2e code that happens to sit inside
+/// a region.
+fn expl_group_is_spaced(node: &SyntaxNode) -> bool {
+    let Some(parent) = node.parent() else {
+        return true;
+    };
+    if parent.kind() != SyntaxKind::COMMAND {
+        return true;
+    }
+    match command_name(&parent) {
+        Some(name) => name.contains('_') || name.contains(':'),
+        None => true,
+    }
+}
+
 /// Lower a brace `{…}` or optional `[…]` group inside an expl3 region as a code
 /// block: the body lays out as expl3 code ([`lower_expl_code`]) indented one step,
-/// the whole wrapped in a soft [`Ir::group`] so it stays inline (`{ body }`, with
-/// canonical inner spaces) when it fits and detonates to an indented block when the
-/// body spans lines or overflows. The inline-vs-block decision is width/structure
+/// the whole wrapped in a soft [`Ir::group`] so it stays inline when it fits —
+/// `{ body }` with canonical inner spaces for an expl3 function's argument or a
+/// bare code block, tight `{body}` for an embedded 2e-named command's argument
+/// ([`expl_group_is_spaced`]) — and detonates to an indented block when the body
+/// spans lines or overflows. The inline-vs-block decision is width/structure
 /// driven (never source newlines), keeping reformatting idempotent. Mirrors
-/// [`lower_prose_group`] but recurses into expl3 code and uses [`Ir::line`] so the
-/// inline form carries spaces.
+/// [`lower_prose_group`] but recurses into expl3 code.
 fn lower_expl_group(
     node: &SyntaxNode,
     open: SyntaxKind,
@@ -1560,21 +1583,58 @@ fn lower_expl_group(
             _ => body_elements.push(element),
         }
     }
+    // A comment opening the body (`{%`, the macro-code continuation idiom, with
+    // inline whitespace tolerated) rides the opening bracket's line — it never
+    // gets a line of its own. Inside a region the masked newline is inert
+    // catcode-9 whitespace either way; this just keeps the authored shape.
+    let mut lead_comment = Ir::Nil;
+    {
+        let mut i = 0;
+        let mut spaced = false;
+        while let Some(SyntaxElement::Token(t)) = body_elements.get(i) {
+            match t.kind() {
+                SyntaxKind::WHITESPACE => {
+                    spaced = true;
+                    i += 1;
+                }
+                SyntaxKind::COMMENT => {
+                    lead_comment = if spaced {
+                        Ir::concat([Ir::verbatim(" "), Ir::verbatim(t.text())])
+                    } else {
+                        Ir::verbatim(t.text())
+                    };
+                    body_elements.drain(..=i);
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
     // A body holding a `%` comment can never flatten: inline, everything after
     // the comment on the line — the closing bracket included — would be
-    // swallowed into the comment on the next parse (`{ …% }`). Force the
-    // broken form so the comment keeps terminating its own line.
-    let has_comment = node
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .any(|t| t.kind() == SyntaxKind::COMMENT);
+    // swallowed into the comment on the next parse (`{ …% }`). The lead comment
+    // glued to the opening bracket forces the broken form the same way.
+    let has_lead_comment = !matches!(lead_comment, Ir::Nil);
+    let has_comment = has_lead_comment
+        || node
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::COMMENT);
+    let open_ir = Ir::concat([open_ir, lead_comment]);
     let body = trim_trailing_break(trim_leading_break(lower_expl_code(
         body_elements.into_iter(),
         cx,
         Statements::SplitAtNewlines,
     )));
     if matches!(body, Ir::Nil) {
-        Ir::concat([open_ir, close_ir])
+        // A glued lead comment owns the rest of its line, so an empty body
+        // still breaks before the closing bracket (`{%…` + `}` on its own
+        // line), never `{%…}` with the bracket swallowed.
+        if has_lead_comment {
+            Ir::concat([open_ir, Ir::hard_line(), close_ir])
+        } else {
+            Ir::concat([open_ir, close_ir])
+        }
     } else if has_comment {
         Ir::concat([
             open_ir,
@@ -1583,10 +1643,17 @@ fn lower_expl_group(
             close_ir,
         ])
     } else {
+        // Flat boundary separators: a space (l3 house style) or nothing
+        // (tight); both break identically.
+        let boundary = if expl_group_is_spaced(node) {
+            Ir::Line
+        } else {
+            Ir::SoftLine
+        };
         Ir::group(Ir::concat([
             open_ir,
-            Ir::indent(Ir::concat([Ir::line(), body])),
-            Ir::line(),
+            Ir::indent(Ir::concat([boundary.clone(), body])),
+            boundary,
             close_ir,
         ]))
     }

@@ -54,6 +54,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   tight (`1/2`, per Knuth), and script-size content is conventionally tight
   overall, so the likely resolution is tight `/` everywhere and no operator
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
+- [ ] **Sign after an opening bracket reads as binary** (surfaced by the issue
+  #56 triage on dalcde/cam-notes). `(-1)^n` renders as `( - 1)^n`: a bare `(`
+  token classifies as `Operand` in `math_atom_role`, so the `-` after it gets
+  binary spacing instead of gluing as a unary sign. Pre-existing and idempotent,
+  just ugly. Likely fix: openers (`(`, `[`, `\{`, and the `\left`/named-delimiter
+  open forms — the same set `bracket_delta` recognizes) should count as a
+  non-operand `prev` role so a following `+`/`-` degrades to unary, mirroring the
+  existing leading-sign rule (`-x`, `x=-b`).
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on

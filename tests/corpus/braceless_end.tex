@@ -1,0 +1,33 @@
+% The \begin/\end shape gate (smoke-test issue #60): macro code uses the bare
+% TeX primitive and delimiter patterns, so a brace-less \begin/\end is a plain
+% command — no environment, no diagnostic.
+\makeatletter
+\ifx\undefined\@@end\else\let\end\@@end\fi
+\def\END{%
+  \ifnum\currentgrouplevel>0 %
+    \typeout{Bad group level}%
+  \fi
+  \@@end
+}
+\let\end\END
+% The docstrip pattern: \end as the job-ending primitive inside a message.
+\def\check{%
+  \ifnum\count0<\count1
+    \errmessage{Too few streams left, exiting}\end
+  \fi
+}
+% The \gobble delimiter pattern (ltnews.cls): \end as a macro-argument
+% delimiter, and a computed \end{\reserved@a} rebuilt via \noexpand.
+\long\def\@gobble@nv#1\end#2{%
+  \def\reserved@b{#2}%
+  \edef\reserved@a{\noexpand\end{\reserved@a}}%
+  \expandafter\reserved@a
+}
+% The xparse pattern: bare \begin and \end passed as argument data, and a
+% parameter-valued name group.
+\def\grab#1#2{%
+  \grabaux \begin \end {#2} #1%
+}
+\makeatother
+\begin{document}
+A bare \end{document}

@@ -1,0 +1,39 @@
+---
+source: tests/parser.rs
+assertion_line: 835
+expression: "tree(r\"\\def\\x{\\end{\\reserved@a}} \\def\\y#1{\\end{#1}}\")"
+---
+ROOT@0..44
+  PARAGRAPH@0..44
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\def"
+    COMMAND@4..25
+      CONTROL_WORD@4..6 "\\x"
+      GROUP@6..25
+        L_BRACE@6..7 "{"
+        COMMAND@7..24
+          CONTROL_WORD@7..11 "\\end"
+          GROUP@11..24
+            L_BRACE@11..12 "{"
+            COMMAND@12..21
+              CONTROL_WORD@12..21 "\\reserved"
+            WORD@21..23 "@a"
+            R_BRACE@23..24 "}"
+        R_BRACE@24..25 "}"
+    WHITESPACE@25..26 " "
+    COMMAND@26..30
+      CONTROL_WORD@26..30 "\\def"
+    COMMAND@30..32
+      CONTROL_WORD@30..32 "\\y"
+    HASH@32..33 "#"
+    WORD@33..34 "1"
+    GROUP@34..44
+      L_BRACE@34..35 "{"
+      COMMAND@35..43
+        CONTROL_WORD@35..39 "\\end"
+        GROUP@39..43
+          L_BRACE@39..40 "{"
+          HASH@40..41 "#"
+          WORD@41..42 "1"
+          R_BRACE@42..43 "}"
+      R_BRACE@43..44 "}"

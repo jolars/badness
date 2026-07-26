@@ -1,0 +1,30 @@
+---
+source: tests/parser.rs
+assertion_line: 842
+expression: "tree(r\"\\begin { myenv } x \\end { myenv }\")"
+---
+ROOT@0..33
+  PARAGRAPH@0..33
+    ENVIRONMENT@0..33
+      BEGIN@0..16
+        CONTROL_WORD@0..6 "\\begin"
+        WHITESPACE@6..7 " "
+        NAME_GROUP@7..16
+          L_BRACE@7..8 "{"
+          WHITESPACE@8..9 " "
+          WORD@9..14 "myenv"
+          WHITESPACE@14..15 " "
+          R_BRACE@15..16 "}"
+      PARAGRAPH@16..18
+        WHITESPACE@16..17 " "
+        WORD@17..18 "x"
+      WHITESPACE@18..19 " "
+      END@19..33
+        CONTROL_WORD@19..23 "\\end"
+        WHITESPACE@23..24 " "
+        NAME_GROUP@24..33
+          L_BRACE@24..25 "{"
+          WHITESPACE@25..26 " "
+          WORD@26..31 "myenv"
+          WHITESPACE@31..32 " "
+          R_BRACE@32..33 "}"

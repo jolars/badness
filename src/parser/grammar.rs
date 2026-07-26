@@ -332,6 +332,41 @@ impl<'t> Parser<'t> {
         self.kind() == Some(SyntaxKind::CONTROL_WORD) && self.text() == name
     }
 
+    /// True if the `\begin`/`\end` at token index `pos` reads as a LaTeX
+    /// environment delimiter: a `{` follows across trivia, without crossing a
+    /// blank line, and the name inside is name-shaped. Macro code uses the
+    /// bare TeX primitive and delimiter patterns (`\let\end\@@end`,
+    /// `\long\def\@gobble@nv#1\end#2{…}`, `\expandafter\end`, xparse's
+    /// `\begin \end {#3}` argument data — issue #60) at least as often as
+    /// prose omits the brace by mistake, so a brace-less `\begin`/`\end` is a
+    /// plain command everywhere: no environment, no diagnostic, and no
+    /// recovery anchor. Likewise a name group holding a parameter or control
+    /// word (`\end{#2}`, `\edef…{\noexpand\end{\reserved@a}}`) is computed
+    /// macro data — statically unpairable — so it too stays a plain command
+    /// (the group attaches as an ordinary argument).
+    fn env_name_follows(&self, pos: usize) -> bool {
+        let s = self.scan_trivia(pos + 1, CommentMode::Skip);
+        if s.saw_blank_line || s.next_kind != Some(SyntaxKind::L_BRACE) {
+            return false;
+        }
+        // Scan the name up to the closing `}` on the same line: a parameter
+        // (`#`), a control word/symbol, or a nested `{` before it is macro
+        // data, not a name. An *unterminated* name (line end or EOF first) is
+        // an in-progress edit — stay optimistic so `\begin{ali` still parses
+        // as a `BEGIN` + `NAME_GROUP` and environment-name completion sees it.
+        for t in &self.tokens[s.next + 1..] {
+            match t.kind {
+                SyntaxKind::R_BRACE | SyntaxKind::NEWLINE => return true,
+                SyntaxKind::HASH
+                | SyntaxKind::CONTROL_WORD
+                | SyntaxKind::CONTROL_SYMBOL
+                | SyntaxKind::L_BRACE => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
     fn is_trivia(k: SyntaxKind) -> bool {
         matches!(
             k,
@@ -630,7 +665,7 @@ impl<'t> Parser<'t> {
         self.at_end()
             || match block {
                 Block::Document => false,
-                Block::Environment => self.at_command(END_CMD),
+                Block::Environment => self.at_command(END_CMD) && self.env_name_follows(self.pos),
                 // `>=` (not `==`): defensive against an element overshooting the
                 // pre-scanned terminator, so the loop still stops.
                 Block::Macrocode => self.macrocode_end.is_some_and(|end| self.pos >= end),
@@ -654,7 +689,9 @@ impl<'t> Parser<'t> {
             // Only trivia remains before the block terminator (`\end`, or EOF).
             None => true,
             Some(SyntaxKind::CONTROL_WORD) => {
-                block == Block::Environment && self.tokens[s.next].text == END_CMD
+                block == Block::Environment
+                    && self.tokens[s.next].text == END_CMD
+                    && self.env_name_follows(s.next)
             }
             Some(_) => false,
         }
@@ -673,9 +710,17 @@ impl<'t> Parser<'t> {
                 // Inside a definition body, `\begin`/`\end` are
                 // plain commands: the two need not balance within one group
                 // (issue #45), so neither opens an environment nor is stray.
-                if !self.in_def_body && self.at_command(BEGIN_CMD) {
+                // A brace-less `\begin`/`\end` is likewise a plain command
+                // (`env_name_follows`).
+                if !self.in_def_body
+                    && self.at_command(BEGIN_CMD)
+                    && self.env_name_follows(self.pos)
+                {
                     self.environment();
-                } else if !self.in_def_body && self.at_command(END_CMD) {
+                } else if !self.in_def_body
+                    && self.at_command(END_CMD)
+                    && self.env_name_follows(self.pos)
+                {
                     self.stray_end();
                 } else {
                     self.command();
@@ -933,10 +978,12 @@ impl<'t> Parser<'t> {
                     break;
                 }
                 // In a definition body `\begin`/`\end` are plain
-                // commands (issue #45), so they don't signal a runaway `[`.
+                // commands (issue #45), so they don't signal a runaway `[` —
+                // nor does a brace-less one (issue #60).
                 Some(SyntaxKind::CONTROL_WORD)
                     if !self.in_def_body
-                        && (self.at_command(BEGIN_CMD) || self.at_command(END_CMD)) =>
+                        && (self.at_command(BEGIN_CMD) || self.at_command(END_CMD))
+                        && self.env_name_follows(self.pos) =>
                 {
                     self.error_at(opener, "unclosed `[`");
                     break;
@@ -1021,7 +1068,8 @@ impl<'t> Parser<'t> {
         let mut brackets = 0usize;
         let mut newlines = 0;
         let mut abuts_command = false;
-        for t in &self.tokens[open + 1..] {
+        for (off, t) in self.tokens[open + 1..].iter().enumerate() {
+            let idx = open + 1 + off;
             let prev_abuts_command = abuts_command;
             abuts_command = false;
             match t.kind {
@@ -1051,7 +1099,10 @@ impl<'t> Parser<'t> {
                 SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
                     return false;
                 }
-                SyntaxKind::CONTROL_WORD if matches!(t.text.as_str(), BEGIN_CMD | END_CMD) => {
+                SyntaxKind::CONTROL_WORD
+                    if matches!(t.text.as_str(), BEGIN_CMD | END_CMD)
+                        && self.env_name_follows(idx) =>
+                {
                     return false;
                 }
                 SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL => abuts_command = true,
@@ -1110,7 +1161,9 @@ impl<'t> Parser<'t> {
                     brackets -= 1;
                 }
                 SyntaxKind::CONTROL_WORD
-                    if !self.in_def_body && matches!(t.text.as_str(), BEGIN_CMD | END_CMD) =>
+                    if !self.in_def_body
+                        && matches!(t.text.as_str(), BEGIN_CMD | END_CMD)
+                        && self.env_name_follows(idx) =>
                 {
                     return false;
                 }
@@ -1176,9 +1229,9 @@ impl<'t> Parser<'t> {
                     }
                 }
                 SyntaxKind::CONTROL_WORD if !self.in_def_body => {
-                    if t.text.as_str() == BEGIN_CMD {
+                    if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
                         envs += 1;
-                    } else if t.text.as_str() == END_CMD {
+                    } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
                         if envs == 0 {
                             return false;
                         }
@@ -1233,7 +1286,9 @@ impl<'t> Parser<'t> {
                     self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
-                Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
+                Some(SyntaxKind::CONTROL_WORD)
+                    if self.at_command(END_CMD) && self.env_name_follows(self.pos) =>
+                {
                     self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
@@ -1300,7 +1355,9 @@ impl<'t> Parser<'t> {
                     self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
-                Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
+                Some(SyntaxKind::CONTROL_WORD)
+                    if self.at_command(END_CMD) && self.env_name_follows(self.pos) =>
+                {
                     self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
@@ -1432,10 +1489,17 @@ impl<'t> Parser<'t> {
         match self.kind() {
             Some(SyntaxKind::L_BRACE) => self.math_group(),
             Some(SyntaxKind::CONTROL_WORD) => {
-                // Same definition-body gate as [`Self::element`] (issue #45).
-                if !self.in_def_body && self.at_command(BEGIN_CMD) {
+                // Same definition-body and brace-less gates as
+                // [`Self::element`] (issues #45/#60).
+                if !self.in_def_body
+                    && self.at_command(BEGIN_CMD)
+                    && self.env_name_follows(self.pos)
+                {
                     self.environment();
-                } else if !self.in_def_body && self.at_command(END_CMD) {
+                } else if !self.in_def_body
+                    && self.at_command(END_CMD)
+                    && self.env_name_follows(self.pos)
+                {
                     self.stray_end();
                 } else if self.at_command(LEFT_CMD) {
                     self.left_right();
@@ -1470,7 +1534,9 @@ impl<'t> Parser<'t> {
         let missing = match self.kind() {
             None | Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => true,
             Some(SyntaxKind::CONTROL_SYMBOL) => matches!(self.text(), "\\]" | "\\)"),
-            Some(SyntaxKind::CONTROL_WORD) => self.at_command(END_CMD),
+            Some(SyntaxKind::CONTROL_WORD) => {
+                self.at_command(END_CMD) && self.env_name_follows(self.pos)
+            }
             _ => false,
         };
         if missing {
@@ -1538,7 +1604,9 @@ impl<'t> Parser<'t> {
                     self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
-                Some(SyntaxKind::CONTROL_WORD) if self.at_command(END_CMD) => {
+                Some(SyntaxKind::CONTROL_WORD)
+                    if self.at_command(END_CMD) && self.env_name_follows(self.pos) =>
+                {
                     self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
@@ -1572,7 +1640,9 @@ impl<'t> Parser<'t> {
             None | Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => true,
             Some(SyntaxKind::CONTROL_SYMBOL) => matches!(self.text(), "\\]" | "\\)"),
             Some(SyntaxKind::CONTROL_WORD) => {
-                self.at_command(END_CMD) || self.at_command(LEFT_CMD) || self.at_command(RIGHT_CMD)
+                (self.at_command(END_CMD) && self.env_name_follows(self.pos))
+                    || self.at_command(LEFT_CMD)
+                    || self.at_command(RIGHT_CMD)
             }
             _ => false,
         };

@@ -1,0 +1,27 @@
+---
+source: tests/parser.rs
+assertion_line: 824
+expression: "tree(\"\\\\begin{myenv}\\n\\\\expandafter\\\\end\\n\\\\end{myenv}\")"
+---
+ROOT@0..42
+  PARAGRAPH@0..42
+    ENVIRONMENT@0..42
+      BEGIN@0..13
+        CONTROL_WORD@0..6 "\\begin"
+        NAME_GROUP@6..13
+          L_BRACE@6..7 "{"
+          WORD@7..12 "myenv"
+          R_BRACE@12..13 "}"
+      PARAGRAPH@13..30
+        NEWLINE@13..14 "\n"
+        COMMAND@14..26
+          CONTROL_WORD@14..26 "\\expandafter"
+        COMMAND@26..30
+          CONTROL_WORD@26..30 "\\end"
+      NEWLINE@30..31 "\n"
+      END@31..42
+        CONTROL_WORD@31..35 "\\end"
+        NAME_GROUP@35..42
+          L_BRACE@35..36 "{"
+          WORD@36..41 "myenv"
+          R_BRACE@41..42 "}"

@@ -806,3 +806,36 @@ fn dollar_math_still_pairs_across_groups_and_environments() {
         r"${a}^2$ and $\begin{smallmatrix} a \end{smallmatrix}$"
     ));
 }
+
+#[test]
+fn braceless_end_is_a_plain_command() {
+    // The `\begin`/`\end` shape gate (smoke-test issue #60): macro code uses
+    // the bare TeX primitive (`\let\end\@@end`, docstrip's
+    // `\errmessage{…}\end`) and the delimiter pattern
+    // (`\long\def\@gobble@nv#1\end#2{…}`), so a `\begin`/`\end` with no
+    // reachable `{` is a plain command: no environment, no diagnostic.
+    insta::assert_snapshot!(tree("\\let\\end\\@@end\n\\def\\g#1\\end#2{x}"));
+}
+
+#[test]
+fn braceless_end_does_not_terminate_an_environment_body() {
+    // A bare `\end` inside an environment body is body content, not the
+    // closer: the environment still pairs with its real `\end{name}`.
+    insta::assert_snapshot!(tree("\\begin{myenv}\n\\expandafter\\end\n\\end{myenv}"));
+}
+
+#[test]
+fn end_with_macro_name_group_is_a_plain_command() {
+    // A name group holding a parameter or control word is computed macro
+    // data (`\edef\reserved@a{\noexpand\end{\reserved@a}}`, xparse's
+    // `\begin \end {#3}`), statically unpairable — a plain command with an
+    // ordinary argument, no diagnostic.
+    insta::assert_snapshot!(tree(r"\def\x{\end{\reserved@a}} \def\y#1{\end{#1}}"));
+}
+
+#[test]
+fn spaced_name_group_still_reads_as_an_environment() {
+    // The name-shape check must not regress `\begin { longtable }`-style
+    // spacing (expl3 sources): a word-only name group still pairs.
+    insta::assert_snapshot!(tree(r"\begin { myenv } x \end { myenv }"));
+}

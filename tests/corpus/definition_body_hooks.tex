@@ -1,0 +1,11 @@
+% Minimized from dalcde/cam-notes IA_L/header.tex (issue #55): hook and
+% command-definition bodies split `\begin`/`\end` across groups by design.
+\makeatletter
+\newenvironment{stretchpage}%
+{\begin{preview}\begin{minipage}{\hsize}}%
+  {\end{minipage}\end{preview}}
+\AtBeginDocument{\begin{stretchpage}}
+\AtEndDocument{\end{stretchpage}}
+
+\newcommand{\@@newpage}{\end{stretchpage}\begin{stretchpage}}
+\makeatother

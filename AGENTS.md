@@ -107,15 +107,19 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      curated data, and a user/unknown environment stays in text mode. A blank line
      inside such a body stays trivia in the `MATH` node (no paragraph split); the
      matching `\end` is the terminator.
-   - **Environment-definition bodies.** The argument groups of the environment-defining
-     commands (`\newenvironment`/`\renewenvironment`/`\provideenvironment` and the xparse
-     `\NewDocumentEnvironment` family) are begin-/end-code *definition bodies*: TeX does
+   - **Definition bodies.** The argument groups of the environment-defining commands
+     (`\newenvironment`/`\renewenvironment`/`\provideenvironment` and the xparse
+     `\NewDocumentEnvironment` family), the command-defining commands (the `\newcommand`
+     family, `\DeclareRobustCommand`, and the xparse `\NewDocumentCommand` family), and
+     the LaTeX2e document/package hooks (`\AtBeginDocument`/`\AtEndDocument`/
+     `\AtEndOfClass`/`\AtEndOfPackage`/`\AddToHook`) are *macro-code bodies*: TeX does
      not require `\begin`/`\end` to balance within an individual group
-     (`\newenvironment{wrap}{\begin{center}}{\end{center}}`, issue #45). Inside them
-     `\begin`/`\end` parse as plain `COMMAND`s—no `ENVIRONMENT` pairing, no stray-`\end`
-     or unclosed diagnostics—and stop being bail anchors for `[…]` optionals. A grammar
-     routing decision on a closed, curated command-name set
-     (`parser::grammar::is_environment_definition_command`, a parser flag scoped to the
+     (`\newenvironment{wrap}{\begin{center}}{\end{center}}`, issue #45;
+     `\AtBeginDocument{\begin{stretchpage}}` balanced by a matching `\AtEndDocument`,
+     issue #55). Inside them `\begin`/`\end` parse as plain `COMMAND`s—no `ENVIRONMENT`
+     pairing, no stray-`\end` or unclosed diagnostics—and stop being bail anchors for
+     `[…]` optionals. A grammar routing decision on a closed, curated command-name set
+     (`parser::grammar::is_definition_body_command`, a parser flag scoped to the
      attached arguments); the bodies stay generic macro code, never executed.
    - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
      DB, never executed.

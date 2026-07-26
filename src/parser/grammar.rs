@@ -56,16 +56,27 @@ fn is_big_delimiter_command(text: &str) -> bool {
     })
 }
 
-/// The environment-*definition* commands: the LaTeX2e `\newenvironment` family
-/// and the xparse `\NewDocumentEnvironment` family. Their trailing brace groups
-/// are begin-/end-code *definition bodies*, and TeX does not require
-/// `\begin`/`\end` to balance within an individual group — the `\begin` lives
-/// in the begin-code and its matching `\end` in the end-code by design
-/// (`\newenvironment{wrap}{\begin{center}}{\end{center}}`, issue #45). Inside
-/// those bodies `\begin`/`\end` parse as plain commands (see
-/// [`Parser::in_env_def`]). A closed, curated set read as a static fact — the
+/// The *definition-body* commands: commands whose trailing brace groups are
+/// macro-code bodies, where TeX does not require `\begin`/`\end` to balance
+/// within an individual group. Three families:
+///
+/// - The environment-definition commands (the LaTeX2e `\newenvironment` family
+///   and the xparse `\NewDocumentEnvironment` family): the `\begin` lives in
+///   the begin-code and its matching `\end` in the end-code by design
+///   (`\newenvironment{wrap}{\begin{center}}{\end{center}}`, issue #45).
+/// - The command-definition commands (the LaTeX2e `\newcommand` family and the
+///   xparse `\NewDocumentCommand` family): a body may open or close an
+///   environment for a matching hook to balance
+///   (`\newcommand{\@@newpage}{\end{page}\begin{page}}`, issue #55).
+/// - The LaTeX2e document/package hooks (`\AtBeginDocument` family): the code
+///   argument runs at a different point in the document, so it balances
+///   against that context, not within its own group
+///   (`\AtBeginDocument{\begin{page}}` … `\AtEndDocument{\end{page}}`).
+///
+/// Inside those bodies `\begin`/`\end` parse as plain commands (see
+/// [`Parser::in_def_body`]). A closed, curated set read as a static fact — the
 /// bodies are never executed, mirroring [`is_big_delimiter_command`].
-fn is_environment_definition_command(text: &str) -> bool {
+fn is_definition_body_command(text: &str) -> bool {
     matches!(
         text,
         "\\newenvironment"
@@ -75,6 +86,19 @@ fn is_environment_definition_command(text: &str) -> bool {
             | "\\RenewDocumentEnvironment"
             | "\\ProvideDocumentEnvironment"
             | "\\DeclareDocumentEnvironment"
+            | "\\newcommand"
+            | "\\renewcommand"
+            | "\\providecommand"
+            | "\\DeclareRobustCommand"
+            | "\\NewDocumentCommand"
+            | "\\RenewDocumentCommand"
+            | "\\ProvideDocumentCommand"
+            | "\\DeclareDocumentCommand"
+            | "\\AtBeginDocument"
+            | "\\AtEndDocument"
+            | "\\AtEndOfClass"
+            | "\\AtEndOfPackage"
+            | "\\AddToHook"
     )
 }
 
@@ -195,15 +219,15 @@ struct Parser<'t> {
     /// are a static lexical fact, and optional-argument attachment uses it to
     /// treat a spaced `[` as content (see [`Self::attach_arguments`]).
     math_depth: usize,
-    /// True while parsing the attached arguments of an environment-definition
-    /// command ([`is_environment_definition_command`], issue #45). Those groups
-    /// are begin-/end-code definition bodies that need not self-balance
+    /// True while parsing the attached arguments of a definition-body command
+    /// ([`is_definition_body_command`], issues #45/#55). Those groups are
+    /// macro-code definition bodies that need not self-balance
     /// `\begin`/`\end`, so while set, `\begin`/`\end` parse as plain commands
     /// ([`Self::element`], [`Self::math_atom`]) and stop being bail anchors for
     /// an optional argument ([`Self::optional`]). Saved and restored around
     /// [`Self::attach_arguments`] in [`Self::command`], so it covers the whole
     /// definition subtree (nested groups included) and nothing after it.
-    in_env_def: bool,
+    in_def_body: bool,
 }
 
 impl<'t> Parser<'t> {
@@ -225,7 +249,7 @@ impl<'t> Parser<'t> {
             last_step_pos: std::cell::Cell::new(0),
             errors: Vec::new(),
             math_depth: 0,
-            in_env_def: false,
+            in_def_body: false,
         }
     }
 
@@ -612,12 +636,12 @@ impl<'t> Parser<'t> {
             | SyntaxKind::DOC_MARGIN
             | SyntaxKind::GUARD => self.bump(),
             SyntaxKind::CONTROL_WORD => {
-                // Inside an environment-definition body, `\begin`/`\end` are
+                // Inside a definition body, `\begin`/`\end` are
                 // plain commands: the two need not balance within one group
                 // (issue #45), so neither opens an environment nor is stray.
-                if !self.in_env_def && self.at_command(BEGIN_CMD) {
+                if !self.in_def_body && self.at_command(BEGIN_CMD) {
                     self.environment();
-                } else if !self.in_env_def && self.at_command(END_CMD) {
+                } else if !self.in_def_body && self.at_command(END_CMD) {
                     self.stray_end();
                 } else {
                     self.command();
@@ -664,17 +688,17 @@ impl<'t> Parser<'t> {
         } else {
             BracketPolicy::Greedy
         };
-        // An environment-definition command's attached groups are definition
-        // bodies (issue #45): flag them so `\begin`/`\end` inside parse as
+        // A definition-body command's attached groups are macro-code bodies
+        // (issues #45/#55): flag them so `\begin`/`\end` inside parse as
         // plain commands. OR-ed with the saved flag so a definition nested in
         // another definition's body stays flagged; restored after the
         // arguments so following siblings are unaffected.
-        let saved = self.in_env_def;
-        self.in_env_def = saved || is_environment_definition_command(self.text());
+        let saved = self.in_def_body;
+        self.in_def_body = saved || is_definition_body_command(self.text());
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
         self.attach_arguments(bracket);
-        self.in_env_def = saved;
+        self.in_def_body = saved;
         self.close();
     }
 
@@ -818,10 +842,10 @@ impl<'t> Parser<'t> {
                     self.bump();
                     break;
                 }
-                // In an environment-definition body `\begin`/`\end` are plain
+                // In a definition body `\begin`/`\end` are plain
                 // commands (issue #45), so they don't signal a runaway `[`.
                 Some(SyntaxKind::CONTROL_WORD)
-                    if !self.in_env_def
+                    if !self.in_def_body
                         && (self.at_command(BEGIN_CMD) || self.at_command(END_CMD)) =>
                 {
                     self.error_at(opener, "unclosed `[`");
@@ -1117,10 +1141,10 @@ impl<'t> Parser<'t> {
         match self.kind() {
             Some(SyntaxKind::L_BRACE) => self.math_group(),
             Some(SyntaxKind::CONTROL_WORD) => {
-                // Same env-definition-body gate as [`Self::element`] (issue #45).
-                if !self.in_env_def && self.at_command(BEGIN_CMD) {
+                // Same definition-body gate as [`Self::element`] (issue #45).
+                if !self.in_def_body && self.at_command(BEGIN_CMD) {
                     self.environment();
-                } else if !self.in_env_def && self.at_command(END_CMD) {
+                } else if !self.in_def_body && self.at_command(END_CMD) {
                     self.stray_end();
                 } else if self.at_command(LEFT_CMD) {
                     self.left_right();

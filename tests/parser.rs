@@ -653,6 +653,24 @@ fn env_def_body_flag_does_not_leak_to_siblings() {
     );
 }
 
+// --- hook and command-definition bodies (issue #55) --------------------------
+
+#[test]
+fn hook_bodies_split_begin_end() {
+    // `\AtBeginDocument` opens an environment that `\AtEndDocument` closes:
+    // the code arguments run at different points in the document, so
+    // `\begin`/`\end` need not balance within either group.
+    let parsed = parse("\\AtBeginDocument{\\begin{page}}\n\\AtEndDocument{\\end{page}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn newcommand_body_splits_end_begin() {
+    // A page-break macro closes the current environment and reopens it
+    // (dalcde/cam-notes headers): plain commands, no errors.
+    insta::assert_snapshot!(tree(r"\newcommand{\newpg}{\end{page}\begin{page}}"));
+}
+
 // --- block-vs-inline paragraph wrapping --------------------------------------
 
 /// The kinds of the root's direct child *nodes* (trivia tokens are skipped, as

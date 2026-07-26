@@ -1,0 +1,29 @@
+---
+source: tests/parser.rs
+assertion_line: 671
+expression: "tree(r\"\\newcommand{\\newpg}{\\end{page}\\begin{page}}\")"
+---
+ROOT@0..43
+  PARAGRAPH@0..43
+    COMMAND@0..43
+      CONTROL_WORD@0..11 "\\newcommand"
+      GROUP@11..19
+        L_BRACE@11..12 "{"
+        COMMAND@12..18
+          CONTROL_WORD@12..18 "\\newpg"
+        R_BRACE@18..19 "}"
+      GROUP@19..43
+        L_BRACE@19..20 "{"
+        COMMAND@20..30
+          CONTROL_WORD@20..24 "\\end"
+          GROUP@24..30
+            L_BRACE@24..25 "{"
+            WORD@25..29 "page"
+            R_BRACE@29..30 "}"
+        COMMAND@30..42
+          CONTROL_WORD@30..36 "\\begin"
+          GROUP@36..42
+            L_BRACE@36..37 "{"
+            WORD@37..41 "page"
+            R_BRACE@41..42 "}"
+        R_BRACE@42..43 "}"

@@ -33,6 +33,37 @@ jobs:
         posquit0/Awesome-CV
         stacks/stacks-project
         vEnhance/napkin
+      # Known non-actionable failures to suppress from issue filing. Each entry
+      # is `repo|path|type`; the path is repo-relative (as `git ls-files`
+      # prints it). Only the *named* failure type is suppressed — if the same
+      # file starts failing a different way (losslessness, timeout, a panic),
+      # that failure is still recorded, so the allowlist can never mask a new
+      # regression. Keep this in sync with TODO.md's record-only roadmap items;
+      # drop an entry the moment badness can handle the file (it then simply
+      # passes and records nothing). See issue #60.
+      ALLOWLIST: |
+        # Catcode-rebinding bootstrap files: general \catcode handling is an
+        # explicit non-goal (AGENTS.md decision #1), so these stay format-error.
+        latex3/latex3|texmf/tex/latex/base/doc.sty|format-error
+        latex3/latex3|texmf/tex/latex/base/doc-2016-02-15.sty|format-error
+        latex3/latex3|texmf/tex/latex/base/doc-2021-06-01.sty|format-error
+        latex3/latex3|texmf/tex/latex/base/source2edoc.cls|format-error
+        latex3/latex3|texmf/tex/latex/base/shortvrb.sty|format-error
+        latex3/latex3|texmf/tex/latex/base/latexrelease.sty|format-error
+        latex3/latex3|texmf/tex/latex/base/ltxdoc.cls|format-error
+        latex3/latex3|support/docstrip.tex|format-error
+        latex3/latex3|texmf/tex/latex/base/docstrip.tex|format-error
+        # Documents closed by macro expansion or a conditional branch: statically
+        # unclosed without a TeX evaluator (a non-goal).
+        latex3/latex3|l3kernel/testfiles-backend/support/driver.tex|format-error
+        latex3/latex3|texmf/tex/latex/base/nfssfont.tex|format-error
+        latex3/latex3|xpackages/xinitials/xinitials-test.tex|format-error
+        latex3/latex3|texmf/tex/latex/base/testpage.tex|format-error
+        latex3/latex3|xpackages/xor/xo-pfloat.tex|format-error
+        latex3/latex3|xpackages/xor/xo-balance.tex|format-error
+        # Genuinely broken upstream (a commented-out balancing \end).
+        latex3/latex3|xpackages/xor/xo-page.dtx|format-error
+        latex3/latex3|xpackages/galley/galley2.dtx|format-error
     steps:
       - uses: actions/checkout@v7
 
@@ -65,6 +96,17 @@ jobs:
           {
             printf 'repo\tfailure_type\tfile\tlog_path\treport_path\trepo_sha\tbadness_sha\tbadness_version\tidempotency_input_path\tidempotency_once_path\tidempotency_twice_path\n'
           } > "$FAILURES_TSV"
+
+          # Normalize the allowlist into exact `repo|path|type` lines (drop blank
+          # and `#` comment lines). A recorded failure whose key matches one of
+          # these is suppressed (see `ALLOWLIST` in the job env, issue #60).
+          ALLOWLIST_ENTRIES="$(printf '%s\n' "$ALLOWLIST" | sed 's/[[:space:]]*$//' | grep -Ev '^[[:space:]]*(#|$)' || true)"
+          SUPPRESSED_COUNT=0
+
+          is_allowlisted() {
+            # args: repo file failure_type
+            grep -Fxq "$1|$2|$3" <<< "$ALLOWLIST_ENTRIES"
+          }
 
           while IFS= read -r repo; do
             if [ -z "$repo" ]; then
@@ -158,6 +200,11 @@ jobs:
                   matched=1
                   while IFS= read -r failure_type; do
                     [ -z "$failure_type" ] && continue
+                    if is_allowlisted "$repo" "$rel_file" "$failure_type"; then
+                      echo "notice: allowlisted $failure_type for $repo:$rel_file (issue #60, record-only)"
+                      SUPPRESSED_COUNT=$((SUPPRESSED_COUNT + 1))
+                      continue
+                    fi
                     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                       "$repo" \
                       "$failure_type" \
@@ -193,6 +240,11 @@ jobs:
             done < <(git -C "$repo_dir" ls-files -z -- '*.tex' '*.sty' '*.cls' '*.dtx' '*.ins' '*.bib')
           done <<< "$TARGET_REPOS"
 
+          # Hand the suppressed-record tally to the summarize step (separate
+          # shells share only the results dir, which is also the uploaded
+          # artifact).
+          echo "$SUPPRESSED_COUNT" > "$RESULTS_DIR/suppressed_count"
+
       - name: Summarize scan results
         id: summarize
         shell: bash
@@ -204,12 +256,17 @@ jobs:
           if [ "$failure_count" -lt 0 ]; then
             failure_count=0
           fi
+          suppressed_count=0
+          if [ -f "$RESULTS_DIR/suppressed_count" ]; then
+            suppressed_count="$(cat "$RESULTS_DIR/suppressed_count")"
+          fi
 
           echo "failure_count=$failure_count" >> "$GITHUB_OUTPUT"
           {
             echo "### Badness debug format repo scan"
             echo ""
             echo "- Failure records: $failure_count"
+            echo "- Suppressed (allowlisted, record-only): $suppressed_count"
             echo "- Scanned extensions: \`.tex\`, \`.sty\`, \`.cls\`, \`.dtx\`, \`.ins\`, \`.bib\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

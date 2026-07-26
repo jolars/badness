@@ -300,9 +300,12 @@ fn comment_line_does_not_close_display_math() {
 #[test]
 fn blank_line_before_comment_still_breaks_math() {
     // A genuine blank line preceding a comment line is still a `\par`: the
-    // comment-reset must not erase a break already seen.
+    // comment-reset must not erase a break already seen, so the `\]` past it
+    // is unreachable — the gated `\[` stays a plain token (no math, no
+    // diagnostic) and the orphan `\]` diagnoses instead.
     let out = tree("\\[\n  a = b\n\n  % stray\n  c\n\\]");
-    assert!(out.contains("unclosed `\\["), "{out}");
+    assert!(out.contains("unmatched `\\]`"), "{out}");
+    assert!(!out.contains("DISPLAY_MATH"), "{out}");
 }
 
 // --- leading comment-bind (AGENTS.md #9) ---------------------------------
@@ -805,6 +808,34 @@ fn dollar_math_still_pairs_across_groups_and_environments() {
     insta::assert_snapshot!(tree(
         r"${a}^2$ and $\begin{smallmatrix} a \end{smallmatrix}$"
     ));
+}
+
+#[test]
+fn def_control_symbol_name_is_plain() {
+    // `\def`-family name isolation (smoke-test issue #65): the control symbol
+    // after `\def` is the sequence being defined, not syntax — `\[` is no
+    // math opener — and the attached body is a macro-code body, so the
+    // trivlist that opens in `\def\[`'s body and closes in `\def\]`'s draws
+    // no diagnostics.
+    insta::assert_snapshot!(tree(
+        "\\def\\[{\\begin{trivlist}\\item[]$\\displaystyle}%\n\\def\\]{$\\end{trivlist}}"
+    ));
+}
+
+#[test]
+fn display_math_without_reachable_closer_stays_plain() {
+    // The `\[` shape gate (smoke-test issue #65), mirroring the `$` gate:
+    // macro code passes `\[` around as a data token
+    // (`\expandafter\@tempa\[\@nil`), so an opener with no reachable closer
+    // is an ordinary token: no math node, no diagnostic.
+    insta::assert_snapshot!(tree("\\expandafter\\@tempa\\[\\@nil"));
+}
+
+#[test]
+fn delim_math_still_pairs_across_lines() {
+    // The gate must not regress legit display math: a closer on a later line
+    // (no blank line between) still opens math.
+    insta::assert_snapshot!(tree("\\[\n  x + y\n\\]\nand \\( a \\)"));
 }
 
 #[test]

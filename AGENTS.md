@@ -214,7 +214,18 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    error (parser diagnostics gate the formatter, so they must be high-precision;
    a likely-typo lone `$` in prose is linter territory). A closing `$` counts only
    outside `{…}` nesting (`math_group` consumes a nested dollar as an ordinary atom).
-   `\[`/`\(` stay optimistic — an unmatched one still diagnoses.
+   `\[`/`\(` are gated the same way (`delim_math_closes`, issue #65): macro code
+   passes the delimiters around as data (`\expandafter\@tempa\[\@nil`), so an opener
+   with no reachable closer stays an ordinary token, no diagnostic. An orphan
+   `\]`/`\)` still diagnoses, so a prose `\[…\]` typo'd across a paragraph break is
+   caught on its closer; only a fully unmatched opener goes silent (linter territory,
+   as for `$`). Relatedly, the control *symbol* after a `\def`-family primitive
+   (`\def`/`\gdef`/`\edef`/`\xdef`) is the sequence being (re)defined, never syntax:
+   `\def\[{…}` is no math opener and `\def\\{…}` no line break — the name is consumed
+   as a plain token inside the `\def`'s node and the attached body is a macro-code
+   body (stacks-project opens `trivlist` in `\def\[`'s body and closes it in
+   `\def\]`'s; `is_def_prefix_command`, another closed curated set). A control-*word*
+   name (`\def\foo…`) keeps its benign generic-command shape.
 
 4. **Parser emits an event stream, not a tree directly.** `lexer → flat token stream →
    parser emits events (Start/Tok(idx)/Finish) → tree_builder re-attaches trivia and

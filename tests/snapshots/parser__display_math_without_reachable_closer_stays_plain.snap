@@ -1,0 +1,13 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\expandafter\\\\@tempa\\\\[\\\\@nil\")"
+---
+ROOT@0..26
+  PARAGRAPH@0..26
+    COMMAND@0..12
+      CONTROL_WORD@0..12 "\\expandafter"
+    CONTROL_SYMBOL@12..14 "\\@"
+    WORD@14..19 "tempa"
+    CONTROL_SYMBOL@19..21 "\\["
+    CONTROL_SYMBOL@21..23 "\\@"
+    WORD@23..26 "nil"

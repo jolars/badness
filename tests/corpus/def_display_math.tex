@@ -1,0 +1,28 @@
+% A regression corpus file for `\def`-family defined-name isolation and the
+% `\[`/`\(` shape gate (smoke-test issue #65): stacks-project restyles display
+% math by redefining `\[`/`\]` — the control symbol after `\def` is the
+% sequence being defined, not a math opener, and the trivlist opens in one
+% macro-code body and closes in the other — and passes `\[` to a delimited
+% splitter as a data token.
+\makeatletter
+\def\[{\relax
+  \ifmmode\@badmath
+  \else
+    \begin{trivlist}%
+    \item[]\leavevmode
+    \hbox to\linewidth\bgroup$\displaystyle
+    \hskip\mathindent\bgroup
+  \fi}%
+\def\]{\relax
+  \ifmmode
+    \egroup \m@th$\hfil \egroup
+    \end{trivlist}%
+  \else \@badmath
+  \fi}%
+\def\@tempa#1$#2#3\@nil{%
+  \def\[{#1$#2\def\@currenvir{displaymath}#3}%
+}%
+\expandafter\@tempa\[\@nil
+\makeatother
+
+Real display math still pairs: \[ x + y \] and so does inline \( a \).

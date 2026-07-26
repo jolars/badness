@@ -102,6 +102,19 @@ fn is_definition_body_command(text: &str) -> bool {
     )
 }
 
+/// The TeX `\def`-family primitives, whose next token is always the control
+/// sequence being (re)defined. A control-*symbol* name would otherwise be
+/// misparsed as live syntax — `\def\[{…}`/`\def\]{…}` (a document class
+/// restyling display math, stacks-project issue #65) reads as a math opener,
+/// `\def\\{…}` as a line break — so [`Parser::command`] consumes it as a plain
+/// token inside the `\def`'s node. A control-*word* name already parses
+/// benignly as a generic command and keeps its current shape. A closed,
+/// curated set read as a static fact, mirroring [`is_definition_body_command`];
+/// the definition is never executed.
+fn is_def_prefix_command(text: &str) -> bool {
+    matches!(text, "\\def" | "\\gdef" | "\\edef" | "\\xdef")
+}
+
 /// Maximum number of consecutive cursor peeks with **no** token consumed before
 /// the parser aborts as stuck. Modeled on rust-analyzer's `PARSER_STEP_LIMIT`
 /// (`crates/parser/src/parser.rs`), a catch-all against a non-advancing loop that
@@ -729,8 +742,24 @@ impl<'t> Parser<'t> {
             SyntaxKind::CONTROL_SYMBOL => {
                 let sym = self.text().to_owned();
                 match sym.as_str() {
-                    "\\[" => self.delim_math(SyntaxKind::DISPLAY_MATH, "\\[", "\\]"),
-                    "\\(" => self.delim_math(SyntaxKind::INLINE_MATH, "\\(", "\\)"),
+                    // Shape-gated like `$` ([`Self::delim_math_closes`]): an
+                    // opener with no reachable closer is macro-code data
+                    // (`\expandafter\@tempa\[\@nil`, issue #65) — an ordinary
+                    // token, no math, no diagnostic.
+                    "\\[" => {
+                        if self.delim_math_closes(self.pos, "\\]") {
+                            self.delim_math(SyntaxKind::DISPLAY_MATH, "\\[", "\\]");
+                        } else {
+                            self.bump();
+                        }
+                    }
+                    "\\(" => {
+                        if self.delim_math_closes(self.pos, "\\)") {
+                            self.delim_math(SyntaxKind::INLINE_MATH, "\\(", "\\)");
+                        } else {
+                            self.bump();
+                        }
+                    }
                     "\\]" | "\\)" => {
                         self.error(format!("unmatched `{sym}`"));
                         self.bump();
@@ -796,8 +825,24 @@ impl<'t> Parser<'t> {
         // arguments so following siblings are unaffected.
         let saved = self.in_def_body;
         self.in_def_body = saved || is_definition_body_command(self.text());
+        let def_prefix = is_def_prefix_command(self.text());
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
+        // A `\def`-family primitive's next token is the control sequence being
+        // defined ([`is_def_prefix_command`]). A control-symbol name is
+        // consumed here as a plain token so it is never misparsed as syntax
+        // (`\def\[{…}` is not a math opener), and the attached body is then a
+        // macro-code body: the stacks-project redefinition opens `trivlist` in
+        // `\def\[`'s body and closes it in `\def\]`'s (issue #65), the same
+        // no-balance fact as `is_definition_body_command`.
+        if def_prefix {
+            let scan = self.scan_trivia(self.pos, CommentMode::Skip);
+            if scan.next_kind == Some(SyntaxKind::CONTROL_SYMBOL) && !scan.saw_blank_line {
+                self.skip_trivia();
+                self.bump(); // the defined name
+                self.in_def_body = true;
+            }
+        }
         self.attach_arguments(bracket);
         self.in_def_body = saved;
         self.close();
@@ -1227,6 +1272,69 @@ impl<'t> Parser<'t> {
                     {
                         return true;
                     }
+                }
+                SyntaxKind::CONTROL_WORD if !self.in_def_body => {
+                    if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
+                        envs += 1;
+                    } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
+                        if envs == 0 {
+                            return false;
+                        }
+                        envs -= 1;
+                    }
+                }
+                _ => {}
+            }
+            newlines = 0;
+            i += 1;
+        }
+        false
+    }
+
+    /// The delimited-math twin of [`Self::dollar_closes`]: `\[`/`\(` opens
+    /// math only when its `\]`/`\)` is reachable. Macro code passes the
+    /// delimiters around as data tokens — stacks-project feeds `\[` to a
+    /// splitter (`\expandafter\@tempa\[\@nil`, issue #65) — so an opener with
+    /// no reachable closer is an ordinary token, no math, **no diagnostic**
+    /// (the shape is routine in code, so it is not statically an error; a
+    /// likely-typo unclosed `\[` in prose is linter territory, exactly as for
+    /// `$`). Same blockers as `dollar_closes`, mirroring
+    /// [`Self::delim_math`]'s recovery anchors: an unbalanced `}`, an `\end`
+    /// not owed to an intervening `\begin`, a paragraph break, the macrocode
+    /// chunk end, EOF. The closer counts only outside `{…}` nesting.
+    fn delim_math_closes(&self, open: usize, closer: &str) -> bool {
+        let mut depth = 0usize;
+        let mut envs = 0usize;
+        let mut newlines = 0;
+        let end = self
+            .macrocode_end
+            .unwrap_or(self.tokens.len())
+            .min(self.tokens.len());
+        let mut i = open + 1;
+        while i < end {
+            let t = &self.tokens[i];
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    if newlines >= 2 {
+                        return false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                SyntaxKind::CONTROL_SYMBOL if depth == 0 && t.text.as_str() == closer => {
+                    return true;
                 }
                 SyntaxKind::CONTROL_WORD if !self.in_def_body => {
                     if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {

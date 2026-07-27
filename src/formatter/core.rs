@@ -1824,12 +1824,24 @@ fn lower_expl_group(
     // the comment on the line — the closing bracket included — would be
     // swallowed into the comment on the next parse (`{ …% }`). The lead comment
     // glued to the opening bracket forces the broken form the same way.
+    //
+    // A docstrip guard (`%<…>`) or `.dtx` margin (`%`) is line-oriented the same
+    // way, and worse: it is only recognized at line start, so flattening it into
+    // `{ %<trace> … }` re-lexes it as an *ordinary* `%` comment that swallows the
+    // rest of the line — braces included — unbalancing the enclosing group on the
+    // next parse (issue #61). Force the broken form so each rides its own line,
+    // where `lower_loose_token` pins it to column 0 and it stays a guard/margin.
     let has_lead_comment = !matches!(lead_comment, Ir::Nil);
     let has_comment = has_lead_comment
         || node
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
-            .any(|t| t.kind() == SyntaxKind::COMMENT);
+            .any(|t| {
+                matches!(
+                    t.kind(),
+                    SyntaxKind::COMMENT | SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN
+                )
+            });
     let open_ir = Ir::concat([open_ir, lead_comment]);
     let body = trim_trailing_break(trim_leading_break(lower_expl_code(
         body_elements.into_iter(),

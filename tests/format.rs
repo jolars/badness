@@ -587,6 +587,12 @@ const DTX_FIXTURES: &[&str] = &[
     // off column 0 (issue #61, l3backend-draw.dtx / l3color.dtx). Covers both a
     // margin-framed `bmatrix` and a `\left\{\begin{array}` opened mid-line.
     "dtx_doc_margin_math",
+    // An expl3 code group whose body carries a docstrip guard (`%<…>`) or margin
+    // must never flatten inline (issue #61, l3ldb.dtx): a guard off line-start
+    // re-lexes as an ordinary `%` comment that swallows the closing brace,
+    // unbalancing the enclosing group on the next parse. Forcing the broken form
+    // keeps the guard column-0 pinned and the layout a fixed point.
+    "dtx_expl3_guarded_group",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

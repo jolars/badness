@@ -88,24 +88,22 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `%␣␣␣␣` line is doc prose, not a docstrip frame — l3backend-draw). Regression
   fixture `dtx_doc_margin_math` (`tests/format.rs`). The margin-framed math-env
   gate rests on the curated `math` flag, mirroring the other structural routes.
-- [ ] **expl3 continuation-group indent is non-idempotent when a docstrip
-  guard splits the group body (issue #61, the last latex3 idempotency
-  straggler, l3ldb.dtx).** A `%<*trace>`/`%</trace>`/inline-`%<trace>` guard
-  inside a `\cs_new:Npn \foo … { … }` body is doc-layer (subtracted from the
-  expl3 region), so it splits the `lower_expl_paragraph` run. The
-  continuation-group indent (d53f064) folds a step into the group's line only
-  when `!lines.is_empty()` — but the guard-induced run split shifts whether the
-  head statement and its `{` land in the same run, so pass 1 indents the group
-  one step and pass 2 flattens it (the fixed point is flat). Minimal repro: a
-  macrocode chunk with `\ExplSyntaxOn`, two `\cs_new` blocks where the second's
-  body carries standalone `%<*trace>`/`%</trace>` guards around a multi-line
-  nested group plus a trailing inline-guard group `{ %<trace> … { … } }` — the
-  second block's outer `{` drifts col 2 → col 0. Fix direction: make the
-  continuation-indent decision independent of run segmentation (decide it from
-  the group's own line-start position, not the accumulated `lines`), or treat a
-  guard-split group body as a single continuation unit. Deferred: a fix here
-  reaches into the just-landed `lower_expl_code` continuation logic and needs a
-  guard-free run-segmentation invariant, so it wants its own focused change.
+- [x] **An expl3 code group holding a docstrip guard flattened inline and
+  swallowed its closing brace (issue #61, the last latex3 idempotency
+  straggler, l3ldb.dtx).** A short group body carrying an inline `%<trace>`
+  guard (`{ %<trace> \foo:n {…} }`) was collapsed onto one line by
+  `lower_expl_group`. A guard is only recognized at line start, so off
+  line-start it re-lexed as an ordinary `%` comment that swallowed the rest of
+  the line — the closing brace included — unbalancing the enclosing group's
+  brace count on the next parse. So pass 1 saw a matched `GROUP` (continuation
+  indent, col 2) and pass 2 saw a lone `L_BRACE` with the body split into
+  sibling paragraphs (flat, col 0): the col 2 → col 0 drift. Root cause was the
+  flatten gate, not the continuation indent: `lower_expl_group` forced the
+  broken (multi-line) form only for a `COMMENT` in the body. Fixed by
+  extending that gate to `GUARD`/`DOC_MARGIN` too, so the guard rides its own
+  line where `lower_loose_token` pins it to column 0 and it stays a guard — the
+  outer group stays matched and the continuation indent holds on every pass.
+  Regression fixture `dtx_expl3_guarded_group` (`tests/format.rs`).
 - [x] **Math operator spacing.** A single space around each binary/relation atom
   (`a+2*1^5` -> `a + 2 * 1^5`, `x=-b` -> `x = -b`); unary signs and `^`/`_` scripts
   stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.

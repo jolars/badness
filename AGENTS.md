@@ -226,7 +226,12 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
    are formatter-owned, and a `%` margin stays in column 0. More generally, the line-oriented
    `.dtx` tokens (`DOC_MARGIN`, `GUARD`) are only margins/guards *at line start*, so no
    relayout may merge or re-indent their lines (the `contains_doc_margin` gates in
-   `formatter::core`, issue #57).
+   `formatter::core`, issue #57). An in-region code group carrying such a token in its body
+   is held to the same rule: `lower_expl_group` forces the broken (multi-line) form so the
+   guard/margin rides its own line and `lower_loose_token` pins it to column 0—flattening it
+   into `{ %<trace> … }` would re-lex the guard as an ordinary `%` comment that swallows the
+   closing brace, unbalancing the group on the next parse (issue #61, l3ldb.dtx; the same
+   swallow reasoning as an in-body `%` comment).
 
 2. **Two layers: syntactic vs. semantic.** The *syntactic* layer is the generic CST
    and knows nothing about what a command means. The *semantic* layer is a

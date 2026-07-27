@@ -1,0 +1,27 @@
+% \begin{macrocode}
+\ProvidesExplPackage{demo}{2024-01-01}{}
+% \end{macrocode}
+%
+% \begin{macro}{\foo:NN}
+%    \begin{macrocode}
+\cs_new_protected:Npn \foo_aux:NN #1#2
+  {
+%<*trace>
+    \trace_internal:e
+    {
+      looking~for~\tl_to_str:N \l_class_tl
+      containing~\token_to_str:N#2
+    }
+%</trace>
+    \prop_get:NoNTF #2 \l_class_tl
+    \l_internal_tl
+    {
+%<trace> \trace_internal:e { found }
+      \exp_after:wN #1 \l_internal_tl
+    }
+    {
+%<trace> \trace_internal:e { no~match }
+    }
+  }
+%    \end{macrocode}
+% \end{macro}

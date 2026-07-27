@@ -968,6 +968,40 @@ fn cite_key_list_layout_is_deterministic() {
     );
 }
 
+/// A multi-line brace group whose opener is glued to its first body token
+/// (`{\aaa`, no source whitespace) keeps that token on the opener's line rather
+/// than Allman-breaking after `{`. In normal catcodes an end-of-line after the
+/// non-control-word `{` reads as a space token (TeX reading state M), so the
+/// old unconditional break silently injected a space the author never wrote — a
+/// meaning change in horizontal mode (TODO's issue #57 review item). A whitespace
+/// boundary after `{` is TeX-identical to a newline, so it still breaks. Only the
+/// first line rides the opener; the interior still indents one step.
+#[test]
+fn glued_brace_opener_keeps_first_body_token_on_its_line() {
+    // `Preserve` keeps `\def\x{` on one line so the assertion isolates the
+    // opener boundary from paragraph reflow (which would split `\def` and `\x`).
+    let style = FormatStyle {
+        wrap: WrapMode::Preserve,
+        ..FormatStyle::default()
+    };
+
+    let glued = "\\def\\x{\\aaa\\bbb\n\\ccc}\n";
+    assert_eq!(
+        format_with_style_flavored(glued, style, LatexFlavor::Package).expect("formats"),
+        "\\def\\x{\\aaa\\bbb\n  \\ccc\n}\n",
+        "a glued opener must not gain a break (and space token) after `{{`"
+    );
+
+    // Whitespace already after the opener is TeX-identical to a newline, so the
+    // Allman break stands.
+    let spaced = "\\def\\x{ \\aaa\\bbb\n\\ccc}\n";
+    assert_eq!(
+        format_with_style_flavored(spaced, style, LatexFlavor::Package).expect("formats"),
+        "\\def\\x{\n  \\aaa\\bbb\n  \\ccc\n}\n",
+        "whitespace after the opener keeps the Allman break"
+    );
+}
+
 /// The `\begin` argument glue is driven by the scanned signature, not the name: the
 /// *same* `\begin{thm}\n{x}` glues only when the document defines `thm`'s arity.
 /// Without the definition `thm` is unknown to both the document and the built-in DB,

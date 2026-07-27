@@ -3647,6 +3647,28 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
         open_ir
     };
 
+    // Whether the source glued the open delimiter directly to the first body
+    // token, with no whitespace between them (`{\let…`). In normal catcodes an
+    // end-of-line after a non-control-word token reads as a *space* (TeX state M
+    // holds right after a `{`), so a break the formatter synthesizes here would
+    // inject a space token the author never wrote — a silent meaning change
+    // wherever space tokens matter (horizontal mode). We therefore only break
+    // after the opener when the source already had whitespace there, where
+    // whitespace ↔ newline is TeX-identical. The parser emits leading
+    // whitespace/newlines as their own trivia tokens, so a whitespace boundary
+    // shows up as a leading `WHITESPACE`/`NEWLINE` element; anything else (real
+    // content, a nested node) means the opener was glued. This path is never
+    // reached inside an expl3 region (routed to `lower_expl_group` earlier),
+    // where source whitespace is catcode-9 and the synthesized break is sound.
+    // Scoped to brace groups: an optional `[…]` freely swaps its interior
+    // newlines for spaces already (a key-value list's whitespace is insignificant;
+    // `collapse_arg_group`, issue #47), so its Allman break after `[` is by design.
+    let open_glued = open == SyntaxKind::L_BRACE
+        && body_elements
+            .first()
+            .and_then(SyntaxElement::as_token)
+            .is_none_or(|t| !is_collapsible_trivia(t.kind()));
+
     // A brace-group body under reflow is laid out as code-like statements: each
     // source line stays its own logical line, but an over-long one wraps to the
     // width instead of forcing the printer to break the innermost nested prose
@@ -3670,9 +3692,13 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
             Ir::concat([open_ir, close_ir])
         }
     } else {
+        // A glued opener keeps the first body line on the opener's line; the
+        // `Ir::indent` still indents the body's *interior* breaks one step, so
+        // only the first line rides the opener (`{\aaa` / `␣␣\bbb`).
+        let lead = if open_glued { Ir::Nil } else { Ir::hard_line() };
         Ir::concat([
             open_ir,
-            Ir::indent(Ir::concat([Ir::hard_line(), body])),
+            Ir::indent(Ir::concat([lead, body])),
             Ir::hard_line(),
             close_ir,
         ])

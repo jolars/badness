@@ -127,26 +127,30 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `prev_opener` flag threaded through `collect_math_pieces`/`lower_math_seq` into
   `math_atom_role`, degrading a following `+`/`-` to unary — mirroring the
   existing leading-sign rule (`-x`, `x=-b`). Covered by `math_op_spacing`.
-- [ ] **Multi-line group relayout inserts a real space token in normal-catcode
-  macro code (surfaced by the issue #57 review).** `lower_bracketed` places a
+- [x] **Multi-line group relayout inserts a real space token in normal-catcode
+  macro code (surfaced by the issue #57 review).** `lower_bracketed` placed a
   break directly after the opening `{` even where the source glued it to the
   first body token (`\@parboxto{\let…` → `{` + newline + `\let…`). In normal
   catcodes an end-of-line after a non-control-word token tokenizes as a *space*
-  (TeX reading state M), so a `\def` body gains a space token the author didn't
+  (TeX reading state M), so a `\def` body gained a space token the author didn't
   write — a silent meaning change in any context where space tokens matter
   (horizontal mode; harmless only in vertical/math mode or before
   `\ignorespaces`). The break *before* `}` and the mid-body breaks are safe:
   they fall after control words, where state S skips the EOL. Pre-existing
-  (reproduces on the pre-#57 baseline with `\def\x{\aaa\bbb`/`\ccc}` in a plain
+  (reproduced on the pre-#57 baseline with `\def\x{\aaa\bbb`/`\ccc}` in a plain
   `.sty` and in `.dtx` macrocode alike) and invisible to the oracles — the
   output is perfectly idempotent and lossless; no invariant checks *token*
   equivalence. Inside expl3 regions the same layout is sound (`\ExplSyntaxOn`
-  sets `\endlinechar` to a catcode-9 space), so this item is about non-expl3
-  code only. Fix direction: outside expl3 regions, only place a break at a
-  boundary where the source already had whitespace (whitespace ↔ newline is
-  TeX-identical there), or emit `%` protection the way authors write `{%` — and
-  expect deliberate fixture churn, since the current Allman `{`-break is pinned
-  by several formatter fixtures.
+  sets `\endlinechar` to a catcode-9 space), so this item was about non-expl3
+  code only. **Fixed:** `lower_bracketed` now synthesizes the after-opener break
+  only when the source already had whitespace there (whitespace ↔ newline is
+  TeX-identical); a glued opener keeps its first body line on the `{` line, the
+  interior still indenting one step. Scoped to `L_BRACE` — an optional `[…]`
+  already swaps its interior newlines for spaces by design (`collapse_arg_group`,
+  issue #47). This path never runs inside an expl3 region (routed to
+  `lower_expl_group` earlier), so the sanctioned expl3 layout is untouched.
+  Pinned by `glued_brace_opener_keeps_first_body_token_on_its_line`
+  (`tests/format.rs`).
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on

@@ -4369,11 +4369,60 @@ fn classify_math_op_text(text: &str) -> MathRole {
     }
 }
 
+/// Whether a math atom *ends* with an opening delimiter (a bare `(`/`[`, the
+/// escaped brace `\{`, or a named open-delimiter command such as `\langle`), so
+/// the immediately following `+`/`-` reads as a unary sign rather than a binary
+/// operator (`(-1)`, `[-x]`, `\{-y\}`). Mirrors the delimiter set
+/// [`bracket_delta`] recognizes, but tracks only the *trailing* delimiter: the
+/// sign is unary only when it directly abuts an opener (`f(-1)`), not when an
+/// operand sits between (`(x-1)`, where `-` stays binary). A `\left(…\right)`
+/// pair is balanced and does not end open, so its interior sign is handled by the
+/// recursive lowering of the `LEFT_RIGHT` node instead.
+fn ends_with_open_delimiter(el: &SyntaxElement) -> bool {
+    let text = match el {
+        SyntaxElement::Token(t) => t.text().to_string(),
+        SyntaxElement::Node(n) => n.text().to_string(),
+    };
+    // `open` tracks whether the most recent significant token was an opener; an
+    // operand char or a closer clears it, so only a trailing opener survives.
+    let mut open = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '(' | '[' => open = true,
+            ')' | ']' => open = false,
+            c if c.is_whitespace() => {}
+            '\\' => match chars.peek() {
+                Some(c2) if c2.is_ascii_alphabetic() => {
+                    let mut name = String::new();
+                    while let Some(&c3) = chars.peek() {
+                        if !c3.is_ascii_alphabetic() {
+                            break;
+                        }
+                        name.push(c3);
+                        chars.next();
+                    }
+                    open = OPEN_DELIMITER_COMMANDS.contains(&name.as_str());
+                }
+                Some(&c2) => {
+                    chars.next();
+                    open = c2 == '{';
+                }
+                None => open = false,
+            },
+            _ => open = false,
+        }
+    }
+    open
+}
+
 /// The [`MathRole`] of a top-level math atom. `prev` is the effective role of the
-/// preceding atom: a `+`/`-` (or any binary operator) with no operand to its left
-/// is unary — it glues to its operand and is *not* a break point — so it degrades
-/// to an [`MathRole::Operand`].
-fn math_atom_role(el: &SyntaxElement, prev: MathRole) -> MathRole {
+/// preceding atom and `prev_opener` whether it ended with an opening delimiter: a
+/// `+`/`-` (or any binary operator) with no operand to its left — either the first
+/// atom, one after a relation/binary, or one directly after an opener (`(-1)`) —
+/// is unary, so it glues to its operand and is *not* a break point, degrading to
+/// an [`MathRole::Operand`].
+fn math_atom_role(el: &SyntaxElement, prev: MathRole, prev_opener: bool) -> MathRole {
     let raw = match el {
         SyntaxElement::Token(t) => classify_math_op_text(t.text()),
         SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => crate::ast::command_name(n)
@@ -4388,7 +4437,7 @@ fn math_atom_role(el: &SyntaxElement, prev: MathRole) -> MathRole {
             }),
         _ => MathRole::Operand,
     };
-    if raw == MathRole::Binary && prev != MathRole::Operand {
+    if raw == MathRole::Binary && (prev != MathRole::Operand || prev_opener) {
         MathRole::Operand
     } else {
         raw
@@ -4405,6 +4454,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
     // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
     // and glues to its operand rather than becoming a break point — e.g. `-x`.
     let mut prev_role = MathRole::Relation;
+    let mut prev_opener = false;
     let mut pending_space = false;
     let mut iter = elements.iter().cloned().peekable();
     while let Some(el) = iter.next() {
@@ -4417,8 +4467,9 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             other => {
-                let role = math_atom_role(&other, prev_role);
+                let role = math_atom_role(&other, prev_role, prev_opener);
                 prev_role = role;
+                prev_opener = ends_with_open_delimiter(&other);
                 let delta = bracket_delta(&other);
                 pieces.push(MathPiece {
                     ir: lower_math_element(other, cx),
@@ -4604,6 +4655,7 @@ fn lower_math_seq(
     // Start as a non-operand so a leading `+`/`-` reads as unary (see
     // [`collect_math_pieces`]).
     let mut prev_role = MathRole::Relation;
+    let mut prev_opener = false; // the previous atom ended with an opening delimiter
     let mut pending_space = false; // authored whitespace since the last atom
     let mut pending_break = false; // a comment forced a hard line break
     let mut pending_newline = false; // a preserved authored line break
@@ -4630,7 +4682,7 @@ fn lower_math_seq(
                 pending_break = true;
             }
             other => {
-                let role = math_atom_role(&other, prev_role);
+                let role = math_atom_role(&other, prev_role, prev_opener);
                 // A top-level `\\` (a `LINE_BREAK` node) ends its line: emit it, then
                 // force a hard break before the next atom. This is how a row stack
                 // (`\[ a \\ b \]`, or an aligned body that fell back off the grid)
@@ -4652,6 +4704,7 @@ fn lower_math_seq(
                     // collapsed authored gap between operands.
                     out.push(Ir::verbatim(" "));
                 }
+                prev_opener = ends_with_open_delimiter(&other);
                 out.push(lower_math_element(other, cx));
                 started = true;
                 pending_space = false;

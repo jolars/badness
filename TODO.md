@@ -118,14 +118,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   tight (`1/2`, per Knuth), and script-size content is conventionally tight
   overall, so the likely resolution is tight `/` everywhere and no operator
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
-- [ ] **Sign after an opening bracket reads as binary** (surfaced by the issue
-  #56 triage on dalcde/cam-notes). `(-1)^n` renders as `( - 1)^n`: a bare `(`
-  token classifies as `Operand` in `math_atom_role`, so the `-` after it gets
-  binary spacing instead of gluing as a unary sign. Pre-existing and idempotent,
-  just ugly. Likely fix: openers (`(`, `[`, `\{`, and the `\left`/named-delimiter
-  open forms — the same set `bracket_delta` recognizes) should count as a
-  non-operand `prev` role so a following `+`/`-` degrades to unary, mirroring the
-  existing leading-sign rule (`-x`, `x=-b`).
+- [x] **Sign after an opening bracket reads as binary** (surfaced by the issue
+  #56 triage on dalcde/cam-notes). `(-1)^n` rendered as `( - 1)^n`: a bare `(`
+  token classified as `Operand` in `math_atom_role`, so the `-` after it got
+  binary spacing instead of gluing as a unary sign. Fixed: a new
+  `ends_with_open_delimiter` (the same delimiter set `bracket_delta` recognizes,
+  but tracking only a *trailing* opener so `(x-1)` stays binary) feeds a
+  `prev_opener` flag threaded through `collect_math_pieces`/`lower_math_seq` into
+  `math_atom_role`, degrading a following `+`/`-` to unary — mirroring the
+  existing leading-sign rule (`-x`, `x=-b`). Covered by `math_op_spacing`.
 - [ ] **Multi-line group relayout inserts a real space token in normal-catcode
   macro code (surfaced by the issue #57 review).** `lower_bracketed` places a
   break directly after the opening `{` even where the source glued it to the

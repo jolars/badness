@@ -72,6 +72,24 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     real comment even in the doc layer); galley2.dtx's doc layer carries an
     early-exit `% \end{document}` whose `\begin` lives in the (already
     closed) driver section.
+- [ ] **pgfmanual and pgf source stay format-error (issue #63,
+  record-only).** The `pgf-tikz/pgf` scan surfaces two non-goal families,
+  now scan-allowlisted:
+  - *pgfmanual `\input` fragments* (`doc/generic/pgf/pgfmanual-en-*.tex`) are
+    chunks of `pgfmanual.tex`, not standalone documents. The parent preamble
+    (`pgfmanual-en-macros.tex`) makes `|` an active short-verb character
+    (`\gdef|{...\verb|...}`, not `\MakeShortVerb`) and defines the
+    `codeexample` verbatim environment; neither is visible to a fragment
+    parsed in isolation, so the verbatim `{`/`\begin` spans read as unbalanced.
+  - *pgf source* leans on catcode-rebinding bootstrap regions (`|`/`/`
+    rebound to the escape character with `\` made `other`; `[`/`]`/`%`/`"`
+    reassigned) — general `\catcode` handling is a non-goal — plus the same
+    control-word `\def`-body gap as nfssfont above: `\def\foo{\begin{env}}` /
+    `\def\endfoo{\end{env}}` split-environment defs (pgfautomata.sty,
+    tikzlibraryexternal.code.tex, tikzexternal.sty's `\end`-delimited
+    parameter text) whose bodies badness does not yet treat as macro code.
+    Closing that gap needs `\def` parameter-text parsing (decision #3);
+    until then, record, don't fix.
 
 ## Formatter
 

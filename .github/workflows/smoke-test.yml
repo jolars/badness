@@ -64,6 +64,53 @@ jobs:
         # Genuinely broken upstream (a commented-out balancing \end).
         latex3/latex3|xpackages/xor/xo-page.dtx|format-error
         latex3/latex3|xpackages/galley/galley2.dtx|format-error
+        # pgfmanual fragments: these are \input chunks of pgfmanual.tex, not
+        # standalone documents. They lean on the parent preamble
+        # (pgfmanual-en-macros.tex) that makes `|` an active short-verb char
+        # (\gdef|{...\verb|...}) and defines the `codeexample` verbatim
+        # environment. Neither is visible when badness parses a fragment in
+        # isolation, and resolving external catcode/short-verb state is a
+        # non-goal (AGENTS.md decision #1), so the unbalanced `{`/environments
+        # in verbatim spans stay format-error. See issue #63.
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-base-arrows.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-base-layers.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-dv-axes.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-gd-algorithms-in-c.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-gd-display-layer.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-external.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-matrices.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-petri.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-profiler.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-rdf.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tikz-coordinates.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tikz-scopes.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tikz-shapes.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tutorial-Euclid.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tutorial-map.tex|format-error
+        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tutorial-nodes.tex|format-error
+        # pgf source: catcode-rebinding bootstrap regions (`|`/`/` rebound to
+        # the escape char with `\` made `other`, `[`/`]`/`%`/`"` reassigned)
+        # unbalance normal brace/escape lexing; general \catcode handling is a
+        # non-goal (AGENTS.md decision #1). tikzlibrarygraphs registers active
+        # `\]`/`\)` as literal data (`\tikz@lib@prepare@active{\]}{...}`), which
+        # draws a conservative orphan-closer diagnostic. Issue #63.
+        pgf-tikz/pgf|tex/generic/pgf/basiclayer/pgfcoreshade.code.tex|format-error
+        pgf-tikz/pgf|tex/generic/pgf/frontendlayer/tikz/libraries/graphs/tikzlibrarygraphs.code.tex|format-error
+        pgf-tikz/pgf|tex/generic/pgf/frontendlayer/tikz/libraries/tikzexternalshared.code.tex|format-error
+        pgf-tikz/pgf|tex/generic/pgf/libraries/pgflibraryprofiler.code.tex|format-error
+        pgf-tikz/pgf|tex/generic/pgf/modules/pgfmoduleplot.code.tex|format-error
+        pgf-tikz/pgf|tex/generic/pgf/utilities/pgfutil-common.tex|format-error
+        pgf-tikz/pgf|tex/latex/pgf/doc/pgfmanual-en-macros.tex|format-error
+        pgf-tikz/pgf|tex/latex/pgf/doc/pgfmanual.prettyprinter.code.tex|format-error
+        # pgf source: split-environment defs done with plain \def
+        # (`\def\foo{\begin{env}}` / `\def\endfoo{\end{env}}`), whose control-word
+        # \def bodies badness does not yet treat as macro code (decision #3 keeps
+        # control-word \def names generic; correctly attaching the body needs
+        # \def parameter-text parsing). tikzexternal uses a \end-delimited \def
+        # parameter text. Issue #63.
+        pgf-tikz/pgf|tex/latex/pgf/compatibility/pgfautomata.sty|format-error
+        pgf-tikz/pgf|tex/latex/pgf/frontendlayer/libraries/tikzlibraryexternal.code.tex|format-error
+        pgf-tikz/pgf|tex/latex/pgf/utilities/tikzexternal.sty|format-error
     steps:
       - uses: actions/checkout@v7
 

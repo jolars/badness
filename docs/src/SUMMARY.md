@@ -19,7 +19,15 @@
 - [BibTeX Linter Rules](reference/bib-linter-rules.md)
 - [Benchmarks](reference/benchmarks.md)
 
+# Development
+
+- [Contributing](development/contributing.md)
+- [Architecture](development/architecture.md)
+- [Parser & Lexer Modes](development/parser.md)
+- [Formatter](development/formatter.md)
+- [Linter](development/linter.md)
+- [LSP & Environment Awareness](development/lsp.md)
+
 # Project
 
-- [Contributing](contributing.md)
 - [Changelog](changelog.md)

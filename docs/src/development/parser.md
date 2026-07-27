@@ -1,0 +1,349 @@
+# Parser & Lexer Modes
+
+The parser is a hand-written recursive-descent parser over a flat token stream. It
+treats input as **generic TeX surface syntax** and **always produces a lossless
+tree**. This page collects the parser's load-bearing design decisions, the catalog
+of statically-recognizable patterns it handles, and the shape gates that keep it
+from over-committing to meaning it can't statically know.
+
+For the high-level pipeline and the two-layer split, start with
+[Architecture](architecture.md).
+
+## Generic TeX, always lossless
+
+The parser never *requires* resolving macros or catcodes—in full generality that is
+equivalent to running a TeX engine, and we do **not** implement macro expansion or a
+TeX evaluator. Anything we cannot statically resolve degrades to generic nodes (plus
+a diagnostic where useful), never a crash or corruption.
+
+What we *do* handle is a bounded, growing set of *statically recognizable* patterns,
+either as lexer modes or as semantic enrichment. All of them read static facts only;
+none resolves what a macro means.
+
+## Sanctioned lexer modes
+
+Each entry below is a pattern the lexer or grammar recognizes from static shape
+alone. They are deliberately conservative: when in doubt, a construct stays generic.
+
+### Letter modes
+
+`\makeatletter`/`\makeatother` make `@` a letter, and
+`\ExplSyntaxOn`/`\ExplSyntaxOff` open expl3 (where `_` and `:` are letters; also
+opened by `\ProvidesExplPackage`/`Class`/`File`). These are independent flags that
+compose.
+
+### Verbatim
+
+`\verb`, verbatim-like environments, and verbatim-argument commands capture their
+opaque body or final argument as a single token, using the signature DB
+(`data/signatures.json`) for argument shape. Built-ins are curated; **user-defined**
+verbatim commands are discovered by the definition scanner (`semantic::define`) via
+a **bounded two-pass parse**—pass 1 fingerprints catcode-changing definitions, pass
+2 re-lexes with those names. This is conservative by construction: a false positive
+suppresses real diagnostics, so we prefer false negatives.
+
+### `\left`/`\right` delimiter isolation
+
+The delimiter following `\left` or `\right` is emitted as its own token; the parser
+then builds the `LEFT_RIGHT` pair.
+
+### Math environments
+
+An environment the *built-in* signature DB flags `math` (`equation`, `align`,
+`gather`, the matrix family, …) has its body parsed in **math mode**, wrapped in a
+`MATH` node exactly as `\[…\]`—so `^`/`_` build `SCRIPTED` nodes, the math operator
+split fires, and `\left…\right` pair.
+
+This is a *grammar* decision (`parser::grammar::math_environment_body`, gated by
+`parser::lexer::is_math_environment`), needing **no lexer math state**: the
+math-relevant tokens (`&`, `\\`, `^`/`_`, `\left`/`\right` isolation) are emitted
+regardless of mode; only *which grammar function runs* changes. It reads the curated
+`math` flag only (never CWL or user tiers), mirroring `is_block_environment` and
+`is_verbatim_environment`—a wrong route is a structural change, so it rests on
+curated data, and a user or unknown environment stays in text mode. A blank line
+inside such a body stays trivia in the `MATH` node (no paragraph split); the
+matching `\end` is the terminator.
+
+### Definition bodies
+
+The argument groups of the environment-defining commands
+(`\newenvironment`/`\renewenvironment`/`\provideenvironment` and the xparse
+`\NewDocumentEnvironment` family), the command-defining commands (the `\newcommand`
+family, `\DeclareRobustCommand`, and the xparse `\NewDocumentCommand` family), and
+the LaTeX2e document/package hooks
+(`\AtBeginDocument`/`\AtEndDocument`/`\AtEndOfClass`/`\AtEndOfPackage`/`\AddToHook`)
+are *macro-code bodies*. TeX does not require `\begin`/`\end` to balance within an
+individual group—`\newenvironment{wrap}{\begin{center}}{\end{center}}` (issue #45),
+or `\AtBeginDocument{\begin{stretchpage}}` balanced by a matching `\AtEndDocument`
+(issue #55).
+
+Inside these bodies `\begin`/`\end` parse as plain `COMMAND`s—no `ENVIRONMENT`
+pairing, no stray-`\end` or unclosed diagnostics—and they stop being bail anchors
+for `[…]` optionals. This is a grammar routing decision on a closed, curated
+command-name set (`parser::grammar::is_definition_body_command`, a parser flag scoped
+to the attached arguments); the bodies stay generic macro code, never executed.
+
+### Short verbs
+
+The `doc` package's `\MakeShortVerb{\|}`/`\DeleteShortVerb{\|}` toggle a character's
+short-verb catcode; while enabled, `<c>…<c>` on one line captures as a single opaque
+`VERB` token, exactly like `\verb<c>…<c>`. This is a lexer mode toggled
+left-to-right like `\makeatletter` (issue #57).
+
+It is also enabled by loading a curated doc class
+(`\documentclass{ltxdoc|ltxguide|ltnews}`—those classes enable `|` themselves) and
+is on for `|` from the start in `.dtx` mode (dtx files are typeset under ltxdoc; the
+driver may live elsewhere). It is gated *off* inside `macrocode` bodies (a code
+layer) and after `\left`/`\right` (the `|` is a delimiter). A span with no closing
+character on its line falls back to an ordinary lone character.
+
+### Macrocode chunk bodies (`.dtx`)
+
+A frame-lexed `macrocode`/`macrocode*` body is *macro code* whose only terminator is
+the frame line (`%    \end{macrocode}`, a line-oriented docstrip fact; the frame
+`\begin` is fingerprinted by its `DOC_MARGIN` and attaches no arguments—the next
+line's `{` is body code). As with definition bodies, `\begin`/`\end` inside parse as
+plain `COMMAND`s (kernel code uses the `\end` *primitive*), and chunk-unmatched
+braces are plain tokens with no diagnostics (a `\def` regularly opens `{` in one
+chunk and closes it chunks later, issue #57). Matched pairs still form `GROUP`s, via
+a per-chunk brace pre-scan (`parser::grammar::macrocode_body`), and a `[` attaches as
+an optional only when its `]` closes inside the chunk.
+
+### `^^A` doc comments (`.dtx`)
+
+ltxdoc/l3doc set `` \catcode`\^^A=14 ``, and the l3 sources lean on it for
+editor-balance hacks in doc-margin prose (`^^A{` paired with a verb `|}|`, a
+commented-out `^^A\end{function}`—issue #60). So on a *doc-margin line* the literal
+`^^A` lexes as a comment to end of line. This is scoped to doc lines only: inside
+`macrocode` bodies `^^A` is live code (`` \char_set_catcode:nn { `\^^A } `` must keep
+its line), and unmargined driver lines lex normally.
+
+### l3doc verbatim name arguments
+
+l3doc's `macro`/`function`/`variable` take an xparse `v`-type name argument (`{ O{}
++v }`), curated as `verbatimArg` in the signature DB. The delimited form
+(`\begin{macro}+\@@_compile_{:+`) is chosen by upstream precisely when the name holds
+unbalanced braces, so the lexer captures the span as one opaque `VERB` token
+(same-line, punctuation delimiter, directly abutting). The braced form keeps its
+`{`/`}` as real brace tokens (the parser still builds the ordinary name `GROUP`) with
+the balanced content between them as one `VERB`: a v-arg is raw data either way, so
+`\begin{macro}{\]}` never draws an orphan-closer diagnostic (issue #60). Both forms
+are same-line only; a multi-line braced name falls back to normal lexing. The parser
+attaches the abutting `VERB` or name group into the `BEGIN` node like any verbatim
+command argument.
+
+### expl3 regions are macro code
+
+Inside an expl3 region (`\ExplSyntaxOn`…`\ExplSyntaxOff`, or `\ProvidesExpl*` to
+EOF), token lists pass `\begin`/`\end` around as data—l3prefixes.tex builds a
+longtable across two `\tl_set:Nn`/`\tl_put_right:Nn` bodies (issue #60). So in-region
+they parse as plain `COMMAND`s exactly as in a definition body, and an orphan
+`\]`/`\)` is data with no diagnostic (`\char_set_catcode_letter:N \)`; the rule also
+applies in definition bodies and macrocode chunks). The parser pre-scans the same
+fixed toggle set the lexer flips (`parser::lexer::expl_toggle`, so the two never
+drift) and gates by token position (`parser::grammar::in_macro_code`). `.dtx`
+doc-margin lines are exempt: a region regularly spans macrocode chunks, and the
+doc-layer markup between them (`\begin{macro}` prose, the frame lines) must keep
+pairing—the same doc-line subtraction the formatter applies to region ownership.
+
+The matching *whitespace* catcodes inside an expl3 region are a **formatter**
+concern, not a parser one; see [Formatter](formatter.md#expl3-code-formatting).
+
+### Char-constant isolation
+
+After a numeric-context primitive (a closed curated set,
+`parser::lexer::is_char_constant_command`: the `\char`/`\catcode` code-tables plus
+the number producers `\number`/`\the`/`\romannumeral`/`\numexpr`/`\dimexpr` and the
+numeric conditionals `\ifnum`/`\ifodd`/`\ifdim`), a backtick opens TeX's
+char-constant number notation: the next character is *data* (`` \char`$ ``,
+`` \char`} ``—issue #60), lexed with its backtick as one plain `WORD` token so it can
+never open math or close a group. The escaped single-character form (`` \number`\[ ``)
+is isolated the same way—backtick plus the whole control symbol—so a `\[`/`\]` there
+is the character `[`/`]`, not a math delimiter (encguide.tex's char-code table pairs
+`\relax[ … ]` across table rows, issue #71). This is the same family as the
+`\left`/`\right` delimiter isolation.
+
+### Signatures
+
+`\newcommand`/xparse *signatures* are extracted into the semantic DB, never executed.
+
+## Recursive descent, with Pratt local to math
+
+Hand-written recursive descent is the spine. Precedence-climbing (Pratt) is used
+*only* for sub/superscript binding (`^`, `_`) and `\left…\right` matching. The
+text-level parser has no precedence.
+
+### Math operator atoms
+
+Arithmetic operators (`+ - * / = < >`) are catcode-12 "other" characters, so the
+catcode-faithful lexer globs them into `WORD` runs (`a+2*1` is one token).
+Operator-ness is a *math-semantic* fact assigned after catcode lexing, so it is the
+parser's job, not the lexer's.
+
+Inside math mode (`math_scripted`, `grammar.rs`) a `WORD` glued around operators is
+split at operator boundaries into flat sibling atoms via a **byte-range split of its
+text** (not a re-lex—no catcode machinery; see `split_math_word`). Only the
+*trailing* operand piece is the scriptable base, so `a+2*1^5` binds `^5` to `1`
+(matching TeX). This is a bounded widening of "Pratt is local to math": operators
+become atoms so the formatter can space them and the display breaker can break long
+chains—there is **no arithmetic-precedence expression tree**.
+
+The split rule: `+ - * /` each stand alone (so a leading `+`/`-` reads as unary),
+`= < >` coalesce into one relation piece (`<=`), never merging with a sign (`=-` →
+`=`,`-`). Bare unbraced script arguments (`x_i+y`) are left glued (a pre-existing
+whole-`WORD` script-binding behavior). The resulting operator *spacing* is a
+formatter concern; see [Formatter](formatter.md#math-operator-spacing).
+
+### The `$` shape gate
+
+`$`/`$$` are data in macro code at least as often as they are math delimiters (a
+tabular preamble's `>{$}`, an expl3 token list's `{ $ }`, catcode comparisons in
+`\def` bodies). So a dollar opens math only when it *reads* as math: a matching
+closer must be reachable before an unbalanced `}`, an `\end` not owed to an
+intervening `\begin` (plain commands in definition bodies, so neither anchors nor
+nests there), a paragraph break, the macrocode chunk end, or EOF
+(`parser::grammar::dollar_closes`, mirroring the `[…]` gates below).
+
+A gated dollar stays an ordinary token—no math node and **no diagnostic**: in code
+the shape is routine, so it is not statically an error. (Parser diagnostics gate the
+formatter, so they must be high-precision; a likely-typo lone `$` in prose is linter
+territory.) A closing `$` counts only outside `{…}` nesting (`math_group` consumes a
+nested dollar as an ordinary atom).
+
+`\[`/`\(` are gated the same way (`delim_math_closes`, issue #65): macro code passes
+the delimiters around as data (`\expandafter\@tempa\[\@nil`), so an opener with no
+reachable closer stays an ordinary token, no diagnostic. An orphan `\]`/`\)` still
+diagnoses, so a prose `\[…\]` typo'd across a paragraph break is caught on its
+closer; only a fully unmatched opener goes silent (linter territory, as for `$`).
+
+Relatedly, the control *symbol* after a `\def`-family primitive
+(`\def`/`\gdef`/`\edef`/`\xdef`) is the sequence being (re)defined, never syntax:
+`\def\[{…}` is no math opener and `\def\\{…}` no line break—the name is consumed as a
+plain token inside the `\def`'s node, and the attached body is a macro-code body
+(stacks-project opens `trivlist` in `\def\[`'s body and closes it in `\def\]`'s;
+`is_def_prefix_command`, another closed curated set). A control-*word* name
+(`\def\foo…`) keeps its benign generic-command shape.
+
+## Argument grouping and bracket policy
+
+The CST greedily attaches trailing `{…}`/`[…]` groups as argument nodes
+(texlab-style). Arity is unknown at parse time; the semantic layer refines it.
+
+**`[…]` attachment is shape-gated** (issue #43). `[`/`]` are not real grouping in
+TeX, so a bracket is an argument only when it reads as one, decided from static shape
+facts, never meaning (`parser::grammar`, `BracketPolicy` + `attach_arguments`):
+
+- *Lexically inside math* (a `math_depth` that persists into text-mode bodies of
+  unknown environments nested in math), a `[` attaches only when it directly abuts
+  the command (`\sqrt[3]{x}`; a spaced `\bE [ x ]` is a delimiter) and its `]` closes
+  before the math ends (open-interval notation `$]0;\num{0.5}[$`)—net of the `]`s
+  claimed by intervening command-abutting `[`s, so in `\P[\gamma[0, \infty) \cap A =
+  \emptyset]` the lone `]` belongs to `\gamma[` and the outer `\P[` stays an ordinary
+  atom (issue #55).
+- *In text mode* (issue #60, mirroring the `$` shape gate), a `[` attaches only when
+  its `]` is reachable before an unbalanced `}`, a `\begin`/`\end` outside a
+  definition body, a paragraph break, or EOF—net of the `]`s claimed by intervening
+  command-abutting `[`s, as in the math gate. Macro code tests for and re-emits lone
+  brackets (`\@ifnextchar [\@xmpar\@ympar`) at least as often as prose writes real
+  optionals, so a gated bracket stays an ordinary token with **no diagnostic**. (In a
+  macrocode chunk the chunk-scoped gate applies instead.)
+- A *curated math environment's* `\begin` likewise attaches only a directly-abutting
+  bracket (`\begin{aligned}[t]`; a detached `[a]_1` on the next line is body
+  content). Non-math environments stay greedy across trivia—the xparse-signature glue
+  relies on a next-line `[Warning]` still attaching to `\begin{note}`.
+- The *delimiter-size commands* (`\big`…`\Bigg` + `l`/`m`/`r`) never take a bracket
+  argument: their `[` is the delimiter being sized (`\Big[ x \Big]`), mirroring the
+  `\left`/`\right` special case.
+
+## Trivia attachment
+
+Trivia attachment follows the rust-analyzer rule: comments bind *forward*,
+whitespace floats, blank lines break the bind. Trivia is never dropped, so the only
+question is which node owns it:
+
+- **Default: float at the nearest enclosing node.** Inter-sibling whitespace and
+  newlines stay direct children of the tightest containing block/group, owned by
+  neither neighbor.
+- **A contiguous run of own-line `%` comments immediately preceding a `COMMAND` or
+  `ENVIRONMENT` binds *leading* into it**, grouped as a `DOC_COMMENT` node.
+  "Documentable" is decided purely on node kind—no signature-DB lookup leaks into the
+  parser. A same-line trailing comment (`\foo % x`) never binds.
+- **A blank line (`≥2` newlines, the `\par` boundary) breaks the bind:** comments
+  past it stay floating. This is a **deliberate divergence** from rust-analyzer's
+  `n_attached_trivias`, which peeks *past* a blank line and keeps attaching when the
+  next comment is an outer doc comment (`///`/`//!`). That peek keys on the
+  `///`-vs-`//` distinction—a marker of documentation intent that LaTeX's single
+  catcode-14 `%` has no equivalent for. Applied to `%` it would wrongly glue a license
+  or copyright header into the following command's doc comment, so we bind only the
+  maximal blank-line-free suffix. Pinned by `comment_after_blank_line_still_binds`
+  (`tests/parser.rs`).
+
+Whitespace stays a bare leaf token (never wrapped); the bound leading-comment run is
+the one named-node exception. This is a CST-shape convention enforced by tests, not a
+hard oracle.
+
+## The event stream
+
+The parser emits an event stream, not a tree directly:
+
+```
+lexer → flat token stream → parser emits events (Start / Tok(idx) / Finish)
+      → tree_builder re-attaches trivia and feeds rowan's GreenNodeBuilder
+```
+
+Tokens are referenced by index. There is **no `Error` event**—diagnostics ride a
+side channel keyed by byte range (the rust-analyzer event-stream pattern). One extra
+event, `SubTok { idx, start, end }`, attaches a `WORD` sub-slice of `tokens[idx]`
+(the math operator split above); losslessness holds because a token's `SubTok` pieces
+cover its full byte range contiguously.
+
+## Error recovery
+
+A single syntactic error never fails the whole parse; errors travel alongside the
+tree. Recovery anchors are `\end{…}`, `\begin`, a blank line, `}`, `$`, `&`, and
+`\\`. The parser always makes progress and never infinite-loops on unexpected input.
+
+## Incrementality
+
+Incrementality is **salsa-first.** Cross-file and cross-query incrementality via
+salsa is the v1 story; intra-file incremental reparse (reusing green subtrees) is a
+*later optimization*—a whole-file reparse of a typical `.tex` is sub-millisecond.
+
+Green nodes are stored in salsa, never red (`SyntaxNode`), because red trees aren't
+`Send`/`Eq`/`salsa::Update`. `incremental.rs` uses `#[salsa::input] SourceFile {
+text }` and a `parsed_document` query returning `rowan::GreenNode` plus diagnostics
+under `no_eq, unsafe(non_update_types)`—sound because the tree is a pure function of
+the text—materializing red cursors on demand.
+
+## Typed AST wrappers
+
+Typed AST wrappers are a **read-only view, never a re-model of the tree.** On top of
+the untyped rowan CST sits a thin typed layer (`ast.rs` + `ast/nodes.rs` +
+`ast/tokens.rs`, and the bib parallel `bib/ast.rs`): rust-analyzer-style
+`AstNode`/`AstToken` traits (`can_cast`/`cast`/`syntax`), an `ast_node!` identity
+macro (a 12-line `macro_rules!`, *not* codegen—the accessors are hand-written), and
+one wrapper struct per node kind (`Command`, `Group`, `Optional`, `NameGroup`,
+`Begin`, `End`, `Environment`, `ControlWord`; add more only when a field-extraction
+consumer appears—`Math`/`Scripted`/… stay unwrapped until then).
+
+Wrappers expose **structure** (a command's name token, its positional argument
+groups, an environment's `\begin`/`\end`), never **meaning**—no signature-DB lookup
+lives here. Because the CST is greedy and generic, accessors are **positional**
+(`Command::nth_group(n)` filters `GROUP` only, so an `OPTIONAL` never shifts brace
+indexing) and tolerate over-attachment by construction; they never pretend arity is
+fixed (`Command::title()` would be a lie—a `\section` and a `\newcommand` share the
+`COMMAND` shape). Navigation uses the generic helpers
+`child::<N>`/`children::<N>`/`child_token::<T>`, which replace the raw
+`children().find(|c| c.kind()==X)` idiom at *field-extraction* sites.
+
+The wrappers are read-only, so they can't threaten losslessness or idempotence. The
+**formatter deliberately stays raw** for structural work: the `lower_node` `match
+node.kind()` dispatch and the token-classification loops (trivia walks,
+`L_BRACE`/`R_BRACE` matching) are idiomatic tree-walking that wrappers would only
+obscure—the formatter adopts wrappers *only* for field access (argument/name
+extraction). The pre-wrapper **free functions** (`command_name`, `environment_name`,
+`nth_group_text`, …) remain as thin **kind-agnostic shims** over the wrapper bodies:
+they read whatever relevant child a node has without gating on the node's own kind,
+because callers rely on that latitude (a dtx `\begin{macro}{\foo}` reads a `GROUP`
+off a `BEGIN`; an xparse default body handed to `group_inner_source` may be an
+`OPTIONAL`). The typed methods are kind-checked at `cast`; the shims are not.

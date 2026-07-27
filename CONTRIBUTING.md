@@ -129,4 +129,4 @@ this file is the contributor guide you should start from.
 ## License
 
 By contributing, you agree that your contributions are licensed under the
-project's [MIT License](LICENSE).
+project's [MIT License](https://github.com/jolars/badness/blob/main/LICENSE).

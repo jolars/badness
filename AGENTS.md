@@ -1,52 +1,39 @@
 # AGENTS.md
 
-Guidance for AI agents working with Badness, a formatter, linter, and
-language server for LaTeX.
+Guidance for AI agents working with Badness, a formatter, linter, and language
+server for LaTeX.
 
-Badness follows **rust-analyzer's** architecture: rowan CST + event-stream parser
-+ salsa + a Wadler-style formatter IR. (We were also inspired by
-[arity](https://github.com/jolars/arity), the same kind of tool for R.) Extended
-rationale for the decisions below is threaded through TODO.md's roadmap sections.
+This file is the **rules** you work under: the tenets, the load-bearing
+architectural decisions (stated tersely), and the invariants and conventions to
+respect. The **why**—worked examples, issue provenance, and the full catalog of
+statically-recognized patterns—lives in the book's Development section, which is the
+source of truth for design detail:
+
+- Architecture (`docs/src/development/architecture.md`)
+- Parser & lexer modes (`docs/src/development/parser.md`)
+- Formatter (`docs/src/development/formatter.md`)
+- Linter (`docs/src/development/linter.md`)
+- LSP & environment awareness (`docs/src/development/lsp.md`)
+
+When a decision below changes, update both this file (the rule) and the relevant
+Development page (the detail). Extended roadmap rationale is threaded through TODO.md.
 
 ## What this project is
 
-Badness parses LaTeX into a **lossless concrete syntax tree (CST)** and builds a
-**formatter** (`badness format`), a **linter** (diagnostics), and a **language
-server** (LSP) on top. The architecture follows **rust-analyzer**: a generic,
-error-tolerant, hand-written parser producing a lossless tree; semantics layered on
-top as a separate concern; incremental recomputation via salsa.
+Badness follows **rust-analyzer's** architecture: a generic, error-tolerant,
+hand-written parser produces a **lossless concrete syntax tree (CST)**; semantics are
+layered on top as a separate concern; recomputation is incremental via salsa. On the
+CST sit a **formatter** (`badness format`), a **linter** (diagnostics), and a
+**language server** (LSP). (We were also inspired by
+[arity](https://github.com/jolars/arity), the same kind of tool for R.)
 
-**Single-crate Cargo package** (`badness`, edition 2024), *not* a workspace. Module
-folders: `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`, `text/`, `ast/`,
-`lsp/`, and `bib/` (the parallel BibTeX pipeline, below), plus top-level `syntax.rs`,
-`incremental.rs`, `config.rs`, `cli.rs`, `completion.rs`, and `file_discovery.rs`.
-
-**Supported inputs.** The CLI processes `.tex`, `.sty`/`.cls`, `.dtx`, `.ins`, and
-`.bib` files (directories are walked with the `ignore` crate, honoring `.gitignore`
-plus `badness.toml` excludes; see `file_discovery.rs`). The lexer's `LatexFlavor`
-(`Document` vs `Package`) picks the starting catcode regime—`.sty`/`.cls`/`.dtx` begin
-with `@` already a letter (implicit `\makeatletter`). `.dtx` docstrip surface syntax is
-parsed; `.ins` install scripts default to the `Preserve` wrap mode. Each `FileKind`
-carries its own default `WrapMode`.
-
-**Parallel BibTeX subsystem (`bib/`).** `.bib` files get their own full pipeline—a
-sibling of `parser/` built on the *same* lossless rowan CST + flat event-stream
-architecture, but with a distinct grammar, its own `SyntaxKind`/`BibLang` marker, and
-its own lexer, parser, `tree_builder`, `ast/`, formatter, linter, semantic layer,
-completion, and outline. The same invariants apply (losslessness, idempotence). The bib
-CST also has typed AST wrappers (`bib/ast.rs`, decision #10). Note: the `bib.rs`
-module-header comment calling the formatter/linter/LSP "later increments" is stale—they
-are implemented.
-
-**Configuration (`badness.toml`).** Discovered by an ancestor walk from each input
-(`config.rs`); the **CLI is the only consumer**—the library API takes a fully-resolved
-`FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`, `wrap`,
-`math-wrap`, `lang`, `no-break-abbreviations`) and `[build]` (`aux-dir`). Excludes follow
-the Ruff model (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
-additive). `wrap` is optional and resolves per file kind when omitted. This keeps the
-formatter hermetic (config is local project data, not the environment). TEXMF discovery
-is deliberately **not** a section here: where a TeX installation lives is machine state,
-not project data, so it arrives via the LSP editor settings (below), never `badness.toml`.
+It is a **single-crate Cargo package** (`badness`, edition 2024), *not* a workspace,
+with module folders `parser/`, `formatter/`, `linter/`, `semantic/`, `project/`,
+`text/`, `ast/`, `lsp/`, and `bib/` (a parallel BibTeX pipeline—its own lexer, parser,
+grammar, AST, formatter, linter, and semantic layer, same invariants). The CLI
+processes `.tex`, `.sty`/`.cls`, `.dtx`, `.ins`, and `.bib`; `badness.toml` is
+local project config consumed only by the CLI. See the Architecture page for the full
+tour.
 
 ## Tenets
 
@@ -57,7 +44,9 @@ not project data, so it arrives via the LSP editor settings (below), never `badn
    it out*, and owes only correctness (the result still parses and is still lossless),
    never line-width. When a fix can't meet that bar for some shape, make it correct by
    construction or withhold it for that shape (still report the finding). The pipeline
-   is fix-then-format; don't run the formatter inside `--fix`.
+   is fix-then-format; don't run the formatter inside `--fix`—and, mirrored, content
+   rewrites never run inside `format`: the layout engine changes only trivia (see
+   Invariants).
 2. **Incremental parsing is first-class.** Parser/CST work must keep the salsa-based
    reparse path (`incremental.rs`) viable.
 3. **Parsing is the parser's job.** Never paper over parser mistakes in the formatter,
@@ -68,459 +57,86 @@ not project data, so it arrives via the LSP editor settings (below), never `badn
 
 ## Core architectural decisions
 
-Load-bearing. If a change pushes against one, raise it explicitly. Extended rationale
-for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
-`## Formatter` roadmap sections.
+Load-bearing. If a change pushes against one, raise it explicitly. Each rule below
+links to the Development page carrying its full rationale, examples, and provenance.
 
 1. **The parser treats input as generic TeX surface syntax and always produces a
-   lossless tree.** It never *requires* resolving macros or catcodes—in full
-   generality that is equivalent to running a TeX engine. We do **not** implement
-   macro expansion or a TeX evaluator. Anything we cannot statically resolve degrades
-   to generic nodes (plus a diagnostic where useful), never a crash or corruption.
+   lossless tree.** It never *requires* resolving macros or catcodes; we do **not**
+   implement macro expansion or a TeX evaluator. Anything we cannot statically resolve
+   degrades to generic nodes (plus a diagnostic where useful), never a crash or
+   corruption. We **do** handle a bounded, growing set of *statically recognizable*
+   patterns—letter modes, verbatim, `\left`/`\right` isolation, math environments,
+   definition bodies, short verbs, macrocode chunks, `^^A` doc comments, expl3
+   regions, char-constant isolation, signatures—as lexer modes or grammar routing, all
+   reading static facts only (no macro meaning). The catalog, with examples and issue
+   references, is in `parser.md` (§ *Sanctioned lexer modes*). The related expl3 *code
+   formatting* is a formatter concern (`formatter.md`).
 
-   We **do** handle a bounded, growing set of *statically recognizable* patterns as
-   lexer modes or semantic enrichment, all reading static facts only (no macro meaning
-   resolved):
-   - **Letter modes.** `\makeatletter`/`\makeatother` (`@` is a letter) and
-     `\ExplSyntaxOn`/`\ExplSyntaxOff` (expl3: `_` and `:` are letters; also opened by
-     `\ProvidesExplPackage`/`Class`/`File`). Independent flags that compose.
-   - **Verbatim.** `\verb`/verbatim-like environments and verbatim-argument commands
-     capture their opaque body or final argument as a single token, using the
-     signature DB (`data/signatures.json`) for argument shape. Built-ins are curated;
-     **user-defined** verbatim commands are discovered by the definition scanner
-     (`semantic::define`) via a **bounded two-pass parse** (pass 1 fingerprints
-     catcode-changing definitions, pass 2 re-lexes with those names). Conservative by
-     construction—a false positive suppresses real diagnostics, so prefer false
-     negatives.
-   - **`\left`/`\right` delimiter isolation.** The following delimiter is emitted as
-     its own token; the `LEFT_RIGHT` pair is then built by the parser.
-   - **Math environments.** An environment the *built-in* signature DB flags `math`
-     (`equation`, `align`, `gather`, matrix, …) has its body parsed in **math mode**,
-     wrapped in a `MATH` node exactly as `\[…\]`—so `^`/`_` build `SCRIPTED` nodes, the
-     math operator split fires, and `\left…\right` pair. This is a *grammar* decision
-     (`parser::grammar::math_environment_body`, gated by
-     `parser::lexer::is_math_environment`), needing **no lexer math state**: the
-     math-relevant tokens (`&`, `\\`, `^`/`_`, `\left`/`\right` isolation) are already
-     emitted regardless of mode; only *which grammar function runs* changes. Reads the
-     curated `math` flag only (never CWL/user tiers), mirroring `is_block_environment`/
-     `is_verbatim_environment`: a wrong route is a structural change, so it rests on
-     curated data, and a user/unknown environment stays in text mode. A blank line
-     inside such a body stays trivia in the `MATH` node (no paragraph split); the
-     matching `\end` is the terminator.
-   - **Definition bodies.** The argument groups of the environment-defining commands
-     (`\newenvironment`/`\renewenvironment`/`\provideenvironment` and the xparse
-     `\NewDocumentEnvironment` family), the command-defining commands (the `\newcommand`
-     family, `\DeclareRobustCommand`, and the xparse `\NewDocumentCommand` family), and
-     the LaTeX2e document/package hooks (`\AtBeginDocument`/`\AtEndDocument`/
-     `\AtEndOfClass`/`\AtEndOfPackage`/`\AddToHook`) are *macro-code bodies*: TeX does
-     not require `\begin`/`\end` to balance within an individual group
-     (`\newenvironment{wrap}{\begin{center}}{\end{center}}`, issue #45;
-     `\AtBeginDocument{\begin{stretchpage}}` balanced by a matching `\AtEndDocument`,
-     issue #55). Inside them `\begin`/`\end` parse as plain `COMMAND`s—no `ENVIRONMENT`
-     pairing, no stray-`\end` or unclosed diagnostics—and stop being bail anchors for
-     `[…]` optionals. A grammar routing decision on a closed, curated command-name set
-     (`parser::grammar::is_definition_body_command`, a parser flag scoped to the
-     attached arguments); the bodies stay generic macro code, never executed.
-   - **Short verbs.** The doc package's `\MakeShortVerb{\|}`/`\DeleteShortVerb{\|}`
-     toggle a character's short-verb catcode; while enabled, `<c>…<c>` on one line
-     captures as a single opaque `VERB` token, exactly like `\verb<c>…<c>`. A lexer
-     mode toggled left-to-right like `\makeatletter` (issue #57). Also enabled by
-     loading a curated doc class (`\documentclass{ltxdoc|ltxguide|ltnews}`—those
-     classes enable `|` themselves) and on for `|` from the start in `.dtx` mode
-     (dtx files are typeset under ltxdoc; the driver may live elsewhere). Gated off
-     inside `macrocode` bodies (a code layer) and after `\left`/`\right` (the `|`
-     is a delimiter). A span with no closing character on its line falls back to an
-     ordinary lone character.
-   - **Macrocode chunk bodies (`.dtx`).** A frame-lexed `macrocode`/`macrocode*`
-     body is *macro code* whose only terminator is the frame line
-     (`%    \end{macrocode}`, a line-oriented docstrip fact; the frame `\begin` is
-     fingerprinted by its `DOC_MARGIN`, and attaches no arguments—the next line's
-     `{` is body code). Like definition bodies above: `\begin`/`\end` inside parse
-     as plain `COMMAND`s (kernel code uses the `\end` *primitive*), chunk-unmatched
-     braces are plain tokens with no diagnostics (a `\def` regularly opens `{` in
-     one chunk and closes it chunks later, issue #57; matched pairs still form
-     `GROUP`s, via a per-chunk brace pre-scan, `parser::grammar::macrocode_body`),
-     and a `[` attaches as an optional only when its `]` closes inside the chunk.
-   - **`^^A` doc comments (`.dtx`).** ltxdoc/l3doc set `` \catcode`\^^A=14 ``, and
-     the l3 sources lean on it for editor-balance hacks in doc-margin prose
-     (`^^A{` paired with a verb `|}|`, a commented-out `^^A\end{function}` —
-     issue #60), so on a *doc-margin line* the literal `^^A` lexes as a comment
-     to end of line. Scoped to doc lines only: inside `macrocode` bodies `^^A`
-     is live code (`` \char_set_catcode:nn { `\^^A } `` must keep its line), and
-     unmargined driver lines lex normally.
-   - **l3doc verbatim name arguments.** l3doc's `macro`/`function`/`variable`
-     take an xparse `v`-type name argument (`{ O{} +v }`), curated as
-     `verbatimArg` in the signature DB. The delimited form
-     (`\begin{macro}+\@@_compile_{:+`) is chosen by upstream precisely when the
-     name holds unbalanced braces, so the lexer captures the span as one opaque
-     `VERB` token (same-line, punctuation delimiter, directly abutting). The
-     braced form keeps its `{`/`}` as real brace tokens (the parser still builds
-     the ordinary name `GROUP`) with the balanced content between them as one
-     `VERB`: a v-arg is raw data in either form, so `\begin{macro}{\]}` never
-     draws an orphan-closer diagnostic (issue #60). Both same-line only; a
-     multi-line braced name falls back to normal lexing. The parser attaches
-     the abutting `VERB` or name group into the `BEGIN` node like any verbatim
-     command argument.
-   - **expl3 regions are macro code.** Inside an expl3 region (`\ExplSyntaxOn`
-     …`\ExplSyntaxOff`, `\ProvidesExpl*` to EOF), token lists pass `\begin`/
-     `\end` around as data — l3prefixes.tex builds a longtable across two
-     `\tl_set:Nn`/`\tl_put_right:Nn` bodies (issue #60) — so in-region they
-     parse as plain `COMMAND`s exactly as in a definition body, and an orphan
-     `\]`/`\)` is data with no diagnostic (`\char_set_catcode_letter:N \)`;
-     the rule also applies in definition bodies and macrocode chunks). The
-     parser pre-scans the same fixed toggle set the lexer flips
-     (`parser::lexer::expl_toggle`, so the two never drift) and gates by token
-     position (`parser::grammar::in_macro_code`). `.dtx` doc-margin lines are
-     exempt: a region regularly spans macrocode chunks, and the doc-layer
-     markup between them (`\begin{macro}` prose, the frame lines) must keep
-     pairing — the same doc-line subtraction the formatter applies to region
-     ownership.
-   - **Char-constant isolation.** After a numeric-context primitive (a closed
-     curated set, `parser::lexer::is_char_constant_command`: the `\char`/
-     `\catcode` code-tables plus the number producers `\number`/`\the`/
-     `\romannumeral`/`\numexpr`/`\dimexpr` and the numeric conditionals
-     `\ifnum`/`\ifodd`/`\ifdim`), a backtick opens TeX's char-constant number
-     notation: the next character is *data* (`` \char`$ ``, `` \char`} `` —
-     issue #60), lexed with its backtick as one plain `WORD` token so it can
-     never open math or close a group. The escaped single-character form
-     (`` \number`\[ ``) is isolated the same way, backtick plus the whole
-     control symbol, so a `\[`/`\]` there is the character `[`/`]`, not a math
-     delimiter (encguide.tex's char-code table pairs `\relax[ … ]` across table
-     rows — issue #71). Same family as the `\left`/`\right` delimiter isolation.
-   - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
-     DB, never executed.
+2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
+   a command means; the semantic layer is a signature database assigning arity,
+   verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See
+   `architecture.md`.
 
-   **expl3 code formatting (formatter-side, sanctioned).** The expl3 letter mode above is
-   a *lexer* fact. The matching *whitespace* catcodes—inside an expl3 region (`\ExplSyntaxOn`
-   …`\ExplSyntaxOff`, or `\ProvidesExpl*` to EOF) source spaces/tabs are catcode 9 (ignored)
-   and `~` is catcode 10 (a literal space)—are a **formatter** concern: since inter-token
-   whitespace is provably insignificant, the formatter owns the layout of in-region code
-   (indentation + line breaks), **regardless of `WrapMode`**. This is **idempotent by
-   construction**: the inserted whitespace is itself catcode-insignificant, so re-lexing the
-   output yields the same token sequence and the deterministic layout is a fixed point. It is
-   the property the generic "hanging continuation indent" (TODO.md, the flush-B/TikZ problem)
-   could not get, supplied here at the catcode level. Region membership is **not** recorded in
-   the CST: the lexer's expl3 toggle stays transient, and the formatter recomputes in-region
-   byte ranges in a read-only pre-pass (`formatter::core::expl3_regions`) over the same fixed
-   toggle set the lexer uses (`parser::lexer::expl_toggle`, shared so the two never drift),
-   stored as a `Vec<TextRange>` side channel in `LowerCtx`—the same byte-range pattern as
-   parser diagnostics (decision #4). The CST, lexer, events, and tree_builder are untouched, so
-   losslessness is unaffected; the reformatted output is a different valid text with the same
-   meaning. Statement boundaries follow *source newlines* (the expl3 one-call-per-line
-   convention; a multi-token call like `\cs_new:Npn \foo:n #1 {…}` is several sibling CST
-   nodes, not one structural unit)—except *within one command's attached arguments*, where a
-   newline is inert whitespace and only the width fill breaks (otherwise a fill-broken argument
-   would read as a new statement on the next pass and never reach a fixed point)—and a single
-   inserted space at any preserved token boundary keeps re-lexing from merging two tokens.
-   A *trailing comment* rides its statement line **zero-width** (`Ir::ZeroWidth`,
-   rustfmt-style): the line may overflow, but prose length never re-breaks code, and the
-   comment is never relocated—moving it would rebind it as the *next* statement's leading
-   doc comment on the second pass (decision #9), changing its attachment. gofmt/rustfmt
-   never relocate trailing comments either; ruff exempts pragma comments from width for
-   the same reason. A *continuation group*—a brace group starting its statement line
-   (a function body, a `\tl_set:Nn` value on its own line)—indents **one step** under
-   its head statement (`\cs_new:Npn \foo:n #1` / `␣␣{ body }`, the l3styleguide shape).
-   The step wraps the break and *the group alone* in one `Indent` (as a folded statement
-   separator, or a folded fill gap for a mid-statement group): the rest of the line stays
-   at base, because a width break re-reads its atoms as ordinary base-indent statements
-   on the next pass—break and group body must land at the same column either way for the
-   layout to be a fixed point.
-   In a `.dtx`, a region regularly spans several `macrocode` chunks (`\ExplSyntaxOn` in one,
-   the `Off` chunks later), so the doc-margined lines in between—doc prose and the frame lines
-   themselves—are subtracted from the regions (`subtract_doc_margin_lines`): only code lines
-   are formatter-owned, and a `%` margin stays in column 0. More generally, the line-oriented
-   `.dtx` tokens (`DOC_MARGIN`, `GUARD`) are only margins/guards *at line start*, so no
-   relayout may merge or re-indent their lines (the `contains_doc_margin` gates in
-   `formatter::core`, issue #57). An in-region code group carrying such a token in its body
-   is held to the same rule: `lower_expl_group` forces the broken (multi-line) form so the
-   guard/margin rides its own line and `lower_loose_token` pins it to column 0—flattening it
-   into `{ %<trace> … }` would re-lex the guard as an ordinary `%` comment that swallows the
-   closing brace, unbalancing the group on the next parse (issue #61, l3ldb.dtx; the same
-   swallow reasoning as an in-body `%` comment).
+3. **Hand-written recursive descent is the spine; Pratt is local to math**
+   (sub/superscript binding and `\left…\right` only). Math operator atoms and the
+   `$`/`\[`/`\(` shape gates are bounded, sanctioned widenings of this rule, still
+   producing no expression tree. See `parser.md`.
 
-2. **Two layers: syntactic vs. semantic.** The *syntactic* layer is the generic CST
-   and knows nothing about what a command means. The *semantic* layer is a
-   **signature database** (built-in table + CWL-style data + `\newcommand`/
-   `\newenvironment` scanning) assigning arity, verbatim-ness, and sectioning.
-   **Meaning never leaks into the parser** (the verbatim-body exception in
-   decision #1 reads static argument-shape data only).
-
-3. **Hand-written recursive descent is the spine; Pratt is local to math.** Use
-   precedence-climbing *only* for sub/superscript binding (`^`, `_`) and `\left…\right`
-   matching. The text-level parser has no precedence.
-
-   **Math operator atoms (sanctioned).** Arithmetic operators (`+ - * / = < >`) are
-   catcode-12 "other" characters, so the catcode-faithful lexer globs them into `WORD`
-   runs (`a+2*1` is one token); operator-ness is a *math-semantic* fact assigned after
-   catcode lexing, so it is the parser's job, not the lexer's. Inside math mode
-   (`math_scripted`, `grammar.rs`) a `WORD` glued around operators is split at operator
-   boundaries into flat sibling atoms via a **byte-range split of its text** (not a
-   re-lex—no catcode machinery; see `split_math_word`). Only the *trailing* operand
-   piece is the scriptable base, so `a+2*1^5` binds `^5` to `1` (matching TeX). This is
-   a bounded widening of "Pratt is local to math": operators become atoms so the
-   formatter can space them and the display breaker can break long chains—there is **no
-   arithmetic-precedence expression tree**. The split rule: `+ - * /` each stand alone
-   (so a leading `+`/`-` reads as unary), `= < >` coalesce into one relation piece
-   (`<=`), never merging with a sign (`=-` → `=`,`-`). Bare unbraced script arguments
-   (`x_i+y`) are left glued (a pre-existing whole-`WORD` script-binding behavior). The
-   resulting operator *spacing* is a formatter concern (tenet #1): a single space
-   around each binary/relation atom, unary signs and scripts tight.
-
-   **`$` shape gate (sanctioned).** `$`/`$$` are data in macro code at least as often
-   as they are math delimiters (a tabular preamble's `>{$}`, an expl3 token list's
-   `{ $ }`, catcode comparisons in `\def` bodies — smoke-test issue #60), so a dollar
-   opens math only when it *reads* as math: a matching closer must be reachable before
-   an unbalanced `}`, an `\end` not owed to an intervening `\begin` (plain commands in
-   definition bodies, so neither anchors nor nests there), a paragraph break, the
-   macrocode chunk end, or EOF (`parser::grammar::dollar_closes`, mirroring the
-   issue #43/#55 `[…]` gates). A gated dollar stays an ordinary token — no math node
-   and **no diagnostic**: in code the shape is routine, so it is not statically an
-   error (parser diagnostics gate the formatter, so they must be high-precision;
-   a likely-typo lone `$` in prose is linter territory). A closing `$` counts only
-   outside `{…}` nesting (`math_group` consumes a nested dollar as an ordinary atom).
-   `\[`/`\(` are gated the same way (`delim_math_closes`, issue #65): macro code
-   passes the delimiters around as data (`\expandafter\@tempa\[\@nil`), so an opener
-   with no reachable closer stays an ordinary token, no diagnostic. An orphan
-   `\]`/`\)` still diagnoses, so a prose `\[…\]` typo'd across a paragraph break is
-   caught on its closer; only a fully unmatched opener goes silent (linter territory,
-   as for `$`). Relatedly, the control *symbol* after a `\def`-family primitive
-   (`\def`/`\gdef`/`\edef`/`\xdef`) is the sequence being (re)defined, never syntax:
-   `\def\[{…}` is no math opener and `\def\\{…}` no line break — the name is consumed
-   as a plain token inside the `\def`'s node and the attached body is a macro-code
-   body (stacks-project opens `trivlist` in `\def\[`'s body and closes it in
-   `\def\]`'s; `is_def_prefix_command`, another closed curated set). A control-*word*
-   name (`\def\foo…`) keeps its benign generic-command shape.
-
-4. **Parser emits an event stream, not a tree directly.** `lexer → flat token stream →
-   parser emits events (Start/Tok(idx)/Finish) → tree_builder re-attaches trivia and
-   feeds rowan's GreenNodeBuilder`. Tokens are referenced by index; there is **no
-   `Error` event**—diagnostics ride a side channel keyed by byte range (the
-   rust-analyzer event-stream pattern). One extra event, `SubTok { idx, start, end }`,
-   attaches a `WORD` sub-slice of `tokens[idx]` (the math operator split, decision #3);
-   losslessness holds because a token's `SubTok` pieces cover its full byte range
-   contiguously.
+4. **The parser emits an event stream, not a tree directly**
+   (`Start`/`Tok(idx)`/`Finish`); diagnostics ride a byte-range side channel (no
+   `Error` event), and a `SubTok` event attaches `WORD` sub-slices for the math split.
+   See `parser.md`.
 
 5. **Errors travel alongside the tree, never abort it.** A single syntactic error
-   never fails the whole parse. Recovery anchors: `\end{…}`, `\begin`, blank line, `}`,
-   `$`, `&`, `\\`. Always make progress; never infinite-loop on unexpected input.
+   never fails the whole parse. Recovery anchors: `\end{…}`, `\begin`, blank line,
+   `}`, `$`, `&`, `\\`. Always make progress; never infinite-loop. See `parser.md`.
 
 6. **Incrementality is salsa-first.** Cross-file/cross-query incrementality via salsa
-   is the v1 story. Intra-file incremental reparse (reusing green subtrees) is a
-   *later optimization*—a whole-file reparse of a typical `.tex` is sub-ms.
+   is the v1 story; intra-file reparse is a later optimization. See `parser.md`.
 
 7. **Store green nodes in salsa, never red (`SyntaxNode`).** Red trees aren't
-   `Send`/`Eq`/`salsa::Update`. See `incremental.rs`: `#[salsa::input]
-   SourceFile { text }`, a `parsed_document` query returning `rowan::GreenNode` +
-   diagnostics under `no_eq, unsafe(non_update_types)` (sound because the tree is a
-   pure function of the text), materializing red cursors on demand.
+   `Send`/`Eq`/`salsa::Update`; the tree is a pure function of the text, materialized
+   to red cursors on demand. See `parser.md`.
 
-8. **Argument grouping is greedy and generic.** The CST greedily attaches trailing
-   `{…}`/`[…]` groups as argument nodes (texlab-style). Arity is unknown at parse time;
-   the semantic layer refines it. **`[…]` attachment is shape-gated** (issue #43) —
-   `[`/`]` are not real grouping in TeX, so a bracket is an argument only when it reads
-   as one, decided from static shape facts, never meaning (`parser::grammar`,
-   `BracketPolicy` + `attach_arguments`):
-   - *Lexically inside math* (a `math_depth` that persists into text-mode bodies of
-     unknown environments nested in math), a `[` attaches only when it directly abuts
-     the command (`\sqrt[3]{x}`; a spaced `\bE [ x ]` is a delimiter) and its `]`
-     closes before the math ends (open-interval notation `$]0;\num{0.5}[$`) — net of
-     the `]`s claimed by intervening command-abutting `[`s, so in
-     `\P[\gamma[0, \infty) \cap A = \emptyset]` the lone `]` belongs to `\gamma[` and
-     the outer `\P[` stays an ordinary atom (issue #55).
-   - *In text mode* (issue #60, mirroring the `$` shape gate in decision #3), a `[`
-     attaches only when its `]` is reachable before an unbalanced `}`, a
-     `\begin`/`\end` outside a definition body, a paragraph break, or EOF — net of the
-     `]`s claimed by intervening command-abutting `[`s, as in the math gate. Macro code
-     tests for and re-emits lone brackets (`\@ifnextchar [\@xmpar\@ympar`) at least as
-     often as prose writes real optionals, so a gated bracket stays an ordinary token
-     with **no diagnostic**. (In a macrocode chunk the chunk-scoped gate in decision #1
-     applies instead.)
-   - A *curated math environment's* `\begin` likewise attaches only a directly-abutting
-     bracket (`\begin{aligned}[t]`; a detached `[a]_1` on the next line is body
-     content). Non-math environments stay greedy across trivia — the xparse-signature
-     glue relies on a next-line `[Warning]` still attaching to `\begin{note}`.
-   - The *delimiter-size commands* (`\big`…`\Bigg` + `l`/`m`/`r`) never take a bracket
-     argument: their `[` is the delimiter being sized (`\Big[ x \Big]`), mirroring the
-     `\left`/`\right` special case.
+8. **Argument grouping is greedy and generic** (texlab-style); arity is refined by the
+   semantic layer. **`[…]` attachment is shape-gated**—a bracket is an argument only
+   when it reads as one, from static shape facts, never meaning. See `parser.md`.
 
-9. **Trivia attachment follows the rust-analyzer rule: comments bind *forward*,
-   whitespace floats, blank lines break the bind.** Trivia is never dropped, so the
-   only question is which node owns it:
-   - **Default: float at the nearest enclosing node**—inter-sibling whitespace and
-     newlines stay direct children of the tightest containing block/group, owned by
-     neither neighbor.
-   - **A contiguous run of own-line `%` comments immediately preceding a `COMMAND` or
-     `ENVIRONMENT` binds *leading* into it**, grouped as a `DOC_COMMENT` node.
-     "Documentable" is decided purely on node kind—no signature-DB lookup leaks into
-     the parser. A same-line trailing comment (`\foo % x`) never binds.
-   - **A blank line (`≥2` newlines, the `\par` boundary) breaks the bind:** comments
-     past it stay floating. This is a **deliberate divergence** from RA's
-     `n_attached_trivias`, which peeks *past* a blank line and keeps attaching when the
-     next comment is an outer doc comment (`///`/`//!`). That peek keys on the
-     `///`-vs-`//` distinction—a marker of documentation intent that LaTeX's single
-     catcode-14 `%` has no equivalent for. Applied to `%` it would wrongly glue a
-     license or copyright header into the following command's doc comment, so we only
-     bind the maximal blank-line-free suffix. Pinned by `comment_after_blank_line_still_binds`
-     (`tests/parser.rs`).
+9. **Trivia attachment follows the rust-analyzer rule:** comments bind *forward* (a
+   run of own-line `%` before a `COMMAND`/`ENVIRONMENT` becomes a `DOC_COMMENT`),
+   whitespace floats, a blank line breaks the bind. See `parser.md`.
 
-   Whitespace stays a bare leaf token (never wrapped); the bound leading-comment run
-   is the one named-node exception. This is a CST-shape convention enforced by tests,
-   not a hard oracle.
+10. **Typed AST wrappers are a read-only view, never a re-model of the tree.** They
+    expose structure, never meaning; accessors are positional and tolerate
+    over-attachment. The formatter stays raw for structural work, adopting wrappers
+    only for field access. See `parser.md`.
 
-10. **Typed AST wrappers are a read-only view, never a re-model of the tree.** On top
-    of the untyped rowan CST sits a thin typed layer (`ast.rs` + `ast/nodes.rs` +
-    `ast/tokens.rs`, and the bib parallel `bib/ast.rs`): rust-analyzer-style `AstNode`/
-    `AstToken` traits (`can_cast`/`cast`/`syntax`), an `ast_node!` identity macro (a
-    12-line `macro_rules!`, *not* codegen—the accessors are hand-written), and one
-    wrapper struct per node kind (`Command`, `Group`, `Optional`, `NameGroup`, `Begin`,
-    `End`, `Environment`, `ControlWord`; add more only when a field-extraction consumer
-    appears—`Math`/`Scripted`/… stay unwrapped until then). Wrappers expose **structure**
-    (a command's name token, its positional argument groups, an environment's
-    `\begin`/`\end`), never **meaning**—no signature-DB lookup lives here (composing with
-    decision #2). Because the CST is greedy and generic (decision #8), accessors are
-    **positional** (`Command::nth_group(n)` filters `GROUP` only, so an `OPTIONAL` never
-    shifts brace indexing) and tolerate over-attachment by construction; they never
-    pretend arity is fixed (`Command::title()` would be a lie—a `\section` and a
-    `\newcommand` share the `COMMAND` shape). Navigation uses the generic helpers
-    `child::<N>`/`children::<N>`/`child_token::<T>`, which replace the raw
-    `children().find(|c| c.kind()==X)` idiom at *field-extraction* sites.
-
-    The wrappers are read-only, so they can't threaten losslessness or idempotence. The
-    **formatter deliberately stays raw** for structural work: the `lower_node`
-    `match node.kind()` dispatch and the token-classification loops (trivia walks,
-    `L_BRACE`/`R_BRACE` matching) are idiomatic tree-walking that wrappers would only
-    obscure—the formatter adopts wrappers *only* for field access (argument/name
-    extraction). The pre-wrapper **free functions** (`command_name`, `environment_name`,
-    `nth_group_text`, …) remain as thin **kind-agnostic shims** over the wrapper bodies:
-    they read whatever relevant child a node has without gating on the node's own kind,
-    because callers rely on that latitude (dtx `\begin{macro}{\foo}` reads a `GROUP` off a
-    `BEGIN`; an xparse default body handed to `group_inner_source` may be an `OPTIONAL`).
-    The typed methods are kind-checked at `cast`; the shims are not.
+The **formatter engine** (Wadler-style `Doc` IR, `WrapMode`, `MathWrap`, table
+alignment, expl3 layout) is documented in `formatter.md`; the **linter** (Rule trait,
+autofix model, registration) in `linter.md`; the **LSP's** sanctioned environment
+awareness in `lsp.md`.
 
 ## Invariants (test oracles—enforce them)
 
 - **Losslessness:** `reconstruct(text) == text`, byte-for-byte.
 - **Idempotence:** `fmt(fmt(x)) == fmt(x)`.
+- **Whitespace-only formatter:** the formatter changes only *trivia* (whitespace,
+  newlines, comments, `.dtx` margins/guards); it never inserts, deletes, or rewrites a
+  non-trivia token. Content normalizations (stripping redundant single-token script
+  braces `x^{2}` → `x^2`, `$$…$$` → `\[…\]`) are *linter autofixes*, never layout. Pinned
+  by the non-trivia-content oracle in `assert_format_invariants` (`tests/format.rs`).
 - **Protected regions** (`verbatim`, `lstlisting`, `\verb`, comments) are never altered
   by the formatter.
 
-There is deliberately **no parse-stability invariant**: the formatter may *normalize*
-structure (e.g. stripping redundant braces around a single-token math script,
-`x^{2}` → `x^2`), changing CST shape on purpose. Such rewrites must preserve *meaning*
-(carried by fixtures and the corpus) but are not held to structural equality with the
-input. The formatter is intentionally used to stress the parser—any formatter
-ambiguity should surface a parser modeling gap.
+There is deliberately **no parse-stability invariant**: the formatter may still change
+CST *shape* (the math operator split re-groups a catcode-12 `WORD`, so `a+2` → `a + 2`
+re-lexes into separate atoms), but the whitespace-only invariant above pins the
+non-trivia *content* it carries. The formatter is intentionally used to stress the
+parser—any formatter ambiguity should surface a parser modeling gap.
 
 **Differential oracle:** use **texlab's parser** as a differential *parse* oracle over
 a corpus—skeletonize both trees and compare. It is a reference we measure against,
 never match.
-
-## Technology choices
-
-- **rowan** for the CST; **salsa** for incremental queries;
-  **smol_str** for interned token text; **insta** for snapshot tests;
-  **annotate-snippets** for diagnostics rendering.
-- **LSP:** `lsp-server` + `lsp-types` (rust-analyzer's stack), **not**
-  `tower-lsp-server`. salsa cancellation is a synchronous unwind
-  (`salsa::Cancelled`) that composes with `lsp-server`'s sync main loop + threadpool
-  and fights tower-lsp's async `&self` model. `text/line_index.rs` uses
-  `lsp_types::Position`.
-- **Formatter engine:** a Wadler/Prettier-style `Doc` IR (`formatter::ir::Ir`), whose
-  core variants are `Group`/`Line`/`SoftLine`/`HardLine`/`EmptyLine`/`Indent` plus
-  `Ir::Fill` (per-gap greedy break decisions) and `Ir::PreferredFill`
-  (source-break-aware global minimum-cost decisions) for paragraph reflow. The enum also
-  carries `Align`, `IfBreak`, `ConditionalGroup`(`AllLines`), `Verbatim`, `ColumnZero`,
-  `MarginPrefix`, and `Nil`—see `ir.rs` for the authoritative list.
-- **Paragraph line breaks** are controlled by a `WrapMode` (`Reflow` default,
-  `Stable`, `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling
-  **panache** formatter and mechanized through the `Doc` IR, not a separate line-filler.
-  All five are implemented: `Reflow` width-fills, `Stable` keeps acceptable authored
-  breaks while optimizing overflow/underflow/change/displacement/raggedness against a
-  hard-coded soft target (`FormatStyle::stable_wrap_target`, `line-width - 15`; not yet
-  configurable), `Preserve` keeps authored breaks,
-  and `Sentence`/`Semantic` split one sentence per line (width ignored) through the
-  shared `reflow_elements` engine—each completed prose run is rendered as a `Fill`
-  (reflow), a `PreferredFill` (stable), or as space-joined sentences
-  (sentence/semantic). `Semantic` additionally
-  ends a line at every authored newline (sembr; no clause detection). Sentence-boundary
-  detection is a per-language abbreviation profile (`formatter::sentence`, ported from
-  panache) resolved from `[format] lang` + `[format.no-break-abbreviations]` into a
-  `SentenceOptions` threaded on `FormatContext`; babel/polyglossia auto-detection is
-  deferred. The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
-  *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
-  **Display-math line breaks** have their own knob, `MathWrap` (`[format] math-wrap`:
-  `auto`/`preserve`/`single-line`/`break`), scoped to single-formula display bodies
-  (`\[…\]`, `$$…$$`, non-grid `equation`; grids and inline math untouched). `auto`
-  (the default) resolves against the effective `WrapMode` at `LowerCtx` construction
-  (`Preserve` → preserve authored breaks, else the amsmath-style breaker), so
-  per-file-kind wrap defaults carry over to math for free.
-- **Table column alignment** (`tabular`/`array`) is a formatter concern (layout, so
-  the formatter owns it—tenet #1). The `{lcr}` column spec is parsed by
-  `formatter::colspec` into per-column `ColAlign`s, reading only the static argument
-  text (no macro meaning); it is **conservative**, bailing to all-left on any token it
-  does not model (`p`/`m`/`b` count as left, `*{n}{}` expands, `>{}`/`<{}`/`@{}`/`!{}`
-  and vertical rules add no column). The grid renderer aligns each cell L/C/R; a
-  right/center *last* cell pads on the left only (no trailing whitespace, so
-  idempotence holds—padding re-trims on re-parse). A `\multicolumn{n}{spec}{…}` spans
-  `n` columns: excluded from single-column widths, aligned within its span by its own
-  spec, and left to overflow rather than ballooning narrow data columns. The rule-line
-  recognizer (`non_row_line`) tolerates the booktabs `\cmidrule(lr){2-3}` paren trim
-  (the `(lr)` `WORD` and detached `{2-3}` group are consumed as part of the rule line),
-  and a same-line `\\ \hline` is normalized onto its own passthrough line.
-- **CLI:** `clap` + `build.rs` generating man pages, completions, and markdown
-  (`clap_mangen`, `clap_complete`, `clapdown`).
-
-## Non-goals
-
-- No general macro expansion, no TeX evaluator, no execution of TeX primitives or
-  arbitrary `\def` semantics. (Common `\newcommand`/`\newenvironment`/xparse
-  *signatures* may feed the semantic DB—extracted, never executed.)
-- No general `\catcode` handling beyond the bounded patterns in decision #1.
-- We never typeset.
-- **The formatter never reads the environment.** `badness format` output is a pure
-  function of the input plus shipped data (curated tables, CWL, the tlpdb-derived
-  name lists and CTAN metadata). It resolves only *local* `.sty`/`.cls` next to the
-  document (`semantic::load::DiskPackageSource`)—never the installed TEXMF tree—so
-  output can't depend on what's installed. This is load-bearing for the deterministic-
-  formatting tenet and the idempotence/losslessness oracles.
-
-## LSP environment awareness (sanctioned, LSP-only)
-
-The **formatter** stays hermetic (above), but the **language server** may look past
-the document's directory into the installed TeX tree, because navigation is inherently
-about the local environment. Two tiers, both read static facts only (no macro meaning,
-no typesetting):
-
-1. **Shipped static CTAN metadata** (`data/package_metadata.json`, generated by
-   `scripts/gen_package_names.py` from the pinned tlpdb): a stem→`{desc, ctan}` map,
-   the same read-only posture as the name lists and CWL. Drives package hover and
-   completion detail (`semantic::signature::package_metadata`).
-2. **A read-only TEXMF file index** (`project::texmf`): the installed `.sty`/`.cls`/
-   `.dtx` files, discovered by *delegating* root discovery to `kpsewhich -var-value`
-   (reimplementing kpathsea's `texmf.cnf` resolution is out of scope; MiKTeX doesn't
-   use it) and enumerating via `ls-R`/walk. Cached to the OS cache dir keyed by a
-   distro fingerprint; a lazy process-global (first config wins). Powers document
-   links, go-to-definition, and installed-set completion for system packages.
-3. **The compile's `.aux` artifacts** (`project::aux`): a dedicated line-oriented
-   scanner (never the LaTeX parser — aux files are written under `\makeatletter`,
-   so `\@input`/`\@writefile` would mis-lex) extracting `\newlabel` numbers and
-   `\@writefile{toc}` entries, following `\@input` per-chapter chains. Freshness is
-   a per-file `(mtime, len)`-keyed process cache — a recompile is picked up on the
-   next request, no watcher. Located per label namespace (sibling `.aux`, or
-   `[build] aux-dir` for out-of-tree builds; latexmkrc/Tectonic auto-detection
-   deferred). Powers label hover (`Figure 3: A chart`) and document-symbol number
-   enrichment (`1.2 Intro`; toc titles matched whitespace-normalized, consumed in
-   document order). Guarded by `format_never_reads_the_aux_file`
-   (`tests/format_packages.rs`).
-
-The distinction the old TODO conflated: a **runtime distro query feeding the
-formatter** stays a non-goal (it would break the hermeticism above); a **read-only
-index/metadata feeding LSP navigation** is sanctioned. The index is gated by
-the `texmf` editor settings (`enabled`/`roots`/`useKpsewhich`, supplied as
-`initializationOptions` or via `didChangeConfiguration`—machine config, so it lives in
-the editor, not `badness.toml`; `project::texmf::TexmfConfig`) and is **never** wired into
-`scope_signatures`/`DiskPackageSource` (guarded by
-`formatter_scope_never_reaches_the_texmf_tree`).
 
 ## Repo conventions
 
@@ -530,14 +146,13 @@ the editor, not `badness.toml`; `project::texmf::TexmfConfig`) and is **never** 
 - **Run `cargo fmt` before committing**—the rustfmt git hook rewrites unformatted
   files and aborts the commit otherwise. `clippy` warnings are errors:
   `cargo clippy --all-targets --all-features -- -D warnings`.
-- Task runner is `go-task` (`Taskfile.yml`). Performance is
-  first-class (`perf`, `cargo-flamegraph`, `hyperfine`, `cargo-show-asm`,
-  `cargo-llvm-cov` are in the dev shell)—benchmark before optimizing, never regress
-  losslessness for speed.
+- Task runner is `go-task` (`Taskfile.yml`). Performance is first-class (`perf`,
+  `cargo-flamegraph`, `hyperfine`, `cargo-show-asm`, `cargo-llvm-cov` are in the dev
+  shell)—benchmark before optimizing, never regress losslessness for speed.
 - New parser features need corpus + snapshot tests **and** a losslessness assertion.
-- **`CHANGELOG.md` is autogenerated by [versionary](https://github.com/jolars/versionary)
-  from the conventional-commit history—never hand-edit it.** Write good conventional
-  commit messages instead; versionary derives the entries at release time.
+- **`CHANGELOG.md` is autogenerated by
+  [versionary](https://github.com/jolars/versionary)** from the conventional-commit
+  history—never hand-edit it. Write good conventional commit messages instead.
 - **Windows CI bites twice:**
   - *Line endings.* The formatter emits **LF** and tests compare bytes against
     checked-in fixtures. When you add a fixture in a new extension under
@@ -545,32 +160,26 @@ the editor, not `badness.toml`; `project::texmf::TexmfConfig`) and is **never** 
     `.gitattributes` (the `*_crlf_*`/`*_lf_*` line-ending fixtures are the deliberate
     `-text` exceptions). Never normalize line endings in code to pass a test—fix the
     attribute.
-  - *URIs.* Decode LSP URIs to filesystem paths only through `uri_to_fs_path`/
-    `path_to_uri` (`lsp.rs`), which strips the `/` before a Windows drive letter and
-    keeps the Unix root. Keep `uri_to_fs_path_handles_unix_and_windows` green; tests
-    and snapshots must not assume `/` vs `\`.
+  - *URIs.* Decode LSP URIs to filesystem paths only through
+    `uri_to_fs_path`/`path_to_uri` (`lsp.rs`), which strips the `/` before a Windows
+    drive letter and keeps the Unix root. Keep `uri_to_fs_path_handles_unix_and_windows`
+    green; tests and snapshots must not assume `/` vs `\`.
 - **Generated `data/` artifacts.** Several data files are generated from pinned
   upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check`/`:sync`
-  targets: `cwl_signatures.json` (TeXstudio CWL corpus, `cwl:check`/`:sync`),
-  `package_names.txt`+`class_names.txt`+`package_metadata.json` (TeX Live tlpdb,
-  `pkg-names:check`/`:sync`), and `bib_fields.json` (below). `signatures.json` (curated
-  built-in command signatures), `colors.json`, and `tikz_libraries.json` are curated by
-  hand. Re-sync generated files via their model/task; don't hand-edit the mechanical
-  facts.
-- **Bib field DB** (`data/bib_fields.json`) tracks biblatex's canonical data model
-  (`blx-dm.def`). `scripts/gen_bib_fields.py` syncs the mechanical facts (entry-type
-  set, field categories, `required` constraints), preserving the hand-curated
-  `optional` ordering and classic-BibTeX overlay. `task bib-fields:check`/`:sync`
-  report/apply drift after a biblatex bump. Don't hand-edit the mechanical
-  facts—change them via the model and re-sync.
+  targets: `cwl_signatures.json` (`cwl:check`/`:sync`),
+  `package_names.txt`+`class_names.txt`+`package_metadata.json` (`pkg-names:check`/`:sync`),
+  and `bib_fields.json` (`bib-fields:check`/`:sync`, tracking biblatex's `blx-dm.def`).
+  `signatures.json`, `colors.json`, and `tikz_libraries.json` are curated by hand.
+  Re-sync generated files via their model/task; don't hand-edit the mechanical facts.
 
 ## Working agreements for agents
 
 - Keep the syntactic layer free of semantic knowledge.
 - Read/navigate the CST through the typed AST wrappers (decision #10): typed accessors
-  and `child`/`children`/`child_token` over raw `children().find(|c| c.kind()==X)`. Add a
-  wrapper struct when a node kind gains a field-extraction consumer; keep accessors
+  and `child`/`children`/`child_token` over raw `children().find(|c| c.kind()==X)`. Add
+  a wrapper struct when a node kind gains a field-extraction consumer; keep accessors
   positional and meaning-free.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
-  decision #1 without recording the decision here.
-- Update TODO.md as phases progress; update this file when a decision changes.
+  decision #1 without recording the decision here and on the relevant Development page.
+- Update TODO.md as phases progress; update this file when a decision changes, and keep
+  the matching Development page in sync.

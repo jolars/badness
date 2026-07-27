@@ -33,6 +33,7 @@ pub mod missing_provides;
 pub mod missing_required_argument;
 pub mod obsolete_environment;
 pub mod primitive_command;
+pub mod redundant_script_braces;
 pub mod sectioning_level_jump;
 pub mod space_before_command;
 pub mod straight_quotes;
@@ -60,6 +61,7 @@ pub use missing_provides::MissingProvides;
 pub use missing_required_argument::MissingRequiredArgument;
 pub use obsolete_environment::ObsoleteEnvironment;
 pub use primitive_command::PrimitiveCommand;
+pub use redundant_script_braces::RedundantScriptBraces;
 pub use sectioning_level_jump::SectioningLevelJump;
 pub use space_before_command::SpaceBeforeCommand;
 pub use straight_quotes::StraightQuotes;
@@ -412,6 +414,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DuplicatePackage),
         Box::new(MissingProvides),
         Box::new(UnknownOption),
+        Box::new(RedundantScriptBraces),
     ]
 }
 
@@ -496,6 +499,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "duplicate-package",
     "missing-provides",
     "unknown-option",
+    "redundant-script-braces",
 ];
 
 /// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).

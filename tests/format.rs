@@ -16,12 +16,52 @@ use badness::formatter::{
 };
 use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness::semantic::SignatureDb;
+use badness::syntax::{SyntaxKind, SyntaxNode};
+
+/// Concatenate the text of every *non-trivia* token in `text`, dropping
+/// whitespace, newlines, comments, and the `.dtx` margin/guard trivia. The
+/// formatter is the sole authority on *layout* (tenet 1); it may add, remove, or
+/// relocate trivia freely, but it must **never change a non-trivia token** —
+/// content rewrites (like stripping `x^{2}` -> `x^2`) belong to the linter's
+/// autofixes, not the layout engine. Concatenating token *text* (rather than
+/// comparing token boundaries) tolerates the math operator split legitimately
+/// re-grouping a catcode-12 run (`a+2` -> `a + 2`, still `a+2` once whitespace is
+/// dropped) while catching any inserted or deleted non-trivia character.
+fn nontrivia_content(text: &str) -> String {
+    let root = SyntaxNode::new_root(parse(text).green);
+    root.descendants_with_tokens()
+        .filter_map(|el| el.into_token())
+        .filter(|t| {
+            !matches!(
+                t.kind(),
+                SyntaxKind::WHITESPACE
+                    | SyntaxKind::NEWLINE
+                    | SyntaxKind::COMMENT
+                    | SyntaxKind::DOC_MARGIN
+                    | SyntaxKind::GUARD
+            )
+        })
+        .map(|t| t.text().to_string())
+        .collect()
+}
 
 /// Assert the formatter invariants for a single clean-parsing input. Inputs the
 /// parser rejects are out of scope for the formatter (it refuses them), so the
 /// caller filters those out.
 fn assert_format_invariants(input: &str) {
     let formatted = format(input).expect("clean input should format");
+
+    // Whitespace-only: the formatter changes only trivia, never a non-trivia
+    // token (tenet 1 — content rewrites are linter autofixes, not layout). The
+    // input is compared with a guaranteed final newline, since the formatter's
+    // "exactly one trailing newline" rule is a defined trivia normalization (and
+    // for the degenerate trailing-`\` input it folds the newline into a
+    // `\<newline>` control symbol — the final-newline rule, not a rewrite).
+    assert_eq!(
+        nontrivia_content(&formatted),
+        nontrivia_content(&format!("{input}\n")),
+        "format changed non-trivia content for {input:?}"
+    );
 
     // Idempotence: fmt(fmt(x)) == fmt(x).
     let twice = format(&formatted).expect("formatted output should re-format");
@@ -47,9 +87,9 @@ const CLEAN_CASES: &[&str] = &[
     "hello world",
     r"\section{Introduction}",
     r"$x^2 + y_i = \frac{1}{2}$",
-    // Structured math: scripts, a strippable braced script, a kept multi-char
-    // braced script, a group base, and display math — the new lowering must keep
-    // all invariants (idempotent, clean, lossless).
+    // Structured math: scripts, a single-token braced script (kept verbatim), a
+    // multi-char braced script, a group base, and display math — the lowering must
+    // keep all invariants (idempotent, clean, lossless).
     r"$x^{2} + a_i^{n+1} + {a+b}^2$",
     // Operators glued into a `WORD` are split into atoms and spaced (`a+2*1^5` ->
     // `a + 2 * 1^5`), unary signs stay tight (`-x`, `x=-b`), and the split must
@@ -307,10 +347,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // it does not.
     ("optional_collapse_fits", WrapMode::Reflow, 30),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
-    // trim just inside the delimiters, tight `^`/`_` scripts, and strip redundant
-    // braces around a single-token script argument (only where the following
-    // token would not glue onto it). A comment inside math forces a line break so
-    // it cannot swallow the closing delimiter.
+    // trim just inside the delimiters, tight `^`/`_` scripts. Braces are kept
+    // verbatim (dropping redundant single-token script braces is a *content*
+    // rewrite, so it lives in the `redundant-script-braces` lint autofix, not the
+    // layout engine). A comment inside math forces a line break so it cannot
+    // swallow the closing delimiter.
     ("math_collapse_spaces", WrapMode::Preserve, 80),
     ("math_trim_delims", WrapMode::Preserve, 80),
     ("math_tight_scripts", WrapMode::Preserve, 80),
@@ -321,13 +362,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // bodies are normalized too (`x^{a+b}` -> `x^{a + b}`). Scientific notation
     // (`1e-5`) is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
-    ("math_strip_single_token_braces", WrapMode::Preserve, 80),
-    // A binary/relation operator atom directly after the braced script does not
-    // block the strip: the sequencer spaces it (`a_{p}/b` -> `a_p / b`), so
-    // nothing glues and the strip already lands on the first pass (issue #56's
-    // idempotency drift). The script content may itself be an operator character
-    // (`\mathcal{A}_{+}/…` -> `\mathcal{A}_+ / …`, issue #66).
-    ("math_strip_braces_before_operator", WrapMode::Preserve, 80),
+    // The layout engine keeps single-token script braces verbatim; it never
+    // strips them (that is the `redundant-script-braces` lint autofix's job).
+    ("math_keep_single_token_braces", WrapMode::Preserve, 80),
+    // Braces around a script argument are likewise kept when an operator follows
+    // (`a_{p} / a_{p - 2}`, `\mathcal{A}_{+} / …`): operator spacing still applies,
+    // but the braces stay — a raw strip here would re-glue (`a_p/a_q` re-lexes as
+    // `_{p/a}`), which is why even the lint autofix withholds it.
+    ("math_keep_braces_before_operator", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),
     // Display math (`\[…\]`, `$$…$$`) is a block: the delimiters land on their own

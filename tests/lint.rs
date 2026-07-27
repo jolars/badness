@@ -383,6 +383,27 @@ fn dash_length_fires_end_to_end_and_its_fix_is_correct() {
 }
 
 #[test]
+fn redundant_script_braces_fires_end_to_end_and_its_fix_is_correct() {
+    // Single-token script braces are flagged (as Hints) and safely stripped; the
+    // operator-adjacent `x^{2}-3` is left alone — a raw strip would re-glue
+    // `2-3` into one token, so the rule withholds it.
+    let src = "$x^{2}$ and $y_{\\alpha}$ but $x^{2}-3$ stays.\n";
+    assert_eq!(
+        lint(src),
+        vec![
+            ("redundant-script-braces", Severity::Hint),
+            ("redundant-script-braces", Severity::Hint),
+        ]
+    );
+    // The safe brace deletion stays lossless and parses (tenet 1).
+    assert_fix_is_correct(src);
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "$x^2$ and $y_\\alpha$ but $x^{2}-3$ stays.\n"
+    );
+}
+
+#[test]
 fn abbreviation_spacing_fires_end_to_end_and_its_fix_is_correct() {
     // The lowercase abbreviation `e.g.` (before a lowercase word) and the acronym
     // `USA.` (ending a sentence, before a capital) both trip the rule; the trailing

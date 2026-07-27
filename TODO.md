@@ -236,6 +236,34 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   are consumed as part of the rule line) and the same-line `\\ \hline` form (a rule
   sharing a physical line with the preceding `\\` is normalized onto its own
   passthrough line).
+- [x] **The layout engine is whitespace-only: the single-token script brace strip
+  moved out of the formatter (architectural).** Tenet #1 draws the line — the
+  formatter is the *sole authority on layout*; content rewrites are autofixes. The
+  one rewrite that crossed it inside the layout engine (`x^{2}` -> `x^2`, the
+  redundant-brace strip in `lower_script`) is now the `redundant-script-braces`
+  Safe lint autofix (`Hint` severity — cosmetic and ubiquitous), the sibling of
+  `dollar-display-math` (`$$…$$` -> `\[…\]`). An audit of the whole `formatter/`
+  tree confirmed this was the **only** token-content change; everything else is
+  trivia or net-zero. **Correctness refinement found while implementing:** the
+  formatter's guard treated an operator-adjacent strip as safe *because the
+  formatter also inserts operator spacing* (`a_{p}/b` -> `a_p / b`). A raw `--fix`
+  edit has no such spacing, and badness globs a catcode-12 run into one `WORD`, so
+  unspaced `a_p/b` re-lexes `_{p/a}` — a meaning change. The lint rule therefore
+  drops that spacing-dependent widening and strips only when the following
+  character cannot glue (verified by dumping parse trees). `lower_script` and its
+  four helpers (`lower_stripped_group`/`strippable_script_arg`/
+  `next_token_safe_after`/`is_lone_control_word`) were deleted; single-token script
+  groups now fall through to `lower_math_group` (braces kept). The two
+  `math_strip_*` fixtures were renamed `math_keep_*` (they now assert
+  brace-retention). Payoff, landed: a new **whitespace-only** invariant replaces
+  the old "meaning preserved, checked by fixtures" posture — `assert_format_invariants`
+  (`tests/format.rs`) asserts the concatenated text of non-trivia tokens is
+  unchanged across `CLEAN_CASES` and the whole clean corpus (comparing text, not
+  token boundaries, tolerates the math-split re-grouping). The oracle immediately
+  caught a pre-existing edge (a bare trailing `\` folds the mandatory final newline
+  into a `\<newline>` control symbol — the final-newline rule, handled by comparing
+  against the newline-normalized input). Recorded in `AGENTS.md` (Invariants +
+  tenet #1 mirror) and `docs/src/development/{architecture,formatter,linter}.md`.
 
 ## Linter
 

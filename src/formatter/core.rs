@@ -4884,9 +4884,10 @@ fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }))
 }
 
-/// Lower a `SUBSCRIPT`/`SUPERSCRIPT`: the `_`/`^` glued tightly to its argument,
-/// stripping redundant braces around a single-token argument where safe (see
-/// [`strippable_script_arg`]).
+/// Lower a `SUBSCRIPT`/`SUPERSCRIPT`: the `_`/`^` glued tightly to its argument.
+/// Braces are kept verbatim — dropping redundant single-token braces (`x^{2}` ->
+/// `x^2`) is a *content* rewrite, not layout, so it lives in the linter's
+/// `redundant-script-braces` autofix, keeping this layout engine whitespace-only.
 fn lower_script(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::concat(node.children_with_tokens().filter_map(|el| match el {
         SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
@@ -4895,97 +4896,8 @@ fn lower_script(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             Some(Ir::verbatim(t.text()))
         }
-        SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP && strippable_script_arg(&n) => {
-            Some(lower_stripped_group(&n, cx))
-        }
         other => Some(lower_math_element(other, cx)),
     }))
-}
-
-/// Whether a script-argument brace group `{X}` may safely drop its braces: `X`
-/// must be a single TeX token (a one-character word or a lone control word) and
-/// the token following the group must not glue onto `X` once the braces are gone
-/// (so `x^{2}y` stays braced — `2y` would re-lex as one word, and `x^{\alpha}b`
-/// stays braced — `\alphab` would be one control word).
-fn strippable_script_arg(group: &SyntaxNode) -> bool {
-    let mut inner = group.children_with_tokens().filter(|el| {
-        !matches!(
-            el.kind(),
-            SyntaxKind::L_BRACE
-                | SyntaxKind::R_BRACE
-                | SyntaxKind::WHITESPACE
-                | SyntaxKind::NEWLINE
-        )
-    });
-    let Some(only) = inner.next() else {
-        return false; // empty `{}` — never strip (`^` needs an argument)
-    };
-    if inner.next().is_some() {
-        return false; // more than one token between the braces
-    }
-    match only {
-        SyntaxElement::Token(t)
-            if t.kind() == SyntaxKind::WORD && t.text().chars().count() == 1 =>
-        {
-            next_token_safe_after(group, false)
-        }
-        SyntaxElement::Node(n) if is_lone_control_word(&n) => next_token_safe_after(group, true),
-        _ => false,
-    }
-}
-
-/// A `COMMAND` node consisting solely of a control word with no attached
-/// arguments (e.g. `\alpha`) — the form whose braces are droppable in script
-/// position.
-fn is_lone_control_word(node: &SyntaxNode) -> bool {
-    if node.kind() != SyntaxKind::COMMAND {
-        return false;
-    }
-    let mut children = node.children_with_tokens();
-    let first_is_control_word = matches!(
-        children.next(),
-        Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::CONTROL_WORD
-    );
-    first_is_control_word && children.next().is_none()
-}
-
-/// True if the token following `group` in the tree would not glue onto a stripped
-/// single-token argument. `letter_only` (for a control-word argument) forbids only
-/// a following ASCII letter; otherwise any word character forbids the strip.
-///
-/// A binary/relation operator atom (the parser's math word split, decision #3) is
-/// always safe even though its characters are word characters: the math sequencer
-/// spaces every operator that follows an operand, and a scripted atom is an
-/// operand, so `a_{p}/b` renders as `a_p / b` — nothing glues.
-fn next_token_safe_after(group: &SyntaxNode, letter_only: bool) -> bool {
-    let Some(next) = group.last_token().and_then(|t| t.next_token()) else {
-        return true;
-    };
-    if classify_math_op_text(next.text()) != MathRole::Operand {
-        return true;
-    }
-    match next.text().chars().next() {
-        None => true,
-        Some(c) if letter_only => !c.is_ascii_alphabetic(),
-        Some(c) => !crate::parser::lexer::is_word_char(c),
-    }
-}
-
-/// Lower the single inner token of a strippable script-argument group, without
-/// its braces.
-fn lower_stripped_group(group: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    match group.children_with_tokens().find(|el| {
-        !matches!(
-            el.kind(),
-            SyntaxKind::L_BRACE
-                | SyntaxKind::R_BRACE
-                | SyntaxKind::WHITESPACE
-                | SyntaxKind::NEWLINE
-        )
-    }) {
-        Some(el) => lower_math_element(el, cx),
-        None => Ir::nil(),
-    }
 }
 
 fn spans_multiple_lines(node: &SyntaxNode) -> bool {

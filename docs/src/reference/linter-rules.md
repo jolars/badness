@@ -702,6 +702,35 @@ warning: unknown-option
   |             ^^^^^ unknown option `final` for package `mypkg`
 ```
 
+## `redundant-script-braces`
+
+Flag braces around a single-token sub/superscript argument, which `^`/`_` bind without them (`x^{2}` is `x^2`). The autofix deletes the two braces and leaves the inner token untouched. It is withheld when dropping the braces would let the following character glue onto the argument and change meaning (`x^{2}-3` stays braced — unspaced `x^2-3` would re-lex `2-3` as one token; `y_{\alpha}b` stays braced — `\alphab` is one control word).
+
+Redundant braces around a single-token script argument:
+
+```tex
+$x^{2}$ and $y_{\alpha}$
+```
+
+```text
+help: redundant-script-braces
+ --> example.tex:1:4
+  |
+1 | $x^{2}$ and $y_{\alpha}$
+  |    ^^^ redundant braces around a single-token script argument
+help: redundant-script-braces
+ --> example.tex:1:16
+  |
+1 | $x^{2}$ and $y_{\alpha}$
+  |                ^^^^^^^^ redundant braces around a single-token script argument
+```
+
+After applying the fix:
+
+```tex
+$x^2$ and $y_\alpha$
+```
+
 ## Suppression
 
 To suppress a rule at a single site, use a comment directive:

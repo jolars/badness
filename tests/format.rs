@@ -188,6 +188,16 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // command's doc comment on reparse and cascades one line further per pass
     // (issue #54, HoTT/book `opt-*.tex`).
     ("reflow_trailing_comment_never_wraps", WrapMode::Reflow, 80),
+    // A trailing `%` on a line directly above a command (`\else % note` over
+    // `\pgfmath@tokens@make{…}`) rides its line: dropping it to its own line would
+    // re-bind it as the following command's doc comment on reparse and split that
+    // command's glued `\word@tail` across passes (issue #64, pgf-tikz/pgf
+    // `pgfmathparser.code.tex`).
+    (
+        "trailing_comment_rides_before_command",
+        WrapMode::Reflow,
+        80,
+    ),
     // A class-defined verbatim environment (jss's `Code`) has its body preserved
     // byte-for-byte — never reindented or reflowed.
     ("verbatim_jss_code_environment", WrapMode::Preserve, 80),

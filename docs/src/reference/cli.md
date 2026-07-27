@@ -45,6 +45,7 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
     Possible values:
 
     - `reflow`: Greedy fill: wrap words to the line width (default)
+    - `stable`: Preserve acceptable authored breaks and rebalance only nearby text (revision-stable wrapping)
     - `sentence`: One sentence per line (line width ignored)
     - `semantic`: Semantic line breaks (sembr.org): keep authored breaks and add breaks at sentence boundaries
     - `preserve`: Leave authored line breaks untouched

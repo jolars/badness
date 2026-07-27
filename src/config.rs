@@ -147,6 +147,9 @@ impl Default for FormatConfig {
 pub enum WrapModeConfig {
     /// Greedy fill: wrap words to the line width.
     Reflow,
+    /// Prefer acceptable authored breaks, changing the smallest possible region
+    /// (revision-stable wrapping).
+    Stable,
     /// One sentence per line (width ignored).
     Sentence,
     /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at
@@ -160,6 +163,7 @@ impl From<WrapModeConfig> for WrapMode {
     fn from(value: WrapModeConfig) -> Self {
         match value {
             WrapModeConfig::Reflow => WrapMode::Reflow,
+            WrapModeConfig::Stable => WrapMode::Stable,
             WrapModeConfig::Sentence => WrapMode::Sentence,
             WrapModeConfig::Semantic => WrapMode::Semantic,
             WrapModeConfig::Preserve => WrapMode::Preserve,
@@ -599,6 +603,7 @@ mod tests {
     fn parses_wrap_variants() {
         for (key, expected) in [
             ("reflow", WrapModeConfig::Reflow),
+            ("stable", WrapModeConfig::Stable),
             ("sentence", WrapModeConfig::Sentence),
             ("semantic", WrapModeConfig::Semantic),
             ("preserve", WrapModeConfig::Preserve),
@@ -613,6 +618,7 @@ mod tests {
     fn expected_wrap_mode(key: &str) -> WrapMode {
         match key {
             "reflow" => WrapMode::Reflow,
+            "stable" => WrapMode::Stable,
             "sentence" => WrapMode::Sentence,
             "semantic" => WrapMode::Semantic,
             "preserve" => WrapMode::Preserve,
@@ -652,6 +658,14 @@ mod tests {
     fn rejects_unknown_math_wrap() {
         let err = parse("[format]\nmath-wrap = \"never\"\n").expect_err("unknown variant");
         assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn stable_wrap_target_sits_below_line_width() {
+        let config = parse("[format]\nline-width = 100\nwrap = \"stable\"\n").expect("parse");
+        let style = FormatStyle::from(&config.format);
+        assert_eq!(config.format.wrap, Some(WrapModeConfig::Stable));
+        assert_eq!(style.stable_wrap_target(), 85);
     }
 
     #[test]

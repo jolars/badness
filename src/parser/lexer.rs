@@ -211,14 +211,31 @@ fn is_definition_keyword(text: &str) -> bool {
 }
 
 /// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
-/// whose following number is conventionally written in backtick char-constant
-/// notation (`` \char`$ ``, `` \catcode`\%=12 ``): after it, a backtick makes
-/// the next character *data*, never syntax. A closed curated set; reads only
-/// the static keyword, no macro meaning.
+/// that opens a numeric context, where a following number is conventionally
+/// written in backtick char-constant notation (`` \char`$ ``, `` \catcode`\%=12 ``,
+/// `` \number`\[ ``): after it, a backtick makes the next character *data*, never
+/// syntax. A closed curated set; reads only the static keyword, no macro meaning.
+/// The number-*producing* primitives (`\number`/`\the`/`\romannumeral`) and the
+/// numeric conditionals (`\ifnum`/`\ifodd`/`\ifdim`) are included alongside the
+/// codetables because their operand is just as routinely a backtick constant.
 fn is_char_constant_command(text: &str) -> bool {
     matches!(
         text,
-        "\\char" | "\\catcode" | "\\lccode" | "\\uccode" | "\\sfcode" | "\\mathcode" | "\\delcode"
+        "\\char"
+            | "\\catcode"
+            | "\\lccode"
+            | "\\uccode"
+            | "\\sfcode"
+            | "\\mathcode"
+            | "\\delcode"
+            | "\\number"
+            | "\\the"
+            | "\\romannumeral"
+            | "\\numexpr"
+            | "\\dimexpr"
+            | "\\ifnum"
+            | "\\ifodd"
+            | "\\ifdim"
     )
 }
 
@@ -463,14 +480,26 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         // primitive, a backtick makes the next character data (`` \char`$ ``,
         // `` \char`} ``), so emit the backtick and that character as one plain
         // `WORD` token — a `$`/`{` there must not open math or a group. The
-        // escaped form (`` \char`\$ ``) falls through and lexes benignly
-        // (backtick, then a control symbol).
+        // escaped single-character form (`` \number`\[ ``) is captured the same
+        // way, backtick plus the whole control symbol: a `\[`/`\]` there is the
+        // *character* `[`/`]`, not a math delimiter (encguide.tex's char-code
+        // table, issue #71).
         if pending_char_constant
             && let Some(after) = rest.strip_prefix('`')
             && let Some(c) = after.chars().next()
-            && !matches!(c, '\\' | '\n' | '\r')
+            && !matches!(c, '\n' | '\r')
+            && let Some(len) = if c == '\\' {
+                // `` `\X ``: backtick, backslash, and one escaped character; a
+                // bare `` `\ `` at line end has no character and falls through.
+                after[1..]
+                    .chars()
+                    .next()
+                    .filter(|e| !matches!(e, '\n' | '\r'))
+                    .map(|e| 2 + e.len_utf8())
+            } else {
+                Some(1 + c.len_utf8())
+            }
         {
-            let len = 1 + c.len_utf8();
             out.push(Token {
                 kind: SyntaxKind::WORD,
                 text: SmolStr::new(&rest[..len]),

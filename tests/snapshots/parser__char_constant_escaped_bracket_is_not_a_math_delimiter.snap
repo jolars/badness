@@ -1,0 +1,27 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\relax[ & \\\\number`\\\\[ \\\\\\\\\\n] & \\\\number`\\\\]\")"
+---
+ROOT@0..38
+  PARAGRAPH@0..38
+    COMMAND@0..25
+      CONTROL_WORD@0..6 "\\relax"
+      OPTIONAL@6..25
+        L_BRACKET@6..7 "["
+        WHITESPACE@7..8 " "
+        AMPERSAND@8..9 "&"
+        WHITESPACE@9..10 " "
+        COMMAND@10..17
+          CONTROL_WORD@10..17 "\\number"
+        WORD@17..20 "`\\["
+        WHITESPACE@20..21 " "
+        LINE_BREAK@21..23
+          CONTROL_SYMBOL@21..23 "\\\\"
+        NEWLINE@23..24 "\n"
+        R_BRACKET@24..25 "]"
+    WHITESPACE@25..26 " "
+    AMPERSAND@26..27 "&"
+    WHITESPACE@27..28 " "
+    COMMAND@28..35
+      CONTROL_WORD@28..35 "\\number"
+    WORD@35..38 "`\\]"

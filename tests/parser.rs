@@ -882,9 +882,19 @@ fn char_constant_backtick_keeps_the_next_character_plain() {
 
 #[test]
 fn char_constant_escaped_form_lexes_benignly() {
-    // The escaped form keeps its ordinary shape: a backtick word, then the
-    // `\$` control symbol.
+    // The escaped single-character form is captured as one plain `WORD` too
+    // (backtick, backslash, and the escaped character): `\catcode`\%=12`.
     insta::assert_snapshot!(tree("\\catcode`\\%=12"));
+}
+
+#[test]
+fn char_constant_escaped_bracket_is_not_a_math_delimiter() {
+    // A numeric-context primitive followed by an escaped-bracket char constant
+    // (`\number`\[`, `\number`\]`) is data, not display math: encguide.tex's
+    // char-code table pairs `\relax[ … ]` across table rows, and the `\[`/`\]`
+    // must not open/close a `\[…\]` display that swallows the row's `]`
+    // (smoke-test issue #71).
+    insta::assert_snapshot!(tree("\\relax[ & \\number`\\[ \\\\\n] & \\number`\\]"));
 }
 
 #[test]

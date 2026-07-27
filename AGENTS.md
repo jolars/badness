@@ -175,13 +175,18 @@ for the sanctioned lexer modes is threaded through TODO.md's `## Parser` and
      markup between them (`\begin{macro}` prose, the frame lines) must keep
      pairing — the same doc-line subtraction the formatter applies to region
      ownership.
-   - **Char-constant isolation.** After a `\char`/`\catcode`-family primitive
-     (a closed curated set, `parser::lexer::is_char_constant_command`), a
-     backtick opens TeX's char-constant number notation: the next character is
-     *data* (`` \char`$ ``, `` \char`} `` — issue #60), lexed with its backtick
-     as one plain `WORD` token so it can never open math or close a group. The
-     escaped form (`` \char`\$ ``) lexes benignly and needs no isolation. Same
-     family as the `\left`/`\right` delimiter isolation.
+   - **Char-constant isolation.** After a numeric-context primitive (a closed
+     curated set, `parser::lexer::is_char_constant_command`: the `\char`/
+     `\catcode` code-tables plus the number producers `\number`/`\the`/
+     `\romannumeral`/`\numexpr`/`\dimexpr` and the numeric conditionals
+     `\ifnum`/`\ifodd`/`\ifdim`), a backtick opens TeX's char-constant number
+     notation: the next character is *data* (`` \char`$ ``, `` \char`} `` —
+     issue #60), lexed with its backtick as one plain `WORD` token so it can
+     never open math or close a group. The escaped single-character form
+     (`` \number`\[ ``) is isolated the same way, backtick plus the whole
+     control symbol, so a `\[`/`\]` there is the character `[`/`]`, not a math
+     delimiter (encguide.tex's char-code table pairs `\relax[ … ]` across table
+     rows — issue #71). Same family as the `\left`/`\right` delimiter isolation.
    - **Signatures.** `\newcommand`/xparse *signatures* are extracted into the semantic
      DB, never executed.
 

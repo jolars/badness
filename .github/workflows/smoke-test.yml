@@ -53,8 +53,30 @@ jobs:
         latex3/latex3|texmf/tex/latex/base/ltxdoc.cls|format-error
         latex3/latex3|support/docstrip.tex|format-error
         latex3/latex3|texmf/tex/latex/base/docstrip.tex|format-error
+        # latex2e is the upstream source repo for the same doc/docstrip sources
+        # (doc.sty is generated from doc.dtx). Same non-goal roots: the doc.sty
+        # variants and doc.dtx carry the `\macro@code` catcode-gymnastics region
+        # (`|` made the escape, `!` a comment, `{`/`}` catcode 12); docstrip.dtx,
+        # ltdefns.dtx, and ltcmd.dtx lean on `\iffalse}\fi`/`\iffalse{\fi`
+        # editor-balance tricks in doc-margin prose (a brace hidden in a skipped
+        # conditional branch). Issue #71.
+        latex3/latex2e|base/doc-2016-02-15.sty|format-error
+        latex3/latex2e|base/doc-2021-06-01.sty|format-error
+        latex3/latex2e|base/doc.dtx|format-error
+        latex3/latex2e|base/docstrip.dtx|format-error
+        latex3/latex2e|base/ltdefns.dtx|format-error
+        latex3/latex2e|base/ltcmd.dtx|format-error
+        # ltfloat.dtx: a `\begin{oldcomments}` doc environment wraps commented-out
+        # historical code with a deliberately unbalanced `\vbox{`; oldcomments is a
+        # doc `comment`-like environment badness cannot know is opaque. Issue #71.
+        latex3/latex2e|base/ltfloat.dtx|format-error
         # Documents closed by macro expansion or a conditional branch: statically
         # unclosed without a TeX evaluator (a non-goal).
+        # source2e.tex closes via `\StopEventually{\end{document}}`; ltnews39.tex
+        # splits `\begin{small}`/`\end{small}` across two `\tubcommand{…}` args.
+        # Issue #71.
+        latex3/latex2e|base/doc/source2e.tex|format-error
+        latex3/latex2e|base/doc/ltnews39.tex|format-error
         latex3/latex3|l3kernel/testfiles-backend/support/driver.tex|format-error
         latex3/latex3|texmf/tex/latex/base/nfssfont.tex|format-error
         latex3/latex3|xpackages/xinitials/xinitials-test.tex|format-error

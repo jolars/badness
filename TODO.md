@@ -14,40 +14,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [x] **Environment relayout inside margined `.dtx` doc math drops the `%`
-  margin (issue #61, l3color.dtx + l3backend-draw.dtx).** Doc-prose display
-  math spans margined lines and holds a matrix/array: the `DISPLAY_MATH`/`MATH`
-  arms are `contains_doc_margin`-gated, but the nested `ENVIRONMENT` reached a
-  re-breaking arm, pushing `\end{array}`/`\end{bmatrix}` off its `%` margin (a
-  *meaning change*: the line becomes live code at package-load time) and
-  leaving pass 2 unparseable. Fixed by gating the two re-breaking arms the
-  nested environment could still reach on `contains_doc_margin`/`!is_math_env`:
-  the generic `lower_environment` arm (`\left\{\begin{array}` opened mid-line,
-  l3color) and the `is_margin_framed` arm (a `bmatrix` whose `\begin` opens a
-  `%␣␣␣␣` line is doc prose, not a docstrip frame — l3backend-draw). Regression
-  fixture `dtx_doc_margin_math` (`tests/format.rs`). The margin-framed math-env
-  gate rests on the curated `math` flag, mirroring the other structural routes.
-- [x] **An expl3 code group holding a docstrip guard flattened inline and
-  swallowed its closing brace (issue #61, the last latex3 idempotency
-  straggler, l3ldb.dtx).** A short group body carrying an inline `%<trace>`
-  guard (`{ %<trace> \foo:n {…} }`) was collapsed onto one line by
-  `lower_expl_group`. A guard is only recognized at line start, so off
-  line-start it re-lexed as an ordinary `%` comment that swallowed the rest of
-  the line — the closing brace included — unbalancing the enclosing group's
-  brace count on the next parse. So pass 1 saw a matched `GROUP` (continuation
-  indent, col 2) and pass 2 saw a lone `L_BRACE` with the body split into
-  sibling paragraphs (flat, col 0): the col 2 → col 0 drift. Root cause was the
-  flatten gate, not the continuation indent: `lower_expl_group` forced the
-  broken (multi-line) form only for a `COMMENT` in the body. Fixed by
-  extending that gate to `GUARD`/`DOC_MARGIN` too, so the guard rides its own
-  line where `lower_loose_token` pins it to column 0 and it stays a guard — the
-  outer group stays matched and the continuation indent holds on every pass.
-  Regression fixture `dtx_expl3_guarded_group` (`tests/format.rs`).
-- [x] **Math operator spacing.** A single space around each binary/relation atom
-  (`a+2*1^5` -> `a + 2 * 1^5`, `x=-b` -> `x = -b`); unary signs and `^`/`_` scripts
-  stay tight; command operators (`\cdot`, `\leq`) join via `math_atom_role`.
-  Group bodies normalized (`x^{a+b}` -> `x^{a + b}`). Scientific notation (`1e-5`)
-  is a known non-special-cased limitation.
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
@@ -57,39 +23,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   tight (`1/2`, per Knuth), and script-size content is conventionally tight
   overall, so the likely resolution is tight `/` everywhere and no operator
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
-- [x] **Sign after an opening bracket reads as binary** (surfaced by the issue
-  #56 triage on dalcde/cam-notes). `(-1)^n` rendered as `( - 1)^n`: a bare `(`
-  token classified as `Operand` in `math_atom_role`, so the `-` after it got
-  binary spacing instead of gluing as a unary sign. Fixed: a new
-  `ends_with_open_delimiter` (the same delimiter set `bracket_delta` recognizes,
-  but tracking only a *trailing* opener so `(x-1)` stays binary) feeds a
-  `prev_opener` flag threaded through `collect_math_pieces`/`lower_math_seq` into
-  `math_atom_role`, degrading a following `+`/`-` to unary — mirroring the
-  existing leading-sign rule (`-x`, `x=-b`). Covered by `math_op_spacing`.
-- [x] **Multi-line group relayout inserts a real space token in normal-catcode
-  macro code (surfaced by the issue #57 review).** `lower_bracketed` placed a
-  break directly after the opening `{` even where the source glued it to the
-  first body token (`\@parboxto{\let…` → `{` + newline + `\let…`). In normal
-  catcodes an end-of-line after a non-control-word token tokenizes as a *space*
-  (TeX reading state M), so a `\def` body gained a space token the author didn't
-  write — a silent meaning change in any context where space tokens matter
-  (horizontal mode; harmless only in vertical/math mode or before
-  `\ignorespaces`). The break *before* `}` and the mid-body breaks are safe:
-  they fall after control words, where state S skips the EOL. Pre-existing
-  (reproduced on the pre-#57 baseline with `\def\x{\aaa\bbb`/`\ccc}` in a plain
-  `.sty` and in `.dtx` macrocode alike) and invisible to the oracles — the
-  output is perfectly idempotent and lossless; no invariant checks *token*
-  equivalence. Inside expl3 regions the same layout is sound (`\ExplSyntaxOn`
-  sets `\endlinechar` to a catcode-9 space), so this item was about non-expl3
-  code only. **Fixed:** `lower_bracketed` now synthesizes the after-opener break
-  only when the source already had whitespace there (whitespace ↔ newline is
-  TeX-identical); a glued opener keeps its first body line on the `{` line, the
-  interior still indenting one step. Scoped to `L_BRACE` — an optional `[…]`
-  already swaps its interior newlines for spaces by design (`collapse_arg_group`,
-  issue #47). This path never runs inside an expl3 region (routed to
-  `lower_expl_group` earlier), so the sanctioned expl3 layout is untouched.
-  Pinned by `glued_brace_opener_keeps_first_body_token_on_its_line`
-  (`tests/format.rs`).
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`) the formatter dispatches whitespace and break policy on
@@ -145,46 +78,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   package-specific grammar, out of scope for the generic parser (decisions #1, #2;
   non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
   corpus, and AGENTS.md amendment), not a formatter patch.
-- [x] Column-spec-aware L/C/R cell alignment and `\multicolumn` for the table
-  environments. The `{lcr}` spec is parsed (`formatter::colspec`, layout-only,
-  bails to all-left on any unrecognized token; `p`/`m`/`b` read as left, `*{n}{}`
-  expands, `>{}`/`<{}`/`@{}`/`!{}` and rules produce no column) and threaded into the
-  grid renderer: each cell aligns L/C/R, a right/center last column pads on the left
-  only (no trailing whitespace), and a `\multicolumn{n}{spec}{…}` spans `n` columns
-  (excluded from single-column widths, aligned within its span by its own spec, wide
-  markup overflows rather than ballooning the data columns). Also handled:
-  `\cmidrule(lr){2-3}` paren trim specs (the `(lr)` `WORD` and detached `{2-3}` group
-  are consumed as part of the rule line) and the same-line `\\ \hline` form (a rule
-  sharing a physical line with the preceding `\\` is normalized onto its own
-  passthrough line).
-- [x] **The layout engine is whitespace-only: the single-token script brace strip
-  moved out of the formatter (architectural).** Tenet #1 draws the line — the
-  formatter is the *sole authority on layout*; content rewrites are autofixes. The
-  one rewrite that crossed it inside the layout engine (`x^{2}` -> `x^2`, the
-  redundant-brace strip in `lower_script`) is now the `redundant-script-braces`
-  Safe lint autofix (`Hint` severity — cosmetic and ubiquitous), the sibling of
-  `dollar-display-math` (`$$…$$` -> `\[…\]`). An audit of the whole `formatter/`
-  tree confirmed this was the **only** token-content change; everything else is
-  trivia or net-zero. **Correctness refinement found while implementing:** the
-  formatter's guard treated an operator-adjacent strip as safe *because the
-  formatter also inserts operator spacing* (`a_{p}/b` -> `a_p / b`). A raw `--fix`
-  edit has no such spacing, and badness globs a catcode-12 run into one `WORD`, so
-  unspaced `a_p/b` re-lexes `_{p/a}` — a meaning change. The lint rule therefore
-  drops that spacing-dependent widening and strips only when the following
-  character cannot glue (verified by dumping parse trees). `lower_script` and its
-  four helpers (`lower_stripped_group`/`strippable_script_arg`/
-  `next_token_safe_after`/`is_lone_control_word`) were deleted; single-token script
-  groups now fall through to `lower_math_group` (braces kept). The two
-  `math_strip_*` fixtures were renamed `math_keep_*` (they now assert
-  brace-retention). Payoff, landed: a new **whitespace-only** invariant replaces
-  the old "meaning preserved, checked by fixtures" posture — `assert_format_invariants`
-  (`tests/format.rs`) asserts the concatenated text of non-trivia tokens is
-  unchanged across `CLEAN_CASES` and the whole clean corpus (comparing text, not
-  token boundaries, tolerates the math-split re-grouping). The oracle immediately
-  caught a pre-existing edge (a bare trailing `\` folds the mandatory final newline
-  into a `\<newline>` control symbol — the final-newline rule, handled by comparing
-  against the newline-normalized input). Recorded in `AGENTS.md` (Invariants +
-  tenet #1 mirror) and `docs/src/development/{architecture,formatter,linter}.md`.
 
 ## Linter
 

@@ -12,33 +12,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **`\path|…|` delimiter form is a deliberate false negative (follow-up to
-  issue #53).** The url package's `\path|…|` no longer captures as verbatim,
-  sacrificed because TikZ's `\path (0,0)` collision is far more common. A body
-  with `_`/`$`/`%` inside now mis-lexes and may draw diagnostics. If a scan
-  flags it, the fix is one line: `"verbatimDelimited": true` on `path` in
-  `data/signatures.json` — but that reopens the TikZ collision. A user who
-  redefines `\path` is now covered by the definition-shadowing item above; only
-  a document relying on the url package's genuine `\path|…|` is still affected.
-- [ ] **pgfmanual and pgf source stay format-error (issue #63,
-  record-only).** The `pgf-tikz/pgf` scan surfaces two non-goal families,
-  now scan-allowlisted:
-  - *pgfmanual `\input` fragments* (`doc/generic/pgf/pgfmanual-en-*.tex`) are
-    chunks of `pgfmanual.tex`, not standalone documents. The parent preamble
-    (`pgfmanual-en-macros.tex`) makes `|` an active short-verb character
-    (`\gdef|{...\verb|...}`, not `\MakeShortVerb`) and defines the
-    `codeexample` verbatim environment; neither is visible to a fragment
-    parsed in isolation, so the verbatim `{`/`\begin` spans read as unbalanced.
-  - *pgf source* leans on catcode-rebinding bootstrap regions (`|`/`/`
-    rebound to the escape character with `\` made `other`; `[`/`]`/`%`/`"`
-    reassigned) — general `\catcode` handling is a non-goal — plus the same
-    control-word `\def`-body gap as nfssfont above: `\def\foo{\begin{env}}` /
-    `\def\endfoo{\end{env}}` split-environment defs (pgfautomata.sty,
-    tikzlibraryexternal.code.tex, tikzexternal.sty's `\end`-delimited
-    parameter text) whose bodies badness does not yet treat as macro code.
-    Closing that gap needs `\def` parameter-text parsing (decision #3);
-    until then, record, don't fix.
-
 ## Formatter
 
 - [x] **Environment relayout inside margined `.dtx` doc math drops the `%`

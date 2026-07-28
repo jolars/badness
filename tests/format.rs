@@ -645,6 +645,15 @@ const DTX_FIXTURES: &[&str] = &[
     // unbalancing the enclosing group on the next parse. Forcing the broken form
     // keeps the guard column-0 pinned and the layout a fixed point.
     "dtx_expl3_guarded_group",
+    // A *fully*-guarded expl3 chunk (a docstrip release block, every line led by
+    // `%<latexrelease>`) is preserved verbatim, not block-relaid (issue #72,
+    // latex2e `ltcmdhooks.dtx`): the guards pin every line to column 0, so
+    // reflowing would strand a delimiter or wrapped token onto an unguarded line
+    // — a docstrip meaning change that also never reaches a fixed point. The
+    // surrounding *unguarded* expl3 code still formats (its `\cs_new` body
+    // collapses and gains l3 brace spacing), proving the region subtraction is
+    // surgical.
+    "dtx_expl3_guarded_release_block",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

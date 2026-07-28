@@ -1,0 +1,21 @@
+% \begin{macrocode}
+\ExplSyntaxOn
+\cs_new_protected:Npn \foo_aux:n #1
+  {
+    \tl_set:Nn \l_tmpa_tl {#1}
+  }
+%<latexrelease>\IncludeInRelease{2021/06/01}{\foo_aux:n}%
+%<latexrelease>                 {Old~behaviour}
+%<latexrelease>\cs_gset_protected:Npn \foo_aux:n #1
+%<latexrelease>  {
+%<latexrelease>    \bar_if:nTF {#1}
+%<latexrelease>      {
+%<latexrelease>        \baz:n {#1}
+%<latexrelease>      }
+%<latexrelease>      {
+%<latexrelease>        \qux:n {#1}
+%<latexrelease>      }
+%<latexrelease>  }
+%<latexrelease>\EndIncludeInRelease
+\ExplSyntaxOff
+% \end{macrocode}

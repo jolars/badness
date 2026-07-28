@@ -401,7 +401,8 @@ fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
         regions.push(TextRange::new(start, root.text_range().end()));
     }
     let regions = intersect_macrocode_bodies(root, regions);
-    subtract_doc_margin_lines(root, regions)
+    let regions = subtract_doc_margin_lines(root, regions);
+    subtract_guarded_line_runs(root, regions)
 }
 
 /// In a `.dtx` (any `DOC_MARGIN` token present), restrict the expl3 regions to
@@ -503,11 +504,88 @@ fn subtract_doc_margin_lines(root: &SyntaxNode, regions: Vec<TextRange>) -> Vec<
     if let Some(start) = hole_start.take() {
         holes.push(TextRange::new(start, root.text_range().end()));
     }
+    subtract_holes(regions, &holes)
+}
+
+/// Remove every maximal run of two-or-more consecutive docstrip-guarded lines
+/// (`%<…>…`) from the expl3 regions. A fully-guarded chunk (a docstrip release
+/// block, `%<latexrelease>…%<latexrelease>\EndIncludeInRelease`, or any run of
+/// `%<*name>`/`%<name>` lines) pins **every** line to column 0 by its guard, so
+/// the expl3 block layout cannot own it: reflowing indents a delimiter or wraps a
+/// long line off its guard, stranding code onto an *unguarded* line — a docstrip
+/// meaning change (the code leaves its guard's scope) that also re-parses
+/// differently, so the layout never reaches a fixed point (issue #72, latex2e
+/// `ltcmdhooks.dtx`). Handing such a run to the generic (non-expl3) lowering
+/// preserves it verbatim, which is idempotent and meaning-preserving.
+///
+/// The two-line threshold keeps an *isolated* guarded line (a lone `%<trace> …`
+/// statement amid unguarded code, or a lone `%<*name>` block marker) in-region,
+/// where it lays out on its own line as before — such a line's content stays on
+/// its line and never strands. A no-op for non-`.dtx` documents (no `GUARD`
+/// tokens).
+fn subtract_guarded_line_runs(root: &SyntaxNode, regions: Vec<TextRange>) -> Vec<TextRange> {
+    if regions.is_empty() {
+        return regions;
+    }
+    // One pass over the leaves grouping guard-led source lines into runs: a line
+    // is guard-led when its first token is a `GUARD`. A run of two or more
+    // adjacent guard-led lines becomes one hole spanning them (each line reaches
+    // through its terminating newline).
+    let mut holes: Vec<TextRange> = Vec::new();
+    let mut at_line_start = true;
+    let mut line_is_guard = false;
+    let mut cur_line_start = TextSize::new(0);
+    // The run of consecutive guard-led lines in progress: (start, end, line count).
+    let mut run: Option<(TextSize, TextSize, usize)> = None;
+    fn flush(run: &mut Option<(TextSize, TextSize, usize)>, holes: &mut Vec<TextRange>) {
+        if let Some((start, end, count)) = run.take()
+            && count >= 2
+        {
+            holes.push(TextRange::new(start, end));
+        }
+    }
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        if at_line_start {
+            cur_line_start = token.text_range().start();
+            line_is_guard = token.kind() == SyntaxKind::GUARD;
+            at_line_start = false;
+        }
+        if token.kind() == SyntaxKind::NEWLINE {
+            let line_end = token.text_range().end();
+            if line_is_guard {
+                match run {
+                    // Adjacent to the run in progress (its end abuts this line's
+                    // start): extend it.
+                    Some((start, end, count)) if end == cur_line_start => {
+                        run = Some((start, line_end, count + 1));
+                    }
+                    // A gap (a non-guarded line intervened) or the first guarded
+                    // line: close any prior run and open a fresh one.
+                    _ => {
+                        flush(&mut run, &mut holes);
+                        run = Some((cur_line_start, line_end, 1));
+                    }
+                }
+            } else {
+                flush(&mut run, &mut holes);
+            }
+            at_line_start = true;
+        }
+    }
+    flush(&mut run, &mut holes);
+    subtract_holes(regions, &holes)
+}
+
+/// Interval subtraction of `holes` from `regions`. Both lists must be sorted and
+/// pairwise disjoint; the output is too (the region binary-search lookups rely on
+/// that). Shared by the two region-subtraction passes above.
+fn subtract_holes(regions: Vec<TextRange>, holes: &[TextRange]) -> Vec<TextRange> {
     if holes.is_empty() {
         return regions;
     }
-    // Interval subtraction; both lists are sorted and disjoint, so the output is
-    // too (the binary-search lookups rely on that).
     let mut out = Vec::with_capacity(regions.len());
     let mut h = holes.iter().peekable();
     for region in regions {

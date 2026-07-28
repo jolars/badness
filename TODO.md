@@ -142,15 +142,6 @@ completion items (VS Code-only), and sub/superscript history completion
   config knob only if a concrete need appears; reserve `wrap = "minimal"` for a
   truly minimal mode that only reflows over-long lines.
 
-### Navigation & structure
-
-- [x] Selection ranges (`textDocument/selectionRange`)—expand-selection from
-  the CST's node hierarchy (group → argument → command → environment). Subsumes
-  texlab's `findEnvironments` command: the enclosing-environment stack falls out
-  of the CST-hierarchy expansion. (`lsp/selection_range.rs`: leaf token +
-  `parent_ancestors` up to `ROOT`, consecutive-equal ranges collapsed; single-file
-  read-pool job mirroring folding.)
-
 ### Completion
 
 Badness offers command, environment, label, cite-key, bib field/type, and file
@@ -158,22 +149,6 @@ completion (`src/completion.rs`, `src/bib/completion.rs`). texlab's completion
 breadth is its biggest lead (`crates/completion/providers/`); the specialized
 sources below are missing.
 
-- [x] **Color name + model, TikZ/PGF library completion**—small static datasets
-  (`data/colors.json`, `data/tikz_libraries.json`) for
-  `\color`/`\textcolor`/`\definecolor` and `\usetikzlibrary`/`\usepgflibrary`.
-  Color-name completion also merges document `\definecolor`/`\colorlet` names.
-  (Model completion is brace-arg only; the optional-arg form `\color[rgb]{…}` is
-  not yet classified.)
-- [x] **Argument-value enum completion** for fixed enumerated argument choices
-  (`\pagestyle`, `\pagenumbering`, `\bibliographystyle`, `\theoremstyle`,
-  `\mathversion`, `\fontshape`/`\fontseries`). A curated side dataset
-  (`data/arg_enums.json`) keyed by command name then *brace*-group index, consumed
-  by completion only (`semantic::signature::arg_enum_values`)—it is *not* a field
-  on the formatter's `ArgSpec` (cold completion data stays out of the hot `Copy`
-  struct), mirroring the color/TikZ datasets. Static built-ins only; merging
-  document-defined values (e.g. `\fancypagestyle` names into `\pagestyle`,
-  `\newtheoremstyle` into `\theoremstyle`) the way colors merge `\definecolor` is a
-  clean follow-up on top of the table.
 - [ ] *(Design decision)* **Package-scoped command completion.** texlab suggests
   only commands provided by the loaded packages (a package→command component
   model). Badness's signature DB is flat (curated + CWL + scanned); scoping

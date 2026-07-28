@@ -1,0 +1,13 @@
+% A visible non-verbatim redefinition of a built-in braced-verbatim command
+% (\code, jss) shadows the built-in: \code{...} then lexes as an ordinary
+% group the formatter is free to lay out, not an opaque VERB (issue #53
+% follow-up). Cross-file redefinitions stay a tolerated false negative.
+\newcommand{\code}[1]{\ensuremath{\mathsf{#1}}}
+
+The sequence \code{code} is now an ordinary macro call, so its argument is a
+real group and the formatter may reflow the surrounding text just like any
+other command with a mandatory argument, wrapping across the line as needed.
+
+A redefined \url also lexes normally:
+\renewcommand{\url}[1]{\texttt{#1}}
+See \url{example} for details.

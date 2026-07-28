@@ -12,31 +12,29 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **Braced-form verbatim capture still collides with user macros (follow-up
-  to issue #53).** The #53 fix made the `\verb`-style delimiter form opt-in per
+- [x] **Braced-form verbatim capture collided with user macros (follow-up to
+  issue #53).** The #53 fix made the `\verb`-style delimiter form opt-in per
   curated signature (`verbatimDelimited`), so `$\code:A+B$` and TikZ
-  `\path (0,0)` lex normally. But the *braced* form still keys on the bare name:
-  a document defining its own `\code`/`\path`/`\url` that writes `\code{x}` gets
-  `{x}` captured as an opaque `VERB`. The failure is benign (lossless, no
-  diagnostics, the formatter just won't touch the body — which is why it was
-  left), but semantically wrong. Candidate robust fixes, both deferred until a
-  real scan report shows the collision:
-  - *Definition shadowing:* let a visible non-verbatim `\newcommand{\code}`
-    suppress the built-in verbatim flag — the definition scanner's two-pass
-    parse already fingerprints definitions, so the machinery half-exists.
-    Cross-file definitions (HoTT keeps `\code` in `macros.tex`) would still be
-    invisible to a per-file parse.
-  - *Class/package gating:* treat `\code` as verbatim only when the document
-    class is provably jss (statically readable from `\documentclass`). Adds
-    scope-awareness to a lexer decision — weigh against decision #2 before
-    building.
+  `\path (0,0)` lex normally. The *braced* form still keyed on the bare name: a
+  document redefining its own `\code`/`\path`/`\url` and writing `\code{x}` got
+  `{x}` captured as an opaque `VERB`. Fixed via **definition shadowing**: the
+  pass-1 scan records a visible non-verbatim redefinition of a built-in
+  braced-verbatim name as a suppression in the lexer's `VerbCtx`, so pass 2 lexes
+  `\code{…}` as an ordinary group (`parser::core::verbatim_ctx`,
+  `parser::lexer::VerbCtx`). Remaining caveat: **cross-file** redefinitions (HoTT
+  keeps `\code` in `macros.tex`) stay invisible to the per-file parse — a
+  tolerated false negative, since the parse is a pure function of one file's text
+  (decision #7). The alternative *class/package gating* (treat `\code` as
+  verbatim only under a provably-jss `\documentclass`) was declined: it pushes
+  scope-awareness into a lexer decision, against decision #2.
 - [ ] **`\path|…|` delimiter form is a deliberate false negative (follow-up to
   issue #53).** The url package's `\path|…|` no longer captures as verbatim,
   sacrificed because TikZ's `\path (0,0)` collision is far more common. A body
   with `_`/`$`/`%` inside now mis-lexes and may draw diagnostics. If a scan
   flags it, the fix is one line: `"verbatimDelimited": true` on `path` in
-  `data/signatures.json` — but that reopens the TikZ collision, so it likely
-  wants the definition-shadowing item above instead.
+  `data/signatures.json` — but that reopens the TikZ collision. A user who
+  redefines `\path` is now covered by the definition-shadowing item above; only
+  a document relying on the url package's genuine `\path|…|` is still affected.
 - [ ] **doc.sty-family escape-character swaps are statically unparseable
   (issue #60, record-only).** `doc.sty`/`doc-2016`/`doc-2021`/`source2edoc.cls`
   self-document with `\catcode`\!=0`/`\catcode`\|=0` regions where `!` and `|`

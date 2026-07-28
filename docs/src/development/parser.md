@@ -44,6 +44,16 @@ catcode-changing definitions, pass 2 re-lexes with those names. This is
 conservative by construction: a false positive suppresses real diagnostics, so
 we prefer false negatives.
 
+The same pass-1 scan handles the inverse collision (follow-up to issue #53): a
+built-in braced-verbatim command name (`\code`, `\url`, `\path`, …) that the
+file **redefines** to an ordinary, non-verbatim macro is recorded as a
+*suppression* in the lexer's `VerbCtx`, so pass 2 lexes `\code{…}` as an
+ordinary group rather than an opaque `VERB`. Only the braced form is affected;
+the built-in capture still applies when the file does not redefine the name.
+Because the scan is a pure function of a single file's text (decision #7), a
+redefinition living in another file (e.g. HoTT's `\code` in `macros.tex`)
+remains a tolerated false negative.
+
 ### `\left`/`\right` delimiter isolation
 
 The delimiter following `\left` or `\right` is emitted as its own token; the

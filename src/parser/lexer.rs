@@ -30,7 +30,7 @@
 //! None of these resolve macro meaning; they are surface lexing concerns (in
 //! TeX, catcodes genuinely change in these regions).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 
@@ -106,23 +106,42 @@ impl From<LatexFlavor> for LexConfig {
 /// convention. An environment entry maps a name to its full argument shape (an
 /// environment's args are all leading; its body follows the `\begin{…}` arguments), so
 /// presence in `environments` means the environment is verbatim.
+///
+/// `suppressed` names the inverse case: commands the current file *redefines* to an
+/// ordinary (non-verbatim) macro whose name collides with a built-in braced-verbatim
+/// command (`\code`, `\url`, `\path`, …). A local definition shadows the built-in, so
+/// [`lex_verbatim_command`] must lex `\code{…}` as an ordinary group rather than capture
+/// the built-in `VERB` (follow-up to issue #53). We read only static definition facts (a
+/// visible `\newcommand`/`\def` with no catcode signal), never macro meaning.
 #[derive(Debug, Default, Clone)]
 pub struct VerbCtx {
     commands: HashMap<SmolStr, Vec<ArgSpec>>,
     environments: HashMap<SmolStr, Vec<ArgSpec>>,
+    suppressed: HashSet<SmolStr>,
 }
 
 impl VerbCtx {
-    /// Whether the context names no user verbatim constructs (the common case — the
-    /// second parse pass is skipped entirely).
+    /// Whether the context names no user verbatim constructs *and* no suppressions (the
+    /// common case — the second parse pass is skipped entirely).
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && self.environments.is_empty()
+        self.commands.is_empty() && self.environments.is_empty() && self.suppressed.is_empty()
     }
 
     /// Record that `name` is a verbatim-argument command with the given `leading`
     /// (non-verbatim) argument shape.
     pub(crate) fn insert(&mut self, name: SmolStr, leading: Vec<ArgSpec>) {
         self.commands.insert(name, leading);
+    }
+
+    /// Record that `name` — a built-in braced-verbatim command — is redefined
+    /// non-verbatim in this file, so its built-in verbatim capture is suppressed.
+    pub(crate) fn suppress(&mut self, name: SmolStr) {
+        self.suppressed.insert(name);
+    }
+
+    /// Whether `name`'s built-in verbatim capture is suppressed by a local redefinition.
+    fn is_suppressed(&self, name: &str) -> bool {
+        self.suppressed.contains(name)
     }
 
     /// Record that environment `name` is verbatim, with the given argument shape (all
@@ -1094,6 +1113,11 @@ fn lex_verbatim_command(
     let (leading, delimited): (&[ArgSpec], bool) = match ctx.leading_args(name) {
         Some(args) => (args, false),
         None => {
+            // A visible non-verbatim redefinition in this file shadows the built-in, so
+            // don't capture — lex the braced argument as an ordinary group (issue #53).
+            if ctx.is_suppressed(name) {
+                return None;
+            }
             let sig = builtin().command(name).filter(|c| c.verbatim)?;
             (&sig.args, sig.verbatim_delimited)
         }

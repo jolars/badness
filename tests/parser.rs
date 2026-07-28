@@ -508,6 +508,29 @@ fn undefined_command_argument_is_not_verbatim() {
 }
 
 #[test]
+fn redefined_braced_verbatim_command_lexes_as_group() {
+    // A document that *redefines* a built-in braced-verbatim command (`\code`, jss) to
+    // an ordinary macro shadows the built-in: `\code{x_y}` must lex as an ordinary group
+    // with token children, not an opaque `VERB` (follow-up to issue #53). The second
+    // parse pass records the non-verbatim redefinition as a suppression.
+    let out = tree("\\newcommand{\\code}{\\ensuremath{\\mathsf{code}}}\n\\code{x_y}\n");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(!out.contains("VERB@"), "{out}");
+    // The argument is a real group: its `_` lexes as an ordinary token, not swallowed.
+    assert!(out.contains("UNDERSCORE@"), "{out}");
+}
+
+#[test]
+fn redefined_delimited_verbatim_command_lexes_normally() {
+    // The suppression covers `verbatimDelimited` built-ins too: a redefined `\url`
+    // captures neither its braced nor its `\verb`-style delimiter form.
+    let out = tree("\\newcommand{\\url}[1]{\\texttt{#1}}\n\\url{a_b} and \\url|a_b|\n");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(!out.contains("VERB@"), "{out}");
+    assert!(out.contains("UNDERSCORE@"), "{out}");
+}
+
+#[test]
 fn standalone_verb_after_command_is_not_captured() {
     // A self-contained `\verb…` token (text begins with `\`) following another
     // command must stay a sibling — it is no one's argument. Only a verbatim

@@ -11,6 +11,7 @@ use crate::parser::grammar;
 use crate::parser::lexer::{LatexFlavor, LexConfig, VerbCtx, lex_with};
 use crate::parser::tree_builder::build_tree;
 use crate::semantic::define::scan_definitions;
+use crate::semantic::signature::builtin;
 use crate::syntax::SyntaxNode;
 
 /// A parsed document: the green tree plus any syntax errors gathered alongside
@@ -83,12 +84,23 @@ fn parse_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Parse {
 /// already resolved (`scan_definitions`); a command's `args` hold its leading,
 /// non-verbatim arguments and an environment's `args` its (all leading) arguments —
 /// the exact shapes the lexer needs.
+///
+/// The inverse case also feeds the context: a command the file redefines *non-verbatim*
+/// whose name collides with a built-in braced-verbatim command (`\code`, `\url`, …) is
+/// recorded as *suppressed*, so the local definition shadows the built-in and pass 2
+/// lexes `\code{…}` as an ordinary group (follow-up to issue #53).
 fn verbatim_ctx(root: &SyntaxNode) -> VerbCtx {
     let db = scan_definitions(root);
     let mut ctx = VerbCtx::default();
     for name in db.command_names() {
-        if let Some(sig) = db.command(name).filter(|sig| sig.verbatim) {
-            ctx.insert(SmolStr::new(name), sig.args.to_vec());
+        match db.command(name) {
+            Some(sig) if sig.verbatim => ctx.insert(SmolStr::new(name), sig.args.to_vec()),
+            // Redefined non-verbatim but shadowing a built-in verbatim command: suppress
+            // the built-in capture.
+            Some(_) if builtin().command(name).is_some_and(|sig| sig.verbatim) => {
+                ctx.suppress(SmolStr::new(name));
+            }
+            _ => {}
         }
     }
     for name in db.environment_names() {

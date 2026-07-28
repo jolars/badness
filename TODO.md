@@ -12,21 +12,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [x] **Braced-form verbatim capture collided with user macros (follow-up to
-  issue #53).** The #53 fix made the `\verb`-style delimiter form opt-in per
-  curated signature (`verbatimDelimited`), so `$\code:A+B$` and TikZ
-  `\path (0,0)` lex normally. The *braced* form still keyed on the bare name: a
-  document redefining its own `\code`/`\path`/`\url` and writing `\code{x}` got
-  `{x}` captured as an opaque `VERB`. Fixed via **definition shadowing**: the
-  pass-1 scan records a visible non-verbatim redefinition of a built-in
-  braced-verbatim name as a suppression in the lexer's `VerbCtx`, so pass 2 lexes
-  `\code{…}` as an ordinary group (`parser::core::verbatim_ctx`,
-  `parser::lexer::VerbCtx`). Remaining caveat: **cross-file** redefinitions (HoTT
-  keeps `\code` in `macros.tex`) stay invisible to the per-file parse — a
-  tolerated false negative, since the parse is a pure function of one file's text
-  (decision #7). The alternative *class/package gating* (treat `\code` as
-  verbatim only under a provably-jss `\documentclass`) was declined: it pushes
-  scope-awareness into a lexer decision, against decision #2.
 - [ ] **`\path|…|` delimiter form is a deliberate false negative (follow-up to
   issue #53).** The url package's `\path|…|` no longer captures as verbatim,
   sacrificed because TikZ's `\path (0,0)` collision is far more common. A body
@@ -35,41 +20,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `data/signatures.json` — but that reopens the TikZ collision. A user who
   redefines `\path` is now covered by the definition-shadowing item above; only
   a document relying on the url package's genuine `\path|…|` is still affected.
-- [ ] **doc.sty-family escape-character swaps are statically unparseable
-  (issue #60, record-only).** `doc.sty`/`doc-2016`/`doc-2021`/`source2edoc.cls`
-  self-document with `\catcode`\!=0`/`\catcode`\|=0` regions where `!` and `|`
-  are the escape characters (`!    \begin{macrocode*}`,
-  `|gdef|xmacro@code#1%`), and `shortvrb.sty`/`latexrelease.sty`/`ltxdoc.cls`
-  play similar catcode games (ltxdoc makes `/` an escape character to define
-  its old-comments scanner). General `\catcode` handling is a non-goal
-  (AGENTS.md decision #1), so these files stay format-error; nothing to fix in
-  badness. Candidate for a scan-level allowlist if the recurring issue noise
-  matters.
-- [ ] **docstrip's `\catcode`\%=12` trick defeats the comment lexer (issue
-  #60, record-only).** `docstrip.tex` (both copies) does
-  `{\catcode`\%=12 \gdef\perCent{%}}` — with `%` demoted to "other", the body
-  `{%}` is three ordinary characters, but badness's lexer reads the `%` as a
-  comment that swallows the closing `}`, leaving one unclosed-`{` diagnostic.
-  Same non-goal boundary as the doc.sty item; record, don't fix.
-- [ ] **Documents closed by macro expansion or conditionals (issue #60,
-  record-only).** The last latex3 format-error stragglers all need TeX
-  evaluation (a non-goal) or are genuinely broken upstream:
-  - *Macro-ended documents:* driver.tex ends with l3build's `\END`,
-    xinitials-test.tex with `\stop`, nfssfont.tex with a custom
-    `\def\bye{\end{document}}` — no literal `\end{document}`, so the
-    `document` environment is statically unclosed (and nfssfont's in-body
-    `\end{document}` sits in a `\def` body whose name is a control *word*,
-    outside the control-symbol rule of decision #3).
-  - *Conditional-branch structure:* xo-pfloat.tex opens `table*` in one
-    `\ifnum` branch and `table`+`minipage` in the other, closing them in a
-    matching conditional later; testpage.tex hides `\end{document}` in an
-    `\ifthenelse` branch group; xo-balance.tex has a second `\end{document}`
-    past the first (dead content TeX never reads).
-  - *Genuinely broken upstream:* xo-page.dtx double-opens `\begin{macro}` and
-    comments out the balancing close (`%% \end{macro}` — the second `%` is a
-    real comment even in the doc layer); galley2.dtx's doc layer carries an
-    early-exit `% \end{document}` whose `\begin` lives in the (already
-    closed) driver section.
 - [ ] **pgfmanual and pgf source stay format-error (issue #63,
   record-only).** The `pgf-tikz/pgf` scan surfaces two non-goal families,
   now scan-allowlisted:

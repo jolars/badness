@@ -113,7 +113,11 @@ fn is_definition_body_command(text: &str) -> bool {
 /// benignly as a generic command and keeps its current shape. A closed,
 /// curated set read as a static fact, mirroring [`is_definition_body_command`];
 /// the definition is never executed.
-fn is_def_prefix_command(text: &str) -> bool {
+///
+/// Also read by the formatter's expl3 region gate ([`crate::formatter`]): a toggle
+/// spelling immediately preceded by one of these is a *definee*, never an executed
+/// catcode switch, so it must not open a formatter-owned region.
+pub(crate) fn is_def_prefix_command(text: &str) -> bool {
     matches!(text, "\\def" | "\\gdef" | "\\edef" | "\\xdef")
 }
 

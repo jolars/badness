@@ -165,6 +165,11 @@ subtraction the formatter applies to region ownership.
 
 The matching *whitespace* catcodes inside an expl3 region are a **formatter**
 concern, not a parser one; see [Formatter](formatter.md#expl3-code-formatting).
+That page's *positional gate* narrows which toggles license formatter layout
+ownership: the toggle *name* set stays shared here (so the two never drift), but
+only the formatter also requires the toggle to be a top-level statement, because
+mis-lexing a name is lossless and cosmetic whereas mis-owning layout rewrites
+meaning (issue #69).
 
 ### Char-constant isolation
 

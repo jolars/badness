@@ -556,10 +556,15 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // (`{ #1 }`), and `#1#2` parameters glue tight.
     ("expl_function_def", "sty"),
     ("expl_inline_vs_block_groups", "sty"),
-    // A region opening mid-line (`\protected\def\ProvidesExplPackage`, issue
-    // #58): the boundary begins a fresh line, and the run-final newline feeds
-    // that separator instead of stacking into a growing blank line.
+    // The positional gate (issue #69): a `\ProvidesExplPackage` in `\def`-definee
+    // position (`\protected\def\ProvidesExplPackage`) is tokenized, never executed,
+    // so it opens no formatter-owned region — the loader body is left to generic
+    // layout, not relaid as expl3 code (which would rewrite real space tokens).
     ("expl_region_midline_open", "sty"),
+    // The positional gate, stored-toggle case (issue #69): an `\ExplSyntaxOn` stored
+    // inside a definition body is never executed at load, so it opens no region; the
+    // following top-level code with `{ x }`/`[ y ]` shapes is left untouched.
+    ("expl_region_false_positive", "sty"),
     // Comments in expl3 code: a *trailing* comment rides its statement line
     // zero-width (rustfmt-style — the line may overflow, but prose length
     // never re-breaks code and the comment is never relocated), and an

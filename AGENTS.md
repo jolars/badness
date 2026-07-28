@@ -72,6 +72,19 @@ links to the Development page carrying its full rationale, examples, and provena
    references, is in `parser.md` (§ *Sanctioned lexer modes*). The related expl3 *code
    formatting* is a formatter concern (`formatter.md`).
 
+   - **expl3 toggles: shared name set, formatter-only positional gate.** The lexer and
+     the formatter read the *same* fixed toggle *name* set (`parser::lexer::expl_toggle`)
+     so a new spelling is recognized in both and they never drift. But only the
+     *formatter* additionally requires a toggle to be a **top-level statement**
+     (`toggle_is_top_level`: not a `\def`/`\let` definee, not stored inside a
+     group/definition body) before it opens a layout-owned region. Rationale (issue #69,
+     `l3kernel/expl3.sty`): a toggle spelling TeX never executes is a false positive of
+     the static model, and the byte-level losslessness/idempotency oracles cannot catch
+     the resulting damage. The lexer keeps the naive name-only model on purpose—mis-lexing
+     a name in letter mode only splits CST tokens (lossless, cosmetic), whereas mis-owning
+     layout rewrites real space tokens (meaning). So only the higher-stakes side gates.
+     Detail in `formatter.md` (§ *Positional gate on layout ownership*).
+
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
    a command means; the semantic layer is a signature database assigning arity,
    verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See

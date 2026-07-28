@@ -52,6 +52,7 @@ use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
 use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
+use crate::parser::grammar::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
 use crate::semantic::{ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, scan_definitions};
@@ -362,37 +363,105 @@ fn ranges_overlap(a: TextRange, b: TextRange) -> bool {
     a.start() < b.end() && b.start() < a.end()
 }
 
-/// The byte ranges of the document's expl3 regions, in document order. A region
-/// runs from an opener (`\ExplSyntaxOn`, or a `\ProvidesExpl*` declaration, which
-/// opens expl3 for the rest of the file) through the matching `\ExplSyntaxOff`
-/// (inclusive of both toggle commands), or to end of input when unclosed. The
-/// toggle set is read from [`expl_toggle`] — the *same* fixed set the lexer flips
-/// its `expl_syntax` flag on — so the two never drift.
+/// The nearest preceding sibling *element* of `node`, skipping `WHITESPACE`/`NEWLINE`
+/// trivia. Used by the definee gate to find the command a toggle would be the
+/// definee of.
+fn prev_nontrivia_element(node: &SyntaxNode) -> Option<SyntaxElement> {
+    let mut prev = node.prev_sibling_or_token();
+    while let Some(el) = prev {
+        if let SyntaxElement::Token(t) = &el
+            && is_collapsible_trivia(t.kind())
+        {
+            prev = el.prev_sibling_or_token();
+            continue;
+        }
+        return Some(el);
+    }
+    None
+}
+
+/// Whether an expl3 toggle `CONTROL_WORD` sits at *top-level statement* position, so
+/// TeX actually executes it and switches catcodes at load. Two shapes are rejected
+/// (issue #69), both false positives of the name-only model:
+///
+/// - **Definee position:** the toggle command's immediately-preceding non-trivia
+///   sibling is a `\def`/`\let`-family primitive, so the toggle is the control
+///   sequence being defined (`\protected\def\ProvidesExplPackage{…}`), never run.
+/// - **Nested in a group / definition body:** an ancestor of the toggle's command is
+///   a `GROUP` or `OPTIONAL`, so the toggle is tokenized into a replacement text and
+///   executed — if ever — only when that macro runs, not at load.
+///
+/// The lexer's letter mode keeps the naive name-only model: mis-lexing a name only
+/// splits CST tokens (lossless, cosmetic); only mis-*owning* layout rewrites meaning.
+fn toggle_is_top_level(token: &SyntaxToken) -> bool {
+    let Some(command) = token.parent() else {
+        return true;
+    };
+    if command.kind() != SyntaxKind::COMMAND {
+        // Not the head of a command node — leave the naive model in charge.
+        return true;
+    }
+    // Rule 1: nested inside an attached group or definition body.
+    for ancestor in command.ancestors().skip(1) {
+        match ancestor.kind() {
+            SyntaxKind::GROUP | SyntaxKind::OPTIONAL => return false,
+            SyntaxKind::ROOT => break,
+            _ => {}
+        }
+    }
+    // Rule 2: definee of a `\def`/`\let`-family command. `command_name` strips the
+    // leading `\`, so reconstruct it for the shared curated set.
+    if let Some(SyntaxElement::Node(prev)) = prev_nontrivia_element(&command)
+        && prev.kind() == SyntaxKind::COMMAND
+        && let Some(name) = command_name(&prev)
+        && (is_def_prefix_command(&format!("\\{name}"))
+            || matches!(name.as_str(), "let" | "futurelet"))
+    {
+        return false;
+    }
+    true
+}
+
+/// The byte ranges of the document's expl3 regions, in document order. A region runs
+/// from an opener (`\ExplSyntaxOn`, or a `\ProvidesExpl*` declaration, which opens
+/// expl3 for the rest of the file) through the matching `\ExplSyntaxOff` (inclusive
+/// of both toggle commands), or to end of input when unclosed. The toggle *name set*
+/// is read from [`expl_toggle`] — the same fixed set the lexer flips its `expl_syntax`
+/// flag on — but the formatter additionally applies a *positional* gate
+/// ([`toggle_is_top_level`]): only a top-level toggle opens a formatter-owned region.
+/// The name set stays shared so the two never drift; the positional layout-ownership
+/// rule is the formatter's alone (issue #69, `AGENTS.md`).
 ///
 /// Matches only [`SyntaxKind::CONTROL_WORD`] tokens, so a `\ExplSyntaxOn` written
 /// inside `\verb`/a comment (a `VERB`/`COMMENT` token, never a `CONTROL_WORD`) is
 /// not a toggle, exactly as in the lexer. The CST is untouched; this is a pure
 /// read-only side channel (the sanctioned byte-range pattern, `AGENTS.md` #4).
 fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
-    let mut regions = Vec::new();
+    let mut regions: Vec<TextRange> = Vec::new();
     let mut open: Option<TextSize> = None;
     for token in root
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
         .filter(|t| t.kind() == SyntaxKind::CONTROL_WORD)
     {
-        match expl_toggle(token.text()) {
+        // Positional gate: a gated-out toggle is skipped entirely (`On` and `Off`
+        // alike), so a stored or definee toggle neither opens nor closes a region.
+        let toggle = match expl_toggle(token.text()) {
+            Some(t) if toggle_is_top_level(&token) => t,
+            _ => continue,
+        };
+        match toggle {
             // A redundant inner `\ExplSyntaxOn` does not restart the region (the
             // lexer's flag is an idempotent set-true).
-            Some(ExplToggle::On) if open.is_none() => open = Some(token.text_range().start()),
-            Some(ExplToggle::Off) => {
+            ExplToggle::On if open.is_none() => open = Some(token.text_range().start()),
+            ExplToggle::On => {}
+            ExplToggle::Off => {
                 if let Some(start) = open.take() {
                     regions.push(TextRange::new(start, token.text_range().end()));
                 }
                 // A stray `\ExplSyntaxOff` with no open region is ignored (toggling
                 // an already-false flag is a no-op), matching the lexer.
             }
-            _ => {}
         }
     }
     if let Some(start) = open.take() {
@@ -5216,6 +5285,40 @@ mod expl3_region_tests {
     fn provides_expl_opens_to_eof() {
         let input = "\\ProvidesExplPackage\n\\cs_new:N \\foo:";
         assert_eq!(regions(input), vec![(0, input.len())]);
+    }
+
+    #[test]
+    fn definee_provides_does_not_open_region() {
+        // `\ProvidesExplPackage` as the definee of `\protected\def` is tokenized,
+        // never executed, so it opens no formatter-owned region (issue #69).
+        let input = "\\protected\\def\\ProvidesExplPackage{\\ProvidesPackage{demo}}\ntext";
+        assert!(regions(input).is_empty());
+    }
+
+    #[test]
+    fn definee_off_does_not_close_a_real_region() {
+        // A gated-out `\ExplSyntaxOff` in definee position must not close the open
+        // region — the gate skips it, so the region still runs to EOF.
+        let input = "\\ExplSyntaxOn a \\let\\ExplSyntaxOff\\relax b";
+        assert_eq!(regions(input), vec![(0, input.len())]);
+    }
+
+    #[test]
+    fn stored_toggle_in_group_does_not_open_region() {
+        // An `\ExplSyntaxOn` stored inside a definition body / attached group is
+        // never executed at load, so it opens no region (issue #69).
+        let input = "\\def\\store{\\ExplSyntaxOn \\foo:n {x}}\ntext";
+        assert!(regions(input).is_empty());
+    }
+
+    #[test]
+    fn top_level_provides_after_gated_definee_still_opens() {
+        // The gate rejects only the false positives: a genuine top-level
+        // `\ProvidesExplPackage` still opens a region even when a definee one
+        // precedes it.
+        let input = "\\def\\x{\\ExplSyntaxOn}\n\\ProvidesExplPackage\n\\cs_new:N \\foo:";
+        let start = input.rfind("\\ProvidesExplPackage").unwrap();
+        assert_eq!(regions(input), vec![(start, input.len())]);
     }
 
     #[test]

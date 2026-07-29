@@ -100,12 +100,14 @@ code, never executed.
 
 The curated command set above only covers bodies we can name. But the same
 splitting happens all over real package code under commands we do not (and
-should not) enumerate: `array.sty`'s `\newcolumntype{w}[2]{>{\begin{lrbox}…}c<{\end{lrbox}…}}`
-puts the two halves in *sibling* groups, `rotex.tex` pairs
+should not) enumerate: `array.sty`'s
+`\newcolumntype{w}[2]{>{\begin{lrbox}…}c<{\end{lrbox}…}}` puts the two halves in
+*sibling* groups, `rotex.tex` pairs
 `\newcommand\BeginExample{…\begin{VerbatimOut}…}` against a separate
-`\EndExample`, `multicol.sty` splits `\@namedef{multicols*}`/`\@namedef{endmulticols*}`,
-and `amstex.sty` writes `\begin{split}` as *prose* inside a `\PackageError`
-message that never runs as structure (all issue #71).
+`\EndExample`, `multicol.sty` splits
+`\@namedef{multicols*}`/`\@namedef{endmulticols*}`, and `amstex.sty` writes
+`\begin{split}` as *prose* inside a `\PackageError` message that never runs as
+structure (all issue #71).
 
 So environment pairing is shape-gated on brace structure instead, which needs no
 command list at all: **an environment can never outlive the brace group its
@@ -113,10 +115,10 @@ command list at all: **an environment can never outlive the brace group its
 are only macros, so a `}` closing a group opened *before* the `\begin` always
 wins. A `\begin` whose matching `\end` is not reachable before that `}` is
 therefore ordinary macro code—a plain `COMMAND`, **no diagnostic**, exactly as a
-gated `$` or `\[` stays a plain token (`parser::grammar::environment_escapes_group`).
-The mirror case holds for the closer: an `\end` reached *inside* a group has its
-`\begin` outside it, so it is macro code rather than stray—ltxdoc's
-`\StopEventually{\end{document}}`.
+gated `$` or `\[` stays a plain token
+(`parser::grammar::environment_escapes_group`). The mirror case holds for the
+closer: an `\end` reached *inside* a group has its `\begin` outside it, so it is
+macro code rather than stray—ltxdoc's `\StopEventually{\end{document}}`.
 
 Without the gate the environment swallowed the enclosing `}` and cascaded into
 unmatched-brace and unclosed-`{` noise, which—since parser diagnostics gate the
@@ -132,8 +134,8 @@ Two scope limits keep the gate high-precision:
   carve-out: `\begin{macro}` and friends are the *documentation* layer and must
   keep pairing across the `macrocode` chunks between them. Those chunks
   routinely leave a brace open on purpose (a `\iffalse}\fi` editor-balance hack,
-  a `` \char`} `` constant), which strands the group depth above zero for the
-  rest of the file and would otherwise unnest the whole doc layer behind it. A
+  a ``\char`}`` constant), which strands the group depth above zero for the rest
+  of the file and would otherwise unnest the whole doc layer behind it. A
   paragraph-break bound cannot stand in here the way it does for the math
   gates—a blank `.dtx` doc line is still a `%` margin, so it never reads as a
   `\par`.
@@ -159,9 +161,9 @@ unexpanded (`parser::lexer::is_literal_token_command`:
 bar—the active character is the token being printed, not a capture opener. The
 doc layer writes that in prose, and capturing there runs the span on to the
 *next* `|` and swallows whatever braces lie between: lthooks.dtx's
-`\meta{first\texttt{\string|}last}\verb|):|` lost the `}` closing `\texttt{`
-and `\meta{`, unnesting the `quote` environment around it (issue #71). This is
-the same family as the `\left`/`\right` gate one paragraph up.
+`\meta{first\texttt{\string|}last}\verb|):|` lost the `}` closing `\texttt{` and
+`\meta{`, unnesting the `quote` environment around it (issue #71). This is the
+same family as the `\left`/`\right` gate one paragraph up.
 
 ### Macrocode chunk bodies (`.dtx`)
 
@@ -183,12 +185,11 @@ layout rules it *floats* like a `DOC_MARGIN`, so the blank-line test still sees
 `%\n%\n` as a `\par`. But a guard-only line (`%<*dtx>`) is not blank: docstrip
 **deletes** it outright when it strips the file, so the lines around it are
 adjacent, not parted. The shape gates that ask only "did my construct's source
-run out mid-shape?" therefore read
-`TriviaScan::saw_blank_line_outside_guards`—a second blank-line tally that a
-guard resets—rather than the layout one. rotating.dtx is the case: it splits
-`\ProvidesPackage{rotating}`'s `[…date…]` optional across `%<package>` and
-`%<*dtx>`/`%</dtx>` variants, and reading the guard pair as a paragraph break
-bailed out of the `[` mid-argument (issue #71).
+run out mid-shape?" therefore read `TriviaScan::saw_blank_line_outside_guards`—a
+second blank-line tally that a guard resets—rather than the layout one.
+rotating.dtx is the case: it splits `\ProvidesPackage{rotating}`'s `[…date…]`
+optional across `%<package>` and `%<*dtx>`/`%</dtx>` variants, and reading the
+guard pair as a paragraph break bailed out of the `[` mid-argument (issue #71).
 
 ### `^^A` doc comments (`.dtx`)
 
@@ -259,7 +260,7 @@ and the backtick cannot hide it: ``\def\v{\char`}`` closes at that `}`
 idiom keeps its braces structural instead of stranding the group it sits in
 (longtable, amsmath-2018-12-01.sty—issue #71). At depth 0 there is no such scan
 and the constant reading stands: *a close-group character is written*
-``\char`}`` *in running text*. The escaped form ``` `\} ``` is a control symbol,
+``\char`}`` *in running text*. The escaped form `` `\} `` is a control symbol,
 never a group delimiter, so it stays data at any depth.
 
 ### Signatures
@@ -313,13 +314,13 @@ prose is linter territory.) A closing `$` counts only outside `{…}` nesting
 
 Both gates must mirror the parse they guard, and the paragraph-break anchor is
 tested only *between top-level atoms* of the math body: once the body descends
-into a `{…}` group or a nested environment, a blank line is ordinary body
-trivia and the math runs on (`paragraph_break_blocks`, issue #70). Scanning
-those blank lines as blockers made the gate stricter than the parse, so a
-display equation laid out from `tikzpicture` cells—
-`\[ \begin{array}… \begin{tikzpicture}`, blank line, `…\]`, the standard
-Feynman-diagram idiom—lost its math node and reported its own `\]` as
-unmatched, which in turn refused the whole file to the formatter.
+into a `{…}` group or a nested environment, a blank line is ordinary body trivia
+and the math runs on (`paragraph_break_blocks`, issue #70). Scanning those blank
+lines as blockers made the gate stricter than the parse, so a display equation
+laid out from `tikzpicture` cells— `\[ \begin{array}… \begin{tikzpicture}`,
+blank line, `…\]`, the standard Feynman-diagram idiom—lost its math node and
+reported its own `\]` as unmatched, which in turn refused the whole file to the
+formatter.
 
 `\[`/`\(` are gated the same way (`delim_math_closes`, issue #65): macro code
 passes the delimiters around as data (`\expandafter\@tempa\[\@nil`), so an

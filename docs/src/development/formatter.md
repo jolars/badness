@@ -122,38 +122,39 @@ and the deterministic layout is a fixed point. It is the property the generic
 
 Region membership is **not** recorded in the CST: the lexer's expl3 toggle stays
 transient, and the formatter recomputes in-region byte ranges in a read-only
-pre-pass (`formatter::core::expl3_regions`) over the same fixed toggle *name* set
-the lexer uses (`parser::lexer::expl_toggle`, shared so the two never drift),
-stored as a `Vec<TextRange>` side channel in `LowerCtx`—the same byte-range
-pattern as parser diagnostics. The CST, lexer, events, and tree_builder are
-untouched, so losslessness is unaffected; the reformatted output is a different
-valid text with the same meaning.
+pre-pass (`formatter::core::expl3_regions`) over the same fixed toggle *name*
+set the lexer uses (`parser::lexer::expl_toggle`, shared so the two never
+drift), stored as a `Vec<TextRange>` side channel in `LowerCtx`—the same
+byte-range pattern as parser diagnostics. The CST, lexer, events, and
+tree_builder are untouched, so losslessness is unaffected; the reformatted
+output is a different valid text with the same meaning.
 
 ### Positional gate on layout ownership
 
 The shared *name* set is necessary but not sufficient to open a region: the
 formatter additionally requires the toggle to be a **top-level statement**
 (`toggle_is_top_level`), because the catcode-9 whitespace assumption only holds
-where TeX actually *executes* the toggle at load. A toggle spelling that is never
-run is a false positive—mis-owning its layout rewrites real space tokens even
-though the byte-level losslessness and idempotency oracles stay green (issue
-\#69, `l3kernel/expl3.sty`). Two shapes are rejected:
+where TeX actually *executes* the toggle at load. A toggle spelling that is
+never run is a false positive—mis-owning its layout rewrites real space tokens
+even though the byte-level losslessness and idempotency oracles stay green
+(issue \#69, `l3kernel/expl3.sty`). Two shapes are rejected:
 
 - **Definee position:** the toggle command's immediately-preceding non-trivia
   sibling is a `\def`/`\let`-family primitive, so the toggle is the control
-  sequence being *defined*, not executed (`\protected\def\ProvidesExplPackage{…}`
-  in the loader). Reuses the parser's `is_def_prefix_command`.
-- **Nested in a group / definition body:** an ancestor of the toggle's command is
-  a `GROUP` or `OPTIONAL`, so the toggle is tokenized into a replacement text and
-  only ever executed—if at all—when that macro runs, not at load.
+  sequence being *defined*, not executed
+  (`\protected\def\ProvidesExplPackage{…}` in the loader). Reuses the parser's
+  `is_def_prefix_command`.
+- **Nested in a group / definition body:** an ancestor of the toggle's command
+  is a `GROUP` or `OPTIONAL`, so the toggle is tokenized into a replacement text
+  and only ever executed—if at all—when that macro runs, not at load.
 
 This deliberately **splits** the "same toggle set" invariant: the *name* set
 stays shared between lexer and formatter (so a new toggle spelling is recognized
 in both), but the *positional layout-ownership* rule is the formatter's alone.
 The lexer keeps the naive name-only model on purpose—mis-lexing a name in letter
 mode only splits CST tokens (lossless, cosmetic), whereas mis-*owning* layout
-rewrites meaning, so only the higher-stakes side gates. See `AGENTS.md`
-(core decisions) for the recorded rationale.
+rewrites meaning, so only the higher-stakes side gates. See `AGENTS.md` (core
+decisions) for the recorded rationale.
 
 ### Statement boundaries
 

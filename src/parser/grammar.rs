@@ -1563,6 +1563,100 @@ impl<'t> Parser<'t> {
         false
     }
 
+    /// The `\left…\right` twin of [`Self::delim_math_closes`]: whether the
+    /// `\left` at token index `open` has a matching `\right` reachable before a
+    /// token that would end its body. `\left`/`\right` pair by *count* (nested
+    /// pairs recurse in [`Self::left_right`]), so — unlike `$`/`\[` which are
+    /// often data in code — an unclosed `\left` is genuinely malformed math, but
+    /// it is still a *likely-typo* the linter should flag, never a parser error
+    /// that blocks the whole file for the formatter (issue #77's
+    /// `\left(1 …) …\left(…\right)` and `\left\bra …` with no `\right`). So it
+    /// gets the same shape gate as `\[`: a `\left` whose `\right` is unreachable
+    /// stays an ordinary command, **no diagnostic**. Mirrors [`Self::left_right`]'s
+    /// recovery anchors — an unbalanced `}`, a closing `$`/`\]`/`\)`, an `\end`
+    /// not owed to an intervening `\begin`, a paragraph break, EOF — with `\right`
+    /// and the anchors counting only at the `\left`'s own brace/env/pair level.
+    /// Does not consume.
+    fn left_right_closes(&self, open: usize) -> bool {
+        #[derive(PartialEq)]
+        enum Ctx {
+            Brace,
+            Env,
+            Left,
+        }
+        let mut stack: Vec<Ctx> = Vec::new();
+        let mut newlines = 0;
+        let end = self
+            .macrocode_end
+            .unwrap_or(self.tokens.len())
+            .min(self.tokens.len());
+        let mut i = open + 1;
+        while i < end {
+            let t = &self.tokens[i];
+            // A brace group parses as [`Self::math_group`]: only its own braces
+            // steer nesting; every other token inside it is ordinary content
+            // (a stray `\right`/`\end` there is not our closer).
+            if stack.last() == Some(&Ctx::Brace) {
+                match t.kind {
+                    SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => {
+                        stack.push(Ctx::Brace)
+                    }
+                    SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
+                        stack.pop();
+                    }
+                    _ => {}
+                }
+                i += 1;
+                continue;
+            }
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    // A paragraph break ends the body only at its own level
+                    // (mirrors [`Self::left_right`]); inside a nested env/pair it
+                    // is ordinary trivia.
+                    if newlines >= 2 && stack.is_empty() {
+                        return false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => stack.push(Ctx::Brace),
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => return false,
+                SyntaxKind::DOLLAR => return false,
+                SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
+                    return false;
+                }
+                SyntaxKind::CONTROL_WORD if !self.in_macro_code(i) => match t.text.as_str() {
+                    LEFT_CMD => stack.push(Ctx::Left),
+                    RIGHT_CMD => match stack.last() {
+                        None => return true,
+                        Some(Ctx::Left) => {
+                            stack.pop();
+                        }
+                        _ => return false,
+                    },
+                    BEGIN_CMD if self.env_name_follows(i) => stack.push(Ctx::Env),
+                    END_CMD if self.env_name_follows(i) => match stack.last() {
+                        Some(Ctx::Env) => {
+                            stack.pop();
+                        }
+                        _ => return false,
+                    },
+                    _ => {}
+                },
+                _ => {}
+            }
+            newlines = 0;
+            i += 1;
+        }
+        false
+    }
+
     /// Inline `$ … $` or display `$$ … $$` math. The body's atoms are wrapped in
     /// a `MATH` node (the delimiters stay direct children of the math node); the
     /// atoms themselves are parsed in math mode (see [`Self::math_element`]).
@@ -1818,7 +1912,7 @@ impl<'t> Parser<'t> {
                     && self.env_name_follows(self.pos)
                 {
                     self.stray_end();
-                } else if self.at_command(LEFT_CMD) {
+                } else if self.at_command(LEFT_CMD) && self.left_right_closes(self.pos) {
                     self.left_right();
                 } else if self.at_command(RIGHT_CMD) {
                     self.stray_right();

@@ -110,13 +110,43 @@ fn left_right_control_word_delimiters() {
 }
 
 #[test]
-fn unclosed_left_recovers() {
-    // `\left(` with no `\right` before the closing `$`: an unclosed-`\left` error,
-    // the `$` handed back to close the math, and nothing corrupted.
+fn unclosed_left_demotes_without_diagnostic() {
+    // `\left(` with no reachable `\right` before the closing `$`: shape-gated like
+    // `\[` (issue #77), the `\left` stays an ordinary command and the `(` an
+    // ordinary atom — no `LEFT_RIGHT` node, **no diagnostic** (a likely typo is
+    // linter territory), and nothing corrupted.
     let parsed = parse(r"$\left( x $");
     assert_eq!(parsed.syntax().to_string(), r"$\left( x $");
+    assert!(
+        !tree(r"$\left( x $").contains("LEFT_RIGHT"),
+        "unclosed `\\left` must not open a LEFT_RIGHT node"
+    );
     let messages: Vec<&str> = parsed.errors.iter().map(|e| e.message.as_str()).collect();
-    assert_eq!(messages, ["unclosed `\\left`"]);
+    assert!(messages.is_empty(), "unexpected diagnostics: {messages:?}");
+}
+
+#[test]
+fn left_right_pairs_through_nested_environments() {
+    // The shape gate must reach the `\right` across a nested `\begin`/`\end`
+    // (`matrix` holding `pmatrix` cells), so a well-formed pair still opens a
+    // `LEFT_RIGHT` and its `\right` is never orphaned (issue #77 regression: a
+    // gate that miscounted nested environments demoted this valid pair).
+    let src = r"$\left\{\begin{matrix}\begin{pmatrix}1\end{pmatrix}\end{matrix}\right\}$";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "a balanced `\\left…\\right` around nested environments must pair"
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "unexpected diagnostics: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

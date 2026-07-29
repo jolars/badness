@@ -81,6 +81,18 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+- [ ] **Flag an unbalanced math delimiter as a likely typo (`\left`/`\[`/`$`).**
+  The parser's shape gates now *silently* demote an unbalanced `\left` (issue #77),
+  `\[`/`\(`, and `$` with no reachable closer to a plain command/token — no
+  diagnostic, so the formatter still accepts the file (`left_right_closes` and the
+  `delim_math_closes`/`dollar_closes` family in `grammar.rs`). That is correct for
+  macro-code data, but in prose these are almost always authoring typos (a missing
+  `\right`, a dropped `\]`). The parser doc comments already call this "linter
+  territory"; add a report-only rule that spots the demoted delimiter and warns,
+  so the typo surfaces even though it no longer blocks parsing. Needs a way for the
+  linter to tell a demoted delimiter (prose typo) from genuine macro-code data —
+  likely a context heuristic (prose vs. definition body/expl3 region) rather than a
+  new CST marker, to keep the syntactic layer meaning-free.
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to
   ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to

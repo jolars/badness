@@ -1,0 +1,26 @@
+% Unclosed `\left` shapes that must degrade to a plain command with no
+% diagnostic (issue #77, dalcde/cam-notes), so the formatter still accepts the
+% file. Both are genuine authoring typos; TeX rejects them, but a likely typo is
+% linter territory, not a parser error that blocks the whole file.
+
+% A `\left(` closed by a bare `)`, leaving one `\left` unmatched while a second
+% `\left(…\right)` pair is well formed.
+\[
+  Q_\alpha' = \left(1 + \omega M^{\mu\nu}) Q_\alpha \left(1 - \omega M^{\mu\nu}\right).
+\]
+
+% A `\left\bra` with no `\right` anywhere in the display.
+\[
+  \left\bra \frac{\partial^2 W}{\partial \varphi_i \partial \varphi_j} \psi_i \psi_j =
+  \begin{pmatrix}
+    0 & M\\
+    M & 0
+  \end{pmatrix}.
+\]
+
+% Guard: a well-formed pair whose body nests environments (`matrix` holding
+% `pmatrix` cells) must still pair — the shape gate reaches its `\right` through
+% the nested `\begin`/`\end`, so this stays a `LEFT_RIGHT`, not a demoted command.
+\[
+  S_n = \left\{\begin{matrix}\begin{pmatrix}1 & 2\\3 & 4\end{pmatrix}, &\begin{pmatrix}1 & 2\\2 & 1\end{pmatrix}\end{matrix}\right\}.
+\]

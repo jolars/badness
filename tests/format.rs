@@ -573,6 +573,13 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // never an opaque block, which would strand a blank line and split the
     // statement head (issue #61, l3bigint.dtx).
     ("expl_doc_comment_statement", "sty"),
+    // A command's trailing block argument hugs: short leading arguments stay
+    // inline and only the over-long trailing group detonates (smoke-test issue
+    // #71, latex-lab-block.dtx). Measuring a later group *flat* while deciding an
+    // earlier one charged `{block}`/`{thm}` for width that never lands on their
+    // line, and the charge depended on where the trailing group's own body
+    // happened to break — so pass 1 and pass 2 disagreed and idempotence failed.
+    ("expl_trailing_block_hug", "sty"),
 ];
 
 #[test]
@@ -659,6 +666,12 @@ const DTX_FIXTURES: &[&str] = &[
     // collapses and gains l3 brace spacing), proving the region subtraction is
     // surgical.
     "dtx_expl3_guarded_release_block",
+    // An *indented* `macrocode` begin frame (smoke-test issue #71, multicol.dtx /
+    // latex-lab-block.dtx): `\DocInput` runs the documentation part under
+    // `\MakePercentIgnore`, so a `%` there is catcode 9 at any column and the
+    // frame opens a chunk exactly like the column-0 spelling. The formatter owns
+    // the margin, so it re-pins the frame at column 0 — a trivia-only change.
+    "dtx_indented_macrocode_frame",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

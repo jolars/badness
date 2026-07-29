@@ -1027,8 +1027,20 @@ impl Printer {
                 Ir::IfBreak { flat, broken } => {
                     work.push((mode, if mode == Mode::Break { broken } else { flat }));
                 }
+                // A later group is measured in the mode it will actually print
+                // in: flat when its own flat rendering still fits from here,
+                // broken otherwise. Measuring a doomed group flat would charge
+                // the *current* group for width that will never land on this
+                // line — and the charge depends on where the doomed group's own
+                // body happens to break, which the previous pass decides. That
+                // is exactly the expl3 `\EditInstance{a}{b}{ …long keyvals… }`
+                // instability (issue #71): pass 1 broke `{a}`/`{b}` out because
+                // the trailing block measured flat and overflowed, pass 2 kept
+                // them inline because the block had by then acquired a hard
+                // break. Deciding the rest group locally makes both passes agree.
                 Ir::Group { inner, expand, .. } => {
-                    work.push((if *expand { Mode::Break } else { Mode::Flat }, inner));
+                    let broken = *expand || !self.fits(col, inner, false, false);
+                    work.push((if broken { Mode::Break } else { Mode::Flat }, inner));
                 }
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     if let Some(first) = cands.first() {

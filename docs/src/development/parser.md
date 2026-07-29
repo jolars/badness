@@ -130,6 +130,32 @@ Two scope limits keep the gate high-precision:
   runs out of file still opens one, so a genuinely forgotten `\end` in prose
   keeps its unclosed-environment diagnostic. Likewise an `\end` at the outer
   level is still stray.
+- **`.dtx` doc-margin lines are exempt from *stranded* braces**, much as they
+  are from the expl3 carve-out: `\begin{macro}` and friends are the
+  *documentation* layer and must keep pairing across the `macrocode` chunks
+  between them. Those chunks routinely leave a brace open on purpose (a
+  `\iffalse}\fi` editor-balance hack, a `` \char`} `` constant), which strands
+  the group depth above zero for the rest of the file and would otherwise unnest
+  the whole doc layer behind it. A paragraph-break bound cannot stand in here the
+  way it does for the math gates—a blank `.dtx` doc line is still a `%` margin,
+  so it never reads as a `\par`.
+
+  The exemption lifts when the enclosing group opened on a doc-margin line too
+  (`parser::grammar::doc_margin_exempt`): that `{` is the documentation layer's
+  own, locally visible, and the `\begin` really is inside it. `theorem.dtx`
+  writes the split definition as doc prose—`% \def\deflist#1{\begin{list}…}`
+  paired with `% \def\enddeflist{\end{list}}`—and gets the same gate the code
+  layer does (issue #71).
+
+A `\begin` the gate demotes leaves its `\end` an orphan *the gate made*, not one
+the author wrote, so the closer is demoted in step
+(`parser::grammar::end_orphans_a_demoted_begin`): an `\end` whose name was gated
+earlier and which closes no open environment is a plain `COMMAND` too. Left as a
+stray `\end` it unwinds every enclosing environment on its way to the root—in
+`amsldoc.tex` a single `\lowercase{…\begin{error}{…}}` (the classic trick for
+smuggling a literal `}` into text) un-closed the whole `document` and stranded
+`\end{document}` behind it. The mirror is scoped to demoted names only, so a
+genuine typo (`\end{itemiz}`) still reports.
 - **`.dtx` doc-margin lines are exempt**, exactly as they are from the expl3
   carve-out: `\begin{macro}` and friends are the *documentation* layer and must
   keep pairing across the `macrocode` chunks between them. Those chunks
@@ -148,7 +174,9 @@ a single opaque `VERB` token, exactly like `\verb<c>…<c>`. This is a lexer mod
 toggled left-to-right like `\makeatletter` (issue #57).
 
 It is also enabled by loading a curated doc class
-(`\documentclass{ltxdoc|ltxguide|ltnews}`—those classes enable `|` themselves)
+(`\documentclass{ltxdoc|ltxguide|ltnews|l3doc|amsldoc}`—those classes enable `|`
+themselves, `amsldoc.cls` with an active `\gdef|{\protect\activevert{}}`; without
+it `amsldoc.tex`'s `|\begin{alignat}|` prose read as real structure, issue #71)
 and is on for `|` from the start in `.dtx` mode (dtx files are typeset under
 ltxdoc; the driver may live elsewhere). It is gated *off* inside `macrocode`
 bodies (a code layer) and after `\left`/`\right` (the `|` is a delimiter). A
@@ -170,7 +198,19 @@ same family as the `\left`/`\right` gate one paragraph up.
 A frame-lexed `macrocode`/`macrocode*` body is *macro code* whose only
 terminator is the frame line (`%    \end{macrocode}`, a line-oriented docstrip
 fact; the frame `\begin` is fingerprinted by its `DOC_MARGIN` and attaches no
-arguments—the next line's `{` is body code). As with definition bodies,
+arguments—the next line's `{` is body code).
+
+The two frames are deliberately asymmetric about column 0. A **begin** frame may
+be indented: `\DocInput` runs the documentation part under `\MakePercentIgnore`
+(`` \catcode`\%=9 ``, doc.dtx), so a `%` there is an *ignored* character at any
+column and `␣␣%␣␣␣␣\begin{macrocode}` opens a chunk exactly like the column-0
+spelling—`multicol.dtx` and `latex-lab-block.dtx` both do it, and lexing the line
+as a comment made the frame vanish and its `\end{macrocode}` unwind the doc layer
+behind it (issue #71). The indent rides as a `WHITESPACE` token before the margin,
+so the line stays lossless and the formatter re-pins the frame at column 0. An
+**end** frame stays column-0 strict: inside the body `%` is a comment again, and
+doc.sty terminates on a delimited match against the literal `%    \end{macrocode}`
+line. As with definition bodies,
 `\begin`/`\end` inside parse as plain `COMMAND`s (kernel code uses the `\end`
 *primitive*), and chunk-unmatched braces are plain tokens with no diagnostics (a
 `\def` regularly opens `{` in one chunk and closes it chunks later, issue #57).

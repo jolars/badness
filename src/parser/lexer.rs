@@ -855,7 +855,7 @@ fn doc_class_enables_bar(after: &str) -> bool {
     };
     matches!(
         rest[..close].trim(),
-        "ltxdoc" | "ltxguide" | "ltnews" | "l3doc"
+        "ltxdoc" | "ltxguide" | "ltnews" | "l3doc" | "amsldoc"
     )
 }
 
@@ -1066,8 +1066,25 @@ fn braced_verb_content_len(content: &str) -> Option<usize> {
 /// `%    \end{macrocode}` string, so anything after it on the line is doc-layer
 /// material. A begin frame stays strict — same-line text there is captured into
 /// the body by `\xmacro@code`, not doc prose.
+///
+/// A *begin* frame additionally tolerates indentation before the `%`. In the
+/// documentation layer `\DocInput` runs under `\MakePercentIgnore`
+/// (`` \catcode`\%=9 ``, doc.dtx), so a `%` there is an *ignored* character at any
+/// column and `␣*%␣*\begin{macrocode}` opens a chunk exactly like the column-0
+/// spelling (multicol.dtx, latex-lab-block.dtx — issue #71). The indent rides as a
+/// `WHITESPACE` token before the margin, so the line stays lossless and the
+/// formatter re-pins the frame at column 0. The *end* frame stays column-0 strict:
+/// inside the body `%` is a comment again, and doc.sty terminates on a delimited
+/// match against the literal `%    \end{macrocode}` line.
 fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Option<usize> {
-    let after_pct = rest.strip_prefix('%')?;
+    let indent = if want_begin {
+        rest.bytes()
+            .take_while(|&b| b == b' ' || b == b'\t')
+            .count()
+    } else {
+        0
+    };
+    let after_pct = rest[indent..].strip_prefix('%')?;
     let ws_len = after_pct
         .bytes()
         .take_while(|&b| b == b' ' || b == b'\t')
@@ -1098,6 +1115,12 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
         return None;
     }
 
+    if indent > 0 {
+        out.push(Token {
+            kind: SyntaxKind::WHITESPACE,
+            text: SmolStr::new(&rest[..indent]),
+        });
+    }
     out.push(Token {
         kind: SyntaxKind::DOC_MARGIN,
         text: SmolStr::new("%"),
@@ -1124,7 +1147,7 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
         kind: SyntaxKind::R_BRACE,
         text: SmolStr::new("}"),
     });
-    Some(1 + ws_len + control.len() + 1 + name.len() + 1)
+    Some(indent + 1 + ws_len + control.len() + 1 + name.len() + 1)
 }
 
 /// If `rest` starts with a verbatim-argument command (`\url`, `\code`,
@@ -1727,14 +1750,18 @@ mod tests {
 
     #[test]
     fn documentclass_ltxguide_enables_the_pipe_short_verb() {
-        // The curated doc classes (`ltxdoc`, `ltxguide`, `ltnews`, `l3doc`)
-        // make `|` a short verb themselves, so loading one enables the
-        // capture — options and trailing release dates included.
+        // The curated doc classes (`ltxdoc`, `ltxguide`, `ltnews`, `l3doc`,
+        // `amsldoc`) make `|` a short verb themselves, so loading one enables the
+        // capture — options and trailing release dates included. `amsldoc` does it
+        // with an active `|` (`\\gdef|{\\protect\\activevert{}}`, amsldoc.cls),
+        // like `ltxguide`/`ltnews`; without it amsldoc.tex's `|\\begin{alignat}|`
+        // prose read as real structure (issue #71).
         for preamble in [
             "\\documentclass{ltxguide}",
             "\\documentclass[a4paper]{ltxdoc}",
             "\\documentclass{ltxguide}[1994/11/20]",
             "\\documentclass{l3doc}",
+            "\\documentclass[leqno,titlepage]{amsldoc}[1999/12/13]",
         ] {
             let input = format!("{preamble}\n|}}| done");
             let toks = lex(&input);

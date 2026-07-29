@@ -699,3 +699,95 @@ fn short_verb_char_after_string_is_literal() {
     assert_eq!(errors, 0);
     assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
 }
+
+#[test]
+fn an_indented_macrocode_begin_frame_opens_a_chunk() {
+    // `\DocInput` runs the documentation part under `\MakePercentIgnore`
+    // (`\catcode`\%=9`, doc.dtx), so a `%` there is an *ignored* character at any
+    // column: an indented `␣␣%␣␣␣␣\begin{macrocode}` opens a chunk exactly like
+    // the column-0 spelling (multicol.dtx, latex-lab-block.dtx — issue #71).
+    // Lexed as a comment instead, the frame vanished and its `\end{macrocode}`
+    // unwound the whole doc layer behind it.
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{macro}{\\a}\n\
+         \x20 %    \\begin{macrocode}\n\
+         \\def\\a{1}\n\
+         %    \\end{macrocode}\n\
+         % \\end{macro}\n",
+    );
+    assert_eq!(errors, 0);
+    // The doc-layer `macro` and the `macrocode` chunk, properly nested.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 2);
+}
+
+#[test]
+fn an_indented_macrocode_end_frame_stays_column_zero() {
+    // The *end* frame is not symmetric: inside the body `%` is a comment again,
+    // and doc.sty terminates the chunk on a delimited match against the literal
+    // `%    \end{macrocode}` line. An indented one is body text, so the chunk
+    // runs on — and the `\end{macro}` after it is code, not doc structure.
+    let (_root, errors) = parse_dtx_with_errors(
+        "% \\begin{macro}{\\a}\n\
+         %    \\begin{macrocode}\n\
+         \\def\\a{1}\n\
+         \x20 %    \\end{macrocode}\n\
+         % \\end{macro}\n",
+    );
+    assert!(errors > 0, "an indented end frame must not close the chunk");
+}
+
+#[test]
+fn a_doc_line_group_gates_a_split_environment_definition() {
+    // theorem.dtx (issue #71): the documentation layer writes the same split
+    // environment definition the code layer does. The `\begin{list}` sits inside
+    // a brace group the doc line itself opened, so the group-boundary gate
+    // applies — the `.dtx` doc-margin exemption covers braces the *code* layer
+    // stranded, not ones the documentation opened in plain sight.
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\def\\deflist#1{\\begin{list}{}{\\let\\makelabel\\deflabel}}\n\
+         % \\def\\enddeflist{\\end{list}}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 0);
+}
+
+#[test]
+fn a_doc_environment_still_pairs_across_macrocode_chunks() {
+    // The exemption itself is intact: a doc-layer `\begin{macro}` with no
+    // doc-line group around it keeps pairing across the chunks between its
+    // halves, even when a chunk leaves a brace open on purpose.
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{macro}{\\a}\n\
+         %    \\begin{macrocode}\n\
+         \\def\\a#1{%\n\
+         %    \\end{macrocode}\n\
+         %    Continued in the next chunk.\n\
+         %    \\begin{macrocode}\n\
+         \x20 #1}\n\
+         %    \\end{macrocode}\n\
+         % \\end{macro}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(
+        count(&root, SyntaxKind::ENVIRONMENT),
+        3,
+        "the doc `macro` plus both `macrocode` chunks"
+    );
+}
+
+#[test]
+fn oldcomments_is_an_opaque_ltxdoc_environment() {
+    // `oldcomments` (ltxdoc) wraps historical LaTeX 2.09 sources and typesets
+    // them verbatim-ish. It is defined inside a catcode-swapped region, so no
+    // static scan can learn it — the curated signature database is the only place
+    // the fact can live. Its body's unbalanced braces and prose `\end{document}`
+    // are data (ltmiscen.dtx / lttab.dtx / ltfloat.dtx, issue #71).
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{oldcomments}\n\
+         %   \\hbox { \\unhbox\\@currfield  %%} brace matching\n\
+         %   \\end{document} will catch a still-open environment.\n\
+         % \\end{oldcomments}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+}

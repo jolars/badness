@@ -1774,6 +1774,28 @@ fn lower_expl_code(
                     lines.push(Ir::concat(vec![line, Ir::zero_width(comment)]));
                 }
             }
+            // A docstrip guard (`%<…>`) is recognized only at column 0, so it must
+            // lead its output line. Under `Statements::Ignore` (a command's attached
+            // arguments) source newlines are catcode-9 whitespace, so without this a
+            // guard between two arguments packs onto the previous line as a trailing
+            // `%<…>` comment — losing its guard meaning and re-lexing on the next
+            // parse as an ordinary comment that swallows the following argument's
+            // braces (issue #78, l3backend-basics.dtx's per-backend `.def` list).
+            // Commit the line in progress so the guard opens a fresh one, where
+            // `lower_loose_token` pins it to column 0; the following code stays on
+            // the guard's line via the ordinary inter-token fill.
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::GUARD => {
+                after_block = false;
+                commit_line(
+                    &mut atom,
+                    &mut parts,
+                    &mut sep_before_next,
+                    &mut lines,
+                    &mut seps,
+                    &mut pending_sep,
+                );
+                atom.push(lower_loose_token(token));
+            }
             SyntaxElement::Token(token) => {
                 after_block = false;
                 atom.push(lower_loose_token(token));

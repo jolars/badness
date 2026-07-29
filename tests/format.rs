@@ -657,6 +657,15 @@ const DTX_FIXTURES: &[&str] = &[
     // unbalancing the enclosing group on the next parse. Forcing the broken form
     // keeps the guard column-0 pinned and the layout a fixed point.
     "dtx_expl3_guarded_group",
+    // Docstrip guards *between the arguments* of an expl3 command (issue #78,
+    // l3backend-basics.dtx's per-backend `.def` list). The command lays out its
+    // attached arguments as a width fill (`Statements::Ignore`, source newlines
+    // collapsed), so without pinning the guard would pack onto the previous line
+    // as a trailing `%<…>` comment — losing its docstrip meaning and re-lexing on
+    // the next pass as a comment that swallows the following `{…}` (a shape drift
+    // that never reaches a fixed point). Each guard must open its own line at
+    // column 0, its guarded argument following on the same line.
+    "dtx_expl3_guarded_arguments",
     // A *fully*-guarded expl3 chunk (a docstrip release block, every line led by
     // `%<latexrelease>`) is preserved verbatim, not block-relaid (issue #72,
     // latex2e `ltcmdhooks.dtx`): the guards pin every line to column 0, so

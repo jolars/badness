@@ -85,6 +85,19 @@ links to the Development page carrying its full rationale, examples, and provena
      layout rewrites real space tokens (meaning). So only the higher-stakes side gates.
      Detail in `formatter.md` (§ *Positional gate on layout ownership*).
 
+   - **Environment pairing is shape-gated on brace structure, not a command set.**
+     An environment can never outlive the brace group its `\begin` opened in: braces
+     are catcode structure, `\begin`/`\end` are only macros, so a `}` closing a group
+     opened before the `\begin` always wins. A `\begin` whose `\end` is unreachable
+     before that `}` — and, mirrored, an `\end` reached *inside* a group — is a plain
+     command with **no diagnostic**, like a gated `$`/`\[` (issue #71). This
+     generalizes the curated definition-body set (#45/#55) to the package code it
+     cannot name. Two scope limits keep it precise: only a *group* boundary
+     suppresses the environment (a `\begin` that just runs out of file still
+     diagnoses), and `.dtx` doc-margin lines are exempt so the doc layer keeps
+     pairing across `macrocode` chunks that leave braces open on purpose. Detail in
+     `parser.md` (§ *The environment group-boundary gate*).
+
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
    a command means; the semantic layer is a signature database assigning arity,
    verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See

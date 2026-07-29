@@ -1,0 +1,28 @@
+% Minimized from latex3/latex2e (issue #71): package code routinely splits
+% `\begin` and `\end` across brace groups, so an environment must never outlive
+% the group it opened in. None of these is document structure.
+\makeatletter
+% array.sty: the two halves live in sibling column-type groups.
+\newcolumntype{w}[2]{%
+  >{\begin{lrbox}\ar@cellbox}%
+  c%
+  <{\end{lrbox}%
+    \makebox[#2][#1]{\unhbox\ar@cellbox}}}
+
+% rotex.tex: the `\end` lives in a sibling macro, and the definee is unbraced
+% so the body group never attaches to `\newcommand`.
+\newcommand\BeginExample{%
+  \VerbatimEnvironment
+  \begin{VerbatimOut}{\jobname.ex}%
+}
+\newcommand{\EndExample}{\end{VerbatimOut}}
+
+% multicol.sty: a `\@namedef` body opens what `endmulticols*` closes.
+\@namedef{multicols*}{\begin{multicols}}
+
+% amstex.sty: `\begin{split}` is prose inside an error message.
+\def\split{\PackageError{amstex}{\string\begin{split} is not allowed here}\@ehb}
+
+% ltxdoc: an `\end` passed as an argument, its `\begin` elsewhere entirely.
+\StopEventually{\end{document}}
+\makeatother

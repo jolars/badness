@@ -388,6 +388,27 @@ fn definition_split_across_macrocode_chunks_parses_cleanly() {
 }
 
 #[test]
+fn doc_layer_environments_pair_across_a_stranded_brace() {
+    // longtable.dtx: a doc line leaves a brace open on purpose (here the
+    // `` \char`} `` constant hides the closer). The doc layer is exempt from
+    // the group gate (issue #71), so `\begin{macro}` still pairs with its
+    // `\end{macro}` instead of being demoted to a plain command — which would
+    // unnest every doc environment behind it.
+    let input = "\
+% \\def\\v{\\char`}\n\
+%\n\
+% \\begin{macro}{\\foo}\n\
+%    \\begin{macrocode}\n\
+\\def\\foo{1}\n\
+%    \\end{macrocode}\n\
+% \\end{macro}\n";
+    let (root, _) = parse_dtx_with_errors(input);
+    // The stranded brace itself still diagnoses; what matters here is that the
+    // doc structure behind it survives — `macro` and `macrocode` both pair.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 2);
+}
+
+#[test]
 fn end_frame_with_trailing_comment_still_terminates_macrocode() {
     // doc.sty's terminator is a delimited match on `%    \end{macrocode}`, so a
     // trailing `%` on the frame line (a guard against a stray trailing space —

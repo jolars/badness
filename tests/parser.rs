@@ -705,6 +705,75 @@ fn newcommand_body_splits_end_begin() {
     insta::assert_snapshot!(tree(r"\newcommand{\newpg}{\end{page}\begin{page}}"));
 }
 
+// --- environments never escape their brace group (issue #71) -----------------
+
+#[test]
+fn environment_does_not_escape_its_enclosing_group() {
+    // array.sty's `\newcolumntype`: the `\begin` sits in one sibling group and
+    // its `\end` in another, so neither is document structure. Each `}` closes
+    // the group it belongs to and nothing cascades into unmatched-brace noise.
+    let parsed = parse(r"\newcolumntype{w}[2]{>{\begin{lrbox}\b}c<{\end{lrbox}}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn begin_in_a_message_argument_is_a_plain_command() {
+    // amstex.sty: `\begin{split}` is prose inside an error message, never
+    // executed as structure, and its group closes before any `\end`.
+    let parsed = parse(r"\def\s{\PackageError{a}{\begin{split} is not allowed}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn end_inside_a_group_is_not_stray() {
+    // ltxdoc's `\StopEventually{\end{document}}`: this `\end`'s `\begin` is
+    // outside the group, so it is macro code, not a stray.
+    let parsed = parse(r"\StopEventually{\end{document}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn unbraced_definee_body_still_gets_the_group_gate() {
+    // rotex.tex's `\newcommand\BeginExample{…\begin{VerbatimOut}…}` pairs with
+    // a separate `\EndExample`. The body group is not attached to
+    // `\newcommand` (the definee is a bare control word), so the definition-body
+    // flag never reaches it and only the group gate keeps the parse clean.
+    let parsed = parse(r"\newcommand\BeginExample{\begin{VerbatimOut}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn def_body_begin_is_a_plain_command() {
+    // The `\def` family is not in `is_definition_body_command`, so before the
+    // group gate this swallowed the closing brace.
+    let parsed = parse(r"\def\x{\begin{y}}");
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn a_reachable_end_inside_a_group_still_nests() {
+    // The gate only fires when the `\end` is unreachable before the enclosing
+    // `}`: a properly paired environment inside a group still builds a real
+    // ENVIRONMENT node.
+    let parsed = parse(r"{\begin{center}hi\end{center}}");
+    assert_eq!(parsed.errors, vec![]);
+    let kinds: Vec<SyntaxKind> = parsed.syntax().descendants().map(|n| n.kind()).collect();
+    assert!(
+        kinds.contains(&SyntaxKind::ENVIRONMENT),
+        "a reachable `\\end` still nests as an environment"
+    );
+}
+
+#[test]
+fn unclosed_environment_outside_a_group_still_diagnoses() {
+    // The gate is scoped to a *group* boundary. A `\begin` that merely runs out
+    // of file has no competing brace, so a genuinely forgotten `\end` in prose
+    // keeps its diagnostic.
+    let parsed = parse(r"\begin{itemize}\item x");
+    assert_eq!(parsed.errors.len(), 1);
+    assert!(parsed.errors[0].message.contains("unclosed environment"));
+}
+
 // --- nested command-abutting brackets in math (issue #55) --------------------
 
 #[test]

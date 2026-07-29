@@ -251,6 +251,12 @@ struct Parser<'t> {
     /// [`Self::attach_arguments`] in [`Self::command`], so it covers the whole
     /// definition subtree (nested groups included) and nothing after it.
     in_def_body: bool,
+    /// Number of brace groups currently open around the cursor
+    /// ([`Self::group`] / [`Self::math_group`]). A `\end` reached inside one
+    /// has its `\begin` outside it, so it is macro code rather than a stray
+    /// (`\StopEventually{\end{document}}`, issue #71) — the `\end`-side twin of
+    /// [`Self::environment_escapes_group`].
+    group_depth: usize,
     /// Inside a `.dtx` `macrocode` body: the token index of the terminating
     /// frame `\end` (or `tokens.len()` when the frame is missing), pre-scanned
     /// by [`Self::macrocode_body`]. `None` outside a macrocode body. The frame
@@ -304,6 +310,7 @@ impl<'t> Parser<'t> {
             errors: Vec::new(),
             math_depth: 0,
             in_def_body: false,
+            group_depth: 0,
             macrocode_end: None,
             plain_braces: std::collections::HashSet::new(),
             expl_toggles,
@@ -781,12 +788,27 @@ impl<'t> Parser<'t> {
                     && self.at_command(BEGIN_CMD)
                     && self.env_name_follows(self.pos)
                 {
-                    self.environment();
+                    // Shape-gated like `\[`: an environment cannot outlive the
+                    // brace group it opened in, so one whose `\end` is not
+                    // reachable before that group closes is macro code — a
+                    // plain command, no diagnostic (issue #71).
+                    if self.environment_escapes_group(self.pos) {
+                        self.command();
+                    } else {
+                        self.environment();
+                    }
                 } else if !self.in_macro_code(self.pos)
                     && self.at_command(END_CMD)
                     && self.env_name_follows(self.pos)
                 {
-                    self.stray_end();
+                    // The mirror case: reached inside a group, this `\end`'s
+                    // `\begin` is outside it, so it is macro code rather than
+                    // stray (`\StopEventually{\end{document}}`, issue #71).
+                    if self.group_depth > 0 && !self.on_doc_margin_line(self.pos) {
+                        self.command();
+                    } else {
+                        self.stray_end();
+                    }
                 } else {
                     self.command();
                 }
@@ -1046,6 +1068,7 @@ impl<'t> Parser<'t> {
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
+        self.group_depth += 1;
         loop {
             match self.kind() {
                 None => {
@@ -1059,6 +1082,7 @@ impl<'t> Parser<'t> {
                 _ => self.element(),
             }
         }
+        self.group_depth -= 1;
         self.close();
     }
 
@@ -1741,6 +1765,7 @@ impl<'t> Parser<'t> {
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
+        self.group_depth += 1;
         loop {
             match self.kind() {
                 None => {
@@ -1754,6 +1779,7 @@ impl<'t> Parser<'t> {
                 _ => self.math_element(),
             }
         }
+        self.group_depth -= 1;
         self.close();
     }
 
@@ -1849,6 +1875,90 @@ impl<'t> Parser<'t> {
         self.error("`\\right` without matching `\\left`");
         self.bump(); // \right
         self.math_delim(RIGHT_CMD);
+    }
+
+    /// The environment twin of [`Self::delim_math_closes`]: whether the
+    /// `\begin` at `open` is cut short by the closing brace of a group it sits
+    /// *inside*, with no `\end` of its own reachable first.
+    ///
+    /// Brace groups are catcode-level structure while `\begin`/`\end` are only
+    /// macros, so a `}` closing a group opened before the `\begin` always wins —
+    /// the environment cannot span it. Package code leans on this constantly:
+    /// the two halves sit in sibling groups
+    /// (`\newcolumntype{w}[2]{>{\begin{lrbox}…}c<{\end{lrbox}…}}`, array.sty),
+    /// in sibling macros (`\newcommand\BeginExample{…\begin{VerbatimOut}…}`
+    /// paired with `\EndExample`, rotex.tex), or the `\begin` is prose in a
+    /// message argument that never runs as structure
+    /// (`\PackageError{amstex}{\string\begin{split} is not allowed…}`,
+    /// amstex.sty — all issue #71). In each the `\begin` is an ordinary token:
+    /// it opens no `ENVIRONMENT` and draws **no diagnostic**, the same shape
+    /// gate `\[` already gets from [`Self::delim_math_closes`]. Without it the
+    /// environment swallows the `}` and cascades into unmatched-brace noise
+    /// that fails the whole file for the formatter.
+    ///
+    /// Only the *group boundary* suppresses the environment. A `\begin` that
+    /// merely runs out of file still opens one, so the unclosed-environment
+    /// diagnostic keeps firing on a genuinely forgotten `\end`. A `\end` of
+    /// another name terminates the scan too, leaving the existing mismatch
+    /// recovery in [`Self::finish_environment`] untouched. Does not consume.
+    fn environment_escapes_group(&self, open: usize) -> bool {
+        // Only a group the `\begin` is *actually* inside can cut it short. At
+        // the outer level there is no such brace, and a later unbalanced `}`
+        // is somebody else's business — notably a `.dtx` doc-line
+        // `\begin{macro}`, whose intervening `macrocode` chunks split
+        // definitions across braces on purpose ([`Self::plain_braces`], only
+        // populated once that chunk is entered). Without this guard the scan
+        // reads those as its own boundary and unnests the whole doc layer.
+        if self.group_depth == 0 {
+            return false;
+        }
+        // `.dtx` doc-margin lines are exempt, exactly as they are from the
+        // expl3 carve-out ([`Self::expl_toggles`]): `\begin{macro}` and friends
+        // are the *documentation* layer and must keep pairing across the
+        // macrocode chunks between them. Those bodies routinely span code that
+        // leaves a brace open on purpose — a `\iffalse}\fi` editor-balance
+        // hack, a `` \char`} `` constant, a catcode-swapped region — which
+        // strands `group_depth` above zero for the rest of the file and would
+        // otherwise unnest the whole doc layer behind it. (A paragraph-break
+        // bound cannot stand in here: a blank `.dtx` doc line is still a `%`
+        // margin, so it never reads as a `\par`.)
+        if self.on_doc_margin_line(open) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut envs = 0usize;
+        let end = self
+            .macrocode_end
+            .unwrap_or(self.tokens.len())
+            .min(self.tokens.len());
+        let mut i = open + 1;
+        while i < end {
+            let t = &self.tokens[i];
+            match t.kind {
+                // The `{name}` group of this very `\begin` nests and unnests
+                // here, so the scan resumes at the environment's own level.
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
+                    if depth == 0 {
+                        return true;
+                    }
+                    depth -= 1;
+                }
+                SyntaxKind::CONTROL_WORD if depth == 0 && !self.in_macro_code(i) => {
+                    if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
+                        envs += 1;
+                    } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
+                        if envs == 0 {
+                            return false;
+                        }
+                        envs -= 1;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// `\begin{name} … \end{name}`, with environment-mismatch recovery.

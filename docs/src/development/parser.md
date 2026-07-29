@@ -234,6 +234,16 @@ gate the formatter, so they must be high-precision; a likely-typo lone `$` in
 prose is linter territory.) A closing `$` counts only outside `{…}` nesting
 (`math_group` consumes a nested dollar as an ordinary atom).
 
+Both gates must mirror the parse they guard, and the paragraph-break anchor is
+tested only *between top-level atoms* of the math body: once the body descends
+into a `{…}` group or a nested environment, a blank line is ordinary body
+trivia and the math runs on (`paragraph_break_blocks`, issue #70). Scanning
+those blank lines as blockers made the gate stricter than the parse, so a
+display equation laid out from `tikzpicture` cells—
+`\[ \begin{array}… \begin{tikzpicture}`, blank line, `…\]`, the standard
+Feynman-diagram idiom—lost its math node and reported its own `\]` as
+unmatched, which in turn refused the whole file to the formatter.
+
 `\[`/`\(` are gated the same way (`delim_math_closes`, issue #65): macro code
 passes the delimiters around as data (`\expandafter\@tempa\[\@nil`), so an
 opener with no reachable closer stays an ordinary token, no diagnostic. An

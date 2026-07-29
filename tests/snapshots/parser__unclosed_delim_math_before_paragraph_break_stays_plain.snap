@@ -1,0 +1,18 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\[\\n  a\\n\\n  b\\n\\\\]\")"
+---
+ROOT@0..14
+  PARAGRAPH@0..6
+    CONTROL_SYMBOL@0..2 "\\["
+    NEWLINE@2..3 "\n"
+    WHITESPACE@3..5 "  "
+    WORD@5..6 "a"
+  NEWLINE@6..7 "\n"
+  NEWLINE@7..8 "\n"
+  WHITESPACE@8..10 "  "
+  PARAGRAPH@10..14
+    WORD@10..11 "b"
+    NEWLINE@11..12 "\n"
+    CONTROL_SYMBOL@12..14 "\\]"
+error @12..14: unmatched `\]`

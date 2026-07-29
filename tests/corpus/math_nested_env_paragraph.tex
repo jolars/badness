@@ -1,0 +1,43 @@
+A display equation whose cells are pictures, with blank lines inside them
+(smoke-test issue #70): the blank line belongs to the nested environment, not
+to the math body, so the math still pairs with its closer.
+
+\[\arraycolsep=0.25em\def\arraystretch{2.2}
+  \begin{array}{ccc}
+  \displaystyle\frac{Z(m^2, \lambda)}{Z(m^2, 0)} & \sim &
+  \begin{tikzpicture}[eqpic]
+    \node [circ] at (0, 0) {};
+
+    \draw (0, 0.5) ellipse (0.3 and 0.5);
+    \draw (0, -0.5) ellipse (0.3 and 0.5);
+  \end{tikzpicture}\\
+  && 1 &+& \displaystyle\frac{-\lambda \hbar}{m^4} \frac{1}{8}
+\end{array}
+\]
+
+The same holds for the other math delimiters:
+
+$$
+\begin{tikzpicture}
+  \draw (0, 0) -- (1, 1);
+
+  \draw (1, 1) -- (2, 0);
+\end{tikzpicture}
+$$
+
+\(
+\begin{tikzpicture}
+  \node {a};
+
+  \node {b};
+\end{tikzpicture}
+\)
+
+A brace group nested in math is the same story: `math_group` consumes the
+blank line as ordinary body trivia.
+
+\[
+  \text{a
+
+  b}
+\]

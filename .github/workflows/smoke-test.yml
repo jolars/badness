@@ -115,6 +115,18 @@ jobs:
         # \right form a group". TeX rejects it for exactly the reason badness
         # does, so no parser change is correct here. Issue #71.
         latex3/latex2e|required/graphics/mathcolor.dtx|format-error
+        # lscape.dtx wraps its whole manual in a doc-prose `\begin{landscape}`
+        # whose closer is `\MaybeStop{\end{landscape}}` — doc.sty's finishing-code
+        # macro (the `\StopEventually` successor) runs its argument at TeX time,
+        # so the `\end{landscape}` lives inside a macro-argument brace group. The
+        # brace-group gate rightly reads that `\end` as macro code (like
+        # `\StopEventually{\end{document}}` in the gate itself), which leaves the
+        # top-level `\begin` with no reachable closer. Pairing them needs to know
+        # `\MaybeStop` executes its argument — macro semantics, a TeX engine. The
+        # symmetric begin-side demotion is out of reach structurally: a top-level
+        # forward scan cannot tell a macrocode-chunk brace from a real group (why
+        # `environment_escapes_group` bails at `group_depth == 0`). Issue #71.
+        latex3/latex2e|required/graphics/lscape.dtx|format-error
         # Genuinely broken upstream (a commented-out balancing \end).
         latex3/latex3|xpackages/xor/xo-page.dtx|format-error
         latex3/latex3|xpackages/galley/galley2.dtx|format-error

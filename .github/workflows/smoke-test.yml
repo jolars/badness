@@ -91,6 +91,23 @@ jobs:
         # historical code with a deliberately unbalanced `\vbox{`; oldcomments is a
         # doc `comment`-like environment badness cannot know is opaque. Issue #71.
         latex3/latex2e|base/ltfloat.dtx|format-error
+        # expl3-code.tex rebinds the *structural* catcodes through expl3's own
+        # API: `\char_set_catcode_group_begin:N \^^@` / `_group_end:N` make
+        # `^^@` a brace for a region, so the file's real grouping is invisible
+        # to a `{`/`}`-based reader. Same non-goal as the `\catcode` bootstrap
+        # files above (AGENTS.md decision #1). Issue #71.
+        latex3/latex2e|texmf/tex/latex/l3kernel/expl3-code.tex|format-error
+        # Genuinely broken upstream — one typo each, and badness reads all three
+        # exactly as docstrip and doc.sty do. latex-lab-block.dtx indents a
+        # `%    \begin{macrocode}` frame (column 0 is the docstrip margin rule,
+        # so the frame is commented out and its chunk is typeset as prose);
+        # latex-lab-enumitem.dtx opens a `\changes{` on a `%%` line (the second
+        # `%` comments the line out, stranding the `}` on the next doc line);
+        # latex-lab-new-or-2.dtx comments out an `\end{plugdecl}` as
+        # `% %  \end{plugdecl}`. Issue #71.
+        latex3/latex2e|required/latex-lab/latex-lab-block.dtx|format-error
+        latex3/latex2e|required/latex-lab/latex-lab-enumitem.dtx|format-error
+        latex3/latex2e|required/latex-lab/latex-lab-new-or-2.dtx|format-error
         latex3/latex3|l3kernel/testfiles-backend/support/driver.tex|format-error
         latex3/latex3|texmf/tex/latex/base/nfssfont.tex|format-error
         latex3/latex3|xpackages/xinitials/xinitials-test.tex|format-error

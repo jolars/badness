@@ -237,6 +237,19 @@ fn is_definition_keyword(text: &str) -> bool {
 /// The number-*producing* primitives (`\number`/`\the`/`\romannumeral`) and the
 /// numeric conditionals (`\ifnum`/`\ifodd`/`\ifdim`) are included alongside the
 /// codetables because their operand is just as routinely a backtick constant.
+/// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
+/// that grabs the *next token* without expanding it, so a following character
+/// keeps its literal shape. Only the short-verb capture reads this: an active
+/// `|` after `\string` is the token being printed, not a `\verb`-style opener
+/// (`\meta{first\texttt{\string|}last}`, lthooks.dtx). A closed curated set,
+/// read from the static keyword alone — no macro meaning.
+fn is_literal_token_command(text: &str) -> bool {
+    matches!(
+        text,
+        "\\string" | "\\noexpand" | "\\meaning" | "\\expandafter" | "\\show"
+    )
+}
+
 fn is_char_constant_command(text: &str) -> bool {
     matches!(
         text,
@@ -300,7 +313,7 @@ pub fn lex(input: &str) -> Vec<Token> {
 /// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter) and
 /// whether to run the `.dtx` docstrip mode.
 pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
-    let mut out = Vec::new();
+    let mut out: Vec<Token> = Vec::new();
     let mut pos = 0;
     let mut at_letter = config.flavor.letter_mode_start(); // `\makeatletter` state
     // `\ExplSyntaxOn` state: while true, `_` and `:` are catcode-11 letters, so
@@ -355,8 +368,27 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     // prose (issue #60), so without this the hidden `$`/`{` cascade into
     // unclosed-math and unclosed-group diagnostics.
     let mut pending_char_constant = false;
+    // True right after a primitive that consumes the *next token* unexpanded
+    // ([`is_literal_token_command`]), where a short-verb character is that
+    // token rather than a capture opener (`\string|`, lthooks.dtx, issue #71).
+    let mut pending_literal_token = false;
+    // Number of brace groups open at the cursor, counted over every token
+    // emitted so far (helpers push braces too, so `out` is the one place that
+    // sees them all). Read by the char-constant branch: inside a group TeX has
+    // already claimed a `{`/`}` as balanced-text structure, so a backtick there
+    // cannot hide it. Saturating, so an unbalanced file never underflows.
+    let mut brace_depth = 0usize;
+    let mut brace_counted = 0usize;
     while pos < input.len() {
         let rest = &input[pos..];
+        while brace_counted < out.len() {
+            match out[brace_counted].kind {
+                SyntaxKind::L_BRACE => brace_depth += 1,
+                SyntaxKind::R_BRACE => brace_depth = brace_depth.saturating_sub(1),
+                _ => {}
+            }
+            brace_counted += 1;
+        }
 
         // `.dtx` `macrocode` frame line. A `%␣*\begin{macrocode}` line opens a code
         // region; its `%␣*\end{macrocode}` terminator closes it. Both lex as a
@@ -380,6 +412,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             pos += consumed;
             at_line_start = false;
             pending_delim = false;
+            pending_literal_token = false;
             pending_def = false;
             continue;
         }
@@ -439,6 +472,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         if let Some(consumed) = lex_verbatim_environment(rest, ctx, &mut out) {
             pos += consumed;
             pending_delim = false;
+            pending_literal_token = false;
             pending_def = false;
             at_line_start = false;
             continue;
@@ -451,6 +485,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         if !in_macrocode && let Some(consumed) = lex_verbatim_arg_environment(rest, &mut out) {
             pos += consumed;
             pending_delim = false;
+            pending_literal_token = false;
             pending_def = false;
             at_line_start = false;
             continue;
@@ -467,6 +502,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         {
             pos += consumed;
             pending_delim = false;
+            pending_literal_token = false;
             at_line_start = false;
             continue;
         }
@@ -477,10 +513,15 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         // ordinary catcode-12 character) and after `\left`/`\right` (whose next
         // character is a delimiter, `\left|x\right|`). With no closing delimiter
         // on the line, fall through: the word-run truncation below still emits
-        // the lone character as its own token.
+        // the lone character as its own token. Also gated off after a primitive
+        // that takes the next token unexpanded ([`is_literal_token_command`]):
+        // `\string|` prints the bar, it does not open a capture that would run
+        // to the next `|` and swallow the intervening braces (lthooks.dtx's
+        // `\meta{first\texttt{\string|}last}\verb|):|`, issue #71).
         if !short_verbs.is_empty()
             && !in_macrocode
             && !pending_delim
+            && !pending_literal_token
             && let Some(c) = rest.chars().next()
             && short_verbs.contains(&c)
             && let Some(len) = delimited_len(rest)
@@ -503,10 +544,22 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
         // way, backtick plus the whole control symbol: a `\[`/`\]` there is the
         // *character* `[`/`]`, not a math delimiter (encguide.tex's char-code
         // table, issue #71).
+        //
+        // A *bare* `{`/`}` is the exception, and only at brace depth 0. Inside a
+        // group the brace has already been claimed as structure by whichever
+        // balanced-text scan opened it — a `\def` body or a macro argument, both
+        // of which count brace *tokens* long before `\char` ever runs — so the
+        // `}` in `` \def\v{\char`} `` (longtable.dtx) and the `` \ifnum`}=0\fi ``
+        // brace-balance idiom (longtable/amsmath) closes its group and is not
+        // data. At depth 0 there is no such scan and the constant reading stands
+        // (`a close-group character is written \char`} in running text`). The
+        // *escaped* form `` `\} `` is unaffected: a control symbol is never a
+        // group delimiter, so it stays data at any depth (issue #71).
         if pending_char_constant
             && let Some(after) = rest.strip_prefix('`')
             && let Some(c) = after.chars().next()
             && !matches!(c, '\n' | '\r')
+            && !(brace_depth > 0 && matches!(c, '{' | '}'))
             && let Some(len) = if c == '\\' {
                 // `` `\X ``: backtick, backslash, and one escaped character; a
                 // bare `` `\ `` at line end has no character and falls through.
@@ -527,6 +580,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             at_line_start = false;
             pending_char_constant = false;
             pending_delim = false;
+            pending_literal_token = false;
             pending_def = false;
             continue;
         }
@@ -548,6 +602,7 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             pos += len;
             at_line_start = false;
             pending_delim = false;
+            pending_literal_token = false;
             pending_def = false;
             continue;
         }
@@ -614,6 +669,12 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             // Trivia is skipped before the delimiter, so the mode persists.
             SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => pending_delim,
             SyntaxKind::CONTROL_WORD if text == "\\left" || text == "\\right" => true,
+            _ => false,
+        };
+        pending_literal_token = match kind {
+            // TeX skips spaces before the token it is about to grab.
+            SyntaxKind::WHITESPACE => pending_literal_token,
+            SyntaxKind::CONTROL_WORD if is_literal_token_command(text) => true,
             _ => false,
         };
         pending_char_constant = match kind {

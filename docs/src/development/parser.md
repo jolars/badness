@@ -153,6 +153,16 @@ bodies (a code layer) and after `\left`/`\right` (the `|` is a delimiter). A
 span with no closing character on its line falls back to an ordinary lone
 character.
 
+It is gated off once more after a primitive that grabs the *next token*
+unexpanded (`parser::lexer::is_literal_token_command`:
+`\string`/`\noexpand`/`\meaning`/`\expandafter`/`\show`). `\string|` prints the
+bar—the active character is the token being printed, not a capture opener. The
+doc layer writes that in prose, and capturing there runs the span on to the
+*next* `|` and swallows whatever braces lie between: lthooks.dtx's
+`\meta{first\texttt{\string|}last}\verb|):|` lost the `}` closing `\texttt{`
+and `\meta{`, unnesting the `quote` environment around it (issue #71). This is
+the same family as the `\left`/`\right` gate one paragraph up.
+
 ### Macrocode chunk bodies (`.dtx`)
 
 A frame-lexed `macrocode`/`macrocode*` body is *macro code* whose only
@@ -165,6 +175,20 @@ arguments—the next line's `{` is body code). As with definition bodies,
 Matched pairs still form `GROUP`s, via a per-chunk brace pre-scan
 (`parser::grammar::macrocode_body`), and a `[` attaches as an optional only when
 its `]` closes inside the chunk.
+
+### Docstrip guard lines are content, not blank space (`.dtx`)
+
+A line-leading `%<…>` lexes as a `GUARD` trivia leaf in any layer. For the
+layout rules it *floats* like a `DOC_MARGIN`, so the blank-line test still sees
+`%\n%\n` as a `\par`. But a guard-only line (`%<*dtx>`) is not blank: docstrip
+**deletes** it outright when it strips the file, so the lines around it are
+adjacent, not parted. The shape gates that ask only "did my construct's source
+run out mid-shape?" therefore read
+`TriviaScan::saw_blank_line_outside_guards`—a second blank-line tally that a
+guard resets—rather than the layout one. rotating.dtx is the case: it splits
+`\ProvidesPackage{rotating}`'s `[…date…]` optional across `%<package>` and
+`%<*dtx>`/`%</dtx>` variants, and reading the guard pair as a paragraph break
+bailed out of the `[` mid-argument (issue #71).
 
 ### `^^A` doc comments (`.dtx`)
 
@@ -226,6 +250,17 @@ can never open math or close a group. The escaped single-character form
 symbol—so a `\[`/`\]` there is the character `[`/`]`, not a math delimiter
 (encguide.tex's char-code table pairs `\relax[ … ]` across table rows, issue
 #71). This is the same family as the `\left`/`\right` delimiter isolation.
+
+A bare `{`/`}` is the one exception, and only *inside* a brace group. TeX's
+balanced-text scans—a `\def` body, a macro argument—count brace **tokens**, and
+they run long before `\char` ever would, so at depth > 0 the brace is structure
+and the backtick cannot hide it: ``\def\v{\char`}`` closes at that `}`
+(longtable.dtx), and the ``\ifnum`}=0\fi`` / ``\ifnum`{=\z@\fi`` brace-balance
+idiom keeps its braces structural instead of stranding the group it sits in
+(longtable, amsmath-2018-12-01.sty—issue #71). At depth 0 there is no such scan
+and the constant reading stands: *a close-group character is written*
+``\char`}`` *in running text*. The escaped form ``` `\} ``` is a control symbol,
+never a group delimiter, so it stays data at any depth.
 
 ### Signatures
 

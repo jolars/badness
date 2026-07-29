@@ -662,3 +662,40 @@ fn doc_margin_envs_still_pair_inside_a_spanning_expl_region() {
     // Two macrocode chunks plus the doc-layer `macro` environment.
     assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 3);
 }
+
+#[test]
+fn guard_only_line_does_not_part_an_optional_argument() {
+    // A `%<*dtx>`/`%</dtx>` block-guard line is content, and one docstrip
+    // *deletes* when it strips the file — so it is not the blank line its bare
+    // `NEWLINE GUARD NEWLINE` shape resembles. rotating.dtx splits
+    // `\ProvidesPackage{rotating}`'s `[…date…]` optional across such guards;
+    // reading them as a paragraph break bailed out of the `[` mid-argument
+    // (issue #71).
+    let (_root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         \\ProvidesPackage{rotating}%\n    \
+         [2026-05-17 v2.16e\n\
+         %<*dtx>\n            \
+         rotating package source file%\n\
+         %</dtx>\n        \
+         ]\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn short_verb_char_after_string_is_literal() {
+    // `\string|` prints the bar: `\string` takes the next token unexpanded, so
+    // the active short-verb `|` is data, not a capture opener. Capturing there
+    // ran the span to the *next* `|` and swallowed the intervening braces,
+    // stranding `\meta{`/`\texttt{` and unnesting the doc environment around it
+    // (lthooks.dtx, issue #71).
+    let (root, errors) = parse_dtx_with_errors(
+        "% \\begin{quote}\n\
+         %   \\verb|x |\\meta{a\\texttt{\\string|}b}\\verb|y|\n\
+         % \\end{quote}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+}

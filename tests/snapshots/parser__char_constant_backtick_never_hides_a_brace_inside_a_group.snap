@@ -1,0 +1,48 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\def\\\\v{\\\\char`}\\n\\\\def\\\\w{\\\\noalign{\\\\ifnum`}=0\\\\fi x}\\n\\\\def\\\\z{\\\\char`\\\\}}\")"
+---
+ROOT@0..64
+  PARAGRAPH@0..64
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\def"
+    COMMAND@4..14
+      CONTROL_WORD@4..6 "\\v"
+      GROUP@6..14
+        L_BRACE@6..7 "{"
+        COMMAND@7..12
+          CONTROL_WORD@7..12 "\\char"
+        WORD@12..13 "`"
+        R_BRACE@13..14 "}"
+    NEWLINE@14..15 "\n"
+    COMMAND@15..19
+      CONTROL_WORD@15..19 "\\def"
+    COMMAND@19..47
+      CONTROL_WORD@19..21 "\\w"
+      GROUP@21..47
+        L_BRACE@21..22 "{"
+        COMMAND@22..39
+          CONTROL_WORD@22..30 "\\noalign"
+          GROUP@30..39
+            L_BRACE@30..31 "{"
+            COMMAND@31..37
+              CONTROL_WORD@31..37 "\\ifnum"
+            WORD@37..38 "`"
+            R_BRACE@38..39 "}"
+        WORD@39..41 "=0"
+        COMMAND@41..44
+          CONTROL_WORD@41..44 "\\fi"
+        WHITESPACE@44..45 " "
+        WORD@45..46 "x"
+        R_BRACE@46..47 "}"
+    NEWLINE@47..48 "\n"
+    COMMAND@48..52
+      CONTROL_WORD@48..52 "\\def"
+    COMMAND@52..64
+      CONTROL_WORD@52..54 "\\z"
+      GROUP@54..64
+        L_BRACE@54..55 "{"
+        COMMAND@55..60
+          CONTROL_WORD@55..60 "\\char"
+        WORD@60..63 "`\\}"
+        R_BRACE@63..64 "}"

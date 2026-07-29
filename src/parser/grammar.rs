@@ -171,6 +171,12 @@ struct TriviaScan {
     /// The run before `next` contains a blank line (≥2 `NEWLINE`s: the `\par`
     /// boundary).
     saw_blank_line: bool,
+    /// As [`Self::saw_blank_line`], but a `.dtx` docstrip guard line counts as
+    /// content rather than blank space. Docstrip *deletes* a guard-only line
+    /// when it strips the file, so `%<*dtx>` between two lines does not part
+    /// them — read by the shape gates that only ask whether their construct's
+    /// source ran out mid-shape (issue #71).
+    saw_blank_line_outside_guards: bool,
     /// Start index of the leading own-line `%` comment run immediately preceding
     /// `next` — the maximal blank-line-free suffix, the start of a
     /// leading-comment bind. `None` if that suffix has no own-line comment.
@@ -512,16 +518,21 @@ impl<'t> Parser<'t> {
     /// `DOC_MARGIN`, and `GUARD` float (a `.dtx` margin neither counts as a
     /// newline nor resets the run, so a margin-only line `%\n%\n` still reads as a
     /// blank line via its two `NEWLINE`s); `NEWLINE`s accumulate into the blank-line
-    /// (`≥2`) test; a `COMMENT` is handled per [`CommentMode`]. Does not consume.
+    /// (`≥2`) test; a `COMMENT` is handled per [`CommentMode`]. A `GUARD` floats
+    /// for `saw_blank_line` but breaks the run for
+    /// [`TriviaScan::saw_blank_line_outside_guards`]. Does not consume.
     fn scan_trivia(&self, from: usize, comment_mode: CommentMode) -> TriviaScan {
         let mut i = from;
         let mut newlines = 0;
+        let mut guard_newlines = 0;
         let mut saw_blank_line = false;
+        let mut saw_blank_line_outside_guards = false;
         let mut comment_start = None;
         while let Some(t) = self.tokens.get(i) {
             match t.kind {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
+                    guard_newlines += 1;
                     if newlines >= 2 {
                         saw_blank_line = true;
                         // A blank line breaks a leading-comment bind: only a
@@ -529,8 +540,19 @@ impl<'t> Parser<'t> {
                         // seen before it.
                         comment_start = None;
                     }
+                    if guard_newlines >= 2 {
+                        saw_blank_line_outside_guards = true;
+                    }
                 }
-                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {}
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => {}
+                // A docstrip guard floats like a margin for the layout rules
+                // (`saw_blank_line`), but it is *content* on its line — and a
+                // line docstrip deletes outright when it strips the file, so a
+                // guard-only line is not a blank line separating what surrounds
+                // it. Constructs that only need to know whether their source
+                // ran out mid-shape read `saw_blank_line_outside_guards`
+                // instead (issue #71).
+                SyntaxKind::GUARD => guard_newlines = 0,
                 SyntaxKind::COMMENT if comment_mode == CommentMode::Stop => break,
                 // A comment occupies its own line: it is content, not blank space,
                 // so it resets the newline run (without undoing a blank line
@@ -538,6 +560,7 @@ impl<'t> Parser<'t> {
                 // leading-comment bind.
                 SyntaxKind::COMMENT => {
                     newlines = 0;
+                    guard_newlines = 0;
                     if comment_start.is_none() && self.comment_starts_line(i) {
                         comment_start = Some(i);
                     }
@@ -550,6 +573,7 @@ impl<'t> Parser<'t> {
             next: i,
             next_kind: self.tokens.get(i).map(|t| t.kind),
             saw_blank_line,
+            saw_blank_line_outside_guards,
             comment_start,
         }
     }
@@ -579,6 +603,17 @@ impl<'t> Parser<'t> {
     /// True if a paragraph break (blank line) begins at the current position.
     fn at_paragraph_break(&self) -> bool {
         self.scan_trivia(self.pos, CommentMode::Skip).saw_blank_line
+    }
+
+    /// [`Self::at_paragraph_break`], but blind to `.dtx` docstrip guard lines:
+    /// a `%<*dtx>`/`%</dtx>` pair on its own lines is not the blank line it
+    /// looks like, because docstrip deletes those lines outright. Used by the
+    /// bail-out anchors of constructs that legitimately span a guarded block —
+    /// `\ProvidesPackage{…}` and its `[…date…]` optional, split across
+    /// `%<package>`/`%<*dtx>` variants (rotating.dtx, issue #71).
+    fn at_paragraph_break_outside_guards(&self) -> bool {
+        self.scan_trivia(self.pos, CommentMode::Skip)
+            .saw_blank_line_outside_guards
     }
 
     /// True if the comment at `pos` starts its own line: scanning back over
@@ -1120,7 +1155,7 @@ impl<'t> Parser<'t> {
                 _ => {
                     // The macrocode frame terminator is absolute: an optional
                     // still open there is abandoned, never consumes the frame.
-                    if self.at_paragraph_break()
+                    if self.at_paragraph_break_outside_guards()
                         || self.macrocode_end.is_some_and(|end| self.pos >= end)
                     {
                         self.error_at(opener, "unclosed `[`");

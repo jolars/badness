@@ -1003,9 +1003,24 @@ fn spaced_name_group_still_reads_as_an_environment() {
 fn char_constant_backtick_keeps_the_next_character_plain() {
     // TeX char-constant notation (smoke-test issue #60): after `\char`/
     // `\catcode`-family primitives, a backtick makes the next character data —
-    // `\char`$` must not open math and `\char`}` must not close a group. The
-    // backtick and its character lex as one plain `WORD` token.
-    insta::assert_snapshot!(tree("\\item[\\char`$ or z] and {\\char`} too}"));
+    // `\char`$` must not open math, and in running text `\char`}` is the
+    // close-group *character*, not a group closer. The backtick and its
+    // character lex as one plain `WORD` token.
+    insta::assert_snapshot!(tree("\\item[\\char`$ or z] and \\char`} too"));
+}
+
+#[test]
+fn char_constant_backtick_never_hides_a_brace_inside_a_group() {
+    // Inside a group the brace wins: whichever balanced-text scan opened it — a
+    // `\def` body here — counts brace *tokens* long before `\char` could run,
+    // so `` \def\v{\char`} `` closes at that `}` (longtable.dtx), and the
+    // `` \ifnum`}=0\fi `` / `` \ifnum`{=\z@\fi `` balance idiom keeps its braces
+    // structural instead of stranding the enclosing group (issue #71). The
+    // escaped form `` `\} `` is a control symbol, never a delimiter, so it
+    // stays data at any depth.
+    insta::assert_snapshot!(tree(
+        "\\def\\v{\\char`}\n\\def\\w{\\noalign{\\ifnum`}=0\\fi x}\n\\def\\z{\\char`\\}}"
+    ));
 }
 
 #[test]

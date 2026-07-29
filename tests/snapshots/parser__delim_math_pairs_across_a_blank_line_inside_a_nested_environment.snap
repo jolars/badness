@@ -1,0 +1,33 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\[\\n\\\\begin{tikzpicture}\\na\\n\\nb\\n\\\\end{tikzpicture}\\n\\\\]\")"
+---
+ROOT@0..48
+  PARAGRAPH@0..48
+    DISPLAY_MATH@0..48
+      CONTROL_SYMBOL@0..2 "\\["
+      MATH@2..46
+        NEWLINE@2..3 "\n"
+        ENVIRONMENT@3..45
+          BEGIN@3..22
+            CONTROL_WORD@3..9 "\\begin"
+            NAME_GROUP@9..22
+              L_BRACE@9..10 "{"
+              WORD@10..21 "tikzpicture"
+              R_BRACE@21..22 "}"
+          PARAGRAPH@22..24
+            NEWLINE@22..23 "\n"
+            WORD@23..24 "a"
+          NEWLINE@24..25 "\n"
+          NEWLINE@25..26 "\n"
+          PARAGRAPH@26..27
+            WORD@26..27 "b"
+          NEWLINE@27..28 "\n"
+          END@28..45
+            CONTROL_WORD@28..32 "\\end"
+            NAME_GROUP@32..45
+              L_BRACE@32..33 "{"
+              WORD@33..44 "tikzpicture"
+              R_BRACE@44..45 "}"
+        NEWLINE@45..46 "\n"
+      CONTROL_SYMBOL@46..48 "\\]"

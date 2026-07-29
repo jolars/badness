@@ -1280,6 +1280,22 @@ impl<'t> Parser<'t> {
         false
     }
 
+    /// Whether a paragraph break seen by the math shape gates
+    /// ([`Self::dollar_closes`], [`Self::delim_math_closes`]) ends the math.
+    ///
+    /// Only at the math body's own level. Both gates must mirror the parse
+    /// they guard, and `dollar_math`/`delim_math` test `at_paragraph_break`
+    /// only between top-level atoms: once the body descends into a `{…}`
+    /// group ([`Self::math_group`]) or a nested environment
+    /// ([`Self::environment`]), blank lines are ordinary body trivia and the
+    /// math runs on. Scanning them as blockers made the gate stricter than
+    /// the parse, so a display equation built out of `tikzpicture` cells
+    /// (`\[ \begin{array}… \begin{tikzpicture}<blank line>… \]`, issue #70)
+    /// lost its math node and reported its own `\]` as unmatched.
+    fn paragraph_break_blocks(depth: usize, envs: usize) -> bool {
+        depth == 0 && envs == 0
+    }
+
     /// True if the `$` (or `$$`) opener at token index `open` is closed by a
     /// matching delimiter before a token that would end the math. `$`/`$$` are
     /// data in macro code at least as often as they are math delimiters (a
@@ -1292,8 +1308,10 @@ impl<'t> Parser<'t> {
     /// only outside `{…}` nesting — [`Self::math_group`] consumes a nested
     /// dollar as an ordinary atom, never as the closer — and for `$$` a lone
     /// `$` is skipped exactly as `dollar_math` skips it (malformed but
-    /// consumed). Inside a definition body `\begin`/`\end` are plain commands
-    /// (issue #45), so neither anchors nor nests there. Does not consume.
+    /// consumed). Likewise a paragraph break blocks only at the math body's
+    /// own level ([`Self::paragraph_break_blocks`]). Inside a definition body
+    /// `\begin`/`\end` are plain commands (issue #45), so neither anchors nor
+    /// nests there. Does not consume.
     fn dollar_closes(&self, open: usize, display: bool) -> bool {
         let mut depth = 0usize;
         let mut envs = 0usize;
@@ -1309,7 +1327,7 @@ impl<'t> Parser<'t> {
             match t.kind {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
-                    if newlines >= 2 {
+                    if newlines >= 2 && Self::paragraph_break_blocks(depth, envs) {
                         return false;
                     }
                     i += 1;
@@ -1361,7 +1379,9 @@ impl<'t> Parser<'t> {
     /// `$`). Same blockers as `dollar_closes`, mirroring
     /// [`Self::delim_math`]'s recovery anchors: an unbalanced `}`, an `\end`
     /// not owed to an intervening `\begin`, a paragraph break, the macrocode
-    /// chunk end, EOF. The closer counts only outside `{…}` nesting.
+    /// chunk end, EOF. The closer counts only outside `{…}` nesting, and a
+    /// paragraph break blocks only at the math body's own level
+    /// ([`Self::paragraph_break_blocks`]).
     fn delim_math_closes(&self, open: usize, closer: &str) -> bool {
         let mut depth = 0usize;
         let mut envs = 0usize;
@@ -1376,7 +1396,7 @@ impl<'t> Parser<'t> {
             match t.kind {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
-                    if newlines >= 2 {
+                    if newlines >= 2 && Self::paragraph_break_blocks(depth, envs) {
                         return false;
                     }
                     i += 1;

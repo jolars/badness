@@ -862,6 +862,42 @@ fn delim_math_still_pairs_across_lines() {
 }
 
 #[test]
+fn delim_math_pairs_across_a_blank_line_inside_a_nested_environment() {
+    // Smoke-test issue #70: a display equation laid out from `tikzpicture`
+    // cells has blank lines inside the pictures. Those belong to the nested
+    // environment — `delim_math` only anchors on a paragraph break between
+    // top-level atoms — so the gate must not read them as ending the math.
+    // Reading them as blockers dropped the math node and left the real `\]`
+    // reported as unmatched.
+    insta::assert_snapshot!(tree(
+        "\\[\n\\begin{tikzpicture}\na\n\nb\n\\end{tikzpicture}\n\\]"
+    ));
+}
+
+#[test]
+fn delim_math_pairs_across_a_blank_line_inside_a_group() {
+    // Same boundary via `{…}`: `math_group` consumes a blank line as ordinary
+    // body trivia, so the gate must too.
+    insta::assert_snapshot!(tree("\\(\n\\text{a\n\nb}\n\\)"));
+}
+
+#[test]
+fn unclosed_delim_math_before_paragraph_break_stays_plain() {
+    // The other side of that boundary: at the math body's own level a blank
+    // line is still a `\par`, so `\[` finds no reachable closer and stays a
+    // plain token (the orphaned `\]` carries the diagnostic).
+    insta::assert_snapshot!(tree("\\[\n  a\n\n  b\n\\]"));
+}
+
+#[test]
+fn dollar_math_pairs_across_a_blank_line_inside_a_nested_environment() {
+    // The `$$` twin of issue #70: `dollar_closes` mirrors the same anchors.
+    insta::assert_snapshot!(tree(
+        "$$\n\\begin{tikzpicture}\na\n\nb\n\\end{tikzpicture}\n$$"
+    ));
+}
+
+#[test]
 fn braceless_end_is_a_plain_command() {
     // The `\begin`/`\end` shape gate (smoke-test issue #60): macro code uses
     // the bare TeX primitive (`\let\end\@@end`, docstrip's

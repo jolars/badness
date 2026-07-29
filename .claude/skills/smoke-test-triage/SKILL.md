@@ -27,6 +27,15 @@ especially idempotency and losslessness regressions.
    - badness commit/version used by the scan
    - report excerpt and the approximate diff start line
 
+   Then **check the `ALLOWLIST` in `.github/workflows/smoke-test.yml`** before
+   doing any work. It holds `repo|path|type` entries for failures already
+   triaged as out of scope, and matching failures are suppressed from issue
+   filing. An issue naming an already-listed file means the scan predates the
+   entry — confirm and close rather than re-triaging it. The issue's sample
+   file is only the *first* failure in its bucket, so scan the whole repo
+   (`badness debug format --checks all --report .`) and triage by root cause;
+   the named sample is often not the most actionable one.
+
 2. Reproduce in a local clone of the target repository:
    - the issue's `logs/…` paths (sample log, report, and the idempotency
      `input`/`once`/`twice` dumps) are relative to the run artifact; fetch it
@@ -77,10 +86,39 @@ especially idempotency and losslessness regressions.
      rewrites must be meaning-preserving and reach a fixed point on the
      second pass.
    - **`format-error` ⇒ the formatter refused the input** (parse diagnostics
-     or an unsupported construct). Run `badness parse <file>` and read the
-     errors: either the parser mis-parses valid LaTeX (fix the grammar or
-     recovery; see the recovery anchors in AGENTS.md decision #5) or the file
-     is genuinely broken upstream (record it, no badness fix needed).
+     or an unsupported construct). Run `badness parse <file>` (diagnostics go
+     to **stderr**) and read the errors. Diagnostics cascade, so triage the
+     *earliest* error in each file — the rest are usually its fallout. Three
+     outcomes: the parser mis-parses valid LaTeX (fix the grammar or recovery;
+     see the recovery anchors in AGENTS.md decision #5), the file is genuinely
+     broken upstream, or the file is **statically unmodelable** — see below.
+   - **Statically unmodelable ⇒ out of scope; allowlist it, do not "fix" it.**
+     Some inputs cannot be parsed without running TeX, so no parser change is
+     correct. Fingerprints:
+     - *Structural catcode rebinding.* A region reassigns catcode 0/1/2/14 or
+       makes space active — doc.sty's `` \catcode`\!=\catcode`\% `` block (`|`
+       becomes the escape, `[`/`]` the group delimiters, `{`/`}` ordinary),
+       source2edoc.cls's `/gdef/oldc< … >`, pgf's bootstrap regions. Our CST's
+       structural vocabulary is built on `{`/`}`; a region that redefines it is
+       out of reach. Note `\makeatletter` is *not* this — it only changes
+       letter classification, which the lexer already handles.
+     - *Catcodes set through expansion.* `` \catcode`#1\active `` in a macro
+       body, or ``|catcode|expandafter`|special@escape@char|active`` — the
+       character is a macro parameter or expansion result, so no static reader
+       can resolve it. This is the proof that general catcode tracking is
+       impossible on real sources, not merely hard.
+     - *Balance hidden in a skipped conditional.* `\iffalse}\fi` /
+       `\iffalse{\fi` editor-balance tricks (docstrip.dtx, ltdefns.dtx).
+     - *Closed elsewhere.* A document whose `\end{document}` arrives by macro
+       expansion, or a fragment relying on a parent preamble's catcode and
+       short-verb state (the pgfmanual `\input` chunks).
+     Record these in the `ALLOWLIST` in `.github/workflows/smoke-test.yml` as
+     `repo|path|type`, grouped under a comment naming the root cause and the
+     issue. Only the named type is suppressed, so the file still reports if it
+     later fails a *different* way — an allowlist entry can never mask a new
+     regression. Be strict about what qualifies: a real modeling gap you simply
+     have not fixed yet is **not** out of scope, and allowlisting it buries the
+     work. When in doubt, leave it failing and say so in the report.
    - **`timeout` ⇒ a hang or pathological slowness.** Reproduce with the
      `/profile` skill's micro-bench; never-infinite-loop on unexpected input
      is a parser invariant.
@@ -121,6 +159,16 @@ especially idempotency and losslessness regressions.
      - `cargo fmt`
    - for parser/CST changes, also run `/parse-compat` (or `task parse-compat`)
      and triage any new divergence
+   - measure the fix against the **whole** target repo, not just the sample:
+     build a baseline binary (`git stash && cargo build --release`, copy it
+     aside, restore) and compare per-file diagnostic counts before/after. A
+     parser gate that fixes one shape routinely makes another *worse*, and only
+     a per-file diff catches it. Report the count, and treat any file that
+     regressed as a blocker, not a footnote.
+   - drop any `ALLOWLIST` entry the fix makes stale (the file now simply passes
+     and records nothing). Leaving a stale entry means a future regression in
+     that file is silently suppressed — the one way the allowlist *can* mask a
+     real bug.
 
 ## Badness-specific guidance
 
@@ -144,4 +192,10 @@ When done, report:
 2. Minimal reproducer summary.
 3. Fixture(s) added/updated.
 4. Root cause and code path changed.
-5. Validation commands run and outcomes.
+5. Validation commands run and outcomes, including the before/after failure
+   count over the whole target repo and confirmation that no file regressed.
+6. What you did **not** fix: the remaining buckets by root cause, which were
+   allowlisted as out of scope (with the reason) and which are open modeling
+   gaps still worth work. Say plainly whether the issue can be closed or should
+   stay open — a scan issue is rarely one bug, and a partial fix reported as a
+   whole one is worse than no fix.

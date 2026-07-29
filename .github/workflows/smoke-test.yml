@@ -70,13 +70,6 @@ jobs:
         # historical code with a deliberately unbalanced `\vbox{`; oldcomments is a
         # doc `comment`-like environment badness cannot know is opaque. Issue #71.
         latex3/latex2e|base/ltfloat.dtx|format-error
-        # Documents closed by macro expansion or a conditional branch: statically
-        # unclosed without a TeX evaluator (a non-goal).
-        # source2e.tex closes via `\StopEventually{\end{document}}`; ltnews39.tex
-        # splits `\begin{small}`/`\end{small}` across two `\tubcommand{…}` args.
-        # Issue #71.
-        latex3/latex2e|base/doc/source2e.tex|format-error
-        latex3/latex2e|base/doc/ltnews39.tex|format-error
         latex3/latex3|l3kernel/testfiles-backend/support/driver.tex|format-error
         latex3/latex3|texmf/tex/latex/base/nfssfont.tex|format-error
         latex3/latex3|xpackages/xinitials/xinitials-test.tex|format-error

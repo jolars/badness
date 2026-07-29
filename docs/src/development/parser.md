@@ -96,6 +96,48 @@ curated command-name set (`parser::grammar::is_definition_body_command`, a
 parser flag scoped to the attached arguments); the bodies stay generic macro
 code, never executed.
 
+### The environment group-boundary gate
+
+The curated command set above only covers bodies we can name. But the same
+splitting happens all over real package code under commands we do not (and
+should not) enumerate: `array.sty`'s `\newcolumntype{w}[2]{>{\begin{lrbox}…}c<{\end{lrbox}…}}`
+puts the two halves in *sibling* groups, `rotex.tex` pairs
+`\newcommand\BeginExample{…\begin{VerbatimOut}…}` against a separate
+`\EndExample`, `multicol.sty` splits `\@namedef{multicols*}`/`\@namedef{endmulticols*}`,
+and `amstex.sty` writes `\begin{split}` as *prose* inside a `\PackageError`
+message that never runs as structure (all issue #71).
+
+So environment pairing is shape-gated on brace structure instead, which needs no
+command list at all: **an environment can never outlive the brace group its
+`\begin` opened in.** Braces are catcode-level structure while `\begin`/`\end`
+are only macros, so a `}` closing a group opened *before* the `\begin` always
+wins. A `\begin` whose matching `\end` is not reachable before that `}` is
+therefore ordinary macro code—a plain `COMMAND`, **no diagnostic**, exactly as a
+gated `$` or `\[` stays a plain token (`parser::grammar::environment_escapes_group`).
+The mirror case holds for the closer: an `\end` reached *inside* a group has its
+`\begin` outside it, so it is macro code rather than stray—ltxdoc's
+`\StopEventually{\end{document}}`.
+
+Without the gate the environment swallowed the enclosing `}` and cascaded into
+unmatched-brace and unclosed-`{` noise, which—since parser diagnostics gate the
+formatter—refused the whole file.
+
+Two scope limits keep the gate high-precision:
+
+- **Only a group boundary suppresses the environment.** A `\begin` that merely
+  runs out of file still opens one, so a genuinely forgotten `\end` in prose
+  keeps its unclosed-environment diagnostic. Likewise an `\end` at the outer
+  level is still stray.
+- **`.dtx` doc-margin lines are exempt**, exactly as they are from the expl3
+  carve-out: `\begin{macro}` and friends are the *documentation* layer and must
+  keep pairing across the `macrocode` chunks between them. Those chunks
+  routinely leave a brace open on purpose (a `\iffalse}\fi` editor-balance hack,
+  a `` \char`} `` constant), which strands the group depth above zero for the
+  rest of the file and would otherwise unnest the whole doc layer behind it. A
+  paragraph-break bound cannot stand in here the way it does for the math
+  gates—a blank `.dtx` doc line is still a `%` margin, so it never reads as a
+  `\par`.
+
 ### Short verbs
 
 The `doc` package's `\MakeShortVerb{\|}`/`\DeleteShortVerb{\|}` toggle a

@@ -265,10 +265,33 @@ impl Ir {
         preferred: Vec<bool>,
         target: usize,
     ) -> Ir {
-        let atoms: Vec<Ir> = atoms
+        // Pair each atom with the "authored break before me" flag (the first
+        // atom has none), then drop `Ir::Nil` atoms together with their flag so
+        // the gap mask stays aligned with the surviving atoms. Filtering `atoms`
+        // alone would leave `preferred` too long, misindexing every downstream
+        // gap (and tripping the debug assertions in `stable_breaks`).
+        let mut flags = preferred.into_iter();
+        let surviving: Vec<(Ir, bool)> = atoms
             .into_iter()
-            .filter(|i| !matches!(i, Ir::Nil))
+            .enumerate()
+            .map(|(i, ir)| {
+                let before = if i == 0 {
+                    false
+                } else {
+                    flags.next().unwrap_or(false)
+                };
+                (ir, before)
+            })
+            .filter(|(ir, _)| !matches!(ir, Ir::Nil))
             .collect();
+        let mut atoms: Vec<Ir> = Vec::with_capacity(surviving.len());
+        let mut preferred: Vec<bool> = Vec::with_capacity(surviving.len().saturating_sub(1));
+        for (i, (ir, before)) in surviving.into_iter().enumerate() {
+            if i > 0 {
+                preferred.push(before);
+            }
+            atoms.push(ir);
+        }
         debug_assert_eq!(preferred.len(), atoms.len().saturating_sub(1));
         match atoms.len() {
             0 => Ir::Nil,

@@ -1170,7 +1170,7 @@ fn stable_wrapping_is_idempotent_over_random_prose() {
     let mut rng = Lcg(0x1234_5678_9abc_def0);
     for case in 0..400 {
         let input = random_prose(&mut rng);
-        // Vary the hard width; the soft target rides along at `width - 10`.
+        // Vary the hard width; the soft target rides along at `width - 15`.
         for &line_width in &[24usize, 40, 60, 72, 90] {
             let style = FormatStyle {
                 line_width,
@@ -1212,6 +1212,51 @@ fn stable_wrapping_is_idempotent_over_random_prose() {
             );
         }
     }
+}
+
+/// Stable wrapping over a `.dtx` documentation-prose block: the `% ` margin
+/// runs through the [`Ir::margin_prefix`] path (`continuation_col` accounts for
+/// the prefix), which the plain-prose stable tests never exercise. Every emitted
+/// line must honor the hard width including the margin, the output must round-trip
+/// losslessly under the docstrip config, and stable wrapping must be idempotent.
+#[test]
+fn stable_wraps_dtx_doc_prose_within_the_margin() {
+    let input = "% This documentation paragraph is authored on one long line that clearly overflows.\n\
+% A second authored line that also runs well past the configured hard width here.\n";
+    let style = FormatStyle {
+        line_width: 50,
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    let formatted = format_with_style_flavored(input, style, dtx_config()).expect("stable dtx");
+
+    // The margin counts toward the width: every wrapped `% ` line stays within 50.
+    assert!(
+        formatted.lines().all(|line| line.chars().count() <= 50),
+        "stable dtx wrapping must honor the hard width including the margin: {formatted:?}"
+    );
+    // Every line keeps its documentation margin (trivia-only change).
+    assert!(
+        formatted.lines().all(|line| line.starts_with('%')),
+        "stable dtx wrapping must preserve the `%` margin on every line: {formatted:?}"
+    );
+    // Clean, lossless round-trip under the docstrip config.
+    let reparsed = parse_with_flavor(&formatted, dtx_config());
+    assert!(
+        reparsed.errors.is_empty(),
+        "stable dtx output must parse cleanly: {formatted:?}"
+    );
+    assert_eq!(
+        reparsed.syntax().to_string(),
+        formatted,
+        "stable dtx output must round-trip losslessly"
+    );
+    // Idempotent under the same config + style.
+    assert_eq!(
+        format_with_style_flavored(&formatted, style, dtx_config()).expect("reformat"),
+        formatted,
+        "stable dtx wrapping must be idempotent"
+    );
 }
 
 /// A collapsible, inline-flagged command (the cite family) formats identically

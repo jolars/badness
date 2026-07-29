@@ -1376,6 +1376,39 @@ mod tests {
     }
 
     #[test]
+    fn preferred_fill_drops_nil_atoms_and_keeps_the_break_mask_aligned() {
+        // A `Nil` atom is filtered out of `atoms`; its gap must be dropped from
+        // `preferred` in lockstep, or the mask misindexes the surviving gaps (and
+        // trips the `stable_breaks` debug assertions / panics on release).
+        let printer = Printer::new(FormatStyle::default());
+        // `preferred` has one bool per gap of the *unfiltered* three-atom run.
+        let ir = Ir::preferred_fill(
+            [Ir::text("a"), Ir::Nil, Ir::text("b")],
+            vec![true, false],
+            10,
+        );
+        // Fits on one line, so no break is taken regardless of the mask.
+        assert_eq!(printer.print(&ir), "a b");
+    }
+
+    #[test]
+    fn preferred_fill_keeps_an_authored_break_after_a_dropped_nil() {
+        // Width 1 forces every gap to break; the authored-break bit that survives
+        // the `Nil` drop still drives the newline, proving the mask stayed aligned.
+        let style = FormatStyle {
+            line_width: 1,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        let ir = Ir::preferred_fill(
+            [Ir::text("a"), Ir::Nil, Ir::text("b")],
+            vec![false, true],
+            1,
+        );
+        assert_eq!(printer.print(&ir), "a\nb");
+    }
+
+    #[test]
     fn fill_wraps_words_greedily_at_the_width() {
         let style = FormatStyle {
             line_width: 10,

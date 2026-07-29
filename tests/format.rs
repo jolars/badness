@@ -1157,7 +1157,15 @@ fn stable_wrapping_is_idempotent_over_random_prose() {
                     // Roughly one in three gaps is an authored newline.
                     out.push(if rng.below(3) == 0 { '\n' } else { ' ' });
                 }
-                let len = 1 + rng.below(12);
+                // Mostly short words, but ~1 in 16 is a long unbreakable run that
+                // exceeds even the narrowest tested width (24), so the hard-width
+                // assertion's `widest_word > line_width` escape hatch is actually
+                // exercised rather than dead for this corpus.
+                let len = if rng.below(16) == 0 {
+                    25 + rng.below(20)
+                } else {
+                    1 + rng.below(12)
+                };
                 for _ in 0..len {
                     out.push((b'a' + rng.below(26) as u8) as char);
                 }

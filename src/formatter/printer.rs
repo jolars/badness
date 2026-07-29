@@ -710,6 +710,26 @@ impl Printer {
         Some(total)
     }
 
+    /// Flat layout of an [`Ir::PreferredFill`] from `col`: its atoms joined by
+    /// single spaces (`atoms.len() - 1` gaps). Returns the resulting column, or
+    /// `None` if it overflows the line width or an atom cannot be laid flat.
+    /// Centralizes the gap accounting so the flat-measuring fit-checkers
+    /// ([`Self::group_fits`], [`Self::rest_fits`], [`Self::first_line_fits`])
+    /// share one definition instead of re-deriving `atoms.len() - 1` each. Note
+    /// [`Self::fits`] keeps its own arm: it measures against `remaining` and
+    /// applies the unfittable-atom hug excuse, which this width-only helper
+    /// cannot express.
+    fn preferred_fill_flat_end(&self, col: usize, atoms: &[Ir]) -> Option<usize> {
+        let mut end = col.saturating_add(atoms.len().saturating_sub(1));
+        for atom in atoms {
+            end = end.checked_add(self.flat_width(atom)?)?;
+            if end > self.line_width {
+                return None;
+            }
+        }
+        Some(end)
+    }
+
     /// Pick the layout for an [`Ir::ConditionalGroup`] at the current column:
     /// the first candidate whose first line fits is rendered flat; if none, the
     /// last candidate is rendered broken. With a single candidate this is a
@@ -943,15 +963,10 @@ impl Printer {
                         stack.push(item);
                     }
                 }
-                Ir::PreferredFill { atoms, .. } => {
-                    col = col.saturating_add(atoms.len().saturating_sub(1));
-                    if col > self.line_width {
-                        return false;
-                    }
-                    for atom in atoms.iter().rev() {
-                        stack.push(atom);
-                    }
-                }
+                Ir::PreferredFill { atoms, .. } => match self.preferred_fill_flat_end(col, atoms) {
+                    Some(end) => col = end,
+                    None => return false,
+                },
             }
         }
         // Phase 2: the rest of the line, each command in its decided mode, until
@@ -1052,15 +1067,10 @@ impl Printer {
                         work.push((mode, item));
                     }
                 }
-                Ir::PreferredFill { atoms, .. } => {
-                    col = col.saturating_add(atoms.len().saturating_sub(1));
-                    if col > self.line_width {
-                        return false;
-                    }
-                    for atom in atoms.iter().rev() {
-                        work.push((Mode::Flat, atom));
-                    }
-                }
+                Ir::PreferredFill { atoms, .. } => match self.preferred_fill_flat_end(col, atoms) {
+                    Some(end) => col = end,
+                    None => return false,
+                },
             }
         }
         col <= self.line_width
@@ -1149,15 +1159,23 @@ impl Printer {
                         stack.push((mode, item));
                     }
                 }
-                Ir::PreferredFill { atoms, .. } => {
-                    col = col.saturating_add(atoms.len().saturating_sub(1));
-                    if col > self.line_width {
-                        return false;
+                Ir::PreferredFill { atoms, .. } => match mode {
+                    // A preferred fill chooses its own breaks: in `Break` mode it
+                    // breaks at a gap, so its first line ends after (at most) the
+                    // first atom — the first line fits iff that atom fits here.
+                    // Measuring the whole fill flat here would spuriously fail and
+                    // force an enclosing group to break. In `Flat` mode the whole
+                    // fill stays on the line.
+                    Mode::Break => {
+                        return atoms
+                            .first()
+                            .is_none_or(|atom| self.first_line_fits(col, atom));
                     }
-                    for atom in atoms.iter().rev() {
-                        stack.push((Mode::Flat, atom));
-                    }
-                }
+                    Mode::Flat => match self.preferred_fill_flat_end(col, atoms) {
+                        Some(end) => col = end,
+                        None => return false,
+                    },
+                },
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     let (m, chosen) = self.pick_candidate(col, cands);
                     stack.push((m, chosen));
@@ -1389,6 +1407,37 @@ mod tests {
         );
         // Fits on one line, so no break is taken regardless of the mask.
         assert_eq!(printer.print(&ir), "a b");
+    }
+
+    #[test]
+    fn first_line_fits_lets_a_broken_group_break_its_preferred_fill() {
+        // Five 3-char words: flat width is 5*3 + 4 gaps = 19 > 10, so the fill
+        // cannot lie flat. But it chooses its own breaks, so a broken group
+        // around it has a first line of just the first word (3 cols), which fits.
+        // A flat-only measurement would spuriously report the first line as too
+        // wide and force needless breaking upstream.
+        let style = FormatStyle {
+            line_width: 10,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        let fill = Ir::preferred_fill(
+            [
+                Ir::text("aaa"),
+                Ir::text("bbb"),
+                Ir::text("ccc"),
+                Ir::text("ddd"),
+                Ir::text("eee"),
+            ],
+            vec![false; 4],
+            10,
+        );
+        // A break-aware group so `first_line_fits` reaches the fill in `Break`.
+        let group = Ir::conditional_group([fill]);
+        assert!(
+            printer.first_line_fits(0, &group),
+            "a broken group should let its preferred fill break for a fitting first line"
+        );
     }
 
     #[test]

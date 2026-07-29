@@ -41,6 +41,20 @@ jobs:
       # regression. Keep this in sync with TODO.md's record-only roadmap items;
       # drop an entry the moment badness can handle the file (it then simply
       # passes and records nothing). See issue #60.
+      #
+      # The bar for an entry is *statically unmodelable*, not merely unfixed: no
+      # parser change could be correct, because reading the file needs a TeX
+      # engine. In practice that means structural catcode rebinding (catcode
+      # 0/1/2/14 or an active space — our CST's structural vocabulary is `{`/`}`,
+      # so a region that reassigns it is out of reach; `\makeatletter` is *not*
+      # this, it only changes letter classification), catcodes set through
+      # expansion (`\catcode`#1\active` in a macro body — the character is a
+      # parameter, so no static reader can resolve it), balance hidden in a
+      # skipped conditional (`\iffalse}\fi`), or a file closed by state that
+      # lives outside it (macro-expanded `\end{document}`, an `\input` fragment
+      # leaning on its parent's preamble). A real modeling gap we simply have
+      # not fixed yet does **not** belong here — allowlisting it buries the
+      # work. Group entries under a comment naming the root cause and issue.
       ALLOWLIST: |
         # Catcode-rebinding bootstrap files: general \catcode handling is an
         # explicit non-goal (AGENTS.md decision #1), so these stay format-error.
@@ -66,6 +80,13 @@ jobs:
         latex3/latex2e|base/docstrip.dtx|format-error
         latex3/latex2e|base/ltdefns.dtx|format-error
         latex3/latex2e|base/ltcmd.dtx|format-error
+        # source2edoc.cls closes doc.dtx's `oldcomments` from inside its own
+        # catcode-swapped region (`/gdef/oldc< \end{oldcomments}>`: `/` is the
+        # escape, `<`/`>` the group delimiters). preload.dtx's `xii}` closes a
+        # brace opened on a *different* docstrip guard variant, so only running
+        # docstrip's guard selection balances it. Issue #71.
+        latex3/latex2e|base/source2edoc.cls|format-error
+        latex3/latex2e|base/preload.dtx|format-error
         # ltfloat.dtx: a `\begin{oldcomments}` doc environment wraps commented-out
         # historical code with a deliberately unbalanced `\vbox{`; oldcomments is a
         # doc `comment`-like environment badness cannot know is opaque. Issue #71.

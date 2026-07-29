@@ -87,10 +87,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   diagnostic, so the formatter still accepts the file (`left_right_closes` and the
   `delim_math_closes`/`dollar_closes` family in `grammar.rs`). That is correct for
   macro-code data, but in prose these are almost always authoring typos (a missing
-  `\right`, a dropped `\]`). The parser doc comments already call this "linter
-  territory"; add a report-only rule that spots the demoted delimiter and warns,
-  so the typo surfaces even though it no longer blocks parsing. Needs a way for the
-  linter to tell a demoted delimiter (prose typo) from genuine macro-code data —
+  `\right`, a dropped `\]`). The right home is the **linter**, not a severity tier
+  on the parser's `SyntaxError`: this matches rust-analyzer, whose parser
+  `SyntaxError` is likewise untiered (`(String, TextRange)`, no level) while the
+  `Severity` enum and all diagnostic judgment live one layer up in `ide-diagnostics`
+  (badness's linter analog), which re-walks the tree to produce diagnostics. So a
+  report-only rule that re-scans for the demoted delimiter and warns is the
+  RA-faithful shape — re-deriving the reachability fact in the linter is that
+  layer's normal job, not a smell. (The one badness-specific wrinkle behind the
+  silent demotion: unlike RA, our formatter *gates* on any parser diagnostic, so
+  the gates must emit none — an Error-severity syntax error would re-block the
+  file.) The rule still needs to tell a prose typo from genuine macro-code data —
   likely a context heuristic (prose vs. definition body/expl3 region) rather than a
   new CST marker, to keep the syntactic layer meaning-free.
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**

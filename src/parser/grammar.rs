@@ -263,6 +263,21 @@ struct Parser<'t> {
     /// (`\StopEventually{\end{document}}`, issue #71) — the `\end`-side twin of
     /// [`Self::environment_escapes_group`].
     group_depth: usize,
+    /// Environment names whose `\begin` the brace-group gate demoted to a plain
+    /// command ([`Self::environment_escapes_group`]). Their `\end` is then an
+    /// orphan by construction — the gate removed its partner, not the author — so
+    /// [`Self::end_orphans_a_demoted_begin`] demotes it in the same way instead of
+    /// letting it unwind (and falsely un-close) every enclosing environment.
+    demoted_envs: std::collections::HashSet<String>,
+    /// Names of the environments open around the cursor, outermost first. Read
+    /// only by [`Self::end_orphans_a_demoted_begin`], to tell an `\end` that
+    /// really does close something from one whose `\begin` was demoted.
+    open_envs: Vec<String>,
+    /// Token index of the `{` opening each currently-open brace group, innermost
+    /// last (the positional twin of [`Self::group_depth`]). Read by
+    /// [`Self::environment_escapes_group`] to tell a group the `.dtx`
+    /// *documentation* layer opened itself from one stranded by the code layer.
+    group_opens: Vec<usize>,
     /// Inside a `.dtx` `macrocode` body: the token index of the terminating
     /// frame `\end` (or `tokens.len()` when the frame is missing), pre-scanned
     /// by [`Self::macrocode_body`]. `None` outside a macrocode body. The frame
@@ -317,6 +332,9 @@ impl<'t> Parser<'t> {
             math_depth: 0,
             in_def_body: false,
             group_depth: 0,
+            demoted_envs: std::collections::HashSet::new(),
+            open_envs: Vec::new(),
+            group_opens: Vec::new(),
             macrocode_end: None,
             plain_braces: std::collections::HashSet::new(),
             expl_toggles,
@@ -340,6 +358,47 @@ impl<'t> Parser<'t> {
             .rev()
             .take_while(|t| t.kind != SyntaxKind::NEWLINE)
             .any(|t| t.kind == SyntaxKind::DOC_MARGIN)
+    }
+
+    /// Whether token `idx` is covered by the `.dtx` doc-margin exemption from the
+    /// brace-group gates ([`Self::environment_escapes_group`] and its `\end`-side
+    /// mirror): it sits on a documentation line *and* every group open around it
+    /// was opened by the code layer.
+    ///
+    /// The exemption exists for braces the *code* layer stranded — a
+    /// `\iffalse{\fi` editor-balance hack, a `` \char`{ `` constant, a
+    /// catcode-swapped region — which hold `group_depth` above zero for the rest
+    /// of the file and would otherwise unnest the whole doc layer behind them. A
+    /// group the documentation layer opened itself is not stranded: it is right
+    /// there on a doc line, so a `\begin`/`\end` inside it really is inside it
+    /// and the gates apply as they do in code (theorem.dtx's
+    /// `% \def\deflist#1{\begin{list}…}` / `% \def\enddeflist{\end{list}}`
+    /// split definition, issue #71).
+    fn doc_margin_exempt(&self, idx: usize) -> bool {
+        self.on_doc_margin_line(idx)
+            && !self
+                .group_opens
+                .last()
+                .is_some_and(|&brace| self.on_doc_margin_line(brace))
+    }
+
+    /// Whether the `\end` at `idx` is the orphaned partner of a `\begin` the
+    /// brace-group gate demoted: its name was gated somewhere earlier
+    /// ([`Self::demoted_envs`]) and no environment of that name is open here.
+    ///
+    /// The gate turns a `\begin` into a plain command, and a lone `\end` then
+    /// unwinds every enclosing environment on its way to the root — one gated
+    /// `\begin` inside a `\lowercase{…}` group un-closes the whole `document`
+    /// (amsldoc.tex, issue #71). Demoting the `\end` too keeps the gate's two
+    /// halves consistent. A genuine typo (`\end{itemiz}`) is untouched: nothing
+    /// demoted that name, so it stays a stray `\end`.
+    fn end_orphans_a_demoted_begin(&self, idx: usize) -> bool {
+        if self.demoted_envs.is_empty() {
+            return false;
+        }
+        peek_end_name(self.tokens, idx).is_some_and(|name| {
+            self.demoted_envs.contains(&name) && !self.open_envs.contains(&name)
+        })
     }
 
     /// True when token `idx` sits in *macro code*: inside a definition body
@@ -772,7 +831,11 @@ impl<'t> Parser<'t> {
         self.at_end()
             || match block {
                 Block::Document => false,
-                Block::Environment => self.at_command(END_CMD) && self.env_name_follows(self.pos),
+                Block::Environment => {
+                    self.at_command(END_CMD)
+                        && self.env_name_follows(self.pos)
+                        && !self.end_orphans_a_demoted_begin(self.pos)
+                }
                 // `>=` (not `==`): defensive against an element overshooting the
                 // pre-scanned terminator, so the loop still stops.
                 Block::Macrocode => self.macrocode_end.is_some_and(|end| self.pos >= end),
@@ -828,6 +891,9 @@ impl<'t> Parser<'t> {
                     // reachable before that group closes is macro code — a
                     // plain command, no diagnostic (issue #71).
                     if self.environment_escapes_group(self.pos) {
+                        if let Some(name) = peek_end_name(self.tokens, self.pos) {
+                            self.demoted_envs.insert(name);
+                        }
                         self.command();
                     } else {
                         self.environment();
@@ -839,7 +905,9 @@ impl<'t> Parser<'t> {
                     // The mirror case: reached inside a group, this `\end`'s
                     // `\begin` is outside it, so it is macro code rather than
                     // stray (`\StopEventually{\end{document}}`, issue #71).
-                    if self.group_depth > 0 && !self.on_doc_margin_line(self.pos) {
+                    if (self.group_depth > 0 && !self.doc_margin_exempt(self.pos))
+                        || self.end_orphans_a_demoted_begin(self.pos)
+                    {
                         self.command();
                     } else {
                         self.stray_end();
@@ -1104,6 +1172,7 @@ impl<'t> Parser<'t> {
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
         self.group_depth += 1;
+        self.group_opens.push(self.pos - 1);
         loop {
             match self.kind() {
                 None => {
@@ -1118,6 +1187,7 @@ impl<'t> Parser<'t> {
             }
         }
         self.group_depth -= 1;
+        self.group_opens.pop();
         self.close();
     }
 
@@ -1801,6 +1871,7 @@ impl<'t> Parser<'t> {
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
         self.group_depth += 1;
+        self.group_opens.push(self.pos - 1);
         loop {
             match self.kind() {
                 None => {
@@ -1815,6 +1886,7 @@ impl<'t> Parser<'t> {
             }
         }
         self.group_depth -= 1;
+        self.group_opens.pop();
         self.close();
     }
 
@@ -1957,7 +2029,15 @@ impl<'t> Parser<'t> {
         // otherwise unnest the whole doc layer behind it. (A paragraph-break
         // bound cannot stand in here: a blank `.dtx` doc line is still a `%`
         // margin, so it never reads as a `\par`.)
-        if self.on_doc_margin_line(open) {
+        //
+        // The exemption is about *stranded* braces, so it lifts when the
+        // enclosing group opened on a doc-margin line too: that `{` is the
+        // documentation layer's own, locally visible, and the `\begin` really is
+        // inside it. `% \def\deflist#1{\begin{list}…}` paired with
+        // `% \def\enddeflist{\end{list}}` (theorem.dtx, issue #71) is the split
+        // environment definition the gate exists for, merely written as doc
+        // prose.
+        if self.doc_margin_exempt(open) {
             return false;
         }
         let mut depth = 0usize;
@@ -2031,6 +2111,9 @@ impl<'t> Parser<'t> {
         }
         self.close(); // BEGIN
 
+        if let Some(open) = name.as_deref() {
+            self.open_envs.push(open.to_owned());
+        }
         if name
             .as_deref()
             .is_some_and(|n| self.ctx.is_verbatim_environment(n))
@@ -2044,6 +2127,9 @@ impl<'t> Parser<'t> {
             self.macrocode_body(name.as_deref().expect("macrocode name"));
         } else {
             self.parse_block(Block::Environment);
+        }
+        if name.is_some() {
+            self.open_envs.pop();
         }
         self.finish_environment(&name, opener);
     }

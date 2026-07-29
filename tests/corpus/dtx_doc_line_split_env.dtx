@@ -1,0 +1,21 @@
+% Minimized from latex3/latex2e `required/tools/theorem.dtx` (smoke-test issue
+% #71). The documentation layer writes the same split environment definition the
+% code layer does: `\begin` in one `\def` body, `\end` in another. Both halves
+% sit inside a brace group the *doc line itself* opened, so the group-boundary
+% gate applies here exactly as it does in code -- the `.dtx` doc-margin exemption
+% is only for braces the code layer stranded.
+%
+% \def\deflabel#1{\ttfamily #1\hfill}
+% \def\deflist#1{\begin{list}{}{\settowidth\labelwidth{\ttfamily #1}%
+%                               \setlength\leftmargin\labelwidth
+%                               \let\makelabel\deflabel}}
+% \def\enddeflist{\end{list}}
+%
+% A doc-layer environment that is *not* inside a doc-line group still pairs
+% across the intervening `macrocode` chunk, exemption intact.
+%
+% \begin{macro}{\thing}
+%    \begin{macrocode}
+\def\thing{ok}
+%    \end{macrocode}
+% \end{macro}

@@ -1,0 +1,19 @@
+% \begin{macro}{\firstchunk}
+%    \begin{macrocode}
+\def\firstchunk{1}
+%    \end{macrocode}
+%    In the documentation part `\DocInput` runs under `\MakePercentIgnore`
+%    (`\catcode`\%=9`), so a `%` is an *ignored* character at any column and an
+%    indented frame opens a chunk exactly like the column-0 spelling
+%    (multicol.dtx, latex-lab-block.dtx -- smoke-test issue #71).
+  %    \begin{macrocode}
+\def\secondchunk{2}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\thirdchunk}
+%    The indent may be a tab, and the `*` variant is accepted too.
+	%  \begin{macrocode*}
+\def\thirdchunk{3}
+%    \end{macrocode*}
+% \end{macro}

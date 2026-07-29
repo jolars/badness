@@ -1,0 +1,20 @@
+% Minimized from latex3/latex2e `base/ltmiscen.dtx` / `base/lttab.dtx` /
+% `base/ltfloat.dtx` (smoke-test issue #71). `oldcomments` is ltxdoc's
+% comment-like environment for historical LaTeX 2.09 sources; it is defined
+% inside a catcode-swapped region in ltxdoc.dtx, where `/` is the escape, so no
+% static scan can learn it -- the curated signature database is the only place
+% the fact can live. Its body is opaque: unbalanced braces and a bare document
+% closer written in prose are data, not structure.
+%
+% \begin{oldcomments}
+%   \box\@curfield :=G \hbox { \unhbox\@currfield  %%} brace matching
+%   \begin, \end, and \@checkend changed so \end{document} will catch
+%   a still-open environment.
+%   \endarray{NAME} ==  BEGIN  \crcr }}  END
+% \end{oldcomments}
+%
+% \begin{macro}{\after}
+%    \begin{macrocode}
+\def\after{ok}
+%    \end{macrocode}
+% \end{macro}

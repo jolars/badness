@@ -1,0 +1,24 @@
+% Minimized from latex3/latex2e `required/amsmath/amsldoc.tex` (smoke-test
+% issue #71). The `\lowercase` trick smuggles a literal `}` into text, so the
+% `\begin{error}` sits inside a group its `\end` is outside of and the
+% group-boundary gate demotes it to a plain command. The `\end{error}` is then
+% an orphan *the gate made*, not one the author wrote: left as a stray `\end` it
+% unwinds every enclosing environment on its way to the root and un-closes the
+% whole `document`. It is demoted in step instead.
+\begin{document}
+
+\begingroup
+\lccode`M=`M
+\lccode`@=`\}
+\lowercase{\endgroup
+\begin{error}{Missing @ inserted}}
+
+Body of the error description.
+\end{error}
+
+% Ordinary structure after the demoted pair is unaffected.
+\begin{quote}
+Still ordinary structure.
+\end{quote}
+
+\end{document}

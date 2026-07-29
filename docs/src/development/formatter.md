@@ -41,6 +41,26 @@ enum also carries `Align`, `IfBreak`, `ConditionalGroup` (`AllLines`),
 `Verbatim`, `ColumnZero`, `MarginPrefix`, and `Nil`—see `ir.rs` for the
 authoritative list.
 
+### A group's fit measures the rest of the line in the mode it will print in
+
+Deciding a `Group` measures its flat rendering *plus* the already-queued
+commands up to the next line break (`printer::group_fits` → `rest_fits`, the
+Wadler/Prettier "fits the rest of the line" rule). A later group in that rest is
+measured in the mode it will actually print in: **flat when its own flat form
+still fits from here, broken otherwise.** Measuring a doomed group flat charges
+the group being decided for width that will never land on this line—and the
+charge depends on where the doomed group's own body happens to break, which the
+*previous formatting pass* decided.
+
+That is a fixed-point hazard, not just a cosmetic one. In
+`\EditInstance{block}{thm}{␣…long keyvals…␣}` inside an expl3 region
+(`latex-lab-block.dtx`, issue #71) pass 1 broke `{block}` and `{thm}` out onto
+their own lines because the trailing block measured flat and overflowed; pass 2
+kept them inline because that block had by then acquired a hard break, and
+idempotence failed. Deciding the rest group locally makes both passes agree—and
+gives the trailing block the hug the expl3 `COMMAND` lowering always intended:
+short leading arguments stay inline, only the over-long trailing one detonates.
+
 ## Paragraph line breaks
 
 Paragraph line breaks are controlled by a `WrapMode` (`Reflow` default,

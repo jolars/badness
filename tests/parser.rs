@@ -751,6 +751,31 @@ fn def_body_begin_is_a_plain_command() {
 }
 
 #[test]
+fn an_end_orphaned_by_the_gate_is_demoted_in_step() {
+    // amsldoc.tex (issue #71): `\lowercase{…}` smuggles a literal `}` into text,
+    // so the `\begin{error}` sits inside a group its `\end` is outside of and the
+    // gate demotes it. Left as a stray `\end`, its partner then unwound every
+    // enclosing environment on the way to the root — un-closing the whole
+    // `document` and stranding `\end{document}` as a second stray.
+    let parsed = parse(concat!(
+        r"\begin{document}\lowercase{\begin{error}{Missing @ inserted}}",
+        "\nx\n",
+        r"\end{error}",
+        "\n",
+        r"\end{document}",
+    ));
+    assert_eq!(parsed.errors, vec![]);
+}
+
+#[test]
+fn an_end_the_gate_never_touched_is_still_stray() {
+    // The mirror is scoped to names the gate actually demoted: a plain typo has
+    // no demoted partner, so it still reports.
+    let parsed = parse(r"egin{itemize}\item a\end{itemiz}");
+    assert!(!parsed.errors.is_empty());
+}
+
+#[test]
 fn a_reachable_end_inside_a_group_still_nests() {
     // The gate only fires when the `\end` is unreachable before the enclosing
     // `}`: a properly paired environment inside a group still builds a real

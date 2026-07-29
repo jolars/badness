@@ -63,7 +63,6 @@ jobs:
         latex3/latex3|texmf/tex/latex/base/doc-2021-06-01.sty|format-error
         latex3/latex3|texmf/tex/latex/base/source2edoc.cls|format-error
         latex3/latex3|texmf/tex/latex/base/shortvrb.sty|format-error
-        latex3/latex3|texmf/tex/latex/base/latexrelease.sty|format-error
         latex3/latex3|texmf/tex/latex/base/ltxdoc.cls|format-error
         latex3/latex3|support/docstrip.tex|format-error
         latex3/latex3|texmf/tex/latex/base/docstrip.tex|format-error
@@ -87,33 +86,35 @@ jobs:
         # docstrip's guard selection balances it. Issue #71.
         latex3/latex2e|base/source2edoc.cls|format-error
         latex3/latex2e|base/preload.dtx|format-error
-        # ltfloat.dtx: a `\begin{oldcomments}` doc environment wraps commented-out
-        # historical code with a deliberately unbalanced `\vbox{`; oldcomments is a
-        # doc `comment`-like environment badness cannot know is opaque. Issue #71.
-        latex3/latex2e|base/ltfloat.dtx|format-error
         # expl3-code.tex rebinds the *structural* catcodes through expl3's own
         # API: `\char_set_catcode_group_begin:N \^^@` / `_group_end:N` make
         # `^^@` a brace for a region, so the file's real grouping is invisible
         # to a `{`/`}`-based reader. Same non-goal as the `\catcode` bootstrap
         # files above (AGENTS.md decision #1). Issue #71.
         latex3/latex2e|texmf/tex/latex/l3kernel/expl3-code.tex|format-error
-        # Genuinely broken upstream — one typo each, and badness reads all three
-        # exactly as docstrip and doc.sty do. latex-lab-block.dtx indents a
-        # `%    \begin{macrocode}` frame (column 0 is the docstrip margin rule,
-        # so the frame is commented out and its chunk is typeset as prose);
-        # latex-lab-enumitem.dtx opens a `\changes{` on a `%%` line (the second
-        # `%` comments the line out, stranding the `}` on the next doc line);
-        # latex-lab-new-or-2.dtx comments out an `\end{plugdecl}` as
-        # `% %  \end{plugdecl}`. Issue #71.
-        latex3/latex2e|required/latex-lab/latex-lab-block.dtx|format-error
+        # Genuinely broken upstream — one typo each, and badness reads both
+        # exactly as docstrip and doc.sty do. latex-lab-enumitem.dtx opens a
+        # `\changes{` on a `%%` line (the second `%` comments the line out,
+        # stranding the `}` on the next doc line); latex-lab-new-or-2.dtx comments
+        # out an `\end{plugdecl}` as `% %  \end{plugdecl}`. Issue #71.
         latex3/latex2e|required/latex-lab/latex-lab-enumitem.dtx|format-error
         latex3/latex2e|required/latex-lab/latex-lab-new-or-2.dtx|format-error
         latex3/latex3|l3kernel/testfiles-backend/support/driver.tex|format-error
         latex3/latex3|texmf/tex/latex/base/nfssfont.tex|format-error
         latex3/latex3|xpackages/xinitials/xinitials-test.tex|format-error
-        latex3/latex3|texmf/tex/latex/base/testpage.tex|format-error
         latex3/latex3|xpackages/xor/xo-pfloat.tex|format-error
         latex3/latex3|xpackages/xor/xo-balance.tex|format-error
+        # array.dtx hides an `\end{macrocode}` with no opener inside a doc-margin
+        # `%\iffalse   % this is a METACOMMENT !` block: doc.sty skips the whole
+        # conditional, so the imbalance never executes. Balance hidden in a
+        # skipped conditional, like docstrip.dtx/ltdefns.dtx above. Issue #71.
+        latex3/latex2e|required/tools/array.dtx|format-error
+        # mathcolor.dtx typesets a deliberately *invalid* example in doc prose:
+        # `\[ \left\{ … \mathcolor{red}{\right\}} \]`, whose own surrounding
+        # sentence says the construct "is not achievable at all because \left and
+        # \right form a group". TeX rejects it for exactly the reason badness
+        # does, so no parser change is correct here. Issue #71.
+        latex3/latex2e|required/graphics/mathcolor.dtx|format-error
         # Genuinely broken upstream (a commented-out balancing \end).
         latex3/latex3|xpackages/xor/xo-page.dtx|format-error
         latex3/latex3|xpackages/galley/galley2.dtx|format-error
@@ -128,7 +129,6 @@ jobs:
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-base-arrows.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-base-layers.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-dv-axes.tex|format-error
-        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-gd-algorithms-in-c.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-gd-display-layer.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-external.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-matrices.tex|format-error
@@ -136,9 +136,7 @@ jobs:
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-profiler.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-library-rdf.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tikz-coordinates.tex|format-error
-        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tikz-scopes.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tikz-shapes.tex|format-error
-        pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tutorial-Euclid.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tutorial-map.tex|format-error
         pgf-tikz/pgf|doc/generic/pgf/pgfmanual-en-tutorial-nodes.tex|format-error
         # pgf source: catcode-rebinding bootstrap regions (`|`/`/` rebound to
@@ -155,15 +153,6 @@ jobs:
         pgf-tikz/pgf|tex/generic/pgf/utilities/pgfutil-common.tex|format-error
         pgf-tikz/pgf|tex/latex/pgf/doc/pgfmanual-en-macros.tex|format-error
         pgf-tikz/pgf|tex/latex/pgf/doc/pgfmanual.prettyprinter.code.tex|format-error
-        # pgf source: split-environment defs done with plain \def
-        # (`\def\foo{\begin{env}}` / `\def\endfoo{\end{env}}`), whose control-word
-        # \def bodies badness does not yet treat as macro code (decision #3 keeps
-        # control-word \def names generic; correctly attaching the body needs
-        # \def parameter-text parsing). tikzexternal uses a \end-delimited \def
-        # parameter text. Issue #63.
-        pgf-tikz/pgf|tex/latex/pgf/compatibility/pgfautomata.sty|format-error
-        pgf-tikz/pgf|tex/latex/pgf/frontendlayer/libraries/tikzlibraryexternal.code.tex|format-error
-        pgf-tikz/pgf|tex/latex/pgf/utilities/tikzexternal.sty|format-error
     steps:
       - uses: actions/checkout@v7
 

@@ -94,9 +94,17 @@ links to the Development page carrying its full rationale, examples, and provena
      generalizes the curated definition-body set (#45/#55) to the package code it
      cannot name. Two scope limits keep it precise: only a *group* boundary
      suppresses the environment (a `\begin` that just runs out of file still
-     diagnoses), and `.dtx` doc-margin lines are exempt so the doc layer keeps
-     pairing across `macrocode` chunks that leave braces open on purpose. Detail in
-     `parser.md` (§ *The environment group-boundary gate*).
+     diagnoses), and `.dtx` doc-margin lines are exempt from *stranded* braces so
+     the doc layer keeps pairing across `macrocode` chunks that leave braces open
+     on purpose — an exemption that lifts when the enclosing `{` opened on a
+     doc-margin line itself, since that group is the documentation layer's own and
+     locally visible (`theorem.dtx`'s `% \def\deflist#1{\begin{list}…}` split
+     definition). A `\begin` the gate demotes leaves an orphan `\end` the gate
+     made, so that closer is demoted in step rather than unwinding every enclosing
+     environment on its way to the root (`amsldoc.tex`'s
+     `\lowercase{…\begin{error}{…}}`); the mirror is scoped to demoted names, so a
+     genuine typo still reports. Detail in `parser.md` (§ *The environment
+     group-boundary gate*).
 
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
    a command means; the semantic layer is a signature database assigning arity,

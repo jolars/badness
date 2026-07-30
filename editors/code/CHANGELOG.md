@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0](https://github.com/jolars/badness/compare/badness-code-v0.11.0...badness-code-v0.12.0) (2026-07-30)
+
+### Bug Fixes
+- **vscode:** swap npm-run-all for npm-run-all2 ([`b631714`](https://github.com/jolars/badness/commit/b631714b7e397493e7a703c44eb1ad12b9fa8da9))
+
+### Dependencies
+- updated badness to v0.12.0
+
 ## [0.11.0](https://github.com/jolars/badness/compare/badness-code-v0.10.0...badness-code-v0.11.0) (2026-07-20)
 
 ### Dependencies

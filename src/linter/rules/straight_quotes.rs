@@ -89,6 +89,11 @@ impl Rule for StraightQuotes {
         if ctx.in_math(usize::from(tok.text_range().start())) {
             return;
         }
+        // Inside `\directlua{…}` and kin the body is Lua source, so a `"` is a
+        // string delimiter, not quotation (issue: cvd's embedded Lua). Skip it.
+        if super::in_code_argument(tok) {
+            return;
+        }
         let base = usize::from(tok.text_range().start());
 
         for (offset, _) in text.match_indices('"') {
@@ -220,6 +225,15 @@ mod tests {
     #[test]
     fn math_is_skipped() {
         assert!(findings("$x = \"y\"$\n").is_empty());
+    }
+
+    #[test]
+    fn lua_string_literals_are_skipped() {
+        // The `"` inside `\directlua{…}` are Lua string delimiters, not quotation.
+        assert!(findings("\\directlua{lfs = require(\"lfs\")}\n").is_empty());
+        assert!(findings("\\luadirect{token.set_macro(\"x\", \"y\")}\n").is_empty());
+        // A `"` in ordinary text right next to such a command still flags.
+        assert_eq!(findings("say \"hi\" \\directlua{f(\"z\")}\n").len(), 2);
     }
 
     #[test]

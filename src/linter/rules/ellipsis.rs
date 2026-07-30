@@ -88,6 +88,11 @@ impl Rule for Ellipsis {
         if !text.contains("...") {
             return;
         }
+        // `\DescribeMacro{\foo[...]}` illustrates syntax; the `...` is a
+        // placeholder, not prose that wants `\dots`. Skip description commands.
+        if super::in_describe_argument(tok) {
+            return;
+        }
         let base = usize::from(tok.text_range().start());
         let in_math = ctx.in_math(base);
         let bytes = text.as_bytes();
@@ -312,5 +317,14 @@ mod tests {
     #[test]
     fn flags_each_run() {
         assert_eq!(findings("a... b...\n").len(), 2);
+    }
+
+    #[test]
+    fn describe_command_placeholders_are_skipped() {
+        // `[...]` in a `\DescribeMacro` illustrates syntax, not prose.
+        assert!(findings("\\DescribeMacro{\\foo[...]}\n").is_empty());
+        assert!(findings("\\DescribeEnv{env[...]}\n").is_empty());
+        // Ordinary text right after still flags.
+        assert_eq!(findings("\\DescribeMacro{\\foo} and so...\n").len(), 1);
     }
 }

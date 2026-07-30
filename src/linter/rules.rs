@@ -230,6 +230,50 @@ pub(crate) fn in_key_argument(tok: &crate::syntax::SyntaxToken) -> bool {
     })
 }
 
+/// The curated set of commands whose braced argument holds a *foreign programming
+/// language* (Lua), not LaTeX prose: the LuaTeX primitives `\directlua`/`\latelua`
+/// and luacode's `\luadirect`/`\luaexec`. Their body is source code executed by the
+/// engine, so ASCII `"`, `...`, and friends there are Lua syntax, never typeset
+/// text. Curated and deliberately small — a wrong entry only silences a prose lint
+/// inside that command (a false negative), never the reverse.
+fn is_code_argument_command(name: &str) -> bool {
+    matches!(name, "directlua" | "latelua" | "luadirect" | "luaexec")
+}
+
+/// Whether `tok` sits inside the argument of a code-argument command
+/// ([`is_code_argument_command`]) — Lua source passed to `\directlua` and its kin.
+/// The prose rules (`straight-quotes`, …) use this to stay off Lua string literals
+/// like `require("lfs")`, which are code, not quotation. Same greedy-attachment
+/// caveat as [`in_key_argument`]: *all* argument groups are skipped, since arity is
+/// unknown at parse time (AGENTS.md decision #8) and a false negative is preferred.
+pub(crate) fn in_code_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
+            && node.parent().is_some_and(|cmd| {
+                cmd.kind() == SyntaxKind::COMMAND
+                    && crate::ast::command_name(&cmd)
+                        .is_some_and(|name| is_code_argument_command(&name))
+            })
+    })
+}
+
+/// Whether `tok` sits inside a doc/ltxdoc *description* command — `\DescribeMacro`
+/// or `\DescribeEnv`, whose argument is the macro or environment *being
+/// documented*, rendered as a syntax illustration in the margin rather than as
+/// running prose. Syntax-placeholder idioms are the norm there (`\foo[...]`,
+/// `\bar{...}`, quoted literals), so prose rules like `ellipsis` must stay off
+/// them. Same greedy-attachment posture as [`in_key_argument`].
+pub(crate) fn in_describe_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
+            && node.parent().is_some_and(|cmd| {
+                cmd.kind() == SyntaxKind::COMMAND
+                    && crate::ast::command_name(&cmd)
+                        .is_some_and(|name| matches!(&*name, "DescribeMacro" | "DescribeEnv"))
+            })
+    })
+}
+
 /// Whether `tok` sits inside an argument of a horizontal-rule command — `\cline`,
 /// booktabs `\cmidrule`/`\specialrule`, … per the *curated* signature DB's `rule`
 /// flag — whose content is a column span or dimension spec, never typeset text.

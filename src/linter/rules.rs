@@ -39,6 +39,7 @@ pub mod space_before_command;
 pub mod straight_quotes;
 pub mod swallowed_space;
 pub mod times_variable;
+pub mod unclosed_math_delimiter;
 pub mod undefined_citation;
 pub mod undefined_ref;
 pub mod unknown_option;
@@ -67,6 +68,7 @@ pub use space_before_command::SpaceBeforeCommand;
 pub use straight_quotes::StraightQuotes;
 pub use swallowed_space::SwallowedSpace;
 pub use times_variable::TimesVariable;
+pub use unclosed_math_delimiter::UnclosedMathDelimiter;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
 pub use unknown_option::UnknownOption;
@@ -108,6 +110,13 @@ pub struct RuleContext<'a> {
     /// [`crate::linter::conditional`]). Same posture as `math_regions`: a
     /// read-only side index derived purely from the tree.
     conditionals: super::conditional::ConditionalIndex,
+    /// The document's expl3 code regions (byte ranges), shared with the formatter's
+    /// [`crate::formatter::core::expl3_regions`] so the two never drift on what
+    /// counts as expl3 code. Only `unclosed-math-delimiter` reads it (to stay
+    /// silent on `\[`/`$` demoted to data inside expl3 code), and demoted
+    /// delimiters are rare, so — unlike `math_regions` — it is computed *lazily*
+    /// on first [`RuleContext::in_expl3`] call rather than for every lint.
+    expl3_regions: OnceLock<Vec<TextRange>>,
 }
 
 impl<'a> RuleContext<'a> {
@@ -131,6 +140,7 @@ impl<'a> RuleContext<'a> {
             packages,
             math_regions: math_regions(root),
             conditionals: super::conditional::ConditionalIndex::compute(root),
+            expl3_regions: OnceLock::new(),
         }
     }
 
@@ -156,6 +166,23 @@ impl<'a> RuleContext<'a> {
             Ok(_) => true, // a region starts exactly here
             Err(0) => false,
             Err(i) => self.math_regions[i - 1].contains(offset),
+        }
+    }
+
+    /// Whether byte `offset` falls inside an expl3 code region (`\ExplSyntaxOn`…
+    /// `\ExplSyntaxOff`, or a `\ProvidesExpl*` opener). Computed lazily from the
+    /// shared [`crate::formatter::core::expl3_regions`] on first use and cached,
+    /// so a lint that never asks (the common case) pays nothing. `O(log n)` over
+    /// the disjoint, document-ordered regions.
+    pub(crate) fn in_expl3(&self, offset: usize) -> bool {
+        let regions = self
+            .expl3_regions
+            .get_or_init(|| crate::formatter::core::expl3_regions(self.root));
+        let offset = TextSize::from(offset as u32);
+        match regions.binary_search_by(|r| r.start().cmp(&offset)) {
+            Ok(_) => true, // a region opens exactly here
+            Err(0) => false,
+            Err(i) => regions[i - 1].contains(offset),
         }
     }
 }
@@ -415,6 +442,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(MissingProvides),
         Box::new(UnknownOption),
         Box::new(RedundantScriptBraces),
+        Box::new(UnclosedMathDelimiter),
     ]
 }
 
@@ -500,6 +528,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "missing-provides",
     "unknown-option",
     "redundant-script-braces",
+    "unclosed-math-delimiter",
 ];
 
 /// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).

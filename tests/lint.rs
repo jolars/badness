@@ -936,3 +936,28 @@ fn missing_provides_fires_only_for_package_sources() {
     // ...and a `.tex` document is inert regardless.
     assert!(!lint_at("main.tex", "\\RequirePackage{xcolor}\n").contains(&"missing-provides"));
 }
+
+#[test]
+fn unclosed_math_delimiter_flags_prose_but_not_macro_code() {
+    // A dropped inline-math `$` in prose is a likely typo.
+    let out = lint("Let $x = 1 be the base case.\n");
+    let hits: Vec<_> = out
+        .iter()
+        .filter(|(r, _)| *r == "unclosed-math-delimiter")
+        .collect();
+    assert_eq!(hits.len(), 1, "got: {out:?}");
+    assert_eq!(hits[0].1, Severity::Warning);
+
+    // The `>{$}` array column spec demotes `$` to data — never flagged.
+    assert!(
+        !lint("\\begin{tabular}{>{$}c<{$}}\na & b\\end{tabular}\n")
+            .iter()
+            .any(|(r, _)| *r == "unclosed-math-delimiter")
+    );
+    // Balanced math draws nothing.
+    assert!(
+        !lint("$x$ and \\[ y \\] and $\\left( z \\right)$\n")
+            .iter()
+            .any(|(r, _)| *r == "unclosed-math-delimiter")
+    );
+}

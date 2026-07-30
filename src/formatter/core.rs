@@ -436,7 +436,11 @@ fn toggle_is_top_level(token: &SyntaxToken) -> bool {
 /// inside `\verb`/a comment (a `VERB`/`COMMENT` token, never a `CONTROL_WORD`) is
 /// not a toggle, exactly as in the lexer. The CST is untouched; this is a pure
 /// read-only side channel (the sanctioned byte-range pattern, `AGENTS.md` #4).
-fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
+///
+/// `pub(crate)` so the linter shares the *same* region computation (the
+/// `unclosed-math-delimiter` rule suppresses inside expl3 code), keeping the
+/// formatter and linter from drifting on what counts as an expl3 region.
+pub(crate) fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
     let mut regions: Vec<TextRange> = Vec::new();
     let mut open: Option<TextSize> = None;
     for token in root

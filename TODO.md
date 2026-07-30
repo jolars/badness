@@ -81,7 +81,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
-- [ ] **Flag an unbalanced math delimiter as a likely typo (`\left`/`\[`/`$`).**
+- [x] **Flag an unbalanced math delimiter as a likely typo (`\left`/`\[`/`$`).**
+  Done: the `unclosed-math-delimiter` linter rule
+  (`src/linter/rules/unclosed_math_delimiter.rs`). Report-only (no autofix),
+  re-derives the parser's silent demotion from CST shape (a `$`/`\[`/`\(` not
+  wrapped in its math node, a `\left` that is a `COMMAND` not a `LEFT_RIGHT`
+  marker) and warns only in *document prose* — staying silent inside a brace
+  group/optional/argument, an expl3 region (shared `expl3_regions`), or a
+  `macrocode` body — trading recall for precision so `>{$}` never false-positives.
   The parser's shape gates now *silently* demote an unbalanced `\left` (issue #77),
   `\[`/`\(`, and `$` with no reachable closer to a plain command/token — no
   diagnostic, so the formatter still accepts the file (`left_right_closes` and the

@@ -47,6 +47,15 @@ pub struct SourceFile {
     /// mutated, so path-keyed queries (which later items will add) don't re-run
     /// on a text edit. In-memory files (see [`IncrementalDatabase::add_file`])
     /// get a unique synthetic path so they never collide.
+    ///
+    /// Constructed at [`Durability::HIGH`](salsa::Durability::HIGH) (it is never
+    /// `set_`), while `text` keeps the `LOW` default because it mutates per
+    /// keystroke. Salsa's per-field revision tracking already keeps a path-only
+    /// query from re-running on a text edit; the `HIGH` marking adds the coarse
+    /// global short-circuit that starts to matter once a genuinely
+    /// rarely-changing input (config, package metadata) is promoted into salsa —
+    /// such inputs must likewise be constructed `HIGH`/`MEDIUM`, or every
+    /// keystroke's `LOW` write would invalidate them.
     #[returns(ref)]
     pub path: PathBuf,
     #[returns(ref)]
@@ -627,7 +636,9 @@ impl IncrementalDatabase {
     pub fn add_file(&self, text: impl Into<String>) -> SourceFile {
         let n = MEM_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = PathBuf::from(format!("<mem>/{n}.tex"));
-        SourceFile::new(self, path, text.into())
+        SourceFile::builder(path, text.into())
+            .path_durability(salsa::Durability::HIGH)
+            .new(self)
     }
 
     pub fn set_file_text(&mut self, file: SourceFile, text: impl Into<String>) {
@@ -660,7 +671,9 @@ impl IncrementalDatabase {
                 // Store the normalized key as the input's path so `\input`/bib
                 // resolution (which joins onto `file.path(db).parent()`) lands in
                 // the same normalized space as the member set.
-                let file = SourceFile::new(self, key.clone(), text);
+                let file = SourceFile::builder(key.clone(), text)
+                    .path_durability(salsa::Durability::HIGH)
+                    .new(self);
                 self.files
                     .lock()
                     .unwrap_or_else(recover_poison)

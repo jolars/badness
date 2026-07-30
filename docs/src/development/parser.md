@@ -471,10 +471,24 @@ sub-millisecond.
 
 Green nodes are stored in salsa, never red (`SyntaxNode`), because red trees
 aren't `Send`/`Eq`/`salsa::Update`. `incremental.rs` uses
-`#[salsa::input] SourceFile { text }` and a `parsed_document` query returning
+`#[salsa::input] SourceFile { path, text }` and a `parsed_document` query returning
 `rowan::GreenNode` plus diagnostics under
 `no_eq, unsafe(non_update_types)`—sound because the tree is a pure function of
 the text—materializing red cursors on demand.
+
+**Durability.** Salsa's default input durability is `LOW`, so every input is
+implicitly `LOW` unless constructed otherwise. `SourceFile.path` is built at
+`Durability::HIGH` (via `SourceFile::builder(path, text).path_durability(HIGH)`)
+because it is set once and never mutated; `text` keeps the `LOW` default, since a
+keystroke `set_text` rewrites it. The interned `Project` is already
+`NEVER_CHANGE` (interned values always are), so it needs nothing. Per-field
+revision tracking already stops a path-only query from re-running on a text edit;
+durability adds the coarse global short-circuit that only starts to matter once a
+genuinely rarely-changing input exists. So the rule for growth: **any future
+salsa input promoted from config or package/class metadata must be constructed at
+`HIGH`/`MEDIUM`**—leave it `LOW` and every keystroke's global `LOW`-revision bump
+would invalidate it. (Today that data deliberately lives in `LazyLock`/`OnceLock`,
+outside the db.)
 
 ## Typed AST wrappers
 

@@ -215,5 +215,9 @@ never match.
   positional and meaning-free.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
   decision #1 without recording the decision here and on the relevant Development page.
+- New salsa **inputs** carrying rarely-changing data (config, package/class metadata)
+  must be constructed at `Durability::HIGH`/`MEDIUM`; per-file `text` stays `LOW`
+  (salsa's default). Otherwise every keystroke's `LOW`-revision bump invalidates them.
+  Detail in `parser.md` (§ *Incrementality*).
 - Update TODO.md as phases progress; update this file when a decision changes, and keep
   the matching Development page in sync.

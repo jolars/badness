@@ -420,16 +420,16 @@ capabilities RA has that badness does not. Severity in brackets.
 
 ### Incrementality (salsa)
 
-- [ ] **[med, latent] No input durability tier.** RA sets
+- [x] **[med, latent] No input durability tier.** RA sets
   `Durability::HIGH/MEDIUM/LOW` per source root (`base-db/change.rs`); badness's
-  setters (`incremental.rs:622`, `SourceFile::new`) never call
-  `.with_durability(...)`, so every input is implicitly `LOW`. Harmless *today*
-  because badness has zero rarely-changing salsa inputs (config, the built-in
-  signature DB, and CWL/package/texmf/aux data all live in `LazyLock`/`OnceLock`
-  or a plain `HashMap`, deliberately outside the db per the hermeticism tenet).
-  But the moment config or package data is promoted into salsa — the natural
-  direction for cross-file work — it must be `HIGH`/`MEDIUM` or every keystroke
-  will invalidate it. Record the requirement now.
+  setters never called `.with_durability(...)`, so every input was implicitly
+  `LOW`. Done: `SourceFile.path` is now constructed at `Durability::HIGH` (it is
+  never `set_`), `text` stays `LOW`, and the convention that any future salsa
+  input carrying config/package data must be constructed `HIGH`/`MEDIUM` is
+  recorded in `AGENTS.md` and `parser.md` (§ *Incrementality*). Config, the
+  built-in signature DB, and CWL/package/texmf/aux data still live in
+  `LazyLock`/`OnceLock` outside the db per the hermeticism tenet; revisit when any
+  of that is promoted into salsa.
 - [ ] **[low] `Project` re-interned from a fresh member `Vec` per request**
   (`incremental.rs:889`, `Analysis::resolve_project`/`scope_signatures`/…).
   Interning dedups by value, so an unchanged sorted membership yields the same id

@@ -409,6 +409,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // (issue #39: the LHS's joined flat width used to become the relation column,
     // pushing the matrix bodies dozens of columns right).
     ("math_display_multiline_lhs", WrapMode::Preserve, 80),
+    // A leading `\label{…}` is equation bookkeeping, not part of the formula, so it
+    // lands on its own line and the math starts below it (under every wrap policy;
+    // `MATH_WRAP_FIXTURES` covers preserve). The split is scoped to a *leading*
+    // `\label`: a trailing one stays glued to its line.
+    ("math_display_leading_label", WrapMode::Preserve, 80),
     // `\left … \right` matched pairs: lowered tight to their delimiters (the body
     // trimmed just inside), with nesting and scripts on the whole pair. A
     // control-word delimiter (`\langle`) keeps one space so the body cannot glue
@@ -909,6 +914,15 @@ const MATH_WRAP_FIXTURES: &[(&str, WrapMode, MathWrap, usize)] = &[
         "math_wrap_break_under_preserve",
         WrapMode::Preserve,
         MathWrap::Break,
+        80,
+    ),
+    // The leading-`\label` split runs under every policy, not just the breaker:
+    // under math preserve the label still lands on its own line while the authored
+    // break inside the formula survives.
+    (
+        "math_wrap_label_splits_under_preserve",
+        WrapMode::Preserve,
+        MathWrap::Auto,
         80,
     ),
 ];

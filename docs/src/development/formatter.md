@@ -100,6 +100,17 @@ untouched). `auto` (the default) resolves against the effective `WrapMode` at
 amsmath-style breaker), so per-file-kind wrap defaults carry over to math for
 free.
 
+A body whose first non-trivia atom is a `\label{…}` splits that label onto its
+own line, starting the formula fresh below it—the label is equation bookkeeping,
+not part of the math. This runs under every `MathWrap` policy (it is applied
+before the mode dispatch, then recurses so the remaining formula lowers under its
+own policy), so `single-line` and `preserve` bodies split the label too. The
+split is otherwise deliberately narrow: it fires only on a *leading* `\label` (a
+trailing one stays glued to its line, keeping the rule out of `aligned`-style
+bodies), and it is keyed to the single `\label` command by name, not a wider
+bookkeeping set. A body that is nothing but a label stays on one line rather than
+gaining a dangling break.
+
 ## Math operator spacing
 
 Operator atoms are produced by the parser's [math operator

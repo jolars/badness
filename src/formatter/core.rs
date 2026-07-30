@@ -4365,11 +4365,46 @@ fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// elements rather than the node itself so a caller can drop the lifted
 /// opener-line comment ([`split_environment`]) before the lowering.
 fn lower_display_formula_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
+    // A leading `\label{…}` is equation bookkeeping, not part of the formula: give
+    // it its own line so the math starts fresh below it, under every wrap policy.
+    // Grids (`align`, `\\`) never reach here. The split recurses so the remaining
+    // formula lowers under its normal `MathWrap` policy (and a `\label\label` run
+    // peels one label per level).
+    if let Some((label, rest)) = split_leading_label(elements) {
+        return Ir::concat([
+            lower_math_element(label, cx),
+            Ir::hard_line(),
+            lower_display_formula_elements(rest, cx),
+        ]);
+    }
     match cx.math_wrap {
         MathWrap::Auto | MathWrap::Break => lower_display_math_body(elements, cx),
         MathWrap::SingleLine => lower_math_seq(elements.iter().cloned(), cx, false),
         MathWrap::Preserve => lower_math_seq(elements.iter().cloned(), cx, true),
     }
+}
+
+/// Split a display-math body whose first non-trivia atom is a `\label{…}` into
+/// that label and the remaining formula elements. Returns `None` when the body
+/// does not lead with a label, or when nothing but trivia follows it (a body that
+/// is only a label stays on one line rather than gaining a dangling break). Scoped
+/// to the single `\label` command by name — a trailing label, or any other
+/// bookkeeping command, is deliberately left in place (see the formatter book).
+fn split_leading_label(elements: &[SyntaxElement]) -> Option<(SyntaxElement, &[SyntaxElement])> {
+    let idx = elements
+        .iter()
+        .position(|e| !is_collapsible_trivia_element(e))?;
+    let node = elements[idx].as_node()?;
+    if node.kind() != SyntaxKind::COMMAND
+        || crate::ast::command_name(node).as_deref() != Some("label")
+    {
+        return None;
+    }
+    let rest = &elements[idx + 1..];
+    if rest.iter().all(is_collapsible_trivia_element) {
+        return None;
+    }
+    Some((elements[idx].clone(), rest))
 }
 
 /// The line-breaking role of a top-level math atom (see [`lower_display_math_body`]).

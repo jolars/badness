@@ -32,6 +32,23 @@ fn fpath(db: &IncrementalDatabase, file: SourceFile) -> PathBuf {
     db.file_path(file).to_path_buf()
 }
 
+/// The raw (unsorted) `{main.tex, part.tex}` membership under `/proj`, in
+/// insertion order. Callers that need a normalized key sort it themselves.
+fn members(db: &IncrementalDatabase, main: SourceFile, part: SourceFile) -> Vec<ProjectMember> {
+    vec![
+        ProjectMember {
+            file: main,
+            path: fpath(db, main),
+            kind: FileKind::Tex,
+        },
+        ProjectMember {
+            file: part,
+            path: fpath(db, part),
+            kind: FileKind::Tex,
+        },
+    ]
+}
+
 /// Intern the membership `{main.tex, part.tex}` under `/proj`. Re-interns from a
 /// fresh (sorted) snapshot on each call, as a real consumer would — so the
 /// interned `Project` borrow never spans a `&mut db` write.
@@ -365,5 +382,39 @@ fn reinterning_same_membership_reuses_graph_memo() {
         count_by_kind(&db.query_log()).get(&QueryKind::ProjectGraph),
         None,
         "an unchanged membership must not rebuild the graph"
+    );
+}
+
+#[test]
+fn reinterning_reordered_membership_reuses_graph_memo() {
+    // The `Analysis` interning path normalizes the member key, so the same set
+    // built in a different order must still re-intern to the same id and reuse
+    // the memo. This is the choke point (`intern_project` -> `normalize_members`)
+    // making memo survival correct by construction — a caller can't churn the id
+    // by reordering. Observed through the public `package_graph` API.
+    let (db, main, part) = main_part("\\input{part}\n", "hello\n");
+    let sorted = {
+        let mut m = members(&db, main, part);
+        m.sort_by(|a, b| a.path.cmp(&b.path));
+        m
+    };
+    let reversed = {
+        let mut m = sorted.clone();
+        m.reverse();
+        m
+    };
+
+    let snap = db.snapshot();
+    let _ = snap.package_graph(sorted);
+    drop(snap);
+    db.clear_query_log();
+
+    // Re-intern the identical set in the opposite order.
+    let snap = db.snapshot();
+    let _ = snap.package_graph(reversed);
+    assert_eq!(
+        count_by_kind(&db.query_log()).get(&QueryKind::PackageGraph),
+        None,
+        "a reordered but unchanged membership must not rebuild the graph"
     );
 }

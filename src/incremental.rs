@@ -899,6 +899,17 @@ impl Analysis {
         self.0.bib_semantic_model(file)
     }
 
+    /// Intern `members` as a `Project`, normalizing the key first so an
+    /// unchanged membership always re-interns to the same id regardless of the
+    /// order the caller assembled it in (see
+    /// [`normalize_members`](crate::project::graph::normalize_members)). Every
+    /// interning method below routes through this, keeping memo survival correct
+    /// by construction.
+    fn intern_project(&self, mut members: Vec<ProjectMember>) -> Project<'_> {
+        crate::project::graph::normalize_members(&mut members);
+        Project::new(&self.0, members)
+    }
+
     /// Intern `members` as a `Project` against this snapshot and resolve its
     /// cross-file label and citation models (the inputs the cross-file lint rules
     /// consume). The returned references borrow the snapshot's salsa storage, so
@@ -908,7 +919,7 @@ impl Analysis {
         &self,
         members: Vec<ProjectMember>,
     ) -> (&ResolvedLabels, &ResolvedCitations) {
-        let project = Project::new(&self.0, members);
+        let project = self.intern_project(members);
         (
             resolved_labels(&self.0, project),
             resolved_citations(&self.0, project),
@@ -920,7 +931,7 @@ impl Analysis {
     /// package it transitively loads from the local member set. The formatter and
     /// completion consume this. Borrows the snapshot's storage.
     pub fn scope_signatures(&self, members: Vec<ProjectMember>, file: SourceFile) -> &SignatureDb {
-        let project = Project::new(&self.0, members);
+        let project = self.intern_project(members);
         scope_signatures(&self.0, project, file)
     }
 
@@ -930,7 +941,7 @@ impl Analysis {
     /// directions) to extend the macro namespace past the include component.
     /// Borrows the snapshot's storage.
     pub fn package_graph(&self, members: Vec<ProjectMember>) -> &crate::project::PackageGraph {
-        let project = Project::new(&self.0, members);
+        let project = self.intern_project(members);
         package_graph(&self.0, project)
     }
 
@@ -939,7 +950,7 @@ impl Analysis {
     /// member statically declares. The `unknown-option` lint consumes this
     /// through `RuleContext`. Borrows the snapshot's storage.
     pub fn resolve_package_options(&self, members: Vec<ProjectMember>) -> &ResolvedPackageOptions {
-        let project = Project::new(&self.0, members);
+        let project = self.intern_project(members);
         resolved_package_options(&self.0, project)
     }
 }

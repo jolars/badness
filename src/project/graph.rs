@@ -432,12 +432,28 @@ pub struct ProjectMember {
 
 /// A project as an interned membership snapshot. Interning dedups by value, so
 /// an unchanged membership yields the same id across runs (a body edit doesn't
-/// change the set) and the [`project_graph`] memo survives. Callers must sort
-/// `members` for a stable, dedup-friendly key.
+/// change the set) and the [`project_graph`] memo survives. This holds only for
+/// a canonically ordered key: the `Analysis` interning path normalizes every
+/// membership through [`normalize_members`], so no caller can silently churn the
+/// id by reordering. Direct `Project::new` callers (only test helpers today)
+/// must pass an already-normalized `members`.
 #[salsa::interned]
 pub struct Project<'db> {
     #[returns(ref)]
     pub members: Vec<ProjectMember>,
+}
+
+/// Canonicalize an interning key: sort members by path and drop exact
+/// duplicates. This is the single source of truth for the ordering the
+/// [`Project`] interned id depends on — the interning path routes every
+/// membership snapshot through it so an unchanged set always re-interns to the
+/// same id (preserving every downstream memo). Paths are unique per project, so
+/// plain `dedup()` (consecutive equal *values* after the path sort) suffices; a
+/// same-path/different-value pair would be an upstream bug we deliberately don't
+/// mask with a path-keyed dedup.
+pub(crate) fn normalize_members(members: &mut Vec<ProjectMember>) {
+    members.sort_by(|a, b| a.path.cmp(&b.path));
+    members.dedup();
 }
 
 /// The inclusion graph for `project`, built from the per-file firewall query.
@@ -505,6 +521,43 @@ pub fn package_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_members_is_order_independent_and_dedups() {
+        use crate::file_discovery::FileKind;
+        use crate::incremental::IncrementalDatabase;
+
+        let mut db = IncrementalDatabase::default();
+        let a = db.upsert_file(Path::new("/p/a.tex"), String::new());
+        let b = db.upsert_file(Path::new("/p/b.tex"), String::new());
+        let (pa, pb) = (db.file_path(a).to_path_buf(), db.file_path(b).to_path_buf());
+        let mem = |file, path: &PathBuf| ProjectMember {
+            file,
+            path: path.clone(),
+            kind: FileKind::Tex,
+        };
+
+        // Different insertion orders normalize to the same key (`ProjectMember`
+        // has no `Debug`, so compare with `==`).
+        let mut sorted = vec![mem(a, &pa), mem(b, &pb)];
+        let mut reversed = vec![mem(b, &pb), mem(a, &pa)];
+        normalize_members(&mut sorted);
+        normalize_members(&mut reversed);
+        assert!(
+            sorted == reversed,
+            "member order must not affect the normalized interning key"
+        );
+        assert_eq!(sorted.len(), 2);
+        assert!(
+            sorted[0].path < sorted[1].path,
+            "normalized key is path-sorted"
+        );
+
+        // An exact duplicate collapses to the same key.
+        let mut dup = vec![mem(a, &pa), mem(a, &pa), mem(b, &pb)];
+        normalize_members(&mut dup);
+        assert!(dup == sorted, "exact duplicate members are dropped");
+    }
 
     fn facts(path: &str, edges: &[(IncludeKind, &str)]) -> FileFacts {
         FileFacts {

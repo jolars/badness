@@ -430,13 +430,16 @@ capabilities RA has that badness does not. Severity in brackets.
   built-in signature DB, and CWL/package/texmf/aux data still live in
   `LazyLock`/`OnceLock` outside the db per the hermeticism tenet; revisit when any
   of that is promoted into salsa.
-- [ ] **[low] `Project` re-interned from a fresh member `Vec` per request**
-  (`incremental.rs:889`, `Analysis::resolve_project`/`scope_signatures`/…).
+- [x] **[low] `Project` re-interned from a fresh member `Vec` per request**
+  (`incremental.rs`, `Analysis::resolve_project`/`scope_signatures`/…).
   Interning dedups by value, so an unchanged sorted membership yields the same id
   and the memo survives — correct *provided* member construction is always
-  identically sorted and deduped. It is today (via `tracked_files`,
-  `incremental.rs:672`); flag as fragile if member-list construction order ever
-  drifts, since a silent id churn would recompute every cross-file query.
+  identically sorted and deduped. Done: all four `Analysis` interning methods now
+  route through a private `intern_project` choke point that normalizes the key via
+  `project::graph::normalize_members` (sort by path + `dedup`), so memo survival is
+  correct by construction and no caller can silently churn the id by reordering.
+  Pinned by `normalize_members_is_order_independent_and_dedups` (graph.rs) and the
+  `reinterning_reordered_membership_reuses_graph_memo` firewall test (tests/project.rs).
 
 ### CST / AST / trivia
 

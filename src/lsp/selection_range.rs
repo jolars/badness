@@ -19,30 +19,24 @@ use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use crate::text::LineIndex;
 
 /// The expand-selection chain for each cursor in `positions`, one [`SelectionRange`]
-/// per input position (in order). `idx`/`text` must index the same buffer `root` was
+/// per input position (in order). `idx` must index the same buffer `root` was
 /// parsed from.
 pub(crate) fn selection_ranges(
     root: &SyntaxNode,
     idx: &LineIndex,
-    text: &str,
     positions: &[Position],
 ) -> Vec<SelectionRange> {
     positions
         .iter()
-        .map(|pos| selection_range_at(root, idx, text, *pos))
+        .map(|pos| selection_range_at(root, idx, *pos))
         .collect()
 }
 
 /// The single expand-selection chain at `pos`: the leaf token's range followed by
 /// every ancestor's range up to `ROOT`, deduplicated to strictly-widening steps and
 /// folded into a `SelectionRange` linked from innermost to outermost.
-fn selection_range_at(
-    root: &SyntaxNode,
-    idx: &LineIndex,
-    text: &str,
-    pos: Position,
-) -> SelectionRange {
-    let offset = idx.offset_at(text, pos.line, pos.character);
+fn selection_range_at(root: &SyntaxNode, idx: &LineIndex, pos: Position) -> SelectionRange {
+    let offset = idx.offset_at(pos.line, pos.character);
     let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
 
     // Collect the innermost-first stack of byte ranges. A cursor inside a token starts
@@ -60,8 +54,8 @@ fn selection_range_at(
     ranges.dedup();
 
     let to_range = |r: TextRange| {
-        let (sl, sc) = idx.position(text, r.start().into());
-        let (el, ec) = idx.position(text, r.end().into());
+        let (sl, sc) = idx.position(r.start().into());
+        let (el, ec) = idx.position(r.end().into());
         Range {
             start: Position::new(sl, sc),
             end: Position::new(el, ec),
@@ -116,7 +110,7 @@ mod tests {
     fn chain(src: &str, line: u32, character: u32) -> Vec<Pair> {
         let root = SyntaxNode::new_root(parse(src).green);
         let idx = LineIndex::new(src);
-        let sr = selection_range_at(&root, &idx, src, Position::new(line, character));
+        let sr = selection_range_at(&root, &idx, Position::new(line, character));
         let mut out = Vec::new();
         let mut cur = Some(Box::new(sr));
         while let Some(node) = cur {
@@ -245,12 +239,7 @@ mod tests {
         let src = "\\section{A}\n\\section{B}\n";
         let root = SyntaxNode::new_root(parse(src).green);
         let idx = LineIndex::new(src);
-        let out = selection_ranges(
-            &root,
-            &idx,
-            src,
-            &[Position::new(0, 9), Position::new(1, 9)],
-        );
+        let out = selection_ranges(&root, &idx, &[Position::new(0, 9), Position::new(1, 9)]);
         assert_eq!(out.len(), 2, "one chain per input position");
     }
 }

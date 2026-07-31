@@ -56,7 +56,7 @@ pub(crate) fn compute_hover(
     enc: PositionEncoding,
 ) -> Option<Hover> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         match snapshot.lookup_file(path) {
@@ -66,7 +66,7 @@ pub(crate) fn compute_hover(
                 let scope = snapshot.scope_signatures(members.clone(), file);
                 let lint_path = snapshot.file_path(file).to_path_buf();
                 build_hover(
-                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, text, build,
+                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, build,
                 )
             }
             // Untracked or stale: a fresh parse + scan (no cross-package scope), like
@@ -77,7 +77,7 @@ pub(crate) fn compute_hover(
                 let model = SemanticModel::build(&root);
                 let scanned = crate::semantic::scan_definitions(&root);
                 build_hover(
-                    snapshot, &root, &model, &scanned, path, members, offset, &idx, text, build,
+                    snapshot, &root, &model, &scanned, path, members, offset, &idx, build,
                 )
             }
         }
@@ -97,11 +97,10 @@ fn build_hover(
     members: Vec<ProjectMember>,
     offset: usize,
     idx: &LineIndex,
-    text: &str,
     build: &BuildConfig,
 ) -> Option<Hover> {
     if let Some((value, range)) = declaration_hover(model, root, offset) {
-        return Some(markup_hover(value, range, idx, text));
+        return Some(markup_hover(value, range, idx));
     }
 
     if let Some(target) = signature_target_at(root, offset) {
@@ -115,25 +114,25 @@ fn build_hover(
                 render_environment(&target.name, sig, &provenance)
             }
         };
-        return Some(markup_hover(value, target.range, idx, text));
+        return Some(markup_hover(value, target.range, idx));
     }
 
     if let Some(target) = package_target_at(root, offset) {
         let meta = package_metadata(&target.name)?;
         let value = render_package(&target.name, target.is_class, meta);
-        return Some(markup_hover(value, target.range, idx, text));
+        return Some(markup_hover(value, target.range, idx));
     }
 
     if let Some((name, key_range)) = citation_at(model, offset) {
         let (_, citations) = snapshot.resolve_project(members);
         let value = render_citation(snapshot, citations, lint_path, &name)?;
-        return Some(markup_hover(value, key_range, idx, text));
+        return Some(markup_hover(value, key_range, idx));
     }
 
     if let Some((name, key_range)) = label_target_at(model, offset) {
         let (resolution, _) = snapshot.resolve_project(members);
         let value = render_label(snapshot, resolution, lint_path, root, model, &name, build)?;
-        return Some(markup_hover(value, key_range, idx, text));
+        return Some(markup_hover(value, key_range, idx));
     }
 
     None
@@ -141,7 +140,7 @@ fn build_hover(
 
 /// Wrap rendered markdown in a [`Hover`], anchoring its range to `range` for the
 /// client's highlight.
-fn markup_hover(value: String, range: TextRange, idx: &LineIndex, text: &str) -> Hover {
+fn markup_hover(value: String, range: TextRange, idx: &LineIndex) -> Hover {
     Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
@@ -149,7 +148,6 @@ fn markup_hover(value: String, range: TextRange, idx: &LineIndex, text: &str) ->
         }),
         range: Some(byte_range_to_lsp(
             idx,
-            text,
             usize::from(range.start()),
             usize::from(range.end()),
         )),
@@ -858,7 +856,7 @@ mod tests {
 
     fn byte_to_position(src: &str, offset: usize) -> Position {
         let idx = LineIndex::new(src);
-        let (line, character) = idx.position(src, offset);
+        let (line, character) = idx.position(offset);
         Position { line, character }
     }
 

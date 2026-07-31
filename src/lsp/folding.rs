@@ -25,10 +25,10 @@ use crate::semantic::{OutlineItem, OutlineSymbol, outline};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 use crate::text::LineIndex;
 
-/// The foldable regions of an already-parsed LaTeX `root`. `idx`/`text` must index
-/// the same buffer `root` was parsed from.
-pub(crate) fn folding_ranges(root: &SyntaxNode, idx: &LineIndex, text: &str) -> Vec<FoldingRange> {
-    let line_of = |offset: usize| idx.position(text, offset).0;
+/// The foldable regions of an already-parsed LaTeX `root`. `idx` must index the
+/// same buffer `root` was parsed from.
+pub(crate) fn folding_ranges(root: &SyntaxNode, idx: &LineIndex) -> Vec<FoldingRange> {
+    let line_of = |offset: usize| idx.position(offset).0;
     let mut ranges = Vec::new();
 
     // 1. Sectioning spans — reuse the outline's stretched section ranges. A section's
@@ -150,7 +150,7 @@ mod tests {
     fn folds(src: &str) -> Vec<FoldingRange> {
         let root = SyntaxNode::new_root(parse(src).green);
         let idx = LineIndex::new(src);
-        folding_ranges(&root, &idx, src)
+        folding_ranges(&root, &idx)
     }
 
     /// A `(start_line, end_line, kind)` triple for terse assertions.

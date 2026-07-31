@@ -1214,8 +1214,8 @@ fn apply_content_changes(
             None => *text = change.text,
             Some(range) => {
                 let idx = LineIndex::with_encoding(text, enc);
-                let start = idx.offset_at(text, range.start.line, range.start.character);
-                let end = idx.offset_at(text, range.end.line, range.end.character);
+                let start = idx.offset_at(range.start.line, range.start.character);
+                let end = idx.offset_at(range.end.line, range.end.character);
                 // Guard against a degenerate (start > end) range from a misbehaving
                 // client: clamp rather than panic on `replace_range`.
                 let (start, end) = (start.min(end), start.max(end));
@@ -3036,7 +3036,7 @@ fn analyze_tex(
         .parse_diagnostics(file)
         .iter()
         .map(|d| Diagnostic {
-            range: byte_range_to_lsp(&idx, &text, d.start, d.end),
+            range: byte_range_to_lsp(&idx, d.start, d.end),
             severity: Some(DiagnosticSeverity::ERROR),
             source: Some("badness".to_owned()),
             message: d.message.clone(),
@@ -3056,7 +3056,7 @@ fn analyze_tex(
         Some(packages),
     ) {
         if rules.is_active(d.rule) {
-            diags.push(lint_to_lsp(&idx, &text, d, true, &lint_path));
+            diags.push(lint_to_lsp(&idx, d, true, &lint_path));
         }
     }
     Some(diags)
@@ -3079,7 +3079,7 @@ fn analyze_bib(
         .bib_parse_diagnostics(file)
         .iter()
         .map(|d| Diagnostic {
-            range: byte_range_to_lsp(&idx, &text, d.start, d.end),
+            range: byte_range_to_lsp(&idx, d.start, d.end),
             severity: Some(DiagnosticSeverity::ERROR),
             source: Some("badness".to_owned()),
             message: d.message.clone(),
@@ -3090,7 +3090,7 @@ fn analyze_bib(
     let model = snapshot.bib_semantic_model(file);
     for d in crate::bib::linter::lint_document(path, &root, model) {
         if rules.is_active(d.rule) {
-            diags.push(lint_to_lsp(&idx, &text, d, false, path));
+            diags.push(lint_to_lsp(&idx, d, false, path));
         }
     }
     Some(diags)
@@ -3109,7 +3109,6 @@ const LATEX_RULES_DOC_URL: &str = "https://badness.dev/reference/linter-rules.ht
 /// (their `code` still carries the rule id, just without a doc link).
 fn lint_to_lsp(
     idx: &LineIndex,
-    text: &str,
     d: crate::linter::Diagnostic,
     link_docs: bool,
     self_path: &Path,
@@ -3118,9 +3117,9 @@ fn lint_to_lsp(
         .then(|| format!("{LATEX_RULES_DOC_URL}#{}", d.rule).parse().ok())
         .flatten()
         .map(|href| CodeDescription { href });
-    let related_information = lint_related_to_lsp(idx, text, self_path, &d.related);
+    let related_information = lint_related_to_lsp(idx, self_path, &d.related);
     Diagnostic {
-        range: byte_range_to_lsp(idx, text, d.start, d.end),
+        range: byte_range_to_lsp(idx, d.start, d.end),
         severity: Some(severity_to_lsp(d.severity)),
         code: Some(NumberOrString::String(d.rule.to_owned())),
         code_description,
@@ -3138,13 +3137,12 @@ fn lint_to_lsp(
 /// when there are none, so the field stays absent for the common case.
 ///
 /// A secondary in the *current* file (`self_path`) resolves its range against
-/// `idx`/`text`; one in another file is **file-level** — a `0..0` byte range
+/// `idx`; one in another file is **file-level** — a `0..0` byte range
 /// maps to the document start regardless of encoding, so we need neither that
 /// file's text nor its line index. An entry whose path cannot form a `file://`
 /// URI is skipped (mirrors [`location_for`]).
 fn lint_related_to_lsp(
     idx: &LineIndex,
-    text: &str,
     self_path: &Path,
     related: &[crate::linter::RelatedInfo],
 ) -> Option<Vec<DiagnosticRelatedInformation>> {
@@ -3155,7 +3153,7 @@ fn lint_related_to_lsp(
         .iter()
         .filter_map(|ri| {
             let range = if ri.path == self_path {
-                byte_range_to_lsp(idx, text, ri.start, ri.end)
+                byte_range_to_lsp(idx, ri.start, ri.end)
             } else {
                 // File-level link: `0..0` at the document start.
                 Range::default()
@@ -3280,7 +3278,7 @@ fn fallback_diagnostics(
             let parsed = parse_with_flavor(text, kind.lex_config());
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(&idx, text, err.start, err.end),
+                    range: byte_range_to_lsp(&idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3291,7 +3289,7 @@ fn fallback_diagnostics(
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, text, d, true, path));
+                    diags.push(lint_to_lsp(&idx, d, true, path));
                 }
             }
         }
@@ -3299,7 +3297,7 @@ fn fallback_diagnostics(
             let parsed = bib_parse(text);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(&idx, text, err.start, err.end),
+                    range: byte_range_to_lsp(&idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3310,7 +3308,7 @@ fn fallback_diagnostics(
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, text, d, false, path));
+                    diags.push(lint_to_lsp(&idx, d, false, path));
                 }
             }
         }
@@ -3538,7 +3536,7 @@ fn compute_format(
         return None;
     }
     let idx = LineIndex::with_encoding(text, enc);
-    let (end_line, end_col) = idx.position(text, text.len());
+    let (end_line, end_col) = idx.position(text.len());
     Some(TextEdit {
         range: Range {
             start: Position::new(0, 0),
@@ -3599,8 +3597,8 @@ fn compute_range_format(
     }
 
     let idx = LineIndex::with_encoding(text, enc);
-    let start = idx.offset_at(text, sel_range.start.line, sel_range.start.character);
-    let end = idx.offset_at(text, sel_range.end.line, sel_range.end.character);
+    let start = idx.offset_at(sel_range.start.line, sel_range.start.character);
+    let end = idx.offset_at(sel_range.end.line, sel_range.end.character);
     let (lo, hi) = (start.min(end), start.max(end));
     let sel = TextRange::new(
         TextSize::new(lo.min(u32::MAX as usize) as u32),
@@ -3723,7 +3721,7 @@ fn compute_on_type_format(
     }
 
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
     let off = offset.min(u32::MAX as usize) as u32;
     let sel = TextRange::empty(TextSize::new(off));
 
@@ -3876,7 +3874,7 @@ fn compute_symbols(
     let mut toc_cursor = 0;
     items
         .iter()
-        .map(|item| to_document_symbol(item, &idx, text, aux.as_ref(), &mut toc_cursor))
+        .map(|item| to_document_symbol(item, &idx, aux.as_ref(), &mut toc_cursor))
         .collect()
 }
 
@@ -3904,7 +3902,7 @@ fn compute_bib_symbols(
     };
     items
         .iter()
-        .map(|item| bib_to_document_symbol(item, &idx, text))
+        .map(|item| bib_to_document_symbol(item, &idx))
         .collect()
 }
 
@@ -3938,7 +3936,6 @@ fn run_workspace_symbols(
                 &items,
                 &member.path,
                 &idx,
-                text,
                 &needle,
                 container,
                 &mut file_symbols,
@@ -3961,14 +3958,13 @@ fn collect_workspace_symbols(
     items: &[OutlineItem],
     path: &Path,
     idx: &LineIndex,
-    text: &str,
     needle: &str,
     container: Option<&str>,
     out: &mut Vec<WorkspaceSymbol>,
 ) {
     for item in items {
         let matches = needle.is_empty() || item.name.to_ascii_lowercase().contains(needle);
-        if matches && let Some(location) = location_for(path, idx, text, item.selection_range) {
+        if matches && let Some(location) = location_for(path, idx, item.selection_range) {
             out.push(WorkspaceSymbol {
                 name: item.name.clone(),
                 kind: outline_symbol_kind(item.kind),
@@ -3979,7 +3975,7 @@ fn collect_workspace_symbols(
             });
         }
         // Always recurse: a matching label can nest under a non-matching section.
-        collect_workspace_symbols(&item.children, path, idx, text, needle, container, out);
+        collect_workspace_symbols(&item.children, path, idx, needle, container, out);
     }
 }
 
@@ -4019,17 +4015,13 @@ fn compute_folding(
         if snapshot.file_text(file) != text {
             return None;
         }
-        Some(folding::folding_ranges(
-            &snapshot.parsed_tree(file),
-            &idx,
-            text,
-        ))
+        Some(folding::folding_ranges(&snapshot.parsed_tree(file), &idx))
     }));
     match cached {
         Ok(Some(ranges)) => ranges,
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
         Ok(None) | Err(_) => {
-            folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx, text)
+            folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx)
         }
     }
 }
@@ -4083,7 +4075,6 @@ fn compute_selection_range(
         Some(selection_range::selection_ranges(
             &snapshot.parsed_tree(file),
             &idx,
-            text,
             positions,
         ))
     }));
@@ -4093,7 +4084,6 @@ fn compute_selection_range(
         Ok(None) | Err(_) => selection_range::selection_ranges(
             &SyntaxNode::new_root(parse(text).green),
             &idx,
-            text,
             positions,
         ),
     }
@@ -4163,7 +4153,7 @@ fn compute_document_link(
         .into_iter()
         .filter_map(|target| {
             Some(DocumentLink {
-                range: lsp_range(&idx, text, target.range),
+                range: lsp_range(&idx, target.range),
                 target: Some(path_to_uri(&target.target)?),
                 tooltip: None,
                 data: None,
@@ -4200,7 +4190,7 @@ fn compute_bib_document_link(
         .into_iter()
         .filter_map(|link| {
             Some(DocumentLink {
-                range: lsp_range(&idx, text, link.range),
+                range: lsp_range(&idx, link.range),
                 target: Some(link.target.parse::<Uri>().ok()?),
                 tooltip: None,
                 data: None,
@@ -4265,7 +4255,6 @@ fn outline_symbol_kind(kind: OutlineSymbol) -> SymbolKind {
 fn to_document_symbol(
     item: &OutlineItem,
     idx: &LineIndex,
-    text: &str,
     aux: Option<&AuxData>,
     toc_cursor: &mut usize,
 ) -> DocumentSymbol {
@@ -4298,7 +4287,7 @@ fn to_document_symbol(
     let children: Vec<DocumentSymbol> = item
         .children
         .iter()
-        .map(|child| to_document_symbol(child, idx, text, aux, toc_cursor))
+        .map(|child| to_document_symbol(child, idx, aux, toc_cursor))
         .collect();
     DocumentSymbol {
         name,
@@ -4306,13 +4295,8 @@ fn to_document_symbol(
         kind,
         tags: None,
         deprecated: None,
-        range: byte_range_to_lsp(idx, text, range.start().into(), range.end().into()),
-        selection_range: byte_range_to_lsp(
-            idx,
-            text,
-            selection.start().into(),
-            selection.end().into(),
-        ),
+        range: byte_range_to_lsp(idx, range.start().into(), range.end().into()),
+        selection_range: byte_range_to_lsp(idx, selection.start().into(), selection.end().into()),
         children: (!children.is_empty()).then_some(children),
     }
 }
@@ -4342,7 +4326,7 @@ fn normalize_toc_title(title: &str) -> String {
 /// have no nesting, so there are never children; the cite key is the name and the
 /// entry type the detail.
 #[allow(deprecated)] // `DocumentSymbol::deprecated` is a required struct field.
-fn bib_to_document_symbol(item: &BibOutlineItem, idx: &LineIndex, text: &str) -> DocumentSymbol {
+fn bib_to_document_symbol(item: &BibOutlineItem, idx: &LineIndex) -> DocumentSymbol {
     let range = item.range;
     let selection = item.selection_range;
     DocumentSymbol {
@@ -4351,13 +4335,8 @@ fn bib_to_document_symbol(item: &BibOutlineItem, idx: &LineIndex, text: &str) ->
         kind: SymbolKind::CONSTANT,
         tags: None,
         deprecated: None,
-        range: byte_range_to_lsp(idx, text, range.start().into(), range.end().into()),
-        selection_range: byte_range_to_lsp(
-            idx,
-            text,
-            selection.start().into(),
-            selection.end().into(),
-        ),
+        range: byte_range_to_lsp(idx, range.start().into(), range.end().into()),
+        selection_range: byte_range_to_lsp(idx, selection.start().into(), selection.end().into()),
         children: None,
     }
 }
@@ -4433,7 +4412,7 @@ fn compute_completion(
     enc: PositionEncoding,
 ) -> Vec<CompletionItem> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     if file_kind_for(path) == FileKind::Bib {
         return compute_bib_completion(text, offset);
@@ -4813,7 +4792,7 @@ fn run_change_environment(
             let idx = LineIndex::with_encoding(text, enc);
             let mut changes = HashMap::new();
             for range in ranges {
-                push_edit(&mut changes, uri, &idx, text, range, new_name);
+                push_edit(&mut changes, uri, &idx, range, new_name);
             }
             let edit = WorkspaceEdit {
                 changes: Some(changes),
@@ -4848,7 +4827,7 @@ fn compute_change_environment(
         return None;
     }
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
         Some(file) if snapshot.file_text(file) == text => {
@@ -4895,7 +4874,7 @@ fn compute_goto_definition(
     enc: PositionEncoding,
 ) -> Vec<Location> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
     let base_dir = path.parent();
 
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -4942,7 +4921,7 @@ fn compute_goto_definition(
                         let file = snapshot.lookup_file(&def_path)?;
                         let text = snapshot.file_text(file);
                         let idx = LineIndex::with_encoding(text, enc);
-                        location_for(&def_path, &idx, text, range)
+                        location_for(&def_path, &idx, range)
                     })
                     .collect();
             }
@@ -5023,7 +5002,7 @@ fn compute_references(
     enc: PositionEncoding,
 ) -> Vec<Location> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let package_members = members.clone();
@@ -5042,7 +5021,7 @@ fn compute_references(
                 .map(|file| snapshot.file_path(file).to_path_buf())
                 .unwrap_or_else(|| path.to_path_buf());
             let decl = if include_declaration {
-                location_for(&origin, &idx, text, key_range)
+                location_for(&origin, &idx, key_range)
             } else {
                 None
             };
@@ -5152,20 +5131,20 @@ fn name_reference_locations(
                     .collect();
                 for range in name_refs::command_occurrences(&root, &target.name) {
                     if include_declaration || !def_ranges.contains(&range) {
-                        locations.push(location_for(&member, &idx, text, range));
+                        locations.push(location_for(&member, &idx, range));
                     }
                 }
             }
             NameKind::Environment => {
                 for range in name_refs::environment_occurrences(&root, &target.name) {
-                    locations.push(location_for(&member, &idx, text, range));
+                    locations.push(location_for(&member, &idx, range));
                 }
                 if include_declaration {
                     for site in sites
                         .iter()
                         .filter(|s| s.kind == DefSiteKind::Environment && s.name == target.name)
                     {
-                        locations.push(location_for(&member, &idx, text, site.name_range));
+                        locations.push(location_for(&member, &idx, site.name_range));
                     }
                 }
             }
@@ -5366,14 +5345,14 @@ fn compute_document_highlight(
     enc: PositionEncoding,
 ) -> Vec<DocumentHighlight> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         if file_kind_for(path) == FileKind::Bib {
             return Vec::new();
         }
         let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
-            range: lsp_range(&idx, text, range),
+            range: lsp_range(&idx, range),
             kind: Some(kind),
         };
         let collect = |root: &SyntaxNode, model: &SemanticModel| -> Vec<DocumentHighlight> {
@@ -5433,13 +5412,13 @@ fn compute_prepare_rename(
     enc: PositionEncoding,
 ) -> Option<(Range, String)> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         // `.bib` origin: the `@entry` key under the cursor.
         if file_kind_for(path) == FileKind::Bib {
             let (key, key_range) = bib_entry_under_cursor(snapshot, path, text, offset)?;
-            return Some((lsp_range(&idx, text, key_range), key.to_string()));
+            return Some((lsp_range(&idx, key_range), key.to_string()));
         }
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
         // `root` is kept for the command/environment name fallback below.
@@ -5456,10 +5435,7 @@ fn compute_prepare_rename(
             }
         };
         if let Some(target) = target {
-            return Some((
-                lsp_range(&idx, text, target.span),
-                target.placeholder.to_string(),
-            ));
+            return Some((lsp_range(&idx, target.span), target.placeholder.to_string()));
         }
         // Not a key: a command or environment name, gated to user-defined names
         // (a project definition site must exist — renaming `\textbf` or
@@ -5469,7 +5445,7 @@ fn compute_prepare_rename(
         if !name_rename_allowed(snapshot, &members, path, &sites, &target) {
             return None;
         }
-        Some((lsp_range(&idx, text, target.span), target.name.to_string()))
+        Some((lsp_range(&idx, target.span), target.name.to_string()))
     }));
     computed.ok().flatten()
 }
@@ -5521,7 +5497,7 @@ fn compute_rename(
     enc: PositionEncoding,
 ) -> Option<WorkspaceEdit> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let changes = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let package_members = members.clone();
@@ -5672,13 +5648,13 @@ fn reference_label_locations(
         let model = snapshot.semantic_model(file);
         for r in model.refs() {
             if names.contains(&r.name) {
-                locations.push(location_for(member, &idx, text, r.range));
+                locations.push(location_for(member, &idx, r.range));
             }
         }
         if include_declaration {
             for label in model.labels() {
                 if names.contains(&label.name) {
-                    locations.push(location_for(member, &idx, text, label.range));
+                    locations.push(location_for(member, &idx, label.range));
                 }
             }
         }
@@ -5717,7 +5693,7 @@ fn reference_citation_locations(
         let idx = LineIndex::with_encoding(text, enc);
         for c in snapshot.semantic_model(file).citations() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
-                locations.push(location_for(member, &idx, text, c.range));
+                locations.push(location_for(member, &idx, c.range));
             }
         }
     }
@@ -5753,7 +5729,7 @@ fn resolve_label_locations(
             let idx = LineIndex::with_encoding(text, enc);
             for label in snapshot.semantic_model(file).labels() {
                 if &label.name == name {
-                    locations.push(location_for(def_path, &idx, text, label.range));
+                    locations.push(location_for(def_path, &idx, label.range));
                 }
             }
         }
@@ -5781,7 +5757,7 @@ fn resolve_citation_locations(
         let idx = LineIndex::with_encoding(text, enc);
         for entry in snapshot.bib_semantic_model(file).entries() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
-                locations.push(location_for(bib_path, &idx, text, entry.key_range));
+                locations.push(location_for(bib_path, &idx, entry.key_range));
             }
         }
     }
@@ -5790,15 +5766,10 @@ fn resolve_citation_locations(
 
 /// Build an LSP [`Location`] from a definer file's path and a byte range in its
 /// text. A path that cannot form a `file://` URI yields `None` (skipped).
-fn location_for(path: &Path, idx: &LineIndex, text: &str, range: TextRange) -> Option<Location> {
+fn location_for(path: &Path, idx: &LineIndex, range: TextRange) -> Option<Location> {
     Some(Location {
         uri: path_to_uri(path)?,
-        range: byte_range_to_lsp(
-            idx,
-            text,
-            usize::from(range.start()),
-            usize::from(range.end()),
-        ),
+        range: byte_range_to_lsp(idx, usize::from(range.start()), usize::from(range.end())),
     })
 }
 
@@ -5813,14 +5784,9 @@ fn dedup_locations(locations: Vec<Option<Location>>) -> Vec<Location> {
         .collect()
 }
 
-/// Convert a byte [`TextRange`] (over `text`) to an LSP [`Range`] via `idx`.
-fn lsp_range(idx: &LineIndex, text: &str, range: TextRange) -> Range {
-    byte_range_to_lsp(
-        idx,
-        text,
-        usize::from(range.start()),
-        usize::from(range.end()),
-    )
+/// Convert a byte [`TextRange`] to an LSP [`Range`] via `idx`.
+fn lsp_range(idx: &LineIndex, range: TextRange) -> Range {
+    byte_range_to_lsp(idx, usize::from(range.start()), usize::from(range.end()))
 }
 
 /// Every `\ref`-family use of `names` across `origin`'s label namespace, plus every
@@ -5849,12 +5815,12 @@ fn rename_label_edits(
         let model = snapshot.semantic_model(file);
         for r in model.refs() {
             if names.contains(&r.name) {
-                push_edit(&mut changes, &uri, &idx, text, r.key_range, new_name);
+                push_edit(&mut changes, &uri, &idx, r.key_range, new_name);
             }
         }
         for label in model.labels() {
             if names.contains(&label.name) {
-                push_edit(&mut changes, &uri, &idx, text, label.key_range, new_name);
+                push_edit(&mut changes, &uri, &idx, label.key_range, new_name);
             }
         }
     }
@@ -5893,7 +5859,7 @@ fn rename_citation_edits(
         let idx = LineIndex::with_encoding(text, enc);
         for c in snapshot.semantic_model(file).citations() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
-                push_edit(&mut changes, &uri, &idx, text, c.key_range, new_name);
+                push_edit(&mut changes, &uri, &idx, c.key_range, new_name);
             }
         }
     }
@@ -5945,7 +5911,6 @@ fn rename_command_edits(
                 &mut changes,
                 &uri,
                 &idx,
-                text,
                 name_refs::strip_backslash(range),
                 new_name,
             );
@@ -5981,7 +5946,7 @@ fn rename_environment_edits(
         let idx = LineIndex::with_encoding(text, enc);
         let root = snapshot.parsed_tree(file);
         for range in name_refs::environment_occurrences(&root, &target.name) {
-            push_edit(&mut changes, &uri, &idx, text, range, new_name);
+            push_edit(&mut changes, &uri, &idx, range, new_name);
         }
     }
     for (def_path, name_range) in
@@ -5995,7 +5960,7 @@ fn rename_environment_edits(
         };
         let text = snapshot.file_text(file);
         let idx = LineIndex::with_encoding(text, enc);
-        push_edit(&mut changes, &uri, &idx, text, name_range, new_name);
+        push_edit(&mut changes, &uri, &idx, name_range, new_name);
     }
     changes
 }
@@ -6020,7 +5985,7 @@ fn push_bib_entry_edits(
     let idx = LineIndex::with_encoding(text, enc);
     for entry in snapshot.bib_semantic_model(file).entries() {
         if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
-            push_edit(changes, &uri, &idx, text, entry.key_range, new_name);
+            push_edit(changes, &uri, &idx, entry.key_range, new_name);
         }
     }
 }
@@ -6030,12 +5995,11 @@ fn push_edit(
     changes: &mut HashMap<Uri, Vec<TextEdit>>,
     uri: &Uri,
     idx: &LineIndex,
-    text: &str,
     range: TextRange,
     new_name: &str,
 ) {
     changes.entry(uri.clone()).or_default().push(TextEdit {
-        range: lsp_range(idx, text, range),
+        range: lsp_range(idx, range),
         new_text: new_name.to_owned(),
     });
 }
@@ -6447,9 +6411,9 @@ fn severity_to_lsp(severity: Severity) -> DiagnosticSeverity {
 }
 
 /// Convert a byte range into an LSP range via the (encoding-aware) [`LineIndex`].
-fn byte_range_to_lsp(idx: &LineIndex, text: &str, start: usize, end: usize) -> Range {
-    let (sl, sc) = idx.position(text, start);
-    let (el, ec) = idx.position(text, end);
+fn byte_range_to_lsp(idx: &LineIndex, start: usize, end: usize) -> Range {
+    let (sl, sc) = idx.position(start);
+    let (el, ec) = idx.position(end);
     Range {
         start: Position::new(sl, sc),
         end: Position::new(el, ec),
@@ -6507,7 +6471,7 @@ fn diff_to_edits(
     // one wholesale replace of the block range.
     if n.saturating_mul(m) > 4_000_000 {
         return vec![TextEdit {
-            range: byte_range_to_lsp(idx, text, base, end),
+            range: byte_range_to_lsp(idx, base, end),
             new_text: fragment.to_owned(),
         }];
     }
@@ -6536,7 +6500,7 @@ fn diff_to_edits(
         if i < n && j < m && a[i] == b[j] {
             if in_hunk {
                 edits.push(TextEdit {
-                    range: byte_range_to_lsp(idx, text, del_start, del_end),
+                    range: byte_range_to_lsp(idx, del_start, del_end),
                     new_text: std::mem::take(&mut ins),
                 });
                 in_hunk = false;
@@ -6566,7 +6530,7 @@ fn diff_to_edits(
     }
     if in_hunk {
         edits.push(TextEdit {
-            range: byte_range_to_lsp(idx, text, del_start, del_end),
+            range: byte_range_to_lsp(idx, del_start, del_end),
             new_text: ins,
         });
     }
@@ -6620,7 +6584,7 @@ mod tests {
 
         // LaTeX arm (link_docs = true): the code deep-links the rule's reference
         // anchor, and the tag still rides along.
-        let latex = lint_to_lsp(&idx, "\\bf x", d(), true, Path::new("x.tex"));
+        let latex = lint_to_lsp(&idx, d(), true, Path::new("x.tex"));
         assert_eq!(
             latex.code_description.map(|c| c.href.to_string()),
             Some("https://badness.dev/reference/linter-rules.html#deprecated-command".to_owned())
@@ -6629,7 +6593,7 @@ mod tests {
 
         // Bib arm (link_docs = false): the rule id is still the `code`, but with
         // no doc link (bib rules aren't catalogued yet).
-        let bib = lint_to_lsp(&idx, "\\bf x", d(), false, Path::new("x.tex"));
+        let bib = lint_to_lsp(&idx, d(), false, Path::new("x.tex"));
         assert!(bib.code_description.is_none());
         assert_eq!(
             bib.code,
@@ -6666,7 +6630,7 @@ mod tests {
                 },
             ],
         };
-        let lsp = lint_to_lsp(&idx, text, d, true, Path::new("/p/main.tex"));
+        let lsp = lint_to_lsp(&idx, d, true, Path::new("/p/main.tex"));
         let related = lsp.related_information.expect("related present");
         assert_eq!(related.len(), 2);
 

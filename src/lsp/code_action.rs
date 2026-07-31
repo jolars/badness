@@ -33,12 +33,8 @@ pub(crate) fn code_actions_for_range(
     link_docs: bool,
 ) -> CodeActionResponse {
     let idx = LineIndex::with_encoding(text, enc);
-    let req_start = idx.offset_at(
-        text,
-        request_range.start.line,
-        request_range.start.character,
-    );
-    let req_end = idx.offset_at(text, request_range.end.line, request_range.end.character);
+    let req_start = idx.offset_at(request_range.start.line, request_range.start.character);
+    let req_end = idx.offset_at(request_range.end.line, request_range.end.character);
 
     findings
         .iter()
@@ -52,7 +48,7 @@ pub(crate) fn code_actions_for_range(
                 .edits
                 .iter()
                 .map(|e| TextEdit {
-                    range: byte_range_to_lsp(&idx, text, e.start, e.end),
+                    range: byte_range_to_lsp(&idx, e.start, e.end),
                     new_text: e.content.clone(),
                 })
                 .collect();
@@ -62,13 +58,7 @@ pub(crate) fn code_actions_for_range(
                 kind: Some(CodeActionKind::QUICKFIX),
                 // Link the action to the finding it fixes, so the client can dim it
                 // once the diagnostic clears.
-                diagnostics: Some(vec![lint_to_lsp(
-                    &idx,
-                    text,
-                    d.clone(),
-                    link_docs,
-                    self_path,
-                )]),
+                diagnostics: Some(vec![lint_to_lsp(&idx, d.clone(), link_docs, self_path)]),
                 edit: Some(WorkspaceEdit {
                     changes: Some(changes),
                     ..Default::default()
@@ -98,7 +88,7 @@ mod tests {
 
     fn full_range(text: &str) -> Range {
         let idx = LineIndex::new(text);
-        let (el, ec) = idx.position(text, text.len());
+        let (el, ec) = idx.position(text.len());
         Range {
             start: Position::new(0, 0),
             end: Position::new(el, ec),

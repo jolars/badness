@@ -2921,8 +2921,8 @@ fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
     let mut spans: Vec<(usize, usize, &str)> = edits
         .iter()
         .map(|edit| {
-            let start = index.offset_at(text, edit.range.start.line, edit.range.start.character);
-            let end = index.offset_at(text, edit.range.end.line, edit.range.end.character);
+            let start = index.offset_at(edit.range.start.line, edit.range.start.character);
+            let end = index.offset_at(edit.range.end.line, edit.range.end.character);
             (start, end, edit.new_text.as_str())
         })
         .collect();

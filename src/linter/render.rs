@@ -108,10 +108,9 @@ fn render_concise(
     let mut out = String::new();
     for (path, diags) in group_by_path(diagnostics) {
         let source = source_for(path);
-        let index = source.as_deref().map(|s| (s, LineIndex::new(s)));
+        let index = source.as_deref().map(LineIndex::new);
         for d in &diags {
-            let resolved = index.as_ref().map(|(s, idx)| (*s, idx));
-            let _ = writeln!(out, "{}", concise_line(path, resolved, d));
+            let _ = writeln!(out, "{}", concise_line(path, index.as_ref(), d));
         }
     }
     out
@@ -119,11 +118,11 @@ fn render_concise(
 
 /// `path:line:col: severity [rule] message`, or `path: …` when no source is
 /// available to resolve line/column.
-fn concise_line(path: &Path, source: Option<(&str, &LineIndex)>, d: &Diagnostic) -> String {
+fn concise_line(path: &Path, index: Option<&LineIndex>, d: &Diagnostic) -> String {
     let severity = severity_word(d.severity);
-    match source {
-        Some((text, index)) => {
-            let lc = index.line_col(text, d.start);
+    match index {
+        Some(index) => {
+            let lc = index.line_col(d.start);
             format!(
                 "{}:{}:{}: {severity} [{}] {}",
                 path.display(),

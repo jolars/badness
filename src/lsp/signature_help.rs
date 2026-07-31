@@ -45,7 +45,7 @@ pub(crate) fn compute_signature_help(
     enc: PositionEncoding,
 ) -> Option<SignatureHelp> {
     let idx = LineIndex::with_encoding(text, enc);
-    let offset = idx.offset_at(text, position.line, position.character);
+    let offset = idx.offset_at(position.line, position.character);
 
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
         Some(file) if snapshot.file_text(file) == text => {
@@ -295,7 +295,7 @@ mod tests {
         let snapshot = db.snapshot();
         let members = super::members_of(&snapshot);
         let idx = LineIndex::new(src);
-        let (line, character) = idx.position(src, offset);
+        let (line, character) = idx.position(offset);
         compute_signature_help(
             &snapshot,
             path,

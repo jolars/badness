@@ -443,13 +443,14 @@ capabilities RA has that badness does not. Severity in brackets.
 
 ### CST / AST / trivia
 
-- [ ] **[low, perf] `LineIndex` re-scans the buffer per call and requires the
-  caller to pass `text` back in** (`text/line_index.rs`). Wide-char *correctness*
-  is right (the common bug — verified: UTF-16/UTF-8 column math, astral chars,
-  CRLF all handled). But RA's standalone `line-index` precomputes a per-line
-  wide-char table at construction and owns no text, so queries are O(wide-chars)
-  with no re-walk and no "hand the same buffer back" misuse hazard. Consider
-  precomputing the table if line-index shows up in a profile.
+- [x] **[low, perf] `LineIndex` re-scans the buffer per call and requires the
+  caller to pass `text` back in** (`text/line_index.rs`). Done: construction now
+  records a per-line wide-char table (RA's `line-index` model), so `line_col`,
+  `position`, and `offset_at` answer in O(wide-chars-on-line) from the table and
+  no longer take a `text` argument — the index owns no text and there is no
+  "hand the same buffer back" misuse hazard. Wide-char correctness (UTF-16/UTF-8
+  column math, astral chars, CRLF) is preserved and pinned by the existing tests
+  plus a multi-wide-char round-trip.
 - [ ] **[low, latent] No `SyntaxNodePtr`/`AstPtr`.** RA stashes stable node
   pointers in salsa data to re-resolve across reparses; badness sidesteps this by
   storing the `GreenNode` directly (decision #7) and carrying diagnostics as

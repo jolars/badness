@@ -174,6 +174,11 @@ fn format_invariants_corpus() {
 /// reflow, so they run under [`WrapMode::Preserve`] — their `expected.tex` is the
 /// pre-reflow output and must stay byte-identical. The `reflow_*` fixtures
 /// exercise the new rule, each at a width chosen to make the wrapping legible.
+///
+/// Exception: list environments hang their `\item` continuation lines under the
+/// marker in every mode (issue #82), so `nested_environments` and
+/// `list_item_continuation_hang` show that hang even under `Preserve` — `Preserve`
+/// keeps only the authored breaks and inner spacing, never the flat body indent.
 const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Whitespace normalization.
     (
@@ -189,6 +194,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Environment indentation.
     ("environment_indents_body", WrapMode::Preserve, 80),
     ("nested_environments", WrapMode::Preserve, 80),
+    ("list_item_continuation_hang", WrapMode::Preserve, 80),
     ("environment_reindents", WrapMode::Preserve, 80),
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),

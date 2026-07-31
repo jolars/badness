@@ -867,8 +867,17 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             return lower_aligned_environment(node, cx);
         }
+        // A list environment (`itemize`/`enumerate`/`description`): its `\item`s get
+        // their continuation lines hanging-indented under the marker. Under a
+        // prose-wrapping mode the body is reflowed; under `Preserve` the authored
+        // breaks and inner spacing are kept byte-faithful and only the continuation
+        // *indentation* is re-hung (see [`lower_item_chunks`]). A doc-margined list
+        // under `Preserve` is excluded — like the generic arm below, its `%` margins
+        // must stay pinned at column 0 — so it falls through to the generic stream.
         SyntaxKind::ENVIRONMENT
-            if cx.wraps_prose() && !has_verbatim_body(node) && is_list_env(node, cx) =>
+            if !has_verbatim_body(node)
+                && is_list_env(node, cx)
+                && (cx.wraps_prose() || !contains_doc_margin(node)) =>
         {
             return lower_list_environment(node, cx);
         }
@@ -2604,9 +2613,11 @@ enum FlatItem {
 /// the body indent. The framing (`\begin`/`\end`, the indented body with
 /// leading/trailing `hard_line`) matches [`lower_environment`].
 ///
-/// Only reached under a prose-wrapping mode (see [`lower_node`]). Falls back to the
-/// plain [`lower_environment`] when the body has no `\item` to anchor on, so an
-/// unusual shape degrades to today's indented body rather than misformatting.
+/// Under [`WrapMode::Preserve`] the body is *not* reflowed: the author's line breaks
+/// and inner spacing are kept byte-faithful (see [`lower_item_chunks`]) and only the
+/// continuation-line indentation is re-hung under the marker. Falls back to the plain
+/// [`lower_environment`] when the body has no `\item` to anchor on, so an unusual
+/// shape degrades to today's indented body rather than misformatting.
 fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let EnvParts {
         leading,
@@ -2676,7 +2687,7 @@ fn lower_list_body(
 
     let mut segments: Vec<Ir> = Vec::new();
     let mut seps: Vec<Ir> = Vec::new();
-    let preamble_ir = reflow_chunks(&preamble, cx);
+    let preamble_ir = lower_item_chunks(&preamble, cx);
     if !matches!(preamble_ir, Ir::Nil) {
         seps.push(Ir::hard_line()); // unused (segment 0 has no preceding separator)
         segments.push(preamble_ir);
@@ -2707,7 +2718,7 @@ fn lower_list_body(
 /// start after a bare `\item`, regardless of how wide the `[label]` is. An empty
 /// item (marker with no body) renders as the bare marker.
 fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
-    let content = reflow_chunks(&item.chunks, cx);
+    let content = lower_item_chunks(&item.chunks, cx);
     let marker = Ir::verbatim(item.marker.clone());
     let body = if matches!(content, Ir::Nil) {
         marker
@@ -2719,6 +2730,40 @@ fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
     }
     let doc = item.doc_lines.iter().map(|line| Ir::verbatim(line.clone()));
     Ir::concat([Ir::join(Ir::hard_line(), doc), Ir::hard_line(), body])
+}
+
+/// Lower an item body's paragraph chunks, dispatching on the wrap mode: a
+/// prose-wrapping mode reflows each chunk to width ([`reflow_chunks`]), while
+/// [`WrapMode::Preserve`] keeps the author's breaks and inner spacing byte-faithful
+/// ([`preserve_chunks`]). Either way the result sits inside the item's hanging
+/// [`Ir::align`], so continuation lines indent under the marker.
+fn lower_item_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
+    if cx.wraps_prose() {
+        reflow_chunks(chunks, cx)
+    } else {
+        preserve_chunks(chunks, cx)
+    }
+}
+
+/// Preserve-mode analogue of [`reflow_chunks`]: lower each paragraph chunk through
+/// the byte-faithful generic stream ([`lower_element_stream`]) so the author's line
+/// breaks become `hard_line`s and inner spacing is kept verbatim, then join the
+/// (non-empty) chunks with an [`Ir::empty_line`]. Each chunk's own edge breaks are
+/// trimmed — the leading whitespace after `\item ` and any trailing break — so the
+/// first line glues after the marker and no blank line leaks; the interior newlines
+/// survive as `hard_line`s that hang under the marker via the enclosing
+/// [`Ir::align`].
+fn preserve_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
+    let parts = chunks
+        .iter()
+        .map(|chunk| {
+            let ir = Ir::concat(lower_element_stream(chunk.iter().cloned(), cx));
+            let (_, ir) = peel_leading_break(ir);
+            let (_, ir) = peel_trailing_break(ir);
+            ir
+        })
+        .filter(|ir| !matches!(ir, Ir::Nil));
+    Ir::join(Ir::empty_line(), parts)
 }
 
 /// Reflow each paragraph chunk of an item body and join the (non-empty) results

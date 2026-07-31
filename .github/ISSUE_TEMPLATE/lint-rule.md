@@ -1,9 +1,9 @@
 ---
 name: Lint rule request
 about: Suggest a new linter rule (diagnostic)
-title: ''
+title: ""
 labels: enhancement
-assignees: ''
+assignees: ""
 ---
 
 **What should the rule catch**

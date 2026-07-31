@@ -1,9 +1,9 @@
 ---
 name: Formatting request
 about: Report output you'd like formatted differently
-title: ''
+title: ""
 labels: enhancement
-assignees: ''
+assignees: ""
 ---
 
 <!-- Fill in what you can; the fenced blocks are annotated so code stays readable. -->

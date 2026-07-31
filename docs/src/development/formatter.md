@@ -160,8 +160,8 @@ shape alone. Three properties keep it safe:
   alignment; gridding an arbitrary `\begin{center}a \\ b\end{center}` would
   reflow it. Only a `&` opts an unknown environment in.
 - **Whitespace-only and self-correcting.** The grid renderer touches only trivia
-  (the non-trivia-content oracle stays green), and any shape it cannot lay out on
-  aligned rows falls back to `lower_environment`—today's plain indented body.
+  (the non-trivia-content oracle stays green), and any shape it cannot lay out
+  on aligned rows falls back to `lower_environment`—today's plain indented body.
 - **Placed *after* the curated arms.** Known list/math/align environments are
   already routed, so a stray top-level `&` inside, say, an `itemize` body never
   reroutes it. Doc-margined bodies are excluded (grid padding would push a `%`
@@ -169,9 +169,9 @@ shape alone. Three properties keep it safe:
 
 An unknown environment takes the *non-math* grid, so its `&` columns align and
 gain the single `" & "` spacing, but its cells are **not** given math operator
-spacing (the parser never entered math mode for it): `a&=b` becomes `a & =b`, not
-`a & = b`. Inferring math mode for an unnamed environment is exactly the meaning
-the parser declines to guess.
+spacing (the parser never entered math mode for it): `a&=b` becomes `a & =b`,
+not `a & = b`. Inferring math mode for an unnamed environment is exactly the
+meaning the parser declines to guess.
 
 ## expl3 code formatting
 
@@ -255,33 +255,35 @@ of the line stays at base, because a width break re-reads its atoms as ordinary
 base-indent statements on the next pass—break and group body must land at the
 same column either way for the layout to be a fixed point.
 
-The rule keys only on the group shape (`child.kind() == GROUP && atom.is_empty()`),
-**not** the statement mode, so it fires identically whether source newlines are
-statement boundaries (`SplitAtNewlines`) or inert catcode-9 whitespace within one
-command's attached arguments (`Statements::Ignore`). This is what gives an
-*attached* brace argument the l3 hang: `\hbox_set:Nn \l_tmpa_box` / `␣␣{ … }`, or
-the `T`/`F` branches of `\cs_if_exist:NTF` each hung one step. A directly-abutting
-argument (`\EditInstance{a}{b}{…}`, no space) leaves `atom` non-empty and stays
-K&R-glued instead—the same `atom` emptiness discriminates space from glue.
+The rule keys only on the group shape
+(`child.kind() == GROUP && atom.is_empty()`), **not** the statement mode, so it
+fires identically whether source newlines are statement boundaries
+(`SplitAtNewlines`) or inert catcode-9 whitespace within one command's attached
+arguments (`Statements::Ignore`). This is what gives an *attached* brace
+argument the l3 hang: `\hbox_set:Nn \l_tmpa_box` / `␣␣{ … }`, or the `T`/`F`
+branches of `\cs_if_exist:NTF` each hung one step. A directly-abutting argument
+(`\EditInstance{a}{b}{…}`, no space) leaves `atom` non-empty and stays K&R-glued
+instead—the same `atom` emptiness discriminates space from glue.
 
-**Head-hug.** A detonating *non-group* child (a command subtree whose first line is
-a head atom—e.g. the `N`-argument `\__kernel_dependency_version_check:nn{T}{F}` of
-`\cs_if_exist:NTF`) that follows a head on the current line, space-separated, is
-kept on that line by an `Ir::group_hug` wrapping `[head, sep, block]`. The hug is
-rest-aware (`fits` stops *successfully* at the block's first forced break), so it
-measures only the prefix `head␣<block-first-line>`, never the block body—the
-issue-#71-safe measurement, deliberately not the `step_fill` local `flat_width`
-cascade that would split a short head off a detonating trailing block.
+**Head-hug.** A detonating *non-group* child (a command subtree whose first line
+is a head atom—e.g. the `N`-argument
+`\__kernel_dependency_version_check:nn{T}{F}` of `\cs_if_exist:NTF`) that
+follows a head on the current line, space-separated, is kept on that line by an
+`Ir::group_hug` wrapping `[head, sep, block]`. The hug is rest-aware (`fits`
+stops *successfully* at the block's first forced break), so it measures only the
+prefix `head␣<block-first-line>`, never the block body—the issue-#71-safe
+measurement, deliberately not the `step_fill` local `flat_width` cascade that
+would split a short head off a detonating trailing block.
 
-**Sibling coupling.** Within one command's attached arguments (`Ignore` only), if
-any brace argument detonates on a *forced* break—a docstrip guard, comment, or
-`.dtx` margin (`expl_group_forces_break`, a cheap token scan, no lowering)—every
-brace sibling is forced to the broken (Allman) form via `lower_expl_group`'s
-`force_break`, so a short false-branch (`{ \tex_endinput:D }`) expands to match a
-multi-line true-branch. Keyed on the *forced* trigger only, so the coupling is a
-pass-stable function of the arg-list content; a sibling that would break solely
-from **width** does not couple (width is a printer decision, invisible at
-build time).
+**Sibling coupling.** Within one command's attached arguments (`Ignore` only),
+if any brace argument detonates on a *forced* break—a docstrip guard, comment,
+or `.dtx` margin (`expl_group_forces_break`, a cheap token scan, no
+lowering)—every brace sibling is forced to the broken (Allman) form via
+`lower_expl_group`'s `force_break`, so a short false-branch
+(`{ \tex_endinput:D }`) expands to match a multi-line true-branch. Keyed on the
+*forced* trigger only, so the coupling is a pass-stable function of the arg-list
+content; a sibling that would break solely from **width** does not couple (width
+is a printer decision, invisible at build time).
 
 ### Interaction with `.dtx` doc margins
 

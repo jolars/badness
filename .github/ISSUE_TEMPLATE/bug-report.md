@@ -1,9 +1,10 @@
 ---
 name: Bug report
-about: A crash, a losslessness or idempotence violation, wrong output, or LSP misbehavior
-title: ''
+about: A crash, a losslessness or idempotence violation, wrong output, or LSP
+  misbehavior
+title: ""
 labels: bug
-assignees: ''
+assignees: ""
 ---
 
 <!-- Fill in what you can. Losslessness (reconstruct == input) and idempotence

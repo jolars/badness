@@ -175,10 +175,13 @@ fn format_invariants_corpus() {
 /// pre-reflow output and must stay byte-identical. The `reflow_*` fixtures
 /// exercise the new rule, each at a width chosen to make the wrapping legible.
 ///
-/// Exception: list environments hang their `\item` continuation lines under the
-/// marker in every mode (issue #82), so `nested_environments` and
-/// `list_item_continuation_hang` show that hang even under `Preserve` — `Preserve`
-/// keeps only the authored breaks and inner spacing, never the flat body indent.
+/// Two clarifications on what `Preserve` keeps. It governs *line breaks* only:
+/// authored breaks survive, but inter-word spacing on a line still collapses to a
+/// single space (`preserve_prose_spacing`) exactly as under the wrapping modes —
+/// an *opaque* argument body (a `\newcommand` definition) is left byte-for-byte.
+/// And list environments hang their `\item` continuation lines under the marker in
+/// every mode (issue #82), so `nested_environments` and `list_item_continuation_hang`
+/// show that hang even under `Preserve`, never the flat body indent.
 const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Whitespace normalization.
     (
@@ -190,6 +193,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("collapse_blank_lines", WrapMode::Preserve, 80),
     ("protected_comment_trailing_space", WrapMode::Preserve, 80),
     ("protected_verbatim", WrapMode::Preserve, 80),
+    ("preserve_prose_spacing", WrapMode::Preserve, 80),
     ("final_newline_added", WrapMode::Preserve, 80),
     // Environment indentation.
     ("environment_indents_body", WrapMode::Preserve, 80),

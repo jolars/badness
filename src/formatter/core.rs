@@ -827,6 +827,18 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::PARAGRAPH if cx.wraps_prose() => {
             return lower_paragraph_reflow(node, cx);
         }
+        // Under `Preserve` a (non-`.dtx`) prose paragraph keeps its authored line
+        // breaks, but inter-word spacing on each line still normalizes to a single
+        // space (see [`lower_prose_stream`]) — `Preserve` governs line breaks only.
+        // Inline-prose command bodies (`\emph{…}`) are flattened in so their text
+        // collapses too, matching every wrapping mode; opaque argument bodies (a
+        // `\newcommand` definition) recurse through [`lower_node`] and stay verbatim.
+        // A `.dtx` doc paragraph is excluded (the arm above requires `wraps_prose`),
+        // so it falls through to the generic stream and keeps its `%` margins.
+        SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Preserve && !is_dtx_doc_paragraph(node) => {
+            let flat = flatten_inline_prose(node.children_with_tokens().collect(), cx);
+            return Ir::concat(lower_prose_stream(flat.into_iter(), cx));
+        }
         // A `.dtx` docstrip frame (`%␣␣␣␣\begin{macrocode}`, a documentation-layer
         // `% \begin{itemize}`): the body is never indented and the closing frame is
         // kept whole at column 0. Routed before the alignment/list lowerers so a
@@ -2122,26 +2134,12 @@ fn lower_element_stream(
 ) -> Vec<Ir> {
     let mut out = Vec::new();
     let mut iter = elements.peekable();
-    // Whether the element just emitted was a `.dtx` margin/guard (`%` doc margin
-    // or a `%<…>` docstrip guard). A newline-free whitespace run right after one
-    // is meaningful documentation-layer indentation (`%    \begin{macrocode}`,
-    // `%<latexrelease>    \bar_if:nTF`), not inter-word spacing, so the `Preserve`
-    // collapse must leave it verbatim — see the trivia arm.
-    let mut pending_margin = false;
     while let Some(element) = iter.next() {
-        let after_margin = std::mem::take(&mut pending_margin);
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
-                // Keep documentation-layer indentation after a `.dtx` margin/guard
-                // verbatim; otherwise apply the `Preserve` inner-spacing collapse.
-                let ir = if after_margin {
-                    classify_trivia(newlines, trailing_ws)
-                } else {
-                    normalize_trivia(newlines, trailing_ws, cx)
-                };
-                out.push(ir);
+                out.push(classify_trivia(newlines, trailing_ws));
             }
             // The floated leading `%` of a reflowable `.dtx` doc paragraph (one that
             // follows a `%` blank line): drop it and the inline whitespace after it,
@@ -2160,10 +2158,40 @@ fn lower_element_stream(
                     }
                 }
             }
-            SyntaxElement::Token(token) => {
-                pending_margin = matches!(token.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD);
-                out.push(lower_loose_token(&token));
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
+        }
+    }
+    out
+}
+
+/// Lower a *prose* element stream under [`WrapMode::Preserve`]: like
+/// [`lower_element_stream`], but a newline-free whitespace run — inter-word spacing
+/// on a single line — collapses to a single space instead of surviving verbatim.
+/// `Preserve` governs *line breaks* only, so intra-line spacing normalizes exactly
+/// as it does in every wrapping mode (runs of spaces/tabs are catcode-10 equivalent
+/// to one space, so the collapse is meaning-preserving); a run carrying a newline
+/// stays a break and the printer still owns the following indentation.
+///
+/// Reached only for genuine prose — a non-`.dtx` `PARAGRAPH` (see [`lower_node`]) or
+/// a list item body (see [`preserve_chunks`]) — after [`flatten_inline_prose`] has
+/// spliced inline-prose command bodies (`\emph{…}`) into the run. A child *node*
+/// still recurses through [`lower_node`], so an *opaque* brace body (a `\newcommand`
+/// definition, any non-inline argument group) keeps its inner spacing byte-for-byte,
+/// exactly as under every other mode.
+fn lower_prose_stream(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCtx<'_>) -> Vec<Ir> {
+    let mut out = Vec::new();
+    let mut iter = elements.peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let (newlines, _ws) = consume_trivia_run(&token, &mut iter);
+                out.push(match newlines {
+                    0 => Ir::verbatim(" "),
+                    _ => classify_trivia(newlines, String::new()),
+                });
             }
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
         }
     }
     out
@@ -2762,19 +2790,22 @@ fn lower_item_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
     }
 }
 
-/// Preserve-mode analogue of [`reflow_chunks`]: lower each paragraph chunk through
-/// the byte-faithful generic stream ([`lower_element_stream`]) so the author's line
-/// breaks become `hard_line`s and inner spacing is kept verbatim, then join the
-/// (non-empty) chunks with an [`Ir::empty_line`]. Each chunk's own edge breaks are
-/// trimmed — the leading whitespace after `\item ` and any trailing break — so the
-/// first line glues after the marker and no blank line leaks; the interior newlines
-/// survive as `hard_line`s that hang under the marker via the enclosing
-/// [`Ir::align`].
+/// Preserve-mode analogue of [`reflow_chunks`]: lower each paragraph chunk as prose
+/// under [`WrapMode::Preserve`] ([`lower_prose_stream`]) so the author's line breaks
+/// become `hard_line`s while inter-word spacing collapses to a single space, then
+/// join the (non-empty) chunks with an [`Ir::empty_line`]. Inline-prose command
+/// bodies are flattened in first (matching the paragraph path), so an `\emph{…}`
+/// body collapses too while an opaque argument group stays verbatim. Each chunk's
+/// own edge breaks are trimmed — the leading whitespace after `\item ` and any
+/// trailing break — so the first line glues after the marker and no blank line
+/// leaks; the interior newlines survive as `hard_line`s that hang under the marker
+/// via the enclosing [`Ir::align`].
 fn preserve_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
     let parts = chunks
         .iter()
         .map(|chunk| {
-            let ir = Ir::concat(lower_element_stream(chunk.iter().cloned(), cx));
+            let flat = flatten_inline_prose(chunk.clone(), cx);
+            let ir = Ir::concat(lower_prose_stream(flat.into_iter(), cx));
             let (_, ir) = peel_leading_break(ir);
             let (_, ir) = peel_trailing_break(ir);
             ir
@@ -5294,21 +5325,6 @@ fn classify_trivia(newlines: usize, trailing_ws: String) -> Ir {
         1 => Ir::hard_line(),
         _ => Ir::empty_line(),
     }
-}
-
-/// [`classify_trivia`] with the [`WrapMode::Preserve`] inner-spacing rule applied:
-/// `Preserve` governs *line breaks* only, so a newline-free run — inter-word
-/// spacing on a single line — normalizes to a single space just like every other
-/// mode, rather than surviving verbatim. Runs of spaces/tabs are catcode-10
-/// equivalent to one space, so the collapse is meaning-preserving; a run carrying a
-/// newline is a break `classify_trivia` still maps to a hard/blank line (its
-/// trailing indentation is the printer's to own). Other modes are unchanged: they
-/// reflow prose through [`reflow_elements`], which never keeps the raw run.
-fn normalize_trivia(newlines: usize, trailing_ws: String, cx: LowerCtx<'_>) -> Ir {
-    if cx.wrap == WrapMode::Preserve && newlines == 0 {
-        return Ir::verbatim(" ");
-    }
-    classify_trivia(newlines, trailing_ws)
 }
 
 /// A break the indenter supplies itself and so trims from a body edge: a forced

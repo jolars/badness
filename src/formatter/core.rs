@@ -899,6 +899,24 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             return lower_list_environment(node, cx);
         }
+        // A user-defined or otherwise unclassified environment whose body carries a
+        // top-level `&` reads as an alignment (`myaligned`, issue #84): `&` at
+        // catcode 4 is a column tab, a static CST-shape fact. Known align/math/list
+        // environments were routed by the arms above; this generalizes `&`-column
+        // layout to the environments the signature DB cannot name, exactly as the
+        // environment group-boundary gate generalizes the curated definition-body set
+        // (decision #1). Whitespace-only (the grid renderer reflows only trivia) and
+        // self-correcting: any shape the grid cannot lay out falls back to
+        // [`lower_environment`]. Doc-margined bodies are excluded (same margin rule as
+        // the arms above and below): grid padding would land before a `%` margin and
+        // push it off column 0.
+        SyntaxKind::ENVIRONMENT
+            if !has_verbatim_body(node)
+                && !contains_doc_margin(node)
+                && body_has_top_level_ampersand(node) =>
+        {
+            return lower_aligned_environment(node, cx);
+        }
         // Same margin rule as the math/group/optional arms below: an environment
         // continuing across `.dtx` doc-margined lines is never re-laid. A
         // *margin-framed* environment (its `\begin`/`\end` on `%` frame lines) took
@@ -3035,6 +3053,27 @@ fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .and_then(|e| e.name())
         .and_then(|name| cx.signatures.environment(&name))
         .is_some_and(|sig| sig.align)
+}
+
+/// True if `node` (an `ENVIRONMENT`) carries a **top-level `&`** — an alignment tab
+/// that is a direct child of the body (or of its single wrapping `PARAGRAPH`), not
+/// nested inside a group or sub-environment. A `&` at catcode 4 reading as a column
+/// tab is a static CST-shape fact, so an environment the signature DB cannot name
+/// (`myaligned`, issue #84) still routes to the `&`-column grid when it is shaped
+/// like one. It mirrors the cell boundary [`build_alignment_grid`]/`flatten_alignment_body`
+/// use, so the routing decision and the grid it enables agree on what a top-level
+/// `&` is; a nested `&` lives in a child node and is correctly invisible. Deliberately
+/// keyed on `&` alone (not `\\`): a `\\`-only body is a line stack, not a column
+/// alignment, and gridding an arbitrary `\begin{center}a \\ b\end{center}` would
+/// reflow it.
+fn body_has_top_level_ampersand(node: &SyntaxNode) -> bool {
+    node.children_with_tokens().any(|el| match el {
+        SyntaxElement::Token(t) => t.kind() == SyntaxKind::AMPERSAND,
+        SyntaxElement::Node(p) if p.kind() == SyntaxKind::PARAGRAPH => p
+            .children_with_tokens()
+            .any(|g| g.kind() == SyntaxKind::AMPERSAND),
+        _ => false,
+    })
 }
 
 /// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks

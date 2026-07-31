@@ -136,6 +136,43 @@ overflow rather than ballooning narrow data columns. The rule-line recognizer
 `(lr)` `WORD` and detached `{2-3}` group are consumed as part of the rule line),
 and a same-line `\\ \hline` is normalized onto its own passthrough line.
 
+### Which environments grid-align: signature flag plus a `&`-shape gate
+
+Routing to the grid is primarily a **semantic** fact: the curated `align`
+signature (`tabular`, `array`, and every math grid—`align`, `pmatrix`, …) picks
+the grid path, and the parallel `math` flag additionally routes the math-aware
+lowerer so cells get role-aware operator spacing. But the signature DB cannot
+name a *user-defined* environment (`\newenvironment{myaligned}{…}{…}`, or one it
+never sees defined at all), so an environment shaped exactly like an alignment
+would otherwise miss the grid (issue #84).
+
+So, after the curated `align`/`math`/list arms have had their say, one more arm
+routes **any** remaining environment whose body carries a **top-level `&`** to
+the non-math grid (`body_has_top_level_ampersand`). A `&` at catcode 4 is a
+column tab—a static CST-shape fact, read exactly as `build_alignment_grid`
+defines a cell boundary (a direct child of the body or its single wrapping
+`PARAGRAPH`; a nested `&` lives in a child node and stays invisible). It is the
+same move the environment group-boundary gate makes for `\begin`/`\end`
+(`parser.md`): generalize a curated set to the package code it cannot name, from
+shape alone. Three properties keep it safe:
+
+- **Keyed on `&`, never `\\`.** A `\\`-only body is a line stack, not a column
+  alignment; gridding an arbitrary `\begin{center}a \\ b\end{center}` would
+  reflow it. Only a `&` opts an unknown environment in.
+- **Whitespace-only and self-correcting.** The grid renderer touches only trivia
+  (the non-trivia-content oracle stays green), and any shape it cannot lay out on
+  aligned rows falls back to `lower_environment`—today's plain indented body.
+- **Placed *after* the curated arms.** Known list/math/align environments are
+  already routed, so a stray top-level `&` inside, say, an `itemize` body never
+  reroutes it. Doc-margined bodies are excluded (grid padding would push a `%`
+  margin off column 0), matching the neighboring environment arms.
+
+An unknown environment takes the *non-math* grid, so its `&` columns align and
+gain the single `" & "` spacing, but its cells are **not** given math operator
+spacing (the parser never entered math mode for it): `a&=b` becomes `a & =b`, not
+`a & = b`. Inferring math mode for an unnamed environment is exactly the meaning
+the parser declines to guess.
+
 ## expl3 code formatting
 
 The expl3 *letter* mode is a lexer fact (see [expl3 regions are macro

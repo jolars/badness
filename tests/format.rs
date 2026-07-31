@@ -449,6 +449,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the cell) falls back to the plain indented body — while a nested alignment
     // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
+    // A user-defined (unclassified) environment with a top-level `&` grid-aligns
+    // like a curated alignment env: `&` at catcode 4 is a column tab, a static
+    // CST-shape fact (issue #84, `\begin{myaligned}`). Uneven columns pad, and a
+    // body with only `\\` and no `&` stays generic (never gridded) — the gate keys
+    // on `&`, not `\\`, so an arbitrary line-broken environment is left alone.
+    ("align_user_env_ampersand", WrapMode::Preserve, 80),
+    ("align_user_env_uneven", WrapMode::Preserve, 80),
+    ("align_user_env_linebreak_only", WrapMode::Preserve, 80),
     ("align_columns_uneven_rows", WrapMode::Preserve, 80),
     ("align_columns_linebreak_optional", WrapMode::Preserve, 80),
     ("align_continuation_join", WrapMode::Preserve, 80),

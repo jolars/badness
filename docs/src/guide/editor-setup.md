@@ -101,9 +101,9 @@ setup, turn off the other two:
 
 Turning off `badness.diagnostics.enable` this way suppresses **every**
 diagnostic, including the syntax/parse errors that a `badness.toml` `[lint]`
-selection [cannot silence](../reference/configuration.md#lint). The `badness.toml`
-route stays the right tool when you want to keep parse errors but mute specific
-lint rules across every editor and the CLI.
+selection [cannot silence](../reference/configuration.md#lint). The
+`badness.toml` route stays the right tool when you want to keep parse errors but
+mute specific lint rules across every editor and the CLI.
 
 ### Using with LaTeX Workshop
 

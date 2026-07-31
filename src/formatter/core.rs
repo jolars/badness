@@ -797,10 +797,16 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 return lower_expl_paragraph(node, cx);
             }
             SyntaxKind::GROUP if cx.in_expl3_region(node.text_range().start()) => {
-                return lower_expl_group(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+                return lower_expl_group(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
             }
             SyntaxKind::OPTIONAL if cx.in_expl3_region(node.text_range().start()) => {
-                return lower_expl_group(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
+                return lower_expl_group(
+                    node,
+                    SyntaxKind::L_BRACKET,
+                    SyntaxKind::R_BRACKET,
+                    cx,
+                    false,
+                );
             }
             // A command and its greedily-attached `{…}`/`[…]` arguments lay out as a
             // fill so the arguments break independently (only an over-long one
@@ -1643,6 +1649,21 @@ fn lower_expl_code(
     statements: Statements,
 ) -> Ir {
     let elements: Vec<SyntaxElement> = elements.collect();
+    // Sibling coupling: within one command's attached arguments ([`Statements::Ignore`]),
+    // if any brace-group sibling detonates on a *forced* break (a guard, comment, or
+    // `.dtx` margin — the width-independent trigger [`lower_expl_group`] uses for its
+    // block form), the l3 house style breaks every brace sibling. So a short
+    // false-branch expands to match its multi-line true-branch. Keyed on a cheap
+    // token scan (no lowering), gated to commands with ≥2 brace groups so the common
+    // single-argument call pays nothing.
+    let couple_siblings = statements == Statements::Ignore && {
+        let groups: Vec<&SyntaxNode> = elements
+            .iter()
+            .filter_map(SyntaxElement::as_node)
+            .filter(|n| n.kind() == SyntaxKind::GROUP)
+            .collect();
+        groups.len() >= 2 && groups.iter().any(|n| expl_group_forces_break(n))
+    };
     let mut lines: Vec<Ir> = Vec::new();
     let mut seps: Vec<Ir> = Vec::new();
     let mut pending_sep = Ir::hard_line();
@@ -1870,25 +1891,29 @@ fn lower_expl_code(
             }
             SyntaxElement::Node(child) => {
                 after_block = false;
-                // A brace group *starting* its statement line is a continuation
-                // (a function body, a value argument on its own line): the line
-                // indents one step under its head statement (l3 house style),
-                // whether the group stays inline or detonates to a block.
-                // A brace group starting a statement line is a *continuation*
-                // (a function body, a `\tl_set:Nn` value on its own line): it
-                // indents one step under its head statement, the l3 house
-                // style (`\cs_new:Npn \foo:n #1` / `  { body }`). The step is
-                // carried by an `Indent` folded around the break *and the
-                // group alone* — never the rest of the line, whose atoms the
-                // reparse reads as ordinary base-indent statements when a
-                // width break separates them (the group's own internal lines
-                // must sit at the deeper level either way, so break and body
-                // travel together).
-                let continuation_group = statements == Statements::SplitAtNewlines
-                    && child.kind() == SyntaxKind::GROUP
-                    && atom.is_empty();
+                // A brace group that *starts a fresh atom* (nothing glued before
+                // it — any trivia flushed the atom) is a *continuation*: it indents
+                // one step under its head statement, the l3 house style
+                // (`\cs_new:Npn \foo:n #1` / `  { body }`, or `\bool_if:nTF {cond}`
+                // / `  { true }`). The step is carried by an `Indent` folded around
+                // the break *and the group alone* — never the rest of the line,
+                // whose atoms the reparse reads as ordinary base-indent statements
+                // when a width break separates them (the group's own internal lines
+                // must sit at the deeper level either way, so break and body travel
+                // together). This holds identically whether source newlines are
+                // statement boundaries (`SplitAtNewlines`) or inert catcode-9
+                // whitespace within one command's attached arguments (`Ignore`), so
+                // the rule keys only on the group shape, not the statement mode.
+                let hang_group = child.kind() == SyntaxKind::GROUP && atom.is_empty();
                 let starts_line = parts.is_empty();
-                let ir = lower_node(child, cx);
+                // Sibling coupling (`Ignore` only): once one brace argument
+                // detonates, force every brace sibling to the broken form so a
+                // short branch expands to match a multi-line one.
+                let ir = if couple_siblings && child.kind() == SyntaxKind::GROUP {
+                    lower_expl_group(child, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, true)
+                } else {
+                    lower_node(child, cx)
+                };
                 if ir.contains_forced_break() {
                     if !atom.is_empty() {
                         // A block hanging off a *directly-abutting* atom stays
@@ -1907,12 +1932,13 @@ fn lower_expl_code(
                             &mut seps,
                             &mut pending_sep,
                         );
-                    } else {
-                        // A multi-line block (group, environment, display math):
-                        // end the current line and place the block on its own
-                        // line(s) (Allman). A continuation group folds its line
-                        // separator into the `Indent` (the seps slot gets `Nil`
-                        // so the two stay paired); the run's first line has no
+                    } else if hang_group {
+                        // A multi-line brace group separated from its head by a
+                        // space (Allman): end the current line — flushing any head
+                        // (`\__kernel…` before its `{T}`) as its own line — then
+                        // place the group on its own line(s) hung one step, folding
+                        // the line separator into the `Indent` (the seps slot gets
+                        // `Nil` so the two stay paired). The run's first line has no
                         // separator to fold and stays at the current level.
                         commit_line(
                             &mut atom,
@@ -1922,7 +1948,7 @@ fn lower_expl_code(
                             &mut seps,
                             &mut pending_sep,
                         );
-                        if continuation_group && !lines.is_empty() {
+                        if !lines.is_empty() {
                             let sep = std::mem::replace(&mut pending_sep, Ir::hard_line());
                             seps.push(Ir::Nil);
                             lines.push(Ir::indent(Ir::concat(vec![sep, ir])));
@@ -1930,17 +1956,48 @@ fn lower_expl_code(
                             seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
                             lines.push(ir);
                         }
+                    } else if !parts.is_empty() {
+                        // Head-hug: a detonating *non-group* child (a command
+                        // subtree whose first line is a head atom, e.g. the N-arg
+                        // `\__kernel…{T}{F}` of `\cs_if_exist:NTF`) follows a head
+                        // on this line, separated by a space. Keep them on one line
+                        // when the prefix up to the block's first forced break fits,
+                        // letting the block body break below — a rest-aware
+                        // `group_hug`, so pass-stable (never the `step_fill` local
+                        // cascade that would split a short head off a detonating
+                        // trailing block).
+                        let head = if parts.len() == 1 {
+                            parts.drain(..).next().unwrap()
+                        } else {
+                            Ir::Fill(std::mem::take(&mut parts).into())
+                        };
+                        let sep = sep_before_next.take().unwrap_or(Ir::Line);
+                        seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                        lines.push(Ir::group_hug(Ir::concat(vec![head, sep, ir])));
+                    } else {
+                        // A multi-line block with no head to hug and no group to
+                        // hang: place it on its own line(s) at the current level.
+                        commit_line(
+                            &mut atom,
+                            &mut parts,
+                            &mut sep_before_next,
+                            &mut lines,
+                            &mut seps,
+                            &mut pending_sep,
+                        );
+                        seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                        lines.push(ir);
                     }
                     after_block = true;
-                } else if continuation_group && starts_line && !lines.is_empty() {
+                } else if hang_group && starts_line && !lines.is_empty() {
                     // Line-initial: fold the statement separator in; the
                     // `commit_line` seps slot then carries `Nil`.
                     let sep = std::mem::replace(&mut pending_sep, Ir::Nil);
                     atom.push(Ir::indent(Ir::concat(vec![sep, ir])));
-                } else if continuation_group && !starts_line {
+                } else if hang_group && !starts_line {
                     // Mid-statement: if the width fill breaks at this gap, the
-                    // group starts a continuation line. Flat, the leading
-                    // `Line` is the single inter-token space (the `Nil`
+                    // group starts a continuation line hung one step. Flat, the
+                    // leading `Line` is the single inter-token space (the `Nil`
                     // separator adds nothing).
                     sep_before_next = Some(Ir::Nil);
                     atom.push(Ir::indent(Ir::concat(vec![Ir::Line, ir])));
@@ -1968,6 +2025,24 @@ fn lower_expl_code(
         result.push(line);
     }
     Ir::concat(result)
+}
+
+/// Whether an expl3-region brace group *forces* a broken (multi-line) block —
+/// independent of width — because its body holds a docstrip guard, a comment, or a
+/// `.dtx` margin, the same tokens that drive [`lower_expl_group`]'s block form. Used
+/// by the sibling-coupling scan in [`lower_expl_code`] to decide (without lowering)
+/// whether a command's other brace arguments must break in step. Keyed on this
+/// width-independent trigger only, so the decision is a pass-stable function of the
+/// arg-list content; a sibling that would break solely from width does not couple.
+fn expl_group_forces_break(node: &SyntaxNode) -> bool {
+    node.descendants_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .any(|t| {
+            matches!(
+                t.kind(),
+                SyntaxKind::COMMENT | SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN
+            )
+        })
 }
 
 /// Whether an expl3-region group's *flat* form carries the l3 house style's
@@ -2001,11 +2076,20 @@ fn expl_group_is_spaced(node: &SyntaxNode) -> bool {
 /// spans lines or overflows. The inline-vs-block decision is width/structure
 /// driven (never source newlines), keeping reformatting idempotent. Mirrors
 /// [`lower_prose_group`] but recurses into expl3 code.
+///
+/// `force_break` makes the group take the broken (Allman) block form even when its
+/// body would otherwise fit on one line. It is set by the *sibling-coupling* rule
+/// in [`lower_expl_code`]: when one brace argument of a command detonates (a guard,
+/// comment, or nested multi-line body), the l3 house style breaks *all* brace
+/// siblings, so a short false-branch (`{ \tex_endinput:D }`) expands to match its
+/// multi-line true-branch. The forced break is unconditional, so the result
+/// [`Ir::contains_forced_break`] and routes through the caller's hang path.
 fn lower_expl_group(
     node: &SyntaxNode,
     open: SyntaxKind,
     close: SyntaxKind,
     cx: LowerCtx<'_>,
+    force_break: bool,
 ) -> Ir {
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
@@ -2085,7 +2169,7 @@ fn lower_expl_group(
         } else {
             Ir::concat([open_ir, close_ir])
         }
-    } else if has_comment {
+    } else if has_comment || force_break {
         Ir::concat([
             open_ir,
             Ir::indent(Ir::concat([Ir::hard_line(), body])),

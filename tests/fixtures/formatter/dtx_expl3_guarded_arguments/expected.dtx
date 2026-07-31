@@ -1,12 +1,13 @@
 % \begin{macrocode}
 \ProvidesExplPackage{demo}{2024-01-01}{}
-\cs_if_exist:NTF
-\__kernel_dependency_version_check:nn
-{
-  \__kernel_dependency_version_check:nn { 2023-10-10 }
+\cs_if_exist:NTF \__kernel_dependency_version_check:nn
+  {
+    \__kernel_dependency_version_check:nn { 2023-10-10 }
 %<dvipdfmx> {l3backend-dvipdfmx.def}
 %<dvips> {l3backend-dvips.def}
 %<xetex> {l3backend-xetex.def}
-}
-{ \tex_endinput:D }
+  }
+  {
+    \tex_endinput:D
+  }
 % \end{macrocode}

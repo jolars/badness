@@ -209,14 +209,42 @@ comments from width for the same reason.
 
 ### Continuation groups
 
-A *continuation group*—a brace group starting its statement line (a function
-body, a `\tl_set:Nn` value on its own line)—indents **one step** under its head
+A *continuation group*—a brace group that **starts a fresh atom** (nothing glued
+before it: any trivia flushed the atom)—indents **one step** under its head
 statement (`\cs_new:Npn \foo:n #1` / `␣␣{ body }`, the l3styleguide shape). The
 step wraps the break and *the group alone* in one `Indent` (as a folded
 statement separator, or a folded fill gap for a mid-statement group): the rest
 of the line stays at base, because a width break re-reads its atoms as ordinary
 base-indent statements on the next pass—break and group body must land at the
 same column either way for the layout to be a fixed point.
+
+The rule keys only on the group shape (`child.kind() == GROUP && atom.is_empty()`),
+**not** the statement mode, so it fires identically whether source newlines are
+statement boundaries (`SplitAtNewlines`) or inert catcode-9 whitespace within one
+command's attached arguments (`Statements::Ignore`). This is what gives an
+*attached* brace argument the l3 hang: `\hbox_set:Nn \l_tmpa_box` / `␣␣{ … }`, or
+the `T`/`F` branches of `\cs_if_exist:NTF` each hung one step. A directly-abutting
+argument (`\EditInstance{a}{b}{…}`, no space) leaves `atom` non-empty and stays
+K&R-glued instead—the same `atom` emptiness discriminates space from glue.
+
+**Head-hug.** A detonating *non-group* child (a command subtree whose first line is
+a head atom—e.g. the `N`-argument `\__kernel_dependency_version_check:nn{T}{F}` of
+`\cs_if_exist:NTF`) that follows a head on the current line, space-separated, is
+kept on that line by an `Ir::group_hug` wrapping `[head, sep, block]`. The hug is
+rest-aware (`fits` stops *successfully* at the block's first forced break), so it
+measures only the prefix `head␣<block-first-line>`, never the block body—the
+issue-#71-safe measurement, deliberately not the `step_fill` local `flat_width`
+cascade that would split a short head off a detonating trailing block.
+
+**Sibling coupling.** Within one command's attached arguments (`Ignore` only), if
+any brace argument detonates on a *forced* break—a docstrip guard, comment, or
+`.dtx` margin (`expl_group_forces_break`, a cheap token scan, no lowering)—every
+brace sibling is forced to the broken (Allman) form via `lower_expl_group`'s
+`force_break`, so a short false-branch (`{ \tex_endinput:D }`) expands to match a
+multi-line true-branch. Keyed on the *forced* trigger only, so the coupling is a
+pass-stable function of the arg-list content; a sibling that would break solely
+from **width** does not couple (width is a printer decision, invisible at
+build time).
 
 ### Interaction with `.dtx` doc margins
 

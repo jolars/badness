@@ -2122,12 +2122,26 @@ fn lower_element_stream(
 ) -> Vec<Ir> {
     let mut out = Vec::new();
     let mut iter = elements.peekable();
+    // Whether the element just emitted was a `.dtx` margin/guard (`%` doc margin
+    // or a `%<…>` docstrip guard). A newline-free whitespace run right after one
+    // is meaningful documentation-layer indentation (`%    \begin{macrocode}`,
+    // `%<latexrelease>    \bar_if:nTF`), not inter-word spacing, so the `Preserve`
+    // collapse must leave it verbatim — see the trivia arm.
+    let mut pending_margin = false;
     while let Some(element) = iter.next() {
+        let after_margin = std::mem::take(&mut pending_margin);
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
-                out.push(classify_trivia(newlines, trailing_ws));
+                // Keep documentation-layer indentation after a `.dtx` margin/guard
+                // verbatim; otherwise apply the `Preserve` inner-spacing collapse.
+                let ir = if after_margin {
+                    classify_trivia(newlines, trailing_ws)
+                } else {
+                    normalize_trivia(newlines, trailing_ws, cx)
+                };
+                out.push(ir);
             }
             // The floated leading `%` of a reflowable `.dtx` doc paragraph (one that
             // follows a `%` blank line): drop it and the inline whitespace after it,
@@ -2146,7 +2160,10 @@ fn lower_element_stream(
                     }
                 }
             }
-            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
+            SyntaxElement::Token(token) => {
+                pending_margin = matches!(token.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD);
+                out.push(lower_loose_token(&token));
+            }
         }
     }
     out
@@ -5277,6 +5294,21 @@ fn classify_trivia(newlines: usize, trailing_ws: String) -> Ir {
         1 => Ir::hard_line(),
         _ => Ir::empty_line(),
     }
+}
+
+/// [`classify_trivia`] with the [`WrapMode::Preserve`] inner-spacing rule applied:
+/// `Preserve` governs *line breaks* only, so a newline-free run — inter-word
+/// spacing on a single line — normalizes to a single space just like every other
+/// mode, rather than surviving verbatim. Runs of spaces/tabs are catcode-10
+/// equivalent to one space, so the collapse is meaning-preserving; a run carrying a
+/// newline is a break `classify_trivia` still maps to a hard/blank line (its
+/// trailing indentation is the printer's to own). Other modes are unchanged: they
+/// reflow prose through [`reflow_elements`], which never keeps the raw run.
+fn normalize_trivia(newlines: usize, trailing_ws: String, cx: LowerCtx<'_>) -> Ir {
+    if cx.wrap == WrapMode::Preserve && newlines == 0 {
+        return Ir::verbatim(" ");
+    }
+    classify_trivia(newlines, trailing_ws)
 }
 
 /// A break the indenter supplies itself and so trims from a body edge: a forced

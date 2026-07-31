@@ -93,10 +93,44 @@ Use `badness.releaseTag` only if you need an exact tag override:
 - If a download fall-through fails, the extension shows a warning and falls back
   to looking up `badness` on the system `PATH`.
 
+## Choosing which features to use
+
+Badness bundles a formatter, a linter, and language features (hover, completion,
+navigation, and so on) behind one language server. Each can be turned off
+independently, so you can use just the parts you want:
+
+- `badness.formatting.enable` (default `true`): use Badness as a formatter. Set
+  to `false` to let another extension own LaTeX formatting without disabling
+  Badness.
+- `badness.diagnostics.enable` (default `true`): show Badness diagnostics (the
+  linter). Set to `false` to suppress **all** squiggles, including the
+  syntax/parse errors that a `badness.toml` `[lint]` selection cannot silence.
+- `badness.languageFeatures.enable` (default `true`): hover, completion,
+  signature help, go-to-definition, references, symbols, rename, code actions,
+  folding, selection ranges, and document links.
+
+For a formatter-only setup (the common "I just want the formatter" case):
+
+```json
+{
+  "badness.diagnostics.enable": false,
+  "badness.languageFeatures.enable": false
+}
+```
+
+The language server keeps running either way—these are client-side gates—so
+formatting stays available and the toggles take effect without reinstalling
+anything.
+
 ## Settings
 
 Badness registers itself as the default formatter for `[latex]` files.
 
+- `badness.formatting.enable`: use Badness as a formatter (default `true`).
+- `badness.diagnostics.enable`: show Badness diagnostics/the linter (default
+  `true`).
+- `badness.languageFeatures.enable`: enable hover, completion, navigation, and
+  the other language features (default `true`).
 - `badness.executableStrategy`: how to locate the `badness` binary—`bundled`
   (default), `environment`, or `path`.
 - `badness.executablePath`: path to the binary, used only when

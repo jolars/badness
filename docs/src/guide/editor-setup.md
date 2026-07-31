@@ -78,6 +78,33 @@ bundled binary (`badness.executableStrategy: "bundled"`); set the strategy to
 `badness.executablePath` to point at a specific binary. See the extension's
 README for the full list of settings.
 
+### Using only some features
+
+The formatter, linter, and language features share one server but can be turned
+off independently, so you can adopt just the parts you want:
+
+- `badness.formatting.enable` — use Badness as a formatter.
+- `badness.diagnostics.enable` — show Badness diagnostics (the linter).
+- `badness.languageFeatures.enable` — hover, completion, navigation, symbols,
+  rename, code actions, and the rest.
+
+All three default to `true`. They are client-side gates, so the server keeps
+running and the toggles take effect without a reinstall. For a formatter-only
+setup, turn off the other two:
+
+```json
+{
+  "badness.diagnostics.enable": false,
+  "badness.languageFeatures.enable": false
+}
+```
+
+Turning off `badness.diagnostics.enable` this way suppresses **every**
+diagnostic, including the syntax/parse errors that a `badness.toml` `[lint]`
+selection [cannot silence](../reference/configuration.md#lint). The `badness.toml`
+route stays the right tool when you want to keep parse errors but mute specific
+lint rules across every editor and the CLI.
+
 ### Using with LaTeX Workshop
 
 Badness works alongside [LaTeX

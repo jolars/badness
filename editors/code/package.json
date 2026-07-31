@@ -40,6 +40,21 @@
     "configuration": {
       "title": "Badness",
       "properties": {
+        "badness.formatting.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable Badness as a formatter. When `false`, Badness contributes no formatting edits (document, range, and on-type formatting), so another formatter can own LaTeX without disabling the extension. The language server keeps running for diagnostics and language features."
+        },
+        "badness.diagnostics.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show Badness diagnostics (the linter) in the editor. When `false`, all diagnostics are suppressed, including the syntax/parse errors that a `badness.toml` `[lint]` selection cannot silence. Formatting and language features are unaffected."
+        },
+        "badness.languageFeatures.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable Badness language features: hover, completion, signature help, go-to-definition, references, document/workspace symbols, rename, code actions, folding, selection ranges, and document links. When `false`, these are suppressed. Formatting and diagnostics are unaffected."
+        },
         "badness.executableStrategy": {
           "type": "string",
           "enum": [

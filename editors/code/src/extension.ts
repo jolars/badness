@@ -4,8 +4,10 @@ import * as path from "node:path";
 import {
   LanguageClient,
   LanguageClientOptions,
+  Middleware,
   ServerOptions,
   Trace,
+  vsdiag,
 } from "vscode-languageclient/node";
 import { resolveBadnessBinary } from "./installer";
 
@@ -128,6 +130,80 @@ function mergeServerEnvironment(
   return env;
 }
 
+/** Whether a `badness.<section>.enable` toggle is on (default on). Read live so
+ *  the middleware reflects the current setting without a server round-trip. */
+function featureEnabled(section: "formatting" | "diagnostics" | "languageFeatures"): boolean {
+  return vscode.workspace
+    .getConfiguration("badness")
+    .get<boolean>(`${section}.enable`, true);
+}
+
+/**
+ * Client-side gates for the three `badness.*.enable` toggles. Each request is
+ * intercepted before it reaches (or after it leaves) the server: diagnostics can
+ * be dropped wholesale (including the parse errors a `badness.toml` cannot mute)
+ * while formatting and language features are suppressed by returning nothing, so
+ * the server keeps running and the other lanes are untouched.
+ */
+function buildMiddleware(): Middleware {
+  // Run `next` only when the lane is enabled; otherwise contribute nothing.
+  const fmt = <T>(run: () => T): T | undefined =>
+    featureEnabled("formatting") ? run() : undefined;
+  const lf = <T>(run: () => T): T | undefined =>
+    featureEnabled("languageFeatures") ? run() : undefined;
+
+  return {
+    // Diagnostics: push (publishDiagnostics) and pull (textDocument/diagnostic).
+    handleDiagnostics(uri, diagnostics, next) {
+      next(uri, featureEnabled("diagnostics") ? diagnostics : []);
+    },
+    provideDiagnostics(document, previousResultId, token, next) {
+      if (!featureEnabled("diagnostics")) {
+        return { kind: vsdiag.DocumentDiagnosticReportKind.full, items: [] };
+      }
+      return next(document, previousResultId, token);
+    },
+
+    // Formatting.
+    provideDocumentFormattingEdits: (document, options, token, next) =>
+      fmt(() => next(document, options, token)),
+    provideDocumentRangeFormattingEdits: (document, range, options, token, next) =>
+      fmt(() => next(document, range, options, token)),
+    provideOnTypeFormattingEdits: (document, position, ch, options, token, next) =>
+      fmt(() => next(document, position, ch, options, token)),
+
+    // Language features.
+    provideHover: (document, position, token, next) =>
+      lf(() => next(document, position, token)),
+    provideSignatureHelp: (document, position, context, token, next) =>
+      lf(() => next(document, position, context, token)),
+    provideCompletionItem: (document, position, context, token, next) =>
+      lf(() => next(document, position, context, token)),
+    provideDefinition: (document, position, token, next) =>
+      lf(() => next(document, position, token)),
+    provideReferences: (document, position, options, token, next) =>
+      lf(() => next(document, position, options, token)),
+    provideDocumentHighlights: (document, position, token, next) =>
+      lf(() => next(document, position, token)),
+    provideDocumentSymbols: (document, token, next) =>
+      lf(() => next(document, token)),
+    provideWorkspaceSymbols: (query, token, next) =>
+      lf(() => next(query, token)),
+    provideCodeActions: (document, range, context, token, next) =>
+      lf(() => next(document, range, context, token)),
+    provideRenameEdits: (document, position, newName, token, next) =>
+      lf(() => next(document, position, newName, token)),
+    prepareRename: (document, position, token, next) =>
+      lf(() => next(document, position, token)),
+    provideFoldingRanges: (document, context, token, next) =>
+      lf(() => next(document, context, token)),
+    provideSelectionRanges: (document, positions, token, next) =>
+      lf(() => next(document, positions, token)),
+    provideDocumentLinks: (document, token, next) =>
+      lf(() => next(document, token)),
+  };
+}
+
 async function startClient(
   context: vscode.ExtensionContext,
   outputChannel: vscode.LogOutputChannel,
@@ -168,6 +244,7 @@ async function startClient(
     ],
     outputChannel,
     traceOutputChannel: outputChannel,
+    middleware: buildMiddleware(),
   };
 
   client = new LanguageClient(
@@ -222,6 +299,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("badness.restart", () =>
       restartClient(context, outputChannel),
     ),
+  );
+
+  // The middleware reads the toggles live, so formatting/languageFeatures need no
+  // restart. Diagnostics are pushed, though, so toggling them must flush the
+  // already-published set: clear on disable, restart to repopulate on enable.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("badness.diagnostics")) {
+        return;
+      }
+      if (featureEnabled("diagnostics")) {
+        void restartClient(context, outputChannel);
+      } else {
+        client?.diagnostics?.clear();
+      }
+    }),
   );
 
   await startClient(context, outputChannel);

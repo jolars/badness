@@ -1,0 +1,44 @@
+name: Lint rule request
+description: Suggest a new linter rule (diagnostic)
+title: "[Lint]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should the rule catch
+      description: One or two sentences on the pattern to flag and why it's worth flagging.
+    validations:
+      required: true
+
+  - type: textarea
+    id: trigger
+    attributes:
+      label: Example that should trigger it
+      render: tex
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix
+      description: What the autofix should rewrite it to, if a fix makes sense.
+      render: tex
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Suggested severity
+      options:
+        - Error
+        - Warning
+        - Info
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Style guides, package docs, prior art (ChkTeX, latexindent), related issues.

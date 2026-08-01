@@ -1,0 +1,49 @@
+name: Formatting request
+description: Report output you'd like formatted differently
+title: "[Formatting]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Badness! Paste the smallest input that shows the difference.
+
+  - type: textarea
+    id: input
+    attributes:
+      label: Input .tex
+      description: The source you ran Badness on.
+      render: tex
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: badness.toml settings
+      description: Any relevant configuration. Leave blank if you used the defaults.
+      render: toml
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      description: What Badness produced.
+      render: tex
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      description: What you'd like it to produce instead.
+      render: tex
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Anything else
+      description: Rationale, references, Badness version (`badness --version`), etc.

@@ -1,0 +1,34 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\[ \\inferrule*[right=$\\Pi$-eq]{A}{B} \\]\")"
+---
+ROOT@0..39
+  PARAGRAPH@0..39
+    DISPLAY_MATH@0..39
+      CONTROL_SYMBOL@0..2 "\\["
+      MATH@2..37
+        WHITESPACE@2..3 " "
+        COMMAND@3..36
+          CONTROL_WORD@3..13 "\\inferrule"
+          WORD@13..14 "*"
+          OPTIONAL@14..30
+            L_BRACKET@14..15 "["
+            WORD@15..21 "right="
+            INLINE_MATH@21..26
+              DOLLAR@21..22 "$"
+              MATH@22..25
+                COMMAND@22..25
+                  CONTROL_WORD@22..25 "\\Pi"
+              DOLLAR@25..26 "$"
+            WORD@26..29 "-eq"
+            R_BRACKET@29..30 "]"
+          GROUP@30..33
+            L_BRACE@30..31 "{"
+            WORD@31..32 "A"
+            R_BRACE@32..33 "}"
+          GROUP@33..36
+            L_BRACE@33..34 "{"
+            WORD@34..35 "B"
+            R_BRACE@35..36 "}"
+        WHITESPACE@36..37 " "
+      CONTROL_SYMBOL@37..39 "\\]"

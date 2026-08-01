@@ -1,0 +1,18 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"\\[ \\foo[$x] \\]\")"
+---
+ROOT@0..14
+  PARAGRAPH@0..14
+    DISPLAY_MATH@0..14
+      CONTROL_SYMBOL@0..2 "\\["
+      MATH@2..12
+        WHITESPACE@2..3 " "
+        COMMAND@3..7
+          CONTROL_WORD@3..7 "\\foo"
+        L_BRACKET@7..8 "["
+        DOLLAR@8..9 "$"
+        WORD@9..10 "x"
+        R_BRACKET@10..11 "]"
+        WHITESPACE@11..12 " "
+      CONTROL_SYMBOL@12..14 "\\]"

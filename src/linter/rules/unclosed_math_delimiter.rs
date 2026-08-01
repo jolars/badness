@@ -266,6 +266,17 @@ mod tests {
     }
 
     #[test]
+    fn balanced_dollar_in_optional_inside_display_math_is_silent() {
+        // A balanced inline `$…$` inside an optional argument that itself sits
+        // in display math is real inline math, not two unclosed dollars: the
+        // parser attaches the optional (folding the starred variant's `*`) and
+        // wraps the pair in INLINE_MATH, so the rule sees no bare dollar.
+        // Mathpartir's `\inferrule*[right=$\Pi$-eq]` shape.
+        let out = findings("\\[\n  \\inferrule*[right=$\\Pi$-eq]\n  {A}{B}\n\\]\n");
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
     fn flags_unclosed_display_opener() {
         let out = findings("The bound \\[ x + y follows.\n");
         assert_eq!(out.len(), 1, "got: {out:?}");

@@ -224,6 +224,37 @@ fn math_optional_attaches_when_closed() {
 }
 
 #[test]
+fn math_optional_with_balanced_dollar_attaches() {
+    // A balanced inline `$…$` inside a command-abutting `[…]` in display math
+    // must not abort bracket attachment: mathpartir's `\inferrule*[right=$\Pi$]`
+    // sets its label in text mode, so the pair is real inline math (wrapped in
+    // an INLINE_MATH under the OPTIONAL), not two unclosed dollars.
+    insta::assert_snapshot!(tree(r"\[ \foo[$x$] \]"));
+}
+
+#[test]
+fn math_optional_with_unclosed_dollar_stays_plain() {
+    // The mirror guard: an *unclosed* `$` inside the bracket leaves no reachable
+    // `]`, so the `[` stays a plain math atom (no OPTIONAL, no over-attachment).
+    insta::assert_snapshot!(tree(r"\[ \foo[$x] \]"));
+}
+
+#[test]
+fn starred_command_folds_star_and_attaches_arguments() {
+    // A starred variant carries its `*` before its arguments; the `*` folds into
+    // the invocation so the following `[…]`/`{…}` still attach — here the
+    // mathpartir shape whose optional label holds inline math.
+    insta::assert_snapshot!(tree(r"\[ \inferrule*[right=$\Pi$-eq]{A}{B} \]"));
+}
+
+#[test]
+fn star_as_math_operator_is_not_folded() {
+    // A `*` with no argument after it is a binary operator, not a variant
+    // marker: `\pi*r` keeps the star a sibling atom, never a command child.
+    insta::assert_snapshot!(tree(r"$\pi*r$"));
+}
+
+#[test]
 fn math_spaced_bracket_stays_content() {
     // #43: inside math a `[` separated from its command by whitespace is a
     // delimiter or interval, not an optional argument — `\bE [ x + y ]` keeps

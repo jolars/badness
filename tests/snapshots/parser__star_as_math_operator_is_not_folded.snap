@@ -1,0 +1,14 @@
+---
+source: tests/parser.rs
+expression: "tree(r\"$\\pi*r$\")"
+---
+ROOT@0..7
+  PARAGRAPH@0..7
+    INLINE_MATH@0..7
+      DOLLAR@0..1 "$"
+      MATH@1..6
+        COMMAND@1..4
+          CONTROL_WORD@1..4 "\\pi"
+        WORD@4..5 "*"
+        WORD@5..6 "r"
+      DOLLAR@6..7 "$"

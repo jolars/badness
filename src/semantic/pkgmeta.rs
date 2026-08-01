@@ -168,8 +168,8 @@ pub fn needs_format_from_command(command: &SyntaxNode) -> Option<NeedsFormatDecl
 
 /// Extract an [`OptionDecl`] from a `\DeclareOption` `COMMAND` node. The non-star form
 /// `\DeclareOption{name}{code}` reads the name from group 0; the starred default
-/// handler `\DeclareOption*{code}` (recognized by a following `*` `WORD` sibling the
-/// greedy parser leaves unattached) records `name: None`.
+/// handler `\DeclareOption*{code}` (recognized by the `*` `WORD` the parser folds into
+/// the invocation) records `name: None`.
 pub fn option_from_command(command: &SyntaxNode) -> Option<OptionDecl> {
     if command_name(command).as_deref() != Some("DeclareOption") {
         return None;
@@ -201,11 +201,24 @@ fn first_optional_text(command: &SyntaxNode) -> Option<String> {
     Some(text)
 }
 
-/// Whether a `*` `WORD` immediately follows `command`'s control word (the starred
-/// form). The greedy parser attaches no `*`, leaving it a sibling `WORD` token; a
-/// starred command therefore has no attached groups, so the `*` is the command's next
-/// meaningful sibling token.
+/// Whether a `*` `WORD` marks `command` as the starred form. A starred variant with a
+/// following argument folds the `*` into the invocation (`at_star_variant_marker`),
+/// so it is a *child* token between the control word and the first attached group; a bare
+/// `\DeclareOption*` with nothing after the star does not fold and leaves the `*` a
+/// *sibling* `WORD` — both shapes count.
 fn has_trailing_star(command: &SyntaxNode) -> bool {
+    // Folded form: the `*` is a child token before any attached argument group.
+    for el in command.children_with_tokens() {
+        match el {
+            rowan::NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::CONTROL_WORD | SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => {}
+                SyntaxKind::WORD if token.text() == "*" => return true,
+                _ => break,
+            },
+            rowan::NodeOrToken::Node(_) => break, // an argument group — no star before it
+        }
+    }
+    // Unfolded fallback: a `*` the parser left as a following sibling token.
     let mut sibling = command.next_sibling_or_token();
     while let Some(el) = sibling {
         match el {

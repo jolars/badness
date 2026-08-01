@@ -412,7 +412,12 @@ static shape facts, never meaning (`parser::grammar`, `BracketPolicy` +
   `]` closes before the math ends (open-interval notation `$]0;\num{0.5}[$`)—net
   of the `]`s claimed by intervening command-abutting `[`s, so in
   `\P[\gamma[0, \infty) \cap A =   \emptyset]` the lone `]` belongs to `\gamma[`
-  and the outer `\P[` stays an ordinary atom (issue #55).
+  and the outer `\P[` stays an ordinary atom (issue #55). A balanced inline
+  `$…$` pair *inside* the bracket is transparent, not a bail: the attached body
+  parses in text mode where the pair is real inline math, so
+  `\inferrule*[right=$\Pi$-eq]` inside `\[…\]` attaches its optional and wraps
+  the label's `$\Pi$` in an `INLINE_MATH` node. An *unbalanced* `$` still leaves
+  no reachable `]`, so the bracket stays a plain atom.
 - *In text mode* (issue #60, mirroring the `$` shape gate), a `[` attaches only
   when its `]` is reachable before an unbalanced `}`, a `\begin`/`\end` outside
   a definition body, a paragraph break, or EOF—net of the `]`s claimed by
@@ -429,6 +434,18 @@ static shape facts, never meaning (`parser::grammar`, `BracketPolicy` +
 - The *delimiter-size commands* (`\big`…`\Bigg` + `l`/`m`/`r`) never take a
   bracket argument: their `[` is the delimiter being sized (`\Big[ x \Big]`),
   mirroring the `\left`/`\right` special case.
+
+**Starred-variant `*` folds into the invocation.** A lone `*` tight to a command
+and *followed by an argument* (`[`/`{`) is a starred-variant marker
+(`\@ifstar` commands: `\section*{…}`, mathpartir's `\inferrule*[…]`, the
+`\\*[2pt]` line break), so `attach_arguments` folds it in as a child token and
+keeps scanning, letting the following arguments attach instead of the `*`
+breaking the run (`at_star_variant_marker`). Gating on a *following argument*
+keeps a math operator (`\pi*r`, `\Gamma * x`)—a `*` with nothing after it—from
+being mistaken for a marker, and a spaced `\foo *` or a glued `\foo*bar` (the
+lexer merges `*bar` into one word) is not a marker either. The semantic layer's
+star probes read the folded child (`pkgmeta::has_trailing_star` for
+`\DeclareOption*`), with the pre-fold sibling shape kept as a fallback.
 
 ## Trivia attachment
 

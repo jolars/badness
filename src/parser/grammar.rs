@@ -1160,9 +1160,41 @@ impl<'t> Parser<'t> {
                 {
                     self.bump(); // the VERB argument
                 }
+                // A starred-variant marker `*` folds into the invocation so the
+                // arguments that follow it still attach (`\section*{…}`,
+                // `\inferrule*[…]`, `\\*[2pt]`).
+                Some(SyntaxKind::WORD) if self.at_star_variant_marker() => {
+                    self.bump(); // the `*`
+                }
                 _ => break,
             }
         }
+    }
+
+    /// Whether the next token is a *starred-variant marker* to fold into the
+    /// command invocation: a lone `*` tight to the command, itself followed by
+    /// an argument opener (`[`/`{`). LaTeX's `\@ifstar` commands carry the star
+    /// before their arguments (`\section*{…}`, mathpartir's `\inferrule*[…]`,
+    /// the `\\*[2pt]` line break), so folding it lets those arguments attach
+    /// (decision #8) instead of the `*` breaking the run. Gating on a *following
+    /// argument* keeps a math operator (`\pi*r`, `\Gamma * x`) — a `*` with no
+    /// argument after it — from being mistaken for a marker. The `*` must be a
+    /// lone token tight to the command: a spaced `\foo *` is not a marker, and
+    /// `\foo*bar` lexes the star into a single `*bar` word (text ≠ `*`), so
+    /// neither folds. Does not consume.
+    fn at_star_variant_marker(&self) -> bool {
+        if self.scan_trivia(self.pos, CommentMode::Skip).next != self.pos {
+            return false; // the star must be tight to the command
+        }
+        if self.tokens.get(self.pos).map(|t| (t.kind, t.text.as_str()))
+            != Some((SyntaxKind::WORD, "*"))
+        {
+            return false;
+        }
+        matches!(
+            self.scan_trivia(self.pos + 1, CommentMode::Skip).next_kind,
+            Some(SyntaxKind::L_BRACKET | SyntaxKind::L_BRACE)
+        )
     }
 
     /// A brace group `{ … }`.
@@ -1284,9 +1316,9 @@ impl<'t> Parser<'t> {
     /// True if the `[` at token index `open` is closed by a `]` before a token
     /// that would end the enclosing math. Mirrors [`Self::optional`]'s bail
     /// anchors (an unbalanced `}`, `\begin`/`\end`, a paragraph break, EOF) and
-    /// adds the math closers (`$`, `\]`, `\)`), which `optional` cannot stop at
-    /// in text mode (`\item[$x$]` is legit) but which inside math mean the `[`
-    /// is not an argument at all — e.g. the open-interval notation
+    /// adds the delimited math closers (`\]`, `\)`), which `optional` cannot
+    /// stop at in text mode (`\item[$x$]` is legit) but which inside math mean
+    /// the `[` is not an argument at all — e.g. the open-interval notation
     /// `$]0;\num{0.5}[$`. A `]` counts only outside `{…}` nesting, matching how
     /// `optional` consumes whole groups via `element` — and only past the `]`s
     /// owed to intervening *command-abutting* `[`s: such a `[` is itself
@@ -1295,11 +1327,20 @@ impl<'t> Parser<'t> {
     /// (`\P[\gamma[0, \infty) \cap A = \emptyset]`, issue #55 — the lone `]`
     /// belongs to `\gamma[`, so `\P[` stays an ordinary atom). A `[` abutting
     /// anything else (`x[i]`, the interval `[0, \infty)`) parses as an ordinary
-    /// atom and claims nothing, so it adds no nesting here either. Does not
-    /// consume.
+    /// atom and claims nothing, so it adds no nesting here either.
+    ///
+    /// A balanced inline `$…$` pair inside the bracket is *transparent*, not a
+    /// bail: [`Self::optional`] parses the attached body in text mode, where the
+    /// pair is real inline math (`\inferrule*[right=$\Pi$-eq]` — mathpartir sets
+    /// the label in text mode). So a `$` at brace depth 0 toggles an inline
+    /// region rather than ending the search, and `]`/`[` inside it are math
+    /// content, ignored. An *unbalanced* `$` leaves the region open, no `]` is
+    /// ever accepted, and the scan falls through to `false` — the bracket stays
+    /// a plain atom, as before. Does not consume.
     fn bracket_closes_before_math_end(&self, open: usize) -> bool {
         let mut depth = 0usize;
         let mut brackets = 0usize;
+        let mut in_inline = false;
         let mut newlines = 0;
         let mut abuts_command = false;
         for (off, t) in self.tokens[open + 1..].iter().enumerate() {
@@ -1322,14 +1363,16 @@ impl<'t> Parser<'t> {
                     }
                     depth -= 1;
                 }
-                SyntaxKind::L_BRACKET if depth == 0 && prev_abuts_command => brackets += 1,
-                SyntaxKind::R_BRACKET if depth == 0 => {
+                SyntaxKind::DOLLAR if depth == 0 => in_inline = !in_inline,
+                SyntaxKind::L_BRACKET if depth == 0 && !in_inline && prev_abuts_command => {
+                    brackets += 1
+                }
+                SyntaxKind::R_BRACKET if depth == 0 && !in_inline => {
                     if brackets == 0 {
                         return true;
                     }
                     brackets -= 1;
                 }
-                SyntaxKind::DOLLAR => return false,
                 SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
                     return false;
                 }

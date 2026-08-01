@@ -378,16 +378,23 @@ fn package_target_at(root: &SyntaxNode, offset: usize) -> Option<PackageTarget> 
 }
 
 /// Render a CTAN metadata hover: a bold `name` with a package/class tag, the one-line
-/// description when known, and a CTAN link when a catalogue id is known.
+/// description when known, and a link row — a texdoc documentation link (LaTeX
+/// Workshop's "View documentation", which shells out to `texdoc`; the web-serve
+/// equivalent is `texdoc.org`, which resolves by *package name* and returns the
+/// documentation PDF) and the CTAN catalogue page when a catalogue id is known.
 fn render_package(name: &str, is_class: bool, meta: &PackageMeta) -> String {
     let tag = if is_class { "class" } else { "package" };
     let mut out = format!("**`{name}`** — {tag}");
     if let Some(desc) = meta.desc {
         let _ = write!(out, "\n\n{desc}");
     }
+    // texdoc resolves by TeX package name, not the CTAN catalogue id, so the doc
+    // link is keyed on `name`; the CTAN link uses the catalogue id.
+    let mut links = format!("[Documentation](https://texdoc.org/pkg/{name})");
     if let Some(url) = meta.ctan_url() {
-        let _ = write!(out, "\n\n[CTAN]({url})");
+        let _ = write!(links, " · [CTAN]({url})");
     }
+    let _ = write!(out, "\n\n{links}");
     out
 }
 
@@ -1096,6 +1103,17 @@ mod tests {
         assert!(
             md.contains("https://ctan.org/pkg/latex-amsmath"),
             "ctan link: {md}"
+        );
+    }
+
+    #[test]
+    fn package_hover_links_documentation_via_texdoc() {
+        // texdoc resolves by TeX package name (`amsmath`), not the CTAN catalogue id
+        // (`latex-amsmath`), so the doc link is keyed on the name the user wrote.
+        let md = hover_md("\\usepackage{amsmath}\n", "amsmath").expect("hover for amsmath");
+        assert!(
+            md.contains("[Documentation](https://texdoc.org/pkg/amsmath)"),
+            "texdoc link: {md}"
         );
     }
 

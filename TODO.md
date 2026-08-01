@@ -177,11 +177,12 @@ sources below are missing.
   rendering on our side, just a file reference: reuse the target resolution
   from `lsp/document_link.rs`; png/jpg/svg only, degrading to the resolved
   path for `.pdf`/`.eps`.
-- [ ] **Documentation link in package hover *(LW)*.** LaTeX Workshop's
+- [x] **Documentation link in package hover *(LW)*.** LaTeX Workshop's
   `\usepackage` hover offers a "View documentation" link via `texdoc`. The
-  shipped CTAN metadata (`data/package_metadata.json`) already carries a
-  `ctan` field—append a documentation link (`https://ctan.org/pkg/<name>`) to
-  the package hover markdown.
+  package hover now pairs a texdoc documentation link
+  (`https://texdoc.org/pkg/<name>`, keyed on the package name texdoc resolves,
+  serving the documentation PDF) with the existing CTAN catalogue link (keyed
+  on the `ctan` catalogue id).
 - [ ] *(Design decision)* **Math preview on hover *(LW)*.** LaTeX Workshop's
   most-loved language feature: hovering math renders it (MathJax,
   client-side); texlab lacks it too, so it is also a differentiator. Options:

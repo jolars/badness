@@ -118,6 +118,18 @@ impl Rule for SwallowedSpace {
         let Some(control_word) = child_token::<ControlWord>(command) else {
             return;
         };
+        // A logo glued to a preceding word with no space (`Con\TeX t`) is the
+        // compound-logo idiom: the author appends the leading run to the logo and
+        // *wants* the trailing space swallowed to attach the tail. Flagging it — and
+        // the `\TeX{} t` fix, which typesets a visible "ConTeX t" — is a false
+        // positive, so a left-abutting `WORD` gates the rule out.
+        if control_word
+            .syntax()
+            .prev_token()
+            .is_some_and(|prev| prev.kind() == SyntaxKind::WORD)
+        {
+            return;
+        }
         let Some(space) = control_word.syntax().next_token() else {
             return;
         };
@@ -260,6 +272,23 @@ mod tests {
     fn trailing_space_at_line_end_is_clean() {
         // Space then newline: nothing glues, so no finding.
         assert!(findings("\\LaTeX \n").is_empty());
+    }
+
+    #[test]
+    fn compound_logo_with_left_abutting_word_is_clean() {
+        // `Con\TeX t` is the ConTeXt-logo idiom: the leading `Con` is glued to the
+        // logo with no space, and the trailing ` t` is *deliberately* swallowed to
+        // append "t" — flagging it (and the unsafe `\TeX{} t` fix, which prints a
+        // visible "ConTeX t") is a false positive.
+        assert!(findings("Con\\TeX t\n").is_empty());
+        assert!(findings("The Con\\TeX t format\n").is_empty());
+    }
+
+    #[test]
+    fn logo_after_a_space_still_flags() {
+        // A logo *not* glued to a preceding word is the ordinary shape: `\TeX Live`
+        // renders "TeXLive", a real swallowed space.
+        assert_eq!(findings("the \\TeX Live release\n").len(), 1);
     }
 
     #[test]

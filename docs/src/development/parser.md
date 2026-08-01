@@ -33,6 +33,23 @@ generic.
 opened by `\ProvidesExplPackage`/`Class`/`File`). These are independent flags
 that compose.
 
+**Implicit expl3 in toggle-less `.dtx`.** Real expl3 package sources
+(`ltx-talk-structure.dtx`) never run an in-file `\ExplSyntaxOn`: expl3 is declared
+in the parent `.dtx`/build, and the module prefix `@@` is set by a docstrip
+`%<@@=mod>` guard. So the lexer additionally reads a **file-level static signal**
+(`lexer::dtx_has_expl_signal`): a line-leading `%<@@=…>` module guard, or a
+`\ProvidesExpl*` anywhere. When present in a `.dtx`, every `macrocode` body lexes
+under expl3 catcodes—`expl_syntax` is forced on at each frame entry and restored on
+exit, mirroring the `at_letter` save/restore (`macrocode` never nests, so one saved
+slot suffices). The scan is deliberately coarse and name-only, consistent with the
+lexer's other expl handling: a false positive only *joins* `_`/`:` into a control
+word (lossless, AGENTS.md decision #1), and reading the whole file makes the signal
+order-independent, so a body *above* the declaration is flagged too. This is a
+**catcode-only** widening: `\begin`/`\end` and braces are untouched, so environment
+pairing is unaffected (a macrocode body is already blanket-exempt from pairing via
+`in_def_body`); making the grammar's `in_expl_region` implicit-aware is a
+deliberate non-goal.
+
 ### Verbatim
 
 `\verb`, verbatim-like environments, and verbatim-argument commands capture

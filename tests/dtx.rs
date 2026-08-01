@@ -791,3 +791,58 @@ fn oldcomments_is_an_opaque_ltxdoc_environment() {
     assert_eq!(errors, 0);
     assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
 }
+
+#[test]
+fn implicit_expl_module_guard_macrocode_body_is_expl3() {
+    // A toggle-less `.dtx` (`ltx-talk-structure.dtx`-style): expl3 is declared in
+    // the parent build, and only a `%<@@=mod>` module guard signals it. The
+    // macrocode body is therefore expl3 code, so `\seq_new:N` parses as one
+    // control word rather than splitting at `_`/`:` (TODO.md).
+    let (root, errors) = parse_dtx_with_errors(
+        "%<@@=talk>\n\
+         %    \\begin{macrocode}\n\
+         \\seq_new:N \\l_talk_frames_seq\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    assert!(tokens(&root).contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N".to_string())));
+}
+
+#[test]
+fn implicit_expl_body_begin_as_data_pairs_nothing() {
+    // The issue #60 shape, but *implicit*: an expl3 body passes `\begin{longtable}`
+    // as data in an n-type argument with no `\end` in the body. Macrocode bodies
+    // are already blanket-exempt from environment pairing (`in_def_body`), so this
+    // is clean with no grammar change — the implicit-expl lexing only affects
+    // `_`/`:` catcodes, never `\begin`/`\end` structure.
+    let (root, errors) = parse_dtx_with_errors(
+        "%<@@=mod>\n\
+         %    \\begin{macrocode}\n\
+         \\tl_set:Nn \\l_mod_tmp_tl { \\begin{longtable} }\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    // Only the `macrocode` frame pairs; the inner `\begin{longtable}` is data.
+    assert_eq!(count(&root, SyntaxKind::ENVIRONMENT), 1);
+    assert!(tokens(&root).contains(&(SyntaxKind::CONTROL_WORD, "\\tl_set:Nn".to_string())));
+}
+
+#[test]
+fn implicit_expl_provides_expl_flags_body_before_declaration() {
+    // `\ProvidesExplPackage` is a whole-file signal, so a `\cs_new:Npn` body split
+    // across macrocode chunks — with an unmatched brace, exercising `plain_braces`
+    // — lexes as expl3 even when the declaration sits after it.
+    let (root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         \\cs_new:Npn \\mod_foo:n #1 {\n\
+         %    \\end{macrocode}\n\
+         % \\ProvidesExplPackage{mod}{2026/01/01}{1.0}{demo}\n\
+         %    \\begin{macrocode}\n\
+         \\tl_set:Nn #1 }\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    let toks = tokens(&root);
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\cs_new:Npn".to_string())));
+    assert!(toks.contains(&(SyntaxKind::CONTROL_WORD, "\\tl_set:Nn".to_string())));
+}

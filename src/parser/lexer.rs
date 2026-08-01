@@ -298,6 +298,27 @@ pub(crate) fn expl_toggle(text: &str) -> Option<ExplToggle> {
     }
 }
 
+/// True when a `.dtx` file carries a *static expl3 signal* even though it never
+/// runs an in-file toggle: a line-leading `%<@@=…>` docstrip module-prefix guard,
+/// or a `\ProvidesExpl{Package,Class,File}` declaration anywhere. Real expl3
+/// package sources declare expl3 in the parent `.dtx`/build and set the module
+/// prefix `@@` with a `%<@@=mod>` guard, so their `macrocode` bodies are expl3
+/// code with no `\ExplSyntaxOn` to see (`ltx-talk-structure.dtx`, TODO.md).
+///
+/// Scans the raw text before lexing, so it cannot reuse [`expl_toggle`] (which
+/// classifies already-lexed token text). Deliberately coarse and name-only, like
+/// the lexer's other expl handling: it sees the whole file — prose and verbatim
+/// examples included — so a `\ProvidesExpl*` mentioned as text also trips it. That
+/// is acceptable (`AGENTS.md` decision #1): a false positive only *joins* `_`/`:`
+/// into a control word (lossless), and reading the whole file keeps the signal
+/// order-independent, so a body *above* the declaration is flagged too.
+fn dtx_has_expl_signal(input: &str) -> bool {
+    input.contains("\\ProvidesExpl")
+        || input
+            .lines()
+            .any(|l| l.starts_with("%<@@=") && l[5..].contains('>'))
+}
+
 /// Lex `input` into a flat, lossless token stream, consulting only the built-in
 /// signature DB for verbatim commands/environments. The entry used by the first
 /// parse pass; [`lex_with`] adds user-defined verbatim commands. Uses the
@@ -344,6 +365,13 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
     // restored on exit.
     let mut in_macrocode = false;
     let mut saved_at_letter = at_letter;
+    // Implicit expl3: a toggle-less `.dtx` whose static signal (a `%<@@=mod>`
+    // module guard or a `\ProvidesExpl*` anywhere) marks its `macrocode` bodies as
+    // expl3 code. When set, `expl_syntax` is forced on inside every macrocode body
+    // (and restored on exit), mirroring the `at_letter` save/restore above. Only
+    // `.dtx` files have macrocode bodies, so this is gated on `config.dtx`.
+    let implicit_expl = config.dtx && dtx_has_expl_signal(input);
+    let mut saved_expl_syntax = expl_syntax;
     // True while lexing the remainder of a `.dtx` documentation line (a line whose
     // column-0 `%` was emitted as a `DOC_MARGIN` above). On such lines the ltxdoc/
     // l3doc `\catcode`\^^A=14` convention applies, so a literal `^^A` reads as a
@@ -404,10 +432,15 @@ pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
             if in_macrocode {
                 in_macrocode = false;
                 at_letter = saved_at_letter;
+                expl_syntax = saved_expl_syntax;
             } else {
                 in_macrocode = true;
                 saved_at_letter = at_letter;
                 at_letter = true;
+                saved_expl_syntax = expl_syntax;
+                if implicit_expl {
+                    expl_syntax = true;
+                }
             }
             pos += consumed;
             at_line_start = false;
@@ -1570,6 +1603,126 @@ mod tests {
         // Under expl3, `_` is a catcode-11 letter: `a_b` is one word, no UNDERSCORE.
         assert!(seen.contains(&(SyntaxKind::WORD, "a_b")));
         assert!(!seen.iter().any(|(k, _)| *k == SyntaxKind::UNDERSCORE));
+    }
+
+    /// Lex `input` under the docstrip (`.dtx`) config, the regime in which
+    /// implicit expl3 applies.
+    fn lex_dtx(input: &str) -> Vec<Token> {
+        lex_with(
+            input,
+            &VerbCtx::default(),
+            LexConfig {
+                flavor: LatexFlavor::Document,
+                dtx: true,
+            },
+        )
+    }
+
+    #[test]
+    fn implicit_expl_module_guard_makes_macrocode_body_expl3() {
+        // A toggle-less `.dtx` with only a `%<@@=mod>` module guard: its macrocode
+        // body is expl3 code, so `\seq_new:N` lexes as one control word.
+        let toks = lex_dtx(
+            "%<@@=mod>\n\
+             %    \\begin{macrocode}\n\
+             \\seq_new:N\n\
+             %    \\end{macrocode}\n",
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
+    }
+
+    #[test]
+    fn no_expl_signal_leaves_macrocode_body_plain() {
+        // The same shape without a signal: `.dtx` macrocode is plain code, so
+        // `\seq_new:N` stops at the first `_` (the feature is opt-in).
+        let toks = lex_dtx(
+            "%    \\begin{macrocode}\n\
+             \\seq_new:N\n\
+             %    \\end{macrocode}\n",
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq")));
+        assert!(!seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
+    }
+
+    #[test]
+    fn implicit_expl_provides_expl_flags_every_body_regardless_of_order() {
+        // `\ProvidesExplPackage` is a whole-file signal, so a macrocode body
+        // *above* the declaration is expl3 too — the property left-to-right
+        // toggling misses.
+        let toks = lex_dtx(
+            "%    \\begin{macrocode}\n\
+             \\seq_new:N\n\
+             %    \\end{macrocode}\n\
+             % \\ProvidesExplPackage{p}{2026/01/01}{1.0}{d}\n\
+             %    \\begin{macrocode}\n\
+             \\tl_set:Nn\n\
+             %    \\end{macrocode}\n",
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\tl_set:Nn")));
+    }
+
+    #[test]
+    fn implicit_expl_is_body_only_doc_layer_stays_plain() {
+        // Implicit expl3 is forced inside the macrocode body and restored on exit,
+        // so the doc-margin line between/around bodies is ordinary LaTeX: `a_b`
+        // joins in the body but splits on the doc line.
+        let toks = lex_dtx(
+            "%<@@=mod>\n\
+             % a_b\n\
+             %    \\begin{macrocode}\n\
+             c_d\n\
+             %    \\end{macrocode}\n",
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        // Body: `_` is a letter, one word.
+        assert!(seen.contains(&(SyntaxKind::WORD, "c_d")));
+        // Doc layer: `_` stays a subscript, so `a_b` splits.
+        assert!(seen.iter().any(|(k, _)| *k == SyntaxKind::UNDERSCORE));
+    }
+
+    #[test]
+    fn implicit_expl_explicit_off_wins_then_next_body_re_enters() {
+        // An explicit `\ExplSyntaxOff` inside an implicit body turns expl off for
+        // the rest of that body; the next body still re-enters expl (the
+        // save/restore restores the pre-body state, not the toggled-off one).
+        let toks = lex_dtx(
+            "%<@@=mod>\n\
+             %    \\begin{macrocode}\n\
+             \\seq_new:N\n\
+             \\ExplSyntaxOff\n\
+             a_b\n\
+             %    \\end{macrocode}\n\
+             %    \\begin{macrocode}\n\
+             \\tl_set:Nn\n\
+             %    \\end{macrocode}\n",
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
+        // After the explicit off, `a_b` splits.
+        assert!(seen.iter().any(|(k, _)| *k == SyntaxKind::UNDERSCORE));
+        // The second body re-enters expl despite the earlier off.
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\tl_set:Nn")));
+    }
+
+    #[test]
+    fn implicit_expl_gated_off_outside_dtx() {
+        // The signal only fires under `.dtx` mode: a `.sty` with the same bytes
+        // must not enable implicit expl (there are no macrocode bodies anyway).
+        let toks = lex_with(
+            "%<@@=mod>\n\\seq_new:N",
+            &VerbCtx::default(),
+            LexConfig {
+                flavor: LatexFlavor::Package,
+                dtx: false,
+            },
+        );
+        let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
+        assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq")));
+        assert!(!seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
     }
 
     #[test]

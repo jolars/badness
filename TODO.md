@@ -224,14 +224,6 @@ engine.
   layout is idempotent by construction (catcode-9 whitespace is insignificant, so it supersedes
   the flush-B deferral for expl3 — see "Hanging continuation indent" above). See the expl3
   code-formatting note in `AGENTS.md` decision #1.
-- [ ] **expl3 implicit detection in toggle-less `.dtx` (deferred).** Real expl3
-  package sources (e.g. `ltx-talk-structure.dtx`) carry no in-file `\ExplSyntaxOn`/
-  `\ProvidesExpl*`; expl3 is declared in the parent `.dtx`/build, and `@@` is a
-  docstrip module prefix (`%<@@=mod>`). Treat `macrocode` bodies as expl3 when the
-  file carries a static expl3 signal (a `%<@@=mod>` guard or `\ProvidesExpl*`
-  anywhere). Needs a file-level scan plus the `macrocode` save/restore interaction
-  (mirror `at_letter`).
-
 ### Formatting
 
 ### Semantic and integration

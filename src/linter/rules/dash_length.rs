@@ -29,11 +29,13 @@
 //! leading/trailing option flags (`--verbose`), all of which lex with the run at a
 //! word edge or alongside other runs. The rule reads only `WORD` tokens, so
 //! comments, `\verb`, and verbatim (which never lex as `WORD`) are untouched, and
-//! math is skipped (a `-` there is a minus, not a dash). Two argument contexts
+//! math is skipped (a `-` there is a minus, not a dash). Three argument contexts
 //! are skipped via the shared gates in `super`: a rule-command span
-//! (`\cline{1-3}`, `\cmidrule(lr){2-3}` — the `n-m` is a column span, issue #34)
-//! and a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}` — an opaque
-//! identifier), neither of which is typeset text.
+//! (`\cline{1-3}`, `\cmidrule(lr){2-3}` — the `n-m` is a column span, issue #34),
+//! a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}` — an opaque
+//! identifier), and a typewriter-font argument (`\texttt{03-02}` — monospace sets
+//! the hyphen literally, with no en-dash ligature), none of which is typeset
+//! range text.
 
 use std::path::PathBuf;
 
@@ -115,8 +117,12 @@ impl Rule for DashLength {
         };
         // A column span in a rule command (`\cline{1-3}`, `\cmidrule(lr){2-3}`)
         // and a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}`) hold a
-        // spec or an opaque identifier, never a typeset range.
-        if super::in_rule_span_argument(tok) || super::in_key_argument(tok) {
+        // spec or an opaque identifier, never a typeset range. Monospace text
+        // (`\texttt{03-02}`) sets the hyphen literally, with no en-dash ligature.
+        if super::in_rule_span_argument(tok)
+            || super::in_key_argument(tok)
+            || super::in_typewriter_argument(tok)
+        {
             return;
         }
         let before = text[..run_start].chars().next_back();
@@ -362,6 +368,20 @@ mod tests {
         assert!(findings("\\label{fig:1-3}\n").is_empty());
         assert!(findings("\\cite{smith2020-1}\n").is_empty());
         assert!(findings("See \\ref{sec:2-4} now.\n").is_empty());
+    }
+
+    #[test]
+    fn texttt_hyphen_is_left_alone() {
+        // Monospace sets the hyphen literally (an MSC code, a version string); the
+        // `--`/`---` ligatures are off, so there is no en dash to reach for.
+        assert!(findings("\\texttt{03-02}\n").is_empty());
+        assert!(findings("the class \\texttt{03-02} covers it\n").is_empty());
+    }
+
+    #[test]
+    fn text_outside_texttt_is_still_flagged() {
+        // The gate is scoped to the argument; prose around it still flags.
+        assert_eq!(findings("pages 5-10, see \\texttt{03-02}\n").len(), 1);
     }
 
     #[test]

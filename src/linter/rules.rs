@@ -274,6 +274,89 @@ pub(crate) fn in_describe_argument(tok: &crate::syntax::SyntaxToken) -> bool {
     })
 }
 
+/// The curated set of commands that typeset their braced argument in a
+/// *typewriter (monospace)* font, where the `--`/`---` dash ligatures are off and
+/// a literal hyphen is the intended glyph — an MSC classification code
+/// (`\texttt{03-02}`), a hyphenated identifier, a flag (`--verbose`). Curated and
+/// deliberately small like [`is_code_argument_command`]; a wrong entry only
+/// silences the dash lint inside that command (a false negative), never the
+/// reverse. Verbatim monospace commands (`\verb`, `\lstinline`, `\url`) need no
+/// entry: their content never lexes as `WORD`, so `dash-length` already skips it.
+fn is_typewriter_argument_command(name: &str) -> bool {
+    matches!(name, "texttt")
+}
+
+/// Whether `tok` sits inside the argument of a typewriter-font command
+/// ([`is_typewriter_argument_command`]). `dash-length` uses this to stay off
+/// monospace text, where an en dash is neither rendered nor wanted
+/// (`\texttt{03-02}`). Same greedy-attachment posture as [`in_key_argument`].
+pub(crate) fn in_typewriter_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
+            && node.parent().is_some_and(|cmd| {
+                cmd.kind() == SyntaxKind::COMMAND
+                    && crate::ast::command_name(&cmd)
+                        .is_some_and(|name| is_typewriter_argument_command(&name))
+            })
+    })
+}
+
+/// Whether `tok` sits inside the *range list* of a pgffor `\foreach` — the
+/// `{0,20,...,350}` in `\foreach \x in {0,20,...,350}`. That `...` is pgffor's
+/// range operator (it loops `0,20,40,…,350`), not prose, and `\dots` would break
+/// the loop, so `ellipsis` must stay off it. Unlike the other argument gates the
+/// range list is *not* a direct argument of `\foreach`: it is a sibling separated
+/// by the loop variable and the `in` keyword, so we anchor on that structure with
+/// a previous-sibling walk. The list group is the one immediately preceded
+/// (skipping trivia) by the `in` keyword, with a `\foreach` command reachable
+/// across the loop header before it. Anchoring on `in` keeps the gate off the
+/// loop *body* group (`\foreach \x in {…} {body}`), whose immediate predecessor
+/// is the list group rather than `in` and whose `...` would be real text. Reads
+/// only the `\foreach` name (curated, like the rule-span gate); a wrong
+/// suppression is just a false negative.
+pub(crate) fn in_foreach_range(tok: &crate::syntax::SyntaxToken) -> bool {
+    let is_foreach = |node: &SyntaxNode| {
+        node.kind() == SyntaxKind::COMMAND
+            && crate::ast::command_name(node).is_some_and(|name| name == "foreach")
+    };
+    let Some(group) = tok
+        .parent_ancestors()
+        .find(|node| node.kind() == SyntaxKind::GROUP)
+    else {
+        return false;
+    };
+    // Walk previous siblings: the list group must sit right after `in` (skipping
+    // trivia), then a `\foreach` must be reachable across the loop header (the
+    // variable command(s), a `/` separator, an `[options]` group).
+    let mut saw_in = false;
+    let mut prev = group.prev_sibling_or_token();
+    while let Some(el) = prev {
+        match &el {
+            SyntaxElement::Node(node) => {
+                if !saw_in {
+                    // First non-trivia predecessor is a node, not `in`: this is the
+                    // body group after the list, not the list itself.
+                    return false;
+                }
+                if is_foreach(node) {
+                    return true;
+                }
+                // Otherwise loop-header material (the `\x` variable, an `[options]`
+                // group); keep walking back toward `\foreach`.
+            }
+            SyntaxElement::Token(t) => match t.kind() {
+                SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT => {}
+                SyntaxKind::WORD if !saw_in && t.text() == "in" => saw_in = true,
+                // A `/` between paired variables (`\x/\y`) once past `in`.
+                SyntaxKind::WORD if saw_in => {}
+                _ => return false,
+            },
+        }
+        prev = el.prev_sibling_or_token();
+    }
+    false
+}
+
 /// Whether `tok` sits inside an argument of a horizontal-rule command — `\cline`,
 /// booktabs `\cmidrule`/`\specialrule`, … per the *curated* signature DB's `rule`
 /// flag — whose content is a column span or dimension spec, never typeset text.

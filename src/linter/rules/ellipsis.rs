@@ -23,7 +23,11 @@
 //! The rule reads only `WORD` tokens, so comments, `\verb`, and verbatim
 //! environments (which never lex as `WORD`) are untouched — protected regions
 //! stay protected. Whether a run sits in math is read straight off the CST (a
-//! `MATH` ancestor), never re-lexed.
+//! `MATH` ancestor), never re-lexed. Two argument contexts are skipped via the
+//! shared gates in `super`: a doc/ltxdoc description command
+//! (`\DescribeMacro{\foo[...]}` — a syntax placeholder) and a pgffor `\foreach`
+//! range (`\foreach \x in {0,20,...,350}` — `...` is the loop range operator, and
+//! `\dots` would break the loop).
 
 use std::path::PathBuf;
 
@@ -90,7 +94,9 @@ impl Rule for Ellipsis {
         }
         // `\DescribeMacro{\foo[...]}` illustrates syntax; the `...` is a
         // placeholder, not prose that wants `\dots`. Skip description commands.
-        if super::in_describe_argument(tok) {
+        // A pgffor range (`\foreach \x in {0,20,...,350}`) uses `...` as the loop
+        // range operator; `\dots` would break the loop.
+        if super::in_describe_argument(tok) || super::in_foreach_range(tok) {
             return;
         }
         let base = usize::from(tok.text_range().start());
@@ -317,6 +323,29 @@ mod tests {
     #[test]
     fn flags_each_run() {
         assert_eq!(findings("a... b...\n").len(), 2);
+    }
+
+    #[test]
+    fn foreach_range_is_left_alone() {
+        // pgffor's `...` range operator, not prose; `\dots` would break the loop.
+        assert!(findings("\\foreach \\x in {0,20,...,350} {a}\n").is_empty());
+        assert!(findings("\\foreach \\x in {1,...,10}\n").is_empty());
+        // Paired variables (`\x/\y`) and an `[options]` group in the header.
+        assert!(findings("\\foreach \\x/\\y in {1/2,...,9/10}\n").is_empty());
+        assert!(findings("\\foreach \\x [count=\\i] in {0,...,5}\n").is_empty());
+    }
+
+    #[test]
+    fn foreach_body_dots_are_still_flagged() {
+        // The gate anchors on the `in` keyword, so the loop *body* group (real
+        // text) is not suppressed.
+        assert_eq!(findings("\\foreach \\x in {1,2,3} {so on...}\n").len(), 1);
+    }
+
+    #[test]
+    fn plain_range_group_without_foreach_still_flags() {
+        // No `\foreach` header, so this is ordinary text, not a loop range.
+        assert_eq!(findings("in {1,2,...,9}\n").len(), 1);
     }
 
     #[test]

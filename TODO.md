@@ -93,13 +93,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   key-argument command) and add a small gate (`in_environment_title`) for a token
   inside an `OPTIONAL` whose parent is a `BEGIN` node (an environment title, not a
   cross-reference).
-- [ ] **DSL false positives: `dash-length` in `\texttt`, `ellipsis` in
+- [x] **DSL false positives: `dash-length` in `\texttt`, `ellipsis` in
   `\foreach`.** `\texttt{03-02}` (an MSC code — the hyphen is literal in
   monospace) and `\foreach \x in {0,20,...,350}` (pgffor range syntax; `\dots`
-  would break the loop). Fixes: a `\texttt`-family gate for `dash-length`; an
-  `in_foreach_range` gate for `ellipsis` — note the range list `{…}` is a
-  *sibling* of `\foreach`, not a direct argument, so it needs a previous-sibling
-  walk.
+  would break the loop). Done: `in_typewriter_argument` gate for `dash-length`;
+  `in_foreach_range` gate for `ellipsis` — the range list `{…}` is a *sibling* of
+  `\foreach`, so the gate anchors on the `in` keyword via a previous-sibling walk
+  (which also keeps it off the loop body group).
 
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to

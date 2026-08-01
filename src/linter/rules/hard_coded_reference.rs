@@ -24,12 +24,16 @@
 //!   word) never match.
 //!
 //! The rule reads only `WORD` tokens and skips math, so comments, `\verb`, and
-//! verbatim (which never lex as `WORD`) are untouched.
+//! verbatim (which never lex as `WORD`) are untouched. Two more shapes are gated
+//! out as false positives: a citation locator (`\cite[Section~8.1]{…}`, via
+//! [`super::in_key_argument`]) references *external* work, and an environment title
+//! (`\begin{thm}[Conway's Theorem 0]`, via [`in_environment_title`]) is a proper
+//! name — neither is a cross-reference into this document.
 
 use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
-use crate::syntax::{SyntaxElement, SyntaxKind};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
 use super::{Example, Rule, RuleContext};
 
@@ -92,8 +96,10 @@ impl Rule for HardCodedReference {
          capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) \
          matched as a whole word and directly followed, across one space or a tie \
          `~`, by an arabic number; plurals, lowercase, `Figure~\\ref{x}`, and \
-         `Figure three` are left alone. It never touches math, comments, or \
-         verbatim."
+         `Figure three` are left alone. It also skips a citation locator \
+         (`\\cite[Section~8.1]{...}`, a reference into external work) and an \
+         environment title (`\\begin{thm}[Conway's Theorem 0]`, a proper name). It \
+         never touches math, comments, or verbatim."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -110,6 +116,13 @@ impl Rule for HardCodedReference {
         };
         let kw = word.text();
         if !REFERENCE_WORDS.contains(&kw) {
+            return;
+        }
+        // A citation locator (`\cite[Section~8.1]{…}`) points into *external* work,
+        // and an environment title (`\begin{thm}[Conway's Theorem 0]`) is a proper
+        // name — neither is a hard-coded cross-reference into this document, so the
+        // number there is not ours to track with a `\label`.
+        if super::in_key_argument(word) || in_environment_title(word) {
             return;
         }
         // A `.` in math is not sentence punctuation, and a reference word there is
@@ -173,6 +186,20 @@ impl Rule for HardCodedReference {
             related: Vec::new(),
         });
     }
+}
+
+/// Whether `tok` sits inside the optional `[title]` of a `\begin{env}[...]` — an
+/// environment title such as a theorem's proper name
+/// (`\begin{thm}[Conway's Theorem 0]`), not a cross-reference. The `[...]` attaches
+/// to the `\begin` opener, so the `OPTIONAL`'s parent is the `BEGIN` node (the arms
+/// of a nested group would leave `BEGIN` as an ancestor, so match the `OPTIONAL`
+/// directly). Distinct from [`super::in_key_argument`], whose `OPTIONAL`/`GROUP`
+/// hangs off a `COMMAND`.
+fn in_environment_title(tok: &SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        node.kind() == SyntaxKind::OPTIONAL
+            && node.parent().is_some_and(|p| p.kind() == SyntaxKind::BEGIN)
+    })
 }
 
 /// Byte length of the numeric reference at the start of `text`, or `None` if the
@@ -320,5 +347,25 @@ mod tests {
     #[test]
     fn flags_each_occurrence() {
         assert_eq!(findings("Figure 3 and Table 4\n").len(), 2);
+    }
+
+    #[test]
+    fn citation_locator_is_left_alone() {
+        // `\cite[Section~8.1]{…}` points into external work, not this document.
+        assert!(findings("see \\cite[Section~8.1]{knuth}\n").is_empty());
+        assert!(findings("\\cite[Chapter 3]{smith}\n").is_empty());
+    }
+
+    #[test]
+    fn environment_title_is_left_alone() {
+        // A theorem title is a proper name, not a cross-reference.
+        assert!(findings("\\begin{thm}[Conway's Theorem 0]\n").is_empty());
+        assert!(findings("\\begin{lemma}[Lemma 2 restated]\n").is_empty());
+    }
+
+    #[test]
+    fn reference_outside_title_still_flagged() {
+        // The gates are narrow: prose after the environment opener still fires.
+        assert_eq!(findings("\\begin{thm}[Main]\nSee Figure 3 here\n").len(), 1);
     }
 }

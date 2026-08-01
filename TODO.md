@@ -86,12 +86,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   xypic DSL, not a forgotten `\makeatletter`. Fix: a curated exact-name gate in
   `src/linter/rules/makeat_macro.rs` skipping the control words `ar`/`xymatrix`
   before the `@`, mirroring `space_before_command`'s `NO_SPACE_COMMANDS`.
-- [ ] **`hard-coded-reference` fires inside citation locators and theorem titles
+- [x] **`hard-coded-reference` fires inside citation locators and theorem titles
   (false positive).** `\cite[Section~8.1]{…}` (an external-work locator) and
   `\begin{thm}[Conway's Theorem 0]` (a proper-name title). Fix: skip when
   `in_key_argument(tok)` (reuses the existing gate — `cite` is already a
-  key-argument command) and add a small gate for a token inside an `OPTIONAL`
-  whose parent is a `BEGIN` node (an environment title, not a cross-reference).
+  key-argument command) and add a small gate (`in_environment_title`) for a token
+  inside an `OPTIONAL` whose parent is a `BEGIN` node (an environment title, not a
+  cross-reference).
 - [ ] **DSL false positives: `dash-length` in `\texttt`, `ellipsis` in
   `\foreach`.** `\texttt{03-02}` (an MSC code — the hyphen is literal in
   monospace) and `\foreach \x in {0,20,...,350}` (pgffor range syntax; `\dots`

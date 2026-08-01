@@ -81,7 +81,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
-- [ ] **`makeat-macro` fires on xypic syntax (false positive).** `\ar@{=}`,
+- [x] **`makeat-macro` fires on xypic syntax (false positive).** `\ar@{=}`,
   `\xymatrix@C=3pc` (97/97 findings on the HoTT book). The `@` is intentional
   xypic DSL, not a forgotten `\makeatletter`. Fix: a curated exact-name gate in
   `src/linter/rules/makeat_macro.rs` skipping the control words `ar`/`xymatrix`

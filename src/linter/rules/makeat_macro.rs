@@ -27,6 +27,12 @@
 //!   `WORD "ifnextchar"`. The legitimate end-of-sentence `\@` (as in `NASA\@.`) is
 //!   spared: there the next token is punctuation/whitespace, not a name run.
 //!
+//! **xypic carve-out.** A small curated set of control words (`\ar`,
+//! `\xymatrix`) is exempt from the embedded shape: xypic uses `@` as intentional
+//! DSL right after the name (`\ar@{->}`, `\xymatrix@C=3pc`), which produces the
+//! same `CONTROL_WORD` + `@`-`WORD` split, so those names are gated out
+//! (`XYPIC_AT_COMMANDS`), mirroring `space_before_command`'s `NO_SPACE_COMMANDS`.
+//!
 //! **Report-only.** A correct-by-construction fix would have to wrap the use in
 //! `\makeatletter`…`\makeatother` (or move it into an existing region), which is not
 //! a tight, local edit, so per tenet 1 no autofix is offered -- the finding stands
@@ -50,6 +56,13 @@ const EXAMPLES: &[Example] = &[
         source: "\\@ifstar{\\StarredForm}{\\PlainForm}\n",
     },
 ];
+
+/// Control words whose trailing `@` is intentional xypic DSL, not a forgotten
+/// `\makeatletter`: `\ar@{->}`, `\xymatrix@C=3pc`. The same `CONTROL_WORD` +
+/// `@`-`WORD` split the rule keys on is legitimate here, so these names are
+/// gated out. Curated exact names, mirroring `space_before_command`'s
+/// `NO_SPACE_COMMANDS`.
+const XYPIC_AT_COMMANDS: &[&str] = &["ar", "xymatrix"];
 
 pub struct MakeatMacro;
 
@@ -92,6 +105,12 @@ impl Rule for MakeatMacro {
             let Some(control_word) = child_token::<ControlWord>(command) else {
                 return;
             };
+            // xypic's `@` DSL (`\ar@{->}`, `\xymatrix@C=3pc`) splits the same
+            // way as a stray at-letter macro; the `@` there is intentional, not
+            // a forgotten `\makeatletter`. Skip the curated control words.
+            if XYPIC_AT_COMMANDS.contains(&control_word.name().as_str()) {
+                return;
+            }
             let Some(next) = control_word.syntax().next_token() else {
                 return;
             };
@@ -260,6 +279,25 @@ mod tests {
         // `\foo{x}@bar`: the `@bar` follows the argument's `}`, not the control
         // word, so it is genuine text -- not flagged.
         assert!(findings("\\foo{x}@bar\n").is_empty());
+    }
+
+    #[test]
+    fn xypic_ar_at_is_not_flagged() {
+        // xypic's `\ar@{...}` arrow-style DSL: the `@` is intentional.
+        assert!(findings("\\ar@{->}\n").is_empty());
+        assert!(findings("\\ar@{=}\n").is_empty());
+    }
+
+    #[test]
+    fn xypic_xymatrix_at_is_not_flagged() {
+        // `\xymatrix@C=3pc` sets column spacing; the `@` is intentional.
+        assert!(findings("\\xymatrix@C=3pc{A & B}\n").is_empty());
+    }
+
+    #[test]
+    fn similar_name_is_not_gated() {
+        // The gate is exact-name, not a prefix: `\arrow@x` still flags.
+        assert_eq!(findings("\\arrow@x\n").len(), 1);
     }
 
     #[test]

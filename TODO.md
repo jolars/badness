@@ -144,14 +144,16 @@ sources below are missing.
   model). Badness's signature DB is flat (curated + CWL + scanned); scoping
   completion to `\usepackage`-loaded packages needs package→command attribution.
   Open question, not a mechanical add.
-- [ ] **Citation completion filterable by title/author *(LW)*.** LaTeX
+- [x] **Citation completion filterable by title/author *(LW)*.** LaTeX
   Workshop's `\cite{` completion matches on the entry's title and other fields,
   not just the key (`intellisense.citation.filterText`)—type a word from the
   paper's title instead of remembering the key. Badness already resolves
   entries cross-file and lazily (`lsp/completion_resolve.rs`); widen
   `filter_text` (and `sort_text`) on citation items to key + title + authors.
   VS Code truncates `filterText` at 128 chars, so field order matters (key
-  first).
+  first). Done: `cite_completion_items` returns the full namespace (no
+  server-side key filter) with `filterText` = key + title + authors and
+  `sortText` = key; `title`/`authors` cached on the bib semantic `Entry`.
 - [ ] **Command argument placeholder snippets *(LW)*, opt-in.** Environment
   completion already inserts snippet bodies with tab stops; commands could emit
   placeholders for required/optional arguments straight from the signature DB

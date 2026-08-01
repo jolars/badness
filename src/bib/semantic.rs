@@ -111,6 +111,30 @@ mod tests {
     }
 
     #[test]
+    fn caches_cleaned_title_and_author() {
+        let model =
+            model_of("@article{k, title = {The {\\TeX}book}, author = {Knuth, Donald E.}}\n");
+        let e = &model.entries()[0];
+        assert_eq!(e.title.as_deref(), Some("The {\\TeX}book"));
+        assert_eq!(e.authors.as_deref(), Some("Knuth, Donald E."));
+    }
+
+    #[test]
+    fn authors_falls_back_to_editor() {
+        let model = model_of("@book{k, title = {T}, editor = {Lamport, Leslie}}\n");
+        let e = &model.entries()[0];
+        assert_eq!(e.authors.as_deref(), Some("Lamport, Leslie"));
+    }
+
+    #[test]
+    fn missing_title_and_author_stay_none() {
+        let model = model_of("@misc{k, year = {2020}}\n");
+        let e = &model.entries()[0];
+        assert!(e.title.is_none());
+        assert!(e.authors.is_none());
+    }
+
+    #[test]
     fn entry_type_is_lowercased() {
         let model = model_of("@InProceedings{k, title = {X}}\n");
         assert_eq!(model.entries()[0].entry_type, "inproceedings");

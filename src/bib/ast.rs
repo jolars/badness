@@ -81,6 +81,20 @@ pub fn field_value(field: &SyntaxNode) -> Option<SyntaxNode> {
     child::<Value>(field).map(|v| v.syntax().clone())
 }
 
+/// A field `VALUE` as plain display text: the node text, trimmed, with one layer of
+/// surrounding `{…}`/`"…"` removed and interior whitespace collapsed. Shared by the
+/// LSP hover/completion cards and the semantic model's cached title/author facts.
+pub fn value_text_cleaned(value: &SyntaxNode) -> String {
+    let raw = value.text().to_string();
+    let trimmed = raw.trim();
+    let inner = trimmed
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .or_else(|| trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+        .unwrap_or(trimmed);
+    inner.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The bare-macro *uses* inside a `VALUE`: each `LITERAL` piece whose single token is
 /// a `WORD` (an unquoted, unbraced name) is an `@string` reference. A `LITERAL`
 /// wrapping a `NUMBER` is a literal number, not a macro use, and is skipped. Yields

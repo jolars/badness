@@ -302,6 +302,45 @@ mod tests {
     }
 
     #[test]
+    fn citation_filter_text_carries_key_title_author() {
+        let tex = "\\addbibresource{refs.bib}\n\\cite{knu";
+        let bib = "@book{knuth1984,\n  author = {Knuth, Donald E.},\n  title = {The TeXbook},\n  year = {1984},\n}\n";
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(Path::new("/p/main.tex"), tex.to_string());
+        db.upsert_file(Path::new("/p/refs.bib"), bib.to_string());
+
+        let items = complete(&db, Path::new("/p/main.tex"), tex, "knu");
+        let item = items
+            .into_iter()
+            .find(|i| i.label == "knuth1984")
+            .expect("knuth1984 candidate");
+        let filter = item.filter_text.expect("filter_text");
+        assert!(filter.contains("knuth1984"), "key: {filter}");
+        assert!(filter.contains("The TeXbook"), "title: {filter}");
+        assert!(filter.contains("Knuth"), "author: {filter}");
+        assert_eq!(item.sort_text.as_deref(), Some("knuth1984"), "sort_text");
+    }
+
+    #[test]
+    fn citation_completion_is_not_key_prefixed() {
+        // The typed prefix `Te` matches only the *title*, not the key. The server must
+        // still return the entry (the client filters by filterText), so title-word
+        // matching works on any editor.
+        let tex = "\\addbibresource{refs.bib}\n\\cite{Te";
+        let bib = "@book{knuth1984,\n  author = {Knuth, Donald E.},\n  title = {The TeXbook},\n}\n";
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(Path::new("/p/main.tex"), tex.to_string());
+        db.upsert_file(Path::new("/p/refs.bib"), bib.to_string());
+
+        let items = complete(&db, Path::new("/p/main.tex"), tex, "Te");
+        assert!(
+            items.iter().any(|i| i.label == "knuth1984"),
+            "full namespace returned regardless of key prefix: {:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn command_resolves_to_signature() {
         let src = "\\sec";
         let path = Path::new("/p/main.tex");

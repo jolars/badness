@@ -4445,7 +4445,7 @@ fn compute_bib_completion(text: &str, offset: usize) -> Vec<CompletionItem> {
 /// against the snapshot, like a file-path read).
 enum TexCompletion {
     Items(Vec<CompletionItem>),
-    Cite { prefix: String, lint_path: PathBuf },
+    Cite { lint_path: PathBuf },
     Glossary { prefix: String, lint_path: PathBuf },
 }
 
@@ -4470,8 +4470,10 @@ fn compute_tex_completion(
             let root = snapshot.parsed_tree(file);
             let ctx = crate::completion::classify_context(&root, offset);
             return match ctx {
-                CompletionContext::CitationKey { prefix } => TexCompletion::Cite {
-                    prefix,
+                // Citations are not prefix-filtered server-side: the full namespace is
+                // returned and the client filters by `filterText` (key + title +
+                // authors), so a title word surfaces its entry.
+                CompletionContext::CitationKey { .. } => TexCompletion::Cite {
                     lint_path: snapshot.file_path(file).to_path_buf(),
                 },
                 CompletionContext::GlossaryKey { prefix } => TexCompletion::Glossary {
@@ -4495,11 +4497,11 @@ fn compute_tex_completion(
 
     match resolved {
         TexCompletion::Items(items) => items,
-        TexCompletion::Cite { prefix, lint_path } => {
+        TexCompletion::Cite { lint_path } => {
             // Cross-file resolve against the db snapshot; a racing write yields none.
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
                 let (_, citations) = snapshot.resolve_project(members);
-                cite_completion_items(snapshot, citations, &lint_path, &prefix)
+                cite_completion_items(snapshot, citations, &lint_path)
             }))
             .unwrap_or_default()
         }
@@ -4527,8 +4529,7 @@ fn reparse_tex_completion(
     let root = SyntaxNode::new_root(parse(text).green);
     let ctx = crate::completion::classify_context(&root, offset);
     match ctx {
-        CompletionContext::CitationKey { prefix } => TexCompletion::Cite {
-            prefix,
+        CompletionContext::CitationKey { .. } => TexCompletion::Cite {
             lint_path: path.to_path_buf(),
         },
         CompletionContext::GlossaryKey { prefix } => TexCompletion::Glossary {
@@ -4543,43 +4544,71 @@ fn reparse_tex_completion(
     }
 }
 
-/// Cite-key candidates: every entry key in the citing file's bibliography namespace,
-/// prefix-filtered (case-insensitive, as BibTeX folds key case) and deduped. Mirrors
-/// [`resolve_citation_locations`] but collects all keys rather than matching a target.
+/// Cite-key candidates: every entry in the citing file's bibliography namespace,
+/// deduped by folded key (first definer wins). The list is *not* prefix-filtered —
+/// each item carries a `filterText` of key + title + authors, so the client filters
+/// on any of those fields (LaTeX Workshop's `citation.filterText`). Mirrors
+/// [`resolve_citation_locations`] but collects all entries rather than matching a target.
 fn cite_completion_items(
     snapshot: &Analysis,
     citations: &ResolvedCitations,
     lint_path: &Path,
-    prefix: &str,
 ) -> Vec<CompletionItem> {
-    let prefix = prefix.to_lowercase();
-    let mut keys: Vec<SmolStr> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items: Vec<CompletionItem> = Vec::new();
     for bib_path in citations.bib_definers(lint_path) {
         let Some(file) = snapshot.lookup_file(bib_path) else {
             continue;
         };
         for entry in snapshot.bib_semantic_model(file).entries() {
-            if entry.key.to_lowercase().starts_with(&prefix) {
-                keys.push(entry.key.clone());
+            // Dedup case-insensitively (BibTeX folds key case); the first definer wins.
+            if !seen.insert(entry.key.to_lowercase()) {
+                continue;
             }
+            items.push(CompletionItem {
+                // Carry the citing file + key so `completionItem/resolve` can re-walk
+                // the bibliography namespace and attach the entry card lazily.
+                data: completion_resolve::CompletionResolveData::Citation {
+                    lint_path: lint_path.to_path_buf(),
+                    key: entry.key.to_string(),
+                }
+                .into_value(),
+                label: entry.key.to_string(),
+                filter_text: Some(citation_filter_text(entry)),
+                // A deterministic tiebreak within the client's match-score bucket,
+                // preserving the old alphabetical-by-key order.
+                sort_text: Some(entry.key.to_lowercase()),
+                kind: Some(CompletionItemKind::REFERENCE),
+                ..Default::default()
+            });
         }
     }
-    keys.sort();
-    keys.dedup();
-    keys.into_iter()
-        .map(|key| CompletionItem {
-            // Carry the citing file + key so `completionItem/resolve` can re-walk
-            // the bibliography namespace and attach the entry card lazily.
-            data: completion_resolve::CompletionResolveData::Citation {
-                lint_path: lint_path.to_path_buf(),
-                key: key.to_string(),
-            }
-            .into_value(),
-            label: key.to_string(),
-            kind: Some(CompletionItemKind::REFERENCE),
-            ..Default::default()
-        })
-        .collect()
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items
+}
+
+/// The `filterText` for a citation item: key, then title, then authors, space-joined
+/// and truncated to 128 chars on a char boundary. The key comes first so it always
+/// survives the cap (VS Code truncates `filterText` at 128 chars).
+fn citation_filter_text(entry: &crate::bib::semantic::Entry) -> String {
+    let mut text = entry.key.to_string();
+    for extra in [entry.title.as_ref(), entry.authors.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        text.push(' ');
+        text.push_str(extra);
+    }
+    if text.len() > 128 {
+        let end = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= 128)
+            .last()
+            .unwrap_or(0);
+        text.truncate(end);
+    }
+    text
 }
 
 /// Glossary/acronym key candidates: every `\newglossaryentry`/`\newacronym` key

@@ -3191,12 +3191,23 @@ fn lsp_cite_completion_cross_file() {
     let uri = path_to_file_uri(&main_path);
     did_open(&client, &uri, 1, main);
 
-    // Cursor inside `\cite{kn|}` → the project's entry key, prefix-filtered.
+    // Cursor inside `\cite{kn|}` → the project's entry key. The list is not
+    // prefix-filtered server-side; each item carries a `filterText` of key + title +
+    // authors for the client to filter on.
     let items = complete_draining(&client, 2, &uri, Position::new(1, 8));
     let names = labels(&items);
     assert!(names.contains(&"knuth1984"), "{names:?}");
     let key = items.iter().find(|i| i.label == "knuth1984").unwrap();
     assert_eq!(key.kind, Some(CompletionItemKind::REFERENCE));
+    let filter = key.filter_text.as_deref().unwrap_or_default();
+    assert!(
+        filter.contains("knuth1984"),
+        "filterText has key: {filter:?}"
+    );
+    assert!(
+        filter.contains("TeXbook"),
+        "filterText has title: {filter:?}"
+    );
 
     shutdown(&client, server_thread);
 }

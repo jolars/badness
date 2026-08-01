@@ -39,15 +39,30 @@ pub fn build(root: &SyntaxNode) -> Model {
 fn collect_entry(entry: &SyntaxNode, model: &mut Model) {
     if let Some((key, key_range)) = ast::cite_key(entry) {
         let entry_type = ast::entry_type(entry).unwrap_or_default().to_lowercase();
+        let title = field_cleaned(entry, "title");
+        let authors = field_cleaned(entry, "author").or_else(|| field_cleaned(entry, "editor"));
         model.entries.push(Entry {
             entry_type: SmolStr::new(entry_type),
             key: SmolStr::new(key),
+            title,
+            authors,
             key_range,
             range: entry.text_range(),
             duplicate: false,
         });
     }
     collect_uses(entry, model);
+}
+
+/// The cleaned value of `entry`'s first field named `want` (case-insensitive), or
+/// `None` when absent or empty. Feeds the cached `title`/`authors` facts.
+fn field_cleaned(entry: &SyntaxNode, want: &str) -> Option<SmolStr> {
+    ast::fields(entry)
+        .filter(|f| ast::field_name(f).is_some_and(|n| n.eq_ignore_ascii_case(want)))
+        .find_map(|f| ast::field_value(&f))
+        .map(|v| ast::value_text_cleaned(&v))
+        .filter(|s| !s.is_empty())
+        .map(SmolStr::new)
 }
 
 /// Record an `@string` definition and any `@string` uses in its (concatenated) value.

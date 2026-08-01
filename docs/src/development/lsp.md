@@ -50,6 +50,22 @@ number enrichment (`1.2 Intro`; toc titles are matched whitespace-normalized,
 consumed in document order). Guarded by `format_never_reads_the_aux_file`
 (`tests/format_packages.rs`).
 
+## Citation completion filtering
+
+A `\cite{…}` completion returns the **entire** bibliography namespace (deduped by
+folded key, first definer wins)—it is *not* prefix-filtered server-side. Each item
+carries a `filterText` of `key + title + authors` (space-joined, key first, capped at
+128 chars), so the client matches on any of those fields, mirroring LaTeX Workshop's
+`intellisense.citation.filterText`. This is deliberately **editor-agnostic**:
+`filterText` is LSP-standard (every compliant client filters and scores against it,
+falling back to `label`), so the behavior needs no client-specific code—the only thing
+that would have blocked a title-word match is a server-side key filter, which we drop.
+`sortText` is the lowercased key, a deterministic tiebreak inside the client's
+match-score bucket. The list keeps `isIncomplete: true` (the client re-queries as the
+prefix narrows). The `title`/`authors` strings are cached on the salsa-tracked bib
+semantic `Entry` (`bib::semantic::entry`), so building the list stays a per-keystroke
+walk over entries with no CST descent (`cite_completion_items` in `lsp.rs`).
+
 ## The distinction
 
 A **runtime distro query feeding the formatter** stays a non-goal—it would break

@@ -662,17 +662,11 @@ pub(super) fn render_entry(entry_type: &str, key: &str, node: &BibSyntaxNode) ->
     out
 }
 
-/// A bib field value as plain display text: the node text, trimmed, with one layer of
-/// surrounding `{…}`/`"…"` removed and interior whitespace collapsed.
+/// A bib field value as plain display text. Thin wrapper over
+/// [`bib_ast::value_text_cleaned`] (the shared cleaner), kept for the hover/resolve
+/// call sites.
 pub(super) fn clean_value(value: &BibSyntaxNode) -> String {
-    let raw = value.text().to_string();
-    let trimmed = raw.trim();
-    let inner = trimmed
-        .strip_prefix('{')
-        .and_then(|s| s.strip_suffix('}'))
-        .or_else(|| trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
-        .unwrap_or(trimmed);
-    inner.split_whitespace().collect::<Vec<_>>().join(" ")
+    bib_ast::value_text_cleaned(value)
 }
 
 // --- Label preview --------------------------------------------------------------

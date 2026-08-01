@@ -18,6 +18,12 @@ pub struct Entry {
     pub entry_type: SmolStr,
     /// The cite key as authored.
     pub key: SmolStr,
+    /// The cleaned `title` field value, if present. Cached here so citation
+    /// completion can build a `filterText` (key + title + authors) without a CST walk.
+    pub title: Option<SmolStr>,
+    /// The cleaned `author` field value, falling back to `editor` (matching the
+    /// citation card's author-or-editor rule). Cached for the same reason as `title`.
+    pub authors: Option<SmolStr>,
     /// The byte range of the `KEY` node.
     pub key_range: TextRange,
     /// The byte range of the whole entry.

@@ -158,16 +158,6 @@ completion items (VS Code-only), and sub/superscript history completion
   `workspace_diagnostics: true` and add it once that plumbing exists; editors
   drive interactive diagnostics through `textDocument/diagnostic` meanwhile.
 
-### Formatting
-
-- [x] Revision-stable paragraph wrapping: `wrap = "stable"` retains authored
-  equilibrium breaks and uses a hard-coded soft target (`line-width - 15`, see
-  `FormatStyle::stable_wrap_target`) under the hard `line-width`; implemented as
-  source-aware `PreferredFill` IR with global lexicographic layout selection,
-  preserving the formatter-engine boundary. Follow-up: expose the soft target as a
-  config knob only if a concrete need appears; reserve `wrap = "minimal"` for a
-  truly minimal mode that only reflows over-long lines.
-
 ### Completion
 
 Badness offers command, environment, label, cite-key, bib field/type, and file
@@ -313,21 +303,9 @@ not re-proposed.
   command, project-aware behind the same closed+rooted namespace gate as
   `unreferenced-label`/`undefined-ref` (the bib linter has `unused-string` but no
   `unused-entry`). Report-only. texlab: `UnusedEntry`.
-- [x] Bib-aware LSP completion: `@string` macro names in value position, field
-  names per entry type (type-scoped, hiding fields already present), and entry
-  types after `@` (`src/bib/completion.rs`); plus `\cite` key completion on the
-  `.tex` side, resolved cross-file via `ResolvedCitations` (`src/lsp.rs`
-  `cite_completion_items`).
 - [ ] Bib document-symbol outline completeness: `src/bib/outline.rs` surfaces
   regular entries only; consider `@string`/`@preamble`/`@comment` blocks (and a
   richer `SymbolKind`/detail).
-- [x] `title-capitalization` refinement: a single mid-word capital now counts only
-  when it is the *first* capital of a lowercase-initial word (the camelCase brand
-  pattern, `iPhone`/`eBay`/`pH`). A later capital in a capital-initial word is a
-  surname particle (`McDonald`, `DeForest`, `MacArthur`) or style token (`LaTeX`),
-  so it is left alone---no curated name list needed, at the cost of an occasional
-  miss (a capital-initial acronym like the cell line `HeLa`). `[A-Z]{2,}` runs
-  (`DNA`) still flag regardless of word shape.
 - [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
   component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
   helper when a third consumer appears.
@@ -351,106 +329,8 @@ rust-analyzer checkout for triage lives at `.rust-analyzer-ref/` (git-ignored;
 `git clone --depth 1 https://github.com/rust-lang/rust-analyzer` to recreate) so
 line references stay stable while we work through the items.
 
-**Verdict:** the overwhelming majority of divergences are deliberate,
-AGENTS.md-sanctioned, or forced by the LaTeX/catcode domain, and are sound. The
-green-node `no_eq` soundness argument, the byte-range error side channel, the
-SubTok math split, the catcode-in-lexer modes, the recovery-anchor set, the
-firewall-layered cross-file salsa queries, the read-snapshot/threadpool split,
-cancellation-via-salsa, version-gated diagnostic publish, incremental document
-sync, UTF-16/UTF-8 column math, and comment-suppression coverage were all checked
-and found faithful (or better). One agent-reported concern was a **false
-positive**: cross-file lint rules are *not* inert in the editor — `analyze_tex`
-(`lsp.rs:3023`) and `compute_lint_findings` (`lsp.rs:3278`) thread full project
-resolution; only the salsa cancellation/cache-miss fallbacks (`fallback_*`,
-`lsp.rs:3186`/`3311`) pass `None`, by design.
-
-The items below are the genuine divergences worth a separate look. None is a
-known-live bug; they are latent gaps, hardening opportunities, and editor-UX
-capabilities RA has that badness does not. Severity in brackets.
-
-### Robustness / hardening
-
-- [x] **[high] Worker thread panic guard** (`lsp.rs`, `Worker::handle_job_guarded`).
-  A panic in the single write-phase worker (`seed_dir`, `apply_watched_change`,
-  `project_members`, a poisoned-mutex `.expect`) used to unwind and kill the
-  worker thread; the main loop kept running but every `job_tx.send` silently
-  no-ops (`let _ = …`), so the server became a quiet zombie. Now the run loop
-  routes every job through `handle_job_guarded`, which `catch_unwind`s the panic
-  and logs it (mirroring the read pool's per-job isolation, `task_pool.rs:47`), so
-  one bad job degrades to a single logged error instead of killing the server.
-  (Follow-up still open: recovering from a *poisoned mutex* — see next item — so a
-  read-pool panic while holding `files`/`query_log` can't leave the worker unable
-  to touch the db.)
-- [x] **[med] Mutex poisoning no longer cascades a read panic into worker death**
-  (`incremental.rs`, `recover_poison`). The `files`/`query_log` locks now recover
-  the inner guard on poison (`.lock().unwrap_or_else(recover_poison)`) instead of
-  `.expect("… poisoned")`, so a read-pool job that panics while holding one can't
-  cascade into the writer panicking on its next `.lock()`. Sound because each lock
-  guards a plain map/vec mutated atomically per access, with no cross-call
-  invariant a panic could leave half-updated. Guarded by
-  `poisoned_files_lock_recovers`.
-- [x] **[med] Global parser step/loop limiter** (`grammar.rs`,
-  `Parser::step` + `PARSER_STEP_LIMIT`). The lookahead primitives (`kind`,
-  `nth_kind`) now tick a peek budget that resets on every cursor advance (via
-  `bump` *or* the math-split `pos += 1` fast path — keyed on `pos`, not `bump`),
-  so the surviving count is the number of *consecutive* peeks with no token
-  consumed. Exceeding the ceiling aborts loudly instead of hanging — the RA
-  catch-all (`parser.rs`), converting "provably terminating by reading the code"
-  into "cannot hang on adversarial or malformed input" (fuzzing, a corrupt corpus
-  file). A **release-mode** guard (real `assert!`, not `debug_assert`); the async
-  callers already recover from a parse panic, so a wedged parse degrades to a
-  logged error. Measured overhead on the 95 KB parse bench: within run-to-run
-  noise (~1-2%). Guarded by `step_guard_trips_when_wedged` and
-  `step_budget_resets_on_cursor_progress`. (Complements the Fuzzing item under
-  Performance & hardening.)
-- [x] **[low] `--fix` post-application losslessness/parse guard**
-  (`main.rs`, `debug_assert_fixes_preserved`). Before `fix_file` writes the
-  fixpoint result back, a debug-only, kind-aware (LaTeX + bib) guard asserts the
-  output (1) reconstructs losslessly and (2) carries no *new* parse errors vs. the
-  original (`errors_before`), so a mis-built fix span that corrupts structure is
-  caught before it reaches disk. Compiled out of release builds.
-- [x] **[low] Debug open/close balance assertion**
-  (`grammar.rs`, `debug_assert_balanced`). After `parse()` builds the event
-  stream, a debug-only pass walks it (+1 `Start`, -1 `Finish`) and asserts it
-  never goes negative and ends at zero — catching a leaked `open()` or an
-  unbalanced `precede` splice at parse time (counting *all* start/finish events
-  regardless of how emitted), rather than as an opaque rowan `finish_node` panic
-  later. The cheap post-hoc analog of RA's per-`Marker` `DropBomb`; compiled out
-  of release builds.
-
-### Incrementality (salsa)
-
-- [x] **[med, latent] No input durability tier.** RA sets
-  `Durability::HIGH/MEDIUM/LOW` per source root (`base-db/change.rs`); badness's
-  setters never called `.with_durability(...)`, so every input was implicitly
-  `LOW`. Done: `SourceFile.path` is now constructed at `Durability::HIGH` (it is
-  never `set_`), `text` stays `LOW`, and the convention that any future salsa
-  input carrying config/package data must be constructed `HIGH`/`MEDIUM` is
-  recorded in `AGENTS.md` and `parser.md` (§ *Incrementality*). Config, the
-  built-in signature DB, and CWL/package/texmf/aux data still live in
-  `LazyLock`/`OnceLock` outside the db per the hermeticism tenet; revisit when any
-  of that is promoted into salsa.
-- [x] **[low] `Project` re-interned from a fresh member `Vec` per request**
-  (`incremental.rs`, `Analysis::resolve_project`/`scope_signatures`/…).
-  Interning dedups by value, so an unchanged sorted membership yields the same id
-  and the memo survives — correct *provided* member construction is always
-  identically sorted and deduped. Done: all four `Analysis` interning methods now
-  route through a private `intern_project` choke point that normalizes the key via
-  `project::graph::normalize_members` (sort by path + `dedup`), so memo survival is
-  correct by construction and no caller can silently churn the id by reordering.
-  Pinned by `normalize_members_is_order_independent_and_dedups` (graph.rs) and the
-  `reinterning_reordered_membership_reuses_graph_memo` firewall test (tests/project.rs).
-
 ### CST / AST / trivia
 
-- [x] **[low, perf] `LineIndex` re-scans the buffer per call and requires the
-  caller to pass `text` back in** (`text/line_index.rs`). Done: construction now
-  records a per-line wide-char table (RA's `line-index` model), so `line_col`,
-  `position`, and `offset_at` answer in O(wide-chars-on-line) from the table and
-  no longer take a `text` argument — the index owns no text and there is no
-  "hand the same buffer back" misuse hazard. Wide-char correctness (UTF-16/UTF-8
-  column math, astral chars, CRLF) is preserved and pinned by the existing tests
-  plus a multi-wide-char round-trip.
 - [ ] **[low, latent] No `SyntaxNodePtr`/`AstPtr`.** RA stashes stable node
   pointers in salsa data to re-resolve across reparses; badness sidesteps this by
   storing the `GreenNode` directly (decision #7) and carrying diagnostics as
@@ -458,64 +338,6 @@ capabilities RA has that badness does not. Severity in brackets.
   that must stash a *stable node identity* in a salsa query (resolving a
   completion/hover target to a specific node across edits) has no primitive for
   it, and byte-ranges alone do not survive edits.
-
-### Diagnostics / linter model (editor-UX capabilities RA has)
-
-- [x] **[med] LSP diagnostic tags.** `lint_to_lsp` now sets `tags` via
-  `lint_diagnostic_tags`, a presentational rule-id→tag map (kept out of the
-  `Diagnostic` struct so the CLI renderer is untouched): `unreferenced-label` →
-  `Unnecessary` (editor dim), and `deprecated-command`/`obsolete-environment`/
-  `primitive-command` → `Deprecated` (strike-through). Extend the match as more
-  rules earn a tag.
-- [x] **[med] `related_information` / secondary spans.** `Diagnostic` now carries
-  a `related: Vec<RelatedInfo>` (`{path, start, end, message}`), populated by
-  `duplicate-label`: the intra-file branch points at the first definition's key
-  range (precise, same file), the cross-file branch at each other definer. It
-  renders as `DiagnosticRelatedInformation` in LSP (`lint_to_lsp` →
-  `lint_related_to_lsp`) and as annotate-snippets context annotations in the CLI
-  (`render_pretty`, cross-file loaded via `source_for`). Messages stay unchanged
-  (additive), so concise output and `related`-blind clients are unaffected.
-  **Cross-file secondaries are file-level (`0..0`, the document start), not the
-  exact `\label` byte range:** `ResolvedLabels` / the `file_labels` firewall
-  deliberately store names→paths only so a label move backdates and doesn't
-  rebuild cross-file resolution (tenet #2). Precise cross-file carets would need a
-  separate per-file name→range query resolved lazily at the render/LSP layer —
-  a possible follow-up.
-- [x] **[low] `code_description` (rule doc URL).** `lint_to_lsp` now sets
-  `code_description.href` to `https://badness.dev/reference/linter-rules.html#<rule>`
-  (the mdBook anchor equals the rule id), so editors deep-link the rule's docs.
-  Gated by a `link_docs` flag threaded from the analyze/code-action sites: the
-  LaTeX arms pass `true`, the bib arms `false` (bib rules aren't catalogued on that
-  page yet — the `code` still carries the rule id, just without a link). Wire the
-  bib rules in once they get a reference page.
-- [x] **[low, latent] Fix model can express cross-file fixes.** Each `Edit`
-  carries an optional target `path` (`linter/diagnostic.rs`): `None` is the
-  diagnostic's own file (unchanged for every existing rule), `Some(p)` targets
-  another file, mirroring the `RelatedInfo` real-paths-stamped-at-rule-time
-  pattern. Atomicity spans files via `apply_fixes_multi` (`linter/fix.rs`): a
-  cross-file fix lands entirely or not at all. Both apply paths honor it — the
-  LSP builds a multi-URI `WorkspaceEdit` (`lsp/code_action.rs`), and `lint --fix`
-  runs a project-level pass (`main.rs::apply_cross_file_fixes`) over the whole
-  resolved set after the per-file fast path. **Remaining (still deferred until a
-  rule needs it):** no built-in rule *emits* a cross-file fix yet — the
-  cross-file rules (`duplicate-label`, `undefined-ref`, `unreferenced-label`,
-  `undefined-citation`) are report-only, and the label-rename case is an LSP
-  *rename*, not a lint. Also still open: precise cross-file `RelatedInfo` ranges
-  (currently `0..0` file-level links) and the per-*project* dimension of a fix
-  spanning files outside one include namespace.
-
-### Maintainability (not a conformance gap, surfaced by the audit)
-
-- [x] **[low] Factor the duplicated trivia/blank-line scanners.** The blank-line
-  and comment-bind logic was re-implemented across ~five methods in `grammar.rs`
-  (`peek_meaningful`, `at_paragraph_break`, `trivia_run_is_separator`,
-  `binding_run`, `at_script`), each re-walking trivia with slightly different
-  newline-counting and a near-identical `.dtx` margin/guard comment block. RA
-  concentrates the equivalent in one `n_attached_trivias`. Now a single
-  `scan_trivia(from, CommentMode)` helper returns a `TriviaScan` (`next`,
-  `next_kind`, `saw_blank_line`, `comment_start`); all five methods are thin
-  wrappers over it. `CommentMode::Stop` folds in `at_script`'s narrower regime (a
-  comment ends the line and stops the scan) without a second walker.
 
 --------------------------------------------------------------------------------
 

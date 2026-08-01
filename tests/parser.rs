@@ -150,6 +150,55 @@ fn left_right_pairs_through_nested_environments() {
 }
 
 #[test]
+fn left_right_pairs_inside_array_cell() {
+    // `array` is a math-only environment (the math-mode analog of `tabular`), so
+    // its body parses in math mode and a `\left…\right` inside a cell pairs into
+    // a `LEFT_RIGHT` — even nested in a display. Regression: `array` was modeled
+    // as a plain block environment, so its body stayed text mode, the `\left`
+    // never paired, and the linter's `unclosed-math-delimiter` fired a false
+    // positive (dalcde/cam-notes, an `\[\begin{array}…\left(\frac…\right)…\]`).
+    let src = "\\[\n\\begin{array}{c}\n\\left( a \\right) & b\n\\end{array}\n\\]\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "a balanced `\\left…\\right` inside an `array` cell must pair"
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "unexpected diagnostics: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn left_right_pairs_inside_tikzcd_cell() {
+    // `tikzcd` (tikz-cd commutative diagrams) typesets its cells in math mode, so
+    // a `\left…\right` in a cell pairs into a `LEFT_RIGHT`. Same regression class
+    // as `array` (dalcde/cam-notes: `\begin{tikzcd} … \left(\frac…\right) \ar[…]`).
+    let src = "\\begin{tikzcd}\nH\\left(\\frac{X}{A}\\right) \\ar[r] & Y\n\\end{tikzcd}\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "a balanced `\\left…\\right` inside a `tikzcd` cell must pair"
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "unexpected diagnostics: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn stray_right_reports() {
     // A `\right)` with no open `\left`: reported, consumed with its delimiter,
     // still lossless.

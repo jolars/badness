@@ -979,4 +979,19 @@ fn unclosed_math_delimiter_flags_prose_but_not_macro_code() {
             .iter()
             .any(|(r, _)| *r == "unclosed-math-delimiter")
     );
+    // A balanced `\left…\right` inside an `array` cell must not be flagged:
+    // `array` is math-mode-only, so its body parses in math and the pair closes
+    // (dalcde/cam-notes regression).
+    assert!(
+        !lint("\\[\n\\begin{array}{c}\n\\left( a \\right) & b\n\\end{array}\n\\]\n")
+            .iter()
+            .any(|(r, _)| *r == "unclosed-math-delimiter")
+    );
+    // Likewise inside a `tikzcd` cell (commutative diagram cells are math)
+    // (dalcde/cam-notes regression).
+    assert!(
+        !lint("\\begin{tikzcd}\nH\\left( x \\right) \\ar[r] & Y\n\\end{tikzcd}\n")
+            .iter()
+            .any(|(r, _)| *r == "unclosed-math-delimiter")
+    );
 }

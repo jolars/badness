@@ -136,7 +136,7 @@
 
     "tabular": { "args": ["opt", "req"], "align": true, "block": true },
     "tabular*": { "args": ["req", "opt", "req"], "align": true, "block": true },
-    "array": { "args": ["opt", "req"], "align": true, "block": true },
+    "array": { "args": ["opt", "req"], "math": true, "align": true, "block": true },
     "minipage": { "args": ["opt", "req"], "block": true },
     "multicols": { "args": ["req"], "block": true },
     "thebibliography": { "args": ["req"], "block": true },
@@ -193,6 +193,7 @@
     "Bmatrix": { "math": true, "align": true },
     "vmatrix": { "math": true, "align": true },
     "Vmatrix": { "math": true, "align": true },
-    "smallmatrix": { "math": true, "align": true }
+    "smallmatrix": { "math": true, "align": true },
+    "tikzcd": { "args": ["opt"], "math": true }
   }
 }

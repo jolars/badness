@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use crate::ast::{command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::signature;
-use crate::syntax::{SyntaxElement, SyntaxKind};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Example, Rule, RuleContext, StreamVisitor};
 
@@ -101,6 +101,30 @@ struct SectioningLevelJumpVisitor {
     prev_level: Option<u8>,
 }
 
+/// Whether the `COMMAND` node carries a `*` variant token (`\section*`): the star
+/// lexes as a `WORD "*"` sibling right after the `CONTROL_WORD`, before any
+/// argument group. A forward-bound comment run (`DOC_COMMENT`, decision #9) can
+/// sit ahead of the control word, so it is skipped along with trivia; the first
+/// significant element after the control word decides. Reads only static token
+/// shape, no meaning.
+fn is_starred(command: &SyntaxNode) -> bool {
+    for child in command.children_with_tokens() {
+        match child {
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::DOC_COMMENT => continue,
+            SyntaxElement::Node(_) => return false,
+            SyntaxElement::Token(t) => match t.kind() {
+                SyntaxKind::CONTROL_WORD
+                | SyntaxKind::WHITESPACE
+                | SyntaxKind::NEWLINE
+                | SyntaxKind::COMMENT => continue,
+                SyntaxKind::WORD if t.text() == "*" => return true,
+                _ => return false,
+            },
+        }
+    }
+    false
+}
+
 impl StreamVisitor for SectioningLevelJumpVisitor {
     fn visit(&mut self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(node) = el.as_node() else {
@@ -118,6 +142,14 @@ impl StreamVisitor for SectioningLevelJumpVisitor {
         else {
             return;
         };
+        // A starred sectioning command (`\section*`, `\subsubsection*`) is
+        // unnumbered and contributes nothing to the table of contents, so it is
+        // outside the numbered outline: it can neither create a lopsided-ToC jump
+        // nor set the baseline the next numbered heading is measured against. Skip
+        // it entirely (dalcde/cam-notes: 23 false positives, all `\subsubsection*`).
+        if is_starred(node) {
+            return;
+        }
         if let Some(prev) = self.prev_level
             && level > prev + 1
         {
@@ -241,6 +273,35 @@ mod tests {
     #[test]
     fn non_sectioning_commands_ignored() {
         assert!(findings("\\textbf{A}\n\\emph{B}\n\\label{c}\n").is_empty());
+    }
+
+    #[test]
+    fn starred_heading_is_not_flagged() {
+        // A starred sectioning command is unnumbered and absent from the table of
+        // contents, so descending to it cannot make the outline lopsided
+        // (dalcde/cam-notes mixes numbered `\subsubsection` with unnumbered
+        // `\subsubsection*` under a `\section`).
+        assert!(findings("\\section{A}\n\\subsubsection*{B}\n").is_empty());
+    }
+
+    #[test]
+    fn starred_heading_with_leading_comment_is_not_flagged() {
+        // A run of own-line `%` comments binds forward into the command as a
+        // `DOC_COMMENT`, so the star sits after that node, not first — the star
+        // check must see past it (dalcde/cam-notes:
+        // `%Here …\n\subsubsection*{Regime 2}`).
+        let src = "\\section{A}\n%a comment\n%another\n\\subsubsection*{B}\n";
+        assert!(findings(src).is_empty(), "got: {:?}", findings(src));
+    }
+
+    #[test]
+    fn starred_heading_does_not_set_baseline() {
+        // Out of the numbered hierarchy, a starred heading neither flags nor shifts
+        // the baseline: the following numbered heading is still compared against the
+        // last numbered one, so a genuine jump after it is still caught.
+        let out = findings("\\section{A}\n\\subsubsection*{note}\n\\subsubsection{B}\n");
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert!(out[0].message.contains("expected `\\subsection`"));
     }
 
     #[test]

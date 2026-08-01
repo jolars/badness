@@ -110,6 +110,92 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `|\part|`, `missing-nonbreaking-space` on `\ref` inside `|…|`) but is a
     genuine catcode limitation, not statically resolvable.
 
+- [x] **`array`/`tikzcd` bodies parsed in text mode drove `unclosed-math-delimiter`
+  FPs.** `array` (the math-mode-only analog of `tabular`) and `tikzcd` (tikz-cd
+  commutative diagrams, whose cells typeset in math) were not flagged `math` in
+  `data/signatures.json`, so their bodies parsed in text mode and a `\left…\right`
+  inside a cell never paired into a `LEFT_RIGHT`. The linter then reported the
+  `\left` as unclosed (dalcde/cam-notes: 18 findings — `\[\begin{array}…
+  \left(\frac…\right)…\]` and `\begin{tikzcd}… H\left(\frac{X}{A}\right) \ar[r]…`).
+  Resolved by curating both as `math` envs (same static-fact route as the matrix
+  family, decision #1). `array` keeps `align` (a genuine alignment matrix the
+  formatter column-aligns, per the `array_columns` fixture); `tikzcd` gets `math`
+  only — a diagram's `&` columns must not be width-aligned, and the formatter
+  output stays byte-identical. Two genuine `\left(…)`/`\left\bra` typos in the
+  corpus (a bare `)` closer, no `\right`) are still correctly flagged.
+
+- [x] **`sectioning-level-jump` ignored the `*` variant.** `\subsubsection*`
+  (unnumbered, no ToC entry) scored identically to `\subsubsection`, so a starred
+  heading under a `\section` was flagged as a level skip (dalcde/cam-notes: 23
+  findings, all `\subsubsection*`, several deliberately mixed with numbered
+  `\subsubsection` in the same file). A starred sectioning command is outside the
+  numbered outline, so it can neither create a lopsided ToC nor set the baseline the
+  next numbered heading is measured against; it is now skipped entirely. The star
+  lexes as a `WORD "*"` sibling after the `CONTROL_WORD`, and a forward-bound
+  `DOC_COMMENT` (decision #9) can precede the control word, so the check skips that
+  node too (`%comment\n\subsubsection*{…}`).
+
+The remaining linter findings from the cam-notes sweep are recorded below as open
+follow-ups (each with a minimal reproducer); none is fixed yet.
+
+- [ ] **`deprecated-command`/`primitive-command` ignore in-document redefinitions
+  — with corrupting `--unsafe-fixes`.** The notes `\renewcommand{\sl}{\mathfrak{sl}}`
+  and `\renewcommand\sp{\mathrm{sp}}`, so every `$\sl_2$`/`$\sp(n)$` is a call to the
+  user's macro, not the deprecated font switch or the `\sp` primitive (21 FPs). Worse,
+  `printf '$\\sp(n)$\n' | badness lint --fix --unsafe-fixes` rewrites to `$^(n)$`
+  (broken math), and the `\renewcommand{\sl}{…}`/`\renewcommand\sp{…}` *definee*
+  itself is flagged and rewritten (`\renewcommand{\slshape}{…}`, `\renewcommand^{…}`).
+  Root causes: (a) neither rule consults `semantic/define.rs::scan_definitions`
+  (which already exists) to suppress a redefined command; (b) `primitive-command` has
+  no reference-position guard at all, and `deprecated_command::in_reference_position`
+  covers only `\let`/`\def`-family definees, missing the `\renewcommand{…}{…}`
+  brace-group form.
+
+- [ ] **`math-operator-name` fires inside upright font groups and text escapes.**
+  `printf '$\\mathrm{exp}(x)$\n' | badness lint` flags `exp` although `\mathrm{exp}`
+  already typesets upright (the message "typesets as italic variables" is false here),
+  and `--unsafe-fixes` produces `$\mathrm{\exp}$` (nests `\exp` inside `\mathrm`). It
+  also fires on prose inside `\text{…}`/`\intertext{…}` (`$\text{the gcd is}\gcd(x)$`).
+  The docstring already promises a `\text` exclusion; the rule should reject a
+  `\mathrm`/`\mathsf`/`\mathbf`/`\mathit`/`\text`/`\mbox`/`\intertext` ancestor. (Same
+  family as the recorded pgf `calc`-coordinate FP above.)
+
+- [ ] **`straight-quotes` corrupts TeX hex constants and font maps under
+  `--unsafe-fixes`.** A `"` opening a TeX hex constant is not isolated by the parser
+  after `\mathchardef`/`\DeclareMathSymbol`, so the rule sees ordinary text:
+  `printf '\\mathchardef\\mdash="2D\n' | badness lint --fix --unsafe-fixes` yields
+  `\mathchardef\mdash=''2D` (breaks the `"2D` = char `-` constant); likewise a
+  `\DeclareMathSymbol{…}{"AC}` slot and a `\pdfmapline{… " -.25 SlantFont " …}`
+  font-map delimiter. These two FPs live in the shared `header.tex` (`\input` by 65
+  files), so one fix clears them everywhere. Gate `"` when it is a hex constant (a
+  `"` before hex digits, or in a `\mathchardef`/`\mathcode`/`\DeclareMathSymbol`
+  numeric slot) and exclude `\pdfmapline`-family arguments.
+
+- [ ] **`dash-length` corrupts pgf/TikZ coordinate arithmetic under
+  `--unsafe-fixes`.** The `in_math` guard covers only `$…$`, not a pgfplots
+  expression in `{…}`: `printf '\\addplot3 {(y^2-1)^2};\n' | badness lint --fix
+  --unsafe-fixes` yields `{(y^2--1)^2}`, a meaning-bearing minus turned into an
+  en-dash. Also many prose FPs on index-pair/term names (`0-1 law`, `1-2 plane`,
+  `1-1 function` — 22 of 25 findings) where the hyphen is intentional; these are
+  `Unsafe`-gated so `--fix` withholds them, but they are noise and the tikz case is a
+  real corruption.
+
+- [ ] **`space-before-command` deletes a real interword space around `\index`.**
+  The rule inspects only what precedes `\index`, never what follows the group. When
+  `\index{…}` is wedged between a word and inline content with no following space,
+  `printf 'We write \\index{$x$}$x \\in E$ done\n'` flags the pre-`\index` space and
+  `--unsafe-fixes` deletes it (`We write\index{…}$x$`, rendering "write$x$"). Gate the
+  fix on the token *after* the `\index{…}` group being whitespace/newline/paragraph
+  end (mirroring the existing pre-space WORD gate). 3 of 9 `\index` findings unsafe.
+
+- [ ] **`hard-coded-reference` over-flags the word "Part".** "Part" collides with
+  Cambridge tripos course names (`the Part III course`), external book divisions
+  (`Chapter 3 of Hartshorne`, `Part 3 of X`), and `\item[Part N.]` description labels
+  — 7 of 10 corpus findings (`printf 'The Part 3 course is a prerequisite.\n' |
+  badness lint`). Genuine internal `Section`/`Chapter` cross-refs are the true
+  positives. Needs an `\item[…]`-label gate (mirroring `in_environment_title`) and an
+  "of [external work]" heuristic, or demoting "Part".
+
 - [ ] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
   `calc` library repurposes `$…$` as coordinate-arithmetic delimiters, where
   `sin`/`cos` are backslash-less pgfmath functions; badness reads the `$` as math

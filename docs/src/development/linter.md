@@ -87,7 +87,13 @@ the active set via `RuleSelection`, applied as a **post-filter** so the shared
 
 A `Diagnostic` may carry a `Fix`: one or more `Edit`s applied **atomically** (a
 fix lands with all its edits or not at all, so a paired insertion can never
-half-apply). Fixes are **textual edits that never invoke the formatter**: a fix
+half-apply). Each `Edit` names its target file: `path: None`—the common
+case—means the diagnostic's *own* file, so a single-file fix never has to know
+its own path; `path: Some(p)` targets another file `p`, mirroring `RelatedInfo`'s
+real-paths-stamped-at-rule-time model. A fix whose edits reach into other files
+is **cross-file**, and atomicity then spans files: every edit in every file
+lands, or none does. Fixes are **textual edits that never invoke the formatter**:
+a fix
 decides *what* to rewrite, never *how to lay it out*, and owes only
 correctness—the result still parses and is still lossless—never line-width. When
 a fix can't meet that bar for some shape, make it correct by construction or
@@ -117,7 +123,26 @@ atomically, and drops any fix that is malformed (no edits, a backwards or
 out-of-bounds span, internally overlapping edits) or that overlaps an
 already-accepted fix, so the output stays well-formed. Accepted edits are
 spliced right-to-left so earlier byte offsets stay valid. `lint --fix` runs this
-to a fixpoint, re-linting between rounds.
+to a fixpoint, re-linting between rounds. A **cross-file** fix (any edit with
+`path: Some`) can't apply against one source, so `apply_fixes` skips it; the
+sibling `apply_fixes_multi` is the same engine keyed by path, dropping the whole
+fix if any edit—in any file—is malformed or conflicts.
+
+Both apply paths honor cross-file fixes atomically:
+
+- **LSP** (`code_actions_for_range`) groups a fix's edits into one `WorkspaceEdit`
+  keyed by URI, resolving each foreign file's text from the snapshot to compute
+  its ranges. If a target file isn't available, the whole action is dropped
+  rather than half-applied.
+- **CLI** `lint --fix` runs the fast per-file pass first (single-file fixes,
+  parallel), then a project-level pass (`apply_cross_file_fixes`) that builds
+  cross-file resolution over the whole set—the same pipeline the report uses—
+  collects the fixes that reach across files, and applies them through
+  `apply_fixes_multi`, writing every changed file back. It is gated to multi-file
+  projects, so single-file `--fix` pays nothing.
+
+No built-in rule emits a cross-file fix yet (the cross-file rules are
+report-only); the model and both apply paths are in place for when one does.
 
 ## Suppression
 

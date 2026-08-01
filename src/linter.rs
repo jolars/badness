@@ -17,6 +17,6 @@ pub mod suppression;
 
 pub use check::{check_document, check_document_fixable, lint_document};
 pub use diagnostic::{Applicability, Diagnostic, Edit, Fix, RelatedInfo, Severity};
-pub use fix::{FixOutcome, apply_fixes};
+pub use fix::{FixOutcome, MultiFixOutcome, apply_fixes, apply_fixes_multi};
 pub use render::{OutputMode, render_findings};
 pub use rules::RuleSelection;

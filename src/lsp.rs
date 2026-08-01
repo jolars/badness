@@ -3341,8 +3341,16 @@ fn run_code_action(
     // echoed diagnostic on a bib quick-fix carries no doc link (mirrors
     // `analyze_bib`/`lint_to_lsp`).
     let link_docs = !matches!(kind, FileKind::Bib);
-    let actions =
-        code_action::code_actions_for_range(&findings, text, uri, path, range, enc, link_docs);
+    // Resolve a cross-file fix's foreign target to its `(uri, text)` from the
+    // snapshot, so a quick-fix can carry edits in files other than this buffer.
+    let resolve = |p: &Path| -> Option<(Uri, String)> {
+        let file = snapshot.lookup_file(p)?;
+        let uri = path_to_uri(p)?;
+        Some((uri, snapshot.file_text(file).to_string()))
+    };
+    let actions = code_action::code_actions_for_range(
+        &findings, text, uri, path, range, enc, link_docs, &resolve,
+    );
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
 }

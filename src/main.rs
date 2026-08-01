@@ -24,10 +24,10 @@ use badness::formatter::{
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
 };
 use badness::linter::{
-    Diagnostic, OutputMode, RuleSelection, apply_fixes, check_document_fixable, lint_document,
-    render_findings,
+    Diagnostic, Fix, OutputMode, RuleSelection, apply_fixes, apply_fixes_multi,
+    check_document_fixable, lint_document, render_findings,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use badness::cli::{Cli, Command, DebugChecksArg, DebugCommand, MathWrapArg, WrapArg};
 use badness::parser::{LexConfig, parse_with_flavor};
@@ -586,9 +586,58 @@ fn run_lint(
     // *same* pure helpers the salsa
     // queries do (`document_label_names`, `is_document_root`,
     // `collect_include_edge_keys`, `ResolvedLabels::build`), so CLI and LSP agree.
+    // Phases 1–3 (parse+analyze, cross-file resolution, resolution-aware lint) live
+    // in `collect_project_diagnostics` so the `--fix` cross-file pass shares the
+    // exact same pipeline — CLI report and CLI fix can never drift.
+    let mut diagnostics = collect_project_diagnostics(&sources);
+
+    // Drop findings from rules the config/CLI deselected. Parse diagnostics
+    // (`rule == "parse"`) are always kept (see `RuleSelection::is_active`).
+    diagnostics.retain(|d| rules.is_active(d.rule));
+
+    // Findings from the two pipelines arrive interleaved by file; sort so the
+    // renderer presents them deterministically (by path, then position).
+    diagnostics.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then(a.start.cmp(&b.start))
+            .then(a.end.cmp(&b.end))
+            .then(a.rule.cmp(b.rule))
+    });
+
+    if !diagnostics.is_empty() {
+        // Index sources by path so the renderer's per-file source lookup is O(1),
+        // not a linear scan of every source (quadratic over a large project).
+        let source_index: HashMap<&Path, &str> = sources
+            .iter()
+            .map(|(p, text, _)| (p.as_path(), text.as_str()))
+            .collect();
+        let source_for = |path: &Path| source_index.get(path).map(|s| s.to_string());
+        eprint!(
+            "{}",
+            render_findings(&diagnostics, OutputMode::Pretty, &source_for)
+        );
+    }
+
+    if failed || !diagnostics.is_empty() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Run the project lint pipeline over in-memory `sources`, returning every
+/// finding (parse + lint, unfiltered by rule selection and unsorted).
+///
+/// This is the CLI's Phases 1–3, factored out of [`run_lint`] so the `--fix`
+/// cross-file pass ([`apply_cross_file_fixes`]) lints through the identical
+/// path: parse+analyze each source in parallel, build cross-file resolution over
+/// the whole set, then lint every LaTeX file with that resolution. `.bib` files
+/// are linted standalone (no cross-file resolution yet); their parse+lint
+/// findings ride along from the analyze phase.
+fn collect_project_diagnostics(sources: &[(PathBuf, String, FileKind)]) -> Vec<Diagnostic> {
     // Phase 1 — parse + analyze every source in parallel. Each task is pure and
-    // returns only `Send` data (`analyze_source`); rayon preserves input order in
-    // the collected Vec, so folding it below is deterministic.
+    // returns only `Send` data (`analyze_source`); rayon preserves input order.
     let analyses: Vec<FileAnalysis> = sources
         .par_iter()
         .map(|(path, content, kind)| analyze_source(path, content, *kind))
@@ -642,8 +691,7 @@ fn run_lint(
 
     // Phase 3 — lint every analyzed file in parallel, sharing the resolution by
     // reference. The red tree is materialized thread-locally from each green node
-    // (red trees are not `Send`). Order-preserving collect keeps output stable;
-    // the final sort below makes it fully deterministic regardless.
+    // (red trees are not `Send`).
     let lint_results: Vec<Vec<Diagnostic>> = analyzed
         .par_iter()
         .map(|(path, green, model)| {
@@ -661,40 +709,7 @@ fn run_lint(
     for result in lint_results {
         diagnostics.extend(result);
     }
-
-    // Drop findings from rules the config/CLI deselected. Parse diagnostics
-    // (`rule == "parse"`) are always kept (see `RuleSelection::is_active`).
-    diagnostics.retain(|d| rules.is_active(d.rule));
-
-    // Findings from the two pipelines arrive interleaved by file; sort so the
-    // renderer presents them deterministically (by path, then position).
-    diagnostics.sort_by(|a, b| {
-        a.path
-            .cmp(&b.path)
-            .then(a.start.cmp(&b.start))
-            .then(a.end.cmp(&b.end))
-            .then(a.rule.cmp(b.rule))
-    });
-
-    if !diagnostics.is_empty() {
-        // Index sources by path so the renderer's per-file source lookup is O(1),
-        // not a linear scan of every source (quadratic over a large project).
-        let source_index: HashMap<&Path, &str> = sources
-            .iter()
-            .map(|(p, text, _)| (p.as_path(), text.as_str()))
-            .collect();
-        let source_for = |path: &Path| source_index.get(path).map(|s| s.to_string());
-        eprint!(
-            "{}",
-            render_findings(&diagnostics, OutputMode::Pretty, &source_for)
-        );
-    }
-
-    if failed || !diagnostics.is_empty() {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    diagnostics
 }
 
 /// Discover lintable files under `paths` and apply autofixes in place. Returns
@@ -759,6 +774,15 @@ fn apply_fixes_to_paths(
             }
         }
     }
+
+    // Second pass: cross-file fixes, which need whole-project resolution the
+    // per-file pass above deliberately lacks. A no-op unless a rule emits a fix
+    // that reaches into another file.
+    if let Err(err) = apply_cross_file_fixes(&files, include_unsafe, rules) {
+        eprintln!("badness: cannot apply cross-file fixes: {err}");
+        failed = true;
+    }
+
     failed.then_some(ExitCode::FAILURE)
 }
 
@@ -820,6 +844,128 @@ fn fix_file(
         std::fs::write(path, &content)?;
     }
     Ok(total)
+}
+
+/// Outcome of one [`apply_project_fixes`] call.
+struct ProjectFixOutcome {
+    /// Fixes fully applied this call.
+    applied: usize,
+    /// Fixes dropped (malformed, missing target file, or a cross-file conflict).
+    skipped_conflicts: usize,
+    /// Paths whose text changed, sorted.
+    changed: Vec<PathBuf>,
+}
+
+/// Apply cross-file `fixes` to the in-memory `files` map, folding each rewritten
+/// file back in place. A thin, IO-free wrapper over [`apply_fixes_multi`] so the
+/// CLI write-back loop is unit-testable without touching disk. Each fix is paired
+/// with its origin path (the finding's own file), which resolves its `None`
+/// edits; `Some(_)` edits target other files. Atomicity spans files.
+fn apply_project_fixes(
+    files: &mut HashMap<PathBuf, String>,
+    fixes: &[(PathBuf, Fix)],
+    include_unsafe: bool,
+) -> ProjectFixOutcome {
+    let refs: Vec<(PathBuf, &Fix)> = fixes.iter().map(|(p, f)| (p.clone(), f)).collect();
+    let out = apply_fixes_multi(files, &refs, include_unsafe);
+    let mut changed: Vec<PathBuf> = out.outputs.keys().cloned().collect();
+    changed.sort();
+    for (path, text) in out.outputs {
+        files.insert(path, text);
+    }
+    ProjectFixOutcome {
+        applied: out.applied,
+        skipped_conflicts: out.skipped_conflicts,
+        changed,
+    }
+}
+
+/// Second `--fix` pass: apply **cross-file** fixes (those with an edit touching a
+/// file other than the finding's own) atomically across the whole project.
+///
+/// The per-file pass ([`fix_file`]) runs first and handles every single-file fix;
+/// it lints without cross-file resolution, so a rule whose fix spans files is
+/// inert there. This pass reads the whole discovered LaTeX set (post per-file
+/// pass), lints it through [`collect_project_diagnostics`] — the *same* pipeline
+/// the report uses, so resolution matches — keeps only active fixes carrying a
+/// cross-file edit, and applies them via [`apply_project_fixes`], writing every
+/// changed file back. Bounded by [`MAX_FIX_ITERATIONS`] (resolution is rebuilt
+/// each round, since a rename changes the label/ref sets); a rename converges in
+/// one round.
+///
+/// Gated to genuine multi-file sets: a lone file (or none) can host no cross-file
+/// edit, so single-file `--fix` skips this pass entirely — no added cost on the
+/// dominant path.
+fn apply_cross_file_fixes(
+    files: &[(PathBuf, FileKind)],
+    include_unsafe: bool,
+    rules: &RuleSelection,
+) -> std::io::Result<()> {
+    // Only LaTeX-family files take part in cross-file resolution (`.bib` has none
+    // yet); a set of one can't host a cross-file edit.
+    let members: Vec<(PathBuf, FileKind)> = files
+        .iter()
+        .filter(|(_, k)| !matches!(k, FileKind::Bib))
+        .cloned()
+        .collect();
+    if members.len() <= 1 {
+        return Ok(());
+    }
+
+    // Read the current on-disk text of every member (already carries the per-file
+    // pass's edits). Snapshot each file's pre-fix parse-error count for the guard.
+    let mut texts: HashMap<PathBuf, String> = HashMap::new();
+    let kinds: HashMap<PathBuf, FileKind> = members.iter().cloned().collect();
+    let mut errors_before: HashMap<PathBuf, usize> = HashMap::new();
+    for (path, kind) in &members {
+        let text = std::fs::read_to_string(path)?;
+        errors_before.insert(path.clone(), debug_parse_error_count(&text, *kind));
+        texts.insert(path.clone(), text);
+    }
+
+    let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut skipped = 0usize;
+    for _ in 0..MAX_FIX_ITERATIONS {
+        let sources: Vec<(PathBuf, String, FileKind)> = members
+            .iter()
+            .map(|(p, k)| (p.clone(), texts[p].clone(), *k))
+            .collect();
+        let fixes: Vec<(PathBuf, Fix)> = collect_project_diagnostics(&sources)
+            .into_iter()
+            .filter(|d| rules.is_active(d.rule))
+            .filter_map(|d| {
+                let fix = d.fix?;
+                // Local-only fixes were already handled by the per-file pass; this
+                // pass owns only the ones that reach into another file.
+                fix.edits
+                    .iter()
+                    .any(|e| e.path.is_some())
+                    .then_some((d.path, fix))
+            })
+            .collect();
+        if fixes.is_empty() {
+            break;
+        }
+        let outcome = apply_project_fixes(&mut texts, &fixes, include_unsafe);
+        skipped += outcome.skipped_conflicts;
+        if outcome.applied == 0 {
+            break;
+        }
+        changed.extend(outcome.changed);
+    }
+    if skipped > 0 {
+        eprintln!(
+            "badness: {skipped} cross-file fix{} skipped (conflicting edits)",
+            plural(skipped)
+        );
+    }
+
+    for path in changed {
+        let kind = kinds[&path];
+        debug_assert_fixes_preserved(&path, kind, &texts[&path], errors_before[&path]);
+        std::fs::write(&path, &texts[&path])?;
+    }
+    Ok(())
 }
 
 /// Parse-error count of `content` under `kind`'s flavor, computed only in debug
@@ -1539,6 +1685,83 @@ fn run_debug_format(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use badness::linter::Edit;
+
+    fn file_map(entries: &[(&str, &str)]) -> HashMap<PathBuf, String> {
+        entries
+            .iter()
+            .map(|(p, t)| (PathBuf::from(p), (*t).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn project_fix_applies_cross_file_edit_atomically() {
+        // Rename `x` -> `y` in a.tex's `\label` and b.tex's `\ref`.
+        let mut files = file_map(&[("a.tex", "\\label{x}\n"), ("b.tex", "\\ref{x}\n")]);
+        let fix = Fix::safe_edits(
+            vec![
+                Edit::new(7, 8, "y"),
+                Edit::in_file(PathBuf::from("b.tex"), 5, 6, "y"),
+            ],
+            "rename x to y",
+        );
+        let out = apply_project_fixes(&mut files, &[(PathBuf::from("a.tex"), fix)], false);
+        assert_eq!(out.applied, 1);
+        assert_eq!(out.skipped_conflicts, 0);
+        assert_eq!(
+            out.changed,
+            vec![PathBuf::from("a.tex"), PathBuf::from("b.tex")]
+        );
+        assert_eq!(files[&PathBuf::from("a.tex")], "\\label{y}\n");
+        assert_eq!(files[&PathBuf::from("b.tex")], "\\ref{y}\n");
+    }
+
+    #[test]
+    fn cross_file_pass_is_a_safe_noop_without_a_cross_file_rule() {
+        // End-to-end driver check: a real two-file project on disk. No rule emits
+        // a cross-file fix today, so the pass must run resolution + lint and write
+        // nothing, leaving both files byte-identical.
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let chap = dir.path().join("chap.tex");
+        let main_src = "\\documentclass{article}\n\\input{chap}\n\\ref{a}\n";
+        let chap_src = "\\label{a}\n";
+        std::fs::write(&main, main_src).unwrap();
+        std::fs::write(&chap, chap_src).unwrap();
+
+        let files = vec![(main.clone(), FileKind::Tex), (chap.clone(), FileKind::Tex)];
+        apply_cross_file_fixes(&files, false, &RuleSelection::all()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&main).unwrap(), main_src);
+        assert_eq!(std::fs::read_to_string(&chap).unwrap(), chap_src);
+    }
+
+    #[test]
+    fn cross_file_pass_skips_single_file_sets() {
+        // A lone file can host no cross-file edit, so the pass returns immediately
+        // (and never reads the path, which need not even exist).
+        let files = vec![(PathBuf::from("/nonexistent/only.tex"), FileKind::Tex)];
+        apply_cross_file_fixes(&files, false, &RuleSelection::all()).unwrap();
+    }
+
+    #[test]
+    fn project_fix_drops_whole_fix_on_missing_target() {
+        // The cross-file edit names a file not in the map: the whole fix is
+        // dropped, so the origin file is left untouched too (atomicity).
+        let mut files = file_map(&[("a.tex", "\\label{x}\n")]);
+        let fix = Fix::safe_edits(
+            vec![
+                Edit::new(7, 8, "y"),
+                Edit::in_file(PathBuf::from("gone.tex"), 5, 6, "y"),
+            ],
+            "rename x to y",
+        );
+        let out = apply_project_fixes(&mut files, &[(PathBuf::from("a.tex"), fix)], false);
+        assert_eq!(out.applied, 0);
+        assert_eq!(out.skipped_conflicts, 1);
+        assert!(out.changed.is_empty());
+        assert_eq!(files[&PathBuf::from("a.tex")], "\\label{x}\n");
+    }
 
     #[test]
     fn sanitize_matches_the_workflow_sed_class() {

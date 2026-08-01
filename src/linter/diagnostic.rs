@@ -28,7 +28,14 @@ pub enum Applicability {
 }
 
 /// One contiguous replacement inside a [`Fix`]: substitute `content` for the
-/// source bytes in `start..end`.
+/// bytes in `start..end` of the target file.
+///
+/// `path` names that file. `None` — the common case — means the diagnostic's
+/// *own* file, so a single-file fix never has to know its own path (and every
+/// existing rule keeps using [`Edit::new`] unchanged). `Some(p)` targets another
+/// file `p`, mirroring [`RelatedInfo`]'s real-paths-stamped-at-rule-time model;
+/// this is what makes a fix *cross-file*. The byte offsets are always into the
+/// text of the file `path` resolves to, never the diagnostic's file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
     /// Replacement text to substitute in.
@@ -37,28 +44,46 @@ pub struct Edit {
     pub start: usize,
     /// Byte offset of the end of the replacement (exclusive).
     pub end: usize,
+    /// File this edit targets. `None` = the diagnostic's own file.
+    pub path: Option<PathBuf>,
 }
 
 impl Edit {
+    /// An edit in the diagnostic's own file (`path` = `None`).
     pub fn new(start: usize, end: usize, content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
             start,
             end,
+            path: None,
+        }
+    }
+
+    /// An edit in another file `path`, for a cross-file [`Fix`]. Offsets are into
+    /// `path`'s text, not the diagnostic's file.
+    pub fn in_file(path: PathBuf, start: usize, end: usize, content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            start,
+            end,
+            path: Some(path),
         }
     }
 }
 
 /// A code edit that, if applied, fixes the diagnostic in question. A fix is a
-/// set of disjoint replacements in the diagnostic's own file, applied
-/// **atomically**: `lint --fix` and the LSP code action apply all of a fix's
-/// edits or none, so a rename that must touch two sites (e.g. a `\begin`/`\end`
-/// pair) can never half-apply. Most fixes carry a single edit. Cross-file fixes
-/// are not expressible (see TODO.md); edits always target the diagnostic's file.
+/// set of disjoint replacements applied **atomically**: `lint --fix` and the LSP
+/// code action apply all of a fix's edits or none, so a rename that must touch
+/// two sites (e.g. a `\begin`/`\end` pair) can never half-apply. Most fixes carry
+/// a single edit in the diagnostic's own file. A fix may also be **cross-file**:
+/// an [`Edit`] with `path: Some(_)` targets another file, and atomicity then spans
+/// files — every edit in every file lands, or none does (see `linter/fix.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fix {
-    /// The replacements, each in the diagnostic's own file. Must be mutually
-    /// disjoint (the apply engine drops a fix whose edits overlap each other).
+    /// The replacements. Each targets the diagnostic's own file
+    /// ([`Edit::path`] `None`) or another file (`Some`). Edits landing in the
+    /// same file must be mutually disjoint (the apply engine drops a fix whose
+    /// same-file edits overlap each other).
     pub edits: Vec<Edit>,
     /// Whether applying the fix preserves meaning.
     pub applicability: Applicability,

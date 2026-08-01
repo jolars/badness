@@ -488,18 +488,21 @@ capabilities RA has that badness does not. Severity in brackets.
   LaTeX arms pass `true`, the bib arms `false` (bib rules aren't catalogued on that
   page yet — the `code` still carries the rule id, just without a link). Wire the
   bib rules in once they get a reference page.
-- [ ] **[low, latent] Fix model can't express cross-file fixes.** `Fix` now
-  carries a set of disjoint edits in the diagnostic's own file
-  (`linter/diagnostic.rs`), applied atomically (`linter/fix.rs`: a fix lands
-  with all its edits or none), so multi-location rewrites are expressible —
-  `dollar-display-math` and `obsolete-environment` swap both delimiters/names
-  in place with the body untouched. What remains of RA's `SourceChange` is the
-  *per-file* dimension: a fix spanning files (e.g. rename a label and its
-  `\ref`s across a multi-file project) has no representation, and the CLI's
-  per-file fixpoint (`main.rs::fix_file`) has no way to apply one. Defer until
-  a rule needs it; when it comes, key edit sets by path (the `RelatedInfo`
-  pattern: real paths stamped at rule time) and teach both apply paths
-  (`lint --fix`, LSP `WorkspaceEdit`) to honor them atomically.
+- [x] **[low, latent] Fix model can express cross-file fixes.** Each `Edit`
+  carries an optional target `path` (`linter/diagnostic.rs`): `None` is the
+  diagnostic's own file (unchanged for every existing rule), `Some(p)` targets
+  another file, mirroring the `RelatedInfo` real-paths-stamped-at-rule-time
+  pattern. Atomicity spans files via `apply_fixes_multi` (`linter/fix.rs`): a
+  cross-file fix lands entirely or not at all. Both apply paths honor it — the
+  LSP builds a multi-URI `WorkspaceEdit` (`lsp/code_action.rs`), and `lint --fix`
+  runs a project-level pass (`main.rs::apply_cross_file_fixes`) over the whole
+  resolved set after the per-file fast path. **Remaining (still deferred until a
+  rule needs it):** no built-in rule *emits* a cross-file fix yet — the
+  cross-file rules (`duplicate-label`, `undefined-ref`, `unreferenced-label`,
+  `undefined-citation`) are report-only, and the label-rename case is an LSP
+  *rename*, not a lint. Also still open: precise cross-file `RelatedInfo` ranges
+  (currently `0..0` file-level links) and the per-*project* dimension of a fix
+  spanning files outside one include namespace.
 
 ### Maintainability (not a conformance gap, surfaced by the audit)
 

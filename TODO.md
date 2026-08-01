@@ -81,32 +81,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
-- [x] **Flag an unbalanced math delimiter as a likely typo (`\left`/`\[`/`$`).**
-  Done: the `unclosed-math-delimiter` linter rule
-  (`src/linter/rules/unclosed_math_delimiter.rs`). Report-only (no autofix),
-  re-derives the parser's silent demotion from CST shape (a `$`/`\[`/`\(` not
-  wrapped in its math node, a `\left` that is a `COMMAND` not a `LEFT_RIGHT`
-  marker) and warns only in *document prose* — staying silent inside a brace
-  group/optional/argument, an expl3 region (shared `expl3_regions`), or a
-  `macrocode` body — trading recall for precision so `>{$}` never false-positives.
-  The parser's shape gates now *silently* demote an unbalanced `\left` (issue #77),
-  `\[`/`\(`, and `$` with no reachable closer to a plain command/token — no
-  diagnostic, so the formatter still accepts the file (`left_right_closes` and the
-  `delim_math_closes`/`dollar_closes` family in `grammar.rs`). That is correct for
-  macro-code data, but in prose these are almost always authoring typos (a missing
-  `\right`, a dropped `\]`). The right home is the **linter**, not a severity tier
-  on the parser's `SyntaxError`: this matches rust-analyzer, whose parser
-  `SyntaxError` is likewise untiered (`(String, TextRange)`, no level) while the
-  `Severity` enum and all diagnostic judgment live one layer up in `ide-diagnostics`
-  (badness's linter analog), which re-walks the tree to produce diagnostics. So a
-  report-only rule that re-scans for the demoted delimiter and warns is the
-  RA-faithful shape — re-deriving the reachability fact in the linter is that
-  layer's normal job, not a smell. (The one badness-specific wrinkle behind the
-  silent demotion: unlike RA, our formatter *gates* on any parser diagnostic, so
-  the gates must emit none — an Error-severity syntax error would re-block the
-  file.) The rule still needs to tell a prose typo from genuine macro-code data —
-  likely a context heuristic (prose vs. definition body/expl3 region) rather than a
-  new CST marker, to keep the syntactic layer meaning-free.
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to
   ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to

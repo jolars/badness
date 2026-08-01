@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0](https://github.com/jolars/badness/compare/badness-code-v0.12.0...badness-code-v0.13.0) (2026-08-01)
+
+### Features
+- **vscode:** add feature toggles for the LSP ([`bb3f13c`](https://github.com/jolars/badness/commit/bb3f13c7f5d0581b2f70ae16422de2946238d3cc)), closes [#86](https://github.com/jolars/badness/issues/86)
+
+### Dependencies
+- updated badness to v0.13.0
+
 ## [0.12.0](https://github.com/jolars/badness/compare/badness-code-v0.11.0...badness-code-v0.12.0) (2026-07-30)
 
 ### Bug Fixes

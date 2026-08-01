@@ -14,9 +14,9 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{command_name, control_word_range};
+use crate::ast::{AstToken, ControlWord, child_token, command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::syntax::{SyntaxElement, SyntaxKind};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Example, Rule, RuleContext};
 
@@ -24,6 +24,14 @@ const EXAMPLES: &[Example] = &[Example {
     caption: "An obsolete two-letter font switch:",
     source: "{\\bf important}\n",
 }];
+
+/// TeX primitives that *reference* the following control word(s) — bind, compare,
+/// or (re)define — rather than execute them. A deprecated switch sitting in one of
+/// their operand slots (`\let\x\rm`, `\ifx\rm\y`, `\def\rm{…}`) must not get the
+/// control-word swap: `\let\x\rmfamily` copies a *different* meaning, and in the
+/// plain-TeX/ConTeXt branches this idiom guards, `\rmfamily` is undefined. Stored
+/// with the leading backslash to compare against `CONTROL_WORD` text directly.
+const REFERENCE_PRIMITIVES: &[&str] = &["\\let", "\\def", "\\edef", "\\gdef", "\\xdef", "\\ifx"];
 
 /// Deprecated control word → its modern replacement.
 const DEPRECATED: &[(&str, &str)] = &[
@@ -85,17 +93,22 @@ impl Rule for DeprecatedCommand {
         // The fix is a tight control-word swap (`\bf` → `\bfseries`): the span
         // covers exactly the `CONTROL_WORD` token (backslash included), the
         // replacement copies in the modern declaration, so it stays correct by
-        // construction (tenet 1). Withheld on the fallback span, where the tight
-        // control word could not be isolated and a whole-node rewrite might drop
-        // a greedily-attached group.
-        let fix = control_word.map(|r| {
-            Fix::safe(
-                usize::from(r.start()),
-                usize::from(r.end()),
-                format!("\\{replacement}"),
-                format!("Replace `\\{name}` with `\\{replacement}`"),
-            )
-        });
+        // construction (tenet 1). It is withheld in two cases: the fallback span,
+        // where the tight control word could not be isolated and a whole-node
+        // rewrite might drop a greedily-attached group; and a *reference* position
+        // (`\let\x\rm`, `\ifx\rm\y`, `\def\rm{…}`), where the switch is bound or
+        // compared rather than executed, so the swap changes meaning (and
+        // `\rmfamily` may not even exist). The finding still stands in both cases.
+        let fix = control_word
+            .filter(|_| !in_reference_position(command))
+            .map(|r| {
+                Fix::safe(
+                    usize::from(r.start()),
+                    usize::from(r.end()),
+                    format!("\\{replacement}"),
+                    format!("Replace `\\{name}` with `\\{replacement}`"),
+                )
+            });
         sink.push(Diagnostic {
             rule: self.id(),
             severity: self.default_severity(),
@@ -107,6 +120,44 @@ impl Rule for DeprecatedCommand {
             related: Vec::new(),
         });
     }
+}
+
+/// Whether `command`'s control word sits in a [`REFERENCE_PRIMITIVES`] operand slot.
+/// The CST is flat, so a `\let`/`\def`/`\ifx` primitive is one or two control words
+/// back (`\let\x\rm`: `\x` then `\let`; `\ifx\a\rm`: `\a` then `\ifx`). Scan backward
+/// over trivia and a possible `=` separator (`\let\x=\rm`), inspecting the two
+/// nearest control words; a reference primitive among them means "referenced".
+fn in_reference_position(command: &SyntaxNode) -> bool {
+    let Some(control_word) = child_token::<ControlWord>(command) else {
+        return false;
+    };
+    let mut token = control_word.syntax().prev_token();
+    let mut control_words_seen = 0;
+    while let Some(current) = token {
+        match current.kind() {
+            // Trivia never breaks the chain. A `WORD` is skipped too: an at-letter
+            // definee splits under document catcodes (`\let\foo@bar\rm` lexes as
+            // `\foo` + `@bar`), and `\let\x=\rm` writes an explicit `=`. The
+            // two-control-word cutoff below bounds how far this look-back reaches, so
+            // skipping intervening words cannot run away.
+            SyntaxKind::WHITESPACE
+            | SyntaxKind::NEWLINE
+            | SyntaxKind::COMMENT
+            | SyntaxKind::WORD => {}
+            SyntaxKind::CONTROL_WORD => {
+                if REFERENCE_PRIMITIVES.contains(&current.text()) {
+                    return true;
+                }
+                control_words_seen += 1;
+                if control_words_seen >= 2 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        token = current.prev_token();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -163,6 +214,37 @@ mod tests {
     #[test]
     fn flags_each_occurrence() {
         assert_eq!(findings("{\\bf a}{\\it b}\n").len(), 2);
+    }
+
+    #[test]
+    fn reference_position_reports_without_a_fix() {
+        // In `\let\x\rm`, `\ifx…`, and `\def\rm{…}` the control word is *referenced*
+        // (copied/compared/redefined), not executed as a font switch, so the swap
+        // `\rm`→`\rmfamily` changes meaning (and `\rmfamily` may not even exist, as in
+        // plain-TeX/ConTeXt branches). The finding stands, but the harmful Safe fix is
+        // withheld.
+        for src in [
+            "\\let\\pgfmath@selectfont\\rm\n",
+            "\\let\\x=\\rm\n",
+            "\\ifx\\rm\\foo\\fi\n",
+            "\\ifx\\foo\\rm\\fi\n",
+            "\\def\\rm{x}\n",
+        ] {
+            let out = findings(src);
+            assert_eq!(out.len(), 1, "still reports: {src:?}");
+            assert!(
+                out[0].fix.is_none(),
+                "no fix in reference position: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_font_switch_still_carries_fix() {
+        // A genuine switch (not in a reference position) keeps its fix.
+        let out = findings("\\global\\bf hi\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_some());
     }
 
     #[test]

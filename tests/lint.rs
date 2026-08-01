@@ -845,6 +845,25 @@ fn straight_quotes_flags_open_and_close() {
 }
 
 #[test]
+fn prose_rules_are_silent_inside_codeexample() {
+    // pgfmanual's `codeexample` is a curated verbatim-body env, so its body lexes
+    // to one opaque token and the prose rules never see it. The same content
+    // outside verbatim would trip `straight-quotes`, `ellipsis`, and `dash-length`
+    // (and the `ellipsis` fix would rewrite `...`->`\dots` inside executed code).
+    let out = lint(
+        "\\begin{codeexample}[]\nHe said \"hello\" and $a + ... + b$ on lines 5-10.\n\\end{codeexample}\n",
+    );
+    let prose: Vec<_> = out
+        .iter()
+        .filter(|(r, _)| matches!(*r, "straight-quotes" | "ellipsis" | "dash-length"))
+        .collect();
+    assert!(
+        prose.is_empty(),
+        "prose rules fired inside codeexample: {prose:?}"
+    );
+}
+
+#[test]
 fn straight_quotes_fix_is_unsafe_and_correct() {
     // The direction-inferring fix is Unsafe, so `--fix` (unsafe = false) is a
     // no-op; `--unsafe-fixes` rewrites to the ligatures.

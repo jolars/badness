@@ -627,6 +627,16 @@ fn verbatim_capital_optional_arg() {
     ));
 }
 
+/// pgfmanual's `codeexample` is a curated verbatim-body env: the leading `[…]`
+/// option is parsed, but the executed-yet-verbatim body (with `$`, `%`, `...`)
+/// collapses to one opaque `VERBATIM_BODY`, so prose rules never see its tokens.
+#[test]
+fn codeexample_optional_arg_then_opaque_body() {
+    insta::assert_snapshot!(tree(
+        "\\begin{codeexample}[]\n\\immediate\\write\\w{...} $x$ %literal\n\\end{codeexample}"
+    ));
+}
+
 /// An option-free `lstlisting` whose body's first line *is* a bracketed list: the
 /// signature has one optional arg, but it sits on the next line, so the `[1,2,3]`
 /// belongs to the opaque body, not to an `OPTIONAL` argument node.

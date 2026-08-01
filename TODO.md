@@ -89,22 +89,26 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   spacing); remaining candidates include space before punctuation or
   parentheses and missing italic correction (`\/`).
 
-- [ ] **`codeexample` (and other package-specific verbatim envs) unknown to the
-  signature DB.** pgfmanual's `codeexample` env holds verbatim-like example
-  source that is *also* executed. Because it is not in `data/signatures.json`
-  (which lists `verbatim`, `lstlisting`, `minted`, `Sinput`, …), the prose rules
-  fire inside it: on the pgf corpus this drives ~1900 `straight-quotes`, ~370
-  `ellipsis`, and ~100 `dash-length` findings, and — worse — the *default*
-  (`Safe`) `ellipsis` fix rewrites `...`→`\dots` inside executed code
-  (`\immediate\write\w{...}` → `{\dots}`). Registering `codeexample` as a
-  `verbatimBody` env silences all of these (verified: the same content inside
-  `lstlisting` yields zero findings). Open question: `codeexample` is
-  pgfmanual-specific, so weigh curating it into the built-in DB (as `Sinput`
-  already is) vs. a project-config knob for user-declared verbatim envs. The
-  sibling `|…|` active-char shortverb (`\catcode`\|=13` + `\gdef|{…\verb|…}`)
-  drives the same class of FP (`straight-quotes`, `unclosed-math-delimiter`,
-  `sectioning-level-jump` on `|\part|`, `missing-nonbreaking-space` on `\ref`
-  inside `|…|`) but is a genuine catcode limitation, not statically resolvable.
+- [x] **`codeexample` unknown to the signature DB.** pgfmanual's `codeexample`
+  env holds verbatim-like example source that is *also* executed. Because it was
+  not in `data/signatures.json` (which lists `verbatim`, `lstlisting`, `minted`,
+  `Sinput`, …), the prose rules fired inside it: on the pgf corpus this drove
+  ~1900 `straight-quotes`, ~370 `ellipsis`, and ~100 `dash-length` findings, and
+  — worse — the *default* (`Safe`) `ellipsis` fix rewrote `...`→`\dots` inside
+  executed code (`\immediate\write\w{...}` → `{\dots}`). Resolved by curating
+  `codeexample` into the built-in DB as a `verbatimBody` env, following the
+  precedent of the equally package-specific Sweave (`Sinput`/`Soutput`/`Scode`)
+  and `Code`/`CodeInput`/`CodeOutput` entries; its body now lexes to one opaque
+  `VERBATIM_BODY` token, so the prose rules never see it.
+  - [ ] *Follow-up (open):* a project-config knob for user-declared verbatim envs
+    would generalize this to package-specific envs badness cannot name. Config
+    does not currently flow into the signature DB or the lexer's `VerbCtx`, so
+    this is a separable feature, not a data edit.
+  - [ ] *Out of scope (catcode limitation):* the sibling `|…|` active-char
+    shortverb (`\catcode`\|=13` + `\gdef|{…\verb|…}`) drives the same class of
+    FP (`straight-quotes`, `unclosed-math-delimiter`, `sectioning-level-jump` on
+    `|\part|`, `missing-nonbreaking-space` on `\ref` inside `|…|`) but is a
+    genuine catcode limitation, not statically resolvable.
 
 - [ ] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
   `calc` library repurposes `$…$` as coordinate-arithmetic delimiters, where

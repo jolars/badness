@@ -1,0 +1,22 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{codeexample}[]\\n\\\\immediate\\\\write\\\\w{...} $x$ %literal\\n\\\\end{codeexample}\")"
+---
+ROOT@0..76
+  ENVIRONMENT@0..76
+    BEGIN@0..21
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..19
+        L_BRACE@6..7 "{"
+        WORD@7..18 "codeexample"
+        R_BRACE@18..19 "}"
+      OPTIONAL@19..21
+        L_BRACKET@19..20 "["
+        R_BRACKET@20..21 "]"
+    VERBATIM_BODY@21..59 "\n\\immediate\\write\\w{...} $x$ %literal\n"
+    END@59..76
+      CONTROL_WORD@59..63 "\\end"
+      NAME_GROUP@63..76
+        L_BRACE@63..64 "{"
+        WORD@64..75 "codeexample"
+        R_BRACE@75..76 "}"

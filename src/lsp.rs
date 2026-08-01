@@ -2989,9 +2989,12 @@ impl Worker {
         });
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
-                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                    analyze_tex(&snapshot, &path, members, &rules, enc)
-                }
+                FileKind::Tex
+                | FileKind::CodeTex
+                | FileKind::Sty
+                | FileKind::Cls
+                | FileKind::Dtx
+                | FileKind::Ins => analyze_tex(&snapshot, &path, members, &rules, enc),
                 FileKind::Bib => analyze_bib(&snapshot, &path, &rules, enc),
             }));
             if let Ok(Some(diags)) = result {
@@ -3247,9 +3250,12 @@ fn compute_diagnostics(
     enc: PositionEncoding,
 ) -> Vec<Diagnostic> {
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            analyze_tex(snapshot, path, members, rules, enc)
-        }
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => analyze_tex(snapshot, path, members, rules, enc),
         FileKind::Bib => analyze_bib(snapshot, path, rules, enc),
     }));
     match cached {
@@ -3274,7 +3280,12 @@ fn fallback_diagnostics(
     let idx = LineIndex::with_encoding(text, enc);
     let mut diags: Vec<Diagnostic> = Vec::new();
     match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {
             let parsed = parse_with_flavor(text, kind.lex_config());
             for err in &parsed.errors {
                 diags.push(Diagnostic {
@@ -3387,7 +3398,12 @@ fn lint_findings(
 ) -> Option<Vec<crate::linter::Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
     let findings = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {
             let lint_path = snapshot.file_path(file).to_path_buf();
             let root = snapshot.parsed_tree(file);
             let model = snapshot.semantic_model(file);
@@ -3421,7 +3437,12 @@ fn fallback_lint_findings(
     rules: &RuleSelection,
 ) -> Vec<crate::linter::Diagnostic> {
     let findings = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {
             let parsed = parse_with_flavor(text, kind.lex_config());
             let root = parsed.syntax();
             let model = SemanticModel::build(&root);
@@ -3508,7 +3529,12 @@ fn compute_format(
             return None;
         }
         match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            FileKind::Tex
+            | FileKind::CodeTex
+            | FileKind::Sty
+            | FileKind::Cls
+            | FileKind::Dtx
+            | FileKind::Ins => {
                 if !snapshot.parse_diagnostics(file).is_empty() {
                     return Some(None);
                 }
@@ -3533,7 +3559,12 @@ fn compute_format(
     let formatted = match cached {
         Ok(Some(opt)) => opt,
         Ok(None) | Err(_) => match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            FileKind::Tex
+            | FileKind::CodeTex
+            | FileKind::Sty
+            | FileKind::Cls
+            | FileKind::Dtx
+            | FileKind::Ins => {
                 format_with_style_flavored_sentence(text, style, kind.lex_config(), sentence).ok()
             }
             FileKind::Bib => bib_format_with_style(text, style).ok(),
@@ -3600,7 +3631,12 @@ fn compute_range_format(
 ) -> Option<Vec<TextEdit>> {
     // Range formatting is LaTeX-only for now; bib falls back to no edits.
     match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {}
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {}
         FileKind::Bib => return None,
     }
 
@@ -3724,7 +3760,12 @@ fn compute_on_type_format(
     enc: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
     match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {}
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {}
         FileKind::Bib => return None,
     }
 
@@ -3833,9 +3874,12 @@ fn run_symbols(
     out_tx: &Sender<Outbound>,
 ) {
     let symbols = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-            compute_symbols(snapshot, path, text, kind, members, build, enc)
-        }
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => compute_symbols(snapshot, path, text, kind, members, build, enc),
         FileKind::Bib => compute_bib_symbols(snapshot, path, text, enc),
     };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))

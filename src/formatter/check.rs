@@ -157,19 +157,22 @@ pub fn check_paths_with_style(
             let mut style = style;
             style.wrap = wrap_override.unwrap_or(kind.default_wrap());
             let formatted = match kind {
-                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                    format_file_with_packages_sentence(
-                        &content,
-                        path,
-                        style,
-                        kind.lex_config(),
-                        sentence,
-                    )
-                    .map_err(|err| CheckError::FormatError {
-                        path: path.clone(),
-                        source: err,
-                    })?
-                }
+                FileKind::Tex
+                | FileKind::CodeTex
+                | FileKind::Sty
+                | FileKind::Cls
+                | FileKind::Dtx
+                | FileKind::Ins => format_file_with_packages_sentence(
+                    &content,
+                    path,
+                    style,
+                    kind.lex_config(),
+                    sentence,
+                )
+                .map_err(|err| CheckError::FormatError {
+                    path: path.clone(),
+                    source: err,
+                })?,
                 FileKind::Bib => crate::bib::format_with_style(&content, style).map_err(|err| {
                     CheckError::BibFormatError {
                         path: path.clone(),

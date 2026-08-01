@@ -141,6 +141,12 @@ pub enum FileDiscoveryError {
 pub enum FileKind {
     /// A `.tex` document.
     Tex,
+    /// A `*.code.tex` package-implementation file. By convention these are
+    /// `\input` by a `.sty`/`.cls` under an implicit `\makeatletter` (pgf/TikZ,
+    /// pgfplots, …), so — like a package source — they parse with `@` already a
+    /// letter and format as code, not prose. The naming convention is the static
+    /// signal; the file itself carries no `\makeatletter`.
+    CodeTex,
     /// A `.sty` package source.
     Sty,
     /// A `.cls` class source.
@@ -161,7 +167,12 @@ impl FileKind {
     pub fn is_latex(self) -> bool {
         matches!(
             self,
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins
+            FileKind::Tex
+                | FileKind::CodeTex
+                | FileKind::Sty
+                | FileKind::Cls
+                | FileKind::Dtx
+                | FileKind::Ins
         )
     }
 
@@ -172,7 +183,9 @@ impl FileKind {
     /// internally (the docstrip mode, see [`lex_config`](Self::lex_config)).
     pub fn latex_flavor(self) -> LatexFlavor {
         match self {
-            FileKind::Sty | FileKind::Cls => LatexFlavor::Package,
+            // `*.code.tex` is `\input` under an implicit `\makeatletter`, exactly
+            // like a package source, so `@` starts as a letter.
+            FileKind::Sty | FileKind::Cls | FileKind::CodeTex => LatexFlavor::Package,
             _ => LatexFlavor::Document,
         }
     }
@@ -194,10 +207,24 @@ impl FileKind {
     /// — so it also defaults to [`WrapMode::Preserve`].
     pub fn default_wrap(self) -> WrapMode {
         match self {
-            FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => WrapMode::Preserve,
+            FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins | FileKind::CodeTex => {
+                WrapMode::Preserve
+            }
             _ => WrapMode::Reflow,
         }
     }
+}
+
+/// Whether `path`'s file name ends with `.code.tex` (case-insensitive) — the
+/// package-implementation convention (`tikz.code.tex`, `pgfcorepoints.code.tex`).
+/// Checked on the name, not the extension, since `Path::extension` sees only `tex`.
+fn is_code_tex(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.ends_with(".code.tex") && lower.len() > ".code.tex".len()
+        })
 }
 
 /// The lint [`FileKind`] of `path` by extension (`.tex`/`.bib`), or `None` for any
@@ -205,7 +232,14 @@ impl FileKind {
 fn lint_file_kind(path: &Path) -> Option<FileKind> {
     let ext = path.extension().and_then(|ext| ext.to_str())?;
     if ext.eq_ignore_ascii_case("tex") {
-        Some(FileKind::Tex)
+        // A `*.code.tex` package-implementation file is loaded under an implicit
+        // `\makeatletter` (checked on the full name, since the extension is just
+        // `tex`); classify it apart from a plain `.tex` document.
+        if is_code_tex(path) {
+            Some(FileKind::CodeTex)
+        } else {
+            Some(FileKind::Tex)
+        }
     } else if ext.eq_ignore_ascii_case("sty") {
         Some(FileKind::Sty)
     } else if ext.eq_ignore_ascii_case("cls") {
@@ -395,6 +429,17 @@ mod tests {
         assert_eq!(file_kind_or_tex(Path::new("refs.bib")), FileKind::Bib);
         assert_eq!(file_kind_or_tex(Path::new("refs.BIB")), FileKind::Bib);
         assert_eq!(file_kind_or_tex(Path::new("doc.tex")), FileKind::Tex);
+        // `*.code.tex` (any case) is the package-implementation convention, kept
+        // apart from a plain `.tex`; a file merely *named* `code.tex` is not.
+        assert_eq!(
+            file_kind_or_tex(Path::new("tikz.code.tex")),
+            FileKind::CodeTex
+        );
+        assert_eq!(
+            file_kind_or_tex(Path::new("pgfCore.CODE.TeX")),
+            FileKind::CodeTex
+        );
+        assert_eq!(file_kind_or_tex(Path::new("code.tex")), FileKind::Tex);
         assert_eq!(file_kind_or_tex(Path::new("pkg.sty")), FileKind::Sty);
         assert_eq!(file_kind_or_tex(Path::new("Pkg.STY")), FileKind::Sty);
         assert_eq!(file_kind_or_tex(Path::new("base.cls")), FileKind::Cls);
@@ -436,6 +481,24 @@ mod tests {
         assert_eq!(FileKind::Tex.latex_flavor(), LatexFlavor::Document);
         assert_eq!(FileKind::Tex.default_wrap(), WrapMode::Reflow);
         assert!(!FileKind::Bib.is_latex());
+    }
+
+    #[test]
+    fn code_tex_kind_parses_as_package_code() {
+        // `*.code.tex` is package implementation loaded under an implicit
+        // `\makeatletter`, so it takes the `Package` flavor (`@` a letter) and the
+        // code-not-prose wrap, exactly like a `.sty` — but it is *not* a package
+        // source, so package-only rules (e.g. `missing-provides`) never see it.
+        assert!(FileKind::CodeTex.is_latex());
+        assert_eq!(FileKind::CodeTex.latex_flavor(), LatexFlavor::Package);
+        assert_eq!(FileKind::CodeTex.default_wrap(), WrapMode::Preserve);
+        assert_eq!(
+            FileKind::CodeTex.lex_config(),
+            LexConfig {
+                flavor: LatexFlavor::Package,
+                dtx: false,
+            }
+        );
     }
 
     #[test]

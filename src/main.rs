@@ -457,7 +457,12 @@ fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
                 keys,
             }
         }
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {
             let parsed = parse_with_flavor(content, kind.lex_config());
             let diagnostics: Vec<Diagnostic> = parsed
                 .errors
@@ -816,7 +821,12 @@ fn fix_file(
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
-            FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+            FileKind::Tex
+            | FileKind::CodeTex
+            | FileKind::Sty
+            | FileKind::Cls
+            | FileKind::Dtx
+            | FileKind::Ins => {
                 // Fixpoint loop: only fix-emitting rules can change anything, so run
                 // just those each round (report-only rules are surfaced later by the
                 // reporting pass).
@@ -1156,7 +1166,12 @@ fn run_format_stdin(
     let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
     style.wrap = wrap_override.unwrap_or(kind.default_wrap());
     let formatted = match kind {
-        FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
+        FileKind::Tex
+        | FileKind::CodeTex
+        | FileKind::Sty
+        | FileKind::Cls
+        | FileKind::Dtx
+        | FileKind::Ins => {
             format_with_style_flavored_sentence(&input, style, kind.lex_config(), sentence)
                 .map_err(|e| e.to_string())
         }
@@ -1236,16 +1251,19 @@ fn run_format_paths(
             let mut style = style;
             style.wrap = wrap_override.unwrap_or(kind.default_wrap());
             let formatted = match kind {
-                FileKind::Tex | FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins => {
-                    format_file_with_packages_sentence(
-                        &content,
-                        path,
-                        style,
-                        kind.lex_config(),
-                        sentence,
-                    )
-                    .map_err(|e| e.to_string())
-                }
+                FileKind::Tex
+                | FileKind::CodeTex
+                | FileKind::Sty
+                | FileKind::Cls
+                | FileKind::Dtx
+                | FileKind::Ins => format_file_with_packages_sentence(
+                    &content,
+                    path,
+                    style,
+                    kind.lex_config(),
+                    sentence,
+                )
+                .map_err(|e| e.to_string()),
                 FileKind::Bib => {
                     badness::bib::format_with_style(&content, style).map_err(|e| e.to_string())
                 }

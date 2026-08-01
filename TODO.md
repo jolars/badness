@@ -81,26 +81,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
-- [x] **`makeat-macro` fires on xypic syntax (false positive).** `\ar@{=}`,
-  `\xymatrix@C=3pc` (97/97 findings on the HoTT book). The `@` is intentional
-  xypic DSL, not a forgotten `\makeatletter`. Fix: a curated exact-name gate in
-  `src/linter/rules/makeat_macro.rs` skipping the control words `ar`/`xymatrix`
-  before the `@`, mirroring `space_before_command`'s `NO_SPACE_COMMANDS`.
-- [x] **`hard-coded-reference` fires inside citation locators and theorem titles
-  (false positive).** `\cite[Section~8.1]{…}` (an external-work locator) and
-  `\begin{thm}[Conway's Theorem 0]` (a proper-name title). Fix: skip when
-  `in_key_argument(tok)` (reuses the existing gate — `cite` is already a
-  key-argument command) and add a small gate (`in_environment_title`) for a token
-  inside an `OPTIONAL` whose parent is a `BEGIN` node (an environment title, not a
-  cross-reference).
-- [x] **DSL false positives: `dash-length` in `\texttt`, `ellipsis` in
-  `\foreach`.** `\texttt{03-02}` (an MSC code — the hyphen is literal in
-  monospace) and `\foreach \x in {0,20,...,350}` (pgffor range syntax; `\dots`
-  would break the loop). Done: `in_typewriter_argument` gate for `dash-length`;
-  `in_foreach_range` gate for `ellipsis` — the range list `{…}` is a *sibling* of
-  `\foreach`, so the gate anchors on the `in` keyword via a previous-sibling walk
-  (which also keeps it off the loop body group).
-
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to
   ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to
@@ -250,7 +230,6 @@ engine.
 
 ## Performance & hardening
 
-- [ ] Fuzzing (losslessness must hold on arbitrary input).
 - [~] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
   Formatter speed bench vs `tex-fmt`/`latexindent` landed (`benches/compare_format.sh`,
   `task bench`, writes `benches/benchmark_results.json`, which feeds the docs

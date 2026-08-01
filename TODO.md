@@ -89,6 +89,40 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   spacing); remaining candidates include space before punctuation or
   parentheses and missing italic correction (`\/`).
 
+- [ ] **`codeexample` (and other package-specific verbatim envs) unknown to the
+  signature DB.** pgfmanual's `codeexample` env holds verbatim-like example
+  source that is *also* executed. Because it is not in `data/signatures.json`
+  (which lists `verbatim`, `lstlisting`, `minted`, `Sinput`, …), the prose rules
+  fire inside it: on the pgf corpus this drives ~1900 `straight-quotes`, ~370
+  `ellipsis`, and ~100 `dash-length` findings, and — worse — the *default*
+  (`Safe`) `ellipsis` fix rewrites `...`→`\dots` inside executed code
+  (`\immediate\write\w{...}` → `{\dots}`). Registering `codeexample` as a
+  `verbatimBody` env silences all of these (verified: the same content inside
+  `lstlisting` yields zero findings). Open question: `codeexample` is
+  pgfmanual-specific, so weigh curating it into the built-in DB (as `Sinput`
+  already is) vs. a project-config knob for user-declared verbatim envs. The
+  sibling `|…|` active-char shortverb (`\catcode`\|=13` + `\gdef|{…\verb|…}`)
+  drives the same class of FP (`straight-quotes`, `unclosed-math-delimiter`,
+  `sectioning-level-jump` on `|\part|`, `missing-nonbreaking-space` on `\ref`
+  inside `|…|`) but is a genuine catcode limitation, not statically resolvable.
+
+- [ ] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
+  `calc` library repurposes `$…$` as coordinate-arithmetic delimiters, where
+  `sin`/`cos` are backslash-less pgfmath functions; badness reads the `$` as math
+  shift and flags the bare names (9 findings on pgf), and the `--unsafe-fixes`
+  `sin`→`\sin` rewrite would break the pgfmath parser. Catcode/package-dependent
+  (the `$` is not math shift there), so hard to settle statically; the glued
+  `func(` shape inside a coordinate `(…)` is a candidate suppression signal.
+
+- [ ] **`makeat-macro` residual on plain-`.tex` package internals.** Recognizing
+  `*.code.tex` as package flavor fixed 98.9% of the pgf `makeat-macro` FPs, but
+  generic-implementation files named plainly (`pgfutil-common.tex`,
+  `support/pgf-regression-test.tex` — `\input` under `\makeatletter`, no
+  `\makeatletter` of their own, no `.code.tex` signal) still emit ~590 findings.
+  There is no clean static signal distinguishing these from a document that
+  genuinely forgot `\makeatletter`, so this is a known limitation rather than a
+  fixable gap; noted for completeness.
+
 ## Semantic layer & signatures
 
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open

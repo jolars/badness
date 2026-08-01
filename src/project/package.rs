@@ -25,7 +25,7 @@ use rowan::TextRange;
 use smol_str::SmolStr;
 
 use crate::ast::{AstNode, Optional, child, command_name, nth_group_text};
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// Which load command produced an edge. Kept distinct even where resolution is
 /// currently identical, so later passes can honor the differences
@@ -134,6 +134,13 @@ fn package_edges_of(command: &SyntaxNode, base_dir: Option<&Path>) -> Vec<Packag
     let Some(kind) = command_name(command).and_then(|name| package_kind(&name)) else {
         return Vec::new();
     };
+    // `\string\usepackage{tikz}` (typically inside a `\message`/`\typeout` string)
+    // names the load command as *text* — `\string` renders the next control word
+    // literally, expanding nothing — so it pulls in no package. Suppress the edge so
+    // it cannot masquerade as a real (or duplicate) load.
+    if preceded_by_string(command) {
+        return Vec::new();
+    }
     let range = command.text_range();
     let ext = kind.extension();
 
@@ -174,6 +181,31 @@ fn package_edges_of(command: &SyntaxNode, base_dir: Option<&Path>) -> Vec<Packag
             range,
         }]
     }
+}
+
+/// Whether `command`'s control word is the token immediately following a `\string`
+/// (across only trivia). `\string\usepackage` makes the load a printed name, not a
+/// real load; `\string` affects exactly the next token, so only intervening
+/// whitespace/comments — never other content — count as "immediately after".
+fn preceded_by_string(command: &SyntaxNode) -> bool {
+    let Some(first) = command.first_token() else {
+        return false;
+    };
+    let mut prev = first.prev_token();
+    while let Some(token) = prev {
+        match token.kind() {
+            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT => {
+                prev = token.prev_token();
+            }
+            _ => return is_string_control_word(&token),
+        }
+    }
+    false
+}
+
+/// Whether `token` is the `\string` control word.
+fn is_string_control_word(token: &SyntaxToken) -> bool {
+    token.kind() == SyntaxKind::CONTROL_WORD && token.text() == "\\string"
 }
 
 /// One literal option inside a load command's `[...]`: its whitespace-trimmed
@@ -318,6 +350,21 @@ mod tests {
             e[0].target,
             PackageTarget::Path(PathBuf::from("/proj/mypkg.sty"))
         );
+    }
+
+    #[test]
+    fn string_prefixed_load_is_text_not_an_edge() {
+        // `\string\usepackage{tikz}` in a `\message`/`\typeout` string names the
+        // command as text; it loads nothing, so it must produce no edge (and so no
+        // spurious `duplicate-package`).
+        assert!(edges("\\string\\usepackage{tikz}\n", None).is_empty());
+        // A space between `\string` and the load still applies.
+        assert!(edges("\\string \\RequirePackage{foo}\n", None).is_empty());
+        // Class loads too.
+        assert!(edges("\\string\\documentclass{article}\n", None).is_empty());
+        // A real load right after an unrelated `\string` use is unaffected.
+        let e = edges("\\string x\n\\usepackage{tikz}\n", None);
+        assert_eq!(e.len(), 1);
     }
 
     #[test]

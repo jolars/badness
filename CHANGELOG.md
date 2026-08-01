@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.13.0](https://github.com/jolars/badness/compare/v0.12.0...v0.13.0) (2026-08-01)
+
+### Features
+- **semantic:** curate `codeexample` as verbatim env ([`4fb98f7`](https://github.com/jolars/badness/commit/4fb98f7d764030cc7d1af8d875eb35b914ad10d8))
+- **lexer:** infer expl3 in toggle-less `.dtx` ([`caba767`](https://github.com/jolars/badness/commit/caba767610b66a266d0f5f35f2851c06fd94b5ac))
+- **lsp:** link package docs via texdoc in hover ([`40b2665`](https://github.com/jolars/badness/commit/40b26651aaa52c9c3139689d364475e68dbacf31))
+- **lsp:** filter cite completion by title and author ([`509cd4a`](https://github.com/jolars/badness/commit/509cd4a08ee30854c01f53be3a559fab1d26029c))
+- **linter:** express and apply cross-file fixes ([`e9071f8`](https://github.com/jolars/badness/commit/e9071f83c485cc23f2dd9cdcbca080fd6cbfe9f7))
+- **vscode:** add feature toggles for the LSP ([`bb3f13c`](https://github.com/jolars/badness/commit/bb3f13c7f5d0581b2f70ae16422de2946238d3cc)), closes [#86](https://github.com/jolars/badness/issues/86)
+- **formatter:** align user environments on `&` ([`ee88953`](https://github.com/jolars/badness/commit/ee88953554b643460b8ff719dcb2ba8a4a275143)), closes [#84](https://github.com/jolars/badness/issues/84)
+- **formatter:** hang expl3 attached brace arguments ([`c25c91b`](https://github.com/jolars/badness/commit/c25c91b97b7c57b9680f207fd5495da8e96fac7a))
+- **formatter:** hang \item continuations under preserve ([`5edeea7`](https://github.com/jolars/badness/commit/5edeea7d32f39c1c0c46bccfa2345d57cd3efcdc)), closes [#82](https://github.com/jolars/badness/issues/82)
+- **incremental:** mark SourceFile.path HIGH durability ([`bca096a`](https://github.com/jolars/badness/commit/bca096a8eb8dafbf94c0d22c79957fe02afc0064))
+- **linter:** flag unclosed math delimiters as likely typos ([`4731c18`](https://github.com/jolars/badness/commit/4731c181f184934c110bfa3d316011d0f41f071b))
+
+### Bug Fixes
+- **parser:** parse `.code.tex` under package flavor ([`2694a86`](https://github.com/jolars/badness/commit/2694a8659b858c9e9ca26841a37efd5ee5421775))
+- **linter:** withhold deprecated-command fix in reference position ([`668647a`](https://github.com/jolars/badness/commit/668647ab18e7a6034beb58c1caabec807395d717))
+- **linter:** skip compound-logo swallowed space ([`0a546b7`](https://github.com/jolars/badness/commit/0a546b7b6c78d2fad4ffd4eed20244d826f6ec87))
+- **linter:** ignore `\string`-prefixed package loads ([`e20504e`](https://github.com/jolars/badness/commit/e20504e341be9df4b5d6e91f9ccbed6c77ab26fe))
+- **linter:** skip `\texttt` dashes and `\foreach` ranges ([`f605ee5`](https://github.com/jolars/badness/commit/f605ee50cb42f08844b867bd8b4ab5108f9b9593))
+- **linter:** skip citation locators and env titles in hard-coded-reference ([`620bde5`](https://github.com/jolars/badness/commit/620bde59c654f00bb638dacc276e6a1828062de7))
+- **linter:** skip xypic `@` DSL in `makeat-macro` ([`81e4c81`](https://github.com/jolars/badness/commit/81e4c81065c4c82e9da98f2d74c4e102dc24b395))
+- **parser:** attach math optional across balanced `$...$` ([`b5c6c50`](https://github.com/jolars/badness/commit/b5c6c50372d7b75cc343aeb178e134677c4e2003))
+- **formatter:** scope preserve spacing collapse to prose ([`0999610`](https://github.com/jolars/badness/commit/09996109d091686e46e22aa9a3010aaed893c982))
+- **formatter:** normalize inner spacing under preserve ([`be8d5ba`](https://github.com/jolars/badness/commit/be8d5ba3b495eaa42d8e6862fdc91fadab447a69))
+- **linter:** skip prose rules in Lua code and doc placeholders ([`bcd4f44`](https://github.com/jolars/badness/commit/bcd4f4432652043f644f212c29de6e98e2606186))
+
+### Performance Improvements
+- **line-index:** precompute wide-char table, own no text ([`d9c526f`](https://github.com/jolars/badness/commit/d9c526fc62eae6ed39c24fb11c4f21471d9443aa))
+
 ## [0.12.0](https://github.com/jolars/badness/compare/v0.11.0...v0.12.0) (2026-07-30)
 
 ### Features

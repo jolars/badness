@@ -2,10 +2,10 @@
 
 Two complementary tools, measuring different things:
 
-| Tool | What it measures | Includes startup floor? |
-| --- | --- | --- |
-| `benches/compare_format.sh` (`task bench`) | wall-clock CLI speed vs tex-fmt/latexindent | **yes** (whole process) |
-| `benches/formatting.rs` (`task bench:micro`) | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
+  | Tool                                         | What it measures                                  | Includes startup floor?       |
+  | -------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+  | `benches/compare_format.sh` (`task bench`)   | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
+  | `benches/formatting.rs` (`task bench:micro`) | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
 
 The CLI script answers "how fast is the `badness` binary"; the in-process bench
 answers "where does the per-byte work go, with no process startup in the way."
@@ -69,44 +69,45 @@ finding. Reproduce with `task bench:micro` + `task bench:profile`.
 The CLI's small-document time is dominated by a **fixed startup floor**, not by
 formatting:
 
-| Document | size | CLI wall-clock | in-process full | implied floor |
-| --- | ---: | ---: | ---: | ---: |
-| small.tex | 1.2 KB | ~4.5 ms | ~0.11 ms | ~4.4 ms |
-| cv.tex | 6.3 KB | ~5.1 ms | ~0.38 ms | ~4.7 ms |
-| masters_dissertation.tex | 95 KB | ~14.9 ms | ~8.6 ms | ~6.3 ms |
+  | Document                 | size   | CLI wall-clock | in-process full | implied floor |
+  | ------------------------ | -----: | -------------: | --------------: | ------------: |
+  | small.tex                | 1.2 KB |        ~4.5 ms |        ~0.11 ms |       ~4.4 ms |
+  | cv.tex                   | 6.3 KB |        ~5.1 ms |        ~0.38 ms |       ~4.7 ms |
+  | masters_dissertation.tex |  95 KB |       ~14.9 ms |         ~8.6 ms |       ~6.3 ms |
 
-A bare `badness --version` is only ~0.8 ms, so the extra ~3.7 ms of the format
+A bare `badness --version` is only \~0.8 ms, so the extra \~3.7 ms of the format
 floor *was* **the one-time CWL signature-DB init**: `cwl()` used to decompress
 and parse the embedded `cwl_signatures.json.gz` on first access (`~4.5 ms`), and
 it is on the format hot path (`Signatures::command`/`environment` fall back to
 `cwl()`, and the lexer consults it for verbatim-env detection).
 
-**Fixed (2026-06):** the CWL tier is now baked into the binary at build time as a
-`phf` perfect-hash map (`build.rs` → `phf_codegen`, values are `const fn`
-constructor calls in `src/semantic/signature.rs`), so init is **~0** (no
-decompress, no JSON parse, no map build). CLI latency on `small.tex` dropped from
-~4.5 ms to ~1.3 ms, and `cv.tex` from ~5.1 ms to ~1.4 ms. The trade-off is a
-larger binary (the data is now uncompressed read-only statics) and a one-time
-build-time codegen step. The curated `builtin` DB (`data/signatures.json`, ~8 KB,
-~0.09 ms) stays a runtime `LazyLock` JSON parse—negligible, not worth moving.
+**Fixed (2026-06):** the CWL tier is now baked into the binary at build time as
+a `phf` perfect-hash map (`build.rs` → `phf_codegen`, values are `const fn`
+constructor calls in `src/semantic/signature.rs`), so init is **\~0** (no
+decompress, no JSON parse, no map build). CLI latency on `small.tex` dropped
+from \~4.5 ms to \~1.3 ms, and `cv.tex` from \~5.1 ms to \~1.4 ms. The trade-off
+is a larger binary (the data is now uncompressed read-only statics) and a
+one-time build-time codegen step. The curated `builtin` DB
+(`data/signatures.json`, \~8 KB, \~0.09 ms) stays a runtime `LazyLock` JSON
+parse—negligible, not worth moving.
 
 ### Per-byte cost (masters dissertation, in-process)
 
-Pipeline split: parse ~25 %, lower+print ~70 % of the full pipeline; throughput
-~10 MB/s. Flamegraph self-time, bucketed:
+Pipeline split: parse \~25 %, lower+print \~70 % of the full pipeline;
+throughput \~10 MB/s. Flamegraph self-time, bucketed:
 
-| Bucket | self-time | notes |
-| --- | ---: | --- |
-| rowan red-tree cursor traversal | ~25–30 % | `PreorderWithTokens`/`SyntaxElementChildren` iteration, `NodeData::new`, sibling walks |
-| allocator (malloc/free) | ~17 % | `Ir` nodes, `Vec<Ir>`, `smol_str`, red nodes |
-| parse + tree-build | ~13 % | lexer + `GreenNodeBuilder` + `smol_str` interning |
-| lowering logic | ~10 % | `lower_node`/`lower_element_stream` + `Ir` build |
-| printing | ~7 % | `Printer::run_with_mode` + `flat_width` |
+  | Bucket                          | self-time | notes                                                                                  |
+  | ------------------------------- | --------: | -------------------------------------------------------------------------------------- |
+  | rowan red-tree cursor traversal |  ~25–30 % | `PreorderWithTokens`/`SyntaxElementChildren` iteration, `NodeData::new`, sibling walks |
+  | allocator (malloc/free)         |     ~17 % | `Ir` nodes, `Vec<Ir>`, `smol_str`, red nodes                                           |
+  | parse + tree-build              |     ~13 % | lexer + `GreenNodeBuilder` + `smol_str` interning                                      |
+  | lowering logic                  |     ~10 % | `lower_node`/`lower_element_stream` + `Ir` build                                       |
+  | printing                        |      ~7 % | `Printer::run_with_mode` + `flat_width`                                                |
 
 Most of the per-byte cost is **inherent to the lossless-CST + Doc-IR
-architecture** (materializing/walking red cursors, allocating IR)—by design,
-and the price of the LSP, incremental reparse, and losslessness. The printer
-itself is modest. One concrete bit of *slack*: `lower_node` runs up to four
+architecture** (materializing/walking red cursors, allocating IR)—by design, and
+the price of the LSP, incremental reparse, and losslessness. The printer itself
+is modest. One concrete bit of *slack*: `lower_node` runs up to four
 direct-children predicate scans per `ENVIRONMENT`
 (`has_verbatim_body`/`is_margin_framed`/`is_alignment_env`/`is_list_env`); these
 are bounded (direct children only) but redundant and could share one pass.

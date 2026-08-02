@@ -34,9 +34,9 @@ GitHub round-trip, and the language server starts on first activation even on
 restricted or offline networks. Behavior is controlled by
 `badness.executableStrategy`:
 
-- `bundled` (default): use the binary that ships inside the extension. If
-  you're on a platform without a platform-specific build (or you've installed
-  the universal VSIX), the extension falls back to downloading a matching binary
+- `bundled` (default): use the binary that ships inside the extension. If you're
+  on a platform without a platform-specific build (or you've installed the
+  universal VSIX), the extension falls back to downloading a matching binary
   from GitHub releases.
 - `environment`: look for `badness` on the system `PATH`.
 - `path`: use the binary at `badness.executablePath`.

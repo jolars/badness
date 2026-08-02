@@ -1,7 +1,7 @@
 # Badness
 
-[Badness](https://badness.dev/) is a language server, formatter, and linter
-for LaTeX documents.
+[Badness](https://badness.dev/) is a language server, formatter, and linter for
+LaTeX documents.
 
 ## Install
 
@@ -29,8 +29,8 @@ badness lint --fix document.tex # lint and apply auto-fixes
 badness lsp                     # start the language server
 ```
 
-See `badness --help` and the [documentation](https://badness.dev/)
-for the full feature list and configuration reference.
+See `badness --help` and the [documentation](https://badness.dev/) for the full
+feature list and configuration reference.
 
 ## Supported platforms
 

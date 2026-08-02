@@ -89,7 +89,7 @@ The language server runs over stdio (`badness lsp`); see the [editor setup
 guide](https://badness.dev/guide/editor-setup.html) for Neovim and VS Code
 wiring.
 
-## Pre-commit hook
+## Pre-Commit Hook
 
 [badness-pre-commit](https://github.com/jolars/badness-pre-commit) provides
 [pre-commit](https://pre-commit.com) hooks for linting and formatting. It

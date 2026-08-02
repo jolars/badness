@@ -4,7 +4,6 @@ extend-exclude = [
   "AGENTS.md",
   "CHANGELOG.md",
   "CLAUDE.md",
-  "README.md",
   "TODO.md",
   ".claude/**/*",
   "PARSE_COMPAT.md",
@@ -19,3 +18,4 @@ extend-exclude = [
 
 [flavor-overrides]
 "docs/src/**/*.md" = "gfm"
+"README.md" = "gfm"

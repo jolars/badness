@@ -8,8 +8,6 @@ Single-crate package (not a workspace). Parser and formatter are **intentionally
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
---------------------------------------------------------------------------------
-
 ## Parser
 
 ## Formatter
@@ -109,31 +107,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     FP (`straight-quotes`, `unclosed-math-delimiter`, `sectioning-level-jump` on
     `|\part|`, `missing-nonbreaking-space` on `\ref` inside `|…|`) but is a
     genuine catcode limitation, not statically resolvable.
-
-- [x] **`array`/`tikzcd` bodies parsed in text mode drove `unclosed-math-delimiter`
-  FPs.** `array` (the math-mode-only analog of `tabular`) and `tikzcd` (tikz-cd
-  commutative diagrams, whose cells typeset in math) were not flagged `math` in
-  `data/signatures.json`, so their bodies parsed in text mode and a `\left…\right`
-  inside a cell never paired into a `LEFT_RIGHT`. The linter then reported the
-  `\left` as unclosed (dalcde/cam-notes: 18 findings — `\[\begin{array}…
-  \left(\frac…\right)…\]` and `\begin{tikzcd}… H\left(\frac{X}{A}\right) \ar[r]…`).
-  Resolved by curating both as `math` envs (same static-fact route as the matrix
-  family, decision #1). `array` keeps `align` (a genuine alignment matrix the
-  formatter column-aligns, per the `array_columns` fixture); `tikzcd` gets `math`
-  only — a diagram's `&` columns must not be width-aligned, and the formatter
-  output stays byte-identical. Two genuine `\left(…)`/`\left\bra` typos in the
-  corpus (a bare `)` closer, no `\right`) are still correctly flagged.
-
-- [x] **`sectioning-level-jump` ignored the `*` variant.** `\subsubsection*`
-  (unnumbered, no ToC entry) scored identically to `\subsubsection`, so a starred
-  heading under a `\section` was flagged as a level skip (dalcde/cam-notes: 23
-  findings, all `\subsubsection*`, several deliberately mixed with numbered
-  `\subsubsection` in the same file). A starred sectioning command is outside the
-  numbered outline, so it can neither create a lopsided ToC nor set the baseline the
-  next numbered heading is measured against; it is now skipped entirely. The star
-  lexes as a `WORD "*"` sibling after the `CONTROL_WORD`, and a forward-bound
-  `DOC_COMMENT` (decision #9) can precede the control word, so the check skips that
-  node too (`%comment\n\subsubsection*{…}`).
 
 The remaining linter findings from the cam-notes sweep are recorded below as open
 follow-ups (each with a minimal reproducer); none is fixed yet.
@@ -288,30 +261,6 @@ sources below are missing.
   across a selection (`\section` ↔ `\subsection`); the sectioning hierarchy is
   already in the signature DB, so this is a mechanical rewrite.
 
-## Package & class infrastructure (`.sty`/`.cls`/`.dtx`/`.ins`)
-
-The document-level tools are mature; the next frontier is the **package
-ecosystem**—class and package sources, and the literate `.dtx` format they
-ship in. This is a large, multi-area subproject (parser + formatter + semantic).
-It stays inside the AGENTS.md non-goals: bounded, statically-recognizable
-patterns only, signatures *extracted, never executed*, no docstrip run, no TeX
-engine.
-
-### Parsing
-
-- [x] **expl3 full catcode model.** `~` is a literal space (catcode 10) and spaces/tabs
-  are ignored (catcode 9) inside expl3 regions, so the formatter owns in-region layout
-  regardless of `WrapMode`: one statement per source line, brace-group code blocks indent,
-  inter-token whitespace collapses to a single space, and `~` is a breakable space. The
-  formatter recomputes region membership read-only (`formatter::core::expl3_regions`, sharing
-  the lexer's `expl_toggle` set); the CST/lexer are untouched, so losslessness holds and the
-  layout is idempotent by construction (catcode-9 whitespace is insignificant, so it supersedes
-  the flush-B deferral for expl3 — see "Hanging continuation indent" above). See the expl3
-  code-formatting note in `AGENTS.md` decision #1.
-### Formatting
-
-### Semantic and integration
-
 ## Performance & hardening
 
 - [~] Large-doc benchmarks (`hyperfine`, criterion); flamegraph hot paths.
@@ -335,16 +284,6 @@ not re-proposed.
   and answers with `window/showDocument`. Badness never typesets—it only maps
   source↔PDF positions via SyncTeX and shells the viewer. texlab:
   `crates/commands/fwd_search` + the `ipc` crate.
-- **Non-goals (do not re-propose):** build/latexmk orchestration
-  (`textDocument/build`), clean-aux/artifacts, `chktex` passthrough (the native
-  linter supersedes it), and citeproc/CSL bibliography rendering (badness shows a
-  lightweight entry summary; full CSL is out of scope). These sit inside the
-  AGENTS.md "We never typeset" non-goal. **Note (boundary split):** the
-  kpsewhich/distro package DB is *no longer* a blanket non-goal—a **read-only TEXMF
-  file index** feeding *LSP navigation only* now exists (`project::texmf`; see
-  "TEXMF index" under Package & class infrastructure and the AGENTS.md "LSP
-  environment awareness" section). What stays a non-goal is a distro query feeding
-  the **formatter** (it would break formatting determinism).
 
 ## BibTeX/BibLaTeX
 
@@ -370,18 +309,7 @@ not re-proposed.
   (completion, hover, go-to-definition); the `undefined-citation` lint and the
   CLI stay hermetic and project-local.
 
---------------------------------------------------------------------------------
-
-## rust-analyzer conformance audit
-
-A structured audit of badness against **rust-analyzer** (its architectural
-inspiration), across five layers: parser/event-stream, CST/AST/trivia, salsa
-incrementality, the LSP server, and the diagnostics/linter model. A read-only
-rust-analyzer checkout for triage lives at `.rust-analyzer-ref/` (git-ignored;
-`git clone --depth 1 https://github.com/rust-lang/rust-analyzer` to recreate) so
-line references stay stable while we work through the items.
-
-### CST / AST / trivia
+## CST / AST / trivia
 
 - [ ] **[low, latent] No `SyntaxNodePtr`/`AstPtr`.** RA stashes stable node
   pointers in salsa data to re-resolve across reparses; badness sidesteps this by
@@ -390,8 +318,6 @@ line references stay stable while we work through the items.
   that must stash a *stable node identity* in a salsa query (resolving a
   completion/hover target to a specific node across edits) has no primitive for
   it, and byte-ranges alone do not survive edits.
-
---------------------------------------------------------------------------------
 
 ## Open decisions to revisit
 

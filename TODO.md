@@ -147,17 +147,6 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   `\mathrm`/`\mathsf`/`\mathbf`/`\mathit`/`\text`/`\mbox`/`\intertext` ancestor. (Same
   family as the recorded pgf `calc`-coordinate FP above.)
 
-- [ ] **`straight-quotes` corrupts TeX hex constants and font maps under
-  `--unsafe-fixes`.** A `"` opening a TeX hex constant is not isolated by the parser
-  after `\mathchardef`/`\DeclareMathSymbol`, so the rule sees ordinary text:
-  `printf '\\mathchardef\\mdash="2D\n' | badness lint --fix --unsafe-fixes` yields
-  `\mathchardef\mdash=''2D` (breaks the `"2D` = char `-` constant); likewise a
-  `\DeclareMathSymbol{…}{"AC}` slot and a `\pdfmapline{… " -.25 SlantFont " …}`
-  font-map delimiter. These two FPs live in the shared `header.tex` (`\input` by 65
-  files), so one fix clears them everywhere. Gate `"` when it is a hex constant (a
-  `"` before hex digits, or in a `\mathchardef`/`\mathcode`/`\DeclareMathSymbol`
-  numeric slot) and exclude `\pdfmapline`-family arguments.
-
 - [ ] **`dash-length` corrupts pgf/TikZ coordinate arithmetic under
   `--unsafe-fixes`.** The `in_math` guard covers only `$…$`, not a pgfplots
   expression in `{…}`: `printf '\\addplot3 {(y^2-1)^2};\n' | badness lint --fix

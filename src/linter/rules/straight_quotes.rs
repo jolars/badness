@@ -20,6 +20,13 @@
 //! be a false-positive minefield. The rule reads only `WORD` tokens, so comments,
 //! `\verb`, and verbatim environments (which never lex as `WORD`) are untouched,
 //! and math is skipped (a `"` there is not a quotation mark).
+//!
+//! Two more contexts where a `"` is not quotation are skipped. A **TeX hex
+//! constant** (`\mathchardef\mdash="2D`, `\DeclareMathSymbol{...}{"AC}`): a `"`
+//! before uppercase hex digits introduces a hexadecimal number, and rewriting it
+//! breaks the constant ([`is_hex_constant`]). And a **font-map line**
+//! (`\pdfmapline{... " .167 SlantFont"}`): the `"` there delimits a PostScript
+//! transform, not a quotation ([`super::in_pdfmap_argument`]).
 
 use std::path::PathBuf;
 
@@ -64,8 +71,8 @@ impl Rule for StraightQuotes {
          the document opens, anything else closes -- and applies only under \
          `--unsafe-fixes` or as an editor code action, since the guess can flip \
          the typeset glyph. Single straight quotes (`'`) are left alone (they are \
-         legitimately apostrophes), and comments, verbatim, and math are never \
-         touched."
+         legitimately apostrophes), and comments, verbatim, math, TeX hex \
+         constants (`\"2D`), and `\\pdfmapline` font maps are never touched."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -94,9 +101,19 @@ impl Rule for StraightQuotes {
         if super::in_code_argument(tok) {
             return;
         }
+        // Inside `\pdfmapline{…}` the `"` delimits a PostScript transform in a
+        // font-map entry, not quotation; skip the whole argument.
+        if super::in_pdfmap_argument(tok) {
+            return;
+        }
         let base = usize::from(tok.text_range().start());
 
         for (offset, _) in text.match_indices('"') {
+            // A `"` introducing a TeX hex constant (`"2D`, `"AC`) is a number, not
+            // a quotation mark; rewriting it would break the constant.
+            if is_hex_constant(&text[offset + 1..]) {
+                continue;
+            }
             let opening = opens_here(tok, text, offset);
             let (replacement, kind) = if opening {
                 ("``", "opening")
@@ -142,6 +159,32 @@ fn opens_here(tok: &SyntaxToken, text: &str, offset: usize) -> bool {
         None => true,
         Some(c) => c.is_whitespace() || matches!(c, '(' | '[' | '{' | '`'),
     }
+}
+
+/// Whether the text immediately after a `"` reads as a TeX **hex constant**
+/// (`"2D`, `"AC`) rather than the start of a quotation. TeX's `"` scans a
+/// hexadecimal number whose digits are `0-9` and *uppercase* `A-F` only (lowercase
+/// `a-f` are not hex digits), so a real constant is one-or-more such digits
+/// terminated by a non-letter boundary — end of the token, or a non-alphabetic
+/// character (`}`, `=`, space, `\`). A prose quote, by contrast, is followed by a
+/// letter (`"Alpha"`) or a non-hex character, so it is not skipped. Command-
+/// agnostic on purpose: this catches `\mathchardef`, `\mathchar`, `\chardef`,
+/// `\char`, `\mathcode`, `\DeclareMathSymbol`, … uniformly, and the *bare*
+/// assignment form (`\mathchardef\mdash="2D`, no brace group) as well. Since word
+/// characters glue, `="2D` lexes as one `WORD`, so the hex run and its boundary are
+/// always in-token. A false negative (a quoted all-hex acronym like `"CAFE"` loses
+/// its opening-quote finding) is the safe direction (AGENTS.md linter posture): no
+/// fix means no corruption.
+fn is_hex_constant(after: &str) -> bool {
+    let run = after
+        .bytes()
+        .take_while(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'))
+        .count();
+    run > 0
+        && after[run..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphabetic())
 }
 
 #[cfg(test)]
@@ -234,6 +277,47 @@ mod tests {
         assert!(findings("\\luadirect{token.set_macro(\"x\", \"y\")}\n").is_empty());
         // A `"` in ordinary text right next to such a command still flags.
         assert_eq!(findings("say \"hi\" \\directlua{f(\"z\")}\n").len(), 2);
+    }
+
+    #[test]
+    fn hex_constant_bare_assignment_is_skipped() {
+        // `\mathchardef\mdash="2D` — the `"2D` is a hex number, not quotation.
+        assert!(findings("\\mathchardef\\mdash=\"2D\n").is_empty());
+        // Other `"`-hex primitives are covered command-agnostically.
+        assert!(findings("\\mathcode`\\-=\"2D\n").is_empty());
+        assert!(findings("\\chardef\\x=\"7F\n").is_empty());
+    }
+
+    #[test]
+    fn hex_constant_in_braced_slot_is_skipped() {
+        let src = "\\DeclareMathSymbol{\\mdash}{\\mathalpha}{operators}{\"2D}\n";
+        assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn pdfmapline_delimiters_are_skipped() {
+        // The `"` there delimit a PostScript transform, not quotation.
+        let src = "\\pdfmapline{+font <font.pfb \" -.25 SlantFont \" <font2.pfb}\n";
+        assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn prose_quote_before_hex_letter_word_still_flags() {
+        // `"Alpha"` — the opening `"` is before `A`, but `A` is followed by the
+        // letter `l`, so it is prose, not a hex constant: both quotes still flag.
+        let out = findings("He said \"Alpha\" today.\n");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "``");
+        assert_eq!(out[1].fix.as_ref().unwrap().edits[0].content, "''");
+    }
+
+    #[test]
+    fn all_hex_acronym_loses_only_opening_quote() {
+        // Accepted false negative: `"CAFE"` reads as a hex run (`CAFE`) terminated
+        // by `"`, so the opening quote is skipped; the closing one still flags.
+        let out = findings("the \"CAFE\" run\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "''");
     }
 
     #[test]

@@ -330,6 +330,33 @@ pub(crate) fn in_code_argument(tok: &crate::syntax::SyntaxToken) -> bool {
     })
 }
 
+/// The curated set of commands whose braced argument is a *font-map line*, not
+/// LaTeX prose: pdfTeX's `\pdfmapline`/`\pdfmapfile`. Their body is a dvips-style
+/// map entry (`+cmr10 <cmr10.pfb " .167 SlantFont"`), where a `"` delimits a
+/// PostScript transform and a `-`/`--` is a flag, never quotation or a dash.
+/// Curated and deliberately small like [`is_code_argument_command`]; a wrong entry
+/// only silences a prose lint inside that command (a false negative), never the
+/// reverse.
+fn is_pdfmap_command(name: &str) -> bool {
+    matches!(name, "pdfmapline" | "pdfmapfile")
+}
+
+/// Whether `tok` sits inside the argument of a font-map command
+/// ([`is_pdfmap_command`]) — a `\pdfmapline` map entry, which is font-map data, not
+/// prose. `straight-quotes` uses this to stay off the `"` PostScript-transform
+/// delimiters there. Same greedy-attachment posture as [`in_key_argument`]: *all*
+/// argument groups are skipped, since arity is unknown at parse time (AGENTS.md
+/// decision #8) and a false negative is preferred.
+pub(crate) fn in_pdfmap_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
+            && node.parent().is_some_and(|cmd| {
+                cmd.kind() == SyntaxKind::COMMAND
+                    && crate::ast::command_name(&cmd).is_some_and(|name| is_pdfmap_command(&name))
+            })
+    })
+}
+
 /// Whether `tok` sits inside a doc/ltxdoc *description* command — `\DescribeMacro`
 /// or `\DescribeEnv`, whose argument is the macro or environment *being
 /// documented*, rendered as a syntax illustration in the margin rather than as

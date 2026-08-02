@@ -281,7 +281,7 @@ warning: hard-coded-reference
 
 ## `straight-quotes`
 
-Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight `"` always sets a *closing* double quote, so an opening one comes out backwards; the correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. The fix is **unsafe**: it infers direction from context -- a quote preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document opens, anything else closes -- and applies only under `--unsafe-fixes` or as an editor code action, since the guess can flip the typeset glyph. Single straight quotes (`'`) are left alone (they are legitimately apostrophes), and comments, verbatim, and math are never touched.
+Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight `"` always sets a *closing* double quote, so an opening one comes out backwards; the correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. The fix is **unsafe**: it infers direction from context -- a quote preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document opens, anything else closes -- and applies only under `--unsafe-fixes` or as an editor code action, since the guess can flip the typeset glyph. Single straight quotes (`'`) are left alone (they are legitimately apostrophes), and comments, verbatim, math, TeX hex constants (`"2D`), and `\pdfmapline` font maps are never touched.
 
 Straight ASCII double quotes around a phrase:
 

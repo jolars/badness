@@ -28,6 +28,14 @@
 //! -- covering both `$…$`/`\[…\]` (a `MATH` ancestor) and math environments like
 //! `equation`/`align` (read off the built-in signature DB's `math` flag).
 //!
+//! For the zero-width `\index`/`\label` there is a mirror gate on the *other*
+//! side: because they type no glyph, the leading space is a real interword space
+//! bridging the preceding word to whatever follows the group. Deleting it is only
+//! correct when the group is trailed by a break (whitespace, newline, or
+//! paragraph/document end); if visible content abuts the group
+//! (`We write \index{$x$}$x$`), removing the space would merge the word into it,
+//! so the finding is withheld (mirroring the pre-space `WORD` gate).
+//!
 //! The command table lives here, not in `data/signatures.json`: "a space before
 //! this command is wrong" is a lint judgment, not the structural arity/verbatim
 //! fact the signature DB carries (AGENTS.md core decision #2).
@@ -50,6 +58,11 @@ const EXAMPLES: &[Example] = &[Example {
 /// typeset or affects pagination, essentially never intentionally. Curated (not
 /// from the signature DB) because "no space before this" is a lint judgment.
 const NO_SPACE_COMMANDS: &[&str] = &["footnote", "footnotemark", "index", "label"];
+
+/// Zero-width commands (no glyph of their own): the pre-space bridges the
+/// preceding word to whatever follows the group, so deleting it is only correct
+/// when the group is itself trailed by a break. A subset of `NO_SPACE_COMMANDS`.
+const ZERO_WIDTH_COMMANDS: &[&str] = &["index", "label"];
 
 pub struct SpaceBeforeCommand;
 
@@ -78,7 +91,10 @@ impl Rule for SpaceBeforeCommand {
          conservative only the same-line `WORD SPACE \\cmd` shape is flagged (a \
          space at line start or after a brace is left alone), and math is skipped \
          (an inter-token space is insignificant there), covering both `$…$` and \
-         math environments like `equation`/`align`."
+         math environments like `equation`/`align`. For the zero-width \
+         `\\index`/`\\label` the fix is withheld unless the group is trailed by \
+         whitespace, a newline, or paragraph end, since otherwise the leading \
+         space is a real interword space to the following content."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -121,6 +137,15 @@ impl Rule for SpaceBeforeCommand {
         if space.prev_token().map(|t| t.kind()) != Some(SyntaxKind::WORD) {
             return;
         }
+        // A zero-width `\index`/`\label` types no glyph, so the leading space is a
+        // real interword space bridging the preceding word to whatever follows the
+        // group. Deleting it is only correct when the group is trailed by a break
+        // (whitespace, newline, or paragraph/document end); if visible content abuts
+        // the group, removing the space merges the word into it. Mirror the
+        // pre-space WORD gate and stay quiet (conservative false negative).
+        if ZERO_WIDTH_COMMANDS.contains(&name.as_str()) && !followed_by_break(command) {
+            return;
+        }
 
         let range = space.text_range();
         let start = usize::from(range.start());
@@ -146,6 +171,20 @@ impl Rule for SpaceBeforeCommand {
             fix: Some(fix),
             related: Vec::new(),
         });
+    }
+}
+
+/// Whether the token immediately after the whole command node (argument group
+/// included) is a break: same-line whitespace, a newline, or end of input
+/// (paragraph/document end). Keeps the zero-width `\index`/`\label` fix from
+/// deleting a load-bearing interword space when visible content abuts the group.
+/// The command node greedily includes its argument group (decision #8), so its
+/// last token is the closing `}` and `next_token()` walks to the token past it
+/// (trailing trivia floats as a sibling, so it is what `next_token()` returns).
+fn followed_by_break(command: &SyntaxNode) -> bool {
+    match command.last_token().and_then(|t| t.next_token()) {
+        None => true, // end of input == paragraph/document end
+        Some(t) => matches!(t.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE),
     }
 }
 
@@ -280,5 +319,33 @@ mod tests {
     #[test]
     fn flags_each_occurrence() {
         assert_eq!(findings("a \\footnote{x} and b \\index{y}\n").len(), 2);
+    }
+
+    #[test]
+    fn zero_width_abutting_visible_content_is_suppressed() {
+        // The space before `\index` here is a real interword space bridging
+        // "write" to the following `$x \in E$`; deleting it would render
+        // "write$x$". No finding (mirrors the pre-space WORD gate).
+        assert!(findings("We write \\index{$x$}$x \\in E$ done\n").is_empty());
+        // A bare word abutting the group is the same shape.
+        assert!(findings("word \\index{term}next\n").is_empty());
+        // `\label` is zero-width too.
+        assert!(findings("word \\label{sec}$x$\n").is_empty());
+    }
+
+    #[test]
+    fn zero_width_trailed_by_break_is_still_flagged() {
+        // Whitespace, a newline, or end of input after the group all leave a
+        // separating break, so deleting the leading space is still correct.
+        assert_eq!(findings("word \\index{term} more\n").len(), 1);
+        assert_eq!(findings("word \\index{term}\n").len(), 1);
+        assert_eq!(findings("word \\index{term}").len(), 1);
+    }
+
+    #[test]
+    fn footnote_is_not_gated_by_trailing_content() {
+        // `\footnote` emits a visible mark, so its pre-space is spurious
+        // regardless of what follows: the zero-width gate does not apply.
+        assert_eq!(findings("word \\footnote{x}next\n").len(), 1);
     }
 }

@@ -426,9 +426,12 @@ fn abbreviation_spacing_fires_end_to_end_and_its_fix_is_correct() {
 
 #[test]
 fn space_before_command_fires_end_to_end_and_its_fix_is_correct() {
-    // A space before `\footnote` and before `\label` trip the rule; the tight
-    // `\emph` does not.
-    let src = "See \\emph{this} word \\footnote{n} and here \\label{s}.\n";
+    // A space before `\footnote` and before a `\label` that is trailed by a break
+    // both trip the rule; the tight `\emph` does not. The zero-width `\label` is
+    // followed by whitespace, so its leading space is safe to delete. (A `\label`
+    // abutting visible content, e.g. `\label{s}.`, is suppressed -- see the unit
+    // test `zero_width_abutting_visible_content_is_suppressed`.)
+    let src = "See \\emph{this} word \\footnote{n} and here \\label{s} too.\n";
     assert_eq!(
         lint(src),
         vec![
@@ -440,7 +443,7 @@ fn space_before_command_fires_end_to_end_and_its_fix_is_correct() {
     assert_fix_is_correct(src);
     assert_eq!(
         fix_to_fixpoint(src),
-        "See \\emph{this} word\\footnote{n} and here\\label{s}.\n"
+        "See \\emph{this} word\\footnote{n} and here\\label{s} too.\n"
     );
 }
 

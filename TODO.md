@@ -156,14 +156,6 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   `Unsafe`-gated so `--fix` withholds them, but they are noise and the tikz case is a
   real corruption.
 
-- [ ] **`space-before-command` deletes a real interword space around `\index`.**
-  The rule inspects only what precedes `\index`, never what follows the group. When
-  `\index{…}` is wedged between a word and inline content with no following space,
-  `printf 'We write \\index{$x$}$x \\in E$ done\n'` flags the pre-`\index` space and
-  `--unsafe-fixes` deletes it (`We write\index{…}$x$`, rendering "write$x$"). Gate the
-  fix on the token *after* the `\index{…}` group being whitespace/newline/paragraph
-  end (mirroring the existing pre-space WORD gate). 3 of 9 `\index` findings unsafe.
-
 - [ ] **`hard-coded-reference` over-flags the word "Part".** "Part" collides with
   Cambridge tripos course names (`the Part III course`), external book divisions
   (`Chapter 3 of Hartshorne`, `Part 3 of X`), and `\item[Part N.]` description labels

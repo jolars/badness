@@ -211,6 +211,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Attach the platform installer scripts once (they are repo files, not
+      # per-target build outputs) so the README one-liners resolve them.
+      - name: Upload installer scripts to release
+        if: inputs.upload == 'true' && matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag }}"
+          gh release upload --clobber "$TAG" \
+            scripts/badness-installer.sh \
+            scripts/badness-installer.ps1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # Linux glibc targets also ship .deb and .rpm packages. The binary is
       # already built above; cargo-deb runs with --no-build so it packages that
       # artifact rather than rebuilding. Both tools read the asset lists from

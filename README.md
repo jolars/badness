@@ -44,6 +44,25 @@ Badness is available from several sources:
   (also works in Positron and Cursor)
 - **From source**: `cargo install --path .` in a checkout
 
+If you prefer a one-liner installer that picks the right release artifact for
+your platform, you can use the installer scripts below. These scripts are
+fetched directly from this repository and then download the latest matching
+Badness release asset for your platform, installing to a user-local directory by
+default. If you prefer, download and inspect the script before running it.
+
+For macOS and Linux:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+    https://raw.githubusercontent.com/jolars/badness/refs/heads/main/scripts/badness-installer.sh | sh
+```
+
+For Windows PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jolars/badness/refs/heads/main/scripts/badness-installer.ps1 | iex"
+```
+
 The VS Code/Open VSX extension bundles the `badness` binary and starts the
 language server automatically when you open a `.tex` file.
 

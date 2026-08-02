@@ -51,10 +51,12 @@
 //! Deliberately **not** flagged, because a break there orphans nothing:
 //!
 //! - **Self-describing references** (`\autoref`, `\cref`, `\Cref`, `\nameref`,
-//!   `\vref`, `\Vref`, `\cpageref`, `\crefrange`, `\Crefrange`): these emit the
-//!   noun themselves (`\autoref{x}` → "Figure 2"), so the space before them is
-//!   ordinary prose ("in Figure 2"). cleveref also ties the noun to its number
-//!   internally, so the only meaningful tie is one we cannot see.
+//!   `\vref`, `\Vref`, `\cpageref`, `\crefrange`, `\Crefrange`, and zref-clever's
+//!   `\zcref`, `\zcpageref`): these emit the noun themselves (`\autoref{x}` →
+//!   "Figure 2", `\zcref{x}` → "Theorem 1.1"), so the space before them is
+//!   ordinary prose ("in Figure 2"). cleveref and zref-clever also tie the noun
+//!   to its number internally, so the only meaningful tie is one we cannot see
+//!   (issue #89).
 //! - **Textual citations** (`\textcite`, `\citet`, `\citeauthor`, `\citeyear`,
 //!   `\citealt`, `\citealp`, `\fullcite`): these weave an author name into the
 //!   running prose (`\textcite{x}` → "Smith (2020)"), so there is no bracketed
@@ -296,8 +298,18 @@ mod tests {
     #[test]
     fn self_describing_refs_are_not_flagged() {
         // These emit the reference noun themselves ("Figure 2"), so the space
-        // before them is ordinary prose, not an orphanable number.
-        for cmd in ["autoref", "cref", "Cref", "nameref", "vref", "cpageref"] {
+        // before them is ordinary prose, not an orphanable number. Includes
+        // zref-clever's `\zcref`/`\zcpageref`, which insert the type too (#89).
+        for cmd in [
+            "autoref",
+            "cref",
+            "Cref",
+            "nameref",
+            "vref",
+            "cpageref",
+            "zcref",
+            "zcpageref",
+        ] {
             assert!(
                 findings(&format!("in \\{cmd}{{x}}\n")).is_empty(),
                 "\\{cmd} should not be flagged"

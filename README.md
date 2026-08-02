@@ -2,6 +2,7 @@
 
 [![Build and
 Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/build-and-test.yml)
+[![Crates.io](https://img.shields.io/crates/v/badness.svg?logo=rust)](https://crates.io/crates/badness)
 [![Open
 VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-vsx.org/extension/jolars/badness)
 [![VS

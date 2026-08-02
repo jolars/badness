@@ -14,24 +14,16 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{AstToken, ControlWord, child_token, command_name, control_word_range};
+use crate::ast::{command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxElement, SyntaxKind};
 
-use super::{Example, Rule, RuleContext};
+use super::{Example, Rule, RuleContext, in_reference_position};
 
 const EXAMPLES: &[Example] = &[Example {
     caption: "An obsolete two-letter font switch:",
     source: "{\\bf important}\n",
 }];
-
-/// TeX primitives that *reference* the following control word(s) — bind, compare,
-/// or (re)define — rather than execute them. A deprecated switch sitting in one of
-/// their operand slots (`\let\x\rm`, `\ifx\rm\y`, `\def\rm{…}`) must not get the
-/// control-word swap: `\let\x\rmfamily` copies a *different* meaning, and in the
-/// plain-TeX/ConTeXt branches this idiom guards, `\rmfamily` is undefined. Stored
-/// with the leading backslash to compare against `CONTROL_WORD` text directly.
-const REFERENCE_PRIMITIVES: &[&str] = &["\\let", "\\def", "\\edef", "\\gdef", "\\xdef", "\\ifx"];
 
 /// Deprecated control word → its modern replacement.
 const DEPRECATED: &[(&str, &str)] = &[
@@ -63,9 +55,12 @@ impl Rule for DeprecatedCommand {
         "Flag the obsolete two-letter font *switches* (`\\bf`, `\\it`, `\\rm`, \
          `\\sf`, `\\tt`, `\\sc`, `\\sl`) that LaTeX 2e superseded with the \
          `\\...series`/`\\...shape`/`\\...family` declarations. `\\em` is not \
-         flagged; it is still the supported emphasis switch. The autofix swaps \
-         just the control word (`\\bf` -> `\\bfseries`), leaving any following \
-         text untouched, so it is correct by construction."
+         flagged; it is still the supported emphasis switch. A name the file \
+         redefines (`\\renewcommand{\\sl}{…}`, `\\def\\rm{…}`) is the user's macro, \
+         not the switch, so it is not flagged anywhere. The autofix swaps just the \
+         control word (`\\bf` -> `\\bfseries`), leaving any following text \
+         untouched, so it is correct by construction; it is withheld where the \
+         switch is merely referenced (`\\let\\x\\rm`, `\\ifx\\rm\\y`)."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -76,7 +71,7 @@ impl Rule for DeprecatedCommand {
         &[SyntaxKind::COMMAND]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(command) = el.as_node() else {
             return;
         };
@@ -86,6 +81,14 @@ impl Rule for DeprecatedCommand {
         let Some((_, replacement)) = DEPRECATED.iter().find(|(dep, _)| *dep == name) else {
             return;
         };
+        // A name the file redefines (`\renewcommand{\sl}{…}`, `\def\rm{…}`) is the
+        // user's macro, not the font switch, at *every* occurrence — including the
+        // definition site. Suppress the finding entirely; the reference-only
+        // `\let`/`\ifx` forms (which carry no new meaning) fall through and are
+        // handled by the fix-withholding gate below.
+        if ctx.user_definitions().command(&name).is_some() {
+            return;
+        }
         // Underline just the control word, not any greedily-attached group, so
         // the caret sits tightly on `\bf`.
         let control_word = control_word_range(command);
@@ -96,9 +99,9 @@ impl Rule for DeprecatedCommand {
         // construction (tenet 1). It is withheld in two cases: the fallback span,
         // where the tight control word could not be isolated and a whole-node
         // rewrite might drop a greedily-attached group; and a *reference* position
-        // (`\let\x\rm`, `\ifx\rm\y`, `\def\rm{…}`), where the switch is bound or
-        // compared rather than executed, so the swap changes meaning (and
-        // `\rmfamily` may not even exist). The finding still stands in both cases.
+        // (`\let\x\rm`, `\ifx\rm\y`), where the switch is bound or compared rather
+        // than executed, so the swap changes meaning (and `\rmfamily` may not even
+        // exist). The finding still stands in both cases.
         let fix = control_word
             .filter(|_| !in_reference_position(command))
             .map(|r| {
@@ -120,44 +123,6 @@ impl Rule for DeprecatedCommand {
             related: Vec::new(),
         });
     }
-}
-
-/// Whether `command`'s control word sits in a [`REFERENCE_PRIMITIVES`] operand slot.
-/// The CST is flat, so a `\let`/`\def`/`\ifx` primitive is one or two control words
-/// back (`\let\x\rm`: `\x` then `\let`; `\ifx\a\rm`: `\a` then `\ifx`). Scan backward
-/// over trivia and a possible `=` separator (`\let\x=\rm`), inspecting the two
-/// nearest control words; a reference primitive among them means "referenced".
-fn in_reference_position(command: &SyntaxNode) -> bool {
-    let Some(control_word) = child_token::<ControlWord>(command) else {
-        return false;
-    };
-    let mut token = control_word.syntax().prev_token();
-    let mut control_words_seen = 0;
-    while let Some(current) = token {
-        match current.kind() {
-            // Trivia never breaks the chain. A `WORD` is skipped too: an at-letter
-            // definee splits under document catcodes (`\let\foo@bar\rm` lexes as
-            // `\foo` + `@bar`), and `\let\x=\rm` writes an explicit `=`. The
-            // two-control-word cutoff below bounds how far this look-back reaches, so
-            // skipping intervening words cannot run away.
-            SyntaxKind::WHITESPACE
-            | SyntaxKind::NEWLINE
-            | SyntaxKind::COMMENT
-            | SyntaxKind::WORD => {}
-            SyntaxKind::CONTROL_WORD => {
-                if REFERENCE_PRIMITIVES.contains(&current.text()) {
-                    return true;
-                }
-                control_words_seen += 1;
-                if control_words_seen >= 2 {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-        token = current.prev_token();
-    }
-    false
 }
 
 #[cfg(test)]
@@ -218,17 +183,16 @@ mod tests {
 
     #[test]
     fn reference_position_reports_without_a_fix() {
-        // In `\let\x\rm`, `\ifx…`, and `\def\rm{…}` the control word is *referenced*
-        // (copied/compared/redefined), not executed as a font switch, so the swap
-        // `\rm`→`\rmfamily` changes meaning (and `\rmfamily` may not even exist, as in
-        // plain-TeX/ConTeXt branches). The finding stands, but the harmful Safe fix is
-        // withheld.
+        // In `\let\x\rm` and `\ifx…` the control word is *referenced* (copied or
+        // compared), not executed as a font switch, so the swap `\rm`→`\rmfamily`
+        // changes meaning (and `\rmfamily` may not even exist, as in plain-TeX/ConTeXt
+        // branches). These forms carry no replacement body, so `scan_definitions` does
+        // not record them: the finding stands, but the harmful Safe fix is withheld.
         for src in [
             "\\let\\pgfmath@selectfont\\rm\n",
             "\\let\\x=\\rm\n",
             "\\ifx\\rm\\foo\\fi\n",
             "\\ifx\\foo\\rm\\fi\n",
-            "\\def\\rm{x}\n",
         ] {
             let out = findings(src);
             assert_eq!(out.len(), 1, "still reports: {src:?}");
@@ -236,6 +200,20 @@ mod tests {
                 out[0].fix.is_none(),
                 "no fix in reference position: {src:?}"
             );
+        }
+    }
+
+    #[test]
+    fn redefinition_is_fully_suppressed() {
+        // A name the file redefines with a body (`\def`, `\renewcommand`, braced or
+        // unbraced) is the user's macro, not the font switch, at every occurrence —
+        // including the definition site and every later use. No finding anywhere.
+        for src in [
+            "\\def\\rm{x}\n",
+            "\\renewcommand{\\sl}{\\mathfrak{sl}}\n$\\sl_2$\n",
+            "\\renewcommand\\sl{\\mathfrak{sl}}\n$\\sl_2$\n",
+        ] {
+            assert!(findings(src).is_empty(), "should be suppressed: {src:?}");
         }
     }
 

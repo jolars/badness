@@ -79,7 +79,7 @@ warning: duplicate-label
 
 ## `deprecated-command`
 
-Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`, `\sc`, `\sl`) that LaTeX 2e superseded with the `\...series`/`\...shape`/`\...family` declarations. `\em` is not flagged; it is still the supported emphasis switch. The autofix swaps just the control word (`\bf` -> `\bfseries`), leaving any following text untouched, so it is correct by construction.
+Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`, `\sc`, `\sl`) that LaTeX 2e superseded with the `\...series`/`\...shape`/`\...family` declarations. `\em` is not flagged; it is still the supported emphasis switch. A name the file redefines (`\renewcommand{\sl}{…}`, `\def\rm{…}`) is the user's macro, not the switch, so it is not flagged anywhere. The autofix swaps just the control word (`\bf` -> `\bfseries`), leaving any following text untouched, so it is correct by construction; it is withheld where the switch is merely referenced (`\let\x\rm`, `\ifx\rm\y`).
 
 An obsolete two-letter font switch:
 
@@ -149,7 +149,7 @@ After applying the fix:
 
 ## `primitive-command`
 
-Flag raw plain-TeX primitives discouraged in LaTeX source, naming the LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A sibling of `deprecated-command`, which covers the obsolete font switches. Most primitives are reported only: their LaTeX replacement restructures arguments (`a \over b` becomes `\frac{a}{b}`, `\centerline{x}` becomes a `\centering` declaration or a `center` environment), so no single textual edit can rewrite them correctly by construction. A few carry a `Safe` autofix — a 1:1 control-word swap for a primitive whose LaTeX form is a single meaning-identical token (`\sb`/`\sp` become `_`/`^`); the swap replaces just the control word, so it stays lossless and meaning-preserving.
+Flag raw plain-TeX primitives discouraged in LaTeX source, naming the LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A sibling of `deprecated-command`, which covers the obsolete font switches. Most primitives are reported only: their LaTeX replacement restructures arguments (`a \over b` becomes `\frac{a}{b}`, `\centerline{x}` becomes a `\centering` declaration or a `center` environment), so no single textual edit can rewrite them correctly by construction. A few carry a `Safe` autofix — a 1:1 control-word swap for a primitive whose LaTeX form is a single meaning-identical token (`\sb`/`\sp` become `_`/`^`); the swap replaces just the control word, so it stays lossless and meaning-preserving, and is withheld where the primitive is merely referenced (`\let\x\sp`, `\ifx\sp\y`). A name the file redefines (`\renewcommand\sp{…}`) is the user's macro, not the primitive, so it is not flagged anywhere.
 
 A plain-TeX fraction primitive (report-only; the LaTeX form restructures its operands):
 

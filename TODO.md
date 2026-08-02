@@ -138,19 +138,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 The remaining linter findings from the cam-notes sweep are recorded below as open
 follow-ups (each with a minimal reproducer); none is fixed yet.
 
-- [ ] **`deprecated-command`/`primitive-command` ignore in-document redefinitions
-  — with corrupting `--unsafe-fixes`.** The notes `\renewcommand{\sl}{\mathfrak{sl}}`
-  and `\renewcommand\sp{\mathrm{sp}}`, so every `$\sl_2$`/`$\sp(n)$` is a call to the
-  user's macro, not the deprecated font switch or the `\sp` primitive (21 FPs). Worse,
-  `printf '$\\sp(n)$\n' | badness lint --fix --unsafe-fixes` rewrites to `$^(n)$`
-  (broken math), and the `\renewcommand{\sl}{…}`/`\renewcommand\sp{…}` *definee*
-  itself is flagged and rewritten (`\renewcommand{\slshape}{…}`, `\renewcommand^{…}`).
-  Root causes: (a) neither rule consults `semantic/define.rs::scan_definitions`
-  (which already exists) to suppress a redefined command; (b) `primitive-command` has
-  no reference-position guard at all, and `deprecated_command::in_reference_position`
-  covers only `\let`/`\def`-family definees, missing the `\renewcommand{…}{…}`
-  brace-group form.
-
 - [ ] **`math-operator-name` fires inside upright font groups and text escapes.**
   `printf '$\\mathrm{exp}(x)$\n' | badness lint` flags `exp` although `\mathrm{exp}`
   already typesets upright (the message "typesets as italic variables" is false here),

@@ -27,7 +27,7 @@ use crate::ast::{command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::syntax::{SyntaxElement, SyntaxKind};
 
-use super::{Example, Rule, RuleContext};
+use super::{Example, Rule, RuleContext, in_reference_position};
 
 /// A discouraged primitive: its control word (backslash stripped), the LaTeX
 /// construct named in the message, and — where a 1:1 meaning-identical
@@ -142,7 +142,10 @@ impl Rule for PrimitiveCommand {
          construction. A few carry a `Safe` autofix — a 1:1 control-word swap for \
          a primitive whose LaTeX form is a single meaning-identical token \
          (`\\sb`/`\\sp` become `_`/`^`); the swap replaces just the control word, \
-         so it stays lossless and meaning-preserving."
+         so it stays lossless and meaning-preserving, and is withheld where the \
+         primitive is merely referenced (`\\let\\x\\sp`, `\\ifx\\sp\\y`). A name the \
+         file redefines (`\\renewcommand\\sp{…}`) is the user's macro, not the \
+         primitive, so it is not flagged anywhere."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -153,7 +156,7 @@ impl Rule for PrimitiveCommand {
         &[SyntaxKind::COMMAND]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(command) = el.as_node() else {
             return;
         };
@@ -163,6 +166,14 @@ impl Rule for PrimitiveCommand {
         let Some(primitive) = PRIMITIVES.iter().find(|p| p.name == name) else {
             return;
         };
+        // A name the file redefines (`\renewcommand\sp{\mathrm{sp}}`, `\def\sp{…}`)
+        // is the user's macro, not the primitive, at *every* occurrence — including
+        // the definition site, whose `\sp` must never become `^`. Suppress the
+        // finding entirely; the reference-only `\let`/`\ifx` forms fall through and
+        // are handled by the fix-withholding gate below.
+        if ctx.user_definitions().command(&name).is_some() {
+            return;
+        }
         // Underline just the control word, not any greedily-attached group, so
         // the caret sits tightly on the primitive.
         let control_word = control_word_range(command);
@@ -170,16 +181,22 @@ impl Rule for PrimitiveCommand {
         // A Safe fix only when the table gives a 1:1 swap *and* we can isolate
         // the control word: the span covers exactly the `CONTROL_WORD` token, the
         // replacement is a single meaning-identical token, so it is correct by
-        // construction (tenet 1). Report-only primitives (argument-restructuring
-        // replacements) carry no fix.
-        let fix = primitive.swap.zip(control_word).map(|(swap, r)| {
-            Fix::safe(
-                usize::from(r.start()),
-                usize::from(r.end()),
-                swap.to_string(),
-                format!("Replace `\\{name}` with `{swap}`"),
-            )
-        });
+        // construction (tenet 1). It is withheld for report-only primitives
+        // (argument-restructuring replacements) and in a *reference* position
+        // (`\let\x\sp`, `\ifx\sp\y`), where the swap would rewrite `\sp` to a bare
+        // `^`/`_` that TeX cannot bind or compare. The finding still stands.
+        let fix = primitive
+            .swap
+            .zip(control_word)
+            .filter(|_| !in_reference_position(command))
+            .map(|(swap, r)| {
+                Fix::safe(
+                    usize::from(r.start()),
+                    usize::from(r.end()),
+                    swap.to_string(),
+                    format!("Replace `\\{name}` with `{swap}`"),
+                )
+            });
         sink.push(Diagnostic {
             rule: self.id(),
             severity: self.default_severity(),
@@ -270,5 +287,53 @@ mod tests {
         let out = findings("$x\\sp2$\n");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "^");
+    }
+
+    #[test]
+    fn reference_position_reports_without_a_fix() {
+        // In `\let\x\sp` and `\ifx\sp\y` the primitive is aliased or compared, not
+        // executed, so the swap `\sp`→`^` would produce a bare superscript TeX cannot
+        // bind or compare. `\let`/`\ifx` carry no body, so `scan_definitions` does not
+        // record them: the finding stands, but the harmful Safe fix is withheld.
+        for src in [
+            "\\let\\x\\sp\n",
+            "\\ifx\\sp\\foo\\fi\n",
+            "\\ifx\\foo\\sp\\fi\n",
+        ] {
+            let out = findings(src);
+            assert_eq!(out.len(), 1, "still reports: {src:?}");
+            assert!(
+                out[0].fix.is_none(),
+                "no fix in reference position: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn redefinition_is_fully_suppressed() {
+        // A name the file redefines with a body is the user's macro, not the
+        // primitive, at every occurrence — including the definition site and later
+        // uses. No finding anywhere.
+        for src in [
+            "\\renewcommand\\sp{\\mathrm{sp}}\n$\\sp(n)$\n",
+            "\\renewcommand{\\sp}{\\mathrm{sp}}\n$\\sp(n)$\n",
+            "\\def\\sp{\\mathrm{sp}}\n$\\sp(n)$\n",
+        ] {
+            assert!(findings(src).is_empty(), "should be suppressed: {src:?}");
+        }
+    }
+
+    #[test]
+    fn redefined_definee_is_not_rewritten_even_unsafe() {
+        // Regression: with `--unsafe-fixes`, the `\sp` definee must not become `^`
+        // (`\renewcommand^{…}` is broken source). Suppression removes the finding, so
+        // there is no fix to apply.
+        use crate::linter::fix::apply_fixes;
+
+        let src = "\\renewcommand\\sp{\\mathrm{sp}}\n$\\sp(n)$\n";
+        let out = findings(src);
+        assert!(out.is_empty());
+        let fixes: Vec<_> = out.into_iter().filter_map(|d| d.fix).collect();
+        assert_eq!(apply_fixes(src, &fixes, true).output, src);
     }
 }

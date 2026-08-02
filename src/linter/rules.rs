@@ -11,8 +11,11 @@ use std::sync::OnceLock;
 
 use rowan::{TextRange, TextSize};
 
+use crate::ast::{AstToken, ControlWord, child_token};
 use crate::project::{ResolvedCitations, ResolvedLabels, ResolvedPackageOptions};
 use crate::semantic::SemanticModel;
+use crate::semantic::define::scan_definitions;
+use crate::semantic::signature::SignatureDb;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::diagnostic::{Diagnostic, Severity};
@@ -117,6 +120,13 @@ pub struct RuleContext<'a> {
     /// delimiters are rare, so — unlike `math_regions` — it is computed *lazily*
     /// on first [`RuleContext::in_expl3`] call rather than for every lint.
     expl3_regions: OnceLock<Vec<TextRange>>,
+    /// The document's user command/environment definitions ([`scan_definitions`]),
+    /// shared by the rules that must not flag a name the file itself redefines
+    /// (`missing-required-argument`, `deprecated-command`, `primitive-command`).
+    /// Same lazy posture as `expl3_regions`: scanned once, on the first
+    /// [`RuleContext::user_definitions`] call, so a lint that never asks (the common
+    /// case, since these rules ask only after matching a curated name) pays nothing.
+    user_definitions: OnceLock<SignatureDb>,
 }
 
 impl<'a> RuleContext<'a> {
@@ -141,6 +151,7 @@ impl<'a> RuleContext<'a> {
             math_regions: math_regions(root),
             conditionals: super::conditional::ConditionalIndex::compute(root),
             expl3_regions: OnceLock::new(),
+            user_definitions: OnceLock::new(),
         }
     }
 
@@ -185,6 +196,68 @@ impl<'a> RuleContext<'a> {
             Err(i) => regions[i - 1].contains(offset),
         }
     }
+
+    /// The document's user command/environment definitions, scanned lazily and
+    /// cached. A command a rule would otherwise flag by name (a deprecated switch,
+    /// a discouraged primitive, a low-arity built-in) must be left alone when the
+    /// file redefines it: `\renewcommand\sp{…}` turns every later `\sp` into the
+    /// user's macro, not the primitive. Query with
+    /// [`SignatureDb::command`]/[`SignatureDb::environment`].
+    pub(crate) fn user_definitions(&self) -> &SignatureDb {
+        self.user_definitions
+            .get_or_init(|| scan_definitions(self.root))
+    }
+}
+
+/// TeX primitives that merely *reference* the following control word(s) — alias
+/// them (`\let\x\rm`) or compare them (`\ifx\rm\y`) — rather than execute them,
+/// and (unlike the `\def`/`\renewcommand` family) carry no replacement body, so
+/// [`RuleContext::user_definitions`] does not record them. A deprecated switch or
+/// discouraged primitive sitting in one of their operand slots must not get the
+/// control-word swap: `\let\x\rmfamily` copies a *different* meaning, and where
+/// this idiom guards the plain-TeX/ConTeXt branch, `\rmfamily`/`^` is undefined.
+/// Redefinitions (a new meaning) are handled upstream by `user_definitions` — they
+/// suppress the whole finding — so this narrow set is reference-only. Stored with
+/// the leading backslash to compare against `CONTROL_WORD` text directly.
+const REFERENCE_PRIMITIVES: &[&str] = &["\\let", "\\ifx"];
+
+/// Whether `command`'s control word sits in a [`REFERENCE_PRIMITIVES`] operand slot.
+/// The CST is flat, so a `\let`/`\ifx` primitive is one or two control words back
+/// (`\let\x\rm`: `\x` then `\let`; `\ifx\a\rm`: `\a` then `\ifx`). Scan backward over
+/// trivia and a possible `=` separator (`\let\x=\rm`), inspecting the two nearest
+/// control words; a reference primitive among them means "referenced". Shared by
+/// `deprecated-command` and `primitive-command` to withhold their control-word swap.
+pub(crate) fn in_reference_position(command: &SyntaxNode) -> bool {
+    let Some(control_word) = child_token::<ControlWord>(command) else {
+        return false;
+    };
+    let mut token = control_word.syntax().prev_token();
+    let mut control_words_seen = 0;
+    while let Some(current) = token {
+        match current.kind() {
+            // Trivia never breaks the chain. A `WORD` is skipped too: an at-letter
+            // definee splits under document catcodes (`\let\foo@bar\rm` lexes as
+            // `\foo` + `@bar`), and `\let\x=\rm` writes an explicit `=`. The
+            // two-control-word cutoff below bounds how far this look-back reaches, so
+            // skipping intervening words cannot run away.
+            SyntaxKind::WHITESPACE
+            | SyntaxKind::NEWLINE
+            | SyntaxKind::COMMENT
+            | SyntaxKind::WORD => {}
+            SyntaxKind::CONTROL_WORD => {
+                if REFERENCE_PRIMITIVES.contains(&current.text()) {
+                    return true;
+                }
+                control_words_seen += 1;
+                if control_words_seen >= 2 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        token = current.prev_token();
+    }
+    false
 }
 
 /// Collect the disjoint byte ranges covered by `MATH` nodes, sorted by start.

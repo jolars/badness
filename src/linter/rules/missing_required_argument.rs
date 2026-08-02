@@ -46,8 +46,8 @@ use std::path::PathBuf;
 
 use crate::ast::{Group, children, command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
-use crate::semantic::define::{is_definition_command, scan_definitions};
-use crate::semantic::signature::{self, SignatureDb};
+use crate::semantic::define::is_definition_command;
+use crate::semantic::signature;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Example, Rule, RuleContext, StreamVisitor};
@@ -94,20 +94,16 @@ impl Rule for MissingRequiredArgument {
         EXAMPLES
     }
 
-    // Streaming rather than node-shape: the redefined-name gate needs the
-    // definition scanner's per-file result, computed once (lazily, on the first
-    // COMMAND) and shared across the rest of the shared walk — instead of the
-    // former separate `descendants()` pass on top of the scanner's own.
+    // Streaming rather than node-shape: the rule reads the definition scanner's
+    // per-file result (via [`RuleContext::user_definitions`], scanned once and
+    // shared with `deprecated-command`/`primitive-command`) to skip redefined
+    // built-ins, riding the shared walk instead of a separate `descendants()` pass.
     fn stream(&self) -> Option<Box<dyn StreamVisitor>> {
-        Some(Box::new(MissingRequiredArgumentVisitor { user_defs: None }))
+        Some(Box::new(MissingRequiredArgumentVisitor))
     }
 }
 
-/// Holds the per-file user-definition signatures (redefined built-ins are
-/// skipped). Scanned once, lazily, the first time a COMMAND is seen.
-struct MissingRequiredArgumentVisitor {
-    user_defs: Option<SignatureDb>,
-}
+struct MissingRequiredArgumentVisitor;
 
 impl StreamVisitor for MissingRequiredArgumentVisitor {
     fn visit(&mut self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
@@ -133,10 +129,7 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
             return;
         }
         // The file redefined this name; the built-in arity no longer applies.
-        let user_defs = self
-            .user_defs
-            .get_or_insert_with(|| scan_definitions(ctx.root));
-        if user_defs.command(&name).is_some() {
+        if ctx.user_definitions().command(&name).is_some() {
             return;
         }
         let braced = children::<Group>(node).count();

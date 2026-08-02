@@ -24,11 +24,12 @@
 //!   word) never match.
 //!
 //! The rule reads only `WORD` tokens and skips math, so comments, `\verb`, and
-//! verbatim (which never lex as `WORD`) are untouched. Two more shapes are gated
+//! verbatim (which never lex as `WORD`) are untouched. Three more shapes are gated
 //! out as false positives: a citation locator (`\cite[Section~8.1]{…}`, via
-//! [`super::in_key_argument`]) references *external* work, and an environment title
+//! [`super::in_key_argument`]) references *external* work, an environment title
 //! (`\begin{thm}[Conway's Theorem 0]`, via [`in_environment_title`]) is a proper
-//! name — neither is a cross-reference into this document.
+//! name, and an `\item[…]` label (`\item[Part 3.]`, via [`in_item_label`]) is a
+//! description-list caption — none is a cross-reference into this document.
 
 use std::path::PathBuf;
 
@@ -63,7 +64,6 @@ const REFERENCE_WORDS: &[&str] = &[
     "Equation",
     "Eq.",
     "Appendix",
-    "Part",
     "Algorithm",
     "Alg.",
     "Listing",
@@ -97,9 +97,10 @@ impl Rule for HardCodedReference {
          matched as a whole word and directly followed, across one space or a tie \
          `~`, by an arabic number; plurals, lowercase, `Figure~\\ref{x}`, and \
          `Figure three` are left alone. It also skips a citation locator \
-         (`\\cite[Section~8.1]{...}`, a reference into external work) and an \
-         environment title (`\\begin{thm}[Conway's Theorem 0]`, a proper name). It \
-         never touches math, comments, or verbatim."
+         (`\\cite[Section~8.1]{...}`, a reference into external work), an \
+         environment title (`\\begin{thm}[Conway's Theorem 0]`, a proper name), and \
+         an `\\item[label]` description-list caption (`\\item[Part 3.]`). It never \
+         touches math, comments, or verbatim."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -119,10 +120,11 @@ impl Rule for HardCodedReference {
             return;
         }
         // A citation locator (`\cite[Section~8.1]{…}`) points into *external* work,
-        // and an environment title (`\begin{thm}[Conway's Theorem 0]`) is a proper
-        // name — neither is a hard-coded cross-reference into this document, so the
-        // number there is not ours to track with a `\label`.
-        if super::in_key_argument(word) || in_environment_title(word) {
+        // an environment title (`\begin{thm}[Conway's Theorem 0]`) is a proper name,
+        // and an `\item[…]` label (`\item[Part 3.]`) is a description-list caption —
+        // none is a hard-coded cross-reference into this document, so the number
+        // there is not ours to track with a `\label`.
+        if super::in_key_argument(word) || in_environment_title(word) || in_item_label(word) {
             return;
         }
         // A `.` in math is not sentence punctuation, and a reference word there is
@@ -199,6 +201,22 @@ fn in_environment_title(tok: &SyntaxToken) -> bool {
     tok.parent_ancestors().any(|node| {
         node.kind() == SyntaxKind::OPTIONAL
             && node.parent().is_some_and(|p| p.kind() == SyntaxKind::BEGIN)
+    })
+}
+
+/// Whether `tok` sits inside the optional `[label]` of an `\item` — a
+/// description-list caption such as `\item[Part 3.]`, not a cross-reference into
+/// this document. The `[...]` attaches to the `\item` opener, so the `OPTIONAL`'s
+/// parent is the `COMMAND` node named `item` (mirrors [`in_environment_title`],
+/// whose `OPTIONAL` hangs off a `BEGIN`; and [`super::in_key_argument`], which
+/// keys the same shape on the command name).
+fn in_item_label(tok: &SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        node.kind() == SyntaxKind::OPTIONAL
+            && node.parent().is_some_and(|p| {
+                p.kind() == SyntaxKind::COMMAND
+                    && crate::ast::command_name(&p).is_some_and(|n| n == "item")
+            })
     })
 }
 
@@ -367,5 +385,27 @@ mod tests {
     fn reference_outside_title_still_flagged() {
         // The gates are narrow: prose after the environment opener still fires.
         assert_eq!(findings("\\begin{thm}[Main]\nSee Figure 3 here\n").len(), 1);
+    }
+
+    #[test]
+    fn item_label_is_left_alone() {
+        // A description-list label is a caption, not a cross-reference. The gate is
+        // general, not Part-specific — a reference word in the label is also spared.
+        assert!(findings("\\item[Part 3.] text\n").is_empty());
+        assert!(findings("\\item[Section 2 recap] text\n").is_empty());
+    }
+
+    #[test]
+    fn reference_in_item_body_still_flagged() {
+        // The gate is scoped to the `[label]`; prose after it still fires.
+        assert_eq!(findings("\\item[Note] See Figure 3 here\n").len(), 1);
+    }
+
+    #[test]
+    fn part_no_longer_flagged() {
+        // "Part" is too ambiguous (course names, external divisions) and was
+        // demoted; a genuine reference word still fires so the demotion is narrow.
+        assert!(findings("The Part 3 course is a prerequisite.\n").is_empty());
+        assert_eq!(findings("See Section 3 here.\n").len(), 1);
     }
 }

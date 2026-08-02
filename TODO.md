@@ -156,14 +156,6 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   `Unsafe`-gated so `--fix` withholds them, but they are noise and the tikz case is a
   real corruption.
 
-- [ ] **`hard-coded-reference` over-flags the word "Part".** "Part" collides with
-  Cambridge tripos course names (`the Part III course`), external book divisions
-  (`Chapter 3 of Hartshorne`, `Part 3 of X`), and `\item[Part N.]` description labels
-  — 7 of 10 corpus findings (`printf 'The Part 3 course is a prerequisite.\n' |
-  badness lint`). Genuine internal `Section`/`Chapter` cross-refs are the true
-  positives. Needs an `\item[…]`-label gate (mirroring `in_environment_title`) and an
-  "of [external work]" heuristic, or demoting "Part".
-
 - [ ] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
   `calc` library repurposes `$…$` as coordinate-arithmetic delimiters, where
   `sin`/`cos` are backslash-less pgfmath functions; badness reads the `$` as math

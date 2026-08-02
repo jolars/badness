@@ -82,11 +82,11 @@ An environment the *built-in* signature DB flags `math` (`equation`, `align`,
 `gather`, the matrix family, …) has its body parsed in **math mode**, wrapped in
 a `MATH` node exactly as `\[…\]`—so `^`/`_` build `SCRIPTED` nodes, the math
 operator split fires, and `\left…\right` pair. The set includes environments
-whose *shape* is not obviously math but whose *contents* always are:
-`array` (the math-mode-only analog of `tabular`) and `tikzcd` (tikz-cd
-commutative diagrams, whose cells typeset in math). Both were `\left…\right`
-false positives for the linter's `unclosed-math-delimiter` while their bodies
-stayed in text mode (dalcde/cam-notes).
+whose *shape* is not obviously math but whose *contents* always are: `array`
+(the math-mode-only analog of `tabular`) and `tikzcd` (tikz-cd commutative
+diagrams, whose cells typeset in math). Both were `\left…\right` false positives
+for the linter's `unclosed-math-delimiter` while their bodies stayed in text
+mode (dalcde/cam-notes).
 
 This is a *grammar* decision (`parser::grammar::math_environment_body`, gated by
 `parser::lexer::is_math_environment`), needing **no lexer math state**: the

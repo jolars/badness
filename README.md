@@ -7,6 +7,10 @@ Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/bad
 VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-vsx.org/extension/jolars/badness)
 [![VS
 Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix)](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
+[![PyPI
+version](https://badge.fury.io/py/badness.svg?icon=si%3Apython)](https://pypi.org/project/badness/)
+[![npm
+version](https://badge.fury.io/js/@badness%2Fbadness.svg?icon=si%3Anpm)](https://www.npmjs.com/package/badness)
 
 **Badness** is a language server, formatter, and linter for LaTeX, built on a
 lossless concrete syntax tree.

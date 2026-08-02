@@ -51,6 +51,67 @@ phf_codegen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[package.metadata.deb]
+maintainer = "Johan Larsson <johan@jolars.co>"
+copyright = "2026, Johan Larsson <johan@jolars.co>"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+Badness is a formatter, linter, and language server for LaTeX. It formats \
+.tex, .sty/.cls, .dtx/.ins, and .bib files with deterministic, rule-based \
+layout, reports diagnostics with optional autofixes, and exposes an integrated \
+language server for editor support."""
+depends = "$auto"
+section = "text"
+priority = "optional"
+assets = [
+    [
+        "target/release/badness",
+        "usr/bin/",
+        "755",
+    ],
+    [
+        "README.md",
+        "usr/share/doc/badness/",
+        "644",
+    ],
+    [
+        "LICENSE",
+        "usr/share/doc/badness/",
+        "644",
+    ],
+    [
+        "target/man/*.1",
+        "usr/share/man/man1/",
+        "644",
+    ],
+    [
+        "target/completions/badness.bash",
+        "usr/share/bash-completion/completions/badness",
+        "644",
+    ],
+    [
+        "target/completions/badness.fish",
+        "usr/share/fish/vendor_completions.d/badness.fish",
+        "644",
+    ],
+    [
+        "target/completions/_badness",
+        "usr/share/zsh/vendor-completions/_badness",
+        "644",
+    ],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/badness", dest = "/usr/bin/badness", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/badness/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/doc/badness/LICENSE", mode = "644", doc = true },
+    { source = "target/man/*.1", dest = "/usr/share/man/man1/", mode = "644" },
+    { source = "target/completions/badness.bash", dest = "/usr/share/bash-completion/completions/badness", mode = "644" },
+    { source = "target/completions/badness.fish", dest = "/usr/share/fish/vendor_completions.d/badness.fish", mode = "644" },
+    { source = "target/completions/_badness", dest = "/usr/share/zsh/vendor-completions/_badness", mode = "644" },
+]
+
 [[bench]]
 name = "formatting"
 harness = false

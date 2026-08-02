@@ -47,11 +47,13 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             glibc: "2.17"
+            build_packages: true
 
           # Linux ARM64 (glibc)
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             glibc: "2.17"
+            build_packages: true
 
           # Linux x86_64 (musl)
           - target: x86_64-unknown-linux-musl
@@ -206,6 +208,60 @@ jobs:
               badness-${{ matrix.target }}.zip \
               badness-${{ matrix.target }}.zip.sha256
           fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Linux glibc targets also ship .deb and .rpm packages. The binary is
+      # already built above; cargo-deb runs with --no-build so it packages that
+      # artifact rather than rebuilding. Both tools read the asset lists from
+      # [package.metadata.deb] and [package.metadata.generate-rpm] in Cargo.toml.
+      - name: Install cargo-deb and cargo-generate-rpm
+        if: matrix.build_packages == true
+        run: |
+          cargo install cargo-deb
+          cargo install cargo-generate-rpm
+
+      - name: Build DEB package
+        if: matrix.build_packages == true
+        run: |
+          rm -rf target/${{ matrix.target }}/debian
+          cargo deb --target ${{ matrix.target }} --no-build
+
+      - name: Build RPM package
+        if: matrix.build_packages == true
+        run: |
+          rm -rf target/${{ matrix.target }}/generate-rpm
+          cargo generate-rpm --target ${{ matrix.target }}
+
+      - name: Collect package files
+        if: matrix.build_packages == true
+        run: |
+          DEB_FILE=$(ls target/${{ matrix.target }}/debian/*.deb)
+          RPM_FILE=$(ls target/${{ matrix.target }}/generate-rpm/*.rpm)
+          cp "$DEB_FILE" "$RPM_FILE" .
+
+      - name: Upload package artifacts (for testing)
+        if: matrix.build_packages == true
+        uses: actions/upload-artifact@v7
+        with:
+          name: badness-packages-${{ matrix.target }}
+          path: |
+            *.deb
+            *.rpm
+
+      - name: Attest package provenance
+        if: matrix.build_packages == true && inputs.upload == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            *.deb
+            *.rpm
+
+      - name: Upload packages to release
+        if: matrix.build_packages == true && inputs.upload == 'true'
+        run: |
+          TAG="${{ inputs.tag }}"
+          gh release upload --clobber "$TAG" *.deb *.rpm
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

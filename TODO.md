@@ -111,31 +111,43 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 The remaining linter findings from the cam-notes sweep are recorded below as open
 follow-ups (each with a minimal reproducer); none is fixed yet.
 
-- [ ] **`math-operator-name` fires inside upright font groups and text escapes.**
-  `printf '$\\mathrm{exp}(x)$\n' | badness lint` flags `exp` although `\mathrm{exp}`
-  already typesets upright (the message "typesets as italic variables" is false here),
-  and `--unsafe-fixes` produces `$\mathrm{\exp}$` (nests `\exp` inside `\mathrm`). It
-  also fires on prose inside `\text{…}`/`\intertext{…}` (`$\text{the gcd is}\gcd(x)$`).
-  The docstring already promises a `\text` exclusion; the rule should reject a
-  `\mathrm`/`\mathsf`/`\mathbf`/`\mathit`/`\text`/`\mbox`/`\intertext` ancestor. (Same
-  family as the recorded pgf `calc`-coordinate FP above.)
+- [x] **`math-operator-name` fires inside upright font groups and text escapes.**
+  `printf '$\\mathrm{exp}(x)$\n' | badness lint` flagged `exp` although `\mathrm{exp}`
+  already typesets upright (the message "typesets as italic variables" was false here),
+  and `--unsafe-fixes` produced `$\mathrm{\exp}$` (nests `\exp` inside `\mathrm`). It
+  also fired on prose inside `\text{…}`/`\intertext{…}` (`$\text{the gcd is}\gcd(x)$`).
+  Resolved by a shared `in_upright_or_text_math_argument` gate: the rule now rejects a
+  `\mathrm`/`\mathsf`/`\mathbf`/`\mathit`/`\mathtt`/`\mathnormal`/`\mathcal`/`\mathbb`/
+  `\mathfrak`/`\mathscr`/`\text`/`\textrm`/`\textnormal`/`\mbox`/`\intertext`/
+  `\operatorname` ancestor (the math-alphabet fonts, the text escapes, and the explicit
+  operator builder). (Same family as the pgf `calc`-coordinate FP below.)
 
-- [ ] **`dash-length` corrupts pgf/TikZ coordinate arithmetic under
-  `--unsafe-fixes`.** The `in_math` guard covers only `$…$`, not a pgfplots
+- [x] **`dash-length` corrupts pgf/TikZ coordinate arithmetic under
+  `--unsafe-fixes`.** The `in_math` guard covered only `$…$`, not a pgfplots
   expression in `{…}`: `printf '\\addplot3 {(y^2-1)^2};\n' | badness lint --fix
-  --unsafe-fixes` yields `{(y^2--1)^2}`, a meaning-bearing minus turned into an
-  en-dash. Also many prose FPs on index-pair/term names (`0-1 law`, `1-2 plane`,
-  `1-1 function` — 22 of 25 findings) where the hyphen is intentional; these are
-  `Unsafe`-gated so `--fix` withholds them, but they are noise and the tikz case is a
-  real corruption.
+  --unsafe-fixes` yielded `{(y^2--1)^2}`, a meaning-bearing minus turned into an
+  en-dash. Resolved by two shared pgf gates: `in_pgf_picture` (a `tikzpicture`/
+  `pgfpicture`/pgfplots-`axis`-family ancestor, so coordinate arithmetic like
+  `(2-1,3)` is skipped) and `in_pgfmath_argument` (the `\addplot`/`\pgfmath…`
+  expression argument, attached or detached past the numeric `\addplot3` variant),
+  where a `-` between numbers is a pgfmath subtraction, not a typeset range.
+  - [ ] *Follow-up (open):* prose FPs on index-pair/term names (`0-1 law`,
+    `1-2 plane`, `1-1 function` — 22 of 25 findings) where the hyphen is
+    intentional; these are `Unsafe`-gated so `--fix` withholds them, so they are
+    noise rather than corruption. Distinguishing `0-1 law` from `pages 5-10`
+    statically is the open part.
 
-- [ ] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
+- [x] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
   `calc` library repurposes `$…$` as coordinate-arithmetic delimiters, where
-  `sin`/`cos` are backslash-less pgfmath functions; badness reads the `$` as math
-  shift and flags the bare names (9 findings on pgf), and the `--unsafe-fixes`
-  `sin`→`\sin` rewrite would break the pgfmath parser. Catcode/package-dependent
-  (the `$` is not math shift there), so hard to settle statically; the glued
-  `func(` shape inside a coordinate `(…)` is a candidate suppression signal.
+  `sin`/`cos` are backslash-less pgfmath functions; badness read the `$` as math
+  shift and flagged the bare names (9 findings on pgf), and the `--unsafe-fixes`
+  `sin`→`\sin` rewrite would break the pgfmath parser. Resolved with the candidate
+  signal from this note: the rule-local `in_calc_coordinate` gate suppresses the
+  finding when the operator is *glued* to `(` (a pgfmath call `sin(…)`) **and** the
+  enclosing inline math is a parenthesized coordinate (`(` directly before the `$`,
+  `)` directly after). Both facts are required, so ordinary math still flags —
+  `$lim(x)$` (glued but not paren-wrapped) and `($sin x$)` (paren-wrapped but
+  spaced) both remain findings.
 
 - [ ] **`makeat-macro` residual on plain-`.tex` package internals.** Recognizing
   `*.code.tex` as package flavor fixed 98.9% of the pgf `makeat-macro` FPs, but

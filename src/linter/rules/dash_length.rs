@@ -29,13 +29,16 @@
 //! leading/trailing option flags (`--verbose`), all of which lex with the run at a
 //! word edge or alongside other runs. The rule reads only `WORD` tokens, so
 //! comments, `\verb`, and verbatim (which never lex as `WORD`) are untouched, and
-//! math is skipped (a `-` there is a minus, not a dash). Three argument contexts
-//! are skipped via the shared gates in `super`: a rule-command span
-//! (`\cline{1-3}`, `\cmidrule(lr){2-3}` — the `n-m` is a column span, issue #34),
-//! a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}` — an opaque
-//! identifier), and a typewriter-font argument (`\texttt{03-02}` — monospace sets
-//! the hyphen literally, with no en-dash ligature), none of which is typeset
-//! range text.
+//! math is skipped (a `-` there is a minus, not a dash). Several contexts are
+//! skipped via the shared gates in `super`: a rule-command span (`\cline{1-3}`,
+//! `\cmidrule(lr){2-3}` — the `n-m` is a column span, issue #34), a key argument
+//! (`\label{fig:1-3}`, `\cite{smith2020-1}` — an opaque identifier), a
+//! typewriter-font argument (`\texttt{03-02}` — monospace sets the hyphen
+//! literally, with no en-dash ligature), and pgf/TikZ coordinate space — a
+//! picture environment (`tikzpicture`, pgfplots `axis`, …) or a pgfmath-expression
+//! argument (`\addplot3 {(y^2-1)^2}`, `\pgfmathparse{…}`) — where a `-` between
+//! numbers is a subtraction the pgfmath parser evaluates, so the en-dash rewrite
+//! would corrupt a meaning-bearing minus. None of these is typeset range text.
 
 use std::path::PathBuf;
 
@@ -123,6 +126,14 @@ impl Rule for DashLength {
             || super::in_key_argument(tok)
             || super::in_typewriter_argument(tok)
         {
+            return;
+        }
+        // pgf/TikZ coordinate and pgfmath-expression space: a `-` between numbers
+        // is subtraction (`(y^2-1)^2`, `(2-1,3)`), not a typeset range, so the
+        // en-dash rewrite would corrupt a meaning-bearing minus. Skip inside a
+        // picture environment (`tikzpicture`, `axis`, …) and inside a pgfmath
+        // argument (`\addplot3 {(y^2-1)^2}`, `\pgfmathparse{…}`).
+        if super::in_pgf_picture(tok) || super::in_pgfmath_argument(tok) {
             return;
         }
         let before = text[..run_start].chars().next_back();
@@ -382,6 +393,34 @@ mod tests {
     fn text_outside_texttt_is_still_flagged() {
         // The gate is scoped to the argument; prose around it still flags.
         assert_eq!(findings("pages 5-10, see \\texttt{03-02}\n").len(), 1);
+    }
+
+    #[test]
+    fn pgfmath_expression_argument_is_left_alone() {
+        // `(y^2-1)^2` is a pgfmath subtraction, not a number range; the en-dash
+        // rewrite would corrupt the minus. The `3` detaches the group from
+        // `\addplot`, so this exercises the detached-argument walk.
+        assert!(findings("\\addplot3 {(y^2-1)^2};\n").is_empty());
+        // Attached form: `\pgfmathparse{y-1}`.
+        assert!(findings("\\pgfmathparse{y-1}\n").is_empty());
+    }
+
+    #[test]
+    fn pgf_picture_coordinate_is_left_alone() {
+        // Coordinate arithmetic inside a picture environment is subtraction, not a
+        // range: `(2-1,3)` must not become `(2--1,3)`.
+        assert!(
+            findings("\\begin{tikzpicture}\n\\node at (2-1,3) {x};\n\\end{tikzpicture}\n")
+                .is_empty()
+        );
+        // pgfplots `axis` is a picture environment too.
+        assert!(findings("\\begin{axis}\n\\addplot {(y^2-1)^2};\n\\end{axis}\n").is_empty());
+    }
+
+    #[test]
+    fn prose_range_outside_pgf_is_still_flagged() {
+        // The gates are scoped to pgf context; ordinary prose still flags.
+        assert_eq!(findings("See pages 5-10 now.\n").len(), 1);
     }
 
     #[test]

@@ -30,6 +30,15 @@
 //!     are still in scope — the gate is a curated name-family list
 //!     (`semantic::builder::key_argument_command`), not a blanket
 //!     argument skip.
+//!   - Never inside an upright font or text escape
+//!     (`super::in_upright_or_text_math_argument`): `\mathrm{exp}` already sets
+//!     `exp` upright, so flagging it (and the broken `\mathrm{\exp}` rewrite) is
+//!     wrong, and `\text{the gcd is}` is prose, not math.
+//!   - Never a pgfmath function call inside a TikZ `calc` coordinate
+//!     ([`in_calc_coordinate`]): in `\draw ($sin(x)$)` the `calc` library
+//!     repurposes `$…$` as coordinate arithmetic where `sin` is a
+//!     backslash-less pgfmath function, so the `$` is not math shift and the
+//!     `\sin` rewrite would break the pgfmath parser.
 //!
 //! The fix inserts the backslash in front of the matched prefix (`sin` →
 //! `\sin`), a single contiguous splice that re-parses and stays lossless (tenet
@@ -47,7 +56,7 @@
 use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::syntax::{SyntaxElement, SyntaxKind};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
 use super::{Example, Rule, RuleContext};
 
@@ -150,10 +159,22 @@ impl Rule for MathOperatorName {
         if super::in_key_argument(tok) {
             return;
         }
+        // An upright font (`\mathrm{exp}`) or a text escape (`\text{the gcd is}`)
+        // is a deliberate glyph, not a bare operator: flagging it is wrong and the
+        // `\mathrm{\exp}` rewrite is broken.
+        if super::in_upright_or_text_math_argument(tok) {
+            return;
+        }
 
         let Some(name) = match_operator_prefix(tok.text()) else {
             return;
         };
+        // A pgfmath function call inside a TikZ `calc` coordinate `($sin(x)$)`:
+        // the `$` is not math shift there and the `\sin` rewrite would break the
+        // pgfmath parser.
+        if in_calc_coordinate(tok, name) {
+            return;
+        }
         let base = usize::from(tok.text_range().start());
         let start = base;
         let end = base + name.len();
@@ -189,6 +210,58 @@ fn follows_script_operator(mut prev: Option<SyntaxElement>) -> bool {
         }
     }
     false
+}
+
+/// True when the matched operator is a pgfmath function call inside a TikZ `calc`
+/// coordinate `($…$)`. The `calc` library repurposes `$…$` as coordinate
+/// arithmetic, where `sin`/`cos` are backslash-less pgfmath functions; reading the
+/// `$` as math shift and flagging them is a false positive, and the `\sin` rewrite
+/// would break the pgfmath parser. Two static shape facts gate it, so ordinary
+/// math still flags:
+///   - the name is *glued* to `(` (a pgfmath call `sin(…)`), so a spaced operator
+///     even in parenthesized prose math (`($sin x$)`) still flags, and
+///   - the enclosing inline math is a parenthesized coordinate — a `(` directly
+///     before the opening `$` and a `)` directly after the closing `$` — so
+///     ordinary inline math (`$lim(x)$`) still flags.
+fn in_calc_coordinate(tok: &SyntaxToken, name: &str) -> bool {
+    // A glued pgfmath call: the byte right after the operator name is `(`.
+    if tok.text().as_bytes().get(name.len()) != Some(&b'(') {
+        return false;
+    }
+    let Some(math) = tok
+        .parent_ancestors()
+        .find(|n| n.kind() == SyntaxKind::INLINE_MATH)
+    else {
+        return false;
+    };
+    flank_char(math.prev_sibling_or_token(), false) == Some('(')
+        && flank_char(math.next_sibling_or_token(), true) == Some(')')
+}
+
+/// The nearest non-trivia character flanking a node on one side: the first char of
+/// the next sibling token (`next`), or the last char of the previous sibling token,
+/// skipping whitespace and newlines. `None` at the edge of the containing node.
+fn flank_char(mut el: Option<SyntaxElement>, next: bool) -> Option<char> {
+    while let Some(e) = el {
+        match e.kind() {
+            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => {
+                el = if next {
+                    e.next_sibling_or_token()
+                } else {
+                    e.prev_sibling_or_token()
+                };
+            }
+            _ => {
+                let text = e.as_token()?.text().to_owned();
+                return if next {
+                    text.chars().next()
+                } else {
+                    text.chars().next_back()
+                };
+            }
+        }
+    }
+    None
 }
 
 /// The longest operator name that is a prefix of `text` ending at a word boundary
@@ -354,6 +427,42 @@ mod tests {
         // The raw-shape guard keys on `_`/`^` only: a bare operator elsewhere
         // in the same argument still fires.
         assert_eq!(findings("$\\frac{x_{a} exp y}{n}$\n").len(), 1);
+    }
+
+    #[test]
+    fn upright_font_argument_is_left_alone() {
+        // `\mathrm{exp}` already sets `exp` upright; flagging it (and the broken
+        // `\mathrm{\exp}` rewrite) is wrong.
+        assert!(findings("$\\mathrm{exp}(x)$\n").is_empty());
+        assert!(findings("$\\mathbf{sin}$\n").is_empty());
+        assert!(findings("$\\operatorname{arg}$\n").is_empty());
+    }
+
+    #[test]
+    fn text_escape_is_left_alone() {
+        // Prose inside a text escape is not math.
+        assert!(findings("$\\text{the gcd is}\\gcd(x)$\n").is_empty());
+        assert!(findings("$\\intertext{where max is}$\n").is_empty());
+    }
+
+    #[test]
+    fn calc_coordinate_is_left_alone() {
+        // TikZ `calc`: `($sin(x)$)` is coordinate arithmetic where `sin` is a
+        // pgfmath function; the `\sin` rewrite would break the pgfmath parser.
+        assert!(findings("\\draw ($sin(x)$);\n").is_empty());
+        assert!(
+            findings("\\begin{tikzpicture}\n\\draw ($cos(x)$);\n\\end{tikzpicture}\n").is_empty()
+        );
+    }
+
+    #[test]
+    fn parenthesized_prose_math_is_still_flagged() {
+        // The calc gate needs both the glued `(` and the `($…$)` wrapper. A spaced
+        // operator in parenthesized prose math (`($sin x$)`) is not a pgfmath call,
+        // so it still flags.
+        assert_eq!(findings("($sin x$)\n").len(), 1);
+        // And a glued call that is not paren-wrapped (`$sin(x)$`) still flags.
+        assert_eq!(findings("$sin(x)$\n").len(), 1);
     }
 
     #[test]

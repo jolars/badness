@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use rowan::{TextRange, TextSize};
 
-use crate::ast::{AstToken, ControlWord, child_token};
+use crate::ast::{AstNode, AstToken, ControlWord, Environment, child_token};
 use crate::project::{ResolvedCitations, ResolvedLabels, ResolvedPackageOptions};
 use crate::semantic::SemanticModel;
 use crate::semantic::define::scan_definitions;
@@ -509,6 +509,146 @@ pub(crate) fn in_rule_span_argument(tok: &crate::syntax::SyntaxToken) -> bool {
         prev = el.prev_sibling_or_token();
     }
     false
+}
+
+/// The curated set of TikZ/pgf *picture* environments whose body is coordinate
+/// and pgfmath-expression space rather than typeset prose: `tikzpicture`,
+/// `pgfpicture`, and the pgfplots axis family. A `-` between numbers there is
+/// coordinate arithmetic or a pgfmath subtraction (`(2-1,3)`, `{(y^2-1)^2}`),
+/// never a typeset number range, so `dash-length`'s en-dash rewrite would turn a
+/// meaning-bearing minus into an en dash. Curated and deliberately small like the
+/// sibling pgf gate [`in_foreach_range`]; a wrong entry only silences a prose lint
+/// inside that environment (a false negative), never the reverse.
+fn is_pgf_picture_environment(name: &str) -> bool {
+    matches!(
+        name,
+        "tikzpicture"
+            | "pgfpicture"
+            | "axis"
+            | "loglogaxis"
+            | "semilogxaxis"
+            | "semilogyaxis"
+            | "groupplot"
+            | "polaraxis"
+            | "ternaryaxis"
+    )
+}
+
+/// Whether `tok` sits inside a TikZ/pgf picture environment
+/// ([`is_pgf_picture_environment`]) — `tikzpicture`, a pgfplots `axis`, and kin,
+/// whose content is coordinate and pgfmath-expression space. `dash-length` uses
+/// this to stay off coordinate arithmetic (`(2-1,3)`, `{(y^2-1)^2}`), where its
+/// number-range en-dash rewrite would corrupt a meaning-bearing minus.
+pub(crate) fn in_pgf_picture(tok: &crate::syntax::SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        node.kind() == SyntaxKind::ENVIRONMENT
+            && Environment::cast(node)
+                .and_then(|env| env.name())
+                .is_some_and(|name| is_pgf_picture_environment(&name))
+    })
+}
+
+/// The curated set of pgf/pgfplots commands whose braced argument is a *pgfmath
+/// expression* — `\addplot{expr}`/`\addplot3{expr}` and the `\pgfmath…` setters —
+/// evaluated by the pgfmath parser, where `-` is subtraction, not a typeset range.
+/// Small and curated like [`is_typewriter_argument_command`]; a wrong entry only
+/// silences a lint inside that argument (a false negative), never the reverse.
+fn is_pgfmath_expression_command(name: &str) -> bool {
+    matches!(
+        name,
+        "addplot"
+            | "pgfmathparse"
+            | "pgfmathsetmacro"
+            | "pgfmathsetlengthmacro"
+            | "pgfmathtruncatemacro"
+    )
+}
+
+/// Whether `tok` sits inside a pgfmath-expression argument
+/// ([`is_pgfmath_expression_command`]). The argument group is either the command's
+/// direct child (`\pgfmathparse{y-1}`) or a *detached* sibling separated by a
+/// numeric-variant `WORD` (`\addplot3 {(y^2-1)^2}` — the `3` breaks greedy
+/// attachment, decision #8), mirroring the detached shape [`in_rule_span_argument`]
+/// handles for `\cmidrule(lr){2-3}`. `dash-length` uses this to stay off pgfmath
+/// subtraction, whose en-dash rewrite would corrupt a meaning-bearing minus.
+pub(crate) fn in_pgfmath_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+    let is_pgfmath = |node: &SyntaxNode| {
+        node.kind() == SyntaxKind::COMMAND
+            && crate::ast::command_name(node)
+                .is_some_and(|name| is_pgfmath_expression_command(&name))
+    };
+    let Some(arg) = tok
+        .parent_ancestors()
+        .find(|node| matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+    else {
+        return false;
+    };
+    if arg.parent().is_some_and(|cmd| is_pgfmath(&cmd)) {
+        return true;
+    }
+    // Detached span: skip whitespace and at most one trailing-variant `WORD`
+    // (`\addplot3`), then expect the command.
+    let mut skipped_word = false;
+    let mut prev = arg.prev_sibling_or_token();
+    while let Some(el) = prev {
+        match &el {
+            SyntaxElement::Node(node) => return is_pgfmath(node),
+            SyntaxElement::Token(t) => match t.kind() {
+                SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => {}
+                SyntaxKind::WORD if !skipped_word => skipped_word = true,
+                _ => return false,
+            },
+        }
+        prev = el.prev_sibling_or_token();
+    }
+    false
+}
+
+/// The curated set of commands that set their argument *upright* (a math-alphabet
+/// font) or as *text*, so a log-like name inside is a deliberate glyph, not a bare
+/// operator missing its backslash: the math-font alphabets (`\mathrm`, `\mathbf`,
+/// …), the amsmath text escapes (`\text`, `\mbox`, `\intertext`), and the explicit
+/// operator builder (`\operatorname`). `math-operator-name` uses this to stay off
+/// `\mathrm{exp}` (already upright — flagging it, and the `\mathrm{\exp}` rewrite,
+/// is wrong) and prose in `\text{the gcd is}`. Curated and small; a wrong entry is
+/// a false negative.
+fn is_upright_or_text_math_command(name: &str) -> bool {
+    matches!(
+        name,
+        "mathrm"
+            | "mathsf"
+            | "mathbf"
+            | "mathit"
+            | "mathtt"
+            | "mathnormal"
+            | "mathcal"
+            | "mathbb"
+            | "mathfrak"
+            | "mathscr"
+            | "text"
+            | "textrm"
+            | "textnormal"
+            | "mbox"
+            | "intertext"
+            | "operatorname"
+    )
+}
+
+/// Whether `tok` sits inside an upright/text math command argument
+/// ([`is_upright_or_text_math_command`]). `math-operator-name` uses this to skip a
+/// name that is already upright (`\mathrm{exp}`) or plain text
+/// (`\text{the gcd is}`), where flagging it is wrong. Same greedy-attachment
+/// posture as [`in_key_argument`]: *all* argument groups are skipped, since arity
+/// is unknown at parse time (decision #8) and a false negative is preferred.
+pub(crate) fn in_upright_or_text_math_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+    tok.parent_ancestors().any(|node| {
+        matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
+            && node.parent().is_some_and(|cmd| {
+                cmd.kind() == SyntaxKind::COMMAND
+                    && crate::ast::command_name(&cmd)
+                        .is_some_and(|name| is_upright_or_text_math_command(&name))
+            })
+    })
 }
 
 /// A documented example for a rule: a snippet of LaTeX that triggers it.

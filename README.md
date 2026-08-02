@@ -24,10 +24,10 @@ It parses LaTeX once and serves three tools from that tree:
 The architecture follows [rust-analyzer](https://rust-analyzer.github.io/): a
 generic, error-tolerant, hand-written parser produces a lossless tree, semantics
 are layered on top as a separate concern, and recomputation is incremental.
-badness never *requires* resolving macros or catcodes to succeed—anything it
+Badness never *requires* resolving macros or catcodes to succeed. Anything it
 cannot statically recognize degrades to generic nodes rather than a crash. Two
-properties hold by construction and are enforced as tests: **losslessness** (the
-tree reconstructs the input byte-for-byte) and **idempotence** (formatting an
+properties hold by construction and are enforced as tests: losslessness (the
+tree reconstructs the input byte-for-byte) and idempotence (formatting an
 already formatted file changes nothing).
 
 ## Installation
@@ -82,8 +82,8 @@ badness lint paper.tex
 badness lsp
 ```
 
-Formatting is configurable via a TOML file named
-`badness.toml`. See the documentation for the full reference.
+Formatting is configurable via a TOML file named `badness.toml`. See the
+documentation for the full reference.
 
 The language server runs over stdio (`badness lsp`); see the [editor setup
 guide](https://badness.dev/guide/editor-setup.html) for Neovim and VS Code
@@ -124,8 +124,8 @@ jobs:
 
 ## Documentation
 
-Full documentation lives at **<https://badness.dev/>** (built with
-mdBook from [`docs/`](docs/)).
+See <https://badness.dev/> for the full documentation, including a user guide,
+reference, and developer guide.
 
 ## Contributing
 

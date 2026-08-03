@@ -258,6 +258,17 @@ jobs:
               case "$(basename "$rel_file")" in
                 .*) continue ;;
               esac
+              # Skip files whose bytes are not valid UTF-8 (e.g. the Latin-1
+              # encoded beamer example/solution `.tex` files with German
+              # umlauts and French accents). Badness reads input as UTF-8 and
+              # refuses anything else with a `stream did not contain valid
+              # UTF-8` read error before any check runs, which would bucket as
+              # a bogus `unknown` failure. Encoding conversion is out of scope
+              # for badness (losslessness is defined byte-for-byte over UTF-8
+              # text); this is a discovery skip, not a badness bug (issue #92).
+              if ! iconv -f UTF-8 -t UTF-8 "$repo_dir/$rel_file" >/dev/null 2>&1; then
+                continue
+              fi
               file_key="$(printf '%s' "${repo}:${rel_file}" | sha256sum | awk '{print $1}')"
               log_path="$LOGS_DIR/$file_key.log"
               report_path="$LOGS_DIR/$file_key.report.md"

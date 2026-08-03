@@ -579,6 +579,16 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // (`{ value }`), and parameter runs glue tight (`{#1}`, `#1#2`).
     ("expl_function_def", "sty"),
     ("expl_inline_vs_block_groups", "sty"),
+    // A statement-leading expl3 conditional explodes structurally (R4/R5): the
+    // l3styleguide gold example, head on its own line then each `nTF` branch on its
+    // own line at +6 (a short true branch stays `{ … }` inline, the multi-line
+    // false branch nests +8) — reproduced regardless of whether it would fit on one
+    // line, keyed on the `:…TF` name suffix (`expl_conditional_branches`).
+    ("expl_conditional_gold", "sty"),
+    // A one-sided (`:nT`) conditional explodes its single branch onto its own line
+    // too — the trailing `T`/`F` run is the branch count, so `:nT`/`:nF` is one
+    // branch.
+    ("expl_conditional_oneside", "sty"),
     // The l3styleguide's *simple run of parameter* exception: `{#1}`, `{#1#2}`,
     // `{##1}` stay tight (and a padded `{ #1 }` normalizes to tight), while a
     // multi-parameter group with interior spaces (`{ #1 #2 }`) or any
@@ -684,6 +694,12 @@ const DTX_FIXTURES: &[&str] = &[
     "dtx_driver",
     "dtx_margin_blank_line",
     "dtx_expl3_chunks",
+    // A statement-leading expl3 conditional inside a `macrocode` body lays out
+    // byte-identically to the same code under the `.sty`/`.tex` flavor
+    // (`expl_conditional_gold`): the margin frame's column-0 base composes with the
+    // in-region `hang_group`/branch-explode so there is no path divergence — the
+    // R4/R5 conditional break is flavor-independent.
+    "dtx_expl3_conditional",
     // An unmargined doc-part line (a stray `␣%` between chunks, issue #58) is
     // still documentation: an open expl3 region owns only `macrocode` bodies,
     // so the following `% \subsection` keeps its column-0 margin.

@@ -1913,6 +1913,29 @@ fn lower_expl_code(
             }
             SyntaxElement::Node(child) => {
                 after_block = false;
+                // A *statement-leading* expl3 conditional (`\…:nTF {c} {T} {F}`,
+                // nothing on the logical line before it) explodes structurally: the
+                // head on its own line, then each `T`/`F` branch on its own line at
+                // +6 (R4/R5), regardless of whether it would fit inline. Keyed on the
+                // command name's argspec suffix ([`expl_conditional_branches`]); a
+                // conditional used mid-line as a value (`,key = \…:nTF …`, atom or
+                // parts non-empty) is not statement-leading and stays on the
+                // width-driven head-hug path (issue #71). `lower_expl_conditional`
+                // returns `None` for shapes whose branches do not attach to the
+                // command (`:NTF`), leaving those on the width path too.
+                if parts.is_empty()
+                    && atom.is_empty()
+                    && child.kind() == SyntaxKind::COMMAND
+                    && let Some(cond_ir) = command_name(child)
+                        .and_then(|name| expl_conditional_branches(&name))
+                        .and_then(|n| lower_expl_conditional(child, cx, n))
+                {
+                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                    lines.push(cond_ir);
+                    after_block = true;
+                    idx += 1;
+                    continue;
+                }
                 // A brace group that *starts a fresh atom* (nothing glued before
                 // it — any trivia flushed the atom) is a *continuation*: it indents
                 // one step under its head statement, the l3 house style
@@ -2128,6 +2151,27 @@ fn is_simple_param_run(node: &SyntaxNode) -> bool {
     saw_hash
 }
 
+/// The number of trailing `T`/`F` branch arguments of an expl3 conditional, read
+/// from the command *name*'s argspec (the substring after the final `:`).
+/// `\tl_if_empty:nTF` → `Some(2)`, `\bool_if:nT`/`:nF` → `Some(1)`; `None` for any
+/// name without a `:`-argspec ending in `T`/`F` — a non-conditional expl3 function
+/// (`\seq_new:N`), or a LaTeX2e command with no colon (`\@ifpackageloaded`). In an
+/// expl3 argspec `T`/`F` denote *only* the true/false branch slots, so a trailing
+/// `T`/`F` run is exactly the branch count. Pure text inspection — no signature or
+/// meaning lookup, mirroring [`expl_group_is_spaced`]'s name-only rule (decision
+/// #2). Only meaningful inside a region, where the whole name lexes as one
+/// `CONTROL_WORD` (outside, `:`/`_` split the token, but the conditional lowering
+/// never fires there).
+fn expl_conditional_branches(name: &str) -> Option<usize> {
+    let argspec = name.rsplit_once(':')?.1;
+    let n = argspec
+        .chars()
+        .rev()
+        .take_while(|c| *c == 'T' || *c == 'F')
+        .count();
+    (n > 0).then_some(n)
+}
+
 /// Whether an expl3-region group's *flat* form carries the l3 house style's
 /// canonical inner spaces (`{ value }`, per the l3styleguide) or stays tight
 /// (`{parbox/after}`). Spaced when the group is the attached argument of an
@@ -2278,6 +2322,61 @@ fn lower_expl_group(
             close_ir,
         ]))
     }
+}
+
+/// Lower a statement-leading expl3 conditional (`\…:nTF {c} {T} {F}`, its branch
+/// count recognized by [`expl_conditional_branches`]) to the l3styleguide's
+/// exploded shape (R4/R5): the head and any leading arguments on one line, then
+/// each of the `n` trailing brace branches on its own line hung one indent step
+/// (+2 relative to the head, so +6 inside a +4 body; a multi-line branch nests its
+/// interior +8). The break is **unconditional** — width-independent, so it is
+/// pass-stable: the exploded output re-parses to the same greedy `COMMAND` (brace
+/// arguments attach across the inserted newlines) in statement position and
+/// re-explodes identically. Each branch is a *soft* [`lower_expl_group`], so a
+/// short branch stays `{ … }` inline on its line and a long one breaks internally.
+///
+/// Returns `None` (leaving the shape on the width-driven head-hug path) unless the
+/// command's own last `n` argument children are `GROUP`s with only trivia beyond
+/// them — i.e. the branches actually attach to the conditional. An `:NTF`/`:nNnTF`
+/// whose single-token (`N`/`V`/operator) argument breaks greedy attachment leaves
+/// the branch groups on a following sibling, not the conditional, so it falls back
+/// rather than mis-lower a partial shape.
+fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Option<Ir> {
+    let children: Vec<SyntaxElement> = cmd.children_with_tokens().collect();
+    let group_positions: Vec<usize> = children
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.as_node().is_some_and(|nd| nd.kind() == SyntaxKind::GROUP))
+        .map(|(i, _)| i)
+        .collect();
+    if group_positions.len() < n {
+        return None;
+    }
+    // The last `n` groups are the branches; everything before the first of them is
+    // the head (control word, leading brace/operator args, and their trivia).
+    let first_branch = group_positions[group_positions.len() - n];
+    // The branches must be the *trailing* arguments: nothing but groups and trivia
+    // may sit from the first branch onward, else this is not a clean conditional
+    // call and the width path is safer.
+    for element in &children[first_branch..] {
+        match element {
+            SyntaxElement::Node(nd) if nd.kind() == SyntaxKind::GROUP => {}
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            _ => return None,
+        }
+    }
+    let head = trim_trailing_break(lower_expl_code(
+        children[..first_branch].iter().cloned(),
+        cx,
+        Statements::Ignore,
+    ));
+    let mut parts = vec![head];
+    for &pos in &group_positions[group_positions.len() - n..] {
+        let branch = children[pos].as_node().expect("group position is a node");
+        let group = lower_expl_group(branch, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
+        parts.push(Ir::indent(Ir::concat([Ir::hard_line(), group])));
+    }
+    Some(Ir::concat(parts))
 }
 
 /// Lower a single loose token (one not collapsed into a trivia run) to inline IR.
@@ -5610,6 +5709,24 @@ mod expl3_region_tests {
             .into_iter()
             .map(|r| (r.start().into(), r.end().into()))
             .collect()
+    }
+
+    #[test]
+    fn conditional_branches_read_from_name_suffix() {
+        // Trailing `T`/`F` run in the argspec (after the final `:`) is the branch
+        // count; non-conditionals and colonless 2e names are `None`.
+        assert_eq!(expl_conditional_branches("tl_if_empty:nTF"), Some(2));
+        assert_eq!(expl_conditional_branches("bool_if:nT"), Some(1));
+        assert_eq!(expl_conditional_branches("bool_if:nF"), Some(1));
+        assert_eq!(expl_conditional_branches("str_if_eq:nnTF"), Some(2));
+        assert_eq!(expl_conditional_branches("int_compare:nNnTF"), Some(2));
+        assert_eq!(expl_conditional_branches("seq_map_inline:Nn"), None);
+        assert_eq!(expl_conditional_branches("prg_return_true:"), None);
+        assert_eq!(expl_conditional_branches("tl_new:N"), None);
+        // A LaTeX2e conditional has no `:`-argspec, so it is never matched (issue
+        // #94's `\@ifpackageloaded` stays on the width path).
+        assert_eq!(expl_conditional_branches("@ifpackageloaded"), None);
+        assert_eq!(expl_conditional_branches("IfBooleanTF"), None);
     }
 
     #[test]

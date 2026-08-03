@@ -1,0 +1,5 @@
+\ExplSyntaxOn
+\cs_new:Npn \mypkg_maybe:n #1 {
+\tl_if_blank:nT {#1} { \mypkg_warn: }
+}
+\ExplSyntaxOff

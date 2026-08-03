@@ -84,17 +84,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   code embedded in a region), chosen for determinism. Whether tightening — vs.
   preserving, or spacing — is the right default for a 2e command in an expl3
   region is an open call; the tightening can read as worse than the input.
-- [ ] **Close the remaining l3styleguide layout deltas (R4/R5).** The house-style
-  rules and the gold example are now documented (`formatter.md` § *House style
-  (l3styleguide)*), and R3 (simple parameter runs stay tight) is implemented. Two
-  deltas remain open: (a) the guide's brace-column progression (**R5**: body `{` at
-  +2, body +4, `nTF` branches +6) is reproduced by neither the `.sty`
-  `Statements::Ignore` width-fill path nor the `.dtx` `macrocode` path (which
-  lowers the body `{` to column 0), so the *same* in-region code lays out
-  differently by file flavor; and (b) **R4** wants each conceptual step on its own
-  line, whereas the fill collapses short `nTF` branches to width. Reconciling the
-  two paths onto the R5 shape is the load-bearing piece; R4 likely follows once the
-  branch grouping is structural rather than width-driven.
+- [x] **Close the remaining l3styleguide layout deltas (R4/R5).** Done. **R4** is
+  the structural conditional break (`lower_expl_conditional`/
+  `expl_conditional_branches`, `formatter.md` § *Conditional branches break
+  structurally*): a statement-leading `nTF`/`TF` conditional explodes each branch
+  onto its own line at +6, width-independently. **R5**'s brace-column progression
+  falls out of the nested `Ir::indent`. The premised **(a) path divergence was a
+  misdiagnosis**: `.sty`/`.tex` and `.dtx` `macrocode` lay out genuine expl3 code
+  byte-identically (both route through `lower_expl_code`); the "body `{` at column
+  0" only occurs for a *non-region* `macrocode` (no `\ExplSyntaxOn`), which is
+  generic LaTeX, not expl3. A mid-line conditional value keeps head-hug (#71) and
+  a 2e conditional (#94) is untouched.
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
   blocked on structure).** A wrapped brace-body line ideally hangs its continuation
   one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather

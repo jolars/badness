@@ -576,9 +576,15 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // inside an expl3 region (catcode-9 whitespace / catcode-10 `~`) the formatter
     // owns layout regardless of wrap mode — messy indentation is normalized, a
     // function body becomes an indented block, short brace arguments stay inline
-    // (`{ #1 }`), and `#1#2` parameters glue tight.
+    // (`{ value }`), and parameter runs glue tight (`{#1}`, `#1#2`).
     ("expl_function_def", "sty"),
     ("expl_inline_vs_block_groups", "sty"),
+    // The l3styleguide's *simple run of parameter* exception: `{#1}`, `{#1#2}`,
+    // `{##1}` stay tight (and a padded `{ #1 }` normalizes to tight), while a
+    // multi-parameter group with interior spaces (`{ #1 #2 }`) or any
+    // non-parameter token (`{ X #2 }`) keeps the canonical inner spaces — exactly
+    // the discrimination the guide's own worked example draws.
+    ("expl_param_run_tight", "sty"),
     // The positional gate (issue #69): a `\ProvidesExplPackage` in `\def`-definee
     // position (`\protected\def\ProvidesExplPackage`) is tokenized, never executed,
     // so it opens no formatter-owned region — the loader body is left to generic

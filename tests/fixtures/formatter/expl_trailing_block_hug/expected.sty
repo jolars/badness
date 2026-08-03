@@ -1,7 +1,6 @@
 \ExplSyntaxOn
 \EditInstance{block}{thm}{
-  ,begin-vspace:e =
-  \tl_if_empty:nTF{ #2 } { \newtheoremstyle@vspace@default }{ #2 }
+  ,begin-vspace:e = \tl_if_empty:nTF{#2} { \newtheoremstyle@vspace@default }{#2}
 }
 \DeclareTemplateInterface{keywordsetup}{std}{2}{
   keyword-format : tokenlist = \itshape ,

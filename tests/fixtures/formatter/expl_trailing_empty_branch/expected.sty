@@ -11,7 +11,7 @@
   }
 \cs_new_protected:Npn \__mypkg_number_format_sign:n #1
   {
-    \tl_if_blank:nTF { #1 }
+    \tl_if_blank:nTF {#1}
       { \__mypkg_number_format_sign_aux:n { \l__mypkg_number_sign_tl } }
-      { \__mypkg_number_format_sign_aux:n { #1 } }
+      { \__mypkg_number_format_sign_aux:n {#1} }
   }

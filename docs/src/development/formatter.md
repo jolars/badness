@@ -197,6 +197,69 @@ byte-range pattern as parser diagnostics. The CST, lexer, events, and
 tree_builder are untouched, so losslessness is unaffected; the reformatted
 output is a different valid text with the same meaning.
 
+### House style (l3styleguide)
+
+The target for in-region layout is the LaTeX Project's own **house style**, "The
+LaTeX3 kernel: style guide for code authors" (`l3styleguide.tex` in
+[`latex3/latex3`](https://github.com/latex3/latex3), `l3kernel/doc/`, LPPL). Its
+mechanical, formatter-enforceable rules are:
+
+  | #   | Rule                                                                                                                       |
+  | --- | -------------------------------------------------------------------------------------------------------------------------- |
+  | R1  | Lines under **80 characters** where possible.                                                                              |
+  | R2  | A **two-space indent** per "level" of code.                                                                                |
+  | R3  | Divide everything with **single spaces**, *except* "simple runs of parameter (`{#1}`, `#1#2`)", which stay **tight**.      |
+  | R4  | Each **conceptually-separate step** on its own line.                                                                       |
+  | R5  | Canonical brace layout: the body `{` on its **own line at +2**, the body at +4, `nTF` branches at +6, nested groups at +8. |
+  | R6  | Related variants (`\cs_generate_variant:Nn`) *may* be **aligned** (optional).                                              |
+  | R7  | **No tabs.**                                                                                                               |
+
+The guide's own worked example is the gold reference (guide §*Format of the code
+itself*):
+
+```latex
+\cs_new:Npn \module_foo:nn #1#2
+  {
+    \tl_if_empty:nTF {#1}
+      { \module_foo_aux:n { X #2 } }
+      {
+        \module_foo_aux:nn {#1} {#2}
+        \module_foo_aux:n { #1 #2 }
+      }
+  }
+```
+
+**Conformance and known deltas.** The formatter satisfies R1, R2, R6 (it
+normalizes any alignment away—permitted, since R6 is optional), and R7. R3 is
+the `expl_group_is_spaced`/`is_simple_param_run` split below. The remaining
+deltas are tracked, not yet closed:
+
+- **Path divergence.** The same in-region code lays out differently under the
+  `.sty`/`.tex` flavor (the `Statements::Ignore` width fill on a command's
+  attached arguments) versus a `.dtx` `macrocode` body; the guide's brace-column
+  progression (R5) is reproduced by neither, and the `.dtx` path lowers the body
+  `{` to column 0 rather than +2. Reconciling the two paths onto the R5 shape,
+  and keeping each conceptual step (R4) on its own line rather than filling
+  `nTF` branches to width, are the open conformance items.
+
+The l3styleguide's non-layout rules (naming prefixes, `:D`-primitive discipline,
+expandability) are **out of scope**—they are meaning, not trivia, and belong to
+a linter, not the layout engine.
+
+### Simple parameter runs stay tight (R3)
+
+R3's exception is the `is_simple_param_run` gate on `expl_group_is_spaced`. The
+default for an expl3-*named* command's brace argument is the canonical inner
+space (`{ value }`); a group whose body—ignoring outer padding—is a run of
+**adjacent parameter tokens** (`{#1}`, `{#1#2}`, `{##1}`) instead stays tight,
+overriding the command-name rule. A padded `{ #1 }` therefore *normalizes* to
+tight `{#1}`, but any whitespace *between* the parameters (`{ #1 #2 }`) or any
+non-parameter token (`{ X #2 }`) keeps the inner spaces—exactly the
+discrimination the gold example draws (`{#1}` tight beside `{ #1 #2 }` spaced).
+The gate reads only token kinds and single-digit index text, no signature or
+meaning; the removed padding is catcode-9 whitespace, so the rewrite is
+trivia-only and idempotent by construction.
+
 ### Positional gate on layout ownership
 
 The shared *name* set is necessary but not sufficient to open a region: the
@@ -296,20 +359,21 @@ too**. The cascade lives in `printer::step_fill` (`sticky`/`broken` on
 `Cmd::Fill`); prose reflow keeps the plain greedy `Ir::Fill`.
 
 This is what a *width*-broken sibling needs that the forced-only **sibling
-coupling** above cannot give. When a true-branch block
-detonates purely from width (no guard/comment/margin), the greedy fill would let
-a following empty false-branch `{}` glue back onto the block's short closing `}`
-line (`} {}`), because at that column the two-byte `{}` fits. But whether the
-block's own body broke **hard** (a source newline, `contains_forced_break`) or
-**soft** (a width fill) is not pass-invariant—the formatter's own reflow turns
-one into the other—so pass 1 (`} {}`) and pass 2 (`}` then `{}` on its own line)
-disagreed and idempotence failed (issue #94, josephwright/siunitx's
+coupling** above cannot give. When a true-branch block detonates purely from
+width (no guard/comment/margin), the greedy fill would let a following empty
+false-branch `{}` glue back onto the block's short closing `}` line (`} {}`),
+because at that column the two-byte `{}` fits. But whether the block's own body
+broke **hard** (a source newline, `contains_forced_break`) or **soft** (a width
+fill) is not pass-invariant—the formatter's own reflow turns one into the
+other—so pass 1 (`} {}`) and pass 2 (`}` then `{}` on its own line) disagreed
+and idempotence failed (issue #94, josephwright/siunitx's
 `\@ifpackageloaded {pkg} {…block…} {}`). The sticky cascade defers the decision
 to the printer's *actual*, column-aware break: the empty branch follows the
 block onto its own line on **every** pass. Unlike the width-independent sibling
 coupling it fixes the exact width-driven case that coupling deliberately skips,
 and it does so without exploding the short leading arguments into blocks—`{pkg}`
-stays inline on the head line; only the arguments *after* the detonated one move.
+stays inline on the head line; only the arguments *after* the detonated one
+move.
 
 ### Interaction with `.dtx` doc margins
 

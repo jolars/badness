@@ -2067,6 +2067,67 @@ fn expl_group_forces_break(node: &SyntaxNode) -> bool {
         })
 }
 
+/// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the shape
+/// that follows `#` in a parameter reference. Reads only the token text.
+fn is_param_digit(t: &SyntaxToken) -> bool {
+    matches!(t.text().as_bytes(), [b'1'..=b'9'])
+}
+
+/// Whether an expl3 brace group's body is a *simple run of parameters* — `{#1}`,
+/// `{#1#2}`, `{##1}` — the l3styleguide's explicit exception to the
+/// divide-with-spaces rule ("With the exception of simple runs of parameter
+/// (`{#1}`, `#1#2`, etc.), everything should be divided up using spaces"). Such a
+/// run stays tight even inside an expl3-named command's arguments. Outer padding
+/// is ignored, so `{ #1 }` normalizes to tight `{#1}`; but any whitespace
+/// *between* the parameters, or any non-parameter token, disqualifies the run, so
+/// `{ #1 #2 }` and `{ X #2 }` keep the canonical inner spaces (matching the
+/// l3styleguide's own worked example). Reads only token kinds and digit text — no
+/// meaning, no signature lookup.
+fn is_simple_param_run(node: &SyntaxNode) -> bool {
+    // Body tokens with the delimiters dropped; a non-token child (a nested group
+    // or command) is never a bare parameter run.
+    let mut body: Vec<SyntaxToken> = Vec::new();
+    for element in node.children_with_tokens() {
+        match element {
+            SyntaxElement::Token(t) => match t.kind() {
+                SyntaxKind::L_BRACE
+                | SyntaxKind::R_BRACE
+                | SyntaxKind::L_BRACKET
+                | SyntaxKind::R_BRACKET => {}
+                _ => body.push(t),
+            },
+            SyntaxElement::Node(_) => return false,
+        }
+    }
+    // Trim the padding whitespace we may be about to remove; any *interior*
+    // whitespace survives and disqualifies the run below.
+    let is_space =
+        |t: &SyntaxToken| matches!(t.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE);
+    while body.first().is_some_and(is_space) {
+        body.remove(0);
+    }
+    while body.last().is_some_and(is_space) {
+        body.pop();
+    }
+    // A run is `#`s and single-digit indices, adjacent, each digit preceded by a
+    // `#` (so `##1` counts, a stray `{1}` or `{ #1 #2 }` does not).
+    let mut saw_hash = false;
+    let mut prev_hash = false;
+    for t in &body {
+        match t.kind() {
+            SyntaxKind::HASH => {
+                saw_hash = true;
+                prev_hash = true;
+            }
+            SyntaxKind::WORD if prev_hash && is_param_digit(t) => {
+                prev_hash = false;
+            }
+            _ => return false,
+        }
+    }
+    saw_hash
+}
+
 /// Whether an expl3-region group's *flat* form carries the l3 house style's
 /// canonical inner spaces (`{ value }`, per the l3styleguide) or stays tight
 /// (`{parbox/after}`). Spaced when the group is the attached argument of an
@@ -2075,8 +2136,12 @@ fn expl_group_forces_break(node: &SyntaxNode) -> bool {
 /// body). Tight when it belongs to an embedded LaTeX2e-named command
 /// (`\UseTaggingSocket`, `\@parboxto`), whose authors write tight braces; the
 /// house style governs expl3 functions, not 2e code that happens to sit inside
-/// a region.
+/// a region. Tight, too, for a *simple run of parameters* ([`is_simple_param_run`]),
+/// the l3styleguide's own exception (`{#1}`, `#1#2`), regardless of the command.
 fn expl_group_is_spaced(node: &SyntaxNode) -> bool {
+    if is_simple_param_run(node) {
+        return false;
+    }
     let Some(parent) = node.parent() else {
         return true;
     };

@@ -240,12 +240,13 @@ There is **no path divergence** between file flavors for genuine expl3 code:
 `.sty`/`.tex` and a `.dtx` `macrocode` body both route the code through
 `lower_expl_paragraph` → `lower_expl_code`, and the `.dtx` margin frame's
 column-0 base composes with the same in-region `hang_group`/branch rules, so
-identical in-region code lays out byte-identically under either flavor (pinned by
-the `dtx_expl3_conditional` fixture against `expl_conditional_gold`). The "body
-`{` at column 0" a bare `macrocode` block shows is *generic* LaTeX lowering: a
-`macrocode` with no `\ExplSyntaxOn`/`\ProvidesExpl*` toggle is by design **not an
-expl3 region** (`expl3_regions` keys on the toggle, not the environment), so its
-body never reaches `lower_expl_code` and its inner spacing is not normalized.
+identical in-region code lays out byte-identically under either flavor (pinned
+by the `dtx_expl3_conditional` fixture against `expl_conditional_gold`). The
+"body `{` at column 0" a bare `macrocode` block shows is *generic* LaTeX
+lowering: a `macrocode` with no `\ExplSyntaxOn`/`\ProvidesExpl*` toggle is by
+design **not an expl3 region** (`expl3_regions` keys on the toggle, not the
+environment), so its body never reaches `lower_expl_code` and its inner spacing
+is not normalized.
 
 The l3styleguide's non-layout rules (naming prefixes, `:D`-primitive discipline,
 expandability) are **out of scope**—they are meaning, not trivia, and belong to
@@ -269,35 +270,35 @@ trivia-only and idempotent by construction.
 
 R4 ("each conceptually-separate step on its own line") is enforced for expl3
 conditionals by `lower_expl_conditional`, routed from `lower_expl_code`'s node
-loop. A *statement-leading* conditional—one that starts its logical line, nothing
-accumulated before it—explodes **unconditionally**: the head and any leading
-arguments on one line, then each `T`/`F` branch on its own line hung one indent
-step (+6 inside a +4 body; a multi-line branch nests its interior +8, giving the
-R5 progression). It breaks even when the whole conditional would fit on one line;
-the l3styleguide's gold example puts a short true branch on its own line beside a
-multi-line false branch, and the house style treats the branch list as structure,
-not a width-fill.
+loop. A *statement-leading* conditional—one that starts its logical line,
+nothing accumulated before it—explodes **unconditionally**: the head and any
+leading arguments on one line, then each `T`/`F` branch on its own line hung one
+indent step (+6 inside a +4 body; a multi-line branch nests its interior +8,
+giving the R5 progression). It breaks even when the whole conditional would fit
+on one line; the l3styleguide's gold example puts a short true branch on its own
+line beside a multi-line false branch, and the house style treats the branch
+list as structure, not a width-fill.
 
 The conditional is recognized by `expl_conditional_branches`: the argspec after
 the final `:` in the command name, if it ends in a run of `T`/`F`, gives the
-branch count (`:nTF` → 2, `:nT`/`:nF` → 1). In an expl3 argspec `T`/`F` mark only
-the true/false slots, so this is exact—and it is a purely lexical fact of the
-name (the whole name lexes as one `CONTROL_WORD` in-region), so meaning stays out
-of the parser (decision #2), mirroring the R3 name rule. Each branch is lowered
-as a *soft* `lower_expl_group`, so a short branch stays `{ … }` inline on its line
-while a long one breaks internally.
+branch count (`:nTF` → 2, `:nT`/`:nF` → 1). In an expl3 argspec `T`/`F` mark
+only the true/false slots, so this is exact—and it is a purely lexical fact of
+the name (the whole name lexes as one `CONTROL_WORD` in-region), so meaning
+stays out of the parser (decision #2), mirroring the R3 name rule. Each branch
+is lowered as a *soft* `lower_expl_group`, so a short branch stays `{ … }`
+inline on its line while a long one breaks internally.
 
 Two scopes keep it precise. A conditional used **mid-line as a value**
 (`,key = \tl_if_empty:nTF …`) is not statement-leading, so it stays on the
 width-driven head-hug path (issue #71, `expl_trailing_block_hug`). And a
 conditional whose branch groups do **not attach** to it—an `:NTF`/`:nNnTF` whose
-single-token `N`/`V`/operator argument breaks greedy brace attachment, leaving the
-branches on a following sibling—falls back to the width path rather than
-mis-lower a partial shape. The break is width-independent, so it is a fixed point:
-the exploded output re-parses to the same greedy `COMMAND` (brace arguments attach
-across the inserted newlines) in statement position and re-explodes identically.
-A LaTeX2e conditional (`\@ifpackageloaded`, no `:`-argspec) is never matched, so
-issue #94's sticky-fill handling is untouched.
+single-token `N`/`V`/operator argument breaks greedy brace attachment, leaving
+the branches on a following sibling—falls back to the width path rather than
+mis-lower a partial shape. The break is width-independent, so it is a fixed
+point: the exploded output re-parses to the same greedy `COMMAND` (brace
+arguments attach across the inserted newlines) in statement position and
+re-explodes identically. A LaTeX2e conditional (`\@ifpackageloaded`, no
+`:`-argspec) is never matched, so issue #94's sticky-fill handling is untouched.
 
 ### Positional gate on layout ownership
 

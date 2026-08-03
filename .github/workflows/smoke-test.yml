@@ -190,6 +190,14 @@ jobs:
         josephwright/beamer|doc/beamerug-nonpresentation.tex|format-error
         josephwright/beamer|doc/beamerug-overlays.tex|format-error
         josephwright/beamer|doc/beamerug-tricks.tex|format-error
+        # Genuinely broken upstream: siunitx-complex.dtx has two stray `\end{macro}`
+        # in its l3doc doc prose (lines 420, 994 -- three `\end{macro}` closing two
+        # `\begin{macro}`). l3doc's `macro` is an ordinary stack environment, so an
+        # extra `\end{macro}` is a LaTeX error: TeX itself reports `\begin{implementation}
+        # ... ended by \end{macro}`, exactly as badness does. LaTeX recovers and still
+        # ships a PDF, so the latent error stays in the source; no parser change is
+        # correct here. Issue #93.
+        josephwright/siunitx|siunitx-complex.dtx|format-error
     steps:
       - uses: actions/checkout@v7
 

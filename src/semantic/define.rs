@@ -70,6 +70,9 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
             Some(DefKind::XparseEnvironment) => {
                 scan_xparse_environment(&command, &mut db, &mut env_bodies)
             }
+            Some(DefKind::VerbatimEnvironment) => {
+                scan_verbatim_environment(&name, &command, &mut db)
+            }
             None => {}
         }
     }
@@ -126,9 +129,9 @@ pub fn scan_definition_sites(root: &SyntaxNode) -> Vec<DefSite> {
         let site = match DefKind::of(&name) {
             Some(DefKind::Command | DefKind::XparseCommand) => command_def_site(&command),
             Some(DefKind::Def) => def_def_site(&command),
-            Some(DefKind::Environment | DefKind::XparseEnvironment) => {
-                environment_def_site(&command)
-            }
+            Some(
+                DefKind::Environment | DefKind::XparseEnvironment | DefKind::VerbatimEnvironment,
+            ) => environment_def_site(&command),
             None => None,
         };
         sites.extend(site);
@@ -384,6 +387,11 @@ enum DefKind {
     Environment,
     XparseCommand,
     XparseEnvironment,
+    /// A package command whose defined environment has a *verbatim* body, a static
+    /// fact of the *defining command's identity* (not of any catcode signal in its
+    /// begin-code, which lives inside the package's own machinery): `listings`'
+    /// `\lstnewenvironment` and `fancyvrb`'s `\DefineVerbatimEnvironment`.
+    VerbatimEnvironment,
 }
 
 impl DefKind {
@@ -404,6 +412,9 @@ impl DefKind {
             | "RenewDocumentEnvironment"
             | "ProvideDocumentEnvironment"
             | "DeclareDocumentEnvironment" => DefKind::XparseEnvironment,
+            // `listings`/`fancyvrb` verbatim-environment definitions: the body is raw
+            // text, a fact of the defining command, not of any scannable catcode signal.
+            "lstnewenvironment" | "DefineVerbatimEnvironment" => DefKind::VerbatimEnvironment,
             _ => return None,
         })
     }
@@ -566,6 +577,36 @@ fn scan_newenvironment(
     record_body(env_bodies, name, nth_group(command, 1).as_ref());
     let (arity, first_optional) = newcommand_arity(command);
     db.insert_environment(name, environment_sig(latex2e_args(arity, first_optional)));
+}
+
+/// A `listings`/`fancyvrb` verbatim-environment definition → an [`EnvironmentSig`]
+/// with `verbatim_body`. Unlike [`scan_newenvironment`], the verbatim-ness is *not*
+/// read from a catcode signal in the begin-code — that machinery lives inside the
+/// package — but is implied by the defining command's identity, a bounded static fact
+/// (AGENTS.md decision #1). The name is the control-word-free text in the first group:
+/// - `\lstnewenvironment{name}[n][default]{begin}{end}` — the `[n][default]` optionals
+///   give the runtime argument shape, as in [`scan_newenvironment`].
+/// - `\DefineVerbatimEnvironment{name}{base}{opts}` — the environment takes one
+///   optional `[key=val]` argument at use time (`fancyvrb`'s `Verbatim` family).
+fn scan_verbatim_environment(defining_command: &str, command: &SyntaxNode, db: &mut SignatureDb) {
+    let Some(name) = nth_group_text(command, 0) else {
+        return;
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    let args = if defining_command == "lstnewenvironment" {
+        let (arity, first_optional) = newcommand_arity(command);
+        latex2e_args(arity, first_optional)
+    } else {
+        // `\DefineVerbatimEnvironment` → a single optional `[options]` slot.
+        latex2e_args(1, true)
+    };
+    let mut sig = environment_sig(args);
+    sig.verbatim_body = true;
+    sig.reflow = false;
+    db.insert_environment(name, sig);
 }
 
 /// `\NewDocumentCommand{\name}{spec}{body}` → a [`CommandSig`] with args from the
@@ -1145,6 +1186,36 @@ mod tests {
         let sig = db.environment("remark").expect("remark defined");
         assert!(!sig.verbatim_body);
         assert!(sig.reflow);
+    }
+
+    #[test]
+    fn lstnewenvironment_flagged_verbatim() {
+        // A `listings` environment's body is verbatim by virtue of the defining
+        // command, with no catcode signal in the begin-code. The `[1][default]`
+        // optionals give it one optional runtime argument (`\begin{demo}[opts]`).
+        let db = db_of("\\lstnewenvironment{demo}[1][code]{\\lstset{#1}}{}\n");
+        let sig = db.environment("demo").expect("demo defined");
+        assert!(sig.verbatim_body);
+        assert!(!sig.reflow);
+        assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
+    }
+
+    #[test]
+    fn lstnewenvironment_no_args_flagged_verbatim() {
+        let db = db_of("\\lstnewenvironment{demo}{}{}\n");
+        let sig = db.environment("demo").expect("demo defined");
+        assert!(sig.verbatim_body);
+        assert!(sig.args.is_empty());
+    }
+
+    #[test]
+    fn defineverbatimenvironment_flagged_verbatim() {
+        // `fancyvrb`: the environment takes one optional `[key=val]` argument.
+        let db = db_of("\\DefineVerbatimEnvironment{code}{Verbatim}{fontsize=\\small}\n");
+        let sig = db.environment("code").expect("code defined");
+        assert!(sig.verbatim_body);
+        assert!(!sig.reflow);
+        assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
     }
 
     #[test]

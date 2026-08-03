@@ -1,0 +1,35 @@
+---
+source: tests/parser.rs
+assertion_line: 79
+expression: "tree(\"\\\\lstnewenvironment{demo}{}{}\\n\\\\begin{demo}\\n\\\\begin{tabular}{S}\\n\\\\end{demo}\\n\")"
+---
+ROOT@0..72
+  PARAGRAPH@0..71
+    COMMAND@0..28
+      CONTROL_WORD@0..18 "\\lstnewenvironment"
+      GROUP@18..24
+        L_BRACE@18..19 "{"
+        WORD@19..23 "demo"
+        R_BRACE@23..24 "}"
+      GROUP@24..26
+        L_BRACE@24..25 "{"
+        R_BRACE@25..26 "}"
+      GROUP@26..28
+        L_BRACE@26..27 "{"
+        R_BRACE@27..28 "}"
+    NEWLINE@28..29 "\n"
+    ENVIRONMENT@29..71
+      BEGIN@29..41
+        CONTROL_WORD@29..35 "\\begin"
+        NAME_GROUP@35..41
+          L_BRACE@35..36 "{"
+          WORD@36..40 "demo"
+          R_BRACE@40..41 "}"
+      VERBATIM_BODY@41..61 "\n\\begin{tabular}{S}\n"
+      END@61..71
+        CONTROL_WORD@61..65 "\\end"
+        NAME_GROUP@65..71
+          L_BRACE@65..66 "{"
+          WORD@66..70 "demo"
+          R_BRACE@70..71 "}"
+  NEWLINE@71..72 "\n"

@@ -71,6 +71,16 @@ fn inline_and_display_math() {
     insta::assert_snapshot!(tree(r"$x^2$ and \[ y_i \]"));
 }
 
+/// An environment defined by a package verbatim-definer (`\lstnewenvironment`) has a
+/// raw body: environment tokens inside it (`\begin{tabular}`) are literal listing
+/// content collected into a `VERBATIM_BODY`, never parsed as real structure.
+#[test]
+fn lstnewenvironment_body_is_verbatim() {
+    insta::assert_snapshot!(tree(
+        "\\lstnewenvironment{demo}{}{}\n\\begin{demo}\n\\begin{tabular}{S}\n\\end{demo}\n"
+    ));
+}
+
 #[test]
 fn display_math_dollars() {
     insta::assert_snapshot!(tree(r"$$a + b$$"));

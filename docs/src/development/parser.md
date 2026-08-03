@@ -61,6 +61,18 @@ catcode-changing definitions, pass 2 re-lexes with those names. This is
 conservative by construction: a false positive suppresses real diagnostics, so
 we prefer false negatives.
 
+Verbatim **environments** are recognized two ways in the same pass-1 scan: a
+`\newenvironment`/`\NewDocumentEnvironment` whose begin-code fingerprints a
+catcode-othering signal (`\dospecials`, `\catcode…=12`, `\@makeother`), *and*—by
+the identity of the defining command, since the raw-body machinery lives inside
+the package and leaves no scannable signal—`listings`' `\lstnewenvironment` and
+`fancyvrb`'s `\DefineVerbatimEnvironment`. Both mark the environment
+`verbatim_body`, so pass 2 collects its body as one opaque `VERBATIM_BODY` and
+literal environment tokens inside it (`\begin{tabular}`, a stray `\end`) are
+never parsed as structure (issue #93). This is the same bounded, statically
+recognizable pattern set as decision #1: a definer's name is a static fact, not
+macro meaning.
+
 The same pass-1 scan handles the inverse collision (follow-up to issue #53): a
 built-in braced-verbatim command name (`\code`, `\url`, `\path`, …) that the
 file **redefines** to an ordinary, non-verbatim macro is recorded as a

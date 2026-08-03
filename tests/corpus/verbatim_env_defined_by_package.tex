@@ -1,0 +1,19 @@
+% A verbatim environment defined by a package command (`listings` /
+% `fancyvrb`) collects its body as raw text, so environment tokens inside it
+% (`\begin{tabular}`, an unbalanced `\end{...}`) are literal listing content,
+% never real structure. Recognizing the defining command keeps the body from
+% being mis-parsed as unclosed environments.
+\lstnewenvironment{demo}[1][code and example]
+  {\lstset{#1}}
+  {}
+\DefineVerbatimEnvironment{code}{Verbatim}{fontsize=\small}
+
+\begin{demo}[code only]
+  \begin{table}
+    \begin{tabular}{S}
+    ...
+\end{demo}
+
+\begin{code}
+  \end{oops} $ { unbalanced & % raw
+\end{code}

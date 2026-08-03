@@ -172,6 +172,24 @@ jobs:
         pgf-tikz/pgf|tex/generic/pgf/utilities/pgfutil-common.tex|format-error
         pgf-tikz/pgf|tex/latex/pgf/doc/pgfmanual-en-macros.tex|format-error
         pgf-tikz/pgf|tex/latex/pgf/doc/pgfmanual.prettyprinter.code.tex|format-error
+        # beamer user-guide fragments: the `beamerug-*.tex` files are `\include`
+        # chunks of `beameruserguide.tex` (each carries a `% !TeX root =`
+        # header), not standalone documents. The parent (an `ltxdoc`/doc.sty
+        # manual) makes `|` an active short-verb char, so doc prose freely writes
+        # environment tokens verbatim inside it -- `|\begin{slide}|`,
+        # `|\end{frame}|`, `|\begin{document}|`, `|[<|...|>]|`. That short-verb
+        # catcode state lives in the parent preamble and is invisible when
+        # badness parses a fragment in isolation; guessing `|` is verbatim is an
+        # inherited-catcode assumption we refuse (AGENTS.md decision #1). So the
+        # environment/`\end` tokens in those spans read as real and go
+        # unbalanced -> format-error. Same class as the pgfmanual `\input`
+        # chunks above. Issue #91.
+        josephwright/beamer|doc/beamerug-emulation.tex|format-error
+        josephwright/beamer|doc/beamerug-frames.tex|format-error
+        josephwright/beamer|doc/beamerug-localstructure.tex|format-error
+        josephwright/beamer|doc/beamerug-nonpresentation.tex|format-error
+        josephwright/beamer|doc/beamerug-overlays.tex|format-error
+        josephwright/beamer|doc/beamerug-tricks.tex|format-error
     steps:
       - uses: actions/checkout@v7
 

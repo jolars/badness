@@ -248,6 +248,15 @@ struct Parser<'t> {
     /// are a static lexical fact, and optional-argument attachment uses it to
     /// treat a spaced `[` as content (see [`Self::attach_arguments`]).
     math_depth: usize,
+    /// Per-level flavor of the enclosing math bodies tracked by `math_depth`:
+    /// `true` for a `$…$`/`$$…$$` (dollar-delimited) level, `false` for
+    /// `\[…\]`/`\(…\)` and math environments. Pushed and popped in lockstep with
+    /// `math_depth`, so its last entry is the *innermost* enclosing math's
+    /// flavor. [`Self::bracket_closes_before_math_end`] reads it: inside dollar
+    /// math a `$` is the closer (a boundary), whereas inside `\[…\]` a `$` opens
+    /// a genuine nested inline region (`\inferrule*[right=$\Pi$-eq]`), so the two
+    /// must be scanned differently.
+    math_dollar: Vec<bool>,
     /// True while parsing the attached arguments of a definition-body command
     /// ([`is_definition_body_command`], issues #45/#55). Those groups are
     /// macro-code definition bodies that need not self-balance
@@ -330,6 +339,7 @@ impl<'t> Parser<'t> {
             last_step_pos: std::cell::Cell::new(0),
             errors: Vec::new(),
             math_depth: 0,
+            math_dollar: Vec::new(),
             in_def_body: false,
             group_depth: 0,
             demoted_envs: std::collections::HashSet::new(),
@@ -1329,15 +1339,24 @@ impl<'t> Parser<'t> {
     /// anything else (`x[i]`, the interval `[0, \infty)`) parses as an ordinary
     /// atom and claims nothing, so it adds no nesting here either.
     ///
-    /// A balanced inline `$…$` pair inside the bracket is *transparent*, not a
-    /// bail: [`Self::optional`] parses the attached body in text mode, where the
-    /// pair is real inline math (`\inferrule*[right=$\Pi$-eq]` — mathpartir sets
-    /// the label in text mode). So a `$` at brace depth 0 toggles an inline
-    /// region rather than ending the search, and `]`/`[` inside it are math
-    /// content, ignored. An *unbalanced* `$` leaves the region open, no `]` is
-    /// ever accepted, and the scan falls through to `false` — the bracket stays
-    /// a plain atom, as before. Does not consume.
+    /// How a `$` at brace depth 0 is read depends on the *innermost enclosing
+    /// math's flavor* ([`Self::math_dollar`]):
+    /// - **Enclosing `\[…\]`/`\(…\)` (or a math environment).** A `$` opens a
+    ///   genuine nested inline region, so a balanced `$…$` pair inside the
+    ///   bracket is *transparent*: the `$` toggles an inline region rather than
+    ///   ending the search, and `]`/`[` inside it are math content, ignored
+    ///   (`\[ \inferrule*[right=$\Pi$-eq]{A}{B} \]` — the `$\Pi$` label sits
+    ///   inside the optional). An *unbalanced* `$` leaves the region open, no
+    ///   `]` is ever accepted, and the scan falls through to `false`.
+    /// - **Enclosing `$…$`/`$$…$$`.** TeX cannot nest a `$` inside dollar math,
+    ///   so the first depth-0 `$` is this math's *closer*: a `]` beyond it lives
+    ///   in a later math and cannot be this bracket's, so bail like `\]`/`\)`.
+    ///   Without this a stray `[` in dollar math (`$\mathcal{N}[\mathcal{S}$`,
+    ///   a missing `]`, stacks-project issue #99) would scan past the closing
+    ///   `$` into following math and wrongly attach an optional that swallows
+    ///   it. Does not consume.
     fn bracket_closes_before_math_end(&self, open: usize) -> bool {
+        let enclosing_is_dollar = self.math_dollar.last().copied().unwrap_or(false);
         let mut depth = 0usize;
         let mut brackets = 0usize;
         let mut in_inline = false;
@@ -1363,7 +1382,12 @@ impl<'t> Parser<'t> {
                     }
                     depth -= 1;
                 }
-                SyntaxKind::DOLLAR if depth == 0 => in_inline = !in_inline,
+                SyntaxKind::DOLLAR if depth == 0 => {
+                    if enclosing_is_dollar {
+                        return false;
+                    }
+                    in_inline = !in_inline;
+                }
                 SyntaxKind::L_BRACKET if depth == 0 && !in_inline && prev_abuts_command => {
                     brackets += 1
                 }
@@ -1725,6 +1749,7 @@ impl<'t> Parser<'t> {
         }
         self.open(SyntaxKind::MATH);
         self.math_depth += 1;
+        self.math_dollar.push(true);
         loop {
             match self.kind() {
                 None => {
@@ -1773,6 +1798,7 @@ impl<'t> Parser<'t> {
             }
         }
         self.math_depth -= 1;
+        self.math_dollar.pop();
         self.close(); // MATH
         if self.kind() == Some(SyntaxKind::DOLLAR) {
             self.bump(); // closing $
@@ -1792,6 +1818,7 @@ impl<'t> Parser<'t> {
         self.bump(); // \[ or \(
         self.open(SyntaxKind::MATH);
         self.math_depth += 1;
+        self.math_dollar.push(false);
         loop {
             match self.kind() {
                 None => {
@@ -1829,6 +1856,7 @@ impl<'t> Parser<'t> {
             }
         }
         self.math_depth -= 1;
+        self.math_dollar.pop();
         self.close(); // MATH
         if self.kind() == Some(SyntaxKind::CONTROL_SYMBOL) && self.text() == closer {
             self.bump(); // \] or \)
@@ -2399,10 +2427,12 @@ impl<'t> Parser<'t> {
     fn math_environment_body(&mut self) {
         self.open(SyntaxKind::MATH);
         self.math_depth += 1;
+        self.math_dollar.push(false);
         while !self.at_block_end(Block::Environment) {
             self.math_element();
         }
         self.math_depth -= 1;
+        self.math_dollar.pop();
         self.close(); // MATH
     }
 

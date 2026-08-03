@@ -1,0 +1,46 @@
+---
+source: tests/parser.rs
+assertion_line: 308
+expression: "tree(r\"$\\mathcal{N}[\\mathcal{S}$ and $\\mathcal{N}[\\mathcal{S}]$\")"
+---
+ROOT@0..56
+  PARAGRAPH@0..56
+    INLINE_MATH@0..25
+      DOLLAR@0..1 "$"
+      MATH@1..24
+        COMMAND@1..12
+          CONTROL_WORD@1..9 "\\mathcal"
+          GROUP@9..12
+            L_BRACE@9..10 "{"
+            WORD@10..11 "N"
+            R_BRACE@11..12 "}"
+        L_BRACKET@12..13 "["
+        COMMAND@13..24
+          CONTROL_WORD@13..21 "\\mathcal"
+          GROUP@21..24
+            L_BRACE@21..22 "{"
+            WORD@22..23 "S"
+            R_BRACE@23..24 "}"
+      DOLLAR@24..25 "$"
+    WHITESPACE@25..26 " "
+    WORD@26..29 "and"
+    WHITESPACE@29..30 " "
+    INLINE_MATH@30..56
+      DOLLAR@30..31 "$"
+      MATH@31..55
+        COMMAND@31..55
+          CONTROL_WORD@31..39 "\\mathcal"
+          GROUP@39..42
+            L_BRACE@39..40 "{"
+            WORD@40..41 "N"
+            R_BRACE@41..42 "}"
+          OPTIONAL@42..55
+            L_BRACKET@42..43 "["
+            COMMAND@43..54
+              CONTROL_WORD@43..51 "\\mathcal"
+              GROUP@51..54
+                L_BRACE@51..52 "{"
+                WORD@52..53 "S"
+                R_BRACE@53..54 "}"
+            R_BRACKET@54..55 "]"
+      DOLLAR@55..56 "$"

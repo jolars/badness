@@ -1,0 +1,7 @@
+% Minimized from stacks/stacks-project sdga.tex (issue #99): a `[` inside inline
+% `$…$` math with no `]` before the closing `$` is a missing-`]` typo. The `$`
+% bounds optional-argument attachment, so a `]` in a *later* `$…$` cannot be
+% claimed by this `[` — it stays a plain math atom and the first math closes,
+% instead of an optional swallowing every following math region to EOF.
+where $\mathcal{N}[\mathcal{S}$ is the
+sheaf $\mathcal{N}[\mathcal{S}]$.

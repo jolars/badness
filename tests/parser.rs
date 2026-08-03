@@ -299,6 +299,18 @@ fn math_optional_with_unclosed_dollar_stays_plain() {
 }
 
 #[test]
+fn math_stray_bracket_in_dollar_stays_plain_despite_later_bracket() {
+    // A `[` inside `$…$` with no `]` before the closing `$` is a stray math atom
+    // (a missing `]` typo: `$\mathcal{N}[\mathcal{S}$`, stacks-project #99). The
+    // closing `$` bounds the search — a `]` in a *later* `$…$` region cannot be
+    // this bracket's, so the `[` stays plain and the first math closes cleanly
+    // instead of the optional swallowing everything to the second `]`.
+    insta::assert_snapshot!(tree(
+        r"$\mathcal{N}[\mathcal{S}$ and $\mathcal{N}[\mathcal{S}]$"
+    ));
+}
+
+#[test]
 fn starred_command_folds_star_and_attaches_arguments() {
     // A starred variant carries its `*` before its arguments; the `*` folds into
     // the invocation so the following `[…]`/`{…}` still attach — here the

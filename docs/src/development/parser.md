@@ -429,12 +429,17 @@ static shape facts, never meaning (`parser::grammar`, `BracketPolicy` +
   `]` closes before the math ends (open-interval notation `$]0;\num{0.5}[$`)—net
   of the `]`s claimed by intervening command-abutting `[`s, so in
   `\P[\gamma[0, \infty) \cap A =   \emptyset]` the lone `]` belongs to `\gamma[`
-  and the outer `\P[` stays an ordinary atom (issue #55). A balanced inline
-  `$…$` pair *inside* the bracket is transparent, not a bail: the attached body
-  parses in text mode where the pair is real inline math, so
-  `\inferrule*[right=$\Pi$-eq]` inside `\[…\]` attaches its optional and wraps
-  the label's `$\Pi$` in an `INLINE_MATH` node. An *unbalanced* `$` still leaves
-  no reachable `]`, so the bracket stays a plain atom.
+  and the outer `\P[` stays an ordinary atom (issue #55). How a `$` inside the
+  bracket reads depends on the *innermost enclosing math's flavor*
+  (`math_dollar`, pushed in lockstep with `math_depth`): inside `\[…\]`/`\(…\)`
+  a `$` opens a genuine nested inline region, so a balanced inline `$…$` pair is
+  transparent and `\inferrule*[right=$\Pi$-eq]` attaches its optional and wraps
+  the label's `$\Pi$` in an `INLINE_MATH` node (an *unbalanced* `$` leaves no
+  reachable `]`, so the bracket stays plain); inside `$…$`/`$$…$$` a `$` cannot
+  nest, so the first one is the math's *closer* and bounds the search—a stray
+  `[` with its `]` only in a *later* `$…$` (a missing-`]` typo like
+  `$\mathcal{N}[\mathcal{S}$`, issue #99) stays an ordinary atom instead of an
+  optional swallowing the following math.
 - *In text mode* (issue #60, mirroring the `$` shape gate), a `[` attaches only
   when its `]` is reachable before an unbalanced `}`, a `\begin`/`\end` outside
   a definition body, a paragraph break, or EOF—net of the `]`s claimed by

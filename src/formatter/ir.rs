@@ -116,6 +116,19 @@ pub(crate) enum Ir {
     /// (every `Line` flat or every `Line` broken), and a conditional group picks
     /// among whole-layout candidates — neither wraps word-by-word.
     Fill(Rc<[Ir]>),
+    /// A *sticky-break* fill: laid out greedily like [`Ir::Fill`], but the break
+    /// decision cascades — once any atom is placed on a broken (multi-line) line,
+    /// every subsequent atom breaks too, instead of each gap deciding
+    /// independently. Same alternating `[atom, sep, atom, …]` shape as
+    /// [`Ir::Fill`]. Used for expl3 statement lines, whose hanging brace arguments
+    /// must all move to their own line once the true-branch body detonates
+    /// (`\@ifpackageloaded {pkg} {…block…} {}` → the empty false-branch drops to
+    /// its own line rather than gluing onto the block's short closing `}` line).
+    /// The greedy fill's independent gaps would glue it back — and, worse,
+    /// unstably, since where the block's own body happens to break is not a
+    /// pass-invariant (issue #94). Shares [`Ir::Fill`]'s builder shape; the
+    /// expl3 statement lowering constructs it directly.
+    StickyFill(Rc<[Ir]>),
     /// A paragraph fill whose gaps remember which ones were authored newlines.
     /// The printer selects a global minimum-cost layout: overflow first, then
     /// short lines relative to `target`, changed authored breaks, displacement,
@@ -381,7 +394,7 @@ impl Ir {
         match self {
             Ir::Group { .. } | Ir::ConditionalGroup(_) | Ir::ConditionalGroupAllLines(_) => true,
             Ir::Concat(items) => items.iter().any(Ir::contains_group),
-            Ir::Fill(parts) => parts.iter().any(Ir::contains_group),
+            Ir::Fill(parts) | Ir::StickyFill(parts) => parts.iter().any(Ir::contains_group),
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_group),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
             Ir::MarginPrefix { inner, .. } => inner.contains_group(),
@@ -423,7 +436,7 @@ impl Ir {
             Ir::Concat(items) => items.iter().any(Ir::contains_forced_break),
             // A fill's separators are soft `Line`s; only its atoms could carry a
             // forced break (none do under reflow lowering, but stay correct).
-            Ir::Fill(parts) => parts.iter().any(Ir::contains_forced_break),
+            Ir::Fill(parts) | Ir::StickyFill(parts) => parts.iter().any(Ir::contains_forced_break),
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_forced_break),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
             Ir::MarginPrefix { inner, .. } => inner.contains_forced_break(),

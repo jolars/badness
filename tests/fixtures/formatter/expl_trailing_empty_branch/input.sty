@@ -1,0 +1,21 @@
+\ProvidesExplPackage {mypkg} {2021-04-17} {1.0}
+\AtBeginDocument
+  {
+    \@ifpackageloaded { textcomp }
+      {
+        \cs_set_protected:Npn \__mypkg_print_text_aux:
+          {
+            \tl_replace_all:Nnn \l__mypkg_print_arg_tl { \pm }
+              { \textpm }
+          }
+      }
+      { }
+  }
+\cs_new_protected:Npn \__mypkg_number_format_sign:n #1
+  {
+    \tl_if_blank:nTF { #1 }
+      {
+        \__mypkg_number_format_sign_aux:n { \l__mypkg_number_sign_tl }
+      }
+      { \__mypkg_number_format_sign_aux:n { #1 } }
+  }

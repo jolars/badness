@@ -603,6 +603,19 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // line, and the charge depended on where the trailing group's own body
     // happened to break — so pass 1 and pass 2 disagreed and idempotence failed.
     ("expl_trailing_block_hug", "sty"),
+    // A trailing brace argument follows its siblings on a *sticky* fill: once a
+    // multi-line true-branch detonates onto its own line, the empty (or short)
+    // false-branch drops to its own line too, instead of gluing onto the block's
+    // short closing `}` line (`} {}`). The greedy fill glued it there, and
+    // whether the block's own body broke hard or soft is not pass-invariant, so
+    // pass 1 (`} {}`) and pass 2 (`}` / `{}`) disagreed and idempotence failed
+    // (smoke-test issue #94, josephwright/siunitx's `\@ifpackageloaded` blocks).
+    // The single-statement true-branch is load-bearing: its `\cs_set_protected:Npn
+    // \…aux:` head is *width*-split (the definiendum greedily absorbs the wide
+    // `{body}`), so the block breaks only from width — soft on pass 1, hard on the
+    // reparse. A two-statement body would break unconditionally on both passes and
+    // never expose the drift, so do not "tidy" this body.
+    ("expl_trailing_empty_branch", "sty"),
 ];
 
 #[test]

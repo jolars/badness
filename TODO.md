@@ -61,6 +61,29 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     for unknown commands.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
+- [ ] **Head/definiendum split on a soft trailing block (rest-aware measurement
+  gap).** In an expl3 statement, a bare command followed by another command that
+  greedily absorbs a wide `{body}` (`\cs_set_protected:Npn \__foo_aux: { … }`) is
+  width-split at the head — `\cs_set_protected:Npn` / `\__foo_aux:` land on
+  separate lines — because the statement fill measures the `\__foo_aux: {body}`
+  atom *flat* (~90 cols) and breaks before it, even though that atom will *hang*
+  its body and only needs the command name (~25 cols) on the line. Both parts fit
+  together with the body hanging. Same rest-aware-measurement gap as #71's
+  head-hug (`Ir::group_hug`), which currently fires only for *forced* breaks; a
+  soft-hanging trailing block gets no hug. Stable/idempotent, just not the
+  prettiest. Surfaced by the #94 fixture (`expl_trailing_empty_branch`, whose
+  single-statement body is kept precisely because this split is what makes the
+  block's break soft-then-hard across passes).
+- [ ] **Revisit tight braces for 2e-named commands inside expl3
+  (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
+  canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but
+  tightens a 2e-*named* command's argument to `{tight}`, so
+  `\@ifpackageloaded { textcomp }` becomes `\@ifpackageloaded {textcomp}`. The
+  spaced form for expl3 functions is genuinely idiomatic l3; the tight form for
+  2e commands is badness's own extrapolation (the style guide is silent on 2e
+  code embedded in a region), chosen for determinism. Whether tightening — vs.
+  preserving, or spacing — is the right default for a 2e command in an expl3
+  region is an open call; the tightening can read as worse than the input.
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
   blocked on structure).** A wrapped brace-body line ideally hangs its continuation
   one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather

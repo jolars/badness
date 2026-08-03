@@ -285,6 +285,32 @@ lowering)—every brace sibling is forced to the broken (Allman) form via
 content; a sibling that would break solely from **width** does not couple (width
 is a printer decision, invisible at build time).
 
+### Sticky-break statement fills
+
+Every expl3 statement line is committed as an `Ir::StickyFill`, not a plain
+`Ir::Fill`. Both greedily fill atoms across the width; the difference is the
+break *cascade*: in a plain fill each gap decides independently (a long word
+breaks, the next words keep filling—correct for prose reflow), whereas in a
+sticky fill, **once any atom lands on a broken line every later atom breaks
+too**. The cascade lives in `printer::step_fill` (`sticky`/`broken` on
+`Cmd::Fill`); prose reflow keeps the plain greedy `Ir::Fill`.
+
+This is what a *width*-broken sibling needs that the forced-only **sibling
+coupling** above cannot give. When a true-branch block
+detonates purely from width (no guard/comment/margin), the greedy fill would let
+a following empty false-branch `{}` glue back onto the block's short closing `}`
+line (`} {}`), because at that column the two-byte `{}` fits. But whether the
+block's own body broke **hard** (a source newline, `contains_forced_break`) or
+**soft** (a width fill) is not pass-invariant—the formatter's own reflow turns
+one into the other—so pass 1 (`} {}`) and pass 2 (`}` then `{}` on its own line)
+disagreed and idempotence failed (issue #94, josephwright/siunitx's
+`\@ifpackageloaded {pkg} {…block…} {}`). The sticky cascade defers the decision
+to the printer's *actual*, column-aware break: the empty branch follows the
+block onto its own line on **every** pass. Unlike the width-independent sibling
+coupling it fixes the exact width-driven case that coupling deliberately skips,
+and it does so without exploding the short leading arguments into blocks—`{pkg}`
+stays inline on the head line; only the arguments *after* the detonated one move.
+
 ### Interaction with `.dtx` doc margins
 
 In a `.dtx`, a region regularly spans several `macrocode` chunks

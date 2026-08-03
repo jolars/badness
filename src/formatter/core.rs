@@ -1721,12 +1721,16 @@ fn lower_expl_code(
     ) {
         flush_atom(atom, parts, sep_before_next);
         if !parts.is_empty() {
-            // A multi-atom line is a fill (greedy independent breaks); a single
-            // atom needs no fill.
+            // A multi-atom line is a *sticky* fill: greedy, but once a hanging
+            // brace argument detonates onto its own line every later argument
+            // follows, rather than an empty false-branch gluing back onto the
+            // block's short closing `}` line — a glue that is not pass-stable,
+            // since where the block's own body breaks is not pass-invariant
+            // (issue #94). A single atom needs no fill.
             let line = if parts.len() == 1 {
                 parts.drain(..).next().unwrap()
             } else {
-                Ir::Fill(std::mem::take(parts).into())
+                Ir::StickyFill(std::mem::take(parts).into())
             };
             seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
             lines.push(line);

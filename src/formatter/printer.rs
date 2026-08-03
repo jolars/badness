@@ -62,6 +62,12 @@ enum Cmd<'a> {
         mode: Mode,
         parts: &'a [Ir],
         prefix: Option<&'a str>,
+        /// A [`Ir::StickyFill`]: once an atom has broken, the rest break too.
+        sticky: bool,
+        /// Sticky bookkeeping: set once any earlier atom in this fill broke, so
+        /// every remaining atom is forced to break. Always `false` for a plain
+        /// (non-sticky) fill.
+        broken: bool,
     },
     PreferredFill {
         indent: usize,
@@ -262,8 +268,10 @@ impl Printer {
                     mode,
                     parts,
                     prefix,
+                    sticky,
+                    broken,
                 } => {
-                    self.step_fill(&w, indent, mode, parts, prefix, &mut stack);
+                    self.step_fill(&w, indent, mode, parts, prefix, sticky, broken, &mut stack);
                     continue;
                 }
                 Cmd::PreferredFill {
@@ -321,6 +329,16 @@ impl Printer {
                     mode,
                     parts: &parts[..],
                     prefix,
+                    sticky: false,
+                    broken: false,
+                }),
+                Ir::StickyFill(parts) => stack.push(Cmd::Fill {
+                    indent,
+                    mode,
+                    parts: &parts[..],
+                    prefix,
+                    sticky: true,
+                    broken: false,
                 }),
                 Ir::PreferredFill {
                     atoms,
@@ -589,6 +607,13 @@ impl Printer {
     /// fits flat from the current column, else it breaks. A lone atom that does
     /// not fit is printed anyway (no break can rescue an unbreakable word). The
     /// remaining fill is pushed back so the next iteration decides the next gap.
+    ///
+    /// A **sticky** fill (`sticky`, [`Ir::StickyFill`]) instead cascades: `broken`
+    /// records that an earlier atom in this fill already broke, so every remaining
+    /// atom is forced to break regardless of its own fit — the greedy fill's
+    /// independent gaps are exactly what would re-glue an expl3 false-branch onto a
+    /// detonated block's short closing line (issue #94).
+    #[allow(clippy::too_many_arguments)]
     fn step_fill<'a>(
         &self,
         w: &Writer,
@@ -596,6 +621,8 @@ impl Printer {
         mode: Mode,
         parts: &'a [Ir],
         prefix: Option<&'a str>,
+        sticky: bool,
+        broken: bool,
         stack: &mut Vec<Cmd<'a>>,
     ) {
         if parts.is_empty() {
@@ -616,7 +643,9 @@ impl Printer {
         let col = w.current_col();
         let content = &parts[0];
         let w0 = self.flat_width(content);
-        let content_fits = matches!(w0, Some(width) if col + width <= self.line_width);
+        // Under a sticky cascade every remaining atom breaks; otherwise the atom
+        // breaks only when it does not fit flat here.
+        let content_fits = !broken && matches!(w0, Some(width) if col + width <= self.line_width);
 
         if parts.len() == 1 {
             stack.push(Cmd::Node {
@@ -635,10 +664,14 @@ impl Printer {
         let sep = &parts[1];
         // Pair fit: the current atom, its separator, and the next atom, all flat.
         // Alternating fills always end on an atom, so `parts[2]` exists here.
-        let pair_fits = match (w0, self.flat_width(sep), self.flat_width(&parts[2])) {
-            (Some(a), Some(s), Some(b)) => col + a + s + b <= self.line_width,
-            _ => false,
-        };
+        let pair_fits = !broken
+            && match (w0, self.flat_width(sep), self.flat_width(&parts[2])) {
+                (Some(a), Some(s), Some(b)) => col + a + s + b <= self.line_width,
+                _ => false,
+            };
+        // Once any atom breaks, a sticky fill stays broken for its remainder, so
+        // the later gaps break unconditionally instead of each deciding afresh.
+        let remainder_broken = sticky && (broken || !content_fits);
         // Push the remainder first (popped last), then the separator, then the
         // content (popped first), so they print in order.
         stack.push(Cmd::Fill {
@@ -646,6 +679,8 @@ impl Printer {
             mode: Mode::Break,
             parts: &parts[2..],
             prefix,
+            sticky,
+            broken: remainder_broken,
         });
         stack.push(Cmd::Node {
             indent,
@@ -686,7 +721,7 @@ impl Printer {
                 Ir::HardLine | Ir::EmptyLine => return None,
                 Ir::Line => total += 1,
                 Ir::Concat(items) => stack.extend(items.iter()),
-                Ir::Fill(parts) => stack.extend(parts.iter()),
+                Ir::Fill(parts) | Ir::StickyFill(parts) => stack.extend(parts.iter()),
                 Ir::PreferredFill { atoms, .. } => {
                     total = total.saturating_add(atoms.len().saturating_sub(1));
                     stack.extend(atoms.iter());
@@ -879,7 +914,7 @@ impl Printer {
                 }
                 // A fill measured flat is its atoms separated by single-space
                 // `Line`s; push the parts and let the arms above account them.
-                Ir::Fill(parts) => {
+                Ir::Fill(parts) | Ir::StickyFill(parts) => {
                     for item in parts.iter().rev() {
                         stack.push(item);
                     }
@@ -958,7 +993,7 @@ impl Printer {
                         stack.push(first);
                     }
                 }
-                Ir::Fill(parts) => {
+                Ir::Fill(parts) | Ir::StickyFill(parts) => {
                     for item in parts.iter().rev() {
                         stack.push(item);
                     }
@@ -1062,7 +1097,7 @@ impl Printer {
                         work.push((Mode::Flat, first));
                     }
                 }
-                Ir::Fill(parts) => {
+                Ir::Fill(parts) | Ir::StickyFill(parts) => {
                     for item in parts.iter().rev() {
                         work.push((mode, item));
                     }
@@ -1154,7 +1189,7 @@ impl Printer {
                     };
                     stack.push((m, inner));
                 }
-                Ir::Fill(parts) => {
+                Ir::Fill(parts) | Ir::StickyFill(parts) => {
                     for item in parts.iter().rev() {
                         stack.push((mode, item));
                     }

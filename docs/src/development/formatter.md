@@ -290,8 +290,8 @@ inline on its line while a long one breaks internally.
 
 Two scopes keep it precise. A conditional used **mid-line as a value**
 (`,key = \tl_if_empty:nTF …`) is not statement-leading, so it stays on the
-width-driven path (issue #71, `expl_trailing_block_hug`). And a
-conditional whose branch groups do **not attach** to it—an `:NTF`/`:nNnTF` whose
+width-driven path (issue #71, `expl_trailing_block_hug`). And a conditional
+whose branch groups do **not attach** to it—an `:NTF`/`:nNnTF` whose
 single-token `N`/`V`/operator argument breaks greedy brace attachment, leaving
 the branches on a following sibling—falls back to the width path rather than
 mis-lower a partial shape. The statement-leading break is width-independent, so
@@ -417,26 +417,27 @@ continuation branch detonates it Allman on pass 2—the same "a width break
 becomes a structural boundary on the next parse" class as the trailing
 conditional above.
 
-`lower_expl_code` commits such a group as one
-`Ir::conditional_group_all_lines` over three candidates—**flat** (`head { body }`
-on one line), **Allman-inline** (head on its own line, `{ body }` inline one step
-under it), **Allman-broken** (`{` on its own line, body a further step, `}`
-back)—keyed on the body's *real* one-line fit rather than its incidental
-source-line count. All-lines-fit measures each candidate with its nested brace
-groups forced **flat** (a very wide probe line), so a candidate is accepted only
-as a genuine one-liner and never as a hybrid where an inner group detonated to
-keep each printed line short; both Allman forms re-parse to a head statement plus
-a statement-leading `{body}` that the continuation branch re-emits identically,
-so each is a fixed point.
+`lower_expl_code` commits such a group as one `Ir::conditional_group_all_lines`
+over three candidates—**flat** (`head { body }` on one line), **Allman-inline**
+(head on its own line, `{ body }` inline one step under it), **Allman-broken**
+(`{` on its own line, body a further step, `}` back)—keyed on the body's *real*
+one-line fit rather than its incidental source-line count. All-lines-fit
+measures each candidate with its nested brace groups forced **flat** (a very
+wide probe line), so a candidate is accepted only as a genuine one-liner and
+never as a hybrid where an inner group detonated to keep each printed line
+short; both Allman forms re-parse to a head statement plus a statement-leading
+`{body}` that the continuation branch re-emits identically, so each is a fixed
+point.
 
 Narrow guards keep this off the shapes the ordinary hang path already lays out
 stably: a single-command or bare-value body (`expl_group_body_is_multi_atom`, a
 top-level `COMMAND` count—no top-level wrap), a body that *already* carries a
 forced break (comment/guard/margin, or several statements—it wants the plain
-Allman block), coupled siblings, and the multi-argument/conditional-branch shapes
-(`statement_has_preceding_group`, `head_command_has_grouped_sibling_arg`) whose
-head this branch—seeing only its own command's `Ignore` stream—cannot measure as
-one unit, so intercepting them would detonate a *preceding* argument group.
+Allman block), coupled siblings, and the multi-argument/conditional-branch
+shapes (`statement_has_preceding_group`, `head_command_has_grouped_sibling_arg`)
+whose head this branch—seeing only its own command's `Ignore` stream—cannot
+measure as one unit, so intercepting them would detonate a *preceding* argument
+group.
 
 ### Sticky-break statement fills
 

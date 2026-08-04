@@ -1,0 +1,12 @@
+% \iffalse meta-comment
+%<*package>
+%    \begin{macrocode}
+\def\bordermatrix#1{\begingroup
+  \setbox\tw@\hbox{$\kern\wd\@ne\left(\kern-\wd\@ne
+    \vcenter{\kern-\ht\@ne\unvbox\z@}\,\right)$}%
+  \endgroup}
+\def\@bBigg@#1#2{{\hbox{$\left#2\vcenter to#1{}\right.$}}}
+\setbox\z@\hbox{$\left#2\right#4$}%
+%    \end{macrocode}
+%</package>
+% \fi

@@ -186,6 +186,35 @@ fn left_right_pairs_inside_array_cell() {
 }
 
 #[test]
+fn left_right_pairs_inside_macro_code() {
+    // A `\left…\right` in math inside macro code (a `\def` body, and the same for
+    // a `.dtx` `macrocode` chunk, both of which set `in_def_body`) must still pair
+    // into a `LEFT_RIGHT`. The pair is catcode-neutral math structure that pairs by
+    // count regardless of macro meaning, so the shape gate may not skip `\left`/
+    // `\right` in macro code the way it skips `\begin`/`\end`. Regression (issue
+    // #95): the gate did skip them, so package math like ltmath.dtx's
+    // `\bordermatrix` (`$…\left(…\right)$`) and delarray.dtx's `$\left#2\right#4$`
+    // never paired and the closer reported a spurious `\right` without matching
+    // `\left`, a parse error that blocked the whole file for the formatter.
+    let src = r"\def\x{$\kern\wd\@ne\left(\vcenter{a}\,\right)$}";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "a balanced `\\left…\\right` in a def body must pair"
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "unexpected diagnostics: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn left_right_pairs_inside_tikzcd_cell() {
     // `tikzcd` (tikz-cd commutative diagrams) typesets its cells in math mode, so
     // a `\left…\right` in a cell pairs into a `LEFT_RIGHT`. Same regression class

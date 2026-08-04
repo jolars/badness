@@ -1698,15 +1698,27 @@ impl<'t> Parser<'t> {
                 SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
                     return false;
                 }
+                // `\left`/`\right` are catcode-neutral math structure that pair by
+                // *count* no matter what — [`Self::left_right`] consumes them
+                // unconditionally — so they must be counted even inside macro code.
+                // A `.dtx` `macrocode` chunk (which sets `in_def_body`) or a `\def`
+                // body is exactly where package math like `$\left#2\right#4$`
+                // (delarray.dtx) or `$\left(…\right)$` (ltmath.dtx's `\bordermatrix`)
+                // lives; gating these on `!in_macro_code` left the `\right`
+                // invisible to the scan, so the pair never opened and the closer
+                // reported a spurious "`\right` without matching `\left`" that
+                // blocked the whole file for the formatter (issue #95).
+                SyntaxKind::CONTROL_WORD if t.text.as_str() == LEFT_CMD => stack.push(Ctx::Left),
+                SyntaxKind::CONTROL_WORD if t.text.as_str() == RIGHT_CMD => match stack.last() {
+                    None => return true,
+                    Some(Ctx::Left) => {
+                        stack.pop();
+                    }
+                    _ => return false,
+                },
+                // `\begin`/`\end` are plain, non-pairing commands in macro code, so
+                // they stay gated (`AGENTS.md` decision #1).
                 SyntaxKind::CONTROL_WORD if !self.in_macro_code(i) => match t.text.as_str() {
-                    LEFT_CMD => stack.push(Ctx::Left),
-                    RIGHT_CMD => match stack.last() {
-                        None => return true,
-                        Some(Ctx::Left) => {
-                            stack.pop();
-                        }
-                        _ => return false,
-                    },
                     BEGIN_CMD if self.env_name_follows(i) => stack.push(Ctx::Env),
                     END_CMD if self.env_name_follows(i) => match stack.last() {
                         Some(Ctx::Env) => {

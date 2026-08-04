@@ -1981,6 +1981,125 @@ fn lower_expl_code(
                     idx += 1;
                     continue;
                 }
+                // A *trailing* greedily-hung `{body}` — a brace group with a head
+                // before it on the line and only trivia after it in the statement —
+                // whose body is a *multi-command* fill (`\int_gset:Nn \g…_int {…}`)
+                // flips K&R->Allman across passes. When the body is authored on one
+                // source line and overflows, the ordinary hang path hangs the `{`
+                // off the head and lets the fill wrap (K&R) on pass 1; but those
+                // wrapped lines re-parse as several statements (source newlines are
+                // statement boundaries inside braces), so the body then carries a
+                // forced break and detonates Allman on pass 2 — the two passes
+                // disagree (idempotency failure, `tagpdf.sty` line 1007,
+                // `latex-lab-testphase-bookmark.sty` line 298).
+                //
+                // Decide instead with a three-candidate all-lines-fit group over the
+                // *same* body IR — flat (whole statement on one line), Allman-inline
+                // (head on its own line, `{ body }` inline), Allman-broken (`{` on
+                // its own line, body wrapped) — keyed on the body's *real* one-line
+                // fit rather than its authored line count, so a body that fits picks
+                // the same form on every pass and one that wraps picks Allman-broken
+                // on every pass. The narrow guards below keep this off the shapes the
+                // existing hang path already lays out stably: a single-command or
+                // bare-value body (no top-level wrap), a forced-break body
+                // (comment/guard/margin, or already multi-statement — plain Allman),
+                // coupled siblings, and the multi-argument/conditional-branch shapes
+                // (a preceding trailing group, or a grouped earlier command) whose
+                // head this branch cannot measure as one unit from inside a single
+                // argument.
+                if child.kind() == SyntaxKind::GROUP
+                    && atom.is_empty()
+                    && !parts.is_empty()
+                    && !couple_siblings
+                    && !expl_group_forces_break(child)
+                    && expl_group_body_is_multi_atom(child)
+                    && is_trailing_in_statement(&elements, idx, statements)
+                    && !statement_has_preceding_group(&elements, idx, statements)
+                    && !head_command_has_grouped_sibling_arg(child)
+                    && let ExplGroupPieces::Pieces {
+                        open_ir,
+                        body,
+                        close_ir,
+                        spaced,
+                        forced: false,
+                    } = expl_group_pieces(child, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx)
+                    // A body that already carries a *forced* break (a nested group
+                    // detonated on width, or the body holds several statements) can
+                    // never be a one-liner: the flat/K&R candidates would render a
+                    // multi-line body as a `flat` pick and freeze a hybrid the next
+                    // parse re-breaks. Such a body wants the plain Allman block, which
+                    // the ordinary hang path already emits stably, so fall through.
+                    && !body.contains_forced_break()
+                {
+                    let sep = sep_before_next.take().unwrap_or(Ir::Line);
+                    flush_atom(&mut atom, &mut parts, &mut sep_before_next);
+                    let head = if parts.len() == 1 {
+                        parts.drain(..).next().unwrap()
+                    } else {
+                        Ir::StickyFill(std::mem::take(&mut parts).into())
+                    };
+                    let space = if spaced { Ir::verbatim(" ") } else { Ir::Nil };
+                    // Three candidates, chosen by all-lines-fit — every one measured
+                    // with its nested brace groups forced *flat*, so a candidate is
+                    // accepted only when its content genuinely lays out that way (no
+                    // inner group silently detonating to keep each printed line short,
+                    // the K&R hybrid). The bodies are therefore raw (no soft group),
+                    // and the structural `HardLine`s alone shape each candidate.
+                    //
+                    // 1. Flat: the whole statement on one line, `{ body }` glued.
+                    // 2. Allman-inline: the head on its own line, `{ body }` inline one
+                    //    step under it — taken when the body fits one line there.
+                    // 3. Allman-broken: `{` on its own line, the body a further step,
+                    //    `}` back — the fallback for a body that wraps.
+                    //
+                    // Both Allman forms re-parse to a head statement followed by a
+                    // statement-leading `{body}`, which the continuation hang branch
+                    // below re-emits identically (the inline/broken split is then the
+                    // soft group's own width choice), so each is a fixed point. Keying
+                    // the K&R↔Allman decision on the body's real one-line fit — not on
+                    // how many source lines the body happened to occupy — is what
+                    // removes the flip (`tagpdf.sty`,
+                    // `latex-lab-testphase-bookmark.sty`).
+                    let c_flat = Ir::concat(vec![
+                        head.clone(),
+                        sep,
+                        open_ir.clone(),
+                        space.clone(),
+                        body.clone(),
+                        space.clone(),
+                        close_ir.clone(),
+                    ]);
+                    let c_allman_inline = Ir::concat(vec![
+                        head.clone(),
+                        Ir::indent(Ir::concat(vec![
+                            Ir::hard_line(),
+                            open_ir.clone(),
+                            space.clone(),
+                            body.clone(),
+                            space,
+                            close_ir.clone(),
+                        ])),
+                    ]);
+                    let c_allman_broken = Ir::concat(vec![
+                        head,
+                        Ir::indent(Ir::concat(vec![
+                            Ir::hard_line(),
+                            open_ir,
+                            Ir::indent(Ir::concat(vec![Ir::hard_line(), body])),
+                            Ir::hard_line(),
+                            close_ir,
+                        ])),
+                    ]);
+                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                    lines.push(Ir::conditional_group_all_lines(vec![
+                        c_flat,
+                        c_allman_inline,
+                        c_allman_broken,
+                    ]));
+                    after_block = true;
+                    idx += 1;
+                    continue;
+                }
                 // A brace group that *starts a fresh atom* (nothing glued before
                 // it — any trivia flushed the atom) is a *continuation*: it indents
                 // one step under its head statement, the l3 house style
@@ -2135,6 +2254,26 @@ fn expl_group_forces_break(node: &SyntaxNode) -> bool {
         })
 }
 
+/// Whether an expl3 brace group's body holds **two or more** top-level `COMMAND`
+/// children — the shape whose K&R hang flips to an Allman block across passes. Two
+/// top-level commands (`\int_gset:Nn \g…_int {…}`, `\cmd {x} ~ \cmd {y}`) form a
+/// width fill, so when the body overflows it wraps onto several physical lines, which
+/// the *next* parse reads as several statements — turning a pass-1 K&R hang (a soft
+/// body fill) into a pass-2 Allman block (a forced break), so the two passes disagree
+/// (`tagpdf.sty`, `latex-lab-testphase-bookmark.sty`).
+///
+/// A body with at most one top-level command (`{ \tl_put_right:Ne #3 {…} }` — the
+/// command plus its loose `#3`/group arguments, or a bare value) stays one statement:
+/// it fits, or it wraps only *inside* that one command's group, never at the top
+/// level, so its hang is already pass-stable and is left on the ordinary hang path.
+/// Reads only CST shape (top-level `COMMAND` count), no meaning.
+fn expl_group_body_is_multi_atom(node: &SyntaxNode) -> bool {
+    node.children()
+        .filter(|n| n.kind() == SyntaxKind::COMMAND)
+        .count()
+        >= 2
+}
+
 /// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the shape
 /// that follows `#` in a parameter reference. Reads only the token text.
 fn is_param_digit(t: &SyntaxToken) -> bool {
@@ -2242,6 +2381,68 @@ fn is_trailing_in_statement(
     true
 }
 
+/// Whether a command *earlier in the same statement* than `child`'s owning command
+/// already carries an attached brace/optional argument — the mark of a
+/// multi-argument call (`\prop_get:NnNTF \g…_prop {#2} \l…_tl {branch}`, whose
+/// `\g…_prop` swallowed `{#2}`) rather than a plain `\cmd \target {body}` hang. The
+/// trailing-hang three-way sees only its own command's [`Statements::Ignore`] stream
+/// (`\l…_tl {body}`), so it cannot tell the two apart from that stream alone; this
+/// looks one level out, at the siblings of `child`'s parent command, to keep the
+/// three-way off the multi-argument shape (its head cannot be measured as one unit
+/// from inside a single argument, so intercepting it detonates a *preceding*
+/// argument group instead). A lone `\cmd \target {body}` (`\tl_put_right:Ne
+/// \l…_tl {body}`, `\bool_if:NF \…_bool {body}`) has no such earlier grouped
+/// command and still qualifies.
+fn head_command_has_grouped_sibling_arg(child: &SyntaxNode) -> bool {
+    let Some(owner) = child.parent() else {
+        return false;
+    };
+    let mut sibling = owner.prev_sibling();
+    while let Some(node) = sibling {
+        if node.kind() == SyntaxKind::COMMAND
+            && node
+                .children()
+                .any(|c| matches!(c.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+        {
+            return true;
+        }
+        sibling = node.prev_sibling();
+    }
+    false
+}
+
+/// Whether a `GROUP`/`OPTIONAL` sibling precedes the element at `idx` within its
+/// statement (back to the previous statement-ending newline under
+/// [`Statements::SplitAtNewlines`], or to the stream start under
+/// [`Statements::Ignore`]). Used to keep the trailing-hang three-way off a group
+/// that is *one of several* trailing brace groups — the branch list of a conditional
+/// call whose N/V argument broke greedy attachment (`\prop_get:NnNTF \g…_prop {#2}
+/// \l…_tl {T} {F}`), or any multi-argument shape — where the existing hang path
+/// already lays the branches out stably. A lone trailing group (`\l…_tl {body}`,
+/// `\bool_if:NF\…_bool {body}`) has no preceding group and still qualifies.
+fn statement_has_preceding_group(
+    elements: &[SyntaxElement],
+    idx: usize,
+    statements: Statements,
+) -> bool {
+    for element in elements[..idx].iter().rev() {
+        match element {
+            SyntaxElement::Token(t)
+                if statements == Statements::SplitAtNewlines && t.kind() == SyntaxKind::NEWLINE =>
+            {
+                return false;
+            }
+            SyntaxElement::Node(n)
+                if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Whether an expl3-region group's *flat* form carries the l3 house style's
 /// canonical inner spaces (`{ value }`, per the l3styleguide) or stays tight
 /// (`{parbox/after}`). Spaced when the group is the attached argument of an
@@ -2292,6 +2493,73 @@ fn lower_expl_group(
     cx: LowerCtx<'_>,
     force_break: bool,
 ) -> Ir {
+    let (open_ir, body, close_ir, spaced, has_comment) =
+        match expl_group_pieces(node, open, close, cx) {
+            ExplGroupPieces::Assembled(ir) => return ir,
+            ExplGroupPieces::Pieces {
+                open_ir,
+                body,
+                close_ir,
+                spaced,
+                forced,
+            } => (open_ir, body, close_ir, spaced, forced),
+        };
+    if has_comment || force_break {
+        Ir::concat([
+            open_ir,
+            Ir::indent(Ir::concat([Ir::hard_line(), body])),
+            Ir::hard_line(),
+            close_ir,
+        ])
+    } else {
+        // Flat boundary separators: a space (l3 house style) or nothing
+        // (tight); both break identically.
+        let boundary = if spaced { Ir::Line } else { Ir::SoftLine };
+        Ir::group(Ir::concat([
+            open_ir,
+            Ir::indent(Ir::concat([boundary.clone(), body])),
+            boundary,
+            close_ir,
+        ]))
+    }
+}
+
+/// The result of decomposing an expl3 brace group into its layout pieces; see
+/// [`expl_group_pieces`].
+enum ExplGroupPieces {
+    /// A special-cased shape ([`expl_group_pieces`] resolved it fully): an empty
+    /// body, with or without a glued lead comment. The caller uses the assembled
+    /// `Ir` verbatim and does *not* get the three-candidate hang treatment.
+    Assembled(Ir),
+    /// A body-bearing group split into its head/body pieces so the caller can
+    /// reassemble in flat, K&R, or Allman form.
+    Pieces {
+        /// The opening bracket, plus any glued lead comment.
+        open_ir: Ir,
+        /// The lowered body (leading/trailing breaks trimmed).
+        body: Ir,
+        /// The closing bracket.
+        close_ir: Ir,
+        /// Whether the flat boundary is a space (l3 house style) or tight.
+        spaced: bool,
+        /// Whether a comment, guard, or `.dtx` margin forces the broken form
+        /// regardless of width.
+        forced: bool,
+    },
+}
+
+/// Decompose an expl3 brace `{…}` (or optional `[…]`) group into the pieces
+/// [`lower_expl_group`] and the trailing-hang branch in [`lower_expl_code`] share.
+/// The empty-body and glued-lead-comment shapes have bespoke, already-stable
+/// assembly, so they are returned pre-assembled as [`ExplGroupPieces::Assembled`];
+/// every body-bearing group is returned as [`ExplGroupPieces::Pieces`] for the
+/// caller to lay out flat, K&R, or Allman.
+fn expl_group_pieces(
+    node: &SyntaxNode,
+    open: SyntaxKind,
+    close: SyntaxKind,
+    cx: LowerCtx<'_>,
+) -> ExplGroupPieces {
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
@@ -2365,32 +2633,24 @@ fn lower_expl_group(
         // A glued lead comment owns the rest of its line, so an empty body
         // still breaks before the closing bracket (`{%…` + `}` on its own
         // line), never `{%…}` with the bracket swallowed.
-        if has_lead_comment {
+        return ExplGroupPieces::Assembled(if has_lead_comment {
             Ir::concat([open_ir, Ir::hard_line(), close_ir])
         } else {
             Ir::concat([open_ir, close_ir])
-        }
-    } else if has_comment || force_break {
-        Ir::concat([
-            open_ir,
-            Ir::indent(Ir::concat([Ir::hard_line(), body])),
-            Ir::hard_line(),
-            close_ir,
-        ])
-    } else {
-        // Flat boundary separators: a space (l3 house style) or nothing
-        // (tight); both break identically.
-        let boundary = if expl_group_is_spaced(node) {
-            Ir::Line
-        } else {
-            Ir::SoftLine
-        };
-        Ir::group(Ir::concat([
-            open_ir,
-            Ir::indent(Ir::concat([boundary.clone(), body])),
-            boundary,
-            close_ir,
-        ]))
+        });
+    }
+    // A glued lead comment on a body-bearing group still forces the broken form
+    // (it owns the rest of the opening line) and, more to the point, means the
+    // three-candidate trailing-hang treatment must not apply — the flat/K&R
+    // candidates would put content after the comment on the same line. Route it
+    // through the forced-break path (`forced` covers both the lead comment and
+    // any interior comment/guard/margin).
+    ExplGroupPieces::Pieces {
+        open_ir,
+        body,
+        close_ir,
+        spaced: expl_group_is_spaced(node),
+        forced: has_comment,
     }
 }
 

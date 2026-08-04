@@ -457,7 +457,11 @@ impl Printer {
                     });
                 }
                 Ir::ConditionalGroupAllLines(cands) => {
-                    let (m, chosen) = self.pick_candidate_all_lines(w.col, indent, cands);
+                    // `current_col()` (not the raw `col`) so a group dispatched right
+                    // after a newline measures its first line from the pending
+                    // indent, not column 0 — otherwise the indent width is dropped
+                    // and an overflowing flat candidate is wrongly accepted.
+                    let (m, chosen) = self.pick_candidate_all_lines(w.current_col(), indent, cands);
                     stack.push(Cmd::Node {
                         indent,
                         mode: m,
@@ -805,14 +809,23 @@ impl Printer {
         unreachable!("Ir::ConditionalGroupAllLines builder rejects empty candidate lists")
     }
 
-    /// Whether every line `node` would render to fits within `line_width`,
-    /// when placed at column `start_col` under the active `indent` in Flat
-    /// mode (the mode the chosen candidate would be rendered in). Used by
-    /// [`Self::pick_candidate_all_lines`]. Renders the candidate via the
-    /// same printer machinery (so nested group decisions match the real
-    /// render), then walks the output lines.
+    /// Whether every line `node` would render to fits within `line_width`, when
+    /// placed at column `start_col` under the active `indent`. Used by
+    /// [`Self::pick_candidate_all_lines`]. The candidate is rendered with a
+    /// *very wide* line so every width-driven `Group`/`ConditionalGroup` inside it
+    /// stays flat — only the candidate's own structural `HardLine`s split it into
+    /// lines — and then each of those lines is measured against the real
+    /// `line_width`. A candidate therefore "fits" only when its content genuinely
+    /// lays out within the width without any nested group having to break: a flat
+    /// candidate whose single line overflows is rejected (the broken fallback is
+    /// taken) rather than silently accepted as a hybrid where a nested brace group
+    /// broke to keep each printed line short.
     fn all_lines_fit(&self, start_col: usize, indent: usize, node: &Ir) -> bool {
-        let rendered = self.run_with_mode(node, indent, start_col, Mode::Flat);
+        let flat = Printer {
+            line_width: usize::MAX / 2,
+            indent_unit: self.indent_unit,
+        };
+        let rendered = flat.run_with_mode(node, indent, start_col, Mode::Flat);
         let mut lines = rendered.split('\n');
         if let Some(first) = lines.next()
             && start_col + first.chars().count() > self.line_width

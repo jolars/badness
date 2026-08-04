@@ -642,6 +642,15 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // reparse. A two-statement body would break unconditionally on both passes and
     // never expose the drift, so do not "tidy" this body.
     ("expl_trailing_empty_branch", "sty"),
+    // A *trailing* greedily-hung `{body}` — a brace group after head atoms with only
+    // trivia following it — whose body is a *multi-command* fill flips K&R->Allman
+    // across passes: a body authored on one source line hangs K&R (soft fill) on
+    // pass 1, but once that fill wraps the reparse reads the wrapped lines as several
+    // statements and detonates it Allman on pass 2 (tagpdf.sty line 1007,
+    // latex-lab-testphase-bookmark.sty line 298). A three-candidate all-lines-fit
+    // choice (flat / Allman-inline / Allman-broken), keyed on the body's real
+    // one-line fit rather than its authored line count, makes both passes agree.
+    ("expl_trailing_hang_group", "sty"),
 ];
 
 #[test]

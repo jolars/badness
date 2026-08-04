@@ -6,10 +6,15 @@
 
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::parser::SyntaxError;
 
 /// Severity of a diagnostic. Ordered to mirror LSP's `DiagnosticSeverity`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serialized lowercase (`"warning"`), matching the concise renderer's wording
+/// and the JSON output of the sibling tools (fatou).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
     Warning,
@@ -20,8 +25,9 @@ pub enum Severity {
 /// Whether a [`Fix`] preserves the document's meaning. `Safe` fixes are applied
 /// by `lint --fix`; `Unsafe` fixes (those that could change typeset output, e.g.
 /// a rewrite that alters spacing) require `--unsafe-fixes` or an explicit editor
-/// action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// action. Serialized lowercase (`"safe"`), matching arity and fatou.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Applicability {
     Safe,
     Unsafe,
@@ -36,7 +42,7 @@ pub enum Applicability {
 /// file `p`, mirroring [`RelatedInfo`]'s real-paths-stamped-at-rule-time model;
 /// this is what makes a fix *cross-file*. The byte offsets are always into the
 /// text of the file `path` resolves to, never the diagnostic's file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Edit {
     /// Replacement text to substitute in.
     pub content: String,
@@ -44,7 +50,9 @@ pub struct Edit {
     pub start: usize,
     /// Byte offset of the end of the replacement (exclusive).
     pub end: usize,
-    /// File this edit targets. `None` = the diagnostic's own file.
+    /// File this edit targets. `None` = the diagnostic's own file (and the key
+    /// is omitted from JSON output).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
 }
 
@@ -78,7 +86,7 @@ impl Edit {
 /// a single edit in the diagnostic's own file. A fix may also be **cross-file**:
 /// an [`Edit`] with `path: Some(_)` targets another file, and atomicity then spans
 /// files — every edit in every file lands, or none does (see `linter/fix.rs`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Fix {
     /// The replacements. Each targets the diagnostic's own file
     /// ([`Edit::path`] `None`) or another file (`Some`). Edits landing in the
@@ -143,7 +151,7 @@ impl Fix {
 /// time — it may differ from the diagnostic's own file (the cross-file case). A
 /// `0..0` range is a deliberate file-level link (the target's exact byte range
 /// is unknown), pointing at the file's start.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RelatedInfo {
     /// File the secondary location lives in.
     pub path: PathBuf,
@@ -157,7 +165,7 @@ pub struct RelatedInfo {
 }
 
 /// A single lint finding, keyed to a byte range in one file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Diagnostic {
     /// Stable identifier for the rule that produced this finding. Parse
     /// diagnostics use `"parse"`.
@@ -170,7 +178,9 @@ pub struct Diagnostic {
     pub end: usize,
     pub message: String,
     /// An autofix for this finding, if one is available. `lint --fix` applies
-    /// these; a finding can exist without one.
+    /// these; a finding can exist without one (and the key is then omitted from
+    /// JSON output).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<Fix>,
     /// Secondary "see also" locations for this finding (possibly in other
     /// files). Usually empty; `duplicate-label` points at the first definition.

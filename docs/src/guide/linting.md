@@ -48,3 +48,41 @@ change output, such as `missing-nonbreaking-space` (inserting a tie changes line
 breaking), `abbreviation-spacing` (inserting `\` or `\@` changes sentence
 spacing), or `space-before-command` (deleting a space before `\footnote` changes
 spacing).
+
+## Machine-readable output
+
+`badness lint --output json` emits the findings as a JSON array on **stdout**
+(the human-readable `pretty` and `concise` modes write to stderr). A clean run
+emits `[]`, so consumers always receive valid JSON; the exit code still signals
+whether findings exist. This is the contract external tools consume, e.g.
+panache when linting `latex` code blocks in Markdown documents.
+
+```json
+[
+  {
+    "rule": "ellipsis",
+    "severity": "warning",
+    "path": "paper.tex",
+    "start": 5,
+    "end": 8,
+    "message": "literal `...` ellipsis; use `\\dots`",
+    "fix": {
+      "edits": [{ "content": "\\dots", "start": 5, "end": 8 }],
+      "applicability": "safe",
+      "description": "Replace `...` with `\\dots`"
+    },
+    "related": []
+  }
+]
+```
+
+Ranges are 0-indexed byte offsets into the named file (no line/column
+resolution). `severity` is one of `error`, `warning`, `info`, or `hint`;
+`applicability` is `safe` or `unsafe` (the `--fix`/`--unsafe-fixes` split). The
+`fix` key is omitted when a finding has no auto-fix. An edit carries a `path`
+key only when it targets a *different* file than the diagnostic (a cross-file
+fix); `related` lists secondary "see also" locations.
+
+Compared to the sibling tools arity and fatou, the schema differs in two ways:
+offsets are flat `start`/`end` keys rather than a `range` object, and `message`
+is a plain string rather than a structured object.

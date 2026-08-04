@@ -1,8 +1,9 @@
-//! Diagnostic rendering for the CLI: pretty (annotate-snippets) and concise.
+//! Diagnostic rendering for the CLI: pretty (annotate-snippets), concise, and
+//! machine-readable JSON.
 //!
-//! Only the two text modes that matter today are implemented (JSON is
-//! deferred). Diagnostics are grouped by file so each file's source is fetched
-//! at most once.
+//! For the text modes, diagnostics are grouped by file so each file's source is
+//! fetched at most once. JSON is a faithful serialization of the diagnostic
+//! model (byte offsets, no line/column resolution), so it needs no source.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -22,6 +23,8 @@ pub enum OutputMode {
     Pretty,
     /// One `path:line:col: severity [rule] message` line per finding.
     Concise,
+    /// A JSON array of findings with byte-offset ranges and fix data.
+    Json,
 }
 
 /// Render `diagnostics` to a string. `source_for` supplies the source text of a
@@ -35,7 +38,14 @@ pub fn render_findings(
     match mode {
         OutputMode::Pretty => render_pretty(diagnostics, source_for),
         OutputMode::Concise => render_concise(diagnostics, source_for),
+        OutputMode::Json => render_json(diagnostics),
     }
+}
+
+/// Serialize the findings as a pretty-printed JSON array (no trailing newline).
+/// An empty slice renders as `[]`, so consumers always receive valid JSON.
+fn render_json(diagnostics: &[Diagnostic]) -> String {
+    serde_json::to_string_pretty(diagnostics).unwrap_or_else(|_| "[]".to_string())
 }
 
 /// Group diagnostics by path, preserving their original order within each file.
@@ -225,6 +235,58 @@ mod tests {
             rendered.contains("first definition of `a`"),
             "got: {rendered}"
         );
+    }
+
+    #[test]
+    fn json_serializes_diagnostic_with_fix_and_related() {
+        use super::super::diagnostic::{Edit, Fix};
+
+        let mut d = diag(12, 20, "label `x` is defined more than once");
+        d.severity = Severity::Warning;
+        d.fix = Some(Fix::safe_edits(
+            vec![
+                Edit::new(5, 9, "abcd"),
+                Edit::in_file(PathBuf::from("other.tex"), 0, 4, "efgh"),
+            ],
+            "rename the second label",
+        ));
+        d.related.push(RelatedInfo {
+            path: PathBuf::from("other.tex"),
+            start: 0,
+            end: 0,
+            message: "first definition of `x`".to_owned(),
+        });
+
+        let rendered = render_findings(&[d], OutputMode::Json, &|_| None);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let diag = &value[0];
+        assert_eq!(diag["rule"], "parse");
+        assert_eq!(diag["severity"], "warning");
+        assert_eq!(diag["path"], "x.tex");
+        assert_eq!(diag["start"], 12);
+        assert_eq!(diag["end"], 20);
+        assert_eq!(diag["fix"]["applicability"], "safe");
+        assert_eq!(diag["fix"]["description"], "rename the second label");
+        assert_eq!(diag["fix"]["edits"][0]["content"], "abcd");
+        // An own-file edit omits `path`; a cross-file edit carries it.
+        assert!(diag["fix"]["edits"][0].get("path").is_none());
+        assert_eq!(diag["fix"]["edits"][1]["path"], "other.tex");
+        assert_eq!(diag["related"][0]["message"], "first definition of `x`");
+    }
+
+    #[test]
+    fn json_omits_fix_when_none() {
+        let d = diag(0, 1, "boom");
+        let rendered = render_findings(&[d], OutputMode::Json, &|_| None);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(value[0].get("fix").is_none());
+        assert_eq!(value[0]["related"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn json_empty_input_is_empty_array() {
+        let rendered = render_findings(&[], OutputMode::Json, &|_| None);
+        assert_eq!(rendered, "[]");
     }
 
     #[test]

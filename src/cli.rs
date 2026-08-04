@@ -28,6 +28,20 @@ pub enum WrapArg {
     Preserve,
 }
 
+/// CLI surface for the lint renderer's `OutputMode`. Kept here for the same
+/// reason as [`WrapArg`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LintOutput {
+    /// Source-snippet output with caret spans, on stderr (default).
+    Pretty,
+    /// One `path:line:col: severity [rule] message` line per finding, on
+    /// stderr.
+    Concise,
+    /// A machine-readable JSON array of findings on stdout (`[]` when clean),
+    /// with byte-offset ranges and fix data.
+    Json,
+}
+
 /// CLI surface for `formatter::MathWrap` (display-math line breaking). Kept
 /// here for the same reason as [`WrapArg`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -142,6 +156,10 @@ pub enum Command {
         /// paths, config, and fixes.
         #[arg(long, value_name = "RULE")]
         explain: Option<String>,
+        /// Output format for findings. The human modes write to stderr; `json`
+        /// writes to stdout.
+        #[arg(long, value_enum, default_value_t = LintOutput::Pretty)]
+        output: LintOutput,
     },
     /// Parse LaTeX source and print its concrete syntax tree (CST).
     ///

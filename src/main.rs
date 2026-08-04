@@ -29,7 +29,7 @@ use badness::linter::{
 };
 use std::collections::{BTreeSet, HashMap};
 
-use badness::cli::{Cli, Command, DebugChecksArg, DebugCommand, MathWrapArg, WrapArg};
+use badness::cli::{Cli, Command, DebugChecksArg, DebugCommand, LintOutput, MathWrapArg, WrapArg};
 use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
@@ -55,6 +55,16 @@ fn wrap_mode(arg: WrapArg) -> WrapMode {
         WrapArg::Sentence => WrapMode::Sentence,
         WrapArg::Semantic => WrapMode::Semantic,
         WrapArg::Preserve => WrapMode::Preserve,
+    }
+}
+
+/// Lower the CLI [`LintOutput`] to the renderer's [`OutputMode`] (same
+/// orphan-rule story as [`wrap_mode`]).
+fn lint_output_mode(arg: LintOutput) -> OutputMode {
+    match arg {
+        LintOutput::Pretty => OutputMode::Pretty,
+        LintOutput::Concise => OutputMode::Concise,
+        LintOutput::Json => OutputMode::Json,
     }
 }
 
@@ -137,6 +147,7 @@ fn main() -> ExitCode {
             select,
             ignore,
             explain,
+            output,
         } => {
             if let Some(rule) = explain {
                 return run_explain(&rule);
@@ -174,6 +185,7 @@ fn main() -> ExitCode {
                 stdin_filepath.as_deref(),
                 &exclude_filter,
                 &rules,
+                lint_output_mode(output),
             )
         }
         Command::Parse { path } => run_parse(path.as_deref()),
@@ -514,6 +526,7 @@ fn run_lint(
     stdin_filepath: Option<&Path>,
     exclude: &ExcludeFilter,
     rules: &RuleSelection,
+    mode: OutputMode,
 ) -> ExitCode {
     // Apply fixes in place first; the reporting pass below then re-reads from
     // disk and shows whatever findings remain. This is a two-pass flow.
@@ -610,7 +623,12 @@ fn run_lint(
             .then(a.rule.cmp(b.rule))
     });
 
-    if !diagnostics.is_empty() {
+    if mode == OutputMode::Json {
+        // JSON goes to stdout unconditionally (`[]` when clean) so consumers
+        // always receive a valid document. It serializes byte offsets and
+        // needs no source lookup.
+        println!("{}", render_findings(&diagnostics, mode, &|_| None));
+    } else if !diagnostics.is_empty() {
         // Index sources by path so the renderer's per-file source lookup is O(1),
         // not a linear scan of every source (quadratic over a large project).
         let source_index: HashMap<&Path, &str> = sources
@@ -618,10 +636,7 @@ fn run_lint(
             .map(|(p, text, _)| (p.as_path(), text.as_str()))
             .collect();
         let source_for = |path: &Path| source_index.get(path).map(|s| s.to_string());
-        eprint!(
-            "{}",
-            render_findings(&diagnostics, OutputMode::Pretty, &source_for)
-        );
+        eprint!("{}", render_findings(&diagnostics, mode, &source_for));
     }
 
     if failed || !diagnostics.is_empty() {

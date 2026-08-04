@@ -105,6 +105,17 @@ With paths, lints each file. With no paths, reads stdin. Exits non-zero if any d
 `--explain <RULE>`
 :   Print the description and examples for a rule id, then exit. Ignores paths, config, and fixes
 
+`--output <OUTPUT>`
+:   Output format for findings. The human modes write to stderr; `json` writes to stdout
+
+    Default value: `pretty`
+
+    Possible values:
+
+    - `pretty`: Source-snippet output with caret spans, on stderr (default)
+    - `concise`: One `path:line:col: severity [rule] message` line per finding, on stderr
+    - `json`: A machine-readable JSON array of findings on stdout (`[]` when clean), with byte-offset ranges and fix data
+
 ## `badness parse`
 
 Parse LaTeX source and print its concrete syntax tree (CST).

@@ -74,6 +74,26 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   prettiest. Surfaced by the #94 fixture (`expl_trailing_empty_branch`, whose
   single-statement body is kept precisely because this split is what makes the
   block's break soft-then-hard across passes).
+- [ ] **Hanging brace argument flips K&R <-> Allman on wrap (idempotency;
+  smoke-test issue #96 residue).** In an expl3 statement a command whose greedily
+  absorbed `{body}` holds a long *single-source-line* body renders K&R on pass 1
+  (`\tl_put_right:Ne \l_tmpa_tl {` — `{` glued to the head, body wrapped below) but
+  Allman on pass 2 (`{` on its own line at +2). The `{`-placement is driven by
+  `contains_forced_break` on the body, true only when the body spans multiple
+  *source* lines (each becomes a `SplitAtNewlines` statement with a hard line
+  between); a one-line body that overflows wraps on pass 1 (still soft -> K&R), and
+  that wrap is multiple source lines on pass 2 (forced -> Allman), so
+  `fmt(fmt(x)) != fmt(x)`. Same "a width break becomes a structural boundary on the
+  next parse" class as the trailing-conditional fix (#96), but in the
+  continuation-group hang path (`lower_expl_code`'s `hang_group` branches), which is
+  far broader: making overflow -> Allman would restyle many existing K&R outputs, so
+  it needs its own change with fixture updates. The fix likely commits the whole
+  hang as one width-conditional group (flat `head {body}` vs Allman) so the
+  `{`-column stops depending on the body's incidental source-line count. Surfaced by
+  `tagpdf.sty` and `pdfmanagement/latex-lab-testphase-bookmark.sty`, which the
+  conditional fix left failing; reproduce with `\__tag_tree_write_idtree:` from
+  tagpdf (a `\tl_put_right:Ne \l_tmpa_tl { <long one-line body> }` inside an
+  `\int_step_inline` body).
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but

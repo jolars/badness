@@ -4,6 +4,7 @@ Badness is distributed as a single binary, `badness`. The current version is
 `{{ badness-version }}`. It is available from several sources:
 
 - **crates.io**: `cargo install badness`
+- **Homebrew**: `brew install jolars/tap/badness`
 - **npm**: `npm install -g badness` (bundles a prebuilt binary)
 - **PyPI**: `uv tool install badness`/`pipx install badness`
 - **Prebuilt binaries**: from the [releases

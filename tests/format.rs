@@ -619,6 +619,16 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // line, and the charge depended on where the trailing group's own body
     // happened to break — so pass 1 and pass 2 disagreed and idempotence failed.
     ("expl_trailing_block_hug", "sty"),
+    // A *trailing* expl3 conditional — one used mid-line as a value after head atoms,
+    // with only trivia after it in the statement — is width-conditional (issue #96,
+    // lthooks.dtx). It stays flat on the line when the whole statement fits (the short
+    // `\tl_if_empty:nTF {#1} { yes } { no }` line), but when head + conditional
+    // overflow, the head drops to its own line and the conditional explodes (R4). Both
+    // are committed as one `group(IfBreak { flat, exploded })` measured by the group's
+    // flat width, head included, so pass 1 and pass 2 agree: on overflow the flushed
+    // head re-parses the conditional as statement-leading and it re-explodes to the
+    // identical bytes, where the fill's arbitrary head-break was not pass-stable.
+    ("expl_conditional_trailing", "sty"),
     // A trailing brace argument follows its siblings on a *sticky* fill: once a
     // multi-line true-branch detonates onto its own line, the empty (or short)
     // false-branch drops to its own line too, instead of gluing onto the block's

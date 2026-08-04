@@ -1936,6 +1936,51 @@ fn lower_expl_code(
                     idx += 1;
                     continue;
                 }
+                // A *trailing* expl3 conditional — one used mid-line as a value, with
+                // head atoms before it on the line and only trivia after it in the
+                // statement — is width-conditional. It stays flat on the line when the
+                // whole statement fits (issue #71's `,key = \…:nTF {c} {T} {F}` shape),
+                // but when head and conditional together overflow, the head drops to
+                // its own line, which makes the conditional *statement-leading* on the
+                // next parse so it then explodes unconditionally (R4). Committing head
+                // and conditional together as one `group(IfBreak { flat, broken })`
+                // — measured by the group's *flat* width (head included, so neither
+                // fooled by a branch that detonates internally nor evaluated apart
+                // from its head) — makes the passes agree: it fits => `head cond` on
+                // one line; it overflows => head on its own line then the R4
+                // explosion, which re-parses statement-leading and re-explodes to the
+                // identical bytes (idempotency failure, `lthooks.dtx`, issue #96). The
+                // `!(…)` guard leaves the statement-leading position to the block above.
+                if child.kind() == SyntaxKind::COMMAND
+                    && !(parts.is_empty() && atom.is_empty())
+                    && is_trailing_in_statement(&elements, idx, statements)
+                    && let Some(exploded) = command_name(child)
+                        .and_then(|name| expl_conditional_branches(&name))
+                        .and_then(|n| lower_expl_conditional(child, cx, n))
+                {
+                    // The head↔conditional separator: a space when trivia flushed the
+                    // atom (`… \…:nTF`), nothing when the conditional directly abuts
+                    // the atom in progress (`…\…:nTF`, no space). `flush_atom`'s own
+                    // `sep_before_next` handles the *internal* head joins.
+                    let sep = if atom.is_empty() {
+                        sep_before_next.take().unwrap_or(Ir::Line)
+                    } else {
+                        Ir::Nil
+                    };
+                    flush_atom(&mut atom, &mut parts, &mut sep_before_next);
+                    let head = if parts.len() == 1 {
+                        parts.drain(..).next().unwrap()
+                    } else {
+                        Ir::StickyFill(std::mem::take(&mut parts).into())
+                    };
+                    let flat = Ir::concat(vec![head.clone(), sep, lower_node(child, cx)]);
+                    let broken = Ir::concat(vec![head, Ir::hard_line(), exploded]);
+                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                    lines.push(Ir::group(Ir::if_break(flat, broken)));
+                    after_block = true;
+                    idx += 1;
+                    continue;
+                }
                 // A brace group that *starts a fresh atom* (nothing glued before
                 // it — any trivia flushed the atom) is a *continuation*: it indents
                 // one step under its head statement, the l3 house style
@@ -2170,6 +2215,31 @@ fn expl_conditional_branches(name: &str) -> Option<usize> {
         .take_while(|c| *c == 'T' || *c == 'F')
         .count();
     (n > 0).then_some(n)
+}
+
+/// Whether the element at `idx` is the last *meaningful* element of its statement —
+/// only collapsible trivia (and, under [`Statements::SplitAtNewlines`], a newline
+/// that ends the statement) follow it. Used to gate the trailing-conditional
+/// width-conditional lowering in [`lower_expl_code`]: a conditional with content
+/// after it on the same statement is not a clean trailing value, so it stays on the
+/// ordinary fill path. A `~` (`TILDE`) or comment is not collapsible trivia, so it
+/// counts as following content.
+fn is_trailing_in_statement(
+    elements: &[SyntaxElement],
+    idx: usize,
+    statements: Statements,
+) -> bool {
+    for element in &elements[idx + 1..] {
+        match element {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                if statements == Statements::SplitAtNewlines && t.kind() == SyntaxKind::NEWLINE {
+                    return true;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Whether an expl3-region group's *flat* form carries the l3 house style's

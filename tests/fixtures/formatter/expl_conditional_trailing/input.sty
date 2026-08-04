@@ -1,0 +1,13 @@
+\ExplSyntaxOn
+\cs_new_protected:Npn \module_log:nn #1 #2
+  {
+    #2
+      {
+        \c_space_tl short~note \tl_if_empty:nTF {#1} { yes } { no }
+        \c_space_tl Not~set~because~the~hook~ \tl_if_empty:nTF {#1}
+          { code~pool~is~empty }
+          { is~\tl_if_blank:nTF {#1} { blank } { filled } }
+        \module_aux:n {#1}
+      }
+  }
+\ExplSyntaxOff

@@ -290,15 +290,30 @@ inline on its line while a long one breaks internally.
 
 Two scopes keep it precise. A conditional used **mid-line as a value**
 (`,key = \tl_if_empty:nTF …`) is not statement-leading, so it stays on the
-width-driven head-hug path (issue #71, `expl_trailing_block_hug`). And a
+width-driven path (issue #71, `expl_trailing_block_hug`). And a
 conditional whose branch groups do **not attach** to it—an `:NTF`/`:nNnTF` whose
 single-token `N`/`V`/operator argument breaks greedy brace attachment, leaving
 the branches on a following sibling—falls back to the width path rather than
-mis-lower a partial shape. The break is width-independent, so it is a fixed
-point: the exploded output re-parses to the same greedy `COMMAND` (brace
-arguments attach across the inserted newlines) in statement position and
+mis-lower a partial shape. The statement-leading break is width-independent, so
+it is a fixed point: the exploded output re-parses to the same greedy `COMMAND`
+(brace arguments attach across the inserted newlines) in statement position and
 re-explodes identically. A LaTeX2e conditional (`\@ifpackageloaded`, no
 `:`-argspec) is never matched, so issue #94's sticky-fill handling is untouched.
+
+The mid-line value scope is itself **width-conditional**, and that is where
+idempotence is subtle (issue #96, `lthooks.dtx`). A *trailing* conditional (head
+atoms before it, only trivia after it in the statement) that would simply join
+the sticky fill is not pass-stable: when head + conditional overflow, the fill
+drops the head to its own line, which on the next parse makes the conditional
+statement-leading—so it then explodes *unconditionally*, and the two passes
+disagree. `lower_expl_code` therefore commits head and conditional as one
+`group(Ir::if_break { flat, broken })`, decided by the group's **flat** width
+(head included, via `group_fits`, so it is neither fooled by a branch that
+detonates internally nor evaluated apart from its head): fits ⇒ `head cond` on
+one line; overflows ⇒ head on its own line then the R4 explosion, which
+re-parses statement-leading and re-explodes to the identical bytes. Gated by
+`is_trailing_in_statement`, so a conditional with real content after it stays on
+the ordinary fill path.
 
 ### Positional gate on layout ownership
 

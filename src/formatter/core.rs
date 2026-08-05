@@ -2282,7 +2282,7 @@ fn expl_group_body_is_multi_atom(node: &SyntaxNode) -> bool {
 
 /// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the shape
 /// that follows `#` in a parameter reference. Reads only the token text.
-fn is_param_digit(t: &SyntaxToken) -> bool {
+pub(crate) fn is_param_digit(t: &SyntaxToken) -> bool {
     matches!(t.text().as_bytes(), [b'1'..=b'9'])
 }
 
@@ -5835,7 +5835,7 @@ fn has_verbatim_body(node: &SyntaxNode) -> bool {
 
 /// Whitespace and newlines are the only trivia the formatter rewrites. Comments
 /// are preserved verbatim and so are *not* collapsible.
-fn is_collapsible_trivia(kind: SyntaxKind) -> bool {
+pub(crate) fn is_collapsible_trivia(kind: SyntaxKind) -> bool {
     matches!(kind, SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
 }
 

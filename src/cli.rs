@@ -195,10 +195,10 @@ pub enum DebugCommand {
     /// Check formatter and parser invariants per file, writing nothing back.
     ///
     /// Runs the selected checks (losslessness: `reconstruct(x) == x`;
-    /// idempotency: `fmt(fmt(x)) == fmt(x)`; trivia:
-    /// `fmt(perturb(x)) == fmt(x)`, opt-in) over each input file. `--report`
-    /// emits a Markdown summary to stdout; `--dump-dir` writes per-pass
-    /// artifacts for triage.
+    /// idempotency: `fmt(fmt(x)) == fmt(x)`; trivia: every perturbed
+    /// `fmt(perturb(x))` is a fixed point, opt-in) over each input file.
+    /// `--report` emits a Markdown summary to stdout; `--dump-dir` writes
+    /// per-pass artifacts for triage.
     Format {
         /// Files or directories to check.
         paths: Vec<PathBuf>,
@@ -241,11 +241,12 @@ pub enum DebugChecksArg {
     Idempotency,
     /// Only the parser round-trip check: `reconstruct(x) == x`.
     Losslessness,
-    /// Only the trivia-invariance oracle: `fmt(perturb(x)) == fmt(x)` for
-    /// TeX-identical newline<->space swaps, under Tier-1 layout (wrap pinned
-    /// to `reflow`, `--wrap` ignored; `.bib` files skipped). Deliberately
-    /// *not* part of `all` — the smoke-test workflow's failure classes stay
-    /// as they are.
+    /// Only the trivia-convergence oracle: every TeX-identical
+    /// newline<->space perturbation of the input must format to a fixed
+    /// point (`fmt(fmt(p)) == fmt(p)`) upholding the invariants. Wrap is
+    /// pinned to `reflow` (`--wrap` ignored); `.bib` files are skipped.
+    /// Deliberately *not* part of `all` — the smoke-test workflow's failure
+    /// classes stay as they are.
     Trivia,
     /// Losslessness and idempotency (default). Does not include `trivia`.
     All,

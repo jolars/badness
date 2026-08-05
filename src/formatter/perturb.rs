@@ -7,30 +7,36 @@
 //! directions, so any layout decision keyed on it makes pass 1 silently edit
 //! pass 2's input — the root of the K&R↔Allman idempotency bug family.
 //!
-//! This module checks the invariant directly, and strictly stronger than
-//! idempotence: generate TeX-identical trivia perturbations of the input (swap
-//! a lone newline for a space and back wherever the swap is meaning-preserving)
-//! and assert `fmt(perturbed) == fmt(original)`. Idempotence only ever
-//! exercises the single perturbation `fmt` happens to produce; this one does
-//! not need a corpus file to land on exactly the right column arithmetic.
+//! This module perturbs that predicate directly: generate TeX-identical trivia
+//! perturbations of the input (swap a lone newline for a space and back
+//! wherever the swap is meaning-preserving) and check the formatter over them.
+//! Two oracles ride on one generator:
 //!
-//! The oracle is scoped to **Tier 1** layout: callers run it under
-//! [`WrapMode::Reflow`](super::WrapMode::Reflow) (the Tier-2 modes —
-//! `Stable`/`Sentence`/`Semantic`/`Preserve`, and `ReflowKind::Statement`
-//! regions — are *defined* by authored breaks). Generator-side, a gap inside a
-//! generic brace group is skipped for the same reason (`ReflowKind::Statement`
-//! owns those bodies and carries a written fixed-point argument), while a gap
-//! inside an expl3 region is *kept*: expl3 statement splitting reads the unsafe
-//! predicate accidentally, and surfacing that is the oracle's job.
+//! - **Convergence** ([`check_trivia_convergence`], today's gate): every
+//!   perturbed variant must format to a *fixed point* whose output upholds the
+//!   whitespace-only and losslessness invariants. This hunts exactly the
+//!   idempotency-hybrid family (K&R↔Allman): plain idempotence only ever
+//!   exercises the single trivia configuration `fmt` itself produces, so a
+//!   hybrid needs a corpus file to land on exactly the right column
+//!   arithmetic — the perturbations synthesize those configurations directly.
+//!   Deliberate authored-break *preservation* (the conservative generic path,
+//!   and every Tier-2 mode with a sound fixed-point argument) passes by
+//!   construction, so a failure is always a real bug, and the check is valid
+//!   under **every** wrap mode — it empirically validates the Tier-2
+//!   fixed-point arguments rather than exempting them.
+//! - **Strict invariance** ([`check_trivia_invariance`], the end-state gate):
+//!   `fmt(perturbed) == fmt(original)`. This is the full trivia-invariant
+//!   layout contract and holds only once layout no longer reads the unsafe
+//!   predicate at all (the Gap-enum endgame); until then it fails wherever the
+//!   formatter preserves an authored break, so it is not part of the S0 gate.
 //!
 //! This is a debug/test surface shared by `badness debug format --checks
 //! trivia` and the invariant tests; it carries no stability promise.
 
 use rowan::TextRange;
 
-use super::core::expl3_regions;
 use crate::parser::{LexConfig, parse_with_flavor};
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 /// One meaning-preserving trivia perturbation of an input text.
 #[derive(Debug, Clone)]
@@ -78,6 +84,23 @@ pub struct TriviaFailure {
     pub formatted_perturbed: String,
 }
 
+/// A perturbation whose formatting broke an invariant: it refused to format,
+/// did not reach a fixed point, or produced output violating the
+/// whitespace-only or losslessness contracts.
+#[derive(Debug, Clone)]
+pub struct ConvergenceFailure {
+    /// The [`PerturbedVariant::label`] of the offending variant.
+    pub label: String,
+    /// The perturbed input — the reproducer.
+    pub perturbed_input: String,
+    /// Which invariant broke.
+    pub reason: String,
+    /// `fmt(perturbed)`, when the first pass succeeded (empty otherwise).
+    pub once: String,
+    /// `fmt(fmt(perturbed))` for a fixed-point failure (empty otherwise).
+    pub twice: String,
+}
+
 /// Why [`check_trivia_invariance`] did not return a report.
 #[derive(Debug, Clone)]
 pub enum TriviaError {
@@ -86,6 +109,16 @@ pub enum TriviaError {
     Original(String),
     /// A verified perturbation formatted differently.
     Violation(Box<TriviaFailure>),
+}
+
+/// Why [`check_trivia_convergence`] did not return a report.
+#[derive(Debug, Clone)]
+pub enum ConvergenceError {
+    /// The *original* input failed to format; the oracle cannot run. The
+    /// message is the formatter's error.
+    Original(String),
+    /// A verified perturbation broke an invariant.
+    Violation(Box<ConvergenceFailure>),
 }
 
 /// Concatenated text of every non-trivia token of `text` parsed under
@@ -117,9 +150,8 @@ pub fn trivia_perturbations(
         };
     }
     let root = parsed.syntax();
-    let regions = expl3_regions(&root);
     let margined = margined_line_ranges(&root);
-    let gaps = collect_gaps(&root, &regions, &margined);
+    let gaps = collect_gaps(&root, &margined);
 
     let original_content = node_nontrivia_content(&root);
     let original_skeleton = skeleton(&root);
@@ -189,12 +221,107 @@ pub fn trivia_perturbations(
     out
 }
 
-/// Run the Tier-1 trivia-invariance oracle: `fmt(perturbed) == fmt(original)`
-/// for every verified perturbation of `input`. The caller supplies the
-/// formatting closure (tests pass `format_with_style`; the CLI passes its
-/// package-aware pipeline), so the oracle loop exists exactly once. The caller
-/// owes the Tier-1 scoping: `fmt` must lay out under
-/// [`WrapMode::Reflow`](super::WrapMode::Reflow).
+/// Run the **convergence** oracle: every verified perturbation of `input`
+/// must format to a fixed point (`fmt(fmt(v)) == fmt(v)`) whose output parses
+/// cleanly, round-trips losslessly, and carries the same non-trivia content.
+/// The caller supplies the formatting closure (tests pass `format_with_style`;
+/// the CLI passes its package-aware pipeline), so the oracle loop exists
+/// exactly once. Valid under every wrap mode — Tier-2 modes owe convergence
+/// too; this empirically validates their fixed-point arguments.
+pub fn check_trivia_convergence(
+    input: &str,
+    config: impl Into<LexConfig>,
+    single_flip_samples: usize,
+    fmt: impl Fn(&str) -> Result<String, String>,
+) -> Result<TriviaReport, ConvergenceError> {
+    let config = config.into();
+    let perturbations = trivia_perturbations(input, config, single_flip_samples);
+    fmt(input).map_err(ConvergenceError::Original)?;
+    let violation = |variant: &PerturbedVariant, reason: String, once: String, twice: String| {
+        ConvergenceError::Violation(Box::new(ConvergenceFailure {
+            label: variant.label.clone(),
+            perturbed_input: variant.text.clone(),
+            reason,
+            once,
+            twice,
+        }))
+    };
+    let mut variants_checked = 0;
+    for variant in &perturbations.variants {
+        let once = fmt(&variant.text).map_err(|e| {
+            violation(
+                variant,
+                format!("perturbed input failed to format: {e}"),
+                String::new(),
+                String::new(),
+            )
+        })?;
+        // The perturbed side gets a guaranteed final newline before comparing:
+        // the formatter's "exactly one trailing newline" rule is a defined
+        // trivia normalization, and for a degenerate trailing-`\` input it
+        // folds that newline into a `\<newline>` control symbol — the
+        // final-newline rule at work, not a content rewrite.
+        if node_nontrivia_content(&parse_with_flavor(&once, config).syntax())
+            != node_nontrivia_content(
+                &parse_with_flavor(&format!("{}\n", variant.text), config).syntax(),
+            )
+        {
+            return Err(violation(
+                variant,
+                "format changed non-trivia content".to_string(),
+                once,
+                String::new(),
+            ));
+        }
+        if !parse_with_flavor(&once, config).errors.is_empty() {
+            return Err(violation(
+                variant,
+                "formatted output does not parse without diagnostics".to_string(),
+                once,
+                String::new(),
+            ));
+        }
+        if parse_with_flavor(&once, config).syntax().to_string() != once {
+            return Err(violation(
+                variant,
+                "formatted output does not round-trip losslessly".to_string(),
+                once,
+                String::new(),
+            ));
+        }
+        match fmt(&once) {
+            Err(e) => {
+                return Err(violation(
+                    variant,
+                    format!("formatted output failed to re-format: {e}"),
+                    once,
+                    String::new(),
+                ));
+            }
+            Ok(twice) if twice != once => {
+                return Err(violation(
+                    variant,
+                    "did not reach a fixed point".to_string(),
+                    once,
+                    twice,
+                ));
+            }
+            Ok(_) => {}
+        }
+        variants_checked += 1;
+    }
+    Ok(TriviaReport {
+        variants_checked,
+        dropped_unsafe: perturbations.dropped_unsafe,
+    })
+}
+
+/// Run the **strict** trivia-invariance oracle: `fmt(perturbed) ==
+/// fmt(original)` for every verified perturbation of `input`. This is the
+/// end-state trivia-invariant layout contract — until the lowering no longer
+/// reads the lone-newline-vs-space predicate at all, it fails wherever the
+/// formatter deliberately preserves an authored break, so it is a
+/// post-umbrella gate, not part of the S0 inventory.
 pub fn check_trivia_invariance(
     input: &str,
     config: impl Into<LexConfig>,
@@ -299,23 +426,6 @@ fn skeleton(root: &SyntaxNode) -> Vec<SyntaxKind> {
         .collect()
 }
 
-/// Whether the gap opened by trivia token `token` is in the oracle's Tier-1
-/// scope: inside an expl3 region (where the accidental
-/// `Statements::SplitAtNewlines` read lives — the inventory's target), or
-/// under no `GROUP` ancestor (generic multi-line group bodies are
-/// `ReflowKind::Statement`, Tier 2 with a written fixed-point argument).
-fn gap_in_scope(token: &SyntaxToken, regions: &[TextRange]) -> bool {
-    if regions
-        .iter()
-        .any(|r| r.contains(token.text_range().start()))
-    {
-        return true;
-    }
-    token
-        .parent_ancestors()
-        .all(|node| node.kind() != SyntaxKind::GROUP)
-}
-
 /// The byte ranges (newline-inclusive) of every physical line carrying a
 /// `.dtx` `DOC_MARGIN` or `GUARD` token. Margins and guards are recognized at
 /// column 0 only, so a swap anywhere on such a line either splits it (leaving
@@ -351,11 +461,12 @@ fn margined_line_ranges(root: &SyntaxNode) -> Vec<TextRange> {
 /// Collect the eligible gaps of `root` in document order. A gap is a maximal
 /// run of collapsible trivia with non-trivia neighbors on both sides (no
 /// BOF/EOF runs), neither neighbor excluded, not touching a margined/guarded
-/// line, in Tier-1 scope, and admitting exactly one swap direction: a
-/// lone-newline run (blank lines are `\par` — never touched) or a lone
-/// single-space token (multi-space runs and tabs are not TeX-identical to a
-/// newline).
-fn collect_gaps(root: &SyntaxNode, regions: &[TextRange], margined: &[TextRange]) -> Vec<Gap> {
+/// line, and admitting exactly one swap direction: a lone-newline run (blank
+/// lines are `\par` — never touched) or a lone single-space token (multi-space
+/// runs and tabs are not TeX-identical to a newline). Eligibility encodes
+/// only *meaning* safety — layout ownership is not consulted, since the
+/// convergence oracle is valid over every gap.
+fn collect_gaps(root: &SyntaxNode, margined: &[TextRange]) -> Vec<Gap> {
     let mut gaps = Vec::new();
     let mut cursor = root.first_token();
     while let Some(token) = cursor {
@@ -384,7 +495,6 @@ fn collect_gaps(root: &SyntaxNode, regions: &[TextRange], margined: &[TextRange]
                     && !margined
                         .iter()
                         .any(|r| r.contains(start) || r.contains(end))
-                    && gap_in_scope(&token, regions)
             }
             _ => false,
         };
@@ -514,32 +624,11 @@ mod tests {
     }
 
     #[test]
-    fn generic_group_interior_is_excluded() {
+    fn group_interior_gaps_are_eligible() {
+        // Eligibility encodes meaning safety only, never layout ownership:
+        // the gaps around *and* inside the brace group all qualify.
         let p = perturb("x {a b} y\n");
-        // The two gaps around the group are eligible; the one inside is not.
-        assert_eq!(p.eligible_gaps, 2);
-        for v in &p.variants {
-            assert!(
-                v.text.contains("{a b}"),
-                "variant {} touched a group-interior gap: {:?}",
-                v.label,
-                v.text
-            );
-        }
-    }
-
-    #[test]
-    fn expl3_region_group_interior_is_eligible() {
-        let outside = perturb("x {a b} y\n");
-        let inside = perturb("\\ExplSyntaxOn\nx {a b} y\n\\ExplSyntaxOff\n");
-        // The expl3 region lifts the group-interior exclusion, so the region
-        // holds strictly more eligible gaps than the same text outside one.
-        assert!(
-            inside.eligible_gaps > outside.eligible_gaps,
-            "expl3 region should widen scope: {} vs {}",
-            inside.eligible_gaps,
-            outside.eligible_gaps
-        );
+        assert_eq!(p.eligible_gaps, 3);
     }
 
     #[test]
@@ -577,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn oracle_passes_on_reflowed_prose() {
+    fn strict_oracle_passes_on_reflowed_prose() {
         let report =
             check_trivia_invariance("alpha\nbeta gamma\n", LatexFlavor::Document, 8, |s| {
                 format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string())
@@ -587,11 +676,11 @@ mod tests {
     }
 
     #[test]
-    fn oracle_catches_the_expl3_statement_split() {
+    fn strict_oracle_catches_the_expl3_statement_split() {
         // Two expl3 statements: the authored newline between them is the
         // statement boundary (`Statements::SplitAtNewlines`), the known
-        // accidental violation. Swapping it for a space must change the
-        // layout, and the oracle must say so.
+        // accidental violation. Swapping it for a space changes the layout,
+        // and the strict (end-state) oracle must say so.
         let input =
             "\\ExplSyntaxOn\n\\tl_new:N \\l_tmpa_tl\n\\tl_new:N \\l_tmpb_tl\n\\ExplSyntaxOff\n";
         let result = check_trivia_invariance(input, LatexFlavor::Document, 8, |s| {
@@ -603,5 +692,18 @@ mod tests {
             }
             other => panic!("expected a trivia violation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn convergence_oracle_accepts_authored_break_preservation() {
+        // The conservative generic path preserves the authored newline between
+        // two top-level commands; the strict oracle flags that, but every
+        // variant formats to a fixed point, so convergence accepts it.
+        let input = "\\usepackage{a}\n\\usepackage{b}\nalpha\nbeta gamma\n";
+        let report = check_trivia_convergence(input, LatexFlavor::Document, 8, |s| {
+            format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string())
+        })
+        .expect("authored-break preservation converges");
+        assert!(report.variants_checked > 0);
     }
 }

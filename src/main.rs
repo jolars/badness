@@ -19,7 +19,7 @@ use badness::config::{Config, ConfigSource};
 use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
-use badness::formatter::perturb::{TriviaError, check_trivia_invariance};
+use badness::formatter::perturb::{ConvergenceError, check_trivia_convergence};
 use badness::formatter::{
     FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
@@ -1639,12 +1639,16 @@ fn run_debug_checks_for_file(
         }
     }
 
-    // The trivia-invariance oracle (opt-in, Tier-1 scope): wrap is pinned to
-    // `reflow` regardless of `--wrap` or the file kind's default — the Tier-2
-    // modes are *defined* by authored breaks, so the oracle is vacuous there —
-    // and `.bib` files are skipped (the oracle is LaTeX-CST-based). A refusal
-    // to format the original is a `format-error` finding, mirroring the
-    // idempotency check's first pass.
+    // The trivia-convergence oracle (opt-in): every TeX-identical
+    // newline<->space perturbation must format to a fixed point upholding the
+    // invariants — the perturbations synthesize the trivia configurations a
+    // hybrid needs, so no corpus file has to land on the right column
+    // arithmetic. Wrap is pinned to `reflow` regardless of `--wrap` or the
+    // file kind's default (`Preserve` reproduces authored breaks verbatim, so
+    // it converges trivially and stresses nothing), and `.bib` files are
+    // skipped (the oracle is LaTeX-CST-based). A refusal to format the
+    // original is a `format-error` finding, mirroring the idempotency check's
+    // first pass.
     if checks == DebugChecksArg::Trivia && kind != FileKind::Bib {
         let mut style = style;
         style.wrap = WrapMode::Reflow;
@@ -1652,21 +1656,22 @@ fn run_debug_checks_for_file(
             format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
                 .map_err(|e| e.to_string())
         };
-        match check_trivia_invariance(content, kind.lex_config(), TRIVIA_SINGLE_FLIP_SAMPLES, fmt) {
+        match check_trivia_convergence(content, kind.lex_config(), TRIVIA_SINGLE_FLIP_SAMPLES, fmt)
+        {
             Ok(_) => {}
-            Err(TriviaError::Original(msg)) => artifacts.failures.push(DebugFailure {
+            Err(ConvergenceError::Original(msg)) => artifacts.failures.push(DebugFailure {
                 kind: CheckKind::FormatError,
                 left: msg,
                 right: String::new(),
                 detail: None,
             }),
-            Err(TriviaError::Violation(failure)) => {
+            Err(ConvergenceError::Violation(failure)) => {
                 artifacts.trivia_perturbed = Some(failure.perturbed_input);
                 artifacts.failures.push(DebugFailure {
                     kind: CheckKind::Trivia,
-                    left: failure.formatted_original,
-                    right: failure.formatted_perturbed,
-                    detail: Some(failure.label),
+                    left: failure.once,
+                    right: failure.twice,
+                    detail: Some(format!("{}, {}", failure.label, failure.reason)),
                 });
             }
         }

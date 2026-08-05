@@ -109,28 +109,39 @@ Four sites read the unsafe predicate; two are accidental and two are Tier 2:
 
 ### The oracle
 
-Trivia perturbation: for each corpus file, apply TeX-identical trivia
-perturbations (swap a lone newline for a space and back wherever the swap is
-meaning-preserving) and assert `fmt(perturbed) == fmt(original)`, scoped to Tier
-1 modes. This is strictly stronger than idempotence, which only ever exercises
-the single perturbation `fmt` happens to produce—so it catches a hybrid without
-needing a corpus file to land on exactly the right column arithmetic.
+Trivia perturbation: generate TeX-identical trivia perturbations of each input
+(swap a lone newline for a space and back wherever the swap is
+meaning-preserving) and check the formatter over them. One generator
+(`formatter::perturb::trivia_perturbations`) feeds two oracles:
 
-The oracle is implemented in `formatter::perturb`
-(`trivia_perturbations`/`check_trivia_invariance`): per file, two bulk variants
-(every eligible lone newline → space, every eligible single space → newline)
-plus a few deterministic single-flip reproducers. Eligibility encodes the
-scoping above—blank lines, comment-adjacent gaps, margined/guarded `.dtx`
-lines, and verbatim neighbors are never touched, and a gap inside a generic
-brace group (owned by Tier-2 `ReflowKind::Statement`) is skipped while a gap
-inside an expl3 region is kept, since the expl3 statement split is the
-accidental read the oracle exists to surface. Each variant is verified post
-hoc (clean parse, identical non-trivia content, identical trivia-blind CST
-skeleton) so newline-sensitive *parser* shape gates are dropped and counted
-(`dropped_unsafe`) instead of polluting the layout inventory. The oracle runs
-as `badness debug format --checks trivia` (wrap pinned to `reflow`; opt-in,
-not part of `--checks all`) and inside `assert_format_invariants`
-(`tests/format.rs`) for reflow-mode styles.
+- **Convergence** (`check_trivia_convergence`, today's gate): every perturbed
+  variant must format to a *fixed point* whose output parses cleanly,
+  round-trips losslessly, and carries the same non-trivia content. This is
+  strictly stronger than idempotence, which only ever exercises the single
+  trivia configuration `fmt` itself produces—a hybrid needs a corpus file to
+  land on exactly the right column arithmetic, while the perturbations
+  synthesize those configurations directly. Deliberate authored-break
+  *preservation* passes by construction, so a failure is always a real bug,
+  and the check is valid under **every** wrap mode: it empirically validates
+  the Tier-2 fixed-point arguments rather than exempting them.
+- **Strict invariance** (`check_trivia_invariance`, the end-state gate):
+  `fmt(perturbed) == fmt(original)`. This is the full trivia-invariant-layout
+  contract; until the lowering no longer reads the unsafe predicate at all
+  (the Gap-enum endgame) it fails wherever the formatter preserves an
+  authored break, so it gates nothing yet.
+
+Per file the generator emits two bulk variants (every eligible lone newline →
+space, every eligible single space → newline) plus a few deterministic
+single-flip reproducers. Eligibility encodes *meaning* safety only—blank
+lines, comment-adjacent gaps, margined/guarded `.dtx` lines, and verbatim
+neighbors are never touched—never layout ownership. Each variant is verified
+post hoc (clean parse, identical non-trivia content, identical trivia-blind
+CST skeleton) so newline-sensitive *parser* shape gates are dropped and
+counted (`dropped_unsafe`) instead of polluting the layout inventory. The
+convergence oracle runs as `badness debug format --checks trivia` (wrap
+pinned to `reflow`, since `Preserve` converges trivially and stresses
+nothing; opt-in, not part of `--checks all`) and inside the corpus invariants
+sweep in `tests/format.rs`.
 
 The staged rollout, with per-stage gates, is in `TODO.md`.
 

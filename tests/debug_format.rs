@@ -125,21 +125,32 @@ fn trivia_check_passes_on_stable_prose() {
 }
 
 #[test]
-fn trivia_check_fires_on_the_expl3_statement_split() {
+fn trivia_check_fires_on_a_known_hybrid() {
     let dir = TempDir::new().unwrap();
-    // Two expl3 statements: the authored newline between them is a statement
-    // boundary (`Statements::SplitAtNewlines`), the known accidental
-    // trivia-invariance violation. Swapping it for a space changes the layout,
-    // so the check must fail — and only under `--checks trivia`, never `all`.
+    // A known convergence failure (found by the S0 sweep): joining
+    // `\ExplSyntaxOn` with its statement makes the doc-prose reflow relocate
+    // the margined `%    \begin{macrocode}` frame line, so the formatted
+    // perturbed output stops parsing cleanly. The trivia check (wrap pinned to
+    // reflow) must fail on it — and only under `--checks trivia`, never `all`
+    // (where the `.dtx` default `Preserve` applies and everything passes).
     std::fs::write(
-        dir.path().join("expl.tex"),
-        "\\ExplSyntaxOn\n\\tl_new:N \\l_tmpa_tl\n\\tl_new:N \\l_tmpb_tl\n\\ExplSyntaxOff\n",
+        dir.path().join("expl.dtx"),
+        "% \\section{Implementation}\n\
+         %    \\begin{macrocode}\n\
+         \\ExplSyntaxOn\n\
+         \\tl_new:N \\l_tmpa_tl\n\
+         %    \\end{macrocode}\n\
+         %\n\
+         % Some prose.\n\
+         %    \\begin{macrocode}\n\
+         \\ExplSyntaxOff\n\
+         %    \\end{macrocode}\n",
     )
     .unwrap();
 
     let output = badness(
         dir.path(),
-        &["debug", "format", "--checks", "trivia", "expl.tex"],
+        &["debug", "format", "--checks", "trivia", "expl.dtx"],
     );
     assert_eq!(output.status.code(), Some(1));
     let log = stderr(&output);
@@ -148,27 +159,23 @@ fn trivia_check_fires_on_the_expl3_statement_split() {
     let output = badness(
         dir.path(),
         &[
-            "debug", "format", "--checks", "trivia", "--report", "expl.tex",
+            "debug", "format", "--checks", "trivia", "--report", "expl.dtx",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
     let report = stdout(&output);
     assert!(report.contains("- Checks: `trivia`"), "report: {report}");
     assert!(
-        report.contains("### 1. `expl.tex` (trivia)"),
+        report.contains("### 1. `expl.dtx` (trivia)"),
         "report: {report}"
     );
     assert!(report.contains("- Variant: `"), "report: {report}");
-    assert!(
-        report.contains("- Approx. diff start line:"),
-        "report: {report}"
-    );
 
     // `all` keeps its meaning: losslessness + idempotency only. The same file
     // passes it, and no `(trivia)` label can appear in its output.
     let output = badness(
         dir.path(),
-        &["debug", "format", "--checks", "all", "--report", "expl.tex"],
+        &["debug", "format", "--checks", "all", "--report", "expl.dtx"],
     );
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(!stdout(&output).contains("(trivia)"));

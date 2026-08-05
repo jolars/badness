@@ -92,6 +92,45 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   whose head this branch cannot measure from inside a single argument). Fixture
   `expl_trailing_hang_group`; verified idempotent on `tagpdf.sty` (line 1007) and
   `pdfmanagement/latex-lab-testphase-bookmark.sty` (line 298).
+- [ ] **Residual K&R <-> Allman hang flips outside the trailing-hang carve-out
+  (idempotency; smoke-test issue #97).** The same root cause as the entry above
+  survives in every shape the carve-out's guards exclude, because the ordinary hang
+  path still keys the `{`-column on `contains_forced_break`, which is *not*
+  pass-invariant: a width wrap on pass 1 becomes a statement boundary on pass 2.
+  Confirmed live on `latex3/latex3` at `3d1d347`: `l3trial/l3auxdata/l3auxdata.dtx`
+  (`\int_set:Nn \l_… { \fp_eval:n { ceil (…) } }` — a *single-command* body whose
+  *nested* group detonates) and `texmf/tex/latex/base/latexrelease.sty` (four
+  distinct shapes: a `} {` continuation, a text-leading `{ is~ … }` body, and two
+  `\str_if_eq:VnT \l_…_tl { choice } {` conditionals with a preceding group).
+
+  **Measured dead ends — do not repeat.** Baseline over the whole repo is 17
+  failing files (288 checked). Cheaply widening the existing carve-out makes
+  idempotency *worse*, never better; each variant below fixed **zero** files:
+  - dropping `expl_group_body_is_multi_atom` *and* `!body.contains_forced_break()`,
+    routing a forced body to the Allman-broken candidate: 17 -> 23 (new failures in
+    `l3doc.dtx`, `l3toks.dtx`, `xtemplate-2023-10-10.sty`, `l3galley.dtx`,
+    `xfm.dtx`, `xo-float.dtx`);
+  - dropping only `!body.contains_forced_break()`: 17 -> 20 (`l3doc.dtx`,
+    `xtemplate-2023-10-10.sty`, `l3galley.dtx`).
+
+  So "a forced body always wants Allman-broken" is **false**: when the soft body
+  fits, all-lines-fit legitimately picks flat or Allman-inline, and forcing the
+  broken form on the reparse introduces a *new* flip. A correct fix has to make the
+  `{`-column independent of the body's forced-ness in the *ordinary* hang path
+  (coupling the `{`-break to the body-break so no K&R hybrid is representable),
+  which is the engine-level change with wide golden-fixture churn already noted
+  above — not another guard relaxation.
+
+  One genuine sub-bug was isolated along the way and is worth fixing on its own
+  terms: `head_command_has_grouped_sibling_arg` documents "a command earlier in the
+  *same statement*" but walks `prev_sibling()` across statement boundaries, so a
+  grouped command in an *earlier* statement rejects the carve-out. It makes two
+  identical `\tl_const:Ne \c_…_tl {body}` lines lay out differently
+  (`latexrelease.sty`'s `\__shipout_init_page_origins:`). Stopping the walk at a
+  `NEWLINE` (when the enclosing stream is `SplitAtNewlines` — i.e. the owner's
+  parent is not a `COMMAND`) is correct and regression-free, but on its own it
+  changes no output on the corpus, so it needs to land *with* the engine-level fix
+  that makes it reachable.
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but

@@ -711,6 +711,24 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // never an opaque block, which would strand a blank line and split the
     // statement head (issue #61, l3bigint.dtx).
     ("expl_doc_comment_statement", "sty"),
+    // Structural statement boundaries (S4): a call unit is the head plus the
+    // arguments its argspec arity consumes, so authored mid-call newlines join —
+    // `\tl_set:Nn` gathers its two arguments across lines, and an `Npn`/`Nn`
+    // definition (parameter text shape-scanned, over-attached body peeled back)
+    // is one statement regardless of where its body group was authored.
+    ("expl_stmt_join", "sty"),
+    // The mirror: statement boundaries are formatter-owned, so several complete
+    // calls authored on one line split to one call per line.
+    ("expl_stmt_split", "sty"),
+    // Fallback interleaving: a `w`-spec head (`\exp_after:wN`) and a colonless
+    // 2e head (`\def`) have no derivable arity, so their authored physical lines
+    // stay the statements — a recognized call sharing the `\def` line is *not*
+    // split out — while the recognized `\tl_set:Nn` between them is structural.
+    ("expl_stmt_fallback_mixed", "sty"),
+    // A blank line (preserved separator) ends a call unit mid-consumption: the
+    // partial `\tl_set:Nn \l_demo_tl` commits as-is before the blank, and the
+    // stranded `{ x }` starts a fresh statement-leading hang after it.
+    ("expl_stmt_blank_end", "sty"),
     // A command's trailing block argument hugs: short leading arguments stay
     // inline and only the over-long trailing group detonates (smoke-test issue
     // #71, latex-lab-block.dtx). Measuring a later group *flat* while deciding an
@@ -735,11 +753,12 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // whether the block's own body broke hard or soft is not pass-invariant, so
     // pass 1 (`} {}`) and pass 2 (`}` / `{}`) disagreed and idempotence failed
     // (smoke-test issue #94, josephwright/siunitx's `\@ifpackageloaded` blocks).
-    // The single-statement true-branch is load-bearing: its `\cs_set_protected:Npn
-    // \…aux:` head is *width*-split (the definiendum greedily absorbs the wide
-    // `{body}`), so the block breaks only from width — soft on pass 1, hard on the
-    // reparse. A two-statement body would break unconditionally on both passes and
-    // never expose the drift, so do not "tidy" this body.
+    // The single-statement true-branch is load-bearing: its block breaks only
+    // from width — soft on pass 1, hard on the reparse — which is what exposed
+    // the drift. A two-statement body would break unconditionally on both passes
+    // and never expose it, so do not "tidy" this body. (Since S4 the
+    // `\cs_set_protected:Npn \…aux:` head joins — the soft-trailing glue keeps
+    // the definiendum on the head line and hangs the body.)
     ("expl_trailing_empty_branch", "sty"),
     // A *trailing* greedily-hung `{body}` — a brace group after head atoms with only
     // trivia following it — whose body is a *multi-command* fill flips K&R->Allman
@@ -762,16 +781,13 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // blocks open and hands the inner body a flat mode; without it the shape is
     // already stable.
     //
-    // NOT ENDORSED: the expected output splits `\int_set:Nn` / `\l_@@_groups_int`
-    // onto two lines even though they join at 36 columns, and the *input* already
-    // has them joined — the formatter degrades this shape. That is the separate
-    // head/definiendum wart filed in TODO.md (the statement fill measures the
-    // `\l_@@_groups_int {body}` atom flat at ~88 cols and breaks at the gap, though
-    // the atom will hang its body and needs only its 16-col name on the line). This
-    // fixture pins *stability*, not beauty: before the mode fix the head stayed
-    // joined only because a flat-dispatched fill skips measurement entirely, and
-    // the block hybridized anyway. Do not "fix" the formatter toward this output,
-    // and expect these two lines to rejoin once the rest-aware measurement lands.
+    // Since S4 the head joins: the soft-trailing glue keeps `\int_set:Nn
+    // \l_@@_groups_int` on one line on *both* passes (the old head/definiendum
+    // wart — the statement fill width-splitting the pair on pass 1 while the
+    // reparse's forced body head-hugged them on pass 2 — was the last
+    // soft-vs-forced dispatch asymmetry; the `\fp_eval:n` body's wrapped `)` is
+    // what still flips the body's forced-ness across passes and keeps this
+    // fixture load-bearing).
     ("expl_forced_block_body_mode", "sty"),
 ];
 

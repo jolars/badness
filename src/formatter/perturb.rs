@@ -676,22 +676,35 @@ mod tests {
     }
 
     #[test]
-    fn strict_oracle_catches_the_expl3_statement_split() {
-        // Two expl3 statements: the authored newline between them is the
-        // statement boundary (`Statements::SplitAtNewlines`), the known
-        // accidental violation. Swapping it for a space changes the layout,
-        // and the strict (end-state) oracle must say so.
+    fn strict_oracle_accepts_structural_expl3_statements() {
+        // Two expl3 statements plus the region toggles, every head with
+        // derivable arity (the toggles are recognized zero-arity units). Under
+        // structural boundaries (S4) a lone newline↔space swap anywhere in the
+        // stream must format back to the identical bytes — the exact gap that
+        // was the `SplitAtNewlines` violation before. This is the first shape
+        // for which the *strict* (end-state) oracle holds, not just the
+        // convergence oracle.
         let input =
             "\\ExplSyntaxOn\n\\tl_new:N \\l_tmpa_tl\n\\tl_new:N \\l_tmpb_tl\n\\ExplSyntaxOff\n";
-        let result = check_trivia_invariance(input, LatexFlavor::Document, 8, |s| {
+        let report = check_trivia_invariance(input, LatexFlavor::Document, 8, |s| {
             format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string())
-        });
-        match result {
-            Err(TriviaError::Violation(failure)) => {
-                assert_ne!(failure.formatted_original, failure.formatted_perturbed);
-            }
-            other => panic!("expected a trivia violation, got {other:?}"),
-        }
+        })
+        .expect("structural expl3 statements are strictly trivia-invariant");
+        assert!(report.variants_checked > 0);
+    }
+
+    #[test]
+    fn strict_oracle_accepts_structural_expl3_definition() {
+        // The S4 flagship: an `Npn` definition (single-token slot, shape-scanned
+        // parameter text, peeled body group) is one structural call unit, so
+        // swapping the authored break before its body for a space — or any other
+        // lone-newline↔space perturbation — formats back byte-identically.
+        let input = "\\ExplSyntaxOn\n\\cs_new:Npn \\demo_foo:n #1\n  { \\demo_use:n {#1} }\n\\cs_new:Nn \\demo_bar:n { \\demo_use:n { x } }\n\\ExplSyntaxOff\n";
+        let report = check_trivia_invariance(input, LatexFlavor::Document, 8, |s| {
+            format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string())
+        })
+        .expect("a structural expl3 definition is strictly trivia-invariant");
+        assert!(report.variants_checked > 0);
     }
 
     #[test]

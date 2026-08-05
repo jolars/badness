@@ -1,0 +1,4 @@
+\ProvidesExplPackage{demo}{2026-08-05}{0.1}{Fallback interleaving}
+\exp_after:wN \demo_foo: \exp_after:wN { \l_demo_tl }
+\tl_set:Nn \l_demo_tl { x }
+\def\demo@old{y} \tl_clear:N \l_demo_tl

@@ -42,13 +42,10 @@
 //! deterministically; a recognized head *mid*-fallback-line is never split
 //! out.
 
-// Landed one commit ahead of its `lower_expl_code` consumer so the pre-pass is
-// reviewable on its own; the allow goes away when the wiring lands.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 
 use crate::ast::command_name;
+use crate::parser::lexer::expl_toggle;
 use crate::semantic::expl3::{self, Expl3Slot};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
@@ -96,7 +93,18 @@ pub(crate) fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMa
                 i += 1;
             }
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => {
-                let slots = command_name(n).and_then(|name| expl3::expl3_slots(&name));
+                // A region toggle (`\ExplSyntaxOn`, `\ProvidesExplPackage`, …)
+                // is colonless but in the shared toggle name set and takes no
+                // trailing call-site material beyond its greedily-attached
+                // groups: a recognized zero-arity unit. Without this, every
+                // region's opening line would stay a newline-keyed fallback
+                // statement and strict trivia-invariance could never hold for
+                // any expl3 stream.
+                let slots = if node_is_expl_toggle(n) {
+                    Some(Vec::new())
+                } else {
+                    command_name(n).and_then(|name| expl3::expl3_slots(&name))
+                };
                 match slots.and_then(|slots| consume_unit(elements, i, &slots)) {
                     Some(end) => {
                         let end = extend_over_trailing_comment(elements, end);
@@ -110,6 +118,15 @@ pub(crate) fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMa
         }
     }
     StatementMap { boundary_after }
+}
+
+/// Whether a `COMMAND`'s name token is one of the shared expl3 region-toggle
+/// spellings (`parser::lexer::expl_toggle`).
+fn node_is_expl_toggle(node: &SyntaxNode) -> bool {
+    node.children_with_tokens()
+        .filter_map(|el| el.into_token())
+        .find(|t| t.kind() == SyntaxKind::CONTROL_WORD)
+        .is_some_and(|t| expl_toggle(t.text()).is_some())
 }
 
 /// Whether only inline whitespace separates element `idx` from the next

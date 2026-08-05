@@ -19,6 +19,7 @@ use badness::config::{Config, ConfigSource};
 use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
+use badness::formatter::perturb::{TriviaError, check_trivia_invariance};
 use badness::formatter::{
     FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
@@ -195,6 +196,8 @@ fn main() -> ExitCode {
             DebugCommand::Format {
                 paths,
                 checks,
+                line_width,
+                wrap,
                 report,
                 dump_dir,
                 dump_passes,
@@ -215,7 +218,7 @@ fn main() -> ExitCode {
                         Ok(filter) => filter.with_force_exclude(force_exclude),
                         Err(code) => return code,
                     };
-                let (style, wrap_override) = resolve_style(&config, None, None, None, None);
+                let (style, wrap_override) = resolve_style(&config, line_width, None, wrap, None);
                 let mut abbrev_scratch = Vec::new();
                 let sentence = SentenceOptions::resolve(
                     config.format.lang.as_deref(),
@@ -1316,13 +1319,21 @@ fn run_format_paths(
 // reports for `idempotency`/`losslessness`/`format-error` and extracts
 // `Approx. diff start line: N` from the report. Keep them stable, and keep the
 // `format-error` wording free of the substrings `idempot` and `lossless` so a
-// formatter refusal is never misclassified as an invariant regression.
+// formatter refusal is never misclassified as an invariant regression. The
+// `trivia` check is deliberately excluded from `--checks all` (the workflow's
+// failure classes stay as they are), and its label must likewise stay free of
+// the other three substrings.
+
+/// How many localized single-flip variants the trivia check samples per file,
+/// on top of the two bulk variants.
+const TRIVIA_SINGLE_FLIP_SAMPLES: usize = 8;
 
 /// One invariant (or the failure to even run it) checked per file.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CheckKind {
     Losslessness,
     Idempotency,
+    Trivia,
     FormatError,
 }
 
@@ -1331,6 +1342,7 @@ impl CheckKind {
         match self {
             CheckKind::Losslessness => "losslessness",
             CheckKind::Idempotency => "idempotency",
+            CheckKind::Trivia => "trivia",
             CheckKind::FormatError => "format-error",
         }
     }
@@ -1343,6 +1355,9 @@ struct DebugFailure {
     kind: CheckKind,
     left: String,
     right: String,
+    /// Extra context shown after the label — the trivia check's offending
+    /// variant. `None` for the other kinds.
+    detail: Option<String>,
 }
 
 /// Everything one file's check run produced: the pass texts (for `--dump-dir`)
@@ -1353,6 +1368,9 @@ struct DebugArtifacts {
     losslessness: Option<(String, String)>,
     /// `(input, once, twice)` when the idempotency check ran to completion.
     idempotency: Option<(String, String, String)>,
+    /// The perturbed input (the reproducer) when the trivia check failed; its
+    /// two formattings are the failure's `left`/`right`.
+    trivia_perturbed: Option<String>,
     failures: Vec<DebugFailure>,
 }
 
@@ -1362,6 +1380,7 @@ fn checks_label(checks: DebugChecksArg) -> &'static str {
     match checks {
         DebugChecksArg::Idempotency => "idempotency",
         DebugChecksArg::Losslessness => "losslessness",
+        DebugChecksArg::Trivia => "trivia",
         DebugChecksArg::All => "all",
     }
 }
@@ -1453,6 +1472,9 @@ fn build_debug_report(
             file,
             failure.kind.label()
         ));
+        if let Some(detail) = &failure.detail {
+            out.push_str(&format!("- Variant: `{detail}`\n"));
+        }
         if failure.kind == CheckKind::FormatError {
             out.push_str(&format!("- Error: {}\n\n", failure.left));
             continue;
@@ -1508,6 +1530,15 @@ fn write_debug_artifacts(
         )?;
     }
 
+    if let Some(perturbed) = artifacts.trivia_perturbed.as_ref()
+        && failed(CheckKind::Trivia)
+    {
+        std::fs::write(
+            dump_dir.join(format!("{stem}.trivia.perturbed-input.txt")),
+            perturbed,
+        )?;
+    }
+
     for failure in &artifacts.failures {
         let kind = failure.kind.label();
         std::fs::write(
@@ -1557,6 +1588,7 @@ fn run_debug_checks_for_file(
                 kind: CheckKind::Losslessness,
                 left: content.to_string(),
                 right: reconstructed,
+                detail: None,
             });
         }
     }
@@ -1578,6 +1610,7 @@ fn run_debug_checks_for_file(
                 kind: CheckKind::FormatError,
                 left: msg,
                 right: String::new(),
+                detail: None,
             }),
             Ok(once) => match fmt(&once) {
                 Ok(twice) => {
@@ -1588,6 +1621,7 @@ fn run_debug_checks_for_file(
                             kind: CheckKind::Idempotency,
                             left: once,
                             right: twice,
+                            detail: None,
                         });
                     }
                 }
@@ -1598,9 +1632,43 @@ fn run_debug_checks_for_file(
                         kind: CheckKind::Idempotency,
                         left: once,
                         right: format!("second pass failed to format: {msg}"),
+                        detail: None,
                     });
                 }
             },
+        }
+    }
+
+    // The trivia-invariance oracle (opt-in, Tier-1 scope): wrap is pinned to
+    // `reflow` regardless of `--wrap` or the file kind's default — the Tier-2
+    // modes are *defined* by authored breaks, so the oracle is vacuous there —
+    // and `.bib` files are skipped (the oracle is LaTeX-CST-based). A refusal
+    // to format the original is a `format-error` finding, mirroring the
+    // idempotency check's first pass.
+    if checks == DebugChecksArg::Trivia && kind != FileKind::Bib {
+        let mut style = style;
+        style.wrap = WrapMode::Reflow;
+        let fmt = |input: &str| {
+            format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
+                .map_err(|e| e.to_string())
+        };
+        match check_trivia_invariance(content, kind.lex_config(), TRIVIA_SINGLE_FLIP_SAMPLES, fmt) {
+            Ok(_) => {}
+            Err(TriviaError::Original(msg)) => artifacts.failures.push(DebugFailure {
+                kind: CheckKind::FormatError,
+                left: msg,
+                right: String::new(),
+                detail: None,
+            }),
+            Err(TriviaError::Violation(failure)) => {
+                artifacts.trivia_perturbed = Some(failure.perturbed_input);
+                artifacts.failures.push(DebugFailure {
+                    kind: CheckKind::Trivia,
+                    left: failure.formatted_original,
+                    right: failure.formatted_perturbed,
+                    detail: Some(failure.label),
+                });
+            }
         }
     }
 
@@ -1689,7 +1757,16 @@ fn run_debug_format(
                 }
                 for failure in artifacts.failures {
                     if !report {
-                        eprintln!("Debug check failed ({}) in {label}", failure.kind.label());
+                        match &failure.detail {
+                            Some(detail) => eprintln!(
+                                "Debug check failed ({}: {detail}) in {label}",
+                                failure.kind.label()
+                            ),
+                            None => eprintln!(
+                                "Debug check failed ({}) in {label}",
+                                failure.kind.label()
+                            ),
+                        }
                         if failure.kind == CheckKind::FormatError {
                             eprintln!("  {}", failure.left);
                         }
@@ -1827,6 +1904,7 @@ mod tests {
                 kind: CheckKind::Idempotency,
                 left: "a\nb\nc\n".to_string(),
                 right: "a\nB\nc\n".to_string(),
+                detail: None,
             },
         )];
         let report = build_debug_report(DebugChecksArg::All, 3, &failures);
@@ -1855,6 +1933,7 @@ mod tests {
                     "input contains 1 parser diagnostic(s); formatter only supports parseable input"
                         .to_string(),
                 right: String::new(),
+                detail: None,
             },
         )];
         let report = build_debug_report(DebugChecksArg::Idempotency, 1, &failures);

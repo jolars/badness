@@ -111,6 +111,105 @@ fn dump_passes_requires_dump_dir() {
 }
 
 #[test]
+fn trivia_check_passes_on_stable_prose() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("ok.tex"), "alpha\nbeta gamma delta.\n").unwrap();
+
+    let output = badness(
+        dir.path(),
+        &["debug", "format", "--checks", "trivia", "ok.tex"],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("All checks passed (checks: trivia, files: 1)"));
+}
+
+#[test]
+fn trivia_check_fires_on_the_expl3_statement_split() {
+    let dir = TempDir::new().unwrap();
+    // Two expl3 statements: the authored newline between them is a statement
+    // boundary (`Statements::SplitAtNewlines`), the known accidental
+    // trivia-invariance violation. Swapping it for a space changes the layout,
+    // so the check must fail — and only under `--checks trivia`, never `all`.
+    std::fs::write(
+        dir.path().join("expl.tex"),
+        "\\ExplSyntaxOn\n\\tl_new:N \\l_tmpa_tl\n\\tl_new:N \\l_tmpb_tl\n\\ExplSyntaxOff\n",
+    )
+    .unwrap();
+
+    let output = badness(
+        dir.path(),
+        &["debug", "format", "--checks", "trivia", "expl.tex"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let log = stderr(&output);
+    assert!(log.contains("Debug check failed (trivia:"), "log: {log}");
+
+    let output = badness(
+        dir.path(),
+        &[
+            "debug", "format", "--checks", "trivia", "--report", "expl.tex",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let report = stdout(&output);
+    assert!(report.contains("- Checks: `trivia`"), "report: {report}");
+    assert!(
+        report.contains("### 1. `expl.tex` (trivia)"),
+        "report: {report}"
+    );
+    assert!(report.contains("- Variant: `"), "report: {report}");
+    assert!(
+        report.contains("- Approx. diff start line:"),
+        "report: {report}"
+    );
+
+    // `all` keeps its meaning: losslessness + idempotency only. The same file
+    // passes it, and no `(trivia)` label can appear in its output.
+    let output = badness(
+        dir.path(),
+        &["debug", "format", "--checks", "all", "--report", "expl.tex"],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(!stdout(&output).contains("(trivia)"));
+}
+
+#[test]
+fn line_width_flag_reaches_the_formatter() {
+    let dir = TempDir::new().unwrap();
+    let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa\n";
+    std::fs::write(dir.path().join("wide.tex"), long).unwrap();
+
+    let output = badness(
+        dir.path(),
+        &[
+            "debug",
+            "format",
+            "--checks",
+            "idempotency",
+            "--line-width",
+            "30",
+            "--dump-dir",
+            "dumps",
+            "--dump-passes",
+            "wide.tex",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let once = std::fs::read_to_string(
+        dir.path()
+            .join("dumps")
+            .join("wide.tex.idempotency.once.txt"),
+    )
+    .expect("once dump exists");
+    assert!(
+        once.lines().count() > 1 && once.lines().all(|l| l.len() <= 30),
+        "expected a wrap at width 30, got: {once:?}"
+    );
+}
+
+#[test]
 fn format_error_never_reads_as_an_invariant_failure() {
     let dir = TempDir::new().unwrap();
     // An unclosed group parses with diagnostics, so the formatter refuses it:

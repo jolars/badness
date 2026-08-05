@@ -195,7 +195,8 @@ pub enum DebugCommand {
     /// Check formatter and parser invariants per file, writing nothing back.
     ///
     /// Runs the selected checks (losslessness: `reconstruct(x) == x`;
-    /// idempotency: `fmt(fmt(x)) == fmt(x)`) over each input file. `--report`
+    /// idempotency: `fmt(fmt(x)) == fmt(x)`; trivia:
+    /// `fmt(perturb(x)) == fmt(x)`, opt-in) over each input file. `--report`
     /// emits a Markdown summary to stdout; `--dump-dir` writes per-pass
     /// artifacts for triage.
     Format {
@@ -204,6 +205,15 @@ pub enum DebugCommand {
         /// Which invariant checks to run.
         #[arg(long, value_enum, default_value = "all")]
         checks: DebugChecksArg,
+        /// Maximum line width before the formatter breaks a line (overrides
+        /// config; the multi-width corpus sweep's knob).
+        #[arg(long)]
+        line_width: Option<usize>,
+        /// How to lay out line breaks inside a paragraph (overrides the
+        /// per-extension default; the trivia check ignores this and pins
+        /// `reflow`).
+        #[arg(long, value_enum)]
+        wrap: Option<WrapArg>,
         /// Emit a Markdown report to stdout instead of log lines.
         #[arg(long)]
         report: bool,
@@ -231,6 +241,12 @@ pub enum DebugChecksArg {
     Idempotency,
     /// Only the parser round-trip check: `reconstruct(x) == x`.
     Losslessness,
-    /// Both checks (default).
+    /// Only the trivia-invariance oracle: `fmt(perturb(x)) == fmt(x)` for
+    /// TeX-identical newline<->space swaps, under Tier-1 layout (wrap pinned
+    /// to `reflow`, `--wrap` ignored; `.bib` files skipped). Deliberately
+    /// *not* part of `all` — the smoke-test workflow's failure classes stay
+    /// as they are.
+    Trivia,
+    /// Losslessness and idempotency (default). Does not include `trivia`.
     All,
 }

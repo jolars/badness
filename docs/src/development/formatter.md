@@ -31,6 +31,92 @@ re-lex into separate atoms. The oracle compares the *concatenated text* of
 non-trivia tokens (not their boundaries), so it tolerates this re-grouping while
 still catching any inserted or deleted non-trivia character.
 
+## Trivia-invariant layout
+
+Whitespace-only says what the formatter may *write*. Trivia-invariant layout says
+what the lowering may *read*:
+
+> Layout is a function of non-trivia content, config, and only those trivia
+> predicates the formatter itself preserves.
+
+A predicate `P` is **preserved** when `P(fmt(x)) == P(x)`. Reading a preserved
+predicate is safe—the formatter cannot change the answer—while reading an
+unpreserved one means pass 1's layout silently edits pass 2's input.
+
+| Predicate | Preserved? | |
+|---|---|---|
+| blank line present (`newlines >= 2`) | yes—a blank line in, a blank line out | **safe** |
+| comment present, own-line vs. trailing | yes—comments are never relocated | **safe** |
+| `%` margin or `%<…>` guard at column 0 | yes—pinned by `Ir::ColumnZero` | **safe** |
+| **gap is a lone newline vs. a space** | **no**—`alpha\nbeta` → `alpha beta`, and a width wrap writes a newline where there was a space | **unsafe** |
+
+### Why this makes idempotence a theorem
+
+The formatter changes only trivia, so `fmt(x)` *is* a trivia-perturbation of `x`.
+If layout is invariant under trivia perturbation, then `fmt(fmt(x)) == fmt(x)`
+follows immediately. Idempotence stops being an empirical property defended one
+decision at a time and becomes a consequence of a single rule.
+
+That matters because the alternative does not scale: every layout decision that
+reads the unsafe predicate is an independent latent bug, and the supply of
+decisions is unbounded. The whole K&R↔Allman family (issues \#71, \#94, \#96,
+\#97) is that pattern—a soft width break becomes a hard statement boundary on the
+reparse, `contains_forced_break` flips, and the layout with it.
+
+This is **not** parse stability, which `AGENTS.md` deliberately declines: the math
+operator split re-granulates a `WORD` driven by non-trivia *content* and reads no
+trivia at all, so it is unaffected.
+
+### Two tiers
+
+**Tier 1 (default).** The lowering must not be *able* to read the unsafe
+predicate. The enforcement is to delete the information at the boundary: the
+lowering consumes a normalized inter-token gap
+
+```
+Gap = Glued | Space | BlankLine | Comment(..) | Guard(..) | Margin(..)
+```
+
+with no `Newline` variant, rather than raw trivia tokens. A rule cannot key on
+what it cannot see, which is the only form of this constraint that survives
+contact with a large codebase.
+
+**Tier 2 (opt-in modes).** Some modes are *defined* by reading authored breaks:
+`WrapMode::Stable`/`Sentence`/`Semantic` (via `RunAtom::preferred_break_before`
+feeding `Ir::PreferredFill`) and `ReflowKind::Statement` (a lone newline ends the
+line so `\draw …;` lists keep one statement per line). These take a widened gap,
+and each owes a written **fixed-point argument**: every layout the rule can emit
+must re-read to itself.
+
+`ReflowKind::Statement` already carries one, and it is the model—its continuation
+is *flush*, so a width-wrapped tail re-parses as a line already at the body indent
+and lays out identically. expl3's hang is the same shape and lacks it: it indents
+continuations one step, so a wrapped line re-parses as a statement at a different
+column and the two passes disagree.
+
+### Known violations
+
+Four sites read the unsafe predicate; two are accidental and two are Tier 2:
+
+- `Statements::SplitAtNewlines` (`core.rs`, `lower_expl_code`)—expl3 statement
+  boundaries. **Accidental**; the root of the K&R↔Allman family.
+- `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups.
+  **Accidental**; already filed in `TODO.md` as "Opaque-group layout
+  non-determinism".
+- `RunAtom::preferred_break_before`—**Tier 2**, `WrapMode::Stable` and friends.
+- `ReflowKind::Statement`—**Tier 2**, argument already written.
+
+### The oracle
+
+Trivia perturbation: for each corpus file, apply TeX-identical trivia
+perturbations (swap a lone newline for a space and back wherever the swap is
+meaning-preserving) and assert `fmt(perturbed) == fmt(original)`, scoped to Tier 1
+modes. This is strictly stronger than idempotence, which only ever exercises the
+single perturbation `fmt` happens to produce—so it catches a hybrid without
+needing a corpus file to land on exactly the right column arithmetic.
+
+The staged rollout, with per-stage gates, is in `TODO.md`.
+
 ## The Doc IR
 
 The engine is a Wadler/Prettier-style `Doc` IR (`formatter::ir::Ir`). Its core

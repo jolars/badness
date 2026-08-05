@@ -12,6 +12,79 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
+- [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
+  (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
+  `formatter.md` (§ *Trivia-invariant layout*). Layout may read only trivia
+  predicates the formatter *preserves*; blank lines, comments, and column-0
+  margins/guards qualify, **a lone newline vs. a space does not**. Since `fmt(x)`
+  is by construction a trivia-perturbation of `x`, layout invariant under trivia
+  perturbation is idempotent *by proof* — which is the point: the current regime
+  defends idempotence one decision at a time, and the supply of decisions is
+  unbounded.
+
+  Enforcement is to delete the information at the boundary — the lowering
+  consumes a normalized `Gap = Glued | Space | BlankLine | Comment | Guard |
+  Margin` with no `Newline` variant — plus a trivia-perturbation oracle. Tier-2
+  modes that are *defined* by authored breaks (`WrapMode::Stable`/`Sentence`/
+  `Semantic`, `ReflowKind::Statement`) keep a widened gap and owe a written
+  fixed-point argument, as `ReflowKind::Statement`'s flush continuation already
+  has.
+
+  **Stages, each gated on the corpus failing-file set not growing** (`badness
+  debug format --checks all --report .` over `latex3/latex3` @ `3d1d347`, plus
+  `latex3/latex2e` and `pgf-tikz/pgf`; compare *sets*, not counts):
+
+  - [ ] **S0 — the oracle, before any refactor.** (a) Run the corpus under
+    `assert_format_invariants` at several line widths (60/72/80/100/120): every
+    hybrid is a column-arithmetic accident, so widths multiply detection. (b) Add
+    the trivia-perturbation oracle itself. No production change; the deliverable
+    is the true failure inventory, which every later stage is gated against.
+    Expect the count to jump — that is the point.
+  - [ ] **S1 — one representation of "forced".** A `propagate_breaks` prepass
+    marking every group containing a hard break as `expand`, replacing the three
+    current representations (`Ir::Group{expand}`, `contains_forced_break`
+    recomputed per decision site, `lower_expl_group`'s hand-rolled branch).
+    Behaviour-neutral. Makes the landed `group_expanded` fix fall out
+    automatically rather than being a special case.
+  - [ ] **S2 — `Mode::Flat` becomes an honest contract.** Define it as "the whole
+    subtree, laid out flat, is verified to fit". Then fix the two producers that
+    claim it without checking — `pick_candidate` selects on *first-line* fit
+    (`printer.rs`), `Cmd::PreferredFill` pushes atoms flat unconditionally — by
+    returning `Mode::Break` (the *choice of candidate* is the decision; children
+    then decide for themselves). **Only then** make `Ir::Group` honour an incoming
+    `Mode::Flat` instead of recomputing. The three must land together: mode
+    propagation alone measured 1 -> 9 idempotency failures precisely because the
+    two producers lie. Expect substantial golden churn; hand-derive each.
+  - [ ] **S3 — collapse the fit predicates.** With mode propagated, a group inside
+    a flat parent is never *asked* whether it fits, so the rest-awareness
+    disagreement dissolves rather than needing a patch (this is what the open
+    `latexrelease.sty` entry below is blocked on). Delete what is now dead of
+    `flat_width` / `first_line_fits` / `all_lines_fit` / `fits` / `group_fits`,
+    and make the survivors share one traversal so they cannot drift again — the
+    `rest_fits` drift (a later `Group` measured in its real mode, a later
+    `ConditionalGroup` measured flat-most) was exactly that failure.
+  - [ ] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Derive
+    `ArgSpec` arity in the semantic layer from the expl3 argspec suffix — the
+    single-argument letters (`N n c V v o x e f T F`) are a bounded, purely
+    lexical set, no macro meaning, squarely decision #2's "semantic layer assigns
+    arity"; `p` (parameter text) and `w` (delimited) have no fixed arity and fall
+    back. Then `\cs_new:Npn \foo:n #1 {…}` is one call unit, statement boundaries
+    are structural, and `SplitAtNewlines` degrades from *the* mechanism to a
+    fallback for unrecognized names.
+
+  **Subsumes three open entries below** — all three are the same invariant
+  violation, independently diagnosed: *Opaque-group layout non-determinism*
+  (`spans_multiple_lines`), *Residual K&R <-> Allman flip* (S2/S3), and *Hanging
+  continuation indent for wrapped statements*, whose own note already concludes it
+  needs "a node that owns the whole statement, so layout derives from structure"
+  — that is S4.
+
+  **Uncertainties to settle in-flight, not assumed away:** whether `Ir::group_hug`
+  survives S2 intact (it is a third mode rule, measuring only a prefix, and its
+  interaction with propagation is untraced); how much of the S4 argspec set the
+  parser's greedy `{}`-attachment already covers, which decides whether S4 buys
+  enough to justify its cost; and whether every Tier-2 mode can actually carry a
+  fixed-point argument, or whether one of them needs redesigning instead.
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
@@ -30,7 +103,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   block-vs-inline from incidental source newlines, sidestepped for the
   `TokenList` kind but still governing every `Opaque` multi-line group. Give
   `Opaque` groups a deterministic layout policy that does not depend on
-  incidental whitespace.
+  incidental whitespace. *(An instance of the trivia-invariant-layout violation
+  above — `spans_multiple_lines` reads the unsafe lone-newline predicate. Fix it
+  under that umbrella, Tier 1, not on its own.)*
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on
@@ -119,9 +194,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `col + flat_width(atom) <= line_width` — purely local. A nested `Ir::Group`
   inside that atom then re-decides with the **rest-aware** `group_fits`, which
   also charges what follows on the line (the issue-#71 rule). So the fill commits
-  the atom to one line while a group inside it breaks: the hybrid. A correct fix
-  makes the two agree — most plausibly by making `step_fill`'s atom check
-  rest-aware, since the group's rest-awareness is load-bearing for #71.
+  the atom to one line while a group inside it breaks: the hybrid. *Blocked on
+  S2/S3 of the trivia-invariant-layout entry above: once `Mode::Flat` is an honest
+  claim and propagates, a group inside a flat parent is never asked whether it
+  fits, so the two rules cannot disagree. Do not patch `step_fill` in isolation —
+  the last dead end below is exactly that attempt.*
 
   **Measured dead ends — do not repeat.** Baseline over the whole repo is 17
   failing files, 288 checked (15 `format-error`, 2 `idempotency`); counts below
@@ -197,7 +274,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   (`;`/`at`/`()` carry no special catcode in plain TeX), so grouping them is
   package-specific grammar, out of scope for the generic parser (decisions #1, #2;
   non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
-  corpus, and AGENTS.md amendment), not a formatter patch.
+  corpus, and AGENTS.md amendment), not a formatter patch. *(The general form of
+  "needs a node that owns the whole statement" is S4 of the trivia-invariant-layout
+  entry above, which delivers it for expl3 from argspec arity. TikZ paths stay out
+  of scope — no static signal — so this entry survives S4 for `.tex` bodies.)*
 
 ## Linter
 

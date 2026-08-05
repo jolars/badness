@@ -161,12 +161,27 @@ awareness in `lsp.md`.
   by the non-trivia-content oracle in `assert_format_invariants` (`tests/format.rs`).
 - **Protected regions** (`verbatim`, `lstlisting`, `\verb`, comments) are never altered
   by the formatter.
+- **Trivia-invariant layout** *(being rolled out—see TODO.md)*: layout is a function of
+  non-trivia content, config, and only those trivia predicates the formatter itself
+  *preserves*. A predicate `P` is preserved when `P(fmt(x)) == P(x)`. Blank-line
+  presence, comment presence and own-line-ness, and a column-0 `.dtx` margin/guard are
+  preserved, so layout may read them. **Whether a gap is a lone newline or a space is
+  not** — the formatter converts freely in both directions (`alpha\nbeta` → `alpha beta`)
+  — so layout must never key on it. Detail, the classification table, and the two-tier
+  escape hatch in `formatter.md` (§ *Trivia-invariant layout*).
+
+  This subsumes idempotence: `fmt(x)` is by construction a trivia-perturbation of `x`
+  (the whitespace-only invariant), so a layout invariant under trivia perturbation is
+  idempotent *by proof*, not by corpus luck. Every bug in the K&R↔Allman family (issues
+  \#71, \#94, \#96, \#97) is one decision keyed on the unsafe predicate.
 
 There is deliberately **no parse-stability invariant**: the formatter may still change
 CST *shape* (the math operator split re-groups a catcode-12 `WORD`, so `a+2` → `a + 2`
 re-lexes into separate atoms), but the whitespace-only invariant above pins the
 non-trivia *content* it carries. The formatter is intentionally used to stress the
-parser—any formatter ambiguity should surface a parser modeling gap.
+parser—any formatter ambiguity should surface a parser modeling gap. Trivia-invariant
+layout is **not** parse stability and does not reintroduce it: the math split is driven
+by non-trivia *content*, reads no trivia, and stays sanctioned.
 
 **Differential oracle:** use **texlab's parser** as a differential *parse* oracle over
 a corpus—skeletonize both trees and compare. It is a reference we measure against,
@@ -213,6 +228,13 @@ never match.
   and `child`/`children`/`child_token` over raw `children().find(|c| c.kind()==X)`. Add
   a wrapper struct when a node kind gains a field-extraction consumer; keep accessors
   positional and meaning-free.
+- **Never key layout on a lone source newline** (trivia-invariant layout, above). A
+  width wrap and an authored newline are the same bytes to the next parse, so any rule
+  that reads one is a latent idempotency bug. Blank lines and comments are fair game.
+  A mode that genuinely needs the unsafe predicate (`WrapMode::Stable`, `Sentence`,
+  `Semantic`, `ReflowKind::Statement`) is Tier 2: it must carry a written fixed-point
+  argument showing every layout it can emit re-reads to itself, as
+  `ReflowKind::Statement`'s flush continuation does.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
   decision #1 without recording the decision here and on the relevant Development page.
 - New salsa **inputs** carrying rarely-changing data (config, package/class metadata)

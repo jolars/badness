@@ -93,9 +93,9 @@
 ./l3packages/l3keys2e/l3keys2e.dtx	trivia	content-change
 ./l3packages/xfp/xfp.dtx	trivia	content-change
 ./l3packages/xparse/xparse-2018-04-12.sty	trivia	non-fixed-point
+./l3packages/xparse/xparse-2020-10-01.sty	trivia	non-fixed-point
 ./l3packages/xparse/xparse.dtx	trivia	content-change
 ./l3packages/xparse/xparse-generic.tex	trivia	non-fixed-point
-./l3packages/xtemplate/xtemplate-2023-10-10.sty	trivia	non-fixed-point
 ./l3packages/xtemplate/xtemplate.dtx	trivia	content-change
 ./l3trial/l3auxdata/l3auxdata.dtx	trivia	content-change
 ./l3trial/l3bigint/l3bigint.dtx	trivia	content-change

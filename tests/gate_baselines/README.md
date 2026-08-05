@@ -6,8 +6,16 @@ these sets but must not grow them.
 
 Recorded at badness commit `268c5d8` (S0); re-recorded after S2, which
 removed `latexrelease.sty` from both latex3 sets (15 `all`, 150 `trivia`)
-and refreshed `SWEEP.md`. Over the pinned gate corpora fetched by
-`task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
+and refreshed `SWEEP.md`. Re-recorded again after S4: the `all` sets are
+byte-identical to S2's, and the `trivia` sets trade four
+statement-boundary entries resolved (`xtemplate-2023-10-10.sty` in both
+corpora — the S4 motivating case — plus latex2e's `pdfmanagement.sty` and
+`tagpdf-base.sty`) for four additions in a different, pre-existing family
+(`xparse-2020-10-01.sty` in both corpora, latex2e's `lipsum.sty` and
+`expl3.sty`): the out-of-region prefix mode/rest printer coupling filed as
+an S4 follow-up in TODO.md, reachable only through the
+all-newlines-to-spaces mega-line variants. Over the pinned gate corpora
+fetched by `task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
 
 | corpus | repo @ pin | files |
 | --- | --- | --- |

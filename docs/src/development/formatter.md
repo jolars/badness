@@ -33,8 +33,8 @@ still catching any inserted or deleted non-trivia character.
 
 ## Trivia-invariant layout
 
-Whitespace-only says what the formatter may *write*. Trivia-invariant layout says
-what the lowering may *read*:
+Whitespace-only says what the formatter may *write*. Trivia-invariant layout
+says what the lowering may *read*:
 
 > Layout is a function of non-trivia content, config, and only those trivia
 > predicates the formatter itself preserves.
@@ -43,29 +43,30 @@ A predicate `P` is **preserved** when `P(fmt(x)) == P(x)`. Reading a preserved
 predicate is safe—the formatter cannot change the answer—while reading an
 unpreserved one means pass 1's layout silently edits pass 2's input.
 
-| Predicate | Preserved? | |
-|---|---|---|
-| blank line present (`newlines >= 2`) | yes—a blank line in, a blank line out | **safe** |
-| comment present, own-line vs. trailing | yes—comments are never relocated | **safe** |
-| `%` margin or `%<…>` guard at column 0 | yes—pinned by `Ir::ColumnZero` | **safe** |
-| **gap is a lone newline vs. a space** | **no**—`alpha\nbeta` → `alpha beta`, and a width wrap writes a newline where there was a space | **unsafe** |
+  | Predicate                              | Preserved?                                                                                     |            |
+  | -------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------- |
+  | blank line present (`newlines >= 2`)   | yes—a blank line in, a blank line out                                                          | **safe**   |
+  | comment present, own-line vs. trailing | yes—comments are never relocated                                                               | **safe**   |
+  | `%` margin or `%<…>` guard at column 0 | yes—pinned by `Ir::ColumnZero`                                                                 | **safe**   |
+  | **gap is a lone newline vs. a space**  | **no**—`alpha\nbeta` → `alpha beta`, and a width wrap writes a newline where there was a space | **unsafe** |
 
 ### Why this makes idempotence a theorem
 
-The formatter changes only trivia, so `fmt(x)` *is* a trivia-perturbation of `x`.
-If layout is invariant under trivia perturbation, then `fmt(fmt(x)) == fmt(x)`
-follows immediately. Idempotence stops being an empirical property defended one
-decision at a time and becomes a consequence of a single rule.
+The formatter changes only trivia, so `fmt(x)` *is* a trivia-perturbation of
+`x`. If layout is invariant under trivia perturbation, then
+`fmt(fmt(x)) == fmt(x)` follows immediately. Idempotence stops being an
+empirical property defended one decision at a time and becomes a consequence of
+a single rule.
 
 That matters because the alternative does not scale: every layout decision that
 reads the unsafe predicate is an independent latent bug, and the supply of
 decisions is unbounded. The whole K&R↔Allman family (issues \#71, \#94, \#96,
-\#97) is that pattern—a soft width break becomes a hard statement boundary on the
-reparse, `contains_forced_break` flips, and the layout with it.
+\#97) is that pattern—a soft width break becomes a hard statement boundary on
+the reparse, `contains_forced_break` flips, and the layout with it.
 
-This is **not** parse stability, which `AGENTS.md` deliberately declines: the math
-operator split re-granulates a `WORD` driven by non-trivia *content* and reads no
-trivia at all, so it is unaffected.
+This is **not** parse stability, which `AGENTS.md` deliberately declines: the
+math operator split re-granulates a `WORD` driven by non-trivia *content* and
+reads no trivia at all, so it is unaffected.
 
 ### Two tiers
 
@@ -83,16 +84,16 @@ contact with a large codebase.
 
 **Tier 2 (opt-in modes).** Some modes are *defined* by reading authored breaks:
 `WrapMode::Stable`/`Sentence`/`Semantic` (via `RunAtom::preferred_break_before`
-feeding `Ir::PreferredFill`) and `ReflowKind::Statement` (a lone newline ends the
-line so `\draw …;` lists keep one statement per line). These take a widened gap,
-and each owes a written **fixed-point argument**: every layout the rule can emit
-must re-read to itself.
+feeding `Ir::PreferredFill`) and `ReflowKind::Statement` (a lone newline ends
+the line so `\draw …;` lists keep one statement per line). These take a widened
+gap, and each owes a written **fixed-point argument**: every layout the rule can
+emit must re-read to itself.
 
-`ReflowKind::Statement` already carries one, and it is the model—its continuation
-is *flush*, so a width-wrapped tail re-parses as a line already at the body indent
-and lays out identically. expl3's hang is the same shape and lacks it: it indents
-continuations one step, so a wrapped line re-parses as a statement at a different
-column and the two passes disagree.
+`ReflowKind::Statement` already carries one, and it is the model—its
+continuation is *flush*, so a width-wrapped tail re-parses as a line already at
+the body indent and lays out identically. expl3's hang is the same shape and
+lacks it: it indents continuations one step, so a wrapped line re-parses as a
+statement at a different column and the two passes disagree.
 
 ### Known violations
 
@@ -110,9 +111,9 @@ Four sites read the unsafe predicate; two are accidental and two are Tier 2:
 
 Trivia perturbation: for each corpus file, apply TeX-identical trivia
 perturbations (swap a lone newline for a space and back wherever the swap is
-meaning-preserving) and assert `fmt(perturbed) == fmt(original)`, scoped to Tier 1
-modes. This is strictly stronger than idempotence, which only ever exercises the
-single perturbation `fmt` happens to produce—so it catches a hybrid without
+meaning-preserving) and assert `fmt(perturbed) == fmt(original)`, scoped to Tier
+1 modes. This is strictly stronger than idempotence, which only ever exercises
+the single perturbation `fmt` happens to produce—so it catches a hybrid without
 needing a corpus file to land on exactly the right column arithmetic.
 
 The staged rollout, with per-stage gates, is in `TODO.md`.
@@ -492,20 +493,20 @@ is a printer decision, invisible at build time).
 **A forced block is an expanded group, not a bare concat.** The broken (Allman)
 form `lower_expl_group` builds for a group forced open by a comment, docstrip
 guard, or `.dtx` margin is wrapped in `Ir::group_expanded`. The wrapper carries
-no width decision—`expand` means "broken", and both
-`Ir::contains_forced_break` and the flat-width measurements answer exactly as
-they did for the `HardLine`-bearing concat—but it does pin the **mode** its body
-is laid out in. A bare concat inherits whatever mode the caller was dispatched
-in, and inheriting `Flat` is the bug: `printer::step_fill` in flat mode lays
-*every* gap flat without measuring, while the groups hanging off those gaps
-still decide their own break (an `Ir::Group` re-decides regardless of the mode it
-is dispatched in). The result is the K&R hybrid
-`\int_set:Nn \l_…_int {` with the body wrapped below—which is not a fixed point,
-since those wrapped lines re-parse as separate statements, so the body acquires a
-forced break and the next pass lays the same group out Allman (smoke-test issue
-\#97, latex3's `l3trial/l3auxdata/l3auxdata.dtx`). Fixture
-`expl_forced_block_body_mode`; its leading `%` comment is load-bearing, being
-what forces the enclosing blocks open and hands the inner body a flat mode.
+no width decision—`expand` means "broken", and both `Ir::contains_forced_break`
+and the flat-width measurements answer exactly as they did for the
+`HardLine`-bearing concat—but it does pin the **mode** its body is laid out in.
+A bare concat inherits whatever mode the caller was dispatched in, and
+inheriting `Flat` is the bug: `printer::step_fill` in flat mode lays *every* gap
+flat without measuring, while the groups hanging off those gaps still decide
+their own break (an `Ir::Group` re-decides regardless of the mode it is
+dispatched in). The result is the K&R hybrid `\int_set:Nn \l_…_int {` with the
+body wrapped below—which is not a fixed point, since those wrapped lines
+re-parse as separate statements, so the body acquires a forced break and the
+next pass lays the same group out Allman (smoke-test issue \#97, latex3's
+`l3trial/l3auxdata/l3auxdata.dtx`). Fixture `expl_forced_block_body_mode`; its
+leading `%` comment is load-bearing, being what forces the enclosing blocks open
+and hands the inner body a flat mode.
 
 ### Trailing hang groups (K&R↔Allman idempotence)
 

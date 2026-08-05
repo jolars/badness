@@ -24,8 +24,8 @@ Requirements (one-time):
 - An AUR account with an SSH public key registered.
 - The matching private key stored as the `AUR_SSH_PRIVATE_KEY` repo secret.
 
-The first workflow run claims the `badness-bin` name by pushing to the empty
-AUR repo; no manual bootstrap is needed.
+The first workflow run claims the `badness-bin` name by pushing to the empty AUR
+repo; no manual bootstrap is needed.
 
 ## Manual fallback
 

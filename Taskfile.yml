@@ -98,6 +98,11 @@ tasks:
     cmds:
       - ./benches/documents/download.sh
 
+  gate-corpora:fetch:
+    desc: Clone/pin the trivia-invariant-layout gate corpora into corpora/ (latex3, latex2e, pgf)
+    cmds:
+      - ./scripts/fetch_gate_corpora.sh
+
   bench:micro:
     desc: In-process formatter micro-bench (parse vs format vs full, no startup floor)
     cmds:

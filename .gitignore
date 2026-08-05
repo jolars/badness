@@ -357,3 +357,6 @@ TSWLatexianTemp*
 
 # rust-analyzer reference checkout (audit only, not part of the project)
 .rust-analyzer-ref/
+
+# trivia-invariant-layout gate corpora (fetched by scripts/fetch_gate_corpora.sh)
+/corpora/

@@ -92,45 +92,76 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   whose head this branch cannot measure from inside a single argument). Fixture
   `expl_trailing_hang_group`; verified idempotent on `tagpdf.sty` (line 1007) and
   `pdfmanagement/latex-lab-testphase-bookmark.sty` (line 298).
-- [ ] **Residual K&R <-> Allman hang flips outside the trailing-hang carve-out
-  (idempotency; smoke-test issue #97).** The same root cause as the entry above
-  survives in every shape the carve-out's guards exclude, because the ordinary hang
-  path still keys the `{`-column on `contains_forced_break`, which is *not*
-  pass-invariant: a width wrap on pass 1 becomes a statement boundary on pass 2.
-  Confirmed live on `latex3/latex3` at `3d1d347`: `l3trial/l3auxdata/l3auxdata.dtx`
-  (`\int_set:Nn \l_… { \fp_eval:n { ceil (…) } }` — a *single-command* body whose
-  *nested* group detonates) and `texmf/tex/latex/base/latexrelease.sty` (four
-  distinct shapes: a `} {` continuation, a text-leading `{ is~ … }` body, and two
-  `\str_if_eq:VnT \l_…_tl { choice } {` conditionals with a preceding group).
+- [x] **Forced expl3 block inherited a flat mode and hybridized (idempotency;
+  smoke-test issue #97, `l3auxdata.dtx`).** The broken form `lower_expl_group`
+  builds for a group forced open by a comment/guard/`.dtx` margin was a bare
+  `Ir::concat`, so its body was laid out in whatever mode the *caller* was
+  dispatched in. Dispatched `Flat`, `step_fill` lays every gap flat without
+  measuring while the groups hanging off those gaps still re-decide and break —
+  the K&R hybrid `\int_set:Nn \l_@@_groups_int {` with the body wrapped below,
+  which pass 2 re-reads as several statements and lays out Allman. Fixed by
+  wrapping the forced form in `Ir::group_expanded`: `expand` pins the body's mode
+  to break while leaving `contains_forced_break` and every flat-width measurement
+  answering exactly as the `HardLine`-bearing concat did. Fixture
+  `expl_forced_block_body_mode` (the leading `%` comment is load-bearing — it is
+  what forces the enclosing blocks open). Measured on `latex3/latex3` at
+  `3d1d347`: 17 -> 16 failing files of 288 (idempotency 2 -> 1), no new failures;
+  `latex3/latex2e` (384 files) and `pgf-tikz/pgf` (397) unchanged.
+- [ ] **Residual K&R <-> Allman flip: a fill atom's flat check is not rest-aware
+  (idempotency; smoke-test issue #97 residue).** One shape survives on
+  `latex3/latex3` at `3d1d347`, `texmf/tex/latex/base/latexrelease.sty`'s
+  `{ is~\__hook_if_disabled:nTF {#1} {disabled} {undeclared} }`: pass 1 renders
+  `{ is~` inline with the body wrapping below and `}` glued onto the last wrapped
+  line, pass 2 lays the group out as a block.
+
+  Root cause is a *disagreement between two fit rules*, not the `{`-column rule
+  the entry below blamed. `printer::step_fill` decides a fill atom flat on
+  `col + flat_width(atom) <= line_width` — purely local. A nested `Ir::Group`
+  inside that atom then re-decides with the **rest-aware** `group_fits`, which
+  also charges what follows on the line (the issue-#71 rule). So the fill commits
+  the atom to one line while a group inside it breaks: the hybrid. A correct fix
+  makes the two agree — most plausibly by making `step_fill`'s atom check
+  rest-aware, since the group's rest-awareness is load-bearing for #71.
 
   **Measured dead ends — do not repeat.** Baseline over the whole repo is 17
-  failing files (288 checked). Cheaply widening the existing carve-out makes
-  idempotency *worse*, never better; each variant below fixed **zero** files:
-  - dropping `expl_group_body_is_multi_atom` *and* `!body.contains_forced_break()`,
-    routing a forced body to the Allman-broken candidate: 17 -> 23 (new failures in
-    `l3doc.dtx`, `l3toks.dtx`, `xtemplate-2023-10-10.sty`, `l3galley.dtx`,
-    `xfm.dtx`, `xo-float.dtx`);
-  - dropping only `!body.contains_forced_break()`: 17 -> 20 (`l3doc.dtx`,
-    `xtemplate-2023-10-10.sty`, `l3galley.dtx`).
+  failing files, 288 checked (15 `format-error`, 2 `idempotency`); counts below
+  are total failing files unless stated.
+  - Cheaply widening the trailing-hang carve-out fixed **zero** files: dropping
+    `expl_group_body_is_multi_atom` *and* `!body.contains_forced_break()` gave
+    17 -> 23; dropping only `!body.contains_forced_break()` gave 17 -> 20. "A
+    forced body always wants Allman-broken" is **false**: when the soft body fits,
+    all-lines-fit legitimately picks flat or Allman-inline.
+  - Making `lower_expl_group`'s *soft* form a two-candidate
+    `conditional_group_all_lines` (inline / broken) so the inline form is accepted
+    only as a genuine one-liner: idempotency 2 -> 35, and 2 -> 10 even after
+    routing a forced body to the broken candidate. All-lines-fit is not rest-aware,
+    so it drops the #71 rule that a later group is measured *in the mode it will
+    print in*; `rest_fits` then charges a following candidate list its full flat
+    width and pass 1 over-breaks (`\SetKeys [l3doc / options]` exploded on pass 1,
+    inline on pass 2). Teaching `rest_fits` to decide a later candidate list
+    locally recovered 10 -> 3, still worse than baseline.
+  - Moving the head↔`{` gap *into* a three-candidate hang group in
+    `lower_expl_code` (so K&R is unrepresentable at the hang site): fixes
+    `l3auxdata.dtx` but destroys the sticky-fill cascade (issue #94) — the gap is
+    no longer a fill separator, so each brace argument independently picks the
+    glued candidate and conditional branches glue two per line
+    (`{ \prg_return_true: } { \prg_return_false: }`).
+  - Making `Ir::Group` honor an incoming `Mode::Flat` (the textbook Wadler rule)
+    fixes this exact shape but is **unsound as the engine stands**: `Mode::Flat` is
+    also pushed by producers that never checked a full flat fit —
+    `pick_candidate` (first-*line* fits) and `Cmd::PreferredFill` (unconditional) —
+    so groups inside them are forced flat and overflow. Measured 1 -> 9
+    idempotency failures. Viable only after those producers are made honest.
 
-  So "a forced body always wants Allman-broken" is **false**: when the soft body
-  fits, all-lines-fit legitimately picks flat or Allman-inline, and forcing the
-  broken form on the reparse introduces a *new* flip. A correct fix has to make the
-  `{`-column independent of the body's forced-ness in the *ordinary* hang path
-  (coupling the `{`-break to the body-break so no K&R hybrid is representable),
-  which is the engine-level change with wide golden-fixture churn already noted
-  above — not another guard relaxation.
-
-  One genuine sub-bug was isolated along the way and is worth fixing on its own
-  terms: `head_command_has_grouped_sibling_arg` documents "a command earlier in the
-  *same statement*" but walks `prev_sibling()` across statement boundaries, so a
-  grouped command in an *earlier* statement rejects the carve-out. It makes two
-  identical `\tl_const:Ne \c_…_tl {body}` lines lay out differently
-  (`latexrelease.sty`'s `\__shipout_init_page_origins:`). Stopping the walk at a
-  `NEWLINE` (when the enclosing stream is `SplitAtNewlines` — i.e. the owner's
-  parent is not a `COMMAND`) is correct and regression-free, but on its own it
-  changes no output on the corpus, so it needs to land *with* the engine-level fix
-  that makes it reachable.
+  One genuine sub-bug remains isolated but **unreachable**:
+  `head_command_has_grouped_sibling_arg` documents "a command earlier in the *same
+  statement*" but walks `prev_sibling()` across statement boundaries. Stopping the
+  walk at a `NEWLINE` (when the enclosing stream is `SplitAtNewlines` — i.e. the
+  owner's parent is not a `COMMAND`) is correct and regression-free, but changes no
+  output on the corpus, and the `group_expanded` fix above did *not* make it
+  reachable (`latexrelease.sty`'s `\__shipout_init_page_origins:` already lays its
+  two `\tl_const:Ne \c_…_tl {body}` lines out identically). Land it only together
+  with a change that makes it observable, so it can carry a test.
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but

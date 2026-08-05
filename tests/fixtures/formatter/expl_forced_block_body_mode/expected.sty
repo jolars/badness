@@ -1,0 +1,18 @@
+\ExplSyntaxOn
+\cs_set:Nn \@@_save_files:
+  {
+    \prop_map_inline:Nn \g_@@_cc_prop
+      {
+        % need this many iterations to cover all the tags for the files we have
+        \int_set:Nn
+        \l_@@_groups_int
+          {
+            \fp_eval:n
+              {
+                ceil ( \seq_count:c { g_@@_cctags_ ##1 _seq } / \l_@@_files_int
+                )
+              }
+          }
+      }
+  }
+\ExplSyntaxOff

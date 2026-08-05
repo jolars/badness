@@ -403,6 +403,24 @@ lowering)—every brace sibling is forced to the broken (Allman) form via
 content; a sibling that would break solely from **width** does not couple (width
 is a printer decision, invisible at build time).
 
+**A forced block is an expanded group, not a bare concat.** The broken (Allman)
+form `lower_expl_group` builds for a group forced open by a comment, docstrip
+guard, or `.dtx` margin is wrapped in `Ir::group_expanded`. The wrapper carries
+no width decision—`expand` means "broken", and both
+`Ir::contains_forced_break` and the flat-width measurements answer exactly as
+they did for the `HardLine`-bearing concat—but it does pin the **mode** its body
+is laid out in. A bare concat inherits whatever mode the caller was dispatched
+in, and inheriting `Flat` is the bug: `printer::step_fill` in flat mode lays
+*every* gap flat without measuring, while the groups hanging off those gaps
+still decide their own break (an `Ir::Group` re-decides regardless of the mode it
+is dispatched in). The result is the K&R hybrid
+`\int_set:Nn \l_…_int {` with the body wrapped below—which is not a fixed point,
+since those wrapped lines re-parse as separate statements, so the body acquires a
+forced break and the next pass lays the same group out Allman (smoke-test issue
+\#97, latex3's `l3trial/l3auxdata/l3auxdata.dtx`). Fixture
+`expl_forced_block_body_mode`; its leading `%` comment is load-bearing, being
+what forces the enclosing blocks open and hands the inner body a flat mode.
+
 ### Trailing hang groups (K&R↔Allman idempotence)
 
 A *trailing* greedily-hung `{body}`—a brace group after head atoms with only

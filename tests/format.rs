@@ -651,6 +651,18 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // choice (flat / Allman-inline / Allman-broken), keyed on the body's real
     // one-line fit rather than its authored line count, makes both passes agree.
     ("expl_trailing_hang_group", "sty"),
+    // A brace group forced open by a comment (or guard, or `.dtx` margin) anywhere
+    // inside it lays its body out as a *block*, so the body must be laid out in break
+    // mode. When the forced block was a bare concat it inherited the caller's mode
+    // instead: dispatched flat, every fill gap in the body rendered flat while the
+    // groups hanging off those gaps still decided their own break, producing the K&R
+    // hybrid `\int_set:Nn \l_…_int {` with the body wrapped below. The wrapped lines
+    // re-parse as separate statements, so the body acquired a forced break and pass 2
+    // laid the same group out Allman (smoke-test issue #97, latex3's l3auxdata.dtx).
+    // The leading `%` comment is load-bearing — it is what forces the enclosing
+    // blocks open and hands the inner body a flat mode; without it the shape is
+    // already stable.
+    ("expl_forced_block_body_mode", "sty"),
 ];
 
 #[test]

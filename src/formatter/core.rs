@@ -2505,12 +2505,23 @@ fn lower_expl_group(
             } => (open_ir, body, close_ir, spaced, forced),
         };
     if has_comment || force_break {
-        Ir::concat([
+        // Wrapped in an *expanded* group, not a bare concat: the block is broken by
+        // construction, so its body must be laid out in break mode. A bare concat
+        // inherits whatever mode the caller was dispatched in, and inheriting `Flat`
+        // makes every fill gap inside the body render flat while the groups hanging
+        // off those gaps still re-decide and break — the K&R hybrid
+        // (`\int_set:Nn \l_…_int {` with the body wrapped below). That hybrid is not
+        // a fixed point: its wrapped lines re-parse as separate statements, so the
+        // body acquires a forced break and the next pass lays the block out Allman
+        // (issue #97, `l3auxdata.dtx`). `expand` also keeps
+        // [`Ir::contains_forced_break`] and the flat-width measurements answering
+        // exactly as the `HardLine`-bearing concat did.
+        Ir::group_expanded(Ir::concat([
             open_ir,
             Ir::indent(Ir::concat([Ir::hard_line(), body])),
             Ir::hard_line(),
             close_ir,
-        ])
+        ]))
     } else {
         // Flat boundary separators: a space (l3 house style) or nothing
         // (tight); both break identically.

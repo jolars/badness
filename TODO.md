@@ -84,7 +84,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     failing-file sets unchanged on all three corpora; a full byte-diff sweep
     against the pre-S1 binary differs on 12 of 1068 files, all this hug family
     (`xpackages` `.dtx`, `latex-lab-amsmath.dtx`, `latex-lab-firstaid.dtx`).
-  - [ ] **S2 — `Mode::Flat` becomes an honest contract.** Define it as "the whole
+  - [x] **S2 — `Mode::Flat` becomes an honest contract.** Define it as "the whole
     subtree, laid out flat, is verified to fit". Then fix the two producers that
     claim it without checking — `pick_candidate` selects on *first-line* fit
     (`printer.rs`), `Cmd::PreferredFill` pushes atoms flat unconditionally — by
@@ -93,10 +93,38 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `Mode::Flat` instead of recomputing. The three must land together: mode
     propagation alone measured 1 -> 9 idempotency failures precisely because the
     two producers lie. Expect substantial golden churn; hand-derive each.
+
+    *Landed.* The three landed together plus two more liars the honest
+    contract flushed out in corpus tracing. `Ir::Group` and both conditional
+    arms honour an incoming `Flat` (a nested conditional resolves to its
+    flat-most candidate, matching every measurement predicate); `expand` stays
+    first, so a saturated forced group never pins. `pick_candidate` announces
+    `Break`; `Cmd::PreferredFill` atoms inherit the fill's mode. Flushed out
+    in-flight: (1) the `Group` arm measured from the raw `w.col`, dropping the
+    pending indent after a newline — the same wrong-column acceptance the
+    `AllLines` arm had already fixed for itself; pre-S2 the nested
+    re-decisions papered over it, post-pin it printed as overflow, so both
+    `Group` measurements and `pick_candidate` now start from `current_col()`.
+    (2) `step_fill`'s last-atom flat claim ignored the trailing content the
+    lowering glues after a statement fill, so it is now rest-aware like
+    `group_fits` — which finally takes the folded continuation hang
+    (`\prop_get:cnN {…}{…}\l__tag_…`). (3) The hug's prefix-only `fits`
+    cannot claim full `Flat` for content past the first forced break
+    (`\@@_if_key_value:VTF {T}{F}` pinned `F` into a 125-column line), so a
+    hug now dispatches `Mode::FlatPrefix`: trivia renders flat (the head
+    stays glued) but groups re-decide — `group_hug` survives S2, settling
+    that uncertainty. No golden churn at all (the fixture set never reached
+    the divergence corners); the corpus churn is 54 files, overflowing lines
+    strictly reduced (18 files fewer, 0 more). Gate: sets unchanged except
+    `latexrelease.sty` leaving both latex3 sets (the #97 residue below —
+    resolved by S2 alone, without waiting for S3); baselines re-recorded,
+    `SWEEP.md` refreshed (five width-dependent files fully converged; one
+    shared `\str_if_eq:` fragment now flips at width 60 via the known
+    `SplitAtNewlines` Tier-2 family, S4's target).
   - [ ] **S3 — collapse the fit predicates.** With mode propagated, a group inside
     a flat parent is never *asked* whether it fits, so the rest-awareness
-    disagreement dissolves rather than needing a patch (this is what the open
-    `latexrelease.sty` entry below is blocked on). Delete what is now dead of
+    disagreement dissolves rather than needing a patch (S2 already resolved
+    the `latexrelease.sty` entry below this way). Delete what is now dead of
     `flat_width` / `first_line_fits` / `all_lines_fit` / `fits` / `group_fits`,
     and make the survivors share one traversal so they cannot drift again — the
     `rest_fits` drift (a later `Group` measured in its real mode, a later
@@ -112,17 +140,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
   **Subsumes three open entries below** — all three are the same invariant
   violation, independently diagnosed: *Opaque-group layout non-determinism*
-  (`spans_multiple_lines`), *Residual K&R <-> Allman flip* (S2/S3), and *Hanging
-  continuation indent for wrapped statements*, whose own note already concludes it
-  needs "a node that owns the whole statement, so layout derives from structure"
-  — that is S4.
+  (`spans_multiple_lines`), *Residual K&R <-> Allman flip* (resolved by S2), and
+  *Hanging continuation indent for wrapped statements*, whose own note already
+  concludes it needs "a node that owns the whole statement, so layout derives
+  from structure" — that is S4.
 
-  **Uncertainties to settle in-flight, not assumed away:** whether `Ir::group_hug`
-  survives S2 intact (it is a third mode rule, measuring only a prefix, and its
-  interaction with propagation is untraced); how much of the S4 argspec set the
-  parser's greedy `{}`-attachment already covers, which decides whether S4 buys
-  enough to justify its cost; and whether every Tier-2 mode can actually carry a
-  fixed-point argument, or whether one of them needs redesigning instead.
+  **Uncertainties to settle in-flight, not assumed away:** ~~whether
+  `Ir::group_hug` survives S2 intact~~ (settled: it survives as the
+  `Mode::FlatPrefix` producer — its prefix-only measurement is an honest but
+  weaker claim, under which trivia renders flat and groups re-decide); how much
+  of the S4 argspec set the parser's greedy `{}`-attachment already covers,
+  which decides whether S4 buys enough to justify its cost; and whether every
+  Tier-2 mode can actually carry a fixed-point argument, or whether one of them
+  needs redesigning instead.
 - [ ] **Reflow-on-`.dtx` violates the whitespace-only invariant (S0 discovery;
   dominates the trivia gate sets).** Two root causes, both reachable without
   any perturbation via `badness format --wrap reflow` on a `.dtx` (the
@@ -256,23 +286,27 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   what forces the enclosing blocks open). Measured on `latex3/latex3` at
   `3d1d347`: 17 -> 16 failing files of 288 (idempotency 2 -> 1), no new failures;
   `latex3/latex2e` (384 files) and `pgf-tikz/pgf` (397) unchanged.
-- [ ] **Residual K&R <-> Allman flip: a fill atom's flat check is not rest-aware
-  (idempotency; smoke-test issue #97 residue).** One shape survives on
+- [x] **Residual K&R <-> Allman flip: a fill atom's flat check is not rest-aware
+  (idempotency; smoke-test issue #97 residue).** One shape survived on
   `latex3/latex3` at `3d1d347`, `texmf/tex/latex/base/latexrelease.sty`'s
-  `{ is~\__hook_if_disabled:nTF {#1} {disabled} {undeclared} }`: pass 1 renders
+  `{ is~\__hook_if_disabled:nTF {#1} {disabled} {undeclared} }`: pass 1 rendered
   `{ is~` inline with the body wrapping below and `}` glued onto the last wrapped
-  line, pass 2 lays the group out as a block.
+  line, pass 2 laid the group out as a block.
 
   Root cause is a *disagreement between two fit rules*, not the `{`-column rule
-  the entry below blamed. `printer::step_fill` decides a fill atom flat on
+  the entry below blamed. `printer::step_fill` decided a fill atom flat on
   `col + flat_width(atom) <= line_width` — purely local. A nested `Ir::Group`
-  inside that atom then re-decides with the **rest-aware** `group_fits`, which
-  also charges what follows on the line (the issue-#71 rule). So the fill commits
-  the atom to one line while a group inside it breaks: the hybrid. *Blocked on
-  S2/S3 of the trivia-invariant-layout entry above: once `Mode::Flat` is an honest
-  claim and propagates, a group inside a flat parent is never asked whether it
-  fits, so the two rules cannot disagree. Do not patch `step_fill` in isolation —
-  the last dead end below is exactly that attempt.*
+  inside that atom then re-decided with the **rest-aware** `group_fits`, which
+  also charges what follows on the line (the issue-#71 rule). So the fill
+  committed the atom to one line while a group inside it broke: the hybrid.
+
+  *Resolved by S2* (the honest-`Mode::Flat` stage above), exactly as predicted:
+  once `Mode::Flat` propagates honestly, a group inside a flat parent is never
+  asked whether it fits, so the two rules cannot disagree — `latexrelease.sty`
+  left both latex3 gate sets without any `step_fill`-in-isolation patch. (S2
+  did also make `step_fill`'s *last-atom* decision rest-aware, but as part of
+  the honest-contract landing, not as the isolated patch the dead ends below
+  warn against.) The dead-end record stays for the archaeology:
 
   **Measured dead ends — do not repeat.** Baseline over the whole repo is 17
   failing files, 288 checked (15 `format-error`, 2 `idempotency`); counts below

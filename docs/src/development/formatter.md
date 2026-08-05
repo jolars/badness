@@ -158,16 +158,60 @@ saturates every non-hug `Group`'s `expand` flag from its content, making the
 flag the single representation of "forced open" (see *One representation of
 "forced"* under the expl3 layout section).
 
+### `Mode::Flat` is an honest contract (S2)
+
+The printer's layout mode is a *verified claim*, not a hint. A producer may
+dispatch a subtree in `Mode::Flat` only after verifying that the subtree's
+whole flat-mode rendering fits (every line, for subtrees whose structural
+`HardLine`s split it); consumers trust the claim, so a `Group` or conditional
+group dispatched in `Flat` honours it instead of re-deciding—the parent's
+verification and the print agree by construction. A producer that cannot make
+the whole-subtree claim dispatches `Break` and lets children decide for
+themselves: the choice of a `ConditionalGroup` candidate by first-line fit is
+the whole decision (`pick_candidate` announces `Break`), and a
+`Cmd::PreferredFill` break plan *places* atoms without verifying them, so
+atoms inherit the fill's mode. Both dispatch decisions measure from
+`Writer::current_col()`—the column the next visible character lands at,
+counting a pending indent—because a fit verified from the wrong column is
+still a lie, one the honest contract would then pin instead of letting nested
+re-decisions paper over.
+
+Two calibrated exceptions keep the contract honest at its edges:
+
+- An **`expand` group** prints `Break` even under an incoming `Flat`: a
+  subtree carrying a hard break was never a flat claim (its `HardLine`s fire
+  in either mode), and pinning its `Line`s flat would glue content onto a
+  forced-open line. This requires the `propagate_breaks`-saturated tree.
+- A **trailing-block hug** claims only `Mode::FlatPrefix`: its `fits` stops
+  *successfully* at the block's first forced break, so only the prefix was
+  verified. Trivia-level layout (`Line`, `SoftLine`, `IfBreak`, fill gaps)
+  renders flat exactly as under `Flat`—that keeps the head glued—but a group
+  may sit *past* the break the measurement stopped at, so groups under
+  `FlatPrefix` re-decide (`\@@_if_key_value:VTF {T}{F}`: the hug verified up
+  to `T`'s detonation; `F` was never measured, and pinning it flat printed a
+  125-column line).
+
+The honest contract is what finally delivers the trailing-hang rule's stated
+intent (see *Trailing hang groups*): an `AllLines` candidate is verified by
+rendering the whole subtree flat and checking every line, so the chosen
+candidate's nested groups now keep exactly the measured layout in the real
+print, instead of re-deciding against the rest of the line and detonating
+into the K&R hybrid the measurement never saw. It also resolved the
+`latexrelease.sty` issue-#97 residue (the step-fill/`group_fits`
+rest-awareness disagreement) ahead of S3's predicate consolidation.
+
 ### A group's fit measures the rest of the line in the mode it will print in
 
-Deciding a `Group` measures its flat rendering *plus* the already-queued
-commands up to the next line break (`printer::group_fits` → `rest_fits`, the
-Wadler/Prettier "fits the rest of the line" rule). A later group in that rest is
-measured in the mode it will actually print in: **flat when its own flat form
-still fits from here, broken otherwise.** Measuring a doomed group flat charges
-the group being decided for width that will never land on this line—and the
-charge depends on where the doomed group's own body happens to break, which the
-*previous formatting pass* decided.
+Deciding a `Group` dispatched in `Break` mode measures its flat rendering
+*plus* the already-queued commands up to the next line break
+(`printer::group_fits` → `rest_fits`, the Wadler/Prettier "fits the rest of
+the line" rule); a group dispatched in `Flat` skips the decision entirely (the
+honest contract above). A later group in that rest is measured in the mode it
+will actually print in: **flat when its own flat form still fits from here,
+broken otherwise.** Measuring a doomed group flat charges the group being
+decided for width that will never land on this line—and the charge depends on
+where the doomed group's own body happens to break, which the *previous
+formatting pass* decided.
 
 That is a fixed-point hazard, not just a cosmetic one. In
 `\EditInstance{block}{thm}{␣…long keyvals…␣}` inside an expl3 region
@@ -177,6 +221,14 @@ kept them inline because that block had by then acquired a hard break, and
 idempotence failed. Deciding the rest group locally makes both passes agree—and
 gives the trailing block the hug the expl3 `COMMAND` lowering always intended:
 short leading arguments stay inline, only the over-long trailing one detonates.
+
+The same rest-awareness extends to a fill's *last* atom (`printer::step_fill`):
+the lowering glues trailing content after a statement's fill (a final
+`\l_…_tl` riding the line), so the last atom's flat claim must survive the
+rest of the line too. Without it the atom's folded hang break is never taken:
+the atom alone fits, goes `Flat`, and the glued tail overflows a line the
+measurement never saw (`\prop_get:cnN {…}{…}\l__tag_get_parent_tmpc_tl`,
+which wants the l3 continuation hang).
 
 ## Paragraph line breaks
 
@@ -508,7 +560,11 @@ follows a head on the current line, space-separated, is kept on that line by an
 stops *successfully* at the block's first forced break), so it measures only the
 prefix `head␣<block-first-line>`, never the block body—the issue-#71-safe
 measurement, deliberately not the `step_fill` local `flat_width` cascade that
-would split a short head off a detonating trailing block.
+would split a short head off a detonating trailing block. Because only the
+prefix was verified, a successful hug dispatches its inner as
+`Mode::FlatPrefix`, not `Flat` (see *`Mode::Flat` is an honest contract*): the
+head's gaps render flat, but any group past the first forced break re-decides
+for itself.
 
 **Sibling coupling.** Within one command's attached arguments (`Ignore` only),
 if any brace argument detonates on a *forced* break—a docstrip guard, comment,
@@ -572,7 +628,10 @@ the body's fill wrapping below), but those wrapped lines re-parse as several
 `SplitAtNewlines` statements, so the body then carries a *forced* break and the
 continuation branch detonates it Allman on pass 2—the same "a width break
 becomes a structural boundary on the next parse" class as the trailing
-conditional above.
+conditional above. Since S2, the accepted candidate is dispatched in honest
+`Mode::Flat`, so the real print keeps exactly the layout all-lines-fit
+measured—before that, nested groups re-decided rest-aware at print time and
+could still detonate into the hybrid the measurement had rejected.
 
 `lower_expl_code` commits such a group as one `Ir::conditional_group_all_lines`
 over three candidates—**flat** (`head { body }` on one line), **Allman-inline**

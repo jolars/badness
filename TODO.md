@@ -145,30 +145,63 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     byte-identical to `tests/gate_baselines`, and full byte-diff sweeps at
     widths 60/80/120 differ on 0 of 1069 files — S2 had already removed
     every reachable disagreement, so no baselines were re-recorded.
-  - [ ] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Derive
-    `ArgSpec` arity in the semantic layer from the expl3 argspec suffix — the
-    single-argument letters (`N n c V v o x e f T F`) are a bounded, purely
-    lexical set, no macro meaning, squarely decision #2's "semantic layer assigns
-    arity"; `p` (parameter text) and `w` (delimited) have no fixed arity and fall
-    back. Then `\cs_new:Npn \foo:n #1 {…}` is one call unit, statement boundaries
-    are structural, and `SplitAtNewlines` degrades from *the* mechanism to a
-    fallback for unrecognized names.
+  - [x] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Landed
+    as `semantic::expl3` (per-slot arity from the argspec suffix: `N V` one
+    token, `n c v o x e f` a brace group, trailing `T F` branches, `p`
+    parameter text shape-scanned to the first explicit `{` — TeX's own static
+    rule, so the `Npn` family is fully structural; `w`/`D`/unknown letters
+    fall back) plus `formatter::expl_stmt` (pure-shape segmentation with
+    peel-back of greedily over-attached arguments) and the `core.rs` rewiring
+    (`Statements::Structural`, boundary-map commits, region toggles as
+    zero-arity units). The formatter owns one-call-per-line; a width wrap
+    re-derives the same unit on every pass. The fallback (underivable heads,
+    plus a unit's same-line trailing junk) is the Tier-2 residue and carries
+    its fixed-point argument in `formatter::expl_stmt`: greedy self-refilling
+    lines (plain `Ir::Fill`, not sticky), no break before a recognized head
+    mid-line, junk-glued statements all-hard. Gate: `--checks all` sets
+    byte-identical to baseline at width 80 for all three corpora; both
+    width-60 SWEEP symptoms (`xtemplate-2023-10-10.sty`, `lttemplates.dtx`)
+    cleared; the strict trivia-invariance oracle holds for recognized-only
+    streams (first Tier-1 shapes to pass it). Trivia sets: 4 entries
+    resolved (`xtemplate` ×2 — the motivating case — `pdfmanagement.sty`,
+    `tagpdf-base.sty`), 4 added from a *different*, pre-existing family
+    (mode/rest printer coupling; follow-up below).
 
-  **Subsumes three open entries below** — all three are the same invariant
-  violation, independently diagnosed: *Opaque-group layout non-determinism*
-  (`spans_multiple_lines`), *Residual K&R <-> Allman flip* (resolved by S2), and
-  *Hanging continuation indent for wrapped statements*, whose own note already
-  concludes it needs "a node that owns the whole statement, so layout derives
-  from structure" — that is S4.
+  **The "subsumes three entries" claim, corrected:** S4 resolved the expl3
+  instances. *Opaque-group layout non-determinism* (`spans_multiple_lines`)
+  still governs non-expl3 `Opaque` groups and stays open below; *Residual
+  K&R <-> Allman flip* was resolved by S2; *Hanging continuation indent* got
+  its "node that owns the whole statement" for expl3 (the call unit) — TikZ
+  paths remain out of scope as that entry says.
 
-  **Uncertainties to settle in-flight, not assumed away:** ~~whether
-  `Ir::group_hug` survives S2 intact~~ (settled: it survives as the
-  `Mode::FlatPrefix` producer — its prefix-only measurement is an honest but
-  weaker claim, under which trivia renders flat and groups re-decide); how much
-  of the S4 argspec set the parser's greedy `{}`-attachment already covers,
-  which decides whether S4 buys enough to justify its cost; and whether every
-  Tier-2 mode can actually carry a fixed-point argument, or whether one of them
-  needs redesigning instead.
+  **In-flight uncertainties, settled:** greedy `{}`-attachment covers leading
+  all-group specs entirely (`\str_if_eq:nnTF {a}{b}{T}{F}` is one node);
+  `N`/`V`/`p` specs are exactly the peel-back cases, common enough (every
+  `\tl_set:Nn`, every `Npn` definition) that S4 pays for itself. Every Tier-2
+  mode now carries a written fixed-point argument (the expl3 fallback's is in
+  `formatter::expl_stmt`).
+
+  **S4 follow-ups:**
+  - [ ] *Out-of-region prefix flips an in-region group's inline/block form.*
+    A `\cmd {group}` in the generic (out-of-region) part of the same
+    paragraph flips a following in-region soft group between inline-tight
+    and Allman-block (`word {g} \ExplSyntaxOn … \DeclareOption* {…}` inline;
+    `\somecmd {g} \ExplSyntaxOn …` block) — an ambient printer mode/rest
+    coupling in the S2 fit-contract family, pre-existing, surfaced by S4's
+    width-deciding statements. Behind the 4 trivia-set additions
+    (`xparse-2020-10-01.sty` ×2, `lipsum.sty`, `expl3.sty`), all on the
+    all-newlines-to-spaces mega-line variant only.
+  - [ ] *In-region `BracketPolicy` audit*: a wrap before an attached `[` can
+    change CST shape across passes (pre-existing; S4's unit re-formation
+    assumes bracket re-attachment is stable — verify which policies are
+    reachable in-region).
+  - [ ] *Per-statement sibling coupling*: `couple_siblings` stays
+    `Ignore`-only; a structural statement spanning siblings could couple its
+    brace arguments the same way.
+  - [ ] *Sibling-attached branch explosion*: `\prop_get:NnNTF \p {k} \l {T}
+    {F}` forms one unit now, but the R4 explosion still fires only via
+    head-attached branches (`lower_expl_conditional` returns `None`); the
+    consumer's slot-to-sibling mapping could drive it.
 - [ ] **Reflow-on-`.dtx` violates the whitespace-only invariant (S0 discovery;
   dominates the trivia gate sets).** Two root causes, both reachable without
   any perturbation via `badness format --wrap reflow` on a `.dtx` (the
@@ -354,15 +387,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     so groups inside them are forced flat and overflow. Measured 1 -> 9
     idempotency failures. Viable only after those producers are made honest.
 
-  One genuine sub-bug remains isolated but **unreachable**:
-  `head_command_has_grouped_sibling_arg` documents "a command earlier in the *same
-  statement*" but walks `prev_sibling()` across statement boundaries. Stopping the
-  walk at a `NEWLINE` (when the enclosing stream is `SplitAtNewlines` — i.e. the
-  owner's parent is not a `COMMAND`) is correct and regression-free, but changes no
-  output on the corpus, and the `group_expanded` fix above did *not* make it
-  reachable (`latexrelease.sty`'s `\__shipout_init_page_origins:` already lays its
-  two `\tl_const:Ne \c_…_tl {body}` lines out identically). Land it only together
-  with a change that makes it observable, so it can carry a test.
+  ~~One genuine sub-bug remains isolated but **unreachable**:
+  `head_command_has_grouped_sibling_arg` walks `prev_sibling()` across statement
+  boundaries.~~ Fixed with S4, which made it observable: the walk now re-segments
+  the owner's sibling stream and stops at the previous statement boundary
+  (`grouped_sibling_walk_stops_at_the_statement_boundary` carries the test).
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but

@@ -91,21 +91,39 @@ emit must re-read to itself.
 
 `ReflowKind::Statement` already carries one, and it is the model—its
 continuation is *flush*, so a width-wrapped tail re-parses as a line already at
-the body indent and lays out identically. expl3's hang is the same shape and
-lacks it: it indents continuations one step, so a wrapped line re-parses as a
-statement at a different column and the two passes disagree.
+the body indent and lays out identically. expl3's structural statements (S4)
+reach the same end a different way: a call unit is re-derived from *content* on
+every pass, so a width wrap anywhere inside it re-consumes to the same unit and
+the layout re-decides identically.
 
 ### Known violations
 
-Four sites read the unsafe predicate; two are accidental and two are Tier 2:
+Three sites read the unsafe predicate; one is a bounded residue and two are
+Tier 2:
 
-- `Statements::SplitAtNewlines` (`core.rs`, `lower_expl_code`)—expl3 statement
-  boundaries. **Accidental**; the root of the K&R↔Allman family.
-- `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups.
-  **Accidental**; already filed in `TODO.md` as "Opaque-group layout
-  non-determinism".
+- The **expl3 fallback statement** (`formatter::expl_stmt`)—a statement whose
+  head has no derivable arity (no `:` suffix; a `w`/`D`/mid-spec-`T`/`F` or
+  unknown letter; a slot-shape mismatch; a guard mid-unit; the stream ending
+  mid-unit) is the authored physical line, and a recognized unit's *same-line
+  trailing junk* extent is line-bounded too. This is `SplitAtNewlines`
+  demoted from *the* mechanism to a per-statement residue, and it carries its
+  fixed-point argument in the module docs: fallback lines commit as plain
+  greedy fills (each printed line re-segments to a fallback statement that
+  re-fills to itself), gaps that could put a *recognized* head at a printed
+  line start are unbreakable, and junk-glued statements render with every
+  top-level gap hard so their newline-keyed extent can never move. The
+  strict-invariance oracle cannot gate a stream containing a fallback head;
+  the convergence oracle validates the argument empirically.
+- `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups
+  *outside* expl3 regions. **Accidental**; already filed in `TODO.md` as
+  "Opaque-group layout non-determinism".
 - `RunAtom::preferred_break_before`—**Tier 2**, `WrapMode::Stable` and friends.
 - `ReflowKind::Statement`—**Tier 2**, argument already written.
+
+Statement boundaries for *recognized* expl3 heads are no longer on this list:
+they are structural (S4, below), and the strict oracle holds for
+recognized-only streams
+(`perturb::tests::strict_oracle_accepts_structural_expl3_statements`).
 
 ### The oracle
 
@@ -548,15 +566,58 @@ mode only splits CST tokens (lossless, cosmetic), whereas mis-*owning* layout
 rewrites meaning, so only the higher-stakes side gates. See `AGENTS.md` (core
 decisions) for the recorded rationale.
 
-### Statement boundaries
+### Statement boundaries are structural (S4)
 
-Statement boundaries follow *source newlines* (the expl3 one-call-per-line
-convention; a multi-token call like `\cs_new:Npn \foo:n #1 {…}` is several
-sibling CST nodes, not one structural unit)—except *within one command's
-attached arguments*, where a newline is inert whitespace and only the width fill
-breaks (otherwise a fill-broken argument would read as a new statement on the
-next pass and never reach a fixed point). A single inserted space at any
-preserved token boundary keeps re-lexing from merging two tokens.
+Statement boundaries are **call units**, not source newlines. A pure shape
+scan (`formatter::expl_stmt::segment_expl_statements`) runs over each in-region
+element stream before layout and decides, per gap, whether a statement ends
+there; the layout loop commits logical lines where the map says. The formatter
+owns one-call-per-line: authored same-line calls split, authored mid-call
+newlines join, and `\cs_new:Npn \foo:n #1 {…}`—several sibling CST nodes—is one
+statement however it was authored.
+
+A unit is a head `COMMAND` whose name has derivable arity
+(`semantic::expl3::expl3_slots`, the argspec suffix read letter by letter:
+`N`/`V` one token, `n c v o x e f` one brace group, trailing `T`/`F` branch
+groups, `p` parameter text) plus the elements its slots consume. Consumption
+draws from the head's greedily-attached children first, then following
+siblings, with three load-bearing rules:
+
+- **Peel-back.** Greedy attachment routinely gives an argument to the wrong
+  owner (`\cs_new:Nn \foo:n {body}` attaches `{body}` to `\foo:n`); a
+  `COMMAND` consumed into a single-token slot has its own attached children
+  pushed back onto the scan queue for the *outer* head's remaining slots.
+  Only the head's argspec ever drives consumption—an argument's own argspec
+  is inert data, exactly as TeX grabs it.
+- **The p-scan.** Parameter text ends at the first explicit `{` (TeX's own
+  static rule), scanning the flattened peeled order so a delimited text
+  (`#1 \q_stop {body}`) finds the body wherever attachment put it.
+- **Preserved-trivia reads only.** A blank line ends the unit where it stands
+  (the partial unit commits, pass-stably); a comment is transparent to
+  consumption; a docstrip guard or doc margin aborts to the fallback
+  (guarded alternative bodies make arity lie, issue #78). The region toggles
+  are recognized zero-arity units, so a region's opening line is structural
+  too.
+
+Whatever the scan cannot resolve degrades to the **fallback**: the authored
+physical line, the old newline rule demoted to a per-statement residue (see
+*Known violations* for its fixed-point argument). A completed unit also
+absorbs trailing *same-line* junk—punctuation, unrecognized command tokens, a
+trailing comment (`\int_use:N \c@… , %mc-num`)—and a junk-bearing statement
+renders with every top-level gap unbreakable so the authored line shape
+survives (xparse's `\bool_if:NTF … { \cs_set:cpn } … ##1 \q_@@ …` definition
+trickery).
+
+Within one command's attached arguments (`Statements::Ignore`) there are no
+statements at all: a newline is inert whitespace and only the width fill
+breaks. A single inserted space at any preserved token boundary keeps
+re-lexing from merging two tokens.
+
+The subsumed idempotency mechanism: a width wrap inside a recognized unit is
+harmless because the next pass re-derives the same unit from content and
+re-runs the same width decisions—the K&R↔Allman family's root (a wrap
+re-reading as a statement boundary) is gone for recognized heads, by
+construction rather than per-shape countermeasures.
 
 ### Trailing comments
 
@@ -581,8 +642,8 @@ same column either way for the layout to be a fixed point.
 
 The rule keys only on the group shape
 (`child.kind() == GROUP && atom.is_empty()`), **not** the statement mode, so it
-fires identically whether source newlines are statement boundaries
-(`SplitAtNewlines`) or inert catcode-9 whitespace within one command's attached
+fires identically whether statement boundaries are structural
+(`Statements::Structural`) or absent within one command's attached
 arguments (`Statements::Ignore`). This is what gives an *attached* brace
 argument the l3 hang: `\hbox_set:Nn \l_tmpa_box` / `␣␣{ … }`, or the `T`/`F`
 branches of `\cs_if_exist:NTF` each hung one step. A directly-abutting argument
@@ -663,11 +724,13 @@ trivia after it, whose body is a **multi-command fill**
 (issue \#96 residue, `tagpdf.sty` line 1007,
 `pdfmanagement/latex-lab-testphase-bookmark.sty` line 298). A body authored on
 one source line hangs K&R on pass 1 (`\tl_put_right:Ne \l_tmpa_tl {`, `{` glued,
-the body's fill wrapping below), but those wrapped lines re-parse as several
-`SplitAtNewlines` statements, so the body then carries a *forced* break and the
-continuation branch detonates it Allman on pass 2—the same "a width break
-becomes a structural boundary on the next parse" class as the trailing
-conditional above. Since S2, the accepted candidate is dispatched in honest
+the body's fill wrapping below), but those wrapped lines re-parsed as several
+newline-split statements under the pre-S4 model, so the body then carried a
+*forced* break and the continuation branch detonated it Allman on pass 2—the
+same "a width break becomes a structural boundary on the next parse" class as
+the trailing conditional above. (Structural boundaries have since removed the
+re-split for recognized heads; the three-way remains for the body-fit
+flip a *fallback* body can still exhibit.) Since S2, the accepted candidate is dispatched in honest
 `Mode::Flat`, so the real print keeps exactly the layout all-lines-fit
 measured—before that, nested groups re-decided rest-aware at print time and
 could still detonate into the hybrid the measurement had rejected.
@@ -696,8 +759,13 @@ group.
 
 ### Sticky-break statement fills
 
-Every expl3 statement line is committed as an `Ir::StickyFill`, not a plain
-`Ir::Fill`. Both greedily fill atoms across the width; the difference is the
+Every *structural* expl3 statement line is committed as an `Ir::StickyFill`,
+not a plain `Ir::Fill`. (A *fallback* or junk-glued line instead commits as a
+plain greedy fill: greedy packing is self-fulfilling—each printed line
+re-segments to a fallback statement that re-fills to exactly itself—while a
+sticky cascade forces atoms that would fit onto broken lines, a shape the next
+pass's shorter per-line statements do not reproduce.) Both greedily fill atoms
+across the width; the difference is the
 break *cascade*: in a plain fill each gap decides independently (a long word
 breaks, the next words keep filling—correct for prose reflow), whereas in a
 sticky fill, **once any atom lands on a broken line every later atom breaks

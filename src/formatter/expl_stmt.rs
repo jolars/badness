@@ -58,12 +58,54 @@ use super::core::{is_collapsible_trivia, is_param_digit};
 /// statement.
 pub(crate) struct StatementMap {
     boundary_after: Vec<bool>,
+    glue_before: Vec<bool>,
+    glued: Vec<bool>,
+    fallback: Vec<bool>,
 }
 
 impl StatementMap {
     /// Whether a statement boundary sits in the gap after element `idx`.
     pub(crate) fn boundary_after(&self, idx: usize) -> bool {
         self.boundary_after.get(idx).copied().unwrap_or(false)
+    }
+
+    /// Whether the gap *before* element `idx` must render unbreakable. Set for
+    /// a recognized-head `COMMAND` sitting mid-way through a fallback
+    /// statement: a width wrap at that gap would start a printed line with the
+    /// recognized head, which the next pass segments as its own statement
+    /// mid-way through this one and the passes disagree (`l3fp-trig.dtx`'s
+    /// `\@@_sep:`-delimited protocols, `xo-or.dtx`'s `=~ \exp_not:c {…}\space`
+    /// trace lines). Every other fallback gap stays breakable: a printed
+    /// continuation line starting with anything unrecognized re-segments to
+    /// exactly that line and renders to itself, the fallback's fixed point.
+    pub(crate) fn glue_before(&self, idx: usize) -> bool {
+        self.glue_before.get(idx).copied().unwrap_or(false)
+    }
+
+    /// Whether element `idx` belongs to a recognized statement that absorbed
+    /// trailing same-line material ([`absorb_trailing_junk`]) — a call unit
+    /// followed by unrecognized tokens or a comment on its authored line
+    /// (xparse's `\bool_if:NTF … { \cs_set:cpn } … ##1 \q_@@ …` definition
+    /// trickery). Such a statement renders with every top-level gap
+    /// unbreakable: its junk extent is newline-keyed (the fallback's Tier-2
+    /// residue), so a width wrap moving material across a line boundary would
+    /// change the extent — and with it the trailing-command glue decision —
+    /// on the next pass. All-hard gaps preserve the authored line shape
+    /// (node-internal layout still breaks freely and re-reads node-internal),
+    /// which is a fixed point by construction.
+    pub(crate) fn is_glued(&self, idx: usize) -> bool {
+        self.glued.get(idx).copied().unwrap_or(false)
+    }
+
+    /// Whether element `idx` belongs to a fallback statement. A fallback line
+    /// commits as a plain *greedy* fill, never the sticky fill structural
+    /// statements use: greedy packing is self-fulfilling (each printed line
+    /// re-segments to a fallback statement that re-fills to exactly itself),
+    /// while a sticky cascade forces atoms that would fit onto their own
+    /// broken lines — a shape the next pass's shorter per-line statements
+    /// do not reproduce.
+    pub(crate) fn is_fallback(&self, idx: usize) -> bool {
+        self.fallback.get(idx).copied().unwrap_or(false)
     }
 }
 
@@ -72,6 +114,9 @@ impl StatementMap {
 /// (so `:`/`_` were letters and names carry their argspec suffix).
 pub(crate) fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMap {
     let mut boundary_after = vec![false; elements.len()];
+    let mut glue_before = vec![false; elements.len()];
+    let mut glued = vec![false; elements.len()];
+    let mut fallback = vec![false; elements.len()];
     let mut i = 0;
     while i < elements.len() {
         match &elements[i] {
@@ -107,17 +152,41 @@ pub(crate) fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMa
                 };
                 match slots.and_then(|slots| consume_unit(elements, i, &slots)) {
                     Some(end) => {
-                        let end = extend_over_trailing_comment(elements, end);
-                        boundary_after[end] = true;
-                        i = end + 1;
+                        let full = absorb_trailing_junk(elements, end);
+                        if full > end {
+                            glued[i..=full].fill(true);
+                        }
+                        boundary_after[full] = true;
+                        i = full + 1;
                     }
-                    None => i = fallback_line(elements, i, &mut boundary_after),
+                    None => {
+                        i = fallback_line(
+                            elements,
+                            i,
+                            &mut boundary_after,
+                            &mut glue_before,
+                            &mut fallback,
+                        )
+                    }
                 }
             }
-            _ => i = fallback_line(elements, i, &mut boundary_after),
+            _ => {
+                i = fallback_line(
+                    elements,
+                    i,
+                    &mut boundary_after,
+                    &mut glue_before,
+                    &mut fallback,
+                )
+            }
         }
     }
-    StatementMap { boundary_after }
+    StatementMap {
+        boundary_after,
+        glue_before,
+        glued,
+        fallback,
+    }
 }
 
 /// Whether a `COMMAND`'s name token is one of the shared expl3 region-toggle
@@ -146,7 +215,13 @@ fn followed_by_newline(elements: &[SyntaxElement], idx: usize) -> bool {
 /// `SplitAtNewlines` rule demoted to a per-statement escape hatch. Marks the
 /// boundary after the line's last non-trivia element and returns the index to
 /// resume the outer walk from.
-fn fallback_line(elements: &[SyntaxElement], start: usize, boundary_after: &mut [bool]) -> usize {
+fn fallback_line(
+    elements: &[SyntaxElement],
+    start: usize,
+    boundary_after: &mut [bool],
+    glue_before: &mut [bool],
+    fallback: &mut [bool],
+) -> usize {
     let mut last = start;
     let mut j = start;
     while j < elements.len() {
@@ -154,29 +229,76 @@ fn fallback_line(elements: &[SyntaxElement], start: usize, boundary_after: &mut 
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
                 if t.kind() == SyntaxKind::NEWLINE {
                     boundary_after[last] = true;
+                    fallback[start..=last].fill(true);
                     return j;
                 }
                 j += 1;
             }
-            _ => {
+            element => {
+                // A recognized head mid-line must never start a printed
+                // continuation line (see [`StatementMap::glue_before`]).
+                if j > start
+                    && let SyntaxElement::Node(n) = element
+                    && n.kind() == SyntaxKind::COMMAND
+                    && (node_is_expl_toggle(n)
+                        || command_name(n).is_some_and(|name| expl3::expl3_slots(&name).is_some()))
+                {
+                    glue_before[j] = true;
+                }
                 last = j;
                 j += 1;
             }
         }
     }
     boundary_after[last] = true;
+    fallback[start..=last].fill(true);
     elements.len()
 }
 
-/// Pull a comment on the same physical line as a completed unit into the
-/// statement, so `\foo:n {a} % note` keeps its note on the call's line.
-fn extend_over_trailing_comment(elements: &[SyntaxElement], end: usize) -> usize {
+/// Extend a completed unit over trailing same-line *junk*: unrecognized
+/// material — punctuation and words (`\int_use:N \c@… , %mc-num`'s comma),
+/// unrecognized command tokens, a trailing comment — that the author wrote as
+/// part of the call's line. The scan never crosses a newline (junk on a later
+/// line stays its own fallback statement, and a recognized head is never
+/// pulled apart from fallback material it shares a line with) and stops at
+/// the next recognized head or toggle (the next call), a `{…}` group (a
+/// statement-leading block keeps its continuation-hang treatment), or a guard
+/// or doc margin (line-structured). This same-line read is part of the
+/// fallback's Tier-2 residue, not the structural model; a comment stays
+/// sanctioned either way (own-line-ness is a preserved predicate).
+fn absorb_trailing_junk(elements: &[SyntaxElement], end: usize) -> usize {
+    let mut end = end;
     let mut j = end + 1;
-    while let Some(SyntaxElement::Token(t)) = elements.get(j) {
-        match t.kind() {
-            SyntaxKind::WHITESPACE => j += 1,
-            SyntaxKind::COMMENT => return j,
-            _ => break,
+    while j < elements.len() {
+        match &elements[j] {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                if t.kind() == SyntaxKind::NEWLINE {
+                    break;
+                }
+                j += 1;
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
+                end = j;
+                break;
+            }
+            SyntaxElement::Token(t)
+                if matches!(t.kind(), SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN) =>
+            {
+                break;
+            }
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP => break,
+            SyntaxElement::Node(n)
+                if n.kind() == SyntaxKind::COMMAND
+                    && (node_is_expl_toggle(n)
+                        || command_name(n)
+                            .is_some_and(|name| expl3::expl3_slots(&name).is_some())) =>
+            {
+                break;
+            }
+            _ => {
+                end = j;
+                j += 1;
+            }
         }
     }
     end

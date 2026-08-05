@@ -4,8 +4,7 @@
     #2
       {
         \c_space_tl short~note \tl_if_empty:nTF {#1} { yes } { no }
-        \c_space_tl Not~set~because~the~hook~
-        \tl_if_empty:nTF {#1}
+        \c_space_tl Not~set~because~the~hook~\tl_if_empty:nTF {#1}
           { code~pool~is~empty }
           { is~\tl_if_blank:nTF {#1} { blank } { filled } }
         \module_aux:n {#1}

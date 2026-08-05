@@ -1726,7 +1726,8 @@ fn lower_expl_code(
     }
 
     /// Commit the in-progress line (if any) as the next logical line, recording the
-    /// pending line separator before it and resetting line state.
+    /// pending line separator before it and resetting line state (`sticky` resets
+    /// to `true`, the structural default).
     fn commit_line(
         atom: &mut Vec<Ir>,
         parts: &mut Vec<Ir>,
@@ -1734,25 +1735,35 @@ fn lower_expl_code(
         lines: &mut Vec<Ir>,
         seps: &mut Vec<Ir>,
         pending_sep: &mut Ir,
+        sticky: &mut bool,
     ) {
         flush_atom(atom, parts, sep_before_next);
         if !parts.is_empty() {
-            // A multi-atom line is a *sticky* fill: greedy, but once a hanging
-            // brace argument detonates onto its own line every later argument
-            // follows, rather than an empty false-branch gluing back onto the
-            // block's short closing `}` line — a glue that is not pass-stable,
-            // since where the block's own body breaks is not pass-invariant
-            // (issue #94). A single atom needs no fill.
+            // A multi-atom *structural* line is a *sticky* fill: greedy, but
+            // once a hanging brace argument detonates onto its own line every
+            // later argument follows, rather than an empty false-branch gluing
+            // back onto the block's short closing `}` line — a glue that is
+            // not pass-stable, since where the block's own body breaks is not
+            // pass-invariant (issue #94). A *fallback* (or junk-glued) line
+            // instead commits as a plain greedy fill: greedy packing is
+            // self-fulfilling (each printed line re-segments to a fallback
+            // statement that re-fills to itself), while a sticky cascade
+            // forces atoms that would fit onto broken lines — a shape the next
+            // pass's shorter per-line statements do not reproduce. A single
+            // atom needs no fill.
             let line = if parts.len() == 1 {
                 parts.drain(..).next().unwrap()
-            } else {
+            } else if *sticky {
                 Ir::StickyFill(std::mem::take(parts).into())
+            } else {
+                Ir::Fill(std::mem::take(parts).into())
             };
             seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
             lines.push(line);
         }
         parts.clear();
         *sep_before_next = None;
+        *sticky = true;
     }
 
     // True right after a multi-line block was pushed as its own line, surviving
@@ -1762,8 +1773,17 @@ fn lower_expl_code(
     // binds *leading* into the following command (decision #9) — a different
     // shape, so a different layout: idempotence would break.
     let mut after_block = false;
+    // Whether the line in progress commits as a sticky fill (structural
+    // statements) or a plain greedy fill (fallback/junk-glued statements) —
+    // see `commit_line`. Any fallback-marked element makes its line greedy.
+    let mut line_sticky = true;
     let mut idx = 0;
     while idx < elements.len() {
+        if let Some(m) = map.as_ref()
+            && (m.is_fallback(idx) || m.is_glued(idx))
+        {
+            line_sticky = false;
+        }
         match &elements[idx] {
             // Insignificant whitespace: a gap the boundary map marks ends the
             // logical line, a blank line promotes the next line separator, and
@@ -1786,6 +1806,7 @@ fn lower_expl_code(
                         &mut lines,
                         &mut seps,
                         &mut pending_sep,
+                        &mut line_sticky,
                     );
                     if newlines >= 2 {
                         pending_sep = Ir::empty_line();
@@ -1797,20 +1818,55 @@ fn lower_expl_code(
                         after_block = false;
                     }
                     flush_atom(&mut atom, &mut parts, &mut sep_before_next);
-                    // Keep a tie's soft break if one is already pending.
+                    // Keep a tie's soft break if one is already pending. A gap
+                    // before a recognized head mid-way through a fallback
+                    // statement, or any top-level gap of a junk-bearing glued
+                    // statement, is an unbreakable literal space: a width wrap
+                    // there would move material across a printed line boundary
+                    // the next pass segments differently (see
+                    // [`StatementMap::glue_before`] and
+                    // [`StatementMap::is_glued`]) — the line overflows instead.
                     if sep_before_next.is_none() {
-                        sep_before_next = Some(Ir::Line);
+                        sep_before_next = Some(
+                            if map
+                                .as_ref()
+                                .is_some_and(|m| m.glue_before(idx) || m.is_glued(idx))
+                            {
+                                Ir::verbatim(" ")
+                            } else {
+                                Ir::Line
+                            },
+                        );
                     }
                 }
                 continue;
             }
             // `~`: a literal space. Glue it to the end of the current atom, then
             // close the atom with a soft break (flat: nothing; broken: newline).
+            // A tie directly before a recognized head mid-fallback-statement
+            // must not break either (`xo-or.dtx`'s `=~ \exp_not:c {…}` trace
+            // lines), so that gap renders as nothing (`Nil`, the soft break's
+            // flat form).
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::TILDE => {
                 after_block = false;
                 atom.push(Ir::verbatim(token.text()));
                 flush_atom(&mut atom, &mut parts, &mut sep_before_next);
-                sep_before_next = Some(Ir::SoftLine);
+                let next = elements[idx + 1..]
+                    .iter()
+                    .position(|el| {
+                        !matches!(el, SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()))
+                    })
+                    .map(|off| idx + 1 + off);
+                sep_before_next = Some(
+                    if next.is_some_and(|n| {
+                        map.as_ref()
+                            .is_some_and(|m| m.glue_before(n) || m.is_glued(n))
+                    }) {
+                        Ir::Nil
+                    } else {
+                        Ir::SoftLine
+                    },
+                );
             }
             // A comment ends its line (it must terminate the source line). One
             // trailing a multi-line block glues onto the block's closing line
@@ -1840,6 +1896,7 @@ fn lower_expl_code(
                         &mut lines,
                         &mut seps,
                         &mut pending_sep,
+                        &mut line_sticky,
                     );
                 } else {
                     // A non-empty `atom` means the comment directly abuts it
@@ -1853,6 +1910,7 @@ fn lower_expl_code(
                         &mut lines,
                         &mut seps,
                         &mut pending_sep,
+                        &mut line_sticky,
                     );
                     let line = lines
                         .pop()
@@ -1884,6 +1942,7 @@ fn lower_expl_code(
                     &mut lines,
                     &mut seps,
                     &mut pending_sep,
+                    &mut line_sticky,
                 );
                 atom.push(lower_loose_token(token));
             }
@@ -1912,6 +1971,7 @@ fn lower_expl_code(
                     &mut lines,
                     &mut seps,
                     &mut pending_sep,
+                    &mut line_sticky,
                 );
                 let mut rest: Vec<SyntaxElement> = Vec::new();
                 for el in child.children_with_tokens() {
@@ -1936,6 +1996,14 @@ fn lower_expl_code(
             }
             SyntaxElement::Node(child) => {
                 after_block = false;
+                // A junk-bearing *glued* statement bypasses every layout
+                // special: its nodes accumulate as plain atoms joined by the
+                // hard separators the trivia arm supplies, so the authored
+                // line shape survives verbatim (see [`StatementMap::is_glued`]
+                // — a conditional explosion or head-hug here would commit a
+                // line mid-statement and strand the junk on a fresh line the
+                // next pass segments differently).
+                let in_glued = map.as_ref().is_some_and(|m| m.is_glued(idx));
                 // A *statement-leading* expl3 conditional (`\…:nTF {c} {T} {F}`,
                 // nothing on the logical line before it) explodes structurally: the
                 // head on its own line, then each `T`/`F` branch on its own line at
@@ -1946,7 +2014,8 @@ fn lower_expl_code(
                 // width-driven head-hug path (issue #71). `lower_expl_conditional`
                 // returns `None` for shapes whose branches do not attach to the
                 // command (`:NTF`), leaving those on the width path too.
-                if parts.is_empty()
+                if !in_glued
+                    && parts.is_empty()
                     && atom.is_empty()
                     && child.kind() == SyntaxKind::COMMAND
                     && let Some(cond_ir) = command_name(child)
@@ -1974,8 +2043,18 @@ fn lower_expl_code(
                 // explosion, which re-parses statement-leading and re-explodes to the
                 // identical bytes (idempotency failure, `lthooks.dtx`, issue #96). The
                 // `!(…)` guard leaves the statement-leading position to the block above.
-                if child.kind() == SyntaxKind::COMMAND
-                    && !(parts.is_empty() && atom.is_empty())
+                // Suppressed in a *fallback* statement too: a conditional name
+                // mid-way through an unrecognized line is data being spliced
+                // (`xtemplate`'s `cs_ \str_if_eq:nnT {#1} { global } { g }
+                // set:Npn` name assembly), not a call — and whether it sits
+                // trailing depends on where the line's junk ends, which is not
+                // pass-invariant.
+                let in_fallback = map.as_ref().is_some_and(|m| m.is_fallback(idx));
+                let statement_leading = parts.is_empty() && atom.is_empty();
+                if !in_glued
+                    && !in_fallback
+                    && !statement_leading
+                    && child.kind() == SyntaxKind::COMMAND
                     && is_trailing_in_statement(&elements, idx, map.as_ref())
                     && let Some(exploded) = command_name(child)
                         .and_then(|name| expl3::conditional_branches(&name))
@@ -2146,7 +2225,52 @@ fn lower_expl_code(
                 } else {
                     lower_node(child, cx)
                 };
-                if ir.contains_forced_break() {
+                // A junk-bearing glued statement: plain atom accumulation, hard
+                // separators, no line commits until the boundary (see above).
+                if in_glued {
+                    atom.push(ir);
+                }
+                // A trailing command carrying a block argument, with a head
+                // before it on the statement line: glue the head to the command
+                // with an unbreakable space and let the command's own internal
+                // hang absorb any overflow, so the head stays joined and only
+                // the block breaks below. Deliberately checked *before* the
+                // forced-break dispatch and applied to soft and forced bodies
+                // alike: whether such a body is soft or forced is not
+                // pass-invariant (a width wrap inside fallback content mints a
+                // statement boundary the reparse reads as a hard break —
+                // `expl_forced_block_body_mode`'s `\fp_eval:n` closing paren,
+                // l3doc's `\string \indexentry {…} {…}` write bodies), so any
+                // dispatch split on it — sticky fill when soft, `group_hug`
+                // when forced — renders different bytes on the two passes.
+                // Gluing renders identically either way: flat when everything
+                // fits, joined head with the block hanging otherwise.
+                // Structural streams only — under [`Statements::Ignore`] the
+                // nested hang branches already treat soft and forced uniformly.
+                else if map.is_some()
+                    && child.kind() == SyntaxKind::COMMAND
+                    && atom.is_empty()
+                    && !parts.is_empty()
+                    && is_trailing_in_statement(&elements, idx, map.as_ref())
+                    && child.children().any(|c| c.kind() == SyntaxKind::GROUP)
+                {
+                    let head = if parts.len() == 1 {
+                        parts.drain(..).next().unwrap()
+                    } else {
+                        Ir::Fill(std::mem::take(&mut parts).into())
+                    };
+                    // The head↔command separator is the pending gap's *flat*
+                    // form: a space for an ordinary inter-token gap, nothing
+                    // after a tie (`plus ~\__char_show_code:n {…}` must not
+                    // grow a space the next parse does not have).
+                    let sep = match sep_before_next.take() {
+                        Some(Ir::SoftLine) | Some(Ir::Nil) => Ir::Nil,
+                        _ => Ir::verbatim(" "),
+                    };
+                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                    lines.push(Ir::concat(vec![head, sep, ir]));
+                    after_block = true;
+                } else if ir.contains_forced_break() {
                     if !atom.is_empty() {
                         // A block hanging off a *directly-abutting* atom stays
                         // glued (`\cs_if_exist:NF\tag_if_active:T { … }` with a
@@ -2163,6 +2287,7 @@ fn lower_expl_code(
                             &mut lines,
                             &mut seps,
                             &mut pending_sep,
+                            &mut line_sticky,
                         );
                     } else if hang_group {
                         // A multi-line brace group separated from its head by a
@@ -2179,6 +2304,7 @@ fn lower_expl_code(
                             &mut lines,
                             &mut seps,
                             &mut pending_sep,
+                            &mut line_sticky,
                         );
                         if !lines.is_empty() {
                             let sep = std::mem::replace(&mut pending_sep, Ir::hard_line());
@@ -2216,41 +2342,11 @@ fn lower_expl_code(
                             &mut lines,
                             &mut seps,
                             &mut pending_sep,
+                            &mut line_sticky,
                         );
                         seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
                         lines.push(ir);
                     }
-                    after_block = true;
-                } else if map.is_some()
-                    && child.kind() == SyntaxKind::COMMAND
-                    && atom.is_empty()
-                    && !parts.is_empty()
-                    && is_trailing_in_statement(&elements, idx, map.as_ref())
-                    && child.children().any(|c| c.kind() == SyntaxKind::GROUP)
-                {
-                    // A *soft* trailing command carrying a block argument, with a
-                    // head before it on the statement line: glue the head to the
-                    // command with an unbreakable space and let the command's own
-                    // internal hang absorb any overflow, so the head stays joined
-                    // and only the block breaks below. The sticky fill would
-                    // instead split between head atoms — a shape the forced
-                    // head-hug branch above never emits, so a body whose
-                    // forced-ness flips across passes (a width wrap minting a
-                    // fallback statement boundary, `expl_forced_block_body_mode`'s
-                    // `\fp_eval:n` closing paren) would flip the whole
-                    // statement's layout with it. Joining both cases renders the
-                    // identical bytes on every pass: flat when everything fits,
-                    // joined head with the block hanging otherwise. Structural
-                    // streams only — under [`Statements::Ignore`] the nested
-                    // hang branches already treat soft and forced uniformly.
-                    let head = if parts.len() == 1 {
-                        parts.drain(..).next().unwrap()
-                    } else {
-                        Ir::Fill(std::mem::take(&mut parts).into())
-                    };
-                    sep_before_next = None;
-                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
-                    lines.push(Ir::concat(vec![head, Ir::verbatim(" "), ir]));
                     after_block = true;
                 } else if hang_group && starts_line && !lines.is_empty() {
                     // Line-initial: fold the statement separator in; the
@@ -2261,7 +2357,11 @@ fn lower_expl_code(
                     // Mid-statement: if the width fill breaks at this gap, the
                     // group starts a continuation line hung one step. Flat, the
                     // leading `Line` is the single inter-token space (the `Nil`
-                    // separator adds nothing).
+                    // separator adds nothing). A `{`-led continuation line is
+                    // safe in a fallback statement too: the reparse reads it as
+                    // a statement-leading group and the continuation-hang fold
+                    // below re-indents it identically. (A glued statement never
+                    // reaches here — the `in_glued` arm above owns its nodes.)
                     sep_before_next = Some(Ir::Nil);
                     atom.push(Ir::indent(Ir::concat(vec![Ir::Line, ir])));
                 } else {
@@ -2281,6 +2381,7 @@ fn lower_expl_code(
                 &mut lines,
                 &mut seps,
                 &mut pending_sep,
+                &mut line_sticky,
             );
         }
         idx += 1;
@@ -2292,6 +2393,7 @@ fn lower_expl_code(
         &mut lines,
         &mut seps,
         &mut pending_sep,
+        &mut line_sticky,
     );
 
     let mut result: Vec<Ir> = Vec::with_capacity(lines.len().saturating_mul(2));

@@ -12,44 +12,26 @@ use std::collections::BTreeMap;
 
 use badness::formatter::{
     FormatStyle, MathWrap, SentenceOptions, WrapMode, format, format_node_range_with_signatures,
-    format_with_style, format_with_style_flavored, format_with_style_flavored_sentence,
+    format_with_style, format_with_style_flavored, format_with_style_flavored_sentence, perturb,
 };
 use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness::semantic::SignatureDb;
-use badness::syntax::{SyntaxKind, SyntaxNode};
 
-/// Concatenate the text of every *non-trivia* token in `text`, dropping
-/// whitespace, newlines, comments, and the `.dtx` margin/guard trivia. The
-/// formatter is the sole authority on *layout* (tenet 1); it may add, remove, or
-/// relocate trivia freely, but it must **never change a non-trivia token** —
-/// content rewrites (like stripping `x^{2}` -> `x^2`) belong to the linter's
-/// autofixes, not the layout engine. Concatenating token *text* (rather than
-/// comparing token boundaries) tolerates the math operator split legitimately
-/// re-grouping a catcode-12 run (`a+2` -> `a + 2`, still `a+2` once whitespace is
-/// dropped) while catching any inserted or deleted non-trivia character.
-fn nontrivia_content(text: &str) -> String {
-    let root = SyntaxNode::new_root(parse(text).green);
-    root.descendants_with_tokens()
-        .filter_map(|el| el.into_token())
-        .filter(|t| {
-            !matches!(
-                t.kind(),
-                SyntaxKind::WHITESPACE
-                    | SyntaxKind::NEWLINE
-                    | SyntaxKind::COMMENT
-                    | SyntaxKind::DOC_MARGIN
-                    | SyntaxKind::GUARD
-            )
-        })
-        .map(|t| t.text().to_string())
-        .collect()
-}
+/// How many localized single-flip variants the trivia oracle samples per input.
+const TRIVIA_SINGLE_FLIP_SAMPLES: usize = 8;
 
-/// Assert the formatter invariants for a single clean-parsing input. Inputs the
-/// parser rejects are out of scope for the formatter (it refuses them), so the
-/// caller filters those out.
-fn assert_format_invariants(input: &str) {
-    let formatted = format(input).expect("clean input should format");
+/// Check the formatter invariants for a single clean-parsing input under
+/// `style` and `config`, returning a description of the first violation
+/// instead of panicking — the corpus sweep aggregates results against the
+/// known-failure registry. Inputs the parser rejects are out of scope for the
+/// formatter (it refuses them), so the caller filters those out.
+fn check_format_invariants(
+    input: &str,
+    style: FormatStyle,
+    config: LexConfig,
+) -> Result<(), String> {
+    let fmt = |s: &str| format_with_style_flavored(s, style, config);
+    let formatted = fmt(input).map_err(|e| format!("clean input failed to format: {e}"))?;
 
     // Whitespace-only: the formatter changes only trivia, never a non-trivia
     // token (tenet 1 — content rewrites are linter autofixes, not layout). The
@@ -57,26 +39,66 @@ fn assert_format_invariants(input: &str) {
     // "exactly one trailing newline" rule is a defined trivia normalization (and
     // for the degenerate trailing-`\` input it folds the newline into a
     // `\<newline>` control symbol — the final-newline rule, not a rewrite).
-    assert_eq!(
-        nontrivia_content(&formatted),
-        nontrivia_content(&format!("{input}\n")),
-        "format changed non-trivia content for {input:?}"
-    );
+    if perturb::nontrivia_content(&formatted, config)
+        != perturb::nontrivia_content(&format!("{input}\n"), config)
+    {
+        return Err("format changed non-trivia content".to_string());
+    }
 
     // Idempotence: fmt(fmt(x)) == fmt(x).
-    let twice = format(&formatted).expect("formatted output should re-format");
-    assert_eq!(twice, formatted, "format is not idempotent for {input:?}");
+    match fmt(&formatted) {
+        Err(e) => return Err(format!("formatted output failed to re-format: {e}")),
+        Ok(twice) if twice != formatted => {
+            return Err(format!(
+                "format is not idempotent:\n--- once ---\n{formatted}\n--- twice ---\n{twice}"
+            ));
+        }
+        Ok(_) => {}
+    }
 
     // The formatted output is itself a clean, lossless document.
-    assert!(
-        parse(&formatted).errors.is_empty(),
-        "formatted output should parse without diagnostics for {input:?}"
-    );
-    assert_eq!(
-        reconstruct(&formatted),
-        formatted,
-        "formatted output should round-trip losslessly for {input:?}"
-    );
+    if !parse_with_flavor(&formatted, config).errors.is_empty() {
+        return Err("formatted output does not parse without diagnostics".to_string());
+    }
+    let roundtrip = parse_with_flavor(&formatted, config).syntax().to_string();
+    if roundtrip != formatted {
+        return Err("formatted output does not round-trip losslessly".to_string());
+    }
+
+    // Trivia convergence (strictly stronger than idempotence): every
+    // TeX-identical newline<->space perturbation must format to a fixed point
+    // upholding the invariants. Valid under every wrap mode — Tier-2 modes owe
+    // convergence too (`formatter.md` § Trivia-invariant layout).
+    match perturb::check_trivia_convergence(input, config, TRIVIA_SINGLE_FLIP_SAMPLES, |s| {
+        fmt(s).map_err(|e| e.to_string())
+    }) {
+        Ok(_) => {}
+        Err(perturb::ConvergenceError::Original(e)) => {
+            return Err(format!("trivia oracle could not format the original: {e}"));
+        }
+        Err(perturb::ConvergenceError::Violation(f)) => {
+            return Err(format!(
+                "trivia perturbation broke an invariant ({}, variant {}):\n--- perturbed input ---\n{}\n--- once ---\n{}\n--- twice ---\n{}",
+                f.reason, f.label, f.perturbed_input, f.once, f.twice
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Assert the formatter invariants (including the trivia oracle for reflow
+/// styles) under an explicit style, for the LaTeX `Document` flavor.
+fn assert_format_invariants_with_style(input: &str, style: FormatStyle) {
+    if let Err(msg) = check_format_invariants(input, style, LatexFlavor::Document.into()) {
+        panic!("{msg}\nfor input: {input:?}");
+    }
+}
+
+/// [`assert_format_invariants_with_style`] at the default style — what every
+/// pre-existing call site uses.
+fn assert_format_invariants(input: &str) {
+    assert_format_invariants_with_style(input, FormatStyle::default());
 }
 
 /// The clean-parsing subset of the roundtrip unit corpus (mirrors
@@ -146,6 +168,55 @@ fn format_invariants_units() {
     }
 }
 
+/// The widths the corpus invariants sweep runs at. Every layout hybrid is a
+/// column-arithmetic accident, so widths multiply detection (TODO.md, S0).
+const SWEEP_WIDTHS: &[usize] = &[60, 72, 80, 100, 120];
+
+/// Corpus files known to violate an invariant at one or more sweep widths —
+/// the in-repo mirror of the S0 failure inventory. A registered file is
+/// asserted to *fail* somewhere in the sweep, so a fix in a later stage forces
+/// the entry's removal; an unregistered failure panics with the details. Never
+/// weaken the oracle to shrink this list.
+const KNOWN_INVARIANT_FAILURES: &[(&str, &str)] = &[
+    // S0 discovery: under `Reflow` the prose reflow relocates `^^A` doc
+    // comments (joining them into or out of prose lines), and at the new
+    // position the `^^A` re-lexes as content — a whitespace-only violation.
+    // `.dtx` defaults to `Preserve` in production, but Reflow-on-dtx is a
+    // supported CLI combination (`DTX_REFLOW_FIXTURES`). TODO.md, S0 notes.
+    (
+        "dtx_caret_comment.dtx",
+        "reflow moves ^^A doc comments into content positions",
+    ),
+];
+
+/// Run the invariants sweep over one corpus file, panicking on any
+/// unregistered failure and on any registered file that no longer fails.
+fn sweep_corpus_file(name: &str, text: &str, config: LexConfig) {
+    let registered = KNOWN_INVARIANT_FAILURES.iter().find(|(n, _)| *n == name);
+    let mut failures: Vec<String> = Vec::new();
+    for &width in SWEEP_WIDTHS {
+        let style = FormatStyle {
+            line_width: width,
+            ..FormatStyle::default()
+        };
+        if let Err(msg) = check_format_invariants(text, style, config) {
+            failures.push(format!("width {width}: {msg}"));
+        }
+    }
+    match registered {
+        Some((_, why)) => assert!(
+            !failures.is_empty(),
+            "{name} is registered in KNOWN_INVARIANT_FAILURES ({why}) but passes the whole \
+             sweep — remove its entry"
+        ),
+        None => assert!(
+            failures.is_empty(),
+            "unregistered invariant failure(s) in {name}:\n{}",
+            failures.join("\n")
+        ),
+    }
+}
+
 #[test]
 fn format_invariants_corpus() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
@@ -159,11 +230,39 @@ fn format_invariants_corpus() {
         // The corpus may contain inputs that exercise recovery; only the
         // clean-parsing ones are in scope for the formatter.
         if parse(&text).errors.is_empty() {
-            assert_format_invariants(&text);
+            let name = path.file_name().unwrap().to_str().unwrap().to_string();
+            sweep_corpus_file(&name, &text, LatexFlavor::Document.into());
             count += 1;
         }
     }
     assert!(count > 0, "no clean .tex corpus files found in {dir:?}");
+}
+
+#[test]
+fn format_invariants_dtx_corpus() {
+    // The `.dtx` corpus files, checked under their real docstrip lex config but
+    // — deliberately — under `Reflow` (the sweep's default wrap), not their
+    // production `Preserve` default: this is the Tier-1 stress scope, matching
+    // `debug format --checks trivia`'s wrap pinning.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
+    let config = LexConfig {
+        flavor: LatexFlavor::Package,
+        dtx: true,
+    };
+    let mut count = 0;
+    for entry in fs::read_dir(&dir).expect("read corpus dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("dtx") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).expect("read corpus file");
+        if parse_with_flavor(&text, config).errors.is_empty() {
+            let name = path.file_name().unwrap().to_str().unwrap().to_string();
+            sweep_corpus_file(&name, &text, config);
+            count += 1;
+        }
+    }
+    assert!(count > 0, "no clean .dtx corpus files found in {dir:?}");
 }
 
 /// Fixture cases under `tests/fixtures/formatter/<name>/`, each an

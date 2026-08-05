@@ -116,6 +116,22 @@ meaning-preserving) and assert `fmt(perturbed) == fmt(original)`, scoped to Tier
 the single perturbation `fmt` happens to produce—so it catches a hybrid without
 needing a corpus file to land on exactly the right column arithmetic.
 
+The oracle is implemented in `formatter::perturb`
+(`trivia_perturbations`/`check_trivia_invariance`): per file, two bulk variants
+(every eligible lone newline → space, every eligible single space → newline)
+plus a few deterministic single-flip reproducers. Eligibility encodes the
+scoping above—blank lines, comment-adjacent gaps, margined/guarded `.dtx`
+lines, and verbatim neighbors are never touched, and a gap inside a generic
+brace group (owned by Tier-2 `ReflowKind::Statement`) is skipped while a gap
+inside an expl3 region is kept, since the expl3 statement split is the
+accidental read the oracle exists to surface. Each variant is verified post
+hoc (clean parse, identical non-trivia content, identical trivia-blind CST
+skeleton) so newline-sensitive *parser* shape gates are dropped and counted
+(`dropped_unsafe`) instead of polluting the layout inventory. The oracle runs
+as `badness debug format --checks trivia` (wrap pinned to `reflow`; opt-in,
+not part of `--checks all`) and inside `assert_format_invariants`
+(`tests/format.rs`) for reflow-mode styles.
+
 The staged rollout, with per-stage gates, is in `TODO.md`.
 
 ## The Doc IR

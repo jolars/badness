@@ -43,7 +43,14 @@ pub(crate) enum Ir {
     Align(usize, Rc<Ir>),
     /// A break-decision boundary. The printer measures the flat rendering of
     /// `inner`; if it fits and contains no forced break, it prints flat,
-    /// otherwise broken. `expand` forces broken unconditionally.
+    /// otherwise broken. `expand` forces broken unconditionally. After
+    /// lowering, [`Ir::propagate_breaks`] saturates the flag: every non-hug
+    /// group whose inner contains a forced break is marked, making `expand`
+    /// the one representation of "forced open" the printer trusts. Hug groups
+    /// are never marked — their inner holds a forced break by construction
+    /// (the trailing block), and their break decision is the hug fit, not the
+    /// flag. `flat_width` deliberately ignores the flag: a group forced only
+    /// by a single-line comment still has a flat width.
     ///
     /// `hug` enables trailing-block hugging: the fit measurement stops
     /// *successfully* at the first forced line break (the opening of a trailing
@@ -453,6 +460,403 @@ impl Ir {
             | Ir::SoftLine
             | Ir::IfBreak { .. }
             | Ir::Nil => false,
+        }
+    }
+
+    /// Post-lowering prepass: saturate `Group::expand` so it becomes the single
+    /// representation of "this subtree is forced open" that the printer trusts.
+    /// Marks every non-hug group whose inner contains an unconditional forced
+    /// break, with the same semantics as [`Ir::contains_forced_break`] (an
+    /// `IfBreak` shields its branches; a conditional group's flat-most
+    /// candidate decides). Hug groups are never marked: their inner holds a
+    /// forced break by construction and their break decision is the hug fit.
+    /// Copy-on-write — unchanged subtrees are shared with `self`.
+    pub(crate) fn propagate_breaks(&self) -> Ir {
+        match saturate(self).1 {
+            Some(rewritten) => {
+                debug_assert!(
+                    saturate(&rewritten).1.is_none(),
+                    "propagate_breaks must reach a fixed point in one pass"
+                );
+                rewritten
+            }
+            None => self.clone(),
+        }
+    }
+}
+
+/// One bottom-up walk of [`Ir::propagate_breaks`]. Returns `(forced,
+/// rewritten)`: `forced` is [`Ir::contains_forced_break`] of the *saturated*
+/// node (computed on the way up, never by re-traversal, so the pass stays
+/// O(n)); `rewritten` is `None` when the subtree is unchanged, letting the
+/// caller share the existing `Rc`.
+fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
+    match ir {
+        Ir::HardLine | Ir::EmptyLine => (true, None),
+        Ir::Verbatim { force_break, .. } => (*force_break, None),
+        Ir::Text(_) | Ir::ColumnZero(_) | Ir::ZeroWidth(_) | Ir::Line | Ir::SoftLine | Ir::Nil => {
+            (false, None)
+        }
+        Ir::Concat(items) => {
+            let (forced, rewritten) = saturate_slice(items);
+            (forced.any, rewritten.map(Ir::Concat))
+        }
+        Ir::Fill(parts) => {
+            let (forced, rewritten) = saturate_slice(parts);
+            (forced.any, rewritten.map(Ir::Fill))
+        }
+        Ir::StickyFill(parts) => {
+            let (forced, rewritten) = saturate_slice(parts);
+            (forced.any, rewritten.map(Ir::StickyFill))
+        }
+        Ir::PreferredFill {
+            atoms,
+            preferred,
+            target,
+        } => {
+            let (forced, rewritten) = saturate_slice(atoms);
+            (
+                forced.any,
+                rewritten.map(|atoms| Ir::PreferredFill {
+                    atoms,
+                    preferred: preferred.clone(),
+                    target: *target,
+                }),
+            )
+        }
+        Ir::Indent(inner) => {
+            let (forced, rewritten) = saturate(inner);
+            (forced, rewritten.map(|ir| Ir::Indent(Rc::new(ir))))
+        }
+        Ir::Align(width, inner) => {
+            let (forced, rewritten) = saturate(inner);
+            (forced, rewritten.map(|ir| Ir::Align(*width, Rc::new(ir))))
+        }
+        Ir::MarginPrefix { prefix, inner } => {
+            let (forced, rewritten) = saturate(inner);
+            (
+                forced,
+                rewritten.map(|ir| Ir::MarginPrefix {
+                    prefix: prefix.clone(),
+                    inner: Rc::new(ir),
+                }),
+            )
+        }
+        // Both branches are saturated (groups inside them must be marked), but
+        // a conditional break never forces the parent.
+        Ir::IfBreak { flat, broken } => {
+            let (_, flat_rw) = saturate(flat);
+            let (_, broken_rw) = saturate(broken);
+            if flat_rw.is_none() && broken_rw.is_none() {
+                (false, None)
+            } else {
+                (
+                    false,
+                    Some(Ir::IfBreak {
+                        flat: flat_rw.map(Rc::new).unwrap_or_else(|| flat.clone()),
+                        broken: broken_rw.map(Rc::new).unwrap_or_else(|| broken.clone()),
+                    }),
+                )
+            }
+        }
+        Ir::Group {
+            inner,
+            expand,
+            hug,
+            hug_excuse_overflow,
+        } => {
+            let (inner_forced, rewritten) = saturate(inner);
+            let new_expand = if *hug {
+                *expand
+            } else {
+                *expand || inner_forced
+            };
+            let forced = *expand || inner_forced;
+            if rewritten.is_none() && new_expand == *expand {
+                (forced, None)
+            } else {
+                (
+                    forced,
+                    Some(Ir::Group {
+                        inner: rewritten.map(Rc::new).unwrap_or_else(|| inner.clone()),
+                        expand: new_expand,
+                        hug: *hug,
+                        hug_excuse_overflow: *hug_excuse_overflow,
+                    }),
+                )
+            }
+        }
+        // Every candidate is saturated (the printer may pick any), but only
+        // the flat-most candidate decides the parent's forcedness.
+        Ir::ConditionalGroup(cands) => {
+            let (forced, rewritten) = saturate_slice(cands);
+            (forced.first, rewritten.map(Ir::ConditionalGroup))
+        }
+        Ir::ConditionalGroupAllLines(cands) => {
+            let (forced, rewritten) = saturate_slice(cands);
+            (forced.first, rewritten.map(Ir::ConditionalGroupAllLines))
+        }
+    }
+}
+
+/// The forcedness of a saturated slice: `any` child forced (a concat/fill
+/// forces when any part does) and `first` child forced (a conditional group's
+/// flat-most candidate decides).
+struct SliceForced {
+    any: bool,
+    first: bool,
+}
+
+/// [`saturate`] over a slice; `rewritten` is built only when some child
+/// changed (unchanged children are cloned cheaply — composites hold `Rc`s).
+fn saturate_slice(items: &[Ir]) -> (SliceForced, Option<Rc<[Ir]>>) {
+    let mut forced = SliceForced {
+        any: false,
+        first: false,
+    };
+    let mut rewritten: Option<Vec<Ir>> = None;
+    for (i, item) in items.iter().enumerate() {
+        let (f, rw) = saturate(item);
+        forced.any |= f;
+        if i == 0 {
+            forced.first = f;
+        }
+        match rw {
+            Some(new) => {
+                rewritten
+                    .get_or_insert_with(|| items[..i].to_vec())
+                    .push(new);
+            }
+            None => {
+                if let Some(vec) = rewritten.as_mut() {
+                    vec.push(item.clone());
+                }
+            }
+        }
+    }
+    (forced, rewritten.map(Into::into))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The saturation invariant: after the pass, every non-hug group's
+    /// `expand` agrees with [`Ir::contains_forced_break`] of its inner, and no
+    /// hug group is marked — everywhere, including `IfBreak` branches and
+    /// every conditional-group candidate.
+    fn assert_saturated(ir: &Ir) {
+        if let Ir::Group {
+            inner, expand, hug, ..
+        } = ir
+        {
+            if *hug {
+                assert!(!expand, "hug group must never be marked: {ir:?}");
+            } else {
+                assert_eq!(
+                    *expand,
+                    inner.contains_forced_break(),
+                    "unsaturated group: {ir:?}"
+                );
+            }
+        }
+        match ir {
+            Ir::Concat(items)
+            | Ir::Fill(items)
+            | Ir::StickyFill(items)
+            | Ir::ConditionalGroup(items)
+            | Ir::ConditionalGroupAllLines(items) => items.iter().for_each(assert_saturated),
+            Ir::PreferredFill { atoms, .. } => atoms.iter().for_each(assert_saturated),
+            Ir::Indent(inner)
+            | Ir::Align(_, inner)
+            | Ir::Group { inner, .. }
+            | Ir::MarginPrefix { inner, .. } => assert_saturated(inner),
+            Ir::IfBreak { flat, broken } => {
+                assert_saturated(flat);
+                assert_saturated(broken);
+            }
+            Ir::Text(_)
+            | Ir::Verbatim { .. }
+            | Ir::ColumnZero(_)
+            | Ir::ZeroWidth(_)
+            | Ir::HardLine
+            | Ir::EmptyLine
+            | Ir::Line
+            | Ir::SoftLine
+            | Ir::Nil => {}
+        }
+    }
+
+    fn expand_of(ir: &Ir) -> bool {
+        match ir {
+            Ir::Group { expand, .. } => *expand,
+            other => panic!("expected a group, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn marks_a_group_containing_a_hard_line() {
+        let out = Ir::group(Ir::concat([Ir::text("{"), Ir::hard_line(), Ir::text("}")]))
+            .propagate_breaks();
+        assert!(expand_of(&out));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn marks_a_group_containing_a_single_line_comment() {
+        let out =
+            Ir::group(Ir::concat([Ir::text("a"), Ir::verbatim_forced("% c")])).propagate_breaks();
+        assert!(expand_of(&out));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn leaves_a_soft_group_unmarked_and_shares_the_subtree() {
+        let g = Ir::group(Ir::concat([Ir::text("a"), Ir::Line, Ir::text("b")]));
+        let out = g.propagate_breaks();
+        assert!(!expand_of(&out));
+        let (Ir::Group { inner: before, .. }, Ir::Group { inner: after, .. }) = (&g, &out) else {
+            unreachable!()
+        };
+        assert!(
+            Rc::ptr_eq(before, after),
+            "unchanged subtree must be shared, not rebuilt"
+        );
+    }
+
+    #[test]
+    fn marks_nested_groups_at_every_level() {
+        let out = Ir::group(Ir::concat([Ir::text("head"), Ir::group(Ir::hard_line())]))
+            .propagate_breaks();
+        assert!(expand_of(&out));
+        let Ir::Group { inner, .. } = &out else {
+            unreachable!()
+        };
+        let Ir::Concat(items) = inner.as_ref() else {
+            unreachable!()
+        };
+        assert!(expand_of(&items[1]));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn if_break_shields_the_parent_but_not_groups_inside() {
+        // A hard break in the broken branch never forces the parent…
+        let out = Ir::group(Ir::if_break(Ir::text("a"), Ir::hard_line())).propagate_breaks();
+        assert!(!expand_of(&out));
+        assert_saturated(&out);
+        // …but a group *inside* a branch is still saturated.
+        let out =
+            Ir::group(Ir::if_break(Ir::text("a"), Ir::group(Ir::hard_line()))).propagate_breaks();
+        assert!(!expand_of(&out));
+        let Ir::Group { inner, .. } = &out else {
+            unreachable!()
+        };
+        let Ir::IfBreak { broken, .. } = inner.as_ref() else {
+            unreachable!()
+        };
+        assert!(expand_of(broken));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn conditional_group_forces_by_its_flat_most_candidate_only() {
+        // Soft first candidate: the enclosing group stays soft even though the
+        // second candidate carries a hard break…
+        let out = Ir::group(Ir::conditional_group([
+            Ir::text("flat"),
+            Ir::concat([Ir::text("{"), Ir::hard_line(), Ir::text("}")]),
+        ]))
+        .propagate_breaks();
+        assert!(!expand_of(&out));
+        assert_saturated(&out);
+        // …but a group inside a non-first candidate is still marked.
+        let out = Ir::group(Ir::conditional_group([
+            Ir::text("flat"),
+            Ir::group(Ir::hard_line()),
+        ]))
+        .propagate_breaks();
+        assert!(!expand_of(&out));
+        let Ir::Group { inner, .. } = &out else {
+            unreachable!()
+        };
+        let Ir::ConditionalGroup(cands) = inner.as_ref() else {
+            unreachable!()
+        };
+        assert!(expand_of(&cands[1]));
+        assert_saturated(&out);
+        // A forced first candidate forces the enclosing group.
+        let out = Ir::group(Ir::conditional_group([
+            Ir::concat([Ir::text("{"), Ir::hard_line(), Ir::text("}")]),
+            Ir::text("never"),
+        ]))
+        .propagate_breaks();
+        assert!(expand_of(&out));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn hug_groups_are_never_marked_but_their_contents_are() {
+        let out = Ir::group_hug(Ir::concat([
+            Ir::text("head"),
+            Ir::Line,
+            Ir::group(Ir::concat([Ir::text("{"), Ir::hard_line(), Ir::text("}")])),
+        ]))
+        .propagate_breaks();
+        assert!(!expand_of(&out));
+        let Ir::Group { inner, hug, .. } = &out else {
+            unreachable!()
+        };
+        assert!(hug);
+        let Ir::Concat(items) = inner.as_ref() else {
+            unreachable!()
+        };
+        assert!(expand_of(&items[2]));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn a_marked_group_forces_its_ancestors() {
+        // The forced bit computed on the way up matches the query: an outer
+        // group is marked because its inner *group* is, not by re-finding the
+        // hard line.
+        let out = Ir::group(Ir::group(Ir::group(Ir::hard_line()))).propagate_breaks();
+        assert!(expand_of(&out));
+        assert_saturated(&out);
+    }
+
+    #[test]
+    fn the_pass_is_idempotent() {
+        let ir = Ir::group(Ir::concat([
+            Ir::text("head"),
+            Ir::group_hug(Ir::concat([Ir::text("x"), Ir::group(Ir::hard_line())])),
+            Ir::if_break(Ir::text("a"), Ir::group(Ir::empty_line())),
+            Ir::conditional_group([Ir::text("flat"), Ir::group(Ir::hard_line())]),
+        ]));
+        let once = ir.propagate_breaks();
+        let twice = once.propagate_breaks();
+        assert_eq!(format!("{once:?}"), format!("{twice:?}"));
+        assert_saturated(&once);
+    }
+
+    #[test]
+    fn saturation_holds_over_a_zoo_of_shapes() {
+        let zoo = [
+            Ir::fill([Ir::text("a"), Ir::group(Ir::hard_line()), Ir::text("b")]),
+            Ir::StickyFill(vec![Ir::group(Ir::verbatim_forced("% c")), Ir::Line].into()),
+            Ir::preferred_fill(
+                [Ir::text("w"), Ir::group(Ir::empty_line())],
+                vec![false],
+                72,
+            ),
+            Ir::indent(Ir::align(4, Ir::group(Ir::hard_line()))),
+            Ir::margin_prefix("% ", Ir::group(Ir::hard_line())),
+            Ir::group(Ir::verbatim("a\nb")),
+            Ir::group(Ir::concat([Ir::zero_width("% t"), Ir::column_zero("%<a>")])),
+            Ir::conditional_group_all_lines([Ir::group(Ir::hard_line()), Ir::text("b")]),
+        ];
+        for ir in zoo {
+            assert_saturated(&ir.propagate_breaks());
         }
     }
 }

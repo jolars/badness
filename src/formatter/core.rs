@@ -350,7 +350,11 @@ fn format_root(
         profile,
         range,
     };
-    let ir = lower_node(root, cx);
+    // Saturate `Group::expand` at the lowering->printer seam: after this, the
+    // flag is the single representation of "forced open" the printer trusts.
+    // The lowering-time `contains_forced_break` queries above run on pre-pass
+    // sub-IR and keep their recursive traversal.
+    let ir = lower_node(root, cx).propagate_breaks();
     Printer::new(ctx.style()).print(&ir)
 }
 

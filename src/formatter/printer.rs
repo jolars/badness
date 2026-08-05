@@ -733,12 +733,12 @@ impl Printer {
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
                 Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
-                Ir::Group { inner, expand, .. } => {
-                    if *expand {
-                        return None;
-                    }
-                    stack.push(inner);
-                }
+                // Deliberately ignores `expand`: a group forced open only by a
+                // single-line comment still has a flat width (the comment
+                // shares the line, forcing a break only *after*), and
+                // `propagate_breaks` marks such groups. A genuinely
+                // unflattenable group surfaces its `HardLine` by recursion.
+                Ir::Group { inner, .. } => stack.push(inner),
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     if let Some(first) = cands.first() {
                         stack.push(first);
@@ -910,8 +910,14 @@ impl Printer {
                     remaining -= 1;
                 }
                 Ir::IfBreak { flat, .. } => stack.push(flat),
+                // Under a hug measurement the *content* decides, never the
+                // flag: `propagate_breaks` marks any group carrying a hard
+                // break, and the hug must stop *successfully* at a nested
+                // block's first forced line break (the `HardLine` arm above)
+                // while a comment in the prefix fails it (the `Verbatim` arm)
+                // — the flag alone cannot distinguish the two.
                 Ir::Group { inner, expand, .. } => {
-                    if *expand {
+                    if *expand && !hug {
                         return false;
                     }
                     stack.push(inner);

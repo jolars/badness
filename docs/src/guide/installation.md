@@ -7,6 +7,7 @@ Badness is distributed as a single binary, `badness`. The current version is
 - **Homebrew**: `brew install jolars/tap/badness`
 - **npm**: `npm install -g badness` (bundles a prebuilt binary)
 - **PyPI**: `uv tool install badness`/`pipx install badness`
+- **AUR** (Arch Linux): `yay -S badness-bin` (prebuilt binary)
 - **Prebuilt binaries**: from the [releases
   page](https://github.com/jolars/badness/releases)
 - **VS Code/Open VSX**: the

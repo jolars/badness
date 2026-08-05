@@ -1,0 +1,28 @@
+# Maintainer: Johan Larsson <johan@jolars.co>
+pkgname=badness-bin
+pkgver=0.13.0
+pkgrel=1
+pkgdesc="A language server, formatter, and linter for LaTeX"
+arch=('x86_64' 'aarch64')
+url="https://github.com/jolars/badness"
+license=('MIT')
+depends=('gcc-libs')
+provides=('badness')
+conflicts=('badness')
+options=(!strip)
+source_x86_64=("badness-$pkgver-x86_64-unknown-linux-gnu.tar.gz::$url/releases/download/v$pkgver/badness-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("badness-$pkgver-aarch64-unknown-linux-gnu.tar.gz::$url/releases/download/v$pkgver/badness-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('5a9e9bfbcb11c535863350994f15a26cf8c7f3eb29681ceda65b88a2cee38b95')
+sha256sums_aarch64=('b2026fffeb84437640fb44dc8dae3f721094a64f26cac681ecd543dcbbf9b924')
+
+package() {
+    install -Dm755 badness "$pkgdir/usr/bin/badness"
+
+    install -Dm644 man/*.1 -t "$pkgdir/usr/share/man/man1/"
+
+    install -Dm644 completions/badness.bash "$pkgdir/usr/share/bash-completion/completions/badness"
+    install -Dm644 completions/badness.fish "$pkgdir/usr/share/fish/vendor_completions.d/badness.fish"
+    install -Dm644 completions/_badness "$pkgdir/usr/share/zsh/site-functions/_badness"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

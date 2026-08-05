@@ -79,6 +79,11 @@ tasks:
     cmds:
       - python3 scripts/gen_package_names.py --write
 
+  aur:push:
+    desc: "Manually publish badness-bin to the AUR (CI fallback; args: [version] [pkgrel])"
+    cmds:
+      - ./scripts/aur_push.sh {{.CLI_ARGS}}
+
   check:
     desc: Everything CI runs
     deps: [fmt-check, lint, test]

@@ -1,0 +1,70 @@
+name: Publish AUR Package
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.13.0)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.13.0)"
+        required: true
+        type: string
+      pkgrel:
+        description: "pkgrel (bump when re-releasing the same version)"
+        required: false
+        default: "1"
+        type: string
+
+jobs:
+  publish-aur:
+    name: Publish badness-bin to AUR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Update PKGBUILD
+        run: |
+          set -euo pipefail
+
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#v}"
+          PKGREL="${{ inputs.pkgrel || '1' }}"
+
+          # Download the release tarballs and compute checksums directly, so a
+          # missing or corrupt asset fails here rather than on users' machines.
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            curl -fsSL -o "badness-$target.tar.gz" \
+              "https://github.com/jolars/badness/releases/download/$TAG/badness-$target.tar.gz"
+          done
+
+          SHA_X64=$(sha256sum badness-x86_64-unknown-linux-gnu.tar.gz | awk '{print $1}')
+          SHA_ARM64=$(sha256sum badness-aarch64-unknown-linux-gnu.tar.gz | awk '{print $1}')
+
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=$VERSION/" \
+            -e "s/^pkgrel=.*/pkgrel=$PKGREL/" \
+            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$SHA_X64')/" \
+            -e "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$SHA_ARM64')/" \
+            packaging/aur/PKGBUILD
+
+          echo "pkgver=$VERSION pkgrel=$PKGREL"
+          echo "sha256 x86_64:  $SHA_X64"
+          echo "sha256 aarch64: $SHA_ARM64"
+
+      # Test-builds the package in an Arch container, generates .SRCINFO, and
+      # pushes to ssh://aur@aur.archlinux.org/badness-bin.git. The first push
+      # claims the package name.
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        with:
+          pkgname: badness-bin
+          pkgbuild: packaging/aur/PKGBUILD
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_username: jolars
+          commit_email: johan@jolars.co
+          commit_message: "Update to ${{ inputs.tag }}"
+          test: true

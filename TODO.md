@@ -59,12 +59,31 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     package code — the S2–S4 target set — plus `latexrelease.sty` (#97
     residue). The width sweep also surfaced ~20 width-dependent idempotency
     files beyond the width-80 baseline (`SWEEP.md`).
-  - [ ] **S1 — one representation of "forced".** A `propagate_breaks` prepass
+  - [x] **S1 — one representation of "forced".** A `propagate_breaks` prepass
     marking every group containing a hard break as `expand`, replacing the three
     current representations (`Ir::Group{expand}`, `contains_forced_break`
     recomputed per decision site, `lower_expl_group`'s hand-rolled branch).
     Behaviour-neutral. Makes the landed `group_expanded` fix fall out
     automatically rather than being a special case.
+
+    *Landed.* `Ir::propagate_breaks` — one bottom-up copy-on-write walk at the
+    lowering->printer seam — saturates every non-hug group's `expand` from its
+    content with `contains_forced_break` semantics (an `IfBreak` shields its
+    branches, a conditional group's flat-most candidate decides).
+    `lower_expl_group`'s forced form now differs from the soft form only in its
+    in-shape `HardLine` boundary, and `Ir::group_expanded` is deleted — the #97
+    mode pin falls out of the prepass. Hug groups are never marked (their inner
+    is forced by construction), and two measurements stop trusting the flag:
+    `flat_width` recurses (a comment-only-forced group still has a flat width)
+    and the hug-mode `fits` lets content decide. The latter is S1's one
+    deliberate, narrow flip — post-pass the flag cannot distinguish an
+    explicitly forced block from a soft group carrying hard breaks — so an
+    interior-comment-forced or sibling-coupled block detonating in a head-hug
+    prefix now hugs K&R-style (`\global\setbox9 \vtop{%`) instead of splitting
+    the head onto its own line. Gate: `--checks all` and `--checks trivia`
+    failing-file sets unchanged on all three corpora; a full byte-diff sweep
+    against the pre-S1 binary differs on 12 of 1068 files, all this hug family
+    (`xpackages` `.dtx`, `latex-lab-amsmath.dtx`, `latex-lab-firstaid.dtx`).
   - [ ] **S2 — `Mode::Flat` becomes an honest contract.** Define it as "the whole
     subtree, laid out flat, is verified to fit". Then fix the two producers that
     claim it without checking — `pick_candidate` selects on *first-line* fit

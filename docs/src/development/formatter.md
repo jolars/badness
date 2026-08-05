@@ -153,7 +153,10 @@ plus `Ir::Fill` (per-gap greedy break decisions) and `Ir::PreferredFill`
 (source-break-aware global minimum-cost decisions) for paragraph reflow. The
 enum also carries `Align`, `IfBreak`, `ConditionalGroup` (`AllLines`),
 `Verbatim`, `ColumnZero`, `MarginPrefix`, and `Nil`—see `ir.rs` for the
-authoritative list.
+authoritative list. Between lowering and printing, `Ir::propagate_breaks`
+saturates every non-hug `Group`'s `expand` flag from its content, making the
+flag the single representation of "forced open" (see *One representation of
+"forced"* under the expl3 layout section).
 
 ### A group's fit measures the rest of the line in the mode it will print in
 
@@ -517,23 +520,45 @@ lowering)—every brace sibling is forced to the broken (Allman) form via
 content; a sibling that would break solely from **width** does not couple (width
 is a printer decision, invisible at build time).
 
-**A forced block is an expanded group, not a bare concat.** The broken (Allman)
-form `lower_expl_group` builds for a group forced open by a comment, docstrip
-guard, or `.dtx` margin is wrapped in `Ir::group_expanded`. The wrapper carries
-no width decision—`expand` means "broken", and both `Ir::contains_forced_break`
-and the flat-width measurements answer exactly as they did for the
-`HardLine`-bearing concat—but it does pin the **mode** its body is laid out in.
-A bare concat inherits whatever mode the caller was dispatched in, and
-inheriting `Flat` is the bug: `printer::step_fill` in flat mode lays *every* gap
-flat without measuring, while the groups hanging off those gaps still decide
-their own break (an `Ir::Group` re-decides regardless of the mode it is
-dispatched in). The result is the K&R hybrid `\int_set:Nn \l_…_int {` with the
-body wrapped below—which is not a fixed point, since those wrapped lines
-re-parse as separate statements, so the body acquires a forced break and the
-next pass lays the same group out Allman (smoke-test issue \#97, latex3's
-`l3trial/l3auxdata/l3auxdata.dtx`). Fixture `expl_forced_block_body_mode`; its
-leading `%` comment is load-bearing, being what forces the enclosing blocks open
-and hands the inner body a flat mode.
+**One representation of "forced": `propagate_breaks` saturates `expand` (S1).**
+After lowering, a single bottom-up prepass (`Ir::propagate_breaks`, run at the
+lowering→printer seam in `format_root`) marks every non-hug `Ir::Group` whose
+inner contains an unconditional forced break as `expand`, with
+`Ir::contains_forced_break`'s exact semantics: an `IfBreak` shields its
+branches, a conditional group's flat-most candidate decides, and every
+candidate and branch is still saturated inside. The flag is thereafter the one
+representation of "forced open" the printer trusts; `contains_forced_break`
+survives as the *query* the lowering asks about pre-pass sub-IR (block-amid-
+prose, the hang paths, grid cells, flat-collapse).
+
+The mode pin that issue \#97 needed now falls out instead of being a hand-made
+special case. A group's body laid out as a bare concat inherits whatever mode
+the caller was dispatched in, and inheriting `Flat` was the bug:
+`printer::step_fill` in flat mode lays *every* gap flat without measuring,
+while the groups hanging off those gaps still decide their own break—the K&R
+hybrid `\int_set:Nn \l_…_int {` with the body wrapped below, not a fixed point
+since the wrapped lines re-parse as separate statements and the next pass lays
+the same group out Allman (latex3's `l3trial/l3auxdata/l3auxdata.dtx`).
+`lower_expl_group`'s forced (Allman) form now differs from the soft form only
+in its boundary separator—a `HardLine` instead of `Line`/`SoftLine`—and those
+in-shape hard lines are what the prepass reads to mark the group, which is what
+pins the body's mode to `Break`. Fixture `expl_forced_block_body_mode` still
+pins the layout; its leading `%` comment is load-bearing, being what forces the
+enclosing blocks open.
+
+Two carve-outs keep the flag honest. Hug groups are never marked: their inner
+holds a forced break *by construction* (the trailing block), and their break
+decision is the hug fit, not the flag. And two measurements deliberately ignore
+`expand`: `flat_width` recurses instead (a group forced open only by a
+single-line comment still has a flat width—the comment shares the line,
+forcing a break only after), and `fits` under a **hug** measurement lets the
+content decide, since a nested block's first hard break must stop the
+measurement *successfully* while a prefix comment must fail it—a distinction
+the flag cannot carry. That last point is S1's one deliberate, narrow layout
+change: an interior-comment-forced or sibling-coupled block detonating in a
+head-hug prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the
+head onto its own line, which is the head-hug rule's documented semantics
+(corpus sweep: 12 files, all this family, gate sets unchanged).
 
 ### Trailing hang groups (K&R↔Allman idempotence)
 

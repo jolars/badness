@@ -196,15 +196,6 @@ impl Ir {
         }
     }
 
-    pub(crate) fn group_expanded(inner: Ir) -> Ir {
-        Ir::Group {
-            inner: Rc::new(inner),
-            expand: true,
-            hug: false,
-            hug_excuse_overflow: false,
-        }
-    }
-
     /// A group that hugs a trailing block: the printer keeps it flat as long as
     /// the prefix up to the block's opening brace fits, then lets the block
     /// break onto its own lines. See [`Ir::Group`]'s `hug` field.

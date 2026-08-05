@@ -662,6 +662,17 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // The leading `%` comment is load-bearing — it is what forces the enclosing
     // blocks open and hands the inner body a flat mode; without it the shape is
     // already stable.
+    //
+    // NOT ENDORSED: the expected output splits `\int_set:Nn` / `\l_@@_groups_int`
+    // onto two lines even though they join at 36 columns, and the *input* already
+    // has them joined — the formatter degrades this shape. That is the separate
+    // head/definiendum wart filed in TODO.md (the statement fill measures the
+    // `\l_@@_groups_int {body}` atom flat at ~88 cols and breaks at the gap, though
+    // the atom will hang its body and needs only its 16-col name on the line). This
+    // fixture pins *stability*, not beauty: before the mode fix the head stayed
+    // joined only because a flat-dispatched fill skips measurement entirely, and
+    // the block hybridized anyway. Do not "fix" the formatter toward this output,
+    // and expect these two lines to rejoin once the rest-aware measurement lands.
     ("expl_forced_block_body_mode", "sty"),
 ];
 

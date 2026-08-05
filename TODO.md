@@ -149,6 +149,25 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   prettiest. Surfaced by the #94 fixture (`expl_trailing_empty_branch`, whose
   single-statement body is kept precisely because this split is what makes the
   block's break soft-then-hard across passes).
+
+  **Now fixture-visible, and more prominent since the `group_expanded` fix.**
+  `expl_forced_block_body_mode` splits `\int_set:Nn` / `\l_@@_groups_int` although
+  they join at 36 columns and the *input* already has them joined — so on this
+  shape the formatter degrades its input. That fixture is the reproducer; its
+  registry comment in `tests/format.rs` marks the split NOT ENDORSED. Before the
+  mode fix the head stayed joined only by accident (a flat-dispatched fill skips
+  per-atom measurement entirely) while the block hybridized anyway, so the fix
+  traded pretty-but-unstable for stable-but-ugly. The right trade, but it makes
+  this entry the most visible remaining formatter wart.
+
+  **Sequence after S2/S3** of the trivia-invariant-layout entry above, not before.
+  The fix needs the fill to measure an atom by *where its first line would end*,
+  which depends on a decision the atom has not made yet (whether its own inner
+  hang breaks). `Ir::group_hug` does exactly this for a *forced* block by stopping
+  the measurement successfully at the first hard break; a soft-hanging block has no
+  hard break to stop at, so it needs a speculative sub-layout — and a speculative
+  answer is only safe once the mode contract guarantees it cannot disagree with
+  what the printer actually does.
 - [x] **Hanging brace argument flips K&R <-> Allman on wrap (idempotency;
   smoke-test issue #96 residue).** In an expl3 statement a command whose greedily
   absorbed `{body}` holds a long *single-source-line* body rendered K&R on pass 1

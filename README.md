@@ -38,6 +38,7 @@ Badness is available from several sources:
 - **Homebrew**: `brew install jolars/tap/badness`
 - **npm**: `npm install -g badness` (bundles a prebuilt binary)
 - **PyPI**: `uv tool install badness`/`pipx install badness`
+- **Aqua**: `aqua install jolars/badness`
 - **Prebuilt binaries**: from the [releases
   page](https://github.com/jolars/badness/releases)
 - **VS Code/Open VSX**: the [**Badness**

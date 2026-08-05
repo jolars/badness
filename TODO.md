@@ -121,7 +121,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `SWEEP.md` refreshed (five width-dependent files fully converged; one
     shared `\str_if_eq:` fragment now flips at width 60 via the known
     `SplitAtNewlines` Tier-2 family, S4's target).
-  - [ ] **S3 — collapse the fit predicates.** With mode propagated, a group inside
+  - [x] **S3 — collapse the fit predicates.** With mode propagated, a group inside
     a flat parent is never *asked* whether it fits, so the rest-awareness
     disagreement dissolves rather than needing a patch (S2 already resolved
     the `latexrelease.sty` entry below this way). Delete what is now dead of
@@ -129,6 +129,22 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     and make the survivors share one traversal so they cannot drift again — the
     `rest_fits` drift (a later `Group` measured in its real mode, a later
     `ConditionalGroup` measured flat-most) was exactly that failure.
+
+    *Landed, behaviour-neutral.* Two shared walkers replace the five bodies:
+    `flat_end` with a `FlatMeasure` policy (`Footprint`/`Fits`/`HugPrefix`)
+    is the one flat simulation behind `flat_width`, the hug fit, and
+    `group_fits`'s flat phase; `line_fits` with a `CommentFit` policy
+    (`Fails`/`SharesLine`, the one deliberate context difference) is the one
+    first-emitted-newline measurement behind `first_line_fits` and
+    `rest_fits`, which shrink to seeds. `fits` and `atom_is_unfittable` are
+    deleted; `all_lines_fit` and `print_flat` share the `wide()` probe. The
+    `rest_fits` drift is gone by construction: a later conditional group is
+    picked via `pick_candidate` (was flat-most), a later hug group measured
+    with its hug flags (was plain), a later `Break`-mode preferred fill by
+    its first atom (was whole-flat). Gate: all six failing-file sets
+    byte-identical to `tests/gate_baselines`, and full byte-diff sweeps at
+    widths 60/80/120 differ on 0 of 1069 files — S2 had already removed
+    every reachable disagreement, so no baselines were re-recorded.
   - [ ] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Derive
     `ArgSpec` arity in the semantic layer from the expl3 argspec suffix — the
     single-argument letters (`N n c V v o x e f T F`) are a bounded, purely

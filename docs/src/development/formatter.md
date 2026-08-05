@@ -182,9 +182,9 @@ Two calibrated exceptions keep the contract honest at its edges:
   subtree carrying a hard break was never a flat claim (its `HardLine`s fire
   in either mode), and pinning its `Line`s flat would glue content onto a
   forced-open line. This requires the `propagate_breaks`-saturated tree.
-- A **trailing-block hug** claims only `Mode::FlatPrefix`: its `fits` stops
-  *successfully* at the block's first forced break, so only the prefix was
-  verified. Trivia-level layout (`Line`, `SoftLine`, `IfBreak`, fill gaps)
+- A **trailing-block hug** claims only `Mode::FlatPrefix`: its prefix
+  measurement (`FlatMeasure::HugPrefix`) stops *successfully* at the block's
+  first forced break, so only the prefix was verified. Trivia-level layout (`Line`, `SoftLine`, `IfBreak`, fill gaps)
   renders flat exactly as under `Flat`—that keeps the head glued—but a group
   may sit *past* the break the measurement stopped at, so groups under
   `FlatPrefix` re-decide (`\@@_if_key_value:VTF {T}{F}`: the hug verified up
@@ -229,6 +229,43 @@ rest of the line too. Without it the atom's folded hang break is never taken:
 the atom alone fits, goes `Flat`, and the glued tail overflows a line the
 measurement never saw (`\prop_get:cnN {…}{…}\l__tag_get_parent_tmpc_tl`,
 which wants the l3 continuation hang).
+
+### The fit predicates share two traversals (S3)
+
+Every fit decision is served by exactly two measurement walkers in
+`printer.rs`, each carrying a small explicit policy—the S3 consolidation of
+what had grown into five overlapping predicates (`flat_width`, `fits`,
+`group_fits`, `rest_fits`, `first_line_fits`) whose hand-copied traversals
+had drifted apart:
+
+- **`flat_end`** simulates a subtree laid out flat and returns the column it
+  ends at (or `None`: the measurement failed). Its `FlatMeasure` policy names
+  the three deliberate readings. `Footprint` is the unbounded flat width
+  behind `flat_width` (a single-line comment counts—it shares the line,
+  forcing a break only after—and `expand` is ignored); `Fits` asks whether
+  the subtree lies fully flat within the width (any forced break or `expand`
+  group fails; the non-hug `Group` decision and `group_fits`'s flat phase);
+  `HugPrefix` is the trailing-block hug's claim (a forced line break stops
+  the measurement *successfully*, a comment still fails it, and
+  `excuse_overflow` excuses an atom no break could rescue).
+- **`line_fits`** walks a pending work list mode-aware up to the first
+  newline that would actually be emitted. `first_line_fits` (the
+  `ConditionalGroup` picker's probe) and `rest_fits` (the queued-commands
+  adapter behind `group_fits` and `step_fill`'s last-atom check) are thin
+  seeds over it. Its one policy knob, `CommentFit`, records the one
+  deliberate difference between those contexts: a candidate carrying a
+  standalone comment can never render flat (`Fails`), while a comment in the
+  rest of an already-committed line is there either way and counts its width
+  (`SharesLine`).
+
+Sharing the traversal dissolved the drift the copies had accumulated: a
+later group in the rest is now decided with its own hug flags, a later
+conditional group through `pick_candidate` rather than assumed flat-most,
+and a `Break`-mode preferred fill by its first atom rather than measured
+whole-flat—the arms `first_line_fits` always had. All of it measured
+behaviour-neutral on the gate corpora (byte-identical sweeps at widths
+60/80/120), because mode propagation (S2) had already removed every reachable
+disagreement: a group inside a flat parent is never *asked* whether it fits.
 
 ## Paragraph line breaks
 
@@ -556,8 +593,9 @@ instead—the same `atom` emptiness discriminates space from glue.
 is a head atom—e.g. the `N`-argument
 `\__kernel_dependency_version_check:nn{T}{F}` of `\cs_if_exist:NTF`) that
 follows a head on the current line, space-separated, is kept on that line by an
-`Ir::group_hug` wrapping `[head, sep, block]`. The hug is rest-aware (`fits`
-stops *successfully* at the block's first forced break), so it measures only the
+`Ir::group_hug` wrapping `[head, sep, block]`. The hug is rest-aware (its
+`FlatMeasure::HugPrefix` measurement stops *successfully* at the block's
+first forced break), so it measures only the
 prefix `head␣<block-first-line>`, never the block body—the issue-#71-safe
 measurement, deliberately not the `step_fill` local `flat_width` cascade that
 would split a short head off a detonating trailing block. Because only the
@@ -605,12 +643,13 @@ enclosing blocks open.
 Two carve-outs keep the flag honest. Hug groups are never marked: their inner
 holds a forced break *by construction* (the trailing block), and their break
 decision is the hug fit, not the flag. And two measurements deliberately ignore
-`expand`: `flat_width` recurses instead (a group forced open only by a
-single-line comment still has a flat width—the comment shares the line,
-forcing a break only after), and `fits` under a **hug** measurement lets the
-content decide, since a nested block's first hard break must stop the
-measurement *successfully* while a prefix comment must fail it—a distinction
-the flag cannot carry. That last point is S1's one deliberate, narrow layout
+`expand` (both now explicit `FlatMeasure` policies): the flat *footprint*
+(`Footprint`, behind `flat_width`) recurses instead (a group forced open only
+by a single-line comment still has a flat width—the comment shares the line,
+forcing a break only after), and the hug-prefix measurement (`HugPrefix`)
+lets the content decide, since a nested block's first hard break must stop
+the measurement *successfully* while a prefix comment must fail it—a
+distinction the flag cannot carry. That last point is S1's one deliberate, narrow layout
 change: an interior-comment-forced or sibling-coupled block detonating in a
 head-hug prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the
 head onto its own line, which is the head-hug rule's documented semantics

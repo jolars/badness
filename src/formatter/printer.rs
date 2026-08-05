@@ -47,8 +47,8 @@ impl LayoutCost {
 /// for themselves.
 ///
 /// `FlatPrefix` is the weaker claim a trailing-block hug can honestly make:
-/// its `fits` stops *successfully* at the first forced break, so only the
-/// prefix up to there was verified. Trivia-level layout (`Line`, `SoftLine`,
+/// its measurement ([`FlatMeasure::HugPrefix`]) stops *successfully* at the
+/// first forced break, so only the prefix up to there was verified. Trivia-level layout (`Line`, `SoftLine`,
 /// `IfBreak`, fill gaps) renders flat exactly as under `Flat` — that keeps the
 /// hug's head glued — but a `Group` or conditional group may sit *past* the
 /// break the measurement stopped at, so it re-decides for itself instead of
@@ -63,6 +63,55 @@ enum Mode {
     Flat,
     FlatPrefix,
     Break,
+}
+
+/// Policy for the shared flat-measurement traversal ([`Printer::flat_end`]):
+/// one walker, three deliberate readings of the same subtree, kept as explicit
+/// variants so the differences stay visible parameters instead of divergent
+/// copies that can drift apart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlatMeasure {
+    /// The flat-rendered *footprint*, unbounded by the line width. A
+    /// single-line forced-break `Verbatim` (a comment) counts its width — it
+    /// shares the line, forcing a break only *after* — as does a group forced
+    /// open only by one (`expand` is ignored; a genuinely unflattenable group
+    /// surfaces its `HardLine` by recursion). Behind [`Printer::flat_width`],
+    /// the fill layout's pair-fit width.
+    Footprint,
+    /// Can the subtree lie *fully flat* within the line width from the start
+    /// column: any forced break (a comment included) fails, an `expand` group
+    /// fails, and the measurement fails as soon as the width is exceeded. The
+    /// non-hug `Group` decision.
+    Fits,
+    /// The trailing-block hug's prefix claim: a forced line break
+    /// (`HardLine`/`EmptyLine`, or a *multi-line* `Verbatim`) stops the
+    /// measurement *successfully* — only the prefix up to the block's opening
+    /// needs to fit — while a single-line comment still fails, and content
+    /// decides instead of the `expand` flag. With `excuse_overflow`, an atom
+    /// that can never fit on any line (`width >= line_width`) is excused
+    /// rather than failed (see `hug_excuse_overflow` on [`Ir::Group`]).
+    HugPrefix { excuse_overflow: bool },
+}
+
+/// Outcome of accounting one unbreakable atom in [`Printer::flat_end`].
+enum AtomStep {
+    Counted,
+    Excused,
+    Overflow,
+}
+
+/// How the shared line measurement ([`Printer::line_fits`]) treats a
+/// single-line forced-break `Verbatim` (a standalone comment) — the one
+/// deliberate policy difference between its two contexts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommentFit {
+    /// A candidate carrying a comment can never render flat: fail, so the
+    /// candidate picker falls through to a more broken layout.
+    Fails,
+    /// The rest of an already-committed line: the comment is there either
+    /// way, so its width counts and the line simply ends at the break the
+    /// comment forces after itself.
+    SharesLine,
 }
 
 /// A unit of pending work on the printer's layout stack. Most IR nodes are a
@@ -255,11 +304,18 @@ impl Printer {
     /// effectively infinite so a width-driven `Group`/`ConditionalGroup` inside a
     /// cell stays flat rather than breaking on the configured line width.
     pub(crate) fn print_flat(&self, ir: &Ir) -> String {
-        let flat = Printer {
+        self.wide().run_with_mode(ir, 0, 0, Mode::Flat)
+    }
+
+    /// A copy of this printer with an effectively infinite line width, so a
+    /// width-driven `Group`/`ConditionalGroup` never breaks and only structural
+    /// `HardLine`s split the output. The probe behind [`Self::print_flat`] and
+    /// [`Self::all_lines_fit`].
+    fn wide(&self) -> Printer {
+        Printer {
             line_width: usize::MAX / 2,
             indent_unit: self.indent_unit,
-        };
-        flat.run_with_mode(ir, 0, 0, Mode::Flat)
+        }
     }
 
     fn run(&self, ir: &Ir, base_indent: usize, init_col: usize) -> String {
@@ -471,7 +527,10 @@ impl Printer {
                         // the block's opening brace; what follows sits on the
                         // block's closing line, not this one — so the claim it
                         // makes is `FlatPrefix`, never full `Flat`.
-                        if self.fits(w.current_col(), inner, true, *hug_excuse_overflow) {
+                        let measure = FlatMeasure::HugPrefix {
+                            excuse_overflow: *hug_excuse_overflow,
+                        };
+                        if self.flat_end(w.current_col(), inner, measure).is_some() {
                             Mode::FlatPrefix
                         } else {
                             Mode::Break
@@ -767,54 +826,120 @@ impl Printer {
     /// a line with what precedes it — it only forces a break *after* — so it
     /// counts as its text width here. Used by the fill layout's pair-fit test.
     fn flat_width(&self, node: &Ir) -> Option<usize> {
-        let mut total = 0usize;
+        self.flat_end(0, node, FlatMeasure::Footprint)
+    }
+
+    /// The shared traversal behind every flat measurement: simulate `node`
+    /// laid out flat from `start_col` and return the column it ends at, or
+    /// `None` when the measurement fails under `measure`'s policy (a forced
+    /// break, an overflow, an `expand` group — see [`FlatMeasure`]). For a
+    /// [`FlatMeasure::HugPrefix`] stop and for an excused unfittable atom the
+    /// returned column is where the measurement stopped, not a full line end —
+    /// those callers only ask `is_some()`.
+    fn flat_end(&self, start_col: usize, node: &Ir, measure: FlatMeasure) -> Option<usize> {
+        let hug = matches!(measure, FlatMeasure::HugPrefix { .. });
+        let mut col = start_col;
         let mut stack: Vec<&Ir> = vec![node];
         while let Some(node) = stack.pop() {
             match node {
                 Ir::Nil | Ir::SoftLine | Ir::ZeroWidth(_) => {}
-                Ir::Text(s) | Ir::ColumnZero(s) => total += s.chars().count(),
-                Ir::Verbatim { text, .. } => {
+                Ir::Text(s) | Ir::ColumnZero(s) => {
+                    match self.flat_atom(&mut col, s.chars().count(), measure) {
+                        AtomStep::Counted => {}
+                        AtomStep::Excused => return Some(col),
+                        AtomStep::Overflow => return None,
+                    }
+                }
+                Ir::Verbatim { text, force_break } => {
+                    // A multi-line verbatim behaves like a `HardLine`: only a
+                    // hug survives it (the prefix up to its own first newline
+                    // is what needed to fit).
                     if text.contains('\n') {
+                        return hug.then_some(col);
+                    }
+                    // A standalone comment cannot lie flat (it forces a break
+                    // after itself), and a comment in a hug prefix forbids
+                    // the hug. Only the footprint counts it: the comment
+                    // shares the line, breaking only *after*.
+                    if *force_break && measure != FlatMeasure::Footprint {
                         return None;
                     }
-                    total += text.chars().count();
+                    match self.flat_atom(&mut col, text.chars().count(), measure) {
+                        AtomStep::Counted => {}
+                        AtomStep::Excused => return Some(col),
+                        AtomStep::Overflow => return None,
+                    }
                 }
-                Ir::HardLine | Ir::EmptyLine => return None,
-                Ir::Line => total += 1,
-                Ir::Concat(items) => stack.extend(items.iter()),
-                Ir::Fill(parts) | Ir::StickyFill(parts) => stack.extend(parts.iter()),
-                Ir::PreferredFill { atoms, .. } => {
-                    total = total.saturating_add(atoms.len().saturating_sub(1));
-                    stack.extend(atoms.iter());
+                Ir::HardLine | Ir::EmptyLine => return hug.then_some(col),
+                Ir::Line => {
+                    col = col.saturating_add(1);
+                    if measure != FlatMeasure::Footprint && col > self.line_width {
+                        return None;
+                    }
                 }
+                Ir::Concat(items) => stack.extend(items.iter().rev()),
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
                 Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
-                // Deliberately ignores `expand`: a group forced open only by a
-                // single-line comment still has a flat width (the comment
-                // shares the line, forcing a break only *after*), and
-                // `propagate_breaks` marks such groups. A genuinely
-                // unflattenable group surfaces its `HardLine` by recursion.
-                Ir::Group { inner, .. } => stack.push(inner),
+                // `Fits` trusts the saturated `expand` flag; `Footprint` and
+                // `HugPrefix` deliberately let the content decide instead. A
+                // group forced open only by a single-line comment still has a
+                // flat footprint (the comment shares the line, forcing a
+                // break only after), and a hug must stop *successfully* at a
+                // nested block's first hard break while a prefix comment
+                // fails it — distinctions the flag cannot carry.
+                Ir::Group { inner, expand, .. } => {
+                    if *expand && measure == FlatMeasure::Fits {
+                        return None;
+                    }
+                    stack.push(inner);
+                }
+                // Conservative: measure as the flat-most candidate, matching
+                // how the printer resolves a conditional group under a
+                // verified `Flat`.
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     if let Some(first) = cands.first() {
                         stack.push(first);
                     }
                 }
+                // A fill measured flat is its atoms separated by single-space
+                // `Line`s; push the parts and let the arms above account them.
+                Ir::Fill(parts) | Ir::StickyFill(parts) => stack.extend(parts.iter().rev()),
+                Ir::PreferredFill { atoms, .. } => {
+                    let gaps = atoms.len().saturating_sub(1);
+                    col = col.saturating_add(gaps);
+                    if measure != FlatMeasure::Footprint && col > self.line_width {
+                        return None;
+                    }
+                    stack.extend(atoms.iter().rev());
+                }
             }
         }
-        Some(total)
+        Some(col)
+    }
+
+    /// Account one unbreakable atom of `width` columns during [`Self::flat_end`].
+    fn flat_atom(&self, col: &mut usize, width: usize, measure: FlatMeasure) -> AtomStep {
+        *col = col.saturating_add(width);
+        match measure {
+            FlatMeasure::Footprint => AtomStep::Counted,
+            _ if *col <= self.line_width => AtomStep::Counted,
+            // The atom can never fit on any line, so breaking would not
+            // rescue it — the hug is excused and the measurement ends
+            // successfully. See `hug_excuse_overflow` on [`Ir::Group`].
+            FlatMeasure::HugPrefix {
+                excuse_overflow: true,
+            } if width >= self.line_width => AtomStep::Excused,
+            _ => AtomStep::Overflow,
+        }
     }
 
     /// Flat layout of an [`Ir::PreferredFill`] from `col`: its atoms joined by
     /// single spaces (`atoms.len() - 1` gaps). Returns the resulting column, or
-    /// `None` if it overflows the line width or an atom cannot be laid flat.
-    /// Centralizes the gap accounting so the flat-measuring fit-checkers
-    /// ([`Self::group_fits`], [`Self::rest_fits`], [`Self::first_line_fits`])
-    /// share one definition instead of re-deriving `atoms.len() - 1` each. Note
-    /// [`Self::fits`] keeps its own arm: it measures against `remaining` and
-    /// applies the unfittable-atom hug excuse, which this width-only helper
-    /// cannot express.
+    /// `None` if it overflows the line width or an atom cannot be laid flat
+    /// (each atom is measured as its [`Self::flat_width`] footprint). Used by
+    /// [`Self::line_fits`]'s flat-mode arm; [`Self::flat_end`] has its own
+    /// arm, which measures the atoms under its policy instead of the footprint.
     fn preferred_fill_flat_end(&self, col: usize, atoms: &[Ir]) -> Option<usize> {
         let mut end = col.saturating_add(atoms.len().saturating_sub(1));
         for atom in atoms {
@@ -881,11 +1006,9 @@ impl Printer {
     /// taken) rather than silently accepted as a hybrid where a nested brace group
     /// broke to keep each printed line short.
     fn all_lines_fit(&self, start_col: usize, indent: usize, node: &Ir) -> bool {
-        let flat = Printer {
-            line_width: usize::MAX / 2,
-            indent_unit: self.indent_unit,
-        };
-        let rendered = flat.run_with_mode(node, indent, start_col, Mode::Flat);
+        let rendered = self
+            .wide()
+            .run_with_mode(node, indent, start_col, Mode::Flat);
         let mut lines = rendered.split('\n');
         if let Some(first) = lines.next()
             && start_col + first.chars().count() > self.line_width
@@ -900,119 +1023,6 @@ impl Printer {
         true
     }
 
-    /// Simulate `node` flat, starting at column `start_col`. Returns false on the
-    /// first forced break or as soon as the running width exceeds the line.
-    ///
-    /// When `hug` is set, a forced line break (`HardLine`/`EmptyLine`) instead
-    /// stops the measurement *successfully*: only the prefix up to a trailing
-    /// block's opening brace needs to fit. A forced-break `Verbatim` (a comment)
-    /// still fails, so a comment in the prefix prevents hugging.
-    /// Whether an overflowing atom of width `w` should be *excused* during a
-    /// hug-prefix fit: it can never fit on any line (`w >= line_width`), so
-    /// breaking the argument list would not rescue it — only cost lines. Gated
-    /// on `excuse_overflow`, which the rule sets solely when every leading
-    /// argument is a bare atom (nothing breaking could rescue). See the
-    /// `hug_excuse_overflow` field on [`Ir::Group`].
-    fn atom_is_unfittable(&self, hug: bool, excuse_overflow: bool, w: usize) -> bool {
-        hug && excuse_overflow && w >= self.line_width
-    }
-
-    fn fits(&self, start_col: usize, node: &Ir, hug: bool, excuse_overflow: bool) -> bool {
-        let mut remaining = self.line_width.saturating_sub(start_col);
-        let mut stack: Vec<&Ir> = vec![node];
-        while let Some(node) = stack.pop() {
-            match node {
-                Ir::Nil | Ir::SoftLine | Ir::ZeroWidth(_) => {}
-                Ir::Text(s) | Ir::ColumnZero(s) => {
-                    let w = s.chars().count();
-                    if w > remaining {
-                        if self.atom_is_unfittable(hug, excuse_overflow, w) {
-                            return true;
-                        }
-                        return false;
-                    }
-                    remaining -= w;
-                }
-                Ir::HardLine | Ir::EmptyLine => return hug,
-                Ir::Verbatim { text, force_break } => {
-                    if *force_break {
-                        // A multi-line force-break verbatim (e.g. a brace-token
-                        // param default) carries its own embedded line breaks
-                        // and behaves like a HardLine for hugging: the prefix
-                        // up to its own first newline is what needs to fit.
-                        // A single-line force-break (a standalone comment) still
-                        // fails — a comment in the prefix forbids the hug.
-                        if hug && text.contains('\n') {
-                            return true;
-                        }
-                        return false;
-                    }
-                    let w = text.chars().count();
-                    if w > remaining {
-                        if self.atom_is_unfittable(hug, excuse_overflow, w) {
-                            return true;
-                        }
-                        return false;
-                    }
-                    remaining -= w;
-                }
-                Ir::Concat(items) => {
-                    for item in items.iter().rev() {
-                        stack.push(item);
-                    }
-                }
-                Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
-                Ir::MarginPrefix { inner, .. } => stack.push(inner),
-                Ir::Line => {
-                    if remaining == 0 {
-                        return false;
-                    }
-                    remaining -= 1;
-                }
-                Ir::IfBreak { flat, .. } => stack.push(flat),
-                // Under a hug measurement the *content* decides, never the
-                // flag: `propagate_breaks` marks any group carrying a hard
-                // break, and the hug must stop *successfully* at a nested
-                // block's first forced line break (the `HardLine` arm above)
-                // while a comment in the prefix fails it (the `Verbatim` arm)
-                // — the flag alone cannot distinguish the two.
-                Ir::Group { inner, expand, .. } => {
-                    if *expand && !hug {
-                        return false;
-                    }
-                    stack.push(inner);
-                }
-                // Conservative: measure as the flat-most candidate. A nested
-                // conditional group inside a flat measurement is rare today
-                // (the only producer is the trailing-function call hug); if
-                // and when one nests, this matches the most permissive layout.
-                Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
-                    if let Some(first) = cands.first() {
-                        stack.push(first);
-                    }
-                }
-                // A fill measured flat is its atoms separated by single-space
-                // `Line`s; push the parts and let the arms above account them.
-                Ir::Fill(parts) | Ir::StickyFill(parts) => {
-                    for item in parts.iter().rev() {
-                        stack.push(item);
-                    }
-                }
-                Ir::PreferredFill { atoms, .. } => {
-                    let gaps = atoms.len().saturating_sub(1);
-                    if gaps > remaining {
-                        return false;
-                    }
-                    remaining -= gaps;
-                    for atom in atoms.iter().rev() {
-                        stack.push(atom);
-                    }
-                }
-            }
-        }
-        true
-    }
-
     /// Rest-aware fit check for a non-hugging [`Ir::Group`]: whether `inner`
     /// laid flat, *followed by* the already-queued `rest` commands up to the
     /// next line break, fits within the line width from `start_col`. Trailing
@@ -1022,80 +1032,15 @@ impl Printer {
     /// This is the Wadler/Prettier "fits the rest of the line" rule and the cure
     /// for break decisions that were previously purely local.
     fn group_fits(&self, start_col: usize, inner: &Ir, rest: &[Cmd]) -> bool {
-        // Phase 1: `inner`, laid flat. A forced break (or an already-expanded
-        // nested group) means it cannot be flat, so the group must break.
-        let mut col = start_col;
-        let mut stack: Vec<&Ir> = vec![inner];
-        while let Some(node) = stack.pop() {
-            match node {
-                Ir::Nil | Ir::SoftLine | Ir::ZeroWidth(_) => {}
-                Ir::Text(s) | Ir::ColumnZero(s) => {
-                    col += s.chars().count();
-                    if col > self.line_width {
-                        return false;
-                    }
-                }
-                Ir::HardLine | Ir::EmptyLine => return false,
-                Ir::Verbatim { text, force_break } => {
-                    if *force_break {
-                        return false;
-                    }
-                    col += text.chars().count();
-                    if col > self.line_width {
-                        return false;
-                    }
-                }
-                Ir::Concat(items) => {
-                    for item in items.iter().rev() {
-                        stack.push(item);
-                    }
-                }
-                Ir::Indent(i) | Ir::Align(_, i) => stack.push(i),
-                Ir::MarginPrefix { inner, .. } => stack.push(inner),
-                Ir::Line => {
-                    col += 1;
-                    if col > self.line_width {
-                        return false;
-                    }
-                }
-                Ir::IfBreak { flat, .. } => stack.push(flat),
-                Ir::Group {
-                    inner: gi, expand, ..
-                } => {
-                    if *expand {
-                        return false;
-                    }
-                    stack.push(gi);
-                }
-                Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
-                    if let Some(first) = cands.first() {
-                        stack.push(first);
-                    }
-                }
-                Ir::Fill(parts) | Ir::StickyFill(parts) => {
-                    for item in parts.iter().rev() {
-                        stack.push(item);
-                    }
-                }
-                Ir::PreferredFill { atoms, .. } => match self.preferred_fill_flat_end(col, atoms) {
-                    Some(end) => col = end,
-                    None => return false,
-                },
-            }
-        }
-        // Phase 2: the rest of the line, each command in its decided mode, until
-        // a line break (the line fits) or the width is exceeded (it does not).
-        self.rest_fits(col, rest)
+        self.flat_end(start_col, inner, FlatMeasure::Fits)
+            .is_some_and(|end| self.rest_fits(end, rest))
     }
 
     /// Measure the queued commands `rest` (the printer stack after the group
     /// being decided) from `start_col`, stopping at the first line break. Each
-    /// command keeps its already-decided mode; an undecided nested group is
-    /// measured flat (optimistic), an expanded one in break mode so its first
-    /// soft break ends the line. Returns whether everything up to that break
-    /// fits within the line width.
+    /// command keeps its already-decided mode. A seeding adapter over
+    /// [`Self::line_fits`].
     fn rest_fits(&self, start_col: usize, rest: &[Cmd]) -> bool {
-        let mut col = start_col;
         // Seed the work stack from the printer stack (`rest` is bottom→top; `pop`
         // takes the top, i.e. the next thing to print). A `Cmd::Fill`'s parts are
         // pushed reversed so they `pop` back in fill order.
@@ -1115,98 +1060,56 @@ impl Printer {
                 }
             }
         }
-        while let Some((mode, node)) = work.pop() {
-            match node {
-                Ir::Nil | Ir::SoftLine if mode != Mode::Break => {}
-                Ir::Nil | Ir::ZeroWidth(_) => {}
-                Ir::SoftLine => return true,
-                Ir::Text(s) | Ir::ColumnZero(s) => {
-                    col += s.chars().count();
-                    if col > self.line_width {
-                        return false;
-                    }
-                }
-                Ir::Verbatim { text, .. } => {
-                    if let Some((first, _)) = text.split_once('\n') {
-                        col += first.chars().count();
-                        return col <= self.line_width;
-                    }
-                    col += text.chars().count();
-                    if col > self.line_width {
-                        return false;
-                    }
-                }
-                Ir::HardLine | Ir::EmptyLine => return true,
-                Ir::Line => match mode {
-                    Mode::Flat | Mode::FlatPrefix => {
-                        col += 1;
-                        if col > self.line_width {
-                            return false;
-                        }
-                    }
-                    Mode::Break => return true,
-                },
-                Ir::Concat(items) => {
-                    for item in items.iter().rev() {
-                        work.push((mode, item));
-                    }
-                }
-                Ir::Indent(i) | Ir::Align(_, i) => work.push((mode, i)),
-                Ir::MarginPrefix { inner, .. } => work.push((mode, inner)),
-                Ir::IfBreak { flat, broken } => {
-                    work.push((mode, if mode == Mode::Break { broken } else { flat }));
-                }
-                // A later group is measured in the mode it will actually print
-                // in: flat when its own flat rendering still fits from here,
-                // broken otherwise. Measuring a doomed group flat would charge
-                // the *current* group for width that will never land on this
-                // line — and the charge depends on where the doomed group's own
-                // body happens to break, which the previous pass decides. That
-                // is exactly the expl3 `\EditInstance{a}{b}{ …long keyvals… }`
-                // instability (issue #71): pass 1 broke `{a}`/`{b}` out because
-                // the trailing block measured flat and overflowed, pass 2 kept
-                // them inline because the block had by then acquired a hard
-                // break. Deciding the rest group locally makes both passes agree.
-                Ir::Group { inner, expand, .. } => {
-                    let broken = *expand || !self.fits(col, inner, false, false);
-                    work.push((if broken { Mode::Break } else { Mode::Flat }, inner));
-                }
-                Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
-                    if let Some(first) = cands.first() {
-                        work.push((Mode::Flat, first));
-                    }
-                }
-                Ir::Fill(parts) | Ir::StickyFill(parts) => {
-                    for item in parts.iter().rev() {
-                        work.push((mode, item));
-                    }
-                }
-                Ir::PreferredFill { atoms, .. } => match self.preferred_fill_flat_end(col, atoms) {
-                    Some(end) => col = end,
-                    None => return false,
-                },
-            }
-        }
-        col <= self.line_width
+        self.line_fits(start_col, work, CommentFit::SharesLine)
     }
 
-    /// Does the *first line* of `node` fit starting at `start_col`? Unlike
-    /// [`Self::fits`] (a flat simulation), this lets nested [`Ir::Group`]s
-    /// decide their own break naturally — they re-use the existing flat
-    /// `fits` exactly as the real printer does — and treats the first
-    /// newline that would actually be emitted (a `HardLine`/`EmptyLine`, a
-    /// `Line`/`SoftLine` in `Break` mode, or anything in a nested group
-    /// decided `Break`) as success. A *single-line* forced-break `Verbatim`
-    /// (e.g. a standalone comment) fails, since it can't be rendered flat;
-    /// a *multi-line* `Verbatim` (e.g. a function arg fallback-rendered as
-    /// a multi-line legacy chunk) measures only its first line — its own
-    /// embedded newline counts as the success signal.
+    /// Does the *first line* of `node` fit starting at `start_col`? Unlike a
+    /// flat simulation ([`Self::flat_end`]), this lets nested [`Ir::Group`]s
+    /// decide their own break naturally and treats the first newline that
+    /// would actually be emitted as success. A single-line forced-break
+    /// `Verbatim` (a standalone comment) fails ([`CommentFit::Fails`]), since
+    /// a candidate carrying one can't be rendered flat.
     fn first_line_fits(&self, start_col: usize, node: &Ir) -> bool {
+        self.line_fits(start_col, vec![(Mode::Flat, node)], CommentFit::Fails)
+    }
+
+    /// The shared line measurement behind [`Self::rest_fits`] and
+    /// [`Self::first_line_fits`]: walk the pending `work` items from
+    /// `start_col`, each in its mode, until the first newline that would
+    /// actually be emitted (a `HardLine`/`EmptyLine`, a `Line`/`SoftLine` in
+    /// `Break` mode, a multi-line `Verbatim`'s own embedded newline, or a
+    /// break inside a nested node decided `Break`) — success — or the line
+    /// width is exceeded — failure. Modes govern trivia; a nested `Group` or
+    /// conditional group is always re-decided here, exactly as the printer
+    /// will decide it (the genuinely verified `Mode::Flat` never reaches this
+    /// measurement: under it nothing is being decided).
+    ///
+    /// A nested group is decided *in the mode it will actually print in*:
+    /// flat when its own flat rendering still fits from here, broken
+    /// otherwise, with its own hug flags honoured. Measuring a doomed group
+    /// flat would charge the current line for width that will never land on
+    /// it — and the charge would depend on where the doomed group's body
+    /// happens to break, which the *previous formatting pass* decided; that
+    /// was exactly the expl3 `\EditInstance{a}{b}{ …long keyvals… }`
+    /// instability (issue #71). The same rule re-decides a conditional group
+    /// through [`Self::pick_candidate`] rather than assuming its flat-most
+    /// candidate — the two measurements share this one traversal so they
+    /// cannot drift apart again.
+    fn line_fits(
+        &self,
+        start_col: usize,
+        mut work: Vec<(Mode, &Ir)>,
+        comments: CommentFit,
+    ) -> bool {
         let mut col = start_col;
-        let mut stack: Vec<(Mode, &Ir)> = vec![(Mode::Flat, node)];
-        while let Some((mode, node)) = stack.pop() {
+        while let Some((mode, node)) = work.pop() {
             match node {
                 Ir::Nil | Ir::ZeroWidth(_) => {}
+                Ir::SoftLine => {
+                    if mode == Mode::Break {
+                        return true;
+                    }
+                }
                 Ir::Text(s) | Ir::ColumnZero(s) => {
                     col += s.chars().count();
                     if col > self.line_width {
@@ -1214,14 +1117,13 @@ impl Printer {
                     }
                 }
                 Ir::Verbatim { text, force_break } => {
-                    if let Some(first_line) = text.split_once('\n').map(|(l, _)| l) {
-                        col += first_line.chars().count();
-                        if col > self.line_width {
-                            return false;
-                        }
-                        return true;
+                    // A multi-line verbatim's own embedded newline ends the
+                    // line: only its first segment is measured.
+                    if let Some((first, _)) = text.split_once('\n') {
+                        col += first.chars().count();
+                        return col <= self.line_width;
                     }
-                    if *force_break {
+                    if *force_break && comments == CommentFit::Fails {
                         return false;
                     }
                     col += text.chars().count();
@@ -1229,17 +1131,8 @@ impl Printer {
                         return false;
                     }
                 }
-                Ir::Concat(items) => {
-                    for item in items.iter().rev() {
-                        stack.push((mode, item));
-                    }
-                }
-                Ir::Indent(inner) | Ir::Align(_, inner) => stack.push((mode, inner)),
-                Ir::MarginPrefix { inner, .. } => stack.push((mode, inner)),
+                Ir::HardLine | Ir::EmptyLine => return true,
                 Ir::Line => match mode {
-                    // `FlatPrefix` never enters this measurement (the work
-                    // stack seeds `Flat` and produces only `Flat`/`Break`);
-                    // it measures like `Flat` if it ever does.
                     Mode::Flat | Mode::FlatPrefix => {
                         col += 1;
                         if col > self.line_width {
@@ -1248,15 +1141,15 @@ impl Printer {
                     }
                     Mode::Break => return true,
                 },
-                Ir::SoftLine => {
-                    if mode == Mode::Break {
-                        return true;
+                Ir::Concat(items) => {
+                    for item in items.iter().rev() {
+                        work.push((mode, item));
                     }
                 }
-                Ir::HardLine | Ir::EmptyLine => return true,
+                Ir::Indent(inner) | Ir::Align(_, inner) => work.push((mode, inner)),
+                Ir::MarginPrefix { inner, .. } => work.push((mode, inner)),
                 Ir::IfBreak { flat, broken } => {
-                    let chosen = if mode == Mode::Break { broken } else { flat };
-                    stack.push((mode, chosen));
+                    work.push((mode, if mode == Mode::Break { broken } else { flat }));
                 }
                 Ir::Group {
                     inner,
@@ -1264,29 +1157,42 @@ impl Printer {
                     hug,
                     hug_excuse_overflow,
                 } => {
-                    let m = if *expand || !self.fits(col, inner, *hug, *hug_excuse_overflow) {
+                    let measure = if *hug {
+                        FlatMeasure::HugPrefix {
+                            excuse_overflow: *hug_excuse_overflow,
+                        }
+                    } else {
+                        FlatMeasure::Fits
+                    };
+                    let m = if *expand || self.flat_end(col, inner, measure).is_none() {
                         Mode::Break
+                    } else if *hug {
+                        Mode::FlatPrefix
                     } else {
                         Mode::Flat
                     };
-                    stack.push((m, inner));
+                    work.push((m, inner));
+                }
+                Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
+                    let (m, chosen) = self.pick_candidate(col, cands);
+                    work.push((m, chosen));
                 }
                 Ir::Fill(parts) | Ir::StickyFill(parts) => {
                     for item in parts.iter().rev() {
-                        stack.push((mode, item));
+                        work.push((mode, item));
                     }
                 }
                 Ir::PreferredFill { atoms, .. } => match mode {
                     // A preferred fill chooses its own breaks: in `Break` mode it
                     // breaks at a gap, so its first line ends after (at most) the
-                    // first atom — the first line fits iff that atom fits here.
-                    // Measuring the whole fill flat here would spuriously fail and
-                    // force an enclosing group to break. In `Flat` mode the whole
-                    // fill stays on the line.
+                    // first atom — the line fits iff that atom fits here.
+                    // Measuring the whole fill flat would spuriously fail and
+                    // force an enclosing group to break. In `Flat`/`FlatPrefix`
+                    // mode the whole fill stays on the line.
                     Mode::Break => {
-                        return atoms
-                            .first()
-                            .is_none_or(|atom| self.first_line_fits(col, atom));
+                        return atoms.first().is_none_or(|atom| {
+                            self.line_fits(col, vec![(Mode::Flat, atom)], comments)
+                        });
                     }
                     Mode::Flat | Mode::FlatPrefix => {
                         match self.preferred_fill_flat_end(col, atoms) {
@@ -1295,13 +1201,9 @@ impl Printer {
                         }
                     }
                 },
-                Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
-                    let (m, chosen) = self.pick_candidate(col, cands);
-                    stack.push((m, chosen));
-                }
             }
         }
-        true
+        col <= self.line_width
     }
 }
 

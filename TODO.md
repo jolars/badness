@@ -34,12 +34,31 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   debug format --checks all --report .` over `latex3/latex3` @ `3d1d347`, plus
   `latex3/latex2e` and `pgf-tikz/pgf`; compare *sets*, not counts):
 
-  - [ ] **S0 — the oracle, before any refactor.** (a) Run the corpus under
+  - [x] **S0 — the oracle, before any refactor.** (a) Run the corpus under
     `assert_format_invariants` at several line widths (60/72/80/100/120): every
     hybrid is a column-arithmetic accident, so widths multiply detection. (b) Add
     the trivia-perturbation oracle itself. No production change; the deliverable
     is the true failure inventory, which every later stage is gated against.
     Expect the count to jump — that is the point.
+
+    *Landed.* The oracle (`formatter::perturb`, `badness debug format --checks
+    trivia`, wired into the invariants sweep in `tests/format.rs`) gates on
+    **convergence** — every TeX-identical newline<->space perturbation must
+    format to a fixed point upholding the invariants — because the strict
+    `fmt(perturbed) == fmt(original)` form flags the conservative generic
+    path's deliberate authored-break preservation on essentially every file;
+    strict stays in the API (`check_trivia_invariance`) as the post-umbrella
+    end-state gate. Inventory recorded in `tests/gate_baselines/` (compare
+    sets, not counts): `--checks all` @ 80 exactly reproduces the pre-S0
+    baseline (latex3 16/288; latex2e 13/384; pgf 15/397), and `--checks
+    trivia` @ 80 yields latex3 151, latex2e 148, pgf 15 (pgf: format-errors
+    only — fully convergent). The trivia sets are dominated by a
+    **pre-existing reflow-on-`.dtx` content-violation family** (see the new
+    entry below), which masks later variants in the same files; the
+    non-fixed-point residue (latex3 4, latex2e 18) is predominantly expl3
+    package code — the S2–S4 target set — plus `latexrelease.sty` (#97
+    residue). The width sweep also surfaced ~20 width-dependent idempotency
+    files beyond the width-80 baseline (`SWEEP.md`).
   - [ ] **S1 — one representation of "forced".** A `propagate_breaks` prepass
     marking every group containing a hard break as `expand`, replacing the three
     current representations (`Ir::Group{expand}`, `contains_forced_break`
@@ -85,6 +104,23 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   parser's greedy `{}`-attachment already covers, which decides whether S4 buys
   enough to justify its cost; and whether every Tier-2 mode can actually carry a
   fixed-point argument, or whether one of them needs redesigning instead.
+- [ ] **Reflow-on-`.dtx` violates the whitespace-only invariant (S0 discovery;
+  dominates the trivia gate sets).** Two root causes, both reachable without
+  any perturbation via `badness format --wrap reflow` on a `.dtx` (the
+  production default `Preserve` hides them, and `debug format` has no content
+  oracle, so nothing caught them before S0's content check):
+  1. *`^^A` relocation*: prose reflow moves `^^A` doc comments into positions
+     where they re-lex as content (`\title{...^^A...}` — essentially every l3
+     `.dtx`; in-repo reproducer registered as `dtx_caret_comment.dtx` in
+     `tests/format.rs`'s `KNOWN_INVARIANT_FAILURES`).
+  2. *Guarded-line content loss*: content on docstrip-guarded lines is dropped
+     entirely (latex2e's `alltt.dtx` loses `\ProvidesFile{alltt.drv}`).
+  Also in the family: joining `\ExplSyntaxOn` with its statement makes the
+  doc-prose reflow relocate a margined `%    \begin{macrocode}` frame line so
+  the output stops parsing (pinned by `trivia_check_fires_on_a_known_hybrid`
+  in `tests/debug_format.rs`). Fixing this family shrinks the trivia gate
+  sets by ~250 files and will surface any non-fixed-points those failures
+  currently mask (the trivia check stops at the first failing variant).
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->

@@ -1,0 +1,13 @@
+./base/doc-2016-02-15.sty	format-error
+./base/doc-2021-06-01.sty	format-error
+./base/doc.dtx	format-error
+./base/docstrip.dtx	format-error
+./base/ltcmd.dtx	format-error
+./base/ltdefns.dtx	format-error
+./base/preload.dtx	format-error
+./base/source2edoc.cls	format-error
+./required/graphics/lscape.dtx	format-error
+./required/latex-lab/latex-lab-enumitem.dtx	format-error
+./required/latex-lab/latex-lab-new-or-2.dtx	format-error
+./required/tools/array.dtx	format-error
+./texmf/tex/latex/l3kernel/expl3-code.tex	format-error

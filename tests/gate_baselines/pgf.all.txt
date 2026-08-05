@@ -1,0 +1,15 @@
+./doc/generic/pgf/pgfmanual-en-base-arrows.tex	format-error
+./doc/generic/pgf/pgfmanual-en-base-layers.tex	format-error
+./doc/generic/pgf/pgfmanual-en-library-external.tex	format-error
+./doc/generic/pgf/pgfmanual-en-library-matrices.tex	format-error
+./doc/generic/pgf/pgfmanual-en-library-profiler.tex	format-error
+./doc/generic/pgf/pgfmanual-en-tikz-coordinates.tex	format-error
+./doc/generic/pgf/pgfmanual-en-tikz-shapes.tex	format-error
+./tex/generic/pgf/basiclayer/pgfcoreshade.code.tex	format-error
+./tex/generic/pgf/frontendlayer/tikz/libraries/graphs/tikzlibrarygraphs.code.tex	format-error
+./tex/generic/pgf/frontendlayer/tikz/libraries/tikzexternalshared.code.tex	format-error
+./tex/generic/pgf/libraries/pgflibraryprofiler.code.tex	format-error
+./tex/generic/pgf/modules/pgfmoduleplot.code.tex	format-error
+./tex/generic/pgf/utilities/pgfutil-common.tex	format-error
+./tex/latex/pgf/doc/pgfmanual-en-macros.tex	format-error
+./tex/latex/pgf/doc/pgfmanual.prettyprinter.code.tex	format-error

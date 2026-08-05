@@ -4,7 +4,6 @@
 ./texmf/tex/latex/base/doc-2021-06-01.sty	format-error
 ./texmf/tex/latex/base/docstrip.tex	format-error
 ./texmf/tex/latex/base/doc.sty	format-error
-./texmf/tex/latex/base/latexrelease.sty	idempotency
 ./texmf/tex/latex/base/ltxdoc.cls	format-error
 ./texmf/tex/latex/base/nfssfont.tex	format-error
 ./texmf/tex/latex/base/shortvrb.sty	format-error

@@ -37,9 +37,31 @@ impl LayoutCost {
     }
 }
 
+/// The layout mode a command prints under. `Flat` is an honest contract: the
+/// producer that dispatched the subtree in `Flat` has verified that the whole
+/// subtree's flat-mode rendering fits (every line, for subtrees whose
+/// structural `HardLine`s split it) — so consumers trust it, and a `Group`
+/// dispatched in `Flat` honours it instead of re-deciding. A producer that
+/// cannot verify the whole subtree (a candidate picker choosing among layouts,
+/// a fill placing atoms by plan) dispatches `Break` and lets children decide
+/// for themselves.
+///
+/// `FlatPrefix` is the weaker claim a trailing-block hug can honestly make:
+/// its `fits` stops *successfully* at the first forced break, so only the
+/// prefix up to there was verified. Trivia-level layout (`Line`, `SoftLine`,
+/// `IfBreak`, fill gaps) renders flat exactly as under `Flat` — that keeps the
+/// hug's head glued — but a `Group` or conditional group may sit *past* the
+/// break the measurement stopped at, so it re-decides for itself instead of
+/// trusting the claim (`\@@_if_key_value:VTF {T}{F}`: the hug verified up to
+/// `T`'s detonation; `F` was never measured).
+///
+/// The remaining carve-out is an `expand` group: a subtree carrying a hard
+/// break was never a flat claim (its `HardLine`s fire in either mode), so it
+/// prints `Break` even under an incoming `Flat`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Flat,
+    FlatPrefix,
     Break,
 }
 
@@ -299,9 +321,13 @@ impl Printer {
                             prefix,
                         });
                     }
+                    // The break plan places atoms, it does not verify them:
+                    // in `Break` mode each atom's own groups decide for
+                    // themselves (an inherited `Flat` was verified by the
+                    // parent and stays).
                     stack.push(Cmd::Node {
                         indent,
-                        mode: Mode::Flat,
+                        mode,
                         node: &atoms[index],
                         prefix,
                     });
@@ -345,7 +371,7 @@ impl Printer {
                     preferred,
                     target,
                 } => {
-                    let breaks = if mode == Mode::Flat {
+                    let breaks = if mode != Mode::Break {
                         vec![false; atoms.len().saturating_sub(1)].into()
                     } else {
                         self.stable_breaks(
@@ -399,7 +425,7 @@ impl Printer {
                     });
                 }
                 Ir::Line => match mode {
-                    Mode::Flat => w.write_text(" "),
+                    Mode::Flat | Mode::FlatPrefix => w.write_text(" "),
                     Mode::Break => w.newline(indent, prefix),
                 },
                 Ir::SoftLine => {
@@ -418,24 +444,39 @@ impl Printer {
                         prefix,
                     });
                 }
+                // Requires a `propagate_breaks`-saturated tree: honouring an
+                // incoming `Flat` trusts that a group whose subtree carries a
+                // hard break is `expand`-marked (the first arm), so a stale
+                // flag would wrongly pin its `Line`s flat.
                 Ir::Group {
                     inner,
                     expand,
                     hug,
                     hug_excuse_overflow,
                 } => {
+                    // Both measurements start from `current_col()` (not the
+                    // raw `col`): a group dispatched right after a newline
+                    // must count the pending indent, or the dropped width
+                    // lets an overflowing flat layout be wrongly verified —
+                    // an error the honest contract would then pin instead of
+                    // letting nested re-decisions paper over it.
                     let m = if *expand {
                         Mode::Break
+                    } else if mode == Mode::Flat {
+                        // Honest contract: the producer verified the whole
+                        // flat rendering, so don't re-decide.
+                        Mode::Flat
                     } else if *hug {
                         // A trailing-block hug measures only its own prefix up to
                         // the block's opening brace; what follows sits on the
-                        // block's closing line, not this one.
-                        if self.fits(w.col, inner, true, *hug_excuse_overflow) {
-                            Mode::Flat
+                        // block's closing line, not this one — so the claim it
+                        // makes is `FlatPrefix`, never full `Flat`.
+                        if self.fits(w.current_col(), inner, true, *hug_excuse_overflow) {
+                            Mode::FlatPrefix
                         } else {
                             Mode::Break
                         }
-                    } else if self.group_fits(w.col, inner, &stack) {
+                    } else if self.group_fits(w.current_col(), inner, &stack) {
                         Mode::Flat
                     } else {
                         Mode::Break
@@ -448,7 +489,15 @@ impl Printer {
                     });
                 }
                 Ir::ConditionalGroup(cands) => {
-                    let (m, chosen) = self.pick_candidate(w.col, cands);
+                    // Under a verified `Flat`, the flat-most candidate without
+                    // re-picking — exactly how every measurement predicate
+                    // models a nested conditional group, so the parent's
+                    // verification and the print agree by construction.
+                    let (m, chosen) = if mode == Mode::Flat {
+                        (Mode::Flat, &cands[0])
+                    } else {
+                        self.pick_candidate(w.current_col(), cands)
+                    };
                     stack.push(Cmd::Node {
                         indent,
                         mode: m,
@@ -461,7 +510,11 @@ impl Printer {
                     // after a newline measures its first line from the pending
                     // indent, not column 0 — otherwise the indent width is dropped
                     // and an overflowing flat candidate is wrongly accepted.
-                    let (m, chosen) = self.pick_candidate_all_lines(w.current_col(), indent, cands);
+                    let (m, chosen) = if mode == Mode::Flat {
+                        (Mode::Flat, &cands[0])
+                    } else {
+                        self.pick_candidate_all_lines(w.current_col(), indent, cands)
+                    };
                     stack.push(Cmd::Node {
                         indent,
                         mode: m,
@@ -632,11 +685,11 @@ impl Printer {
         if parts.is_empty() {
             return;
         }
-        if mode == Mode::Flat {
+        if mode != Mode::Break {
             for part in parts.iter().rev() {
                 stack.push(Cmd::Node {
                     indent,
-                    mode: Mode::Flat,
+                    mode,
                     node: part,
                     prefix,
                 });
@@ -652,13 +705,17 @@ impl Printer {
         let content_fits = !broken && matches!(w0, Some(width) if col + width <= self.line_width);
 
         if parts.len() == 1 {
+            // The fill's last atom shares its line with whatever the lowering
+            // glued after the fill (a trailing command riding a statement), so
+            // its flat claim must survive the rest of the line too — the same
+            // rest-awareness `group_fits` has. Without this the atom's folded
+            // hang break is never taken: the atom alone fits, goes `Flat`, and
+            // the glued tail overflows the line the measurement never saw.
+            let flat =
+                content_fits && matches!(w0, Some(width) if self.rest_fits(col + width, stack));
             stack.push(Cmd::Node {
                 indent,
-                mode: if content_fits {
-                    Mode::Flat
-                } else {
-                    Mode::Break
-                },
+                mode: if flat { Mode::Flat } else { Mode::Break },
                 node: content,
                 prefix,
             });
@@ -770,27 +827,30 @@ impl Printer {
     }
 
     /// Pick the layout for an [`Ir::ConditionalGroup`] at the current column:
-    /// the first candidate whose first line fits is rendered flat; if none, the
-    /// last candidate is rendered broken. With a single candidate this is a
-    /// "break-aware group" — flat if its first line fits, broken otherwise.
+    /// the first candidate whose first line fits, or the last as the fallback.
+    /// Always announced as `Break` — a first-line fit verifies nothing about
+    /// the rest of the subtree, so under the honest [`Mode`] contract the
+    /// *choice of candidate* is the whole decision and the candidate's own
+    /// groups decide for themselves.
     fn pick_candidate<'a>(&self, col: usize, cands: &'a [Ir]) -> (Mode, &'a Ir) {
-        let n = cands.len();
-        for (i, c) in cands.iter().enumerate() {
-            if self.first_line_fits(col, c) {
-                return (Mode::Flat, c);
-            }
-            if i + 1 == n {
-                return (Mode::Break, c);
-            }
-        }
-        unreachable!("Ir::ConditionalGroup builder rejects empty candidate lists")
+        let (last, rest) = cands
+            .split_last()
+            .expect("Ir::ConditionalGroup builder rejects empty candidate lists");
+        let chosen = rest
+            .iter()
+            .find(|c| self.first_line_fits(col, c))
+            .unwrap_or(last);
+        (Mode::Break, chosen)
     }
 
     /// Pick the layout for an [`Ir::ConditionalGroupAllLines`]: the first
     /// candidate every one of whose rendered lines fits within `line_width`
     /// is rendered flat; if none qualifies the last candidate is rendered
     /// broken. The IR-native equivalent of the legacy `fits_with_newlines`
-    /// check.
+    /// check. Unlike [`Self::pick_candidate`], the `Flat` announced here is
+    /// honest — [`Self::all_lines_fit`] verified the candidate's whole
+    /// flat-mode rendering — so the chosen candidate's nested groups are
+    /// pinned to exactly the layout that was measured.
     fn pick_candidate_all_lines<'a>(
         &self,
         col: usize,
@@ -1057,7 +1117,7 @@ impl Printer {
         }
         while let Some((mode, node)) = work.pop() {
             match node {
-                Ir::Nil | Ir::SoftLine if mode == Mode::Flat => {}
+                Ir::Nil | Ir::SoftLine if mode != Mode::Break => {}
                 Ir::Nil | Ir::ZeroWidth(_) => {}
                 Ir::SoftLine => return true,
                 Ir::Text(s) | Ir::ColumnZero(s) => {
@@ -1078,7 +1138,7 @@ impl Printer {
                 }
                 Ir::HardLine | Ir::EmptyLine => return true,
                 Ir::Line => match mode {
-                    Mode::Flat => {
+                    Mode::Flat | Mode::FlatPrefix => {
                         col += 1;
                         if col > self.line_width {
                             return false;
@@ -1177,7 +1237,10 @@ impl Printer {
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push((mode, inner)),
                 Ir::MarginPrefix { inner, .. } => stack.push((mode, inner)),
                 Ir::Line => match mode {
-                    Mode::Flat => {
+                    // `FlatPrefix` never enters this measurement (the work
+                    // stack seeds `Flat` and produces only `Flat`/`Break`);
+                    // it measures like `Flat` if it ever does.
+                    Mode::Flat | Mode::FlatPrefix => {
                         col += 1;
                         if col > self.line_width {
                             return false;
@@ -1225,10 +1288,12 @@ impl Printer {
                             .first()
                             .is_none_or(|atom| self.first_line_fits(col, atom));
                     }
-                    Mode::Flat => match self.preferred_fill_flat_end(col, atoms) {
-                        Some(end) => col = end,
-                        None => return false,
-                    },
+                    Mode::Flat | Mode::FlatPrefix => {
+                        match self.preferred_fill_flat_end(col, atoms) {
+                            Some(end) => col = end,
+                            None => return false,
+                        }
+                    }
                 },
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
                     let (m, chosen) = self.pick_candidate(col, cands);
@@ -1365,10 +1430,12 @@ mod tests {
     }
 
     #[test]
-    fn conditional_group_single_candidate_flat_when_first_line_fits() {
+    fn conditional_group_single_candidate_lets_children_decide_when_first_line_fits() {
         // The inner group cannot fit flat (long >> width), but the conditional
         // group's first-line measurement lets it break naturally: `f(` fits
-        // and the inner emits its own newline.
+        // and the inner emits its own newline. The chosen candidate is
+        // dispatched in `Break` (the choice is the decision), so the nested
+        // group re-decides for itself exactly as the measurement assumed.
         let style = FormatStyle {
             line_width: 10,
             indent_width: 2,
@@ -1431,6 +1498,116 @@ mod tests {
         let c2 = Ir::concat([Ir::text("ab"), Ir::line(), Ir::text("cd")]);
         let ir = Ir::conditional_group([c0, c1, c2]);
         assert_eq!(printer.print(&ir), "ab\ncd");
+    }
+
+    #[test]
+    fn conditional_group_dispatches_the_chosen_candidate_in_break_mode() {
+        // A first-line fit verifies nothing about the rest of the subtree, so
+        // the chosen candidate is not announced `Flat`: its own `Line`s break
+        // and its groups decide for themselves. A candidate that wants
+        // flat-if-fits content must say so with a nested group.
+        let printer = Printer::new(FormatStyle::default());
+        let ir = Ir::conditional_group([Ir::concat([Ir::text("ab"), Ir::line(), Ir::text("cd")])]);
+        assert_eq!(printer.print(&ir), "ab\ncd");
+    }
+
+    #[test]
+    fn conditional_group_all_lines_pins_the_verified_candidate() {
+        // The all-lines pick *did* verify the candidate's whole flat
+        // rendering, so its `Flat` is honoured downstream: the nested group
+        // keeps exactly the layout that was measured instead of re-deciding
+        // against the trailing text and detonating into a hybrid the
+        // measurement never saw (`abc\ndefXXXX`).
+        let style = FormatStyle {
+            line_width: 10,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        let candidate = Ir::group(Ir::concat([Ir::text("abc"), Ir::line(), Ir::text("def")]));
+        let ir = Ir::concat([
+            Ir::conditional_group_all_lines([candidate]),
+            Ir::text("XXXX"),
+        ])
+        .propagate_breaks();
+        assert_eq!(printer.print(&ir), "abc defXXXX");
+    }
+
+    #[test]
+    fn preferred_fill_atoms_inherit_the_fill_mode() {
+        // The break plan places atoms, it does not verify them: in `Break`
+        // mode an atom is dispatched `Break`, so a mode-sensitive child (here
+        // an `IfBreak`) sees the honest mode instead of an unverified `Flat`.
+        let printer = Printer::new(FormatStyle::default());
+        let ir = Ir::preferred_fill(
+            [Ir::text("aa"), Ir::if_break(Ir::text("F"), Ir::text("B"))],
+            vec![false],
+            10,
+        );
+        assert_eq!(printer.print(&ir), "aa B");
+    }
+
+    #[test]
+    fn hug_prefix_claim_does_not_pin_a_group_past_the_forced_break() {
+        // The hug's `fits` stops successfully at the first forced break, so a
+        // soft group *after* the detonating block (a second trailing brace
+        // argument, `\@@_if_key_value:VTF {T}{F}`) was never measured. It must
+        // re-decide for itself under the hug's `FlatPrefix` — here it does not
+        // fit and breaks — instead of inheriting an unverified `Flat`.
+        let style = FormatStyle {
+            line_width: 20,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        let t_branch = Ir::group(Ir::concat([
+            Ir::text("{"),
+            Ir::indent(Ir::concat([Ir::hard_line(), Ir::text("tt")])),
+            Ir::hard_line(),
+            Ir::text("}"),
+        ]));
+        let f_branch = Ir::group(Ir::concat([
+            Ir::text("{"),
+            Ir::indent(Ir::concat([Ir::line(), Ir::text("ffffffffffffffffffff")])),
+            Ir::line(),
+            Ir::text("}"),
+        ]));
+        let ir = Ir::group_hug(Ir::concat([
+            Ir::text("\\head:TF"),
+            Ir::line(),
+            Ir::concat([
+                Ir::text("\\v"),
+                Ir::indent(Ir::concat([Ir::hard_line(), t_branch])),
+                Ir::indent(Ir::concat([Ir::hard_line(), f_branch])),
+            ]),
+        ]))
+        .propagate_breaks();
+        assert_eq!(
+            printer.print(&ir),
+            "\\head:TF \\v\n  {\n    tt\n  }\n  {\n    ffffffffffffffffffff\n  }"
+        );
+    }
+
+    #[test]
+    fn hug_prefix_flat_does_not_pin_the_expanded_block() {
+        // A hug verifies only its prefix, so its `Flat` must not reach into
+        // the detonating block: the block group is `expand`-marked by
+        // `propagate_breaks` and still prints `Break` (its `Line` breaks)
+        // even though it is dispatched under the hug's flat prefix.
+        let printer = Printer::new(FormatStyle::default());
+        let block = Ir::group(Ir::concat([
+            Ir::text("{"),
+            Ir::indent(Ir::concat([
+                Ir::hard_line(),
+                Ir::text("x"),
+                Ir::line(),
+                Ir::text("y"),
+            ])),
+            Ir::hard_line(),
+            Ir::text("}"),
+        ]));
+        let ir = Ir::group_hug(Ir::concat([Ir::text("f(a, "), block])).propagate_breaks();
+        assert_eq!(printer.print(&ir), "f(a, {\n  x\n  y\n}");
     }
 
     #[test]

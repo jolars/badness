@@ -4,8 +4,10 @@ The failure inventory the S1–S4 stages of the trivia-invariant-layout plan
 (TODO.md) are gated against: **compare sets, not counts** — a stage may shrink
 these sets but must not grow them.
 
-Recorded at badness commit `268c5d8` (S0), over the pinned gate corpora
-fetched by `task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
+Recorded at badness commit `268c5d8` (S0); re-recorded after S2, which
+removed `latexrelease.sty` from both latex3 sets (15 `all`, 150 `trivia`)
+and refreshed `SWEEP.md`. Over the pinned gate corpora fetched by
+`task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
 
 | corpus | repo @ pin | files |
 | --- | --- | --- |
@@ -31,12 +33,13 @@ width sweep behind `SWEEP.md` reruns both checks with
 ## The sets
 
 - `<corpus>.all.txt` — the pre-existing `--checks all` gate (losslessness +
-  idempotency at width 80). latex3's 16 (15 `format-error` +
-  `latexrelease.sty` idempotency) match the baseline recorded in TODO.md
-  before S0, i.e. S0 changed no production layout.
+  idempotency at width 80). At S0, latex3's 16 (15 `format-error` +
+  `latexrelease.sty` idempotency) matched the baseline recorded in TODO.md
+  before S0, i.e. S0 changed no production layout; S2 resolved the
+  `latexrelease.sty` entry, leaving latex3 at 15 `format-error`.
 - `<corpus>.trivia.txt` — the `--checks trivia` convergence-oracle inventory
-  at width 80 (wrap pinned to reflow). Counts: latex3 151, latex2e 148,
-  pgf 15.
+  at width 80 (wrap pinned to reflow). Counts: latex3 150 (151 at S0),
+  latex2e 148, pgf 15.
 - `SWEEP.md` — failures that appear or vanish across widths 60–120; each is a
   column-arithmetic hybrid candidate.
 
@@ -58,10 +61,10 @@ width sweep behind `SWEEP.md` reruns both checks with
   (the check stops at the first failing variant), so fixing them will both
   shrink these sets and potentially surface currently-hidden non-fixed-points.
 - `non-fixed-point` — a perturbed variant formats to a non-fixed-point: the
-  idempotency-hybrid family the umbrella exists to fix (latex3 4, latex2e 18;
-  predominantly expl3 package code — xparse, xtemplate, tagpdf,
-  pdfmanagement, luamml — the S2–S4 target set). `latexrelease.sty` is the
-  known issue-#97 residue (rest-aware fill disagreement, blocked on S2/S3).
+  idempotency-hybrid family the umbrella exists to fix (latex3 3 after S2,
+  latex2e 18; predominantly expl3 package code — xparse, xtemplate, tagpdf,
+  pdfmanagement, luamml — the S2–S4 target set). `latexrelease.sty` was the
+  known issue-#97 residue (rest-aware fill disagreement); S2 resolved it.
 
 The generator's meaning-safety was spot-checked: 1 `dropped_unsafe` variant
 in ~157k eligible gaps over 120 latex2e files.

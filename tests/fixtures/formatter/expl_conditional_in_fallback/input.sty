@@ -1,0 +1,6 @@
+\ExplSyntaxOn
+\EditInstance{block}{thm}{
+  ,short-vspace:e = \tl_if_empty:nTF {#2} { \default@a } {#2}
+  ,begin-vspace:e = \tl_if_empty:nTF {#2} { \newtheoremstyle@vspace@default } {#2}
+}
+\ExplSyntaxOff

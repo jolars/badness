@@ -839,7 +839,30 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 // boundary — the width fill alone decides the breaks. Otherwise a
                 // fill-broken argument would read as a new statement on the next
                 // pass and the layout would never reach a fixed point.
-                return lower_expl_code(node.children_with_tokens(), cx, Statements::Ignore);
+                let fill = lower_expl_code(node.children_with_tokens(), cx, Statements::Ignore);
+                // A recognized conditional renders **all-or-nothing**: flat when the
+                // whole call fits, else the R4/R5 explosion. Left to the fill above,
+                // the branch groups are independent atoms, so an overflow hangs only
+                // the last one and splits the branch list across two indents —
+                // `\…:nTF {c} {T}` / `{F}`, which reads as a continuation of the
+                // enclosing statement rather than as the false branch.
+                //
+                // Attached to the *node*, not to statement position. The two
+                // position-keyed paths in `lower_expl_code` (statement-leading,
+                // trailing) additionally join the head, but both are gated off inside
+                // a *fallback* statement — deliberately, since whether a conditional
+                // name sits trailing there depends on where the line's junk ends,
+                // which is not pass-invariant (xtemplate's spliced
+                // `cs_ \str_if_eq:nnT … set:Npn` name assembly). The node is the node
+                // on every pass, so this carries no such question and covers the
+                // fallback case the other two decline.
+                if let Some(exploded) = command_name(node)
+                    .and_then(|name| expl3::conditional_branches(&name))
+                    .and_then(|n| lower_expl_conditional(node, cx, n))
+                {
+                    return Ir::group(Ir::if_break(fill, exploded));
+                }
+                return fill;
             }
             _ => {}
         }

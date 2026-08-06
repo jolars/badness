@@ -727,6 +727,11 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // argument breaks on its own body — `{ > }` and `{ 1 }` stay inline rather than
     // detonating in sympathy with the sibling the comment forced open.
     ("expl_conditional_comment_siblings", "sty"),
+    // A recognized conditional renders all-or-nothing even inside a *fallback*
+    // statement, where both position-keyed paths are gated off: a fitting call stays
+    // flat, an overflowing one explodes wholly rather than hanging only its last
+    // branch and splitting the branch list across two indents.
+    ("expl_conditional_in_fallback", "sty"),
     // R3 outside the brace: an expl3 function's argument written flush against its
     // head is respaced (`\clist_count:n{#1}` -> `\clist_count:n {#1}`), while an
     // embedded 2e-named command keeps its authored gap (`\eqref{#1}`,

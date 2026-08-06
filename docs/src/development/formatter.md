@@ -547,6 +547,26 @@ single-token `N`/`V`/operator argument breaks greedy brace attachment, leaving
 the branches on a following sibling—falls back to the width path rather than
 mis-lower a partial shape.
 
+**All-or-nothing is a property of the node, not of statement position.** Both
+scopes above are *positional*, and both are additionally gated off inside a
+**fallback** statement. Left to the plain fill, a conditional's branch groups are
+independent atoms, so an overflow hangs only the last one:
+
+```tex
+  ,begin-vspace:e = \tl_if_empty:nTF {#2} { \newtheoremstyle@vspace@default }
+    {#2}
+```
+
+—the two branches of one conditional at different indents, the second reading as
+a continuation of the key-value entry rather than as the false branch. So
+`lower_node`'s COMMAND-in-region arm wraps *any* recognized conditional in
+`group(if_break{fill, exploded})`: flat when the whole call fits, else the R4/R5
+explosion. That covers the fallback case the positional paths decline, and it
+carries none of their pass-invariance question—whether a name sits *trailing*
+depends on where a fallback line's junk ends, but the node is the node on every
+pass. Pinned by `expl_conditional_in_fallback`; byte-neutral across latex3's
+`.dtx` sources, the shape not occurring upstream.
+
 **Annotated branches stay on the path.** A `%` among the branch children does
 *not* fall back: a comment trailing a branch rides that branch's own line, an
 own-line one keeps its own line between branches (own-line-ness is a preserved

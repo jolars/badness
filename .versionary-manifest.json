@@ -1,28 +1,28 @@
 {
   "manifest-version": 1,
-  "baseline-sha": "4fb98f7d764030cc7d1af8d875eb35b914ad10d8",
+  "baseline-sha": "25e54713cafb058bcfccd79b9eef5001726a5910",
   "release-targets": [
     {
       "path": ".",
-      "version": "0.13.0",
-      "tag": "v0.13.0"
+      "version": "0.14.0",
+      "tag": "v0.14.0"
     },
     {
       "path": "editors/code",
-      "version": "0.13.0",
-      "tag": "badness-code-v0.13.0"
+      "version": "0.14.0",
+      "tag": "badness-code-v0.14.0"
     }
   ],
   "pending-release-targets": [
     {
       "path": ".",
-      "version": "0.13.0",
-      "tag": "v0.13.0"
+      "version": "0.14.0",
+      "tag": "v0.14.0"
     },
     {
       "path": "editors/code",
-      "version": "0.13.0",
-      "tag": "badness-code-v0.13.0"
+      "version": "0.14.0",
+      "tag": "badness-code-v0.14.0"
     }
   ]
 }

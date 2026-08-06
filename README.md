@@ -56,13 +56,13 @@ For macOS and Linux:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-    https://raw.githubusercontent.com/jolars/badness/refs/heads/main/scripts/badness-installer.sh | sh
+    https://github.com/jolars/badness/releases/latest/download/badness-installer.sh | sh
 ```
 
 For Windows PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jolars/badness/refs/heads/main/scripts/badness-installer.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/jolars/badness/releases/latest/download/badness-installer.ps1 | iex"
 ```
 
 The VS Code/Open VSX extension bundles the `badness` binary and starts the

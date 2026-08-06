@@ -457,9 +457,9 @@ itself*):
 away—permitted, since R6 is optional), and R7. R3 is the
 `expl_group_is_spaced`/`is_simple_param_run` split and the
 `expl_arg_takes_leading_space` respacing below; R4/R5 are the conditional-break
-rule below. The brace-column progression (R5: body `{` at +2,
-body +4, `nTF` branches +6, nested +8) falls out of the nested `Ir::indent` the
-`hang_group` rule and the conditional lowering emit.
+rule below. The brace-column progression (R5: body `{` at +2, body +4, `nTF`
+branches +6, nested +8) falls out of the nested `Ir::indent` the `hang_group`
+rule and the conditional lowering emit.
 
 There is **no path divergence** between file flavors for genuine expl3 code:
 `.sty`/`.tex` and a `.dtx` `macrocode` body both route the code through
@@ -481,8 +481,8 @@ a linter, not the layout engine.
 
 R3's positive half applies *outside* the brace as well: an expl3 function's
 argument written flush against its head is respaced, `\clist_count:n{#1}` →
-`\clist_count:n {#1}`. `lower_expl_code` synthesizes the gap by flushing the atom
-exactly as a source gap would, so every branch below it—the `hang_group`
+`\clist_count:n {#1}`. `lower_expl_code` synthesizes the gap by flushing the
+atom exactly as a source gap would, so every branch below it—the `hang_group`
 continuation, the conditional explosion, the trailing-hang candidates—sees the
 state the spaced spelling already produced, and there is no second spelling to
 special-case.
@@ -492,16 +492,16 @@ special-case.
 deliberately **not** subject to the simple-parameter-run exception below—that
 exception governs a group's *inner* padding, not the gap before it. l3kernel
 writes the space either way: a sweep of its `.dtx` sources counts **2883 spaced
-against 9 glued** for parameter-run arguments alone, and **8447 against 14** over
-all expl3-named heads. An embedded 2e-named command keeps its authored gap
+against 9 glued** for parameter-run arguments alone, and **8447 against 14**
+over all expl3-named heads. An embedded 2e-named command keeps its authored gap
 (`\eqref{#1}`, `\ProvidesExplPackage{demo}{…}`), where upstream is genuinely
 mixed (179 spaced, 227 glued) and the house style does not reach.
 
 Inserting the space is a trivia edit and catcode-safe: in-region source spaces
 are catcode 9, so the token stream is unchanged (a real space is `~`, catcode
-10). This is also why it cannot resurrect the classic `\def\foo#1 {…}`
-delimiter hazard—the inserted space never becomes a token. Junk-glued statements
-are exempt, their authored line shape being load-bearing.
+10). This is also why it cannot resurrect the classic `\def\foo#1 {…}` delimiter
+hazard—the inserted space never becomes a token. Junk-glued statements are
+exempt, their authored line shape being load-bearing.
 
 ### Simple parameter runs stay tight (R3)
 
@@ -557,11 +557,12 @@ the width path instead was issue \#101's real trigger: one
 call off the exploded shape, and the width path—then still coupling
 siblings—blew every argument, `{ > }` and `{ 1 }` included, into a three-line
 block. A comment *after* the whole call is not a child of the command, so it
-leaves a fitting conditional flat (`expl_conditional_annotated_branches`). The statement-leading break is width-independent, so
-it is a fixed point: the exploded output re-parses to the same greedy `COMMAND`
-(brace arguments attach across the inserted newlines) in statement position and
-re-explodes identically. A LaTeX2e conditional (`\@ifpackageloaded`, no
-`:`-argspec) is never matched, so issue #94's sticky-fill handling is untouched.
+leaves a fitting conditional flat (`expl_conditional_annotated_branches`). The
+statement-leading break is width-independent, so it is a fixed point: the
+exploded output re-parses to the same greedy `COMMAND` (brace arguments attach
+across the inserted newlines) in statement position and re-explodes identically.
+A LaTeX2e conditional (`\@ifpackageloaded`, no `:`-argspec) is never matched, so
+issue #94's sticky-fill handling is untouched.
 
 The mid-line value scope is itself **width-conditional**, and that is where
 idempotence is subtle (issue #96, `lthooks.dtx`). A *trailing* conditional (head
@@ -762,9 +763,10 @@ forcing a break only after), and the hug-prefix measurement (`HugPrefix`) lets
 the content decide, since a nested block's first hard break must stop the
 measurement *successfully* while a prefix comment must fail it—a distinction the
 flag cannot carry. That last point is S1's one deliberate, narrow layout change:
-an interior-comment-forced block detonating in a head-hug prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the head onto
-its own line, which is the head-hug rule's documented semantics (corpus sweep:
-12 files, all this family, gate sets unchanged).
+an interior-comment-forced block detonating in a head-hug prefix now hugs
+(`\global\setbox9 \vtop{%`) instead of splitting the head onto its own line,
+which is the head-hug rule's documented semantics (corpus sweep: 12 files, all
+this family, gate sets unchanged).
 
 ### Trailing hang groups (K&R↔Allman idempotence)
 
@@ -801,11 +803,10 @@ Narrow guards keep this off the shapes the ordinary hang path already lays out
 stably: a single-command or bare-value body (`expl_group_body_is_multi_atom`, a
 top-level `COMMAND` count—no top-level wrap), a body that *already* carries a
 forced break (comment/guard/margin, or several statements—it wants the plain
-Allman block), and the multi-argument/conditional-branch
-shapes (`statement_has_preceding_group`, `head_command_has_grouped_sibling_arg`)
-whose head this branch—seeing only its own command's `Ignore` stream—cannot
-measure as one unit, so intercepting them would detonate a *preceding* argument
-group.
+Allman block), and the multi-argument/conditional-branch shapes
+(`statement_has_preceding_group`, `head_command_has_grouped_sibling_arg`) whose
+head this branch—seeing only its own command's `Ignore` stream—cannot measure as
+one unit, so intercepting them would detonate a *preceding* argument group.
 
 ### Sticky-break statement fills
 
@@ -824,8 +825,8 @@ later atom breaks too**. The cascade lives in `printer::step_fill`
 
 This is what a *width*-broken sibling needs, and it is the whole of what a
 sibling gets: the argument after a detonated one moves to its own line, but it
-is not itself broken open. When a true-branch block detonates purely from
-width (no guard/comment/margin), the greedy fill would let a following empty
+is not itself broken open. When a true-branch block detonates purely from width
+(no guard/comment/margin), the greedy fill would let a following empty
 false-branch `{}` glue back onto the block's short closing `}` line (`} {}`),
 because at that column the two-byte `{}` fits. But whether the block's own body
 broke **hard** (a source newline, `contains_forced_break`) or **soft** (a width

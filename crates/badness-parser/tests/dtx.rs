@@ -7,9 +7,9 @@
 //! trivia leaf (flat, never a block node) in any layer. Every case also re-checks
 //! losslessness.
 
-use badness::parser::{LatexFlavor, LexConfig, parse_with_flavor};
-use badness::semantic::{DocKind, doc_associations};
-use badness::syntax::{SyntaxKind, SyntaxNode};
+use badness_parser::parser::{LatexFlavor, LexConfig, parse_with_flavor};
+use badness_parser::semantic::{DocKind, doc_associations};
+use badness_parser::syntax::{SyntaxKind, SyntaxNode};
 
 /// Parse `input` under the docstrip (`.dtx`) config, asserting losslessness.
 fn parse_dtx(input: &str) -> SyntaxNode {

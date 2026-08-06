@@ -17,7 +17,7 @@ mod parse_skeleton;
 use std::fs;
 use std::path::Path;
 
-use badness::parser::parse;
+use badness_parser::parser::parse;
 use parse_skeleton::texlab_has_error;
 
 /// Corpus files badness legitimately parses cleanly but texlab cannot, each with

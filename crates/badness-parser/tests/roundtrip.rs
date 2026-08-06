@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::Path;
 
-use badness::parser::{LatexFlavor, LexConfig, parse_with_flavor, reconstruct};
+use badness_parser::parser::{LatexFlavor, LexConfig, parse_with_flavor, reconstruct};
 
 fn assert_lossless(text: &str) {
     assert_eq!(reconstruct(text), text);

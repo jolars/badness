@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::Path;
 
-use badness::bib::parse;
-use badness::bib::semantic::Model;
+use badness_parser::bib::parse;
+use badness_parser::bib::semantic::Model;
 
 fn model_of_corpus_file(name: &str) -> Model {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

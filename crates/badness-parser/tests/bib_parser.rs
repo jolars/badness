@@ -2,8 +2,8 @@
 //! targeted assertions on error-recovery behaviour. Every case also re-checks the
 //! losslessness invariant. Regenerate snapshots with `task snapshots`.
 
-use badness::bib::parse;
-use badness::bib::syntax::SyntaxNode;
+use badness_parser::bib::parse;
+use badness_parser::bib::syntax::SyntaxNode;
 use rowan::NodeOrToken;
 
 /// Render a CST as an indented `KIND@range` tree, with token text, followed by

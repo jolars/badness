@@ -38,7 +38,7 @@ fn texlab_recognizes_badness_clean_entries() {
         let text = fs::read_to_string(&path).expect("read bib corpus file");
 
         // Only assert on inputs badness accepts cleanly (mirrors `parse_oracle.rs`).
-        if !badness::bib::parse(&text).errors.is_empty() {
+        if !badness_parser::bib::parse(&text).errors.is_empty() {
             continue;
         }
 

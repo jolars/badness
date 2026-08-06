@@ -229,10 +229,10 @@ pub fn dice(a: &[String], b: &[String]) -> f64 {
 pub enum Badness {}
 
 impl Projector for Badness {
-    type Lang = badness::syntax::BadnessLang;
+    type Lang = badness_parser::syntax::BadnessLang;
 
-    fn cat(kind: badness::syntax::SyntaxKind) -> Cat {
-        use badness::syntax::SyntaxKind::*;
+    fn cat(kind: badness_parser::syntax::SyntaxKind) -> Cat {
+        use badness_parser::syntax::SyntaxKind::*;
         match kind {
             COMMAND => Cat::Cmd,
             ENVIRONMENT => Cat::Env,
@@ -246,29 +246,29 @@ impl Projector for Badness {
         }
     }
 
-    fn is_begin_or_end(kind: badness::syntax::SyntaxKind) -> bool {
-        use badness::syntax::SyntaxKind::{BEGIN, END};
+    fn is_begin_or_end(kind: badness_parser::syntax::SyntaxKind) -> bool {
+        use badness_parser::syntax::SyntaxKind::{BEGIN, END};
         matches!(kind, BEGIN | END)
     }
 
-    fn is_command_token(kind: badness::syntax::SyntaxKind) -> bool {
-        use badness::syntax::SyntaxKind::{CONTROL_SYMBOL, CONTROL_WORD};
+    fn is_command_token(kind: badness_parser::syntax::SyntaxKind) -> bool {
+        use badness_parser::syntax::SyntaxKind::{CONTROL_SYMBOL, CONTROL_WORD};
         matches!(kind, CONTROL_WORD | CONTROL_SYMBOL)
     }
 
-    fn is_word_token(kind: badness::syntax::SyntaxKind) -> bool {
-        kind == badness::syntax::SyntaxKind::WORD
+    fn is_word_token(kind: badness_parser::syntax::SyntaxKind) -> bool {
+        kind == badness_parser::syntax::SyntaxKind::WORD
     }
 
-    fn is_verbatim_token(kind: badness::syntax::SyntaxKind) -> bool {
-        use badness::syntax::SyntaxKind::{VERB, VERBATIM_BODY};
+    fn is_verbatim_token(kind: badness_parser::syntax::SyntaxKind) -> bool {
+        use badness_parser::syntax::SyntaxKind::{VERB, VERBATIM_BODY};
         matches!(kind, VERB | VERBATIM_BODY)
     }
 }
 
 /// Project badness's CST for `text`.
 pub fn project_badness(text: &str) -> Vec<Atom> {
-    let parsed = badness::parser::parse(text);
+    let parsed = badness_parser::parser::parse(text);
     project::<Badness>(&parsed.syntax())
 }
 

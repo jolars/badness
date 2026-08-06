@@ -2,7 +2,7 @@
 //! Phase 0 scaffolding). Regenerate with `INSTA_UPDATE=always cargo test` or
 //! `task snapshots`.
 
-use badness::parser::lex;
+use badness_parser::parser::lex;
 
 fn dump(input: &str) -> String {
     lex(input)

@@ -102,7 +102,6 @@ dependencies = [
  "log",
  "lsp-server",
  "lsp-types",
- "parser",
  "rayon",
  "rowan",
  "salsa",
@@ -110,7 +109,6 @@ dependencies = [
  "serde_json",
  "similar 3.1.2",
  "smol_str",
- "syntax",
  "tempfile",
  "toml",
 ]

@@ -21,7 +21,7 @@
 
 #![allow(dead_code)] // each test binary uses only part of this module.
 
-use badness::bib;
+use badness_parser::bib;
 use texlab_syntax::bibtex;
 
 /// One node in the common bib skeleton. A document projects to a `Vec<BibAtom>` forest.

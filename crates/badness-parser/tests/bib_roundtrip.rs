@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use badness::bib::reconstruct;
+use badness_parser::bib::reconstruct;
 
 fn assert_lossless(text: &str) {
     assert_eq!(reconstruct(text), text);

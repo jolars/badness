@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use badness::parser::parse;
+use badness_parser::parser::parse;
 use parse_skeleton::{
     Badness, dice, lcs_len, project, project_texlab, render_lines, texlab_has_error,
 };
@@ -124,7 +124,7 @@ fn parse_compat_report() {
 
     if dump_enabled {
         let dump_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
+            .join("../../target")
             .join("parse_compat_diffs.txt");
         fs::write(&dump_path, &dump).expect("write parse_compat_diffs.txt");
         eprintln!(
@@ -142,8 +142,8 @@ fn parse_compat_report() {
     );
     print!("{report}");
 
-    let out_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills/parse-compat/PARSE_COMPAT.md");
+    let out_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.claude/skills/parse-compat/PARSE_COMPAT.md");
     fs::write(&out_path, &report).expect("write PARSE_COMPAT.md");
     eprintln!("parse-compat: wrote {}", out_path.display());
 }

@@ -8,10 +8,10 @@
 use std::fs;
 use std::path::Path;
 
-use badness::bib::semantic::Model;
-use badness::bib::syntax::SyntaxKind;
-use badness::bib::{ast, format, format_with_style, parse, reconstruct};
-use badness::formatter::FormatStyle;
+use badness_formatter::bib::semantic::Model;
+use badness_formatter::bib::syntax::SyntaxKind;
+use badness_formatter::bib::{ast, format, format_with_style, parse, reconstruct};
+use badness_formatter::formatter::FormatStyle;
 
 /// The semantic facts formatting must preserve: the *multiset* of each entry's
 /// (type, key), the `@string` definition names, and the `@string` use names. Every
@@ -138,7 +138,7 @@ fn format_fixtures() {
 
 #[test]
 fn format_invariants_corpus() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bib_corpus");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../badness-parser/tests/bib_corpus");
     let mut count = 0;
     for entry in fs::read_dir(&dir).expect("read bib corpus dir") {
         let path = entry.expect("dir entry").path();

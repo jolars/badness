@@ -62,7 +62,7 @@ fn bib_parse_compat_report() {
             continue;
         };
 
-        if !badness::bib::parse(&text).errors.is_empty() {
+        if !badness_parser::bib::parse(&text).errors.is_empty() {
             reports.push(FileReport {
                 key: key.clone(),
                 outcome: Outcome::SkippedBadness,
@@ -93,7 +93,7 @@ fn bib_parse_compat_report() {
     print!("{report}");
 
     let out_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(".claude/skills/bib-parse-compat/BIB_PARSE_COMPAT.md");
+        .join("../../.claude/skills/bib-parse-compat/BIB_PARSE_COMPAT.md");
     fs::write(&out_path, &report).expect("write BIB_PARSE_COMPAT.md");
     eprintln!("bib-parse-compat: wrote {}", out_path.display());
 }

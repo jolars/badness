@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
 
-use badness::formatter::{
+use badness_formatter::formatter::{
     FormatStyle, MathWrap, SentenceOptions, WrapMode, format, format_node_range_with_signatures,
     format_with_style, format_with_style_flavored, format_with_style_flavored_sentence, perturb,
 };
-use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
-use badness::semantic::SignatureDb;
+use badness_formatter::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
+use badness_formatter::semantic::SignatureDb;
 
 /// Check the formatter invariants for a single clean-parsing input under
 /// `style` and `config`, returning a description of the first violation
@@ -249,7 +249,7 @@ fn sweep_corpus_file(name: &str, text: &str, config: LexConfig) {
 
 #[test]
 fn format_invariants_corpus() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../badness-parser/tests/corpus");
     let mut count = 0;
     for entry in fs::read_dir(&dir).expect("read corpus dir") {
         let path = entry.expect("dir entry").path();
@@ -274,7 +274,7 @@ fn format_invariants_dtx_corpus() {
     // — deliberately — under `Reflow` (the sweep's default wrap), not their
     // production `Preserve` default: this is the Tier-1 stress scope, matching
     // `debug format --checks trivia`'s wrap pinning.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../badness-parser/tests/corpus");
     let config = LexConfig {
         flavor: LatexFlavor::Package,
         dtx: true,

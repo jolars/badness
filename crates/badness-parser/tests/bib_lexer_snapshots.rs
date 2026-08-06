@@ -1,7 +1,7 @@
 //! Snapshot the BibTeX token stream for a few representative inputs. Regenerate
 //! with `INSTA_UPDATE=always cargo test` or `task snapshots`.
 
-use badness::bib::lex;
+use badness_parser::bib::lex;
 
 fn dump(input: &str) -> String {
     lex(input)

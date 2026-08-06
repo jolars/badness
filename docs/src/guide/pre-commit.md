@@ -34,3 +34,7 @@ To check formatting without rewriting files:
 - id: badness-format
   args: [--check]
 ```
+
+The hook then writes nothing, so pre-commit has no modified file to show you;
+the diff `--check` prints is the whole report. Add `--quiet` alongside it if you
+would rather see only the list of files that would be reformatted.

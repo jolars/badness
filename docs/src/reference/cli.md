@@ -12,6 +12,20 @@ A formatter, linter, and language server for LaTeX
 `--no-config`
 :   Ignore any `badness.toml` (project, `$BADNESS_CONFIG`, or global) and use built-in defaults
 
+`--color <WHEN>`
+:   When to use color in output
+
+    Default value: `auto`
+
+    Possible values:
+
+    - `auto`: Colorize when writing to a terminal and `NO_COLOR` is unset (default)
+    - `always`: Always colorize
+    - `never`: Never colorize
+
+`-q`, `--quiet`
+:   Suppress non-essential output (errors are still shown). Under `format --check` this drops the per-file diff, leaving the list of files that would be reformatted and the summary
+
 ## `badness format`
 
 Format LaTeX source.

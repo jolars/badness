@@ -11,7 +11,7 @@
 //! from the [`badness::cli`] definitions by `build.rs` (via `clap_mangen` /
 //! `clap_complete` / `clapdown`).
 
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -23,7 +23,7 @@ use badness::formatter::perturb::{
     ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence,
 };
 use badness::formatter::{
-    FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
+    ChangedFile, FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
 };
 use badness::linter::{
@@ -32,7 +32,9 @@ use badness::linter::{
 };
 use std::collections::{BTreeSet, HashMap};
 
-use badness::cli::{Cli, Command, DebugChecksArg, DebugCommand, LintOutput, MathWrapArg, WrapArg};
+use badness::cli::{
+    Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, LintOutput, MathWrapArg, WrapArg,
+};
 use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
@@ -45,6 +47,7 @@ use badness::syntax::SyntaxNode;
 use clap::Parser;
 use rayon::prelude::*;
 use rowan::{GreenNode, NodeOrToken};
+use similar::{ChangeTag, TextDiff};
 use smol_str::SmolStr;
 
 /// Lower the CLI [`WrapArg`] to the formatter's [`WrapMode`]. Kept as a free
@@ -87,7 +90,10 @@ fn main() -> ExitCode {
         command,
         config: config_arg,
         no_config,
+        color,
+        quiet,
     } = Cli::parse();
+    let out = OutputOptions { color, quiet };
     match command {
         Command::Format {
             paths,
@@ -138,6 +144,7 @@ fn main() -> ExitCode {
                 wrap_override,
                 sentence,
                 &exclude_filter,
+                out,
             )
         }
         Command::Lint {
@@ -1118,6 +1125,26 @@ fn render_cst(node: &SyntaxNode, depth: usize, out: &mut String) {
     }
 }
 
+/// The global output flags (`--color`, `--quiet`), threaded to the commands that
+/// write human-facing output.
+#[derive(Debug, Clone, Copy)]
+struct OutputOptions {
+    color: ColorChoice,
+    quiet: bool,
+}
+
+/// Resolve `--color` against the destination stream. `Auto` honors `NO_COLOR`
+/// (any value, per no-color.org) and requires a terminal, so redirected output
+/// and CI logs stay plain unless `--color always` is passed.
+fn color_enabled(choice: ColorChoice, is_terminal: bool) -> bool {
+    match choice {
+        ColorChoice::Always => true,
+        ColorChoice::Never => false,
+        ColorChoice::Auto => std::env::var_os("NO_COLOR").is_none() && is_terminal,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_format(
     paths: &[PathBuf],
     check: bool,
@@ -1126,9 +1153,10 @@ fn run_format(
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
+    out: OutputOptions,
 ) -> ExitCode {
     if check {
-        return run_check(paths, style, wrap_override, sentence, exclude);
+        return run_check(paths, style, wrap_override, sentence, exclude, out);
     }
     if paths.is_empty() {
         // Stdin has no directory to walk, so the exclude filter never applies.
@@ -1139,32 +1167,92 @@ fn run_format(
 }
 
 /// `--check`: report unformatted files, exit code 1 if any.
+///
+/// The report goes to stdout (only the error path uses stderr) so it can be
+/// piped, and each changed file is rendered as a diff — under `--check` nothing
+/// is written, so this output is the only account of what would change. That
+/// matters most where `--check` is actually used: a CI step log, and a
+/// pre-commit hook configured with `args: [--check]`, neither of which has a
+/// modified file to inspect afterwards. `--quiet` drops the diffs for callers
+/// that want just the file list.
 fn run_check(
     paths: &[PathBuf],
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
     exclude: &ExcludeFilter,
+    out: OutputOptions,
 ) -> ExitCode {
     match check_paths_with_style(paths, style, wrap_override, sentence, exclude) {
         Ok(result) => {
             if result.changed_files.is_empty() {
-                ExitCode::SUCCESS
-            } else {
-                for path in &result.changed_files {
-                    eprintln!("would reformat {}", path.display());
-                }
-                eprintln!(
-                    "{} of {} file(s) would be reformatted",
-                    result.changed_files.len(),
-                    result.checked_files
-                );
-                ExitCode::FAILURE
+                return ExitCode::SUCCESS;
             }
+            if out.quiet {
+                for path in result.changed_paths() {
+                    println!("would reformat {}", path.display());
+                }
+            } else {
+                let use_color = color_enabled(out.color, std::io::stdout().is_terminal());
+                for (idx, file) in result.changed_files.iter().enumerate() {
+                    if idx > 0 {
+                        println!();
+                    }
+                    print_diff(file, use_color);
+                }
+            }
+            println!(
+                "{} of {} file(s) would be reformatted",
+                result.changed_files.len(),
+                result.checked_files
+            );
+            ExitCode::FAILURE
         }
         Err(err) => {
             eprintln!("badness: {err}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Print a unified-style, per-file diff of the formatting change (rustfmt-like:
+/// a `Diff in <path>:<line>:` header followed by context-grouped hunks), matching
+/// what arity and panache emit.
+fn print_diff(file: &ChangedFile, use_color: bool) {
+    const RED: &str = "\x1b[31m";
+    const GREEN: &str = "\x1b[32m";
+    const RESET: &str = "\x1b[0m";
+
+    let diff = TextDiff::from_lines(&file.original, &file.formatted);
+    // Three lines of context around each changed region, so a single stray
+    // space in a long file does not print the whole file.
+    for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
+        if idx > 0 {
+            println!("---");
+        }
+        let start = group[0].old_range().start + 1;
+        println!("Diff in {}:{}:", file.path.display(), start);
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let (sign, color) = match change.tag() {
+                    ChangeTag::Delete => ("-", RED),
+                    ChangeTag::Insert => ("+", GREEN),
+                    ChangeTag::Equal => (" ", ""),
+                };
+                // A final line without a trailing newline must not gain one, so
+                // the newline is re-emitted only when the change carried it.
+                let value = change.value();
+                let newline = value.ends_with('\n');
+                let line = value.strip_suffix('\n').unwrap_or(value);
+                if use_color && !color.is_empty() {
+                    print!("{color}{sign}{line}{RESET}");
+                } else {
+                    print!("{sign}{line}");
+                }
+                if newline {
+                    println!();
+                }
+            }
         }
     }
 }
@@ -1825,6 +1913,20 @@ fn run_debug_format(
 mod tests {
     use super::*;
     use badness::linter::Edit;
+
+    #[test]
+    fn color_choice_overrides_ignore_the_terminal() {
+        assert!(color_enabled(ColorChoice::Always, false));
+        assert!(!color_enabled(ColorChoice::Never, true));
+    }
+
+    #[test]
+    fn color_auto_is_off_when_not_a_terminal() {
+        // Env-independent: a redirected stream (a CI step log, a pipe) is plain
+        // whatever `NO_COLOR` says, which is what keeps the `--check` diff
+        // readable in captured output.
+        assert!(!color_enabled(ColorChoice::Auto, false));
+    }
 
     fn file_map(entries: &[(&str, &str)]) -> HashMap<PathBuf, String> {
         entries

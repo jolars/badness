@@ -28,12 +28,32 @@ cat paper.tex | badness format
 ## Checking Without Writing
 
 In CI you usually want to *verify* that files are already formatted rather than
-rewrite them. The `--check` flag reports which files would change and exits
-non-zero if any are not already formatted:
+rewrite them. The `--check` flag prints a diff of what would change and exits
+non-zero if any file is not already formatted:
 
 ```sh
 badness format --check paper.tex
 ```
+
+```diff
+Diff in paper.tex:12:
+ \section{Introduction}
+-Some    text with   odd spacing.
++Some text with odd spacing.
+1 of 1 file(s) would be reformatted
+```
+
+Since `--check` writes nothing, that report is the only account of what would
+change, which is why it is shown by default. Pass `--quiet` for just the file
+list and the summary---useful when a first run over an unformatted project would
+otherwise flood a CI log:
+
+```sh
+badness format --check --quiet .
+```
+
+The report goes to stdout (only errors use stderr) and is colorized when writing
+to a terminal; `--color always|never` overrides that, and `NO_COLOR` is honored.
 
 ## Linting
 

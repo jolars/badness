@@ -28,6 +28,19 @@ pub enum WrapArg {
     Preserve,
 }
 
+/// When to colorize output. Mirrors arity's global `--color` so the two CLIs
+/// agree on the spelling and on `NO_COLOR`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum ColorChoice {
+    /// Colorize when writing to a terminal and `NO_COLOR` is unset (default).
+    #[default]
+    Auto,
+    /// Always colorize.
+    Always,
+    /// Never colorize.
+    Never,
+}
+
 /// CLI surface for the lint renderer's `OutputMode`. Kept here for the same
 /// reason as [`WrapArg`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -74,6 +87,14 @@ pub struct Cli {
     /// use built-in defaults.
     #[arg(long, global = true)]
     pub no_config: bool,
+    /// When to use color in output.
+    #[arg(long, value_enum, default_value_t = ColorChoice::Auto, global = true, value_name = "WHEN")]
+    pub color: ColorChoice,
+    /// Suppress non-essential output (errors are still shown). Under
+    /// `format --check` this drops the per-file diff, leaving the list of files
+    /// that would be reformatted and the summary.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
 }
 
 #[derive(Subcommand)]

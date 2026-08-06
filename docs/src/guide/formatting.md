@@ -9,8 +9,12 @@ per-construct special cases to memorize.
 ```sh
 badness format paper.tex          # rewrite the file in place
 cat paper.tex | badness format    # stdin → stdout
-badness format --check paper.tex  # report, don't write; non-zero if unformatted
+badness format --check paper.tex  # diff, don't write; non-zero if unformatted
 ```
+
+`--check` prints a diff of the pending change for each file, then a summary; add
+`--quiet` to reduce that to the file list and the summary. See [Checking without
+writing](getting-started.md#checking-without-writing).
 
 ## Style Options
 

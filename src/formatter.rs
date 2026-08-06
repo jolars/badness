@@ -15,7 +15,7 @@ pub(crate) mod printer;
 pub(crate) mod sentence;
 pub mod style;
 
-pub use check::{CheckError, CheckResult, check_paths, check_paths_with_style};
+pub use check::{ChangedFile, CheckError, CheckResult, check_paths, check_paths_with_style};
 pub use core::{
     FormatError, format, format_file_with_packages, format_file_with_packages_sentence,
     format_node, format_node_range_with_signatures, format_node_range_with_signatures_sentence,

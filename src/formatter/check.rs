@@ -8,7 +8,7 @@
 
 use std::fmt;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
@@ -17,10 +17,30 @@ use super::{
 };
 use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
 
+/// A file whose formatted output differs from what is on disk. Both texts are
+/// retained so the CLI can render a diff without formatting a second time; they
+/// are held only for files that actually changed, so a clean run allocates
+/// nothing beyond the path list it already built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub path: PathBuf,
+    /// The file as read from disk.
+    pub original: String,
+    /// What `format` would have written.
+    pub formatted: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
     pub checked_files: usize,
-    pub changed_files: Vec<PathBuf>,
+    pub changed_files: Vec<ChangedFile>,
+}
+
+impl CheckResult {
+    /// The paths that would be reformatted, in discovery order.
+    pub fn changed_paths(&self) -> impl Iterator<Item = &Path> {
+        self.changed_files.iter().map(|file| file.path.as_path())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,11 +162,11 @@ pub fn check_paths_with_style(
     let checked_files = files.len();
 
     // Read + format each file in parallel (formatting is a pure function of input
-    // plus shipped data, so it is thread-safe). `Some(path)` marks a file that
+    // plus shipped data, so it is thread-safe). `Some(file)` marks a file that
     // would change. The order-preserving collect keeps `changed_files`
     // deterministic, and returning the first `Err` in that order reports the same
     // failure the serial loop would.
-    let results: Vec<Result<Option<PathBuf>, CheckError>> = files
+    let results: Vec<Result<Option<ChangedFile>, CheckError>> = files
         .par_iter()
         .map(|(path, kind)| {
             let content = fs::read_to_string(path).map_err(|err| CheckError::ReadError {
@@ -180,14 +200,18 @@ pub fn check_paths_with_style(
                     }
                 })?,
             };
-            Ok((formatted != content).then(|| path.clone()))
+            Ok((formatted != content).then(|| ChangedFile {
+                path: path.clone(),
+                original: content,
+                formatted,
+            }))
         })
         .collect();
 
     let mut changed_files = Vec::new();
     for result in results {
-        if let Some(path) = result? {
-            changed_files.push(path);
+        if let Some(file) = result? {
+            changed_files.push(file);
         }
     }
 
@@ -211,7 +235,25 @@ mod tests {
 
         let result = check_paths(std::slice::from_ref(&path)).unwrap();
         assert_eq!(result.checked_files, 1);
-        assert_eq!(result.changed_files, vec![path]);
+        assert_eq!(result.changed_paths().collect::<Vec<_>>(), vec![&*path]);
+    }
+
+    #[test]
+    fn check_retains_both_texts_for_the_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refs.bib");
+        let original = "@article{k,title={T}}\n";
+        fs::write(&path, original).unwrap();
+
+        let result = check_paths(std::slice::from_ref(&path)).unwrap();
+        let [changed] = &result.changed_files[..] else {
+            panic!("expected one changed file, got {:?}", result.changed_files);
+        };
+        // The original is what is on disk and the formatted text is what
+        // `format` would write, so a diff of the two is the pending change.
+        assert_eq!(changed.original, original);
+        assert_eq!(changed.formatted, crate::bib::format(original).unwrap());
+        assert_ne!(changed.original, changed.formatted);
     }
 
     #[test]
@@ -241,6 +283,6 @@ mod tests {
         let result = check_paths(&[dir.path().to_path_buf()]).unwrap();
         assert_eq!(result.checked_files, 2);
         // Only the unformatted bib should be flagged.
-        assert_eq!(result.changed_files, vec![bib]);
+        assert_eq!(result.changed_paths().collect::<Vec<_>>(), vec![&*bib]);
     }
 }

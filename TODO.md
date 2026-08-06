@@ -503,6 +503,20 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+- [ ] **Config knob for user-declared ref/cite command families (grew out of
+  issue #104).** The #104 example still draws `unreferenced-label` on every
+  label referenced only through a custom wrapper (`\eqrefs{thm:eq1,thm:eq4}`
+  expanding to `\eqref` calls): the semantic builder's ref-family name set
+  (`semantic::builder::ref_command`) is fixed, and seeing through the wrapper
+  would take macro expansion (out of scope, decision #1). A `badness.toml`
+  knob declaring extra ref-family (and cite-family) command names — the
+  analog of the parked user-declared-verbatim-envs knob above — would let a
+  project name its wrappers; the declared names feed the builder's name sets
+  (semantic layer only, never argument attachment, so decision #8's
+  text-purity is untouched). Needs plumbing: config does not currently flow
+  into `SemanticModel::build`, and the shared name sets also serve completion
+  and the LSP, which should honor the same declarations.
+
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to
   ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to

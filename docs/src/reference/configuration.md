@@ -1,6 +1,6 @@
 # Configuration
 
-badness is configured through a `badness.toml` file. All keys are optional and
+Badness is configured through a `badness.toml` file. All keys are optional and
 spelled in kebab-case; an unknown key or section is a hard error, not a silent
 no-op. Run `badness init` to write a commented starter file showing every key at
 its default.
@@ -23,17 +23,16 @@ its default.
 
 ## Discovery
 
-For each input, badness walks from the file's directory upward and uses the
+For each input, Badness walks from the file's directory upward and uses the
 first `badness.toml` it finds. The walk stops at a directory containing a `.git`
-entry (the repository root), so a config outside your repository is never picked
-up.
+entry (the repository root), so a config file outside your repository is never
+picked up.
 
-If no project file is found, badness next checks the `BADNESS_CONFIG`
+If no project file is found, Badness next checks the `BADNESS_CONFIG`
 environment variable. When set (and non-empty), it names a config file to use
 instead of the global user config below—handy for keeping one config on a synced
 drive and pointing every machine at it. A set `BADNESS_CONFIG` shadows the
-global config entirely, and a missing or malformed file is a hard error rather
-than a silent fall-through, so a typo'd path can't go unnoticed.
+global config entirely.
 
 If `BADNESS_CONFIG` is unset, badness falls back to a global user config: the
 first existing file among
@@ -58,7 +57,7 @@ Two global CLI flags override discovery:
 - `--no-config` ignores any project, `BADNESS_CONFIG`, or global file and uses
   built-in defaults.
 
-CLI flags for individual options (`--line-width`, `--wrap`, `--select`, …)
+CLI flags for individual options (`--line-width`, `--wrap`, `--select`, etc.)
 override the corresponding config values for a single run.
 
 ## Top level
@@ -138,7 +137,7 @@ indent-width = 4
 ### `wrap`
 
 How the formatter lays out line breaks *inside a paragraph*. It does not affect
-structure—only where soft line breaks fall.
+structure, only where soft line breaks fall.
 
   | Mode       | Behavior                                                                                                        |
   | ---------- | --------------------------------------------------------------------------------------------------------------- |
@@ -151,13 +150,13 @@ structure—only where soft line breaks fall.
 Both `sentence` and `semantic` split a paragraph at sentence boundaries, one
 sentence per line. Boundary detection is a small per-language rule engine over
 the words: a `.`, `!`, or `?` ends a sentence *unless* the word is a known
-abbreviation (`e.g.`, `Fig.`, `Dr.`, …), an ellipsis (`...`, `…`), or a
+abbreviation (`e.g.`, `Fig.`, `Dr.`, etc.) an ellipsis (`...`, `…`), or a
 contextual abbreviation whose following word signals that the sentence continues
 (`U.S. Government` stays together, `U.S. However` splits). The abbreviation
 profile is chosen by [`lang`](#lang) and extended by
 [`no-break-abbreviations`](#no-break-abbreviations).
 
-`semantic` additionally **preserves the author's own line breaks** on top of the
+`semantic` additionally *preserves the author's own line breaks* on top of the
 sentence breaks (the [sembr](https://sembr.org) convention). It does not detect
 clause boundaries itself—a break after a comma or `and` survives only where the
 author placed a newline. A run-on sentence on a single source line is still

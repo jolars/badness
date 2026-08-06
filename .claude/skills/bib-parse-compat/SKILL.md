@@ -6,7 +6,7 @@ description: Use when the user wants to check or analyze badness's BibTeX parse 
 # bib-parse-compat
 
 A **soft differential gauge** of badness's BibTeX CST against texlab's BibTeX CST
-over `tests/bib_corpus/*.bib`. It is **not a quality gate**: per AGENTS.md we
+over `crates/badness-parser/tests/bib_corpus/*.bib`. It is **not a quality gate**: per AGENTS.md we
 *measure against texlab, never match it*. The skeleton stops at entry types and
 field names; cite keys and value internals are intentionally dropped because the
 two legitimately diverge there. Note texlab's bib parser has no error channel, so
@@ -18,7 +18,7 @@ this gauge never reports texlab parse errors.
 task bib-parse-compat
 ```
 
-This runs `cargo test --test bib_parse_compat -- --ignored --nocapture` and
+This runs `cargo test -p badness-parser --test bib_parse_compat -- --ignored --nocapture` and
 rewrites the report at `.claude/skills/bib-parse-compat/BIB_PARSE_COMPAT.md` (the
 generated artifact next to this skill — do not hand-edit it).
 
@@ -29,7 +29,7 @@ generated artifact next to this skill — do not hand-edit it).
    is still clean."
 2. If "Unexplained divergences" is `0`, report that and stop.
 3. For each unexplained divergence, classify it against
-   `tests/bib_parse_compat_allowlist.toml`:
+   `crates/badness-parser/tests/bib_parse_compat_allowlist.toml`:
    - **Deliberate deviation** (badness is the faithful reading): add a
      `[deviations]` entry keyed by the corpus filename with a one-line reason;
      re-run to confirm.

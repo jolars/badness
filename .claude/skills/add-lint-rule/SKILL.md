@@ -207,7 +207,8 @@ not it ships an auto-fix.
    by your rule id. For fixes, `assert_fix_is_correct(...)` enforces the tenet-1
    contract (fixed text still parses and reconstructs losslessly).
 
-8. **Validate** in this order (single-crate package—no `--workspace`):
+8. **Validate** in this order (the linter lives in the root `badness` crate,
+   which is the default package at the repo root):
    - Targeted: `cargo test --lib <rule_name>`, `cargo test --test lint`,
      `cargo test --test rule_docs` (checks the description/examples requirement,
      that each example triggers, the per-rule snapshot, and that the committed
@@ -216,9 +217,10 @@ not it ships an auto-fix.
      `cargo run -q -- lint /tmp/f.tex`, then if it has a Safe fix
      `cargo run -q -- lint --fix /tmp/f.tex` (or `--unsafe-fixes` for an Unsafe
      one) and inspect the file.
-   - Full: `cargo test`,
-     `cargo clippy --all-targets --all-features -- -D warnings`,
-     `cargo fmt` (the rustfmt git hook aborts the commit on unformatted files).
+   - Full: `cargo test --workspace`,
+     `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+     `cargo fmt --all` (the rustfmt git hook aborts the commit on unformatted
+     files).
 
 ## Dos and don'ts
 

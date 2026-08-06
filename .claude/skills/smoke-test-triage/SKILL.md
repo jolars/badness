@@ -133,13 +133,13 @@ especially idempotency and losslessness regressions.
 
 5. Add regression fixture(s):
    - Parser bugs (losslessness, mis-parse): add a corpus file under
-     `tests/corpus/` (LaTeX) or `tests/bib_corpus/` (BibTeX) — the roundtrip
+     `crates/badness-parser/tests/corpus/` (LaTeX) or `crates/badness-parser/tests/bib_corpus/` (BibTeX) — the roundtrip
      suites assert losslessness over every corpus file — plus a snapshot
      test in `tests/parser.rs` when the tree shape is the point.
    - Formatter bugs (idempotency, layout): add a snapshot case in
      `tests/format.rs` (insta); the format harness asserts idempotence.
    - When a fixture lands in a new extension under `tests/fixtures/**` or
-     `tests/corpus/**`, add the matching `… eol=lf` line to `.gitattributes`
+     `crates/badness-parser/tests/corpus/**`, add the matching `… eol=lf` line to `.gitattributes`
      (the formatter emits LF and Windows CI compares bytes).
 
 6. Fix implementation at root cause:
@@ -150,8 +150,8 @@ especially idempotency and losslessness regressions.
 
 7. Validate:
    - targeted first:
-     - the new test (`cargo test --test format <case>` or
-       `cargo test --test parser <case>` / `--test roundtrip`)
+     - the new test (`cargo test -p badness-formatter --test format <case>` or
+       `cargo test -p badness-parser --test parser <case>` / `--test roundtrip`)
      - `badness debug format --checks all --report <fixture-or-sample-file>`
    - then full validation:
      - `cargo test`

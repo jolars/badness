@@ -549,8 +549,8 @@ mis-lower a partial shape.
 
 **All-or-nothing is a property of the node, not of statement position.** Both
 scopes above are *positional*, and both are additionally gated off inside a
-**fallback** statement. Left to the plain fill, a conditional's branch groups are
-independent atoms, so an overflow hangs only the last one:
+**fallback** statement. Left to the plain fill, a conditional's branch groups
+are independent atoms, so an overflow hangs only the last one:
 
 ```tex
   ,begin-vspace:e = \tl_if_empty:nTF {#2} { \newtheoremstyle@vspace@default }

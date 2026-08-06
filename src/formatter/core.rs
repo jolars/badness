@@ -55,13 +55,15 @@ use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
 use crate::parser::grammar::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
+use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::{
     ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
 };
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+use crate::syntax::{
+    SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
+};
 
 use super::context::FormatContext;
-use super::expl_stmt::{StatementMap, segment_expl_statements};
 use super::ir::Ir;
 use super::printer::Printer;
 use super::sentence::{ResolvedProfile, SentenceOptions, is_sentence_boundary_text};
@@ -2442,12 +2444,6 @@ fn expl_group_body_is_multi_atom(node: &SyntaxNode) -> bool {
         .filter(|n| n.kind() == SyntaxKind::COMMAND)
         .count()
         >= 2
-}
-
-/// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the shape
-/// that follows `#` in a parameter reference. Reads only the token text.
-pub(crate) fn is_param_digit(t: &SyntaxToken) -> bool {
-    matches!(t.text().as_bytes(), [b'1'..=b'9'])
 }
 
 /// Whether an expl3 brace group's body is a *simple run of parameters* — `{#1}`,
@@ -6017,12 +6013,6 @@ fn has_verbatim_body(node: &SyntaxNode) -> bool {
     node.children_with_tokens()
         .filter_map(|e| e.into_token())
         .any(|t| t.kind() == SyntaxKind::VERBATIM_BODY)
-}
-
-/// Whitespace and newlines are the only trivia the formatter rewrites. Comments
-/// are preserved verbatim and so are *not* collapsible.
-pub(crate) fn is_collapsible_trivia(kind: SyntaxKind) -> bool {
-    matches!(kind, SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
 }
 
 /// Consume the maximal run of collapsible trivia beginning at `first`, returning

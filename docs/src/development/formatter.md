@@ -101,7 +101,7 @@ the layout re-decides identically.
 Three sites read the unsafe predicate; one is a bounded residue and two are
 Tier 2:
 
-- The **expl3 fallback statement** (`formatter::expl_stmt`)—a statement whose
+- The **expl3 fallback statement** (`semantic::expl3`)—a statement whose
   head has no derivable arity (no `:` suffix; a `w`/`D`/mid-spec-`T`/`F` or
   unknown letter; a slot-shape mismatch; a guard mid-unit; the stream ending
   mid-unit) is the authored physical line, and a recognized unit's *same-line
@@ -569,7 +569,7 @@ decisions) for the recorded rationale.
 ### Statement boundaries are structural (S4)
 
 Statement boundaries are **call units**, not source newlines. A pure shape
-scan (`formatter::expl_stmt::segment_expl_statements`) runs over each in-region
+scan (`semantic::expl3::segment_expl_statements`) runs over each in-region
 element stream before layout and decides, per gap, whether a statement ends
 there; the layout loop commits logical lines where the map says. The formatter
 owns one-call-per-line: authored same-line calls split, authored mid-call

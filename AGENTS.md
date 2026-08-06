@@ -189,12 +189,12 @@ awareness in `lsp.md`.
 
   S4 made expl3 statement boundaries **structural**: a call unit is the head plus the
   arguments its argspec arity consumes (`semantic::expl3`, decision #2's "semantic
-  layer assigns arity"; segmentation in `formatter::expl_stmt`), so the formatter owns
+  layer assigns arity"; segmentation in `semantic::expl3`), so the formatter owns
   one-call-per-line and a width wrap re-derives the same unit on every pass. The old
   newline rule survives only as the per-statement **fallback** for underivable heads
   (no `:` suffix, `w`/`D`/unknown letters, shape mismatches, guards mid-unit) and for
   a unit's same-line trailing junk — Tier 2, with its fixed-point argument written in
-  `formatter::expl_stmt` (greedy self-refilling lines, no wrap before a recognized
+  `semantic::expl3` (greedy self-refilling lines, no wrap before a recognized
   head, junk-glued statements all-hard).
 
 There is deliberately **no parse-stability invariant**: the formatter may still change

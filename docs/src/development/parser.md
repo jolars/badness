@@ -441,7 +441,7 @@ for derivable specs would be exactly as text-pure as greed. Greedy is not
 neutral there; it is a systematically wrong guess—every single-token slot
 (`N`/`V`) breaks the attachment run, so every `\tl_set:Nn \l_a {x}` attaches
 `{x}` to the definee. The measured cost of that guess is the formatter's
-S4 machinery (the peel-back queue and p-scan in `formatter::expl_stmt`,
+S4 machinery (the peel-back queue and p-scan in `semantic::expl3`,
 which exist only to undo greedy ownership after the fact) and the
 compensating heuristics that accumulated before it
 (`head_command_has_grouped_sibling_arg`, `statement_has_preceding_group`,

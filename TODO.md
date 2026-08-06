@@ -24,7 +24,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   pays), and the parse-compat divergence ledger vs. texlab. Natural trigger: an
   LSP feature needing correct argument ownership in-region (expl3 signature
   help). The semantic statement model is the migration's differential oracle —
-  test grammar attachment against `formatter::expl_stmt`'s segmentation over the
+  test grammar attachment against `semantic::expl3`'s segmentation over the
   gate corpora before flipping any consumer. Rationale in `parser.md`
   (§ *Why greedy: text purity, not uniformity*).
 
@@ -168,13 +168,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     token, `n c v o x e f` a brace group, trailing `T F` branches, `p`
     parameter text shape-scanned to the first explicit `{` — TeX's own static
     rule, so the `Npn` family is fully structural; `w`/`D`/unknown letters
-    fall back) plus `formatter::expl_stmt` (pure-shape segmentation with
+    fall back) plus `semantic::expl3` (pure-shape segmentation with
     peel-back of greedily over-attached arguments) and the `core.rs` rewiring
     (`Statements::Structural`, boundary-map commits, region toggles as
     zero-arity units). The formatter owns one-call-per-line; a width wrap
     re-derives the same unit on every pass. The fallback (underivable heads,
     plus a unit's same-line trailing junk) is the Tier-2 residue and carries
-    its fixed-point argument in `formatter::expl_stmt`: greedy self-refilling
+    its fixed-point argument in `semantic::expl3`: greedy self-refilling
     lines (plain `Ir::Fill`, not sticky), no break before a recognized head
     mid-line, junk-glued statements all-hard. Gate: `--checks all` sets
     byte-identical to baseline at width 80 for all three corpora; both
@@ -197,7 +197,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `N`/`V`/`p` specs are exactly the peel-back cases, common enough (every
   `\tl_set:Nn`, every `Npn` definition) that S4 pays for itself. Every Tier-2
   mode now carries a written fixed-point argument (the expl3 fallback's is in
-  `formatter::expl_stmt`).
+  `semantic::expl3`).
 
   **S4 follow-ups:**
   - [ ] *Out-of-region prefix flips an in-region group's inline/block form.*

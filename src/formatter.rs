@@ -9,7 +9,6 @@ pub mod check;
 pub(crate) mod colspec;
 pub(crate) mod context;
 pub mod core;
-pub(crate) mod expl_stmt;
 pub(crate) mod ir;
 pub mod perturb;
 pub(crate) mod printer;

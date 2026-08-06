@@ -14,7 +14,14 @@ corpora — the S4 motivating case — plus latex2e's `pdfmanagement.sty` and
 (`xparse-2020-10-01.sty` in both corpora, latex2e's `lipsum.sty` and
 `expl3.sty`): the out-of-region prefix mode/rest printer coupling filed as
 an S4 follow-up in TODO.md, reachable only through the
-all-newlines-to-spaces mega-line variants. Over the pinned gate corpora
+all-newlines-to-spaces mega-line variants. Re-recorded once more after the
+grouped-sibling-walk fix (`head_command_has_grouped_sibling_arg` now
+segments the same stream the layout segments — container braces stripped,
+sliced to the in-region run): three `non-fixed-point` entries resolved
+(`xparse-2020-10-01.sty` in both corpora — two of the four S4 additions
+were this, not the mode/rest coupling — plus latex2e's long-standing
+`xparse.sty`), no additions, and production output is byte-identical over
+all three corpora at widths 60/80/120. Over the pinned gate corpora
 fetched by `task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
 
 | corpus | repo @ pin | files |
@@ -46,8 +53,8 @@ width sweep behind `SWEEP.md` reruns both checks with
   before S0, i.e. S0 changed no production layout; S2 resolved the
   `latexrelease.sty` entry, leaving latex3 at 15 `format-error`.
 - `<corpus>.trivia.txt` — the `--checks trivia` convergence-oracle inventory
-  at width 80 (wrap pinned to reflow). Counts: latex3 150 (151 at S0),
-  latex2e 148, pgf 15.
+  at width 80 (wrap pinned to reflow). Counts: latex3 149 (151 at S0),
+  latex2e 146 (148 after S4), pgf 15.
 - `SWEEP.md` — failures that appear or vanish across widths 60–120; each is a
   column-arithmetic hybrid candidate.
 

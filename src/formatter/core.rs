@@ -2119,7 +2119,7 @@ fn lower_expl_code(
                     && expl_group_body_is_multi_atom(child)
                     && is_trailing_in_statement(&elements, idx, map.as_ref())
                     && !statement_has_preceding_group(&elements, idx, map.as_ref())
-                    && !head_command_has_grouped_sibling_arg(child)
+                    && !head_command_has_grouped_sibling_arg(child, cx.expl3_regions)
                     && let ExplGroupPieces::Pieces {
                         open_ir,
                         body,
@@ -2546,26 +2546,58 @@ fn is_trailing_in_statement(
 /// statement boundary, so a grouped command in an *earlier statement*
 /// (`\tl_set:Nn \l_x { v }` on the line above) no longer suppresses the
 /// three-way for an unrelated `\bool_if:NF \…_bool {body}`.
-fn head_command_has_grouped_sibling_arg(child: &SyntaxNode) -> bool {
+///
+/// The re-segmented stream must be the stream the layout segmented, or the
+/// boundaries consulted here disagree with the boundaries committing lines: a
+/// `GROUP` container's braces never reach [`lower_expl_code`]
+/// ([`expl_group_pieces`] strips them — included, the `{` opens a fallback
+/// line that swallows every boundary on the group's first physical line), and
+/// a paragraph is lowered per in-region run ([`lower_expl_paragraph`]), so the
+/// stream is the contiguous in-region slice around the owner. A container that
+/// is itself a `COMMAND` is an [`Statements::Ignore`]-level stream with no
+/// statements to bound, so the walk runs to the stream start there, mirroring
+/// [`statement_has_preceding_group`]'s `map == None` arm.
+fn head_command_has_grouped_sibling_arg(child: &SyntaxNode, regions: &[TextRange]) -> bool {
     let Some(owner) = child.parent() else {
         return false;
     };
+    // Only an *attached* argument has a head with sibling arguments: a
+    // stream-level group's parent is the container itself, where the walk
+    // below has no head command to inspect.
+    if owner.kind() != SyntaxKind::COMMAND {
+        return false;
+    }
     let Some(container) = owner.parent() else {
         return false;
     };
-    let elements: Vec<SyntaxElement> = container.children_with_tokens().collect();
-    let Some(owner_idx) = elements.iter().position(|el| {
+    let stream: Vec<SyntaxElement> = container
+        .children_with_tokens()
+        .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
+        .collect();
+    let Some(owner_idx) = stream.iter().position(|el| {
         el.as_node()
             .is_some_and(|n| n.text_range() == owner.text_range())
     }) else {
         return false;
     };
-    let map = segment_expl_statements(&elements);
-    for j in (0..owner_idx).rev() {
-        if map.boundary_after(j) {
+    let in_region =
+        |el: &SyntaxElement| regions.iter().any(|r| r.contains(el.text_range().start()));
+    let start = (0..owner_idx)
+        .rev()
+        .take_while(|&j| in_region(&stream[j]))
+        .last()
+        .unwrap_or(owner_idx);
+    let mut end = owner_idx + 1;
+    while end < stream.len() && in_region(&stream[end]) {
+        end += 1;
+    }
+    let run = &stream[start..end];
+    let map = (container.kind() != SyntaxKind::COMMAND).then(|| segment_expl_statements(run));
+    for j in (0..owner_idx - start).rev() {
+        if map.as_ref().is_some_and(|m| m.boundary_after(j)) {
             return false;
         }
-        if let SyntaxElement::Node(node) = &elements[j]
+        if let SyntaxElement::Node(node) = &run[j]
             && node.kind() == SyntaxKind::COMMAND
             && node
                 .children()
@@ -6192,15 +6224,22 @@ mod expl3_region_tests {
     use super::*;
     use crate::parser::parse;
 
-    /// The first `GROUP` descendant whose text contains `marker`.
-    fn group_containing(input: &str, marker: &str) -> SyntaxNode {
+    /// Run [`head_command_has_grouped_sibling_arg`] on the *innermost* `GROUP`
+    /// descendant of `input` whose text contains `marker`, with the document's
+    /// real expl3 regions.
+    fn grouped_sibling_walk(input: &str, marker: &str) -> bool {
         let parsed = parse(input);
         assert!(parsed.errors.is_empty(), "test input should parse cleanly");
-        parsed
-            .syntax()
+        let root = parsed.syntax();
+        let regions = expl3_regions(&root);
+        // Preorder puts an enclosing group before a nested one, so the last
+        // match is the innermost.
+        let group = root
             .descendants()
-            .find(|n| n.kind() == SyntaxKind::GROUP && n.text().to_string().contains(marker))
-            .expect("a group containing the marker")
+            .filter(|n| n.kind() == SyntaxKind::GROUP && n.text().to_string().contains(marker))
+            .last()
+            .expect("a group containing the marker");
+        head_command_has_grouped_sibling_arg(&group, &regions)
     }
 
     #[test]
@@ -6209,18 +6248,36 @@ mod expl3_region_tests {
         // trailing-hang treatment for an unrelated `\bool_if:NF \l… {body}` —
         // the backward walk stops at the segmentation boundary.
         let src = "\\ExplSyntaxOn\n\\tl_set:Nn \\l_x { v }\n\\bool_if:NF \\l_bool { body }\n\\ExplSyntaxOff\n";
-        assert!(!head_command_has_grouped_sibling_arg(&group_containing(
-            src, "body"
-        )));
+        assert!(!grouped_sibling_walk(src, "body"));
 
         // Within one statement the earlier grouped command still counts: the
         // `\g_prop {#2}` of a `\prop_get:NnNTF` call marks the multi-argument
         // shape whose branch list the hang path already lays out stably.
         let src =
             "\\ExplSyntaxOn\n\\prop_get:NnNTF \\g_prop {#2} \\l_tl { branch }\n\\ExplSyntaxOff\n";
-        assert!(head_command_has_grouped_sibling_arg(&group_containing(
-            src, "branch"
-        )));
+        assert!(grouped_sibling_walk(src, "branch"));
+    }
+
+    #[test]
+    fn grouped_sibling_walk_matches_the_body_stream_segmentation() {
+        // Inside a single-line brace body, the container's braces must not
+        // reach the re-segmentation: included, the leading `{` opens a
+        // fallback line spanning the whole body, hiding the `\tl_set:Nn`
+        // statement boundary before `\bool_if:NF` — a map disagreeing with
+        // the one the layout commits lines with (`expl_group_pieces` strips
+        // the braces before lowering).
+        let src = "\\ExplSyntaxOn\n\\use:n { \\tl_set:Nn \\l_x { v } \\bool_if:NF \\l_b { body } }\n\\ExplSyntaxOff\n";
+        assert!(!grouped_sibling_walk(src, "body"));
+    }
+
+    #[test]
+    fn grouped_sibling_walk_ignores_out_of_region_prefix() {
+        // A paragraph is lowered per in-region run, so the walk segments only
+        // the contiguous in-region slice around the owner: the out-of-region
+        // `\emph{y}` sharing the authored line must not read as an earlier
+        // grouped command of the `\tl_put_right:Ne` statement.
+        let src = "x \\emph{y} \\ExplSyntaxOn \\tl_put_right:Ne \\l_t { body } \\ExplSyntaxOff\n";
+        assert!(!grouped_sibling_walk(src, "body"));
     }
 
     /// The expl3 regions of `input`, as `(start, end)` byte pairs.

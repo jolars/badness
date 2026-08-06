@@ -206,8 +206,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     and Allman-block (`word {g} \ExplSyntaxOn … \DeclareOption* {…}` inline;
     `\somecmd {g} \ExplSyntaxOn …` block) — an ambient printer mode/rest
     coupling in the S2 fit-contract family, pre-existing, surfaced by S4's
-    width-deciding statements. Behind the 4 trivia-set additions
-    (`xparse-2020-10-01.sty` ×2, `lipsum.sty`, `expl3.sty`), all on the
+    width-deciding statements. Originally blamed for all 4 trivia-set
+    additions at S4, but two of them (`xparse-2020-10-01.sty` ×2) were the
+    grouped-sibling walk re-segmenting a stream the layout never saw
+    (container braces included, out-of-region prefix included) — fixed, see
+    below; `lipsum.sty` and `expl3.sty` remain in this family, all on the
     all-newlines-to-spaces mega-line variant only.
   - [ ] *In-region `BracketPolicy` audit*: a wrap before an attached `[` can
     change CST shape across passes (pre-existing; S4's unit re-formation
@@ -410,6 +413,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   boundaries.~~ Fixed with S4, which made it observable: the walk now re-segments
   the owner's sibling stream and stops at the previous statement boundary
   (`grouped_sibling_walk_stops_at_the_statement_boundary` carries the test).
+  A post-S4 follow-up made the re-segmented stream *the layout's own*: the
+  container's braces are stripped (matching `expl_group_pieces`) and the
+  stream is sliced to the contiguous in-region run (matching
+  `lower_expl_paragraph`), since a map over a differently-shaped stream can
+  disagree with the map committing lines (a `{` opens a fallback line that
+  swallows every boundary on a single-line body; an out-of-region `\emph{y}`
+  on a mega-line read as an earlier grouped command). Resolved three trivia
+  gate entries (`xparse-2020-10-01.sty` ×2, latex2e's `xparse.sty`),
+  byte-neutral on authored corpus files at widths 60/80/120.
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but

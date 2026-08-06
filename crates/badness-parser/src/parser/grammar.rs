@@ -114,7 +114,7 @@ fn is_definition_body_command(text: &str) -> bool {
 /// curated set read as a static fact, mirroring [`is_definition_body_command`];
 /// the definition is never executed.
 ///
-/// Also read by the formatter's expl3 region gate ([`crate::formatter`]): a toggle
+/// Also read by the formatter's expl3 region gate (in the `badness-formatter` crate): a toggle
 /// spelling immediately preceded by one of these is a *definee*, never an executed
 /// catcode switch, so it must not open a formatter-owned region.
 pub fn is_def_prefix_command(text: &str) -> bool {

@@ -273,7 +273,7 @@ fn is_char_constant_command(text: &str) -> bool {
 
 /// An expl3 catcode-mode toggle recognized purely by its control-word spelling.
 /// Shared by the lexer (which flips its `expl_syntax` flag) and the formatter's
-/// region pre-pass ([`crate::formatter`] recomputes in-region byte spans), so the
+/// region pre-pass (the `badness-formatter` crate recomputes in-region byte spans), so the
 /// two read the *same* fixed toggle set and can never drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplToggle {

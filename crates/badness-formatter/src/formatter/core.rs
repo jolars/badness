@@ -117,12 +117,12 @@ pub fn format_with_style(input: &str, style: FormatStyle) -> Result<String, Form
 }
 
 /// Like [`format_with_style`] but parses `input` under an explicit
-/// [`LexConfig`], so a [`Package`](LatexFlavor::Package) flavor (`.sty`/`.cls`)
+/// [`LexConfig`](crate::parser::LexConfig), so a [`Package`](LatexFlavor::Package) flavor (`.sty`/`.cls`)
 /// lexes with `@` as a letter (the implicit `\makeatletter`) and a `.dtx` runs
 /// the docstrip mode. A bare [`LatexFlavor`] coerces in. The wrap mode is a
 /// `style` concern, decided by the caller (`.sty`/`.cls` default to
-/// [`crate::formatter::WrapMode::Preserve`] via
-/// [`crate::file_discovery::FileKind::default_wrap`]).
+/// [`crate::formatter::WrapMode::Preserve`] via the CLI crate's
+/// `FileKind::default_wrap`).
 pub fn format_with_style_flavored(
     input: &str,
     style: FormatStyle,
@@ -153,8 +153,8 @@ pub fn format_with_style_flavored_sentence(
 
 /// Like [`format_with_style_flavored`] but additionally folds an `external`
 /// signature scope — the merged definitions of the document's loaded local
-/// packages ([`crate::semantic::collect_package_signatures`] /
-/// [`crate::incremental::scope_signatures`]) — into the lowering, so calls to
+/// packages (`semantic::load::collect_package_signatures` and the salsa-cached
+/// `incremental::scope_signatures`, both in the `badness` crate) — into the lowering, so calls to
 /// package-defined macros are shaped by their real arity/verbatim-ness. The
 /// document's own definitions always win over `external`. The CLI uses this for a
 /// real file path; passing an empty DB recovers [`format_with_style_flavored`].
@@ -186,7 +186,7 @@ pub fn format_node(root: &SyntaxNode, style: FormatStyle) -> Result<String, Form
 
 /// Like [`format_node`] but folds an `external` signature scope (loaded local
 /// packages' merged definitions) into the lowering. The language server passes the
-/// salsa-cached [`crate::incremental::scope_signatures`] here; the document's own
+/// salsa-cached `incremental::scope_signatures` (in the `badness` crate) here; the document's own
 /// definitions always win over `external`. An empty DB recovers [`format_node`].
 pub fn format_node_with_signatures(
     root: &SyntaxNode,
@@ -223,7 +223,7 @@ pub fn format_node_with_signatures_sentence(
 
 /// Range formatting: lay out only the top-level blocks overlapping `range`,
 /// returning the formatted text for the `[first block start, last block end]`
-/// span. The caller ([`crate::lsp`]) expands the editor selection to whole
+/// span. The caller (the `badness` crate's LSP) expands the editor selection to whole
 /// top-level-block boundaries before calling, so `range` is already block-aligned.
 ///
 /// The whole document is still scanned for `\newcommand` signatures and expl3

@@ -1,6 +1,6 @@
 //! The parser entry point and its output type.
 //!
-//! `parse` runs the pipeline: [`lex`] → [`grammar::parse`] (the recursive
+//! `parse` runs the pipeline: [`lex`](crate::parser::lex) → [`grammar::parse`] (the recursive
 //! descent, which emits events + errors) → [`build_tree`] (the green tree).
 //! Syntax errors ride a side channel and never abort the parse.
 

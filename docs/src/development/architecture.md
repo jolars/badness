@@ -18,11 +18,31 @@ and the LSP's environment awareness each have their own page:
 
 ## What the project is
 
-**A single-crate Cargo package** (`badness`, edition 2024), *not* a workspace.
-The source is organized into module folders: `parser/`, `formatter/`, `linter/`,
-`semantic/`, `project/`, `text/`, `ast/`, `lsp/`, and `bib/` (the parallel
-BibTeX pipeline, below), plus top-level `syntax.rs`, `incremental.rs`,
-`config.rs`, `cli.rs`, `completion.rs`, and `file_discovery.rs`.
+**A three-crate Cargo workspace** (edition 2024). The root package is the
+CLI/LSP/linter crate `badness`; two publishable library crates live under
+`crates/`:
+
+- **`badness-parser`** — the syntax layer (`syntax`, `ast`), the parser, the
+  semantic layer (minus the disk/salsa-backed `load` module), the BibTeX
+  parsing and semantic layers, the `data/` signature artifacts, and the phf
+  codegen `build.rs` that bakes them.
+- **`badness-formatter`** — the layout engine (`formatter/{core, ir, printer,
+  style, context, colspec, sentence, perturb}`) and the `.bib` formatter.
+  Depends on `badness-parser`.
+
+Both library crates build for `wasm32-unknown-unknown` (a CI job guards this;
+the formatter is embedded by the dprint Wasm plugin), so nothing in them may
+touch the filesystem, threads, or processes.
+
+The root crate keeps `linter/`, `lsp/`, `project/`, `text/`, plus top-level
+`incremental.rs` (salsa), `config.rs`, `cli.rs`, `completion.rs`, and
+`file_discovery.rs`, and re-exports the member crates at the old module paths
+through **shim modules** — `src/parser.rs` is just
+`pub use badness_parser::parser::*;` — so code everywhere keeps writing
+`crate::parser::…`. Two **bridge modules** host the CLI-side halves of split
+concerns: `src/formatter.rs` (the `check` batch driver and the disk-backed
+`format_file_with_packages` entries) and `src/semantic.rs` (the `load`
+module).
 
 ### Supported inputs
 

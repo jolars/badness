@@ -54,7 +54,7 @@ making the grammar's `in_expl_region` implicit-aware is a deliberate non-goal.
 
 `\verb`, verbatim-like environments, and verbatim-argument commands capture
 their opaque body or final argument as a single token, using the signature DB
-(`data/signatures.json`) for argument shape. Built-ins are curated;
+(`crates/badness-parser/data/signatures.json`) for argument shape. Built-ins are curated;
 **user-defined** verbatim commands are discovered by the definition scanner
 (`semantic::define`) via a **bounded two-pass parse**—pass 1 fingerprints
 catcode-changing definitions, pass 2 re-lexes with those names. This is

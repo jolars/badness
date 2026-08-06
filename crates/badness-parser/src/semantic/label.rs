@@ -161,7 +161,7 @@ pub struct ColorDef {
 /// `CitationRef`s. Citations are always cross-file: cite keys live in `.bib`
 /// files, so there is no in-file resolution (no `resolved` flag); the
 /// `undefined-citation` lint resolves them against the project's bibliography via
-/// [`crate::project::citations::ResolvedCitations`].
+/// `project::citations::ResolvedCitations` (in the `badness` crate).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CitationRef {
     /// The cite key, as authored.

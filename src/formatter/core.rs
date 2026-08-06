@@ -46,6 +46,8 @@
 //! The lowering (`lower_node`) is the LaTeX-specific part; the surrounding
 //! `format`/`format_with_style` framework is generic.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::iter::Peekable;
 
 use rowan::{TextRange, TextSize};
@@ -344,6 +346,9 @@ fn format_root(
     // no-break slice `ctx` still owns for the whole call, so it rides `LowerCtx`
     // like the bare `wrap` mode. Never consulted under `reflow`/`preserve`.
     let profile = ctx.sentence().resolved();
+    // The grouped-sibling memo (see [`GroupedSiblingCache`]), owned here for the
+    // whole lowering like `user` and `regions`.
+    let grouped_sibling_cache = GroupedSiblingCache::default();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
         // Resolved here (never `Auto` past this point), so per-file-kind wrap
@@ -354,6 +359,7 @@ fn format_root(
         expl3_regions: &regions,
         profile,
         range,
+        grouped_sibling_cache: &grouped_sibling_cache,
     };
     // Saturate `Group::expand` at the lowering->printer seam: after this, the
     // flag is the single representation of "forced open" the printer trusts.
@@ -729,7 +735,20 @@ struct LowerCtx<'a> {
     /// `ROOT` — every selected block still lowers in full, at its real indent-0
     /// context, so the formatter stays the sole authority on layout.
     range: Option<TextRange>,
+    /// Per-container memo for [`head_command_has_grouped_sibling_arg`]: the
+    /// gate re-segments the *enclosing* stream (which the [`Statements::Ignore`]
+    /// call lowering the owner's arguments cannot see), and doing that once per
+    /// trailing-group candidate is O(run²) over a paragraph run of
+    /// `\cmd:Nn \tgt {body}` statements. One linear pass per container instead,
+    /// shared through the whole lowering. Borrowed from [`format_root`] like
+    /// `expl3_regions`.
+    grouped_sibling_cache: &'a GroupedSiblingCache,
 }
+
+/// Memoized [`head_command_has_grouped_sibling_arg`] answers: per container
+/// node, the answer for every in-region `COMMAND` child, keyed by its start
+/// offset (unique among siblings). See [`grouped_sibling_answers`].
+type GroupedSiblingCache = RefCell<HashMap<SyntaxNode, HashMap<TextSize, bool>>>;
 
 impl<'a> LowerCtx<'a> {
     /// Whether the active wrap mode lays out prose paragraphs at all (as opposed to
@@ -2119,7 +2138,11 @@ fn lower_expl_code(
                     && expl_group_body_is_multi_atom(child)
                     && is_trailing_in_statement(&elements, idx, map.as_ref())
                     && !statement_has_preceding_group(&elements, idx, map.as_ref())
-                    && !head_command_has_grouped_sibling_arg(child, cx.expl3_regions)
+                    && !head_command_has_grouped_sibling_arg(
+                        child,
+                        cx.expl3_regions,
+                        cx.grouped_sibling_cache,
+                    )
                     && let ExplGroupPieces::Pieces {
                         open_ir,
                         body,
@@ -2541,8 +2564,9 @@ fn is_trailing_in_statement(
 /// \l…_tl {body}`, `\bool_if:NF \…_bool {body}`) has no such earlier grouped
 /// command and still qualifies.
 ///
-/// "Same statement" is decided by re-segmenting the owner's sibling stream
-/// ([`segment_expl_statements`]): the backward walk stops at the previous
+/// "Same statement" is decided by segmenting the owner's sibling stream
+/// ([`segment_expl_statements`], memoized per container in
+/// [`GroupedSiblingCache`]): the backward walk stops at the previous
 /// statement boundary, so a grouped command in an *earlier statement*
 /// (`\tl_set:Nn \l_x { v }` on the line above) no longer suppresses the
 /// three-way for an unrelated `\bool_if:NF \…_bool {body}`.
@@ -2557,7 +2581,11 @@ fn is_trailing_in_statement(
 /// is itself a `COMMAND` is an [`Statements::Ignore`]-level stream with no
 /// statements to bound, so the walk runs to the stream start there, mirroring
 /// [`statement_has_preceding_group`]'s `map == None` arm.
-fn head_command_has_grouped_sibling_arg(child: &SyntaxNode, regions: &[TextRange]) -> bool {
+fn head_command_has_grouped_sibling_arg(
+    child: &SyntaxNode,
+    regions: &[TextRange],
+    cache: &GroupedSiblingCache,
+) -> bool {
     let Some(owner) = child.parent() else {
         return false;
     };
@@ -2570,43 +2598,72 @@ fn head_command_has_grouped_sibling_arg(child: &SyntaxNode, regions: &[TextRange
     let Some(container) = owner.parent() else {
         return false;
     };
+    // Memoized per container: segmenting the enclosing stream once per
+    // trailing-group candidate is O(run²) over a paragraph run of qualifying
+    // statements (56x wall-clock at 2000 statements), and every candidate in
+    // the same container needs the same segmentation.
+    let mut cache = cache.borrow_mut();
+    let answers = cache
+        .entry(container)
+        .or_insert_with_key(|container| grouped_sibling_answers(container, regions));
+    answers
+        .get(&owner.text_range().start())
+        .copied()
+        .unwrap_or(false)
+}
+
+/// One linear pass computing [`head_command_has_grouped_sibling_arg`] for every
+/// in-region `COMMAND` child of `container`: split the (brace-stripped) sibling
+/// stream into maximal in-region runs, segment each run once, and sweep it
+/// forward carrying "a grouped command has appeared since the last statement
+/// boundary" — the state an element's backward same-statement walk would
+/// observe. A grouped command that itself *ends* a statement resets rather than
+/// sets the flag (the backward walk meets its boundary first). An owner absent
+/// from the map (out of region — unreachable from the expl3 lowering that asks)
+/// answers `false`.
+fn grouped_sibling_answers(
+    container: &SyntaxNode,
+    regions: &[TextRange],
+) -> HashMap<TextSize, bool> {
     let stream: Vec<SyntaxElement> = container
         .children_with_tokens()
         .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
         .collect();
-    let Some(owner_idx) = stream.iter().position(|el| {
-        el.as_node()
-            .is_some_and(|n| n.text_range() == owner.text_range())
-    }) else {
-        return false;
-    };
     let in_region =
         |el: &SyntaxElement| regions.iter().any(|r| r.contains(el.text_range().start()));
-    let start = (0..owner_idx)
-        .rev()
-        .take_while(|&j| in_region(&stream[j]))
-        .last()
-        .unwrap_or(owner_idx);
-    let mut end = owner_idx + 1;
-    while end < stream.len() && in_region(&stream[end]) {
-        end += 1;
-    }
-    let run = &stream[start..end];
-    let map = (container.kind() != SyntaxKind::COMMAND).then(|| segment_expl_statements(run));
-    for j in (0..owner_idx - start).rev() {
-        if map.as_ref().is_some_and(|m| m.boundary_after(j)) {
-            return false;
+    let mut answers = HashMap::new();
+    let mut i = 0;
+    while i < stream.len() {
+        if !in_region(&stream[i]) {
+            i += 1;
+            continue;
         }
-        if let SyntaxElement::Node(node) = &run[j]
-            && node.kind() == SyntaxKind::COMMAND
-            && node
-                .children()
-                .any(|c| matches!(c.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
-        {
-            return true;
+        let mut end = i + 1;
+        while end < stream.len() && in_region(&stream[end]) {
+            end += 1;
         }
+        let run = &stream[i..end];
+        let map = (container.kind() != SyntaxKind::COMMAND).then(|| segment_expl_statements(run));
+        let mut seen_grouped = false;
+        for (j, el) in run.iter().enumerate() {
+            if let SyntaxElement::Node(node) = el
+                && node.kind() == SyntaxKind::COMMAND
+            {
+                answers.insert(node.text_range().start(), seen_grouped);
+            }
+            if map.as_ref().is_some_and(|m| m.boundary_after(j)) {
+                seen_grouped = false;
+            } else if el.as_node().is_some_and(|n| {
+                n.kind() == SyntaxKind::COMMAND
+                    && n.children()
+                        .any(|c| matches!(c.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+            }) {
+                seen_grouped = true;
+            }
+        }
+        i = end;
     }
-    false
+    answers
 }
 
 /// Whether a `GROUP`/`OPTIONAL` sibling precedes the element at `idx` within its
@@ -6239,7 +6296,7 @@ mod expl3_region_tests {
             .filter(|n| n.kind() == SyntaxKind::GROUP && n.text().to_string().contains(marker))
             .last()
             .expect("a group containing the marker");
-        head_command_has_grouped_sibling_arg(&group, &regions)
+        head_command_has_grouped_sibling_arg(&group, &regions, &GroupedSiblingCache::default())
     }
 
     #[test]

@@ -132,9 +132,21 @@ links to the Development page carrying its full rationale, examples, and provena
    `Send`/`Eq`/`salsa::Update`; the tree is a pure function of the text, materialized
    to red cursors on demand. See `parser.md`.
 
-8. **Argument grouping is greedy and generic** (texlab-style); arity is refined by the
-   semantic layer. **`[…]` attachment is shape-gated**—a bracket is an argument only
-   when it reads as one, from static shape facts, never meaning. See `parser.md`.
+8. **Argument grouping is text-pure: greedy and generic by default, deviating only on
+   static lexical facts.** Greedy attachment (texlab-style) is the only total strategy
+   where the text carries no arity protocol; arity is refined by the semantic layer,
+   never consulted during attachment—grouping from mutable signature data (config,
+   package scopes, scanned definitions beyond the two-pass verbatim scan) would make
+   the tree a function of inputs other than the text (decision #7). Sanctioned
+   deviations read static facts only: **`[…]` attachment is shape-gated**—a bracket is
+   an argument only when it reads as one, from static shape facts, never meaning—and
+   the **expl3 argspec suffix** (the one dialect whose arity rides in the token
+   itself, so arity-directed attachment would be as text-pure as greed) is the
+   recorded *candidate* deviation, deliberately unimplemented: today the semantic
+   layer derives the arity (`semantic::expl3`) and the formatter consumes it, and
+   promoting attachment into the grammar is a migration with recorded open questions
+   (mixed-shape CST, false-positive blast radius, differential-oracle divergence),
+   not a patch. See `parser.md` (§ *Argument grouping and bracket policy*).
 
 9. **Trivia attachment follows the rust-analyzer rule:** comments bind *forward* (a
    run of own-line `%` before a `COMMAND`/`ENVIRONMENT` becomes a `DOC_COMMENT`),

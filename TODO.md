@@ -10,6 +10,24 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
+- [ ] **Arity-directed expl3 attachment (decision #8's recorded candidate
+  deviation).** In-region, the argspec suffix rides in the `CONTROL_WORD` token,
+  so attachment directed by `semantic::expl3::expl3_slots` would be exactly as
+  text-pure as greed — and greedy is a systematically wrong guess there (every
+  `N`/`V` slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
+  definee; the formatter's S4 peel-back exists only to undo this). Keys on token
+  shape alone (colon-suffixed names only lex as one token in-region — no grammar
+  region-awareness needed); `w`/`D`/colonless fall back to greed. Deliberately
+  unimplemented until the migration questions have answers: the mixed-shape CST
+  every consumer must then handle, the false-positive blast radius moving from
+  layout into the tree (linter/LSP see wrong structure where today only layout
+  pays), and the parse-compat divergence ledger vs. texlab. Natural trigger: an
+  LSP feature needing correct argument ownership in-region (expl3 signature
+  help). The semantic statement model is the migration's differential oracle —
+  test grammar attachment against `formatter::expl_stmt`'s segmentation over the
+  gate corpora before flipping any consumer. Rationale in `parser.md`
+  (§ *Why greedy: text purity, not uniformity*).
+
 ## Formatter
 
 - [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family

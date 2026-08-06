@@ -174,12 +174,25 @@ line remains unpenalized. Blank lines and command-only lines bound each
 independently optimized run, and code-like statement bodies retain ordinary
 greedy fill. (The soft target is not currently configurable.)
 
-When omitted, the formatter uses each file kind's default: `.tex` and `.bib`
-files reflow, while code-heavy `.sty`, `.cls`, `.dtx`, and `.ins` files preserve
-authored line breaks. Setting `wrap` applies the same mode to every file kind.
+When omitted, every file kind reflows—`.tex`, `.bib`, `.sty`, `.cls`, `.dtx`,
+and `.ins` alike. A file's extension is not a layout input.
 
-**Default value**: unset (per file kind: `.tex`/`.bib` → `reflow`,
-`.sty`/`.cls`/`.dtx`/`.ins` → `preserve`)
+That is safe because reflow is never the thing that decides whether content may
+move. The formatter declines to reflow anything it cannot lay out without
+changing meaning, in *every* wrap mode and regardless of what you configure:
+verbatim bodies and `\verb`, comments, `.dtx` documentation margins and docstrip
+guards (which must stay at column 0), and any documentation block whose
+rewrapping would push a `%` off column 0. Asking for `wrap = "reflow"` on a
+`.dtx` cannot corrupt it; asking for `wrap = "preserve"` on a `.tex` is a
+stylistic choice, not a safety one.
+
+Code, in practice, has little to reflow: expl3 regions
+(`\ExplSyntaxOn`…`\ExplSyntaxOff`) are laid out by their own rules whatever
+`wrap` says, and a source line consisting only of commands keeps its own line.
+So a package or class body formats much as it did before, and `preserve` remains
+available if you want authored breaks kept verbatim.
+
+**Default value**: unset (`reflow`, for every file kind)
 
 **Type**: `"reflow" | "stable" | "sentence" | "semantic" | "preserve"`
 

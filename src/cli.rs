@@ -247,9 +247,8 @@ pub enum DebugCommand {
         /// config; the multi-width corpus sweep's knob).
         #[arg(long)]
         line_width: Option<usize>,
-        /// How to lay out line breaks inside a paragraph (overrides the
-        /// per-extension default; the trivia check ignores this and pins
-        /// `reflow`).
+        /// How to lay out line breaks inside a paragraph (the trivia check
+        /// ignores this and pins `reflow`).
         #[arg(long, value_enum)]
         wrap: Option<WrapArg>,
         /// Emit a Markdown report to stdout instead of log lines.

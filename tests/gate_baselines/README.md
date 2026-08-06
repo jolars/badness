@@ -37,6 +37,33 @@ trivia variant. Five `non-fixed-point` entries resolved (`lipsum.sty` and
 files; latex3 and pgf byte-unchanged. Production output moved in 19 files across
 the three corpora, every diff the same shape: a sibling stranded on its own line
 after a multi-line group (`,`, `{#1}`, `\fi:`) re-glues onto the closing `}`.
+Re-recorded once more after **`reflow` became the default for every file kind**
+(the per-extension `WrapMode` default is gone) together with the `.dtx`
+margin-safety gates that made it safe. This is the largest movement the
+inventory has seen:
+
+- **169 `content-change` entries resolved** — latex3 132 → 11, latex2e 117 → 69.
+  The `^^A`-relocation and guarded-line families are gone: reflowing a managed
+  command argument across doc-margined lines is now refused
+  (`!contains_doc_margin` on the `COMMAND` arm), a `DtxProse` reflow that
+  commits anything outside the `%` margin abandons the reflow
+  (`LineBuilder::margin_escaped`), a paragraph whose first line is unmargined
+  never gains a canonical margin (`dtx_paragraph_starts_margined`), and a
+  doc-margined out-of-region expl3 run is no longer prose-reflowed
+  (`run_carries_doc_margin`).
+- **31 `non-fixed-point` additions** — latex3 2 → 19, latex2e 11 → 23. Every one
+  is in a file that was already recorded: the trivia check stops at the first
+  failing variant, so removing a file's `content-change` failure exposes the
+  non-convergence behind it. TODO.md's S0 note predicted exactly this.
+- **16 `idempotency` additions to the `all` sets** (latex3 15 → 16, latex2e 13 →
+  28). All `.dtx` plus `array-2024-06-01.sty`, and all already recorded in the
+  `trivia` sets: these are pre-existing layout non-convergence that the old
+  `.dtx` `Preserve` default hid from the production path. The flip makes them
+  reachable at the default; the fix is the S-series work, not a wrap default.
+- **No file that previously passed now fails**, in either gate, and the `all`
+  sets contain **no** `content-change` entry — production formatting corrupts
+  nothing. pgf is byte-identical in both gates.
+
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):
 

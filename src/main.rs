@@ -1301,7 +1301,7 @@ fn run_format_stdin(
         return ExitCode::FAILURE;
     }
     let kind = stdin_filepath.map_or(FileKind::Tex, file_kind_or_tex);
-    style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+    style.wrap = wrap_override.unwrap_or_default();
     let formatted = match kind {
         FileKind::Tex
         | FileKind::CodeTex
@@ -1386,7 +1386,7 @@ fn run_format_paths(
                 Err(err) => return Some(format!("badness: cannot read {}: {err}", path.display())),
             };
             let mut style = style;
-            style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+            style.wrap = wrap_override.unwrap_or_default();
             let formatted = match kind {
                 FileKind::Tex
                 | FileKind::CodeTex
@@ -1718,7 +1718,7 @@ fn run_debug_checks_for_file(
 
     if matches!(checks, DebugChecksArg::Idempotency | DebugChecksArg::All) {
         let mut style = style;
-        style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+        style.wrap = wrap_override.unwrap_or_default();
         let fmt = |input: &str| match kind {
             FileKind::Bib => {
                 badness::bib::format_with_style(input, style).map_err(|e| e.to_string())

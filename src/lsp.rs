@@ -1265,9 +1265,9 @@ fn on_formatting(
     }
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    // `wrap` is decided per request: a configured `wrap` wins, else the file kind
-    // (a package/class body is code, defaulting to `Preserve`).
-    style.wrap = resolved.wrap_override.unwrap_or(kind.default_wrap());
+    // `wrap` is decided per request: a configured `wrap` wins, else the default
+    // (`reflow`, the same for every file kind).
+    style.wrap = resolved.wrap_override.unwrap_or_default();
     let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::Format {
         id,
@@ -1320,7 +1320,7 @@ fn on_range_formatting(
     }
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    style.wrap = resolved.wrap_override.unwrap_or(kind.default_wrap());
+    style.wrap = resolved.wrap_override.unwrap_or_default();
     let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::RangeFormat {
         id,
@@ -1374,7 +1374,7 @@ fn on_type_formatting(
     }
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    style.wrap = resolved.wrap_override.unwrap_or(kind.default_wrap());
+    style.wrap = resolved.wrap_override.unwrap_or_default();
     let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::OnTypeFormat {
         id,

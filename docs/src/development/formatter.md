@@ -203,9 +203,10 @@ never touched—never layout ownership. Each variant is verified post hoc (clean
 parse, identical non-trivia content, identical trivia-blind CST skeleton) so
 newline-sensitive *parser* shape gates are dropped and counted
 (`dropped_unsafe`) instead of polluting the layout inventory. The convergence
-oracle runs as `badness debug format --checks trivia` (wrap pinned to `reflow`,
-since `Preserve` converges trivially and stresses nothing; opt-in, not part of
-`--checks all`) and inside the corpus invariants sweep in `tests/format.rs`.
+oracle runs as `badness debug format --checks trivia` (wrap pinned to `reflow`—
+the default anyway, but pinned so an explicit `--wrap preserve` cannot make the
+oracle converge trivially; opt-in, not part of `--checks all`) and inside the
+corpus invariants sweep in `tests/format.rs`.
 
 The staged rollout, with per-stage gates, is in `TODO.md`.
 
@@ -335,10 +336,11 @@ parent is never *asked* whether it fits.
 
 ## Paragraph line breaks
 
-Paragraph line breaks are controlled by a `WrapMode` (`Reflow` default,
-`Stable`, `Sentence`, `Semantic`/sembr, `Preserve`), modeled on the sibling
-[panache](https://github.com/jolars/panache) formatter and mechanized through
-the `Doc` IR, not a separate line-filler. All five are implemented:
+Paragraph line breaks are controlled by a `WrapMode` (`Reflow`—the default for
+every file kind—`Stable`, `Sentence`, `Semantic`/sembr, `Preserve`), modeled on
+the sibling [panache](https://github.com/jolars/panache) formatter and
+mechanized through the `Doc` IR, not a separate line-filler. All five are
+implemented:
 
 - `Reflow` width-fills.
 - `Stable` keeps acceptable authored breaks while optimizing
@@ -362,6 +364,55 @@ Sentence-boundary detection is a per-language abbreviation profile
 The `\\` line break (with a tightly-bound `*`/`[len]`) is grouped by the
 *parser* into a `LINE_BREAK` node so the formatter sees `\\[2ex]` as one unit.
 
+### Reflow is safe by construction, not by file kind
+
+`WrapMode` used to be resolved per file extension: `.tex`/`.bib` reflowed while
+`.sty`/`.cls`/`.dtx`/`.ins`/`*.code.tex` fell back to `Preserve`. That default
+is gone—every file kind reflows—because "is this content safe to reflow?" is a
+property of the content, not of the file name, and answering it via the
+extension left `--wrap reflow` on a `.dtx` free to corrupt the document.
+
+The safety is now structural, and every gate below is independent of `cx.wrap`,
+so an explicit `--wrap reflow` is exactly as safe as any other mode:
+
+- **`contains_doc_margin` gates.** Every relayout arm in
+  `lower_node`—environment, math, multi-line group, optional argument, and (new)
+  a `COMMAND` with a managed argument—refuses a node whose subtree carries a
+  `DOC_MARGIN` or `GUARD`. Reflowing a managed argument breaks its body onto
+  fresh lines, which drops the `%` margin; on an unmargined line a `^^A` doc
+  comment re-lexes as content, so the layout stops being whitespace-only and
+  pass 2 no longer parses (`corpus/dtx_caret_comment.dtx`).
+- **The margin-escape detector.** Under `ReflowKind::DtxProse` the per-line
+  `DOC_MARGIN` is dropped and a canonical `%` re-emitted by
+  `LineBuilder::end_line`. Two paths commit content *outside* that wrap: a
+  forced-break block placed by `push_segment`, and a column-0 `GUARD`. Both set
+  `LineBuilder::margin_escaped`, and `lower_dtx_doc_paragraph` re-lowers the
+  paragraph on the byte-faithful preserve path when it fires. Because the same
+  answer decides whether a floated leading `%` may be dropped, both go through
+  `dtx_doc_paragraph_reflow`.
+- **`is_dtx_doc_paragraph` reads the paragraph's *first* content token**,
+  descending into child nodes. Walking only direct child tokens skipped an
+  opening `COMMAND` and read a margin from a later line, so a guarded
+  `%<package>\def\x{1}` was wrapped in a `%` margin that commented the code out.
+- **Doc-margined runs between expl3 regions are never prose-reflowed.**
+  `lower_expl_paragraph` splits a paragraph at the toggles; an out-of-region run
+  carrying a `DOC_MARGIN`/`GUARD` (`run_carries_doc_margin`) is
+  documentation-layer text riding `%` margins and margin-framed `macrocode`
+  frames, so it takes the element stream in every wrap mode rather than generic
+  prose reflow.
+
+Two adjacency rules keep package code looking like package code under the new
+default. A forced-break block *glued* to the command run in progress
+(`\newcommand\cls@hook{%`) hugs it via `LineBuilder::push_glued_segment` instead
+of breaking—the source offered no break opportunity there. And content still on
+a block's last physical line (`\input docstrip.tex`, where a leading `%%`
+comment bound to `\input` and made it a block) rides that line, the same rule
+the trailing `%` already had.
+
+The residual, deliberately deferred work is the *positive* fix: propagating the
+`%` margin through `push_segment` so those `.dtx` paragraphs reflow instead of
+falling back. Recorded in `TODO.md`.
+
 ## Display-math line breaks
 
 Display-math line breaks have their own knob, `MathWrap` (`[format] math-wrap`:
@@ -369,8 +420,7 @@ Display-math line breaks have their own knob, `MathWrap` (`[format] math-wrap`:
 bodies (`\[…\]`, `$$…$$`, non-grid `equation`; grids and inline math are
 untouched). `auto` (the default) resolves against the effective `WrapMode` at
 `LowerCtx` construction (`Preserve` → preserve authored breaks, else the
-amsmath-style breaker), so per-file-kind wrap defaults carry over to math for
-free.
+amsmath-style breaker), so one `wrap` setting carries over to math for free.
 
 A body whose first non-trivia atom is a `\label{…}` splits that label onto its
 own line, starting the formula fresh below it—the label is equation bookkeeping,

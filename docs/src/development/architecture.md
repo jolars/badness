@@ -55,9 +55,10 @@ honoring `.gitignore` plus `badness.toml` excludes (see `file_discovery.rs`).
 
 The lexer's `LatexFlavor` (`Document` vs `Package`) picks the starting catcode
 regime: `.sty`/`.cls`/`.dtx` begin with `@` already a letter (implicit
-`\makeatletter`). `.dtx` docstrip surface syntax is parsed; `.ins` install
-scripts default to the `Preserve` wrap mode. Each `FileKind` carries its own
-default `WrapMode`.
+`\makeatletter`). `.dtx` docstrip surface syntax is parsed. The wrap mode is
+*not* a `FileKind` fact: every kind defaults to `WrapMode::Reflow`, and content
+that is unsafe to reflow is refused structurally in every mode (see
+[Formatter](formatter.md#reflow-is-safe-by-construction-not-by-file-kind)).
 
 ### The BibTeX subsystem
 
@@ -76,7 +77,9 @@ and the **CLI is its only consumer**—the library API takes a fully-resolved
 `wrap`, `math-wrap`, `lang`, `no-break-abbreviations`) and `[build]`
 (`aux-dir`). Excludes follow the [Ruff](https://docs.astral.sh/ruff/) model
 (`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
-additive). `wrap` is optional and resolves per file kind when omitted.
+additive). `wrap` is optional; when omitted every file kind reflows. It stays an
+`Option` so the LSP can tell "unset" from "set" when merging editor settings
+over project config, not because the fallback depends on the file.
 
 This keeps the formatter hermetic: config is local project data, not the
 environment. TEXMF discovery is deliberately **not** a section here—where a TeX

@@ -158,12 +158,72 @@ fn trivia_check_counts_skipped_bib_files_separately() {
 #[test]
 fn trivia_check_fires_on_a_known_hybrid() {
     let dir = TempDir::new().unwrap();
-    // A known convergence failure (found by the S0 sweep): joining
-    // `\ExplSyntaxOn` with its statement makes the doc-prose reflow relocate
-    // the margined `%    \begin{macrocode}` frame line, so the formatted
-    // perturbed output stops parsing cleanly. The trivia check (wrap pinned to
-    // reflow) must fail on it — and only under `--checks trivia`, never `all`
-    // (where the `.dtx` default `Preserve` applies and everything passes).
+    // A known convergence failure, delta-debugged down from latex3's
+    // `l3packages/xparse/xparse-generic.tex` (one of the `non-fixed-point`
+    // entries in `tests/gate_baselines/*.trivia.txt`): under the
+    // `all-newlines-to-spaces` variant the expl3 layout picks a different set of
+    // statement boundaries, so the formatted perturbed output is not a fixed
+    // point. The trivia check must fail on it — and only under `--checks trivia`,
+    // never `all`, which sees no losslessness or idempotency problem.
+    //
+    // Every layout hybrid is a column-arithmetic accident, so the exact shape is
+    // load-bearing: tidying the braces or renaming the control sequences makes it
+    // converge again. Do not "clean it up" — reduce a fresh corpus failure instead.
+    std::fs::write(dir.path().join("hybrid.tex"), HYBRID_TEX).unwrap();
+
+    let output = badness(
+        dir.path(),
+        &["debug", "format", "--checks", "trivia", "hybrid.tex"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let log = stderr(&output);
+    assert!(log.contains("Debug check failed (trivia:"), "log: {log}");
+
+    let output = badness(
+        dir.path(),
+        &[
+            "debug",
+            "format",
+            "--checks",
+            "trivia",
+            "--report",
+            "hybrid.tex",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let report = stdout(&output);
+    assert!(report.contains("- Checks: `trivia`"), "report: {report}");
+    assert!(
+        report.contains("### 1. `hybrid.tex` (trivia)"),
+        "report: {report}"
+    );
+    assert!(report.contains("- Variant: `"), "report: {report}");
+
+    // `all` keeps its meaning: losslessness + idempotency only. The same file
+    // passes it, and no `(trivia)` label can appear in its output.
+    let output = badness(
+        dir.path(),
+        &[
+            "debug",
+            "format",
+            "--checks",
+            "all",
+            "--report",
+            "hybrid.tex",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(!stdout(&output).contains("(trivia)"));
+}
+
+#[test]
+fn dtx_doc_margin_frame_survives_reflow() {
+    let dir = TempDir::new().unwrap();
+    // A `.dtx` whose documentation prose sits either side of a margin-framed
+    // `macrocode` chunk holding expl3 code. Reflow — now the default for every
+    // file kind — must not join the `%    \begin{macrocode}` frame line onto the
+    // prose above it: the frame's `%` would leave column 0, stop being a comment
+    // at package-load time, and the next pass would not parse. Both checks pass.
     std::fs::write(
         dir.path().join("expl.dtx"),
         "% \\section{Implementation}\n\
@@ -179,38 +239,54 @@ fn trivia_check_fires_on_a_known_hybrid() {
     )
     .unwrap();
 
-    let output = badness(
-        dir.path(),
-        &["debug", "format", "--checks", "trivia", "expl.dtx"],
-    );
-    assert_eq!(output.status.code(), Some(1));
-    let log = stderr(&output);
-    assert!(log.contains("Debug check failed (trivia:"), "log: {log}");
-
-    let output = badness(
-        dir.path(),
-        &[
-            "debug", "format", "--checks", "trivia", "--report", "expl.dtx",
-        ],
-    );
-    assert_eq!(output.status.code(), Some(1));
-    let report = stdout(&output);
-    assert!(report.contains("- Checks: `trivia`"), "report: {report}");
-    assert!(
-        report.contains("### 1. `expl.dtx` (trivia)"),
-        "report: {report}"
-    );
-    assert!(report.contains("- Variant: `"), "report: {report}");
-
-    // `all` keeps its meaning: losslessness + idempotency only. The same file
-    // passes it, and no `(trivia)` label can appear in its output.
-    let output = badness(
-        dir.path(),
-        &["debug", "format", "--checks", "all", "--report", "expl.dtx"],
-    );
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(!stdout(&output).contains("(trivia)"));
+    for checks in ["all", "trivia"] {
+        let output = badness(
+            dir.path(),
+            &["debug", "format", "--checks", checks, "expl.dtx"],
+        );
+        assert!(
+            output.status.success(),
+            "--checks {checks} stderr: {}",
+            stderr(&output)
+        );
+    }
 }
+
+/// The reduced hybrid behind [`trivia_check_fires_on_a_known_hybrid`]. Kept as a
+/// literal so the exact whitespace survives editing.
+const HYBRID_TEX: &str = r#"  \ExplSyntaxOn
+  {
+      {
+      }
+  }
+  {
+      {
+          {
+          }
+      }
+  }
+  {
+    \bool_if:NT \l__xparse_defaults_bool
+      {
+          {
+          }
+      }
+      { \cs_set_nopar:Npx } { \cs_set_protected_nopar:Npx } #1
+      {
+            {
+            }
+      }
+    \bool_if:NTF \l__xparse_some_long_bool
+      {
+        \bool_if:NT \l__xparse_some_short_bool
+          {
+          }
+        \cs_set:cpx
+      }
+      { \cs_set_nopar:cpx }
+          { \l__xparse_function_tl \c_space_tl } ##1##2 { ##1 {##2} }
+  }
+"#;
 
 #[test]
 fn line_width_flag_reaches_the_formatter() {

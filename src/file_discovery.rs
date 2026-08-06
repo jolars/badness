@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use crate::formatter::WrapMode;
 use crate::parser::{LatexFlavor, LexConfig};
 
 /// A compiled set of exclude patterns applied during directory discovery.
@@ -163,7 +162,7 @@ impl FileKind {
     /// Whether this kind feeds the LaTeX pipeline (`.tex`/`.sty`/`.cls`/`.dtx`/
     /// `.ins`), as opposed to the BibTeX one. The LaTeX kinds share a parser,
     /// formatter, and linter, differing only in
-    /// [`latex_flavor`](Self::latex_flavor) and [`default_wrap`](Self::default_wrap).
+    /// [`latex_flavor`](Self::latex_flavor) and [`lex_config`](Self::lex_config).
     pub fn is_latex(self) -> bool {
         matches!(
             self,
@@ -197,21 +196,6 @@ impl FileKind {
         LexConfig {
             flavor: self.latex_flavor(),
             dtx: matches!(self, FileKind::Dtx),
-        }
-    }
-
-    /// The default paragraph [`WrapMode`] for this kind when the caller gives no
-    /// explicit override: a package/class body is code, not prose, so it defaults
-    /// to [`WrapMode::Preserve`]; a document reflows ([`WrapMode::Reflow`]). A
-    /// `.dtx` is code-heavy and defaults to [`WrapMode::Preserve`] (its two-layer
-    /// formatting is a later milestone). A `.ins` is a docstrip driver — pure code
-    /// — so it also defaults to [`WrapMode::Preserve`].
-    pub fn default_wrap(self) -> WrapMode {
-        match self {
-            FileKind::Sty | FileKind::Cls | FileKind::Dtx | FileKind::Ins | FileKind::CodeTex => {
-                WrapMode::Preserve
-            }
-            _ => WrapMode::Reflow,
         }
     }
 }
@@ -470,29 +454,27 @@ mod tests {
     }
 
     #[test]
-    fn package_and_class_kinds_are_latex_with_preserve_default() {
-        // `.sty`/`.cls` feed the LaTeX pipeline under the `Package` flavor and
-        // default to code-not-prose wrapping; `.tex` stays a reflowed document.
+    fn package_and_class_kinds_are_latex_under_the_package_flavor() {
+        // `.sty`/`.cls` feed the LaTeX pipeline under the `Package` flavor; `.tex`
+        // is a `Document`. Wrapping is not a file-kind fact — every kind reflows
+        // unless the caller says otherwise.
         for kind in [FileKind::Sty, FileKind::Cls] {
             assert!(kind.is_latex());
             assert_eq!(kind.latex_flavor(), LatexFlavor::Package);
-            assert_eq!(kind.default_wrap(), WrapMode::Preserve);
         }
         assert!(FileKind::Tex.is_latex());
         assert_eq!(FileKind::Tex.latex_flavor(), LatexFlavor::Document);
-        assert_eq!(FileKind::Tex.default_wrap(), WrapMode::Reflow);
         assert!(!FileKind::Bib.is_latex());
     }
 
     #[test]
     fn code_tex_kind_parses_as_package_code() {
         // `*.code.tex` is package implementation loaded under an implicit
-        // `\makeatletter`, so it takes the `Package` flavor (`@` a letter) and the
-        // code-not-prose wrap, exactly like a `.sty` — but it is *not* a package
-        // source, so package-only rules (e.g. `missing-provides`) never see it.
+        // `\makeatletter`, so it takes the `Package` flavor (`@` a letter) exactly
+        // like a `.sty` — but it is *not* a package source, so package-only rules
+        // (e.g. `missing-provides`) never see it.
         assert!(FileKind::CodeTex.is_latex());
         assert_eq!(FileKind::CodeTex.latex_flavor(), LatexFlavor::Package);
-        assert_eq!(FileKind::CodeTex.default_wrap(), WrapMode::Preserve);
         assert_eq!(
             FileKind::CodeTex.lex_config(),
             LexConfig {
@@ -505,13 +487,11 @@ mod tests {
     #[test]
     fn dtx_kind_is_latex_document_flavor_with_docstrip_lex_config() {
         // A `.dtx` feeds the LaTeX pipeline: its documentation layer is
-        // `Document`-flavored, it defaults to code-not-prose wrapping, and its
-        // `lex_config` carries the docstrip mode (its `macrocode` body switches to
-        // the package regime internally).
+        // `Document`-flavored and its `lex_config` carries the docstrip mode (its
+        // `macrocode` body switches to the package regime internally).
         let dtx = FileKind::Dtx;
         assert!(dtx.is_latex());
         assert_eq!(dtx.latex_flavor(), LatexFlavor::Document);
-        assert_eq!(dtx.default_wrap(), WrapMode::Preserve);
         assert_eq!(
             dtx.lex_config(),
             LexConfig {
@@ -526,13 +506,12 @@ mod tests {
     #[test]
     fn ins_kind_is_plain_document_code_no_docstrip_mode() {
         // A `.ins` is a docstrip driver TeX runs directly — plain `Document`-flavored
-        // code, not a docstrip-read literate source. So it feeds the LaTeX pipeline,
-        // defaults to `Preserve` (it is code), and its `lex_config` does *not* enable
-        // the docstrip mode (`dtx = false`): a leading `%` stays an ordinary comment.
+        // code, not a docstrip-read literate source. So it feeds the LaTeX pipeline
+        // and its `lex_config` does *not* enable the docstrip mode (`dtx = false`):
+        // a leading `%` stays an ordinary comment.
         let ins = FileKind::Ins;
         assert!(ins.is_latex());
         assert_eq!(ins.latex_flavor(), LatexFlavor::Document);
-        assert_eq!(ins.default_wrap(), WrapMode::Preserve);
         assert_eq!(
             ins.lex_config(),
             LexConfig {

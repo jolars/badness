@@ -130,8 +130,7 @@ pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
 }
 
 /// Check `paths` under `style`. `wrap_override` is the global `--wrap` value: when
-/// `None`, each file uses its kind's default wrap ([`FileKind::default_wrap`], so
-/// `.sty`/`.cls` default to `Preserve`), resolved per file below. `sentence`
+/// `None`, every file uses [`WrapMode::default`] (`reflow`). `sentence`
 /// carries the `sentence`/`semantic` language options (ignored by other modes), so
 /// `--check` matches what `format` would produce. `exclude` prunes directory
 /// discovery (explicitly-named files are pruned only in its force mode).
@@ -175,7 +174,7 @@ pub fn check_paths_with_style(
             })?;
 
             let mut style = style;
-            style.wrap = wrap_override.unwrap_or(kind.default_wrap());
+            style.wrap = wrap_override.unwrap_or_default();
             let formatted = match kind {
                 FileKind::Tex
                 | FileKind::CodeTex

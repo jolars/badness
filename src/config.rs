@@ -12,9 +12,10 @@
 //!   `exclude` *replaces* the built-in
 //!   [`DEFAULT_EXCLUDE`] set; `extend-exclude` is always *additive* on top.
 //! - **`[format]` carries `wrap`, not `line-ending`** (the LaTeX paragraph
-//!   line-break policy). `wrap` is optional: when omitted the formatter falls back
-//!   to each file kind's default ([`FileKind::default_wrap`](crate::file_discovery::FileKind::default_wrap)),
-//!   so it is resolved per file, not baked into [`FormatStyle`] here.
+//!   line-break policy). `wrap` is optional: when omitted every file kind uses
+//!   [`WrapMode::default`] (`reflow`). It stays an `Option` here so the LSP can
+//!   tell "unset" from "set" when merging editor settings over project config,
+//!   not because the fallback depends on the file.
 //!
 //! There is no `[index]` section (badness has no R-package index) and no
 //! `[lint]`-driven network egress key.
@@ -99,10 +100,10 @@ pub struct FormatConfig {
     pub line_width: u32,
     #[serde(default = "default_indent_width")]
     pub indent_width: u32,
-    /// The paragraph line-break policy. See [`WrapModeConfig`]. When omitted, the
-    /// formatter uses each file kind's default
-    /// ([`FileKind::default_wrap`](crate::file_discovery::FileKind::default_wrap)):
-    /// `.sty`/`.cls`/`.dtx`/`.ins` → `preserve`, `.tex` → `reflow`.
+    /// The paragraph line-break policy. See [`WrapModeConfig`]. When omitted,
+    /// every file kind uses [`WrapMode::default`] (`reflow`) — the formatter
+    /// declines to reflow content that is unsafe to reflow on its own, in every
+    /// mode, so the file's extension is not a layout input.
     #[serde(default)]
     pub wrap: Option<WrapModeConfig>,
     /// The display-math line-break policy. See [`MathWrapConfig`]. When omitted

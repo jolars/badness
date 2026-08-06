@@ -39,9 +39,8 @@ pub fn check(input: &str, file_type: &str) -> Result<Vec<Diagnostic>, JsError> {
 /// `file_type` is one of `"tex"`, `"sty-cls"`, `"dtx"`, `"bib"`. `wrap`
 /// (`"reflow" | "stable" | "sentence" | "semantic" | "preserve"`) and
 /// `math_wrap` (`"auto" | "preserve" | "single-line" | "break"`) apply to the
-/// LaTeX kinds only and are ignored for `"bib"`. An omitted `wrap` uses the
-/// file type's default, matching the CLI: `reflow` for a document, `preserve`
-/// for package/class and `.dtx` sources.
+/// LaTeX kinds only and are ignored for `"bib"`. An omitted `wrap` means
+/// `reflow`, the default for every file type, matching the CLI.
 #[wasm_bindgen]
 pub fn format(
     input: &str,
@@ -118,18 +117,7 @@ fn lex_config(file_type: FileType) -> LexConfig {
     }
 }
 
-/// The default [`WrapMode`] when the caller gives none, mirroring
-/// `FileKind::default_wrap` in the CLI: package/class and `.dtx` bodies are
-/// code, not prose, so they preserve authored breaks.
-fn default_wrap(file_type: FileType) -> WrapMode {
-    match file_type {
-        FileType::StyCls | FileType::Dtx => WrapMode::Preserve,
-        FileType::Tex | FileType::Bib => WrapMode::Reflow,
-    }
-}
-
 fn build_style(
-    file_type: FileType,
     line_width: Option<usize>,
     indent_width: Option<usize>,
     wrap: Option<&str>,
@@ -141,7 +129,7 @@ fn build_style(
         indent_width: indent_width.unwrap_or(default.indent_width),
         wrap: match wrap {
             Some(s) => parse_wrap(s)?,
-            None => default_wrap(file_type),
+            None => default.wrap,
         },
         math_wrap: match math_wrap {
             Some(s) => parse_math_wrap(s)?,
@@ -179,7 +167,7 @@ fn format_impl(
     math_wrap: Option<&str>,
 ) -> Result<String, String> {
     let file_type = parse_file_type(file_type)?;
-    let style = build_style(file_type, line_width, indent_width, wrap, math_wrap)?;
+    let style = build_style(line_width, indent_width, wrap, math_wrap)?;
     match file_type {
         FileType::Bib => {
             badness_formatter::bib::format_with_style(input, style).map_err(|e| e.to_string())
@@ -327,34 +315,31 @@ mod tests {
     }
 
     #[test]
-    fn default_wrap_mirrors_file_kind() {
-        assert_eq!(default_wrap(FileType::Tex), WrapMode::Reflow);
-        assert_eq!(default_wrap(FileType::StyCls), WrapMode::Preserve);
-        assert_eq!(default_wrap(FileType::Dtx), WrapMode::Preserve);
+    fn wrap_defaults_to_reflow_for_every_file_type() {
+        // The style no longer depends on the file kind: `build_style` takes no
+        // `FileType`, so every playground input reflows unless the caller says
+        // otherwise.
+        assert_eq!(
+            build_style(None, None, None, None).unwrap().wrap,
+            WrapMode::Reflow
+        );
     }
 
     #[test]
     fn build_style_defaults_and_overrides() {
-        let style = build_style(FileType::Tex, None, None, None, None).unwrap();
+        let style = build_style(None, None, None, None).unwrap();
         assert_eq!(style, FormatStyle::default());
 
-        let style = build_style(FileType::StyCls, None, None, None, None).unwrap();
+        let style = build_style(None, None, Some("preserve"), None).unwrap();
         assert_eq!(style.wrap, WrapMode::Preserve);
 
-        let style = build_style(
-            FileType::StyCls,
-            Some(100),
-            Some(4),
-            Some("reflow"),
-            Some("break"),
-        )
-        .unwrap();
+        let style = build_style(Some(100), Some(4), Some("reflow"), Some("break")).unwrap();
         assert_eq!(style.line_width, 100);
         assert_eq!(style.indent_width, 4);
         assert_eq!(style.wrap, WrapMode::Reflow);
         assert_eq!(style.math_wrap, MathWrap::Break);
 
-        assert!(build_style(FileType::Tex, None, None, Some("bogus"), None).is_err());
+        assert!(build_style(None, None, Some("bogus"), None).is_err());
     }
 
     #[test]

@@ -192,18 +192,7 @@ const SWEEP_WIDTHS: &[usize] = &[60, 72, 80, 100, 120];
 /// a registration masks only its recorded failure mode — a *new, unrelated*
 /// regression in a registered file still panics. Never weaken the oracle to
 /// shrink this list.
-const KNOWN_INVARIANT_FAILURES: &[(&str, &str, &str)] = &[
-    // S0 discovery: under `Reflow` the prose reflow relocates `^^A` doc
-    // comments (joining them into or out of prose lines), and at the new
-    // position the `^^A` re-lexes as content — a whitespace-only violation.
-    // `.dtx` defaults to `Preserve` in production, but Reflow-on-dtx is a
-    // supported CLI combination (`DTX_REFLOW_FIXTURES`). TODO.md, S0 notes.
-    (
-        "dtx_caret_comment.dtx",
-        "reflow moves ^^A doc comments into content positions",
-        "format changed non-trivia content",
-    ),
-];
+const KNOWN_INVARIANT_FAILURES: &[(&str, &str, &str)] = &[];
 
 /// Run the invariants sweep over one corpus file, panicking on any
 /// unregistered failure, any registered file that no longer fails, and any
@@ -271,10 +260,10 @@ fn format_invariants_corpus() {
 
 #[test]
 fn format_invariants_dtx_corpus() {
-    // The `.dtx` corpus files, checked under their real docstrip lex config but
-    // — deliberately — under `Reflow` (the sweep's default wrap), not their
-    // production `Preserve` default: this is the Tier-1 stress scope, matching
-    // `debug format --checks trivia`'s wrap pinning.
+    // The `.dtx` corpus files, checked under their real docstrip lex config and
+    // under `Reflow` — the sweep's default wrap and, since every file kind
+    // reflows, the production default too. Same wrap as
+    // `debug format --checks trivia` pins.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../badness-parser/tests/corpus");
     let config = LexConfig {
         flavor: LatexFlavor::Package,
@@ -701,13 +690,15 @@ fn fixture_path(name: &str, file: &str) -> PathBuf {
 /// Package/class fixtures under `tests/fixtures/formatter/<name>/`, each an
 /// `input.<ext>` + `expected.<ext>` pair where `<ext>` is `sty` or `cls`. They are
 /// parsed and formatted under the [`LatexFlavor::Package`] flavor (`@` is a letter
-/// throughout, the implicit `\makeatletter`) and default to [`WrapMode::Preserve`]
-/// (package bodies are code, not prose), exactly as the CLI/LSP resolve a
-/// `.sty`/`.cls` file.
+/// throughout, the implicit `\makeatletter`) and under [`WrapMode::Reflow`],
+/// exactly as the CLI/LSP resolve a `.sty`/`.cls` file — every file kind reflows
+/// unless the caller overrides `wrap`. Package code barely reaches the prose fill:
+/// expl3 regions own their own layout regardless of wrap mode, and a command-only
+/// physical line keeps its own line (`line_is_command_only`).
 const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     ("package_at_letter_command", "sty"),
     ("class_provides_preserve", "cls"),
-    // expl3 code formatting under the package flavor's default `Preserve` wrap:
+    // expl3 code formatting, which the wrap mode never reaches:
     // inside an expl3 region (catcode-9 whitespace / catcode-10 `~`) the formatter
     // owns layout regardless of wrap mode — messy indentation is normalized, a
     // function body becomes an indented block, short brace arguments stay inline
@@ -877,7 +868,7 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
 fn package_fixtures_match_expected() {
     for &(name, ext) in PACKAGE_FIXTURES {
         let style = FormatStyle {
-            wrap: WrapMode::Preserve,
+            wrap: WrapMode::Reflow,
             ..FormatStyle::default()
         };
         let input = fs::read_to_string(fixture_path(name, &format!("input.{ext}")))
@@ -911,8 +902,10 @@ fn package_fixtures_match_expected() {
 
 /// `.dtx` (docstrip) fixtures under `tests/fixtures/formatter/<name>/`, each an
 /// `input.dtx` + `expected.dtx` pair. They are parsed and formatted under the
-/// docstrip [`LexConfig`] (`dtx: true`, `Document` flavor) and default to
-/// [`WrapMode::Preserve`], exactly as the CLI/LSP resolve a `.dtx` file. The
+/// docstrip [`LexConfig`] (`dtx: true`, `Document` flavor) and under
+/// [`WrapMode::Reflow`], exactly as the CLI/LSP resolve a `.dtx` file. Reflow is
+/// safe here because the formatter declines it wherever the `%` margin would be
+/// escaped (see `lower_dtx_doc_paragraph`), in every wrap mode. The
 /// two-layer rules are pinned here: documentation margins (`%`) and docstrip
 /// guards (`%<…>`) stay byte-for-byte at column 0, a `macrocode` body formats as
 /// code at a column-0 base, and a documentation-layer environment's frames are
@@ -984,7 +977,7 @@ fn dtx_config() -> LexConfig {
 fn dtx_fixtures_match_expected() {
     for &name in DTX_FIXTURES {
         let style = FormatStyle {
-            wrap: WrapMode::Preserve,
+            wrap: WrapMode::Reflow,
             ..FormatStyle::default()
         };
         let input = fs::read_to_string(fixture_path(name, "input.dtx"))
@@ -1021,9 +1014,9 @@ fn dtx_fixtures_match_expected() {
     }
 }
 
-/// `.dtx` reflow fixtures: `(name, line_width)`. Formatted under the docstrip
-/// [`LexConfig`] like [`DTX_FIXTURES`] but with [`WrapMode::Reflow`] and a narrow
-/// width, so the documentation *prose* layer rewraps while a canonical `% ` margin
+/// `.dtx` reflow fixtures: `(name, line_width)`. The same mode as [`DTX_FIXTURES`]
+/// under the same docstrip [`LexConfig`], but at a narrow width, so the
+/// documentation *prose* layer rewraps while a canonical `% ` margin
 /// is re-emitted on every wrapped line. Structured content (margin-framed lists,
 /// `macrocode` frames) and the `%`-only paragraph separator must round-trip
 /// byte-for-byte; only running prose reflows.
@@ -1037,6 +1030,10 @@ const DTX_REFLOW_FIXTURES: &[(&str, usize)] = &[
     ("dtx_reflow_margin_blank_line", 80),
     // A margin-framed `itemize` stays byte-identical (no item-line reflow).
     ("dtx_reflow_itemize", 50),
+    // The margin-escape gate: a `\title{^^A…}` block whose argument carries `%`
+    // margins, and a guarded `%<package>` line, both stay byte-identical — while
+    // the plain prose paragraph between them still rewraps.
+    ("dtx_reflow_margin_escape", 50),
 ];
 
 #[test]
@@ -1109,7 +1106,7 @@ fn ins_config() -> LexConfig {
 fn ins_fixtures_match_expected() {
     for &name in INS_FIXTURES {
         let style = FormatStyle {
-            wrap: WrapMode::Preserve,
+            wrap: WrapMode::Reflow,
             ..FormatStyle::default()
         };
         let input = fs::read_to_string(fixture_path(name, "input.ins"))

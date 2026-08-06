@@ -202,6 +202,15 @@ awareness in `lsp.md`.
   token text, so without the carve-out a CRLF document came out CRLF *inside* verbatim
   and LF everywhere else. Only the `\r\n`/`\n` pair converts; every other byte of the
   region is still untouched. Detail in `formatter.md` (§ *Line endings*).
+- **Reflow safety is structural, never config-derived.** Every file kind defaults to
+  `WrapMode::Reflow`; there is no per-extension default. Whether content may be
+  relaid is decided by the content, in *every* wrap mode — the `contains_doc_margin`
+  gates on the relayout arms, the `.dtx` margin-escape detector
+  (`LineBuilder::margin_escaped` → `lower_dtx_doc_paragraph` falls back to the
+  preserve path), and `run_carries_doc_margin` for out-of-region expl3 runs. So a
+  user asking for `--wrap reflow` on a `.dtx` cannot corrupt it. Never re-introduce a
+  file-kind wrap default to paper over a layout bug; fix the gate. Detail in
+  `formatter.md` (§ *Reflow is safe by construction, not by file kind*).
 - **Trivia-invariant layout** *(being rolled out—see TODO.md)*: layout is a function of
   non-trivia content, config, and only those trivia predicates the formatter itself
   *preserves*. A predicate `P` is preserved when `P(fmt(x)) == P(x)`. Blank-line

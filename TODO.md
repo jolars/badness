@@ -254,23 +254,41 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     {F}` forms one unit now, but the R4 explosion still fires only via
     head-attached branches (`lower_expl_conditional` returns `None`); the
     consumer's slot-to-sibling mapping could drive it.
-- [ ] **Reflow-on-`.dtx` violates the whitespace-only invariant (S0 discovery;
-  dominates the trivia gate sets).** Two root causes, both reachable without
-  any perturbation via `badness format --wrap reflow` on a `.dtx` (the
-  production default `Preserve` hides them, and `debug format` has no content
-  oracle, so nothing caught them before S0's content check):
-  1. *`^^A` relocation*: prose reflow moves `^^A` doc comments into positions
-     where they re-lex as content (`\title{...^^A...}` — essentially every l3
-     `.dtx`; in-repo reproducer registered as `dtx_caret_comment.dtx` in
-     `tests/format.rs`'s `KNOWN_INVARIANT_FAILURES`).
-  2. *Guarded-line content loss*: content on docstrip-guarded lines is dropped
-     entirely (latex2e's `alltt.dtx` loses `\ProvidesFile{alltt.drv}`).
-  Also in the family: joining `\ExplSyntaxOn` with its statement makes the
-  doc-prose reflow relocate a margined `%    \begin{macrocode}` frame line so
-  the output stops parsing (pinned by `trivia_check_fires_on_a_known_hybrid`
-  in `tests/debug_format.rs`). Fixing this family shrinks the trivia gate
-  sets by ~250 files and will surface any non-fixed-points those failures
-  currently mask (the trivia check stops at the first failing variant).
+- [x] **Reflow-on-`.dtx` violates the whitespace-only invariant (S0 discovery;
+  dominated the trivia gate sets).** Three root causes, all reachable without any
+  perturbation via `badness format --wrap reflow` on a `.dtx`, and all now gated
+  structurally (independent of `WrapMode`, so an explicit `--wrap reflow` is as
+  safe as any other mode) — which is what let the per-file-kind `Preserve`
+  default go away:
+  1. *`^^A` relocation*: reflowing a managed command argument
+     (`\title{...^^A...}` — essentially every l3 `.dtx`) broke its body onto
+     fresh lines, dropping the `%` margin, and at the new position `^^A` re-lexed
+     as content. Fixed by gating the `COMMAND`-with-managed-argument arm on
+     `!contains_doc_margin`, the same margin rule the environment/math/group/
+     optional arms already carried. `dtx_caret_comment.dtx` is out of
+     `KNOWN_INVARIANT_FAILURES`.
+  2. *Guarded-line content loss*: `is_dtx_doc_paragraph` walked only direct child
+     tokens, so it skipped an opening `COMMAND` and read a margin from a later
+     line — wrapping `%<package>\def\x{1}` in a `% ` margin that commented the
+     code out. It now reads the paragraph's first content token, descending into
+     nodes.
+  3. *Doc-prose relocating a `macrocode` frame*: `lower_expl_paragraph` reflowed
+     an out-of-region run as generic prose, joining `%    \begin{macrocode}` onto
+     the prose line above. A run carrying a `DOC_MARGIN`/`GUARD`
+     (`run_carries_doc_margin`) now takes the byte-faithful element stream.
+  Backstop for anything not enumerated above: `LineBuilder::margin_escaped`
+  records a `DtxProse` reflow that committed content outside the `% ` margin, and
+  `lower_dtx_doc_paragraph` re-lowers on the preserve path when it fires.
+- [ ] **Propagate the `.dtx` `% ` margin through `push_segment`** so the
+  paragraphs the escape detector above sends to the preserve path can reflow
+  again. Today `Ir::margin_prefix` is applied only in `LineBuilder::end_line`, so
+  a forced-break block placed by `push_segment` lands unmargined; moving the wrap
+  into `push_segment` (and not injecting a margin after a `GUARD`) is the
+  positive fix the conservative gate stands in for. Same for the
+  `run_carries_doc_margin` bail: a doc-margined out-of-region expl3 run could
+  reflow under `ReflowKind::DtxProse` with the escape fallback, rather than not
+  at all — but only once the run's *first* line is known to be margined, or the
+  reflow would prepend a `%` to unmargined content (a content change).
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->

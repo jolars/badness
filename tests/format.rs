@@ -718,6 +718,10 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // too — the trailing `T`/`F` run is the branch count, so `:nT`/`:nF` is one
     // branch.
     ("expl_conditional_oneside", "sty"),
+    // Issue #101 in full: an annotated branch beside a multi-line one. Each brace
+    // argument breaks on its own body — `{ > }` and `{ 1 }` stay inline rather than
+    // detonating in sympathy with the sibling the comment forced open.
+    ("expl_conditional_comment_siblings", "sty"),
     // The l3styleguide's *simple run of parameter* exception: `{#1}`, `{#1#2}`,
     // `{##1}` stay tight (and a padded `{ #1 }` normalizes to tight), while a
     // multi-parameter group with interior spaces (`{ #1 #2 }`) or any

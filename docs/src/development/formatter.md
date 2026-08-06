@@ -662,15 +662,30 @@ dispatches its inner as `Mode::FlatPrefix`, not `Flat` (see *`Mode::Flat` is an
 honest contract*): the head's gaps render flat, but any group past the first
 forced break re-decides for itself.
 
-**Sibling coupling.** Within one command's attached arguments (`Ignore` only),
-if any brace argument detonates on a *forced* break—a docstrip guard, comment,
-or `.dtx` margin (`expl_group_forces_break`, a cheap token scan, no
-lowering)—every brace sibling is forced to the broken (Allman) form via
-`lower_expl_group`'s `force_break`, so a short false-branch
-(`{ \tex_endinput:D }`) expands to match a multi-line true-branch. Keyed on the
-*forced* trigger only, so the coupling is a pass-stable function of the arg-list
-content; a sibling that would break solely from **width** does not couple (width
-is a printer decision, invisible at build time).
+**No sibling coupling.** Each brace argument breaks on its own body; a
+*sibling's* forced break (guard, comment, `.dtx` margin) is none of its
+business. This is the styleguide's own worked example, whose short true-branch
+stays inline beside a multi-line false-branch block:
+
+```tex
+\cs_new:Npn \module_foo:nn #1#2
+  {
+    \tl_if_empty:nTF {#1}
+      { \module_foo_aux:n { X #2 } }
+      {
+        \module_foo_aux:nn {#1} {#2}
+        \module_foo_aux:n { #1 #2 }
+      }
+  }
+```
+
+l3kernel follows it throughout (a sweep of its `.dtx` sources counts 338 places
+where a flat one-line braced argument sits directly above a broken sibling at
+the same indent). An earlier *sibling coupling* rule forced every brace sibling
+to the Allman form when one detonated; it was removed (issue \#101), where it
+turned each of `\int_compare:nNnTF`'s five arguments—`{ > }`, `{ 1 }`—into a
+three-line block because one branch held a comment. `expl_group_forces_break`
+survives as the *self* test in the trailing-hang guard below.
 
 **One representation of "forced": `propagate_breaks` saturates `expand` (S1).**
 After lowering, a single bottom-up prepass (`Ir::propagate_breaks`, run at the
@@ -708,8 +723,7 @@ forcing a break only after), and the hug-prefix measurement (`HugPrefix`) lets
 the content decide, since a nested block's first hard break must stop the
 measurement *successfully* while a prefix comment must fail it—a distinction the
 flag cannot carry. That last point is S1's one deliberate, narrow layout change:
-an interior-comment-forced or sibling-coupled block detonating in a head-hug
-prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the head onto
+an interior-comment-forced block detonating in a head-hug prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the head onto
 its own line, which is the head-hug rule's documented semantics (corpus sweep:
 12 files, all this family, gate sets unchanged).
 
@@ -748,7 +762,7 @@ Narrow guards keep this off the shapes the ordinary hang path already lays out
 stably: a single-command or bare-value body (`expl_group_body_is_multi_atom`, a
 top-level `COMMAND` count—no top-level wrap), a body that *already* carries a
 forced break (comment/guard/margin, or several statements—it wants the plain
-Allman block), coupled siblings, and the multi-argument/conditional-branch
+Allman block), and the multi-argument/conditional-branch
 shapes (`statement_has_preceding_group`, `head_command_has_grouped_sibling_arg`)
 whose head this branch—seeing only its own command's `Ignore` stream—cannot
 measure as one unit, so intercepting them would detonate a *preceding* argument
@@ -769,8 +783,9 @@ later atom breaks too**. The cascade lives in `printer::step_fill`
 (`sticky`/`broken` on `Cmd::Fill`); prose reflow keeps the plain greedy
 `Ir::Fill`.
 
-This is what a *width*-broken sibling needs that the forced-only **sibling
-coupling** above cannot give. When a true-branch block detonates purely from
+This is what a *width*-broken sibling needs, and it is the whole of what a
+sibling gets: the argument after a detonated one moves to its own line, but it
+is not itself broken open. When a true-branch block detonates purely from
 width (no guard/comment/margin), the greedy fill would let a following empty
 false-branch `{}` glue back onto the block's short closing `}` line (`} {}`),
 because at that column the two-byte `{}` fits. But whether the block's own body
@@ -780,11 +795,9 @@ other—so pass 1 (`} {}`) and pass 2 (`}` then `{}` on its own line) disagreed
 and idempotence failed (issue #94, josephwright/siunitx's
 `\@ifpackageloaded {pkg} {…block…} {}`). The sticky cascade defers the decision
 to the printer's *actual*, column-aware break: the empty branch follows the
-block onto its own line on **every** pass. Unlike the width-independent sibling
-coupling it fixes the exact width-driven case that coupling deliberately skips,
-and it does so without exploding the short leading arguments into blocks—`{pkg}`
-stays inline on the head line; only the arguments *after* the detonated one
-move.
+block onto its own line on **every** pass. It does so without exploding any
+argument into a block—`{pkg}` stays inline on the head line, and the trailing
+`{}` lands on its own line still spelled `{}`.
 
 ### Interaction with `.dtx` doc margins
 

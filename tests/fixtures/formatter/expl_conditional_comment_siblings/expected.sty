@@ -1,0 +1,15 @@
+\ExplSyntaxOn
+\cs_new:Npn \autoeqrefs #1
+  {
+    \exp_not:e
+      {
+        \int_compare:nNnTF { \clist_count:n {#1} } { > } { 1 }
+          { \exp_not:n { equations~ } } % You might prefer \nobreakspace to ~
+          {
+            \int_compare:nNnTF { \clist_count:n {#1} } { > } { 0 }
+              { \exp_not:n { equation~ } } % You might prefer \nobreakspace to ~
+              {}
+          }
+      }
+  }
+\ExplSyntaxOff

@@ -825,16 +825,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 return lower_expl_paragraph(node, cx);
             }
             SyntaxKind::GROUP if cx.in_expl3_region(node.text_range().start()) => {
-                return lower_expl_group(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
+                return lower_expl_group(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
             }
             SyntaxKind::OPTIONAL if cx.in_expl3_region(node.text_range().start()) => {
-                return lower_expl_group(
-                    node,
-                    SyntaxKind::L_BRACKET,
-                    SyntaxKind::R_BRACKET,
-                    cx,
-                    false,
-                );
+                return lower_expl_group(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
             }
             // A command and its greedily-attached `{…}`/`[…]` arguments lay out as a
             // fill so the arguments break independently (only an over-long one
@@ -1704,21 +1698,6 @@ fn lower_expl_code(
     // The statement-boundary map (structural mode only): computed over the very
     // element vector lowered below, so indices align by construction.
     let map = (statements == Statements::Structural).then(|| segment_expl_statements(&elements));
-    // Sibling coupling: within one command's attached arguments ([`Statements::Ignore`]),
-    // if any brace-group sibling detonates on a *forced* break (a guard, comment, or
-    // `.dtx` margin — the width-independent trigger [`lower_expl_group`] uses for its
-    // block form), the l3 house style breaks every brace sibling. So a short
-    // false-branch expands to match its multi-line true-branch. Keyed on a cheap
-    // token scan (no lowering), gated to commands with ≥2 brace groups so the common
-    // single-argument call pays nothing.
-    let couple_siblings = statements == Statements::Ignore && {
-        let groups: Vec<&SyntaxNode> = elements
-            .iter()
-            .filter_map(SyntaxElement::as_node)
-            .filter(|n| n.kind() == SyntaxKind::GROUP)
-            .collect();
-        groups.len() >= 2 && groups.iter().any(|n| expl_group_forces_break(n))
-    };
     let mut lines: Vec<Ir> = Vec::new();
     let mut seps: Vec<Ir> = Vec::new();
     let mut pending_sep = Ir::hard_line();
@@ -2126,14 +2105,12 @@ fn lower_expl_code(
                 // existing hang path already lays out stably: a single-command or
                 // bare-value body (no top-level wrap), a forced-break body
                 // (comment/guard/margin, or already multi-statement — plain Allman),
-                // coupled siblings, and the multi-argument/conditional-branch shapes
-                // (a preceding trailing group, or a grouped earlier command) whose
-                // head this branch cannot measure as one unit from inside a single
-                // argument.
+                // and the multi-argument/conditional-branch shapes (a preceding
+                // trailing group, or a grouped earlier command) whose head this
+                // branch cannot measure as one unit from inside a single argument.
                 if child.kind() == SyntaxKind::GROUP
                     && atom.is_empty()
                     && !parts.is_empty()
-                    && !couple_siblings
                     && !expl_group_forces_break(child)
                     && expl_group_body_is_multi_atom(child)
                     && is_trailing_in_statement(&elements, idx, map.as_ref())
@@ -2242,14 +2219,12 @@ fn lower_expl_code(
                 // group shape, not the statement mode.
                 let hang_group = child.kind() == SyntaxKind::GROUP && atom.is_empty();
                 let starts_line = parts.is_empty();
-                // Sibling coupling (`Ignore` only): once one brace argument
-                // detonates, force every brace sibling to the broken form so a
-                // short branch expands to match a multi-line one.
-                let ir = if couple_siblings && child.kind() == SyntaxKind::GROUP {
-                    lower_expl_group(child, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, true)
-                } else {
-                    lower_node(child, cx)
-                };
+                // Each brace argument breaks on its own merits: the l3styleguide's
+                // own example keeps a short branch inline (`{ \module_foo_aux:n
+                // { X #2 } }`) beside a multi-line sibling, and l3kernel does the
+                // same throughout. A sibling's forced break is not this group's
+                // business.
+                let ir = lower_node(child, cx);
                 // A junk-bearing glued statement: plain atom accumulation, hard
                 // separators, no line commits until the boundary (see above).
                 if in_glued {
@@ -2735,19 +2710,15 @@ fn expl_group_is_spaced(node: &SyntaxNode) -> bool {
 /// driven (never source newlines), keeping reformatting idempotent. Mirrors
 /// [`lower_prose_group`] but recurses into expl3 code.
 ///
-/// `force_break` makes the group take the broken (Allman) block form even when its
-/// body would otherwise fit on one line. It is set by the *sibling-coupling* rule
-/// in [`lower_expl_code`]: when one brace argument of a command detonates (a guard,
-/// comment, or nested multi-line body), the l3 house style breaks *all* brace
-/// siblings, so a short false-branch (`{ \tex_endinput:D }`) expands to match its
-/// multi-line true-branch. The forced break is unconditional, so the result
-/// [`Ir::contains_forced_break`] and routes through the caller's hang path.
+/// A group breaks only on its own body: a *sibling* argument's forced break is none
+/// of its business. The l3styleguide's own worked example keeps a short true-branch
+/// inline (`{ \module_foo_aux:n { X #2 } }`) beside a multi-line false-branch block,
+/// and l3kernel follows that throughout.
 fn lower_expl_group(
     node: &SyntaxNode,
     open: SyntaxKind,
     close: SyntaxKind,
     cx: LowerCtx<'_>,
-    force_break: bool,
 ) -> Ir {
     let (open_ir, body, close_ir, spaced, has_comment) =
         match expl_group_pieces(node, open, close, cx) {
@@ -2765,7 +2736,7 @@ fn lower_expl_group(
     // body out in break mode — never the K&R hybrid of a flat-dispatched
     // concat (issue #97, `l3auxdata.dtx`). Otherwise the flat boundary is a
     // space (l3 house style) or nothing (tight); both break identically.
-    let boundary = if has_comment || force_break {
+    let boundary = if has_comment {
         Ir::hard_line()
     } else if spaced {
         Ir::Line
@@ -2959,7 +2930,7 @@ fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Optio
     let mut parts = vec![head];
     for &pos in &group_positions[group_positions.len() - n..] {
         let branch = children[pos].as_node().expect("group position is a node");
-        let group = lower_expl_group(branch, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
+        let group = lower_expl_group(branch, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
         parts.push(Ir::indent(Ir::concat([Ir::hard_line(), group])));
     }
     Some(Ir::concat(parts))

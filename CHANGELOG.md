@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.14.0](https://github.com/jolars/badness/compare/v0.13.0...v0.14.0) (2026-08-06)
+
+### Features
+- **cli:** diff changed files in `format --check` ([`eed1537`](https://github.com/jolars/badness/commit/eed1537d15fd467b09b89e0750a5decbb42d1cf7))
+- **semantic:** curate filecontents and ltxdockit verbatim envs ([`d805548`](https://github.com/jolars/badness/commit/d8055483cc4716eb89327ea3c9a85f7f45cbe212)), closes [#98](https://github.com/jolars/badness/issues/98)
+- **formatter:** respace flush expl3 argument braces ([`c44125c`](https://github.com/jolars/badness/commit/c44125cf40212a5ca518f0f9beda295de03d7069))
+- **formatter:** add trivia-perturbation invariance oracle (#103) ([`f22d668`](https://github.com/jolars/badness/commit/f22d668c6c95d323b0cc3ecb110db811bd0f23ba))
+- **packaging:** publish badness-bin to the AUR on release ([`82a64c2`](https://github.com/jolars/badness/commit/82a64c2284fe71a4155b481d22507901abffda1d))
+- **lint:** add `--output json` machine-readable findings ([`92b04bd`](https://github.com/jolars/badness/commit/92b04bd48c35587e4157438e98960ab08171772b))
+- **formatter:** explode expl3 conditional branches (R4) ([`bebdbde`](https://github.com/jolars/badness/commit/bebdbdecce2a493135c7da826259a322cfe097cb))
+- **parser:** recognize package-defined verbatim envs ([`696f109`](https://github.com/jolars/badness/commit/696f109074c612fad2998ab194ece275c0b7713b))
+- **build:** bundle man pages and completion in tarballs ([`8268c88`](https://github.com/jolars/badness/commit/8268c885ce8811dd33a533cd8f8085b998bdd1d2))
+
+### Bug Fixes
+- **formatter:** render expl3 conditionals all-or-nothing ([`c8b3aef`](https://github.com/jolars/badness/commit/c8b3aef1ac0b68671b5136233273fb15edcc384b))
+- **formatter:** keep annotated expl3 branches on the exploded path ([`ac07506`](https://github.com/jolars/badness/commit/ac0750624e01506172d0a3192b0df35186f9928f)), refs [#101](https://github.com/jolars/badness/issues/101)
+- **formatter:** drop expl3 sibling break coupling ([`836ed83`](https://github.com/jolars/badness/commit/836ed83b6b3ea4914dd4580457ea5ebd73299afb)), closes [#101](https://github.com/jolars/badness/issues/101)
+- **packaging:** tolerate pre-0.14 release tarballs in PKGBUILD ([`750493b`](https://github.com/jolars/badness/commit/750493b97a142ff40b35ce250680c5d2d716e1aa))
+- **installer:** detect musl/libc in installation script ([`eb195a1`](https://github.com/jolars/badness/commit/eb195a1904bbf0a7a3a8d2f83308a3539b748ffc))
+- **formatter:** pin forced expl3 block body to break mode ([`349ccdd`](https://github.com/jolars/badness/commit/349ccdd26f1e269703bee96feaaec41a16d0fff2))
+- **formatter:** stabilize trailing expl3 hang group ([`72a6d35`](https://github.com/jolars/badness/commit/72a6d3585bd3e4310cd26aeef347740c933c0979)), closes [#96](https://github.com/jolars/badness/issues/96)
+- **npm:** fall back to musl when glibc build fails ([`bd1891e`](https://github.com/jolars/badness/commit/bd1891e0961bc36c0c6f088d5f61b33b0db0af47))
+- **formatter:** stabilize trailing expl3 conditional ([`b5ed902`](https://github.com/jolars/badness/commit/b5ed902de89c7619c55d7a143784e21383500863)), refs [#96](https://github.com/jolars/badness/issues/96)
+- **parser:** pair \left/\right inside macro code ([`20a59ef`](https://github.com/jolars/badness/commit/20a59eff44e3b6b4e4a0013291a99d7b2ae1221f)), closes [#95](https://github.com/jolars/badness/issues/95)
+- **parser:** bound math bracket gate at dollar closer ([`703f5f5`](https://github.com/jolars/badness/commit/703f5f569acd01a92f57b8a5006c159401fe4249)), closes [#99](https://github.com/jolars/badness/issues/99)
+- **formatter:** keep expl3 parameter runs tight ([`47d6277`](https://github.com/jolars/badness/commit/47d62775abcc2620329db9508a1f8a52bdeda55b)), exception [#1](https://github.com/jolars/badness/issues/1) and [#2](https://github.com/jolars/badness/issues/2)
+- **formatter:** sticky-break fill for expl3 statements ([`107ecb0`](https://github.com/jolars/badness/commit/107ecb0e97525f5f10ed520599ca2a5e4fec882c)), closes [#94](https://github.com/jolars/badness/issues/94)
+- **linter:** stop TikZ/pgf false positives ([`aca172f`](https://github.com/jolars/badness/commit/aca172f3bc782bf98dc6836a4f21c80711e38a6d))
+- **linter:** drop "Part", gate hard-coded-reference item labels ([`274c124`](https://github.com/jolars/badness/commit/274c1243d94cf451bef6f03317ecf1c60eb61277))
+- **linter:** gate space-before-command on trailing break ([`2f66cae`](https://github.com/jolars/badness/commit/2f66cae638337bc56f21ca7838e6884586720173))
+- **linter:** skip hex constants, font maps in straight-quotes ([`2fb9ee3`](https://github.com/jolars/badness/commit/2fb9ee31f7c6709616526a2c1bafb03eec225afa))
+- **linter:** skip redefined commands in deprecated/primitive ([`0490f16`](https://github.com/jolars/badness/commit/0490f16c3a708d6cdc0b24c93ceb82fb3e5358ad))
+- **linter:** skip starred headings in sectioning-level-jump ([`befe30e`](https://github.com/jolars/badness/commit/befe30e44cf7e6d6528333a164dc56988365d612))
+- **parser:** parse array and tikzcd bodies as math ([`9db4e8f`](https://github.com/jolars/badness/commit/9db4e8fc3f492303479ee572d4e50aba88f85622))
+
 ## [0.13.0](https://github.com/jolars/badness/compare/v0.12.0...v0.13.0) (2026-08-01)
 
 ### Features

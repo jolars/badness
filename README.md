@@ -74,7 +74,7 @@ language server automatically when you open a `.tex` file.
 # Format a file in place (or stdin → stdout with no path)
 badness format paper.tex
 
-# Verify formatting without writing—diffs the change, exits non-zero if any
+# Verify formatting without writing, showing diffs
 badness format --check paper.tex
 
 # Lint, reporting parse diagnostics

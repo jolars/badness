@@ -41,7 +41,7 @@ impl LayoutCost {
 /// producer that dispatched the subtree in `Flat` has verified that the whole
 /// subtree's flat-mode rendering fits (every line, for subtrees whose
 /// structural `HardLine`s split it) — so consumers trust it, and a `Group`
-/// dispatched in `Flat` honours it instead of re-deciding. A producer that
+/// dispatched in `Flat` honors it instead of re-deciding. A producer that
 /// cannot verify the whole subtree (a candidate picker choosing among layouts,
 /// a fill placing atoms by plan) dispatches `Break` and lets children decide
 /// for themselves.
@@ -500,7 +500,7 @@ impl Printer {
                         prefix,
                     });
                 }
-                // Requires a `propagate_breaks`-saturated tree: honouring an
+                // Requires a `propagate_breaks`-saturated tree: honoring an
                 // incoming `Flat` trusts that a group whose subtree carries a
                 // hard break is `expand`-marked (the first arm), so a stale
                 // flag would wrongly pin its `Line`s flat.
@@ -1103,7 +1103,7 @@ impl Printer {
     ///
     /// A nested group is decided *in the mode it will actually print in*:
     /// flat when its own flat rendering still fits from here, broken
-    /// otherwise, with its own hug flags honoured. Measuring a doomed group
+    /// otherwise, with its own hug flags honored. Measuring a doomed group
     /// flat would charge the current line for width that will never land on
     /// it — and the charge would depend on where the doomed group's body
     /// happens to break, which the *previous formatting pass* decided; that
@@ -1455,7 +1455,7 @@ mod tests {
     #[test]
     fn conditional_group_all_lines_pins_the_verified_candidate() {
         // The all-lines pick *did* verify the candidate's whole flat
-        // rendering, so its `Flat` is honoured downstream: the nested group
+        // rendering, so its `Flat` is honored downstream: the nested group
         // keeps exactly the layout that was measured instead of re-deciding
         // against the trailing text and detonating into a hybrid the
         // measurement never saw (`abc\ndefXXXX`).

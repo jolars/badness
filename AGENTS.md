@@ -188,8 +188,9 @@ awareness in `lsp.md`.
   \#71, \#94, \#96, \#97) is one decision keyed on the unsafe predicate.
 
   S4 made expl3 statement boundaries **structural**: a call unit is the head plus the
-  arguments its argspec arity consumes (`semantic::expl3`, decision #2's "semantic
-  layer assigns arity"; segmentation in `semantic::expl3`), so the formatter owns
+  arguments its argspec arity consumes (`semantic::expl3::expl3_slots`, decision #2's
+  "semantic layer assigns arity"; segmentation in
+  `semantic::expl3::segment_expl_statements`), so the formatter owns
   one-call-per-line and a width wrap re-derives the same unit on every pass. The old
   newline rule survives only as the per-statement **fallback** for underivable heads
   (no `:` suffix, `w`/`D`/unknown letters, shape mismatches, guards mid-unit) and for

@@ -81,7 +81,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     marking every group containing a hard break as `expand`, replacing the three
     current representations (`Ir::Group{expand}`, `contains_forced_break`
     recomputed per decision site, `lower_expl_group`'s hand-rolled branch).
-    Behaviour-neutral. Makes the landed `group_expanded` fix fall out
+    Behavior-neutral. Makes the landed `group_expanded` fix fall out
     automatically rather than being a special case.
 
     *Landed.* `Ir::propagate_breaks` — one bottom-up copy-on-write walk at the
@@ -107,14 +107,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     claim it without checking — `pick_candidate` selects on *first-line* fit
     (`printer.rs`), `Cmd::PreferredFill` pushes atoms flat unconditionally — by
     returning `Mode::Break` (the *choice of candidate* is the decision; children
-    then decide for themselves). **Only then** make `Ir::Group` honour an incoming
+    then decide for themselves). **Only then** make `Ir::Group` honor an incoming
     `Mode::Flat` instead of recomputing. The three must land together: mode
     propagation alone measured 1 -> 9 idempotency failures precisely because the
     two producers lie. Expect substantial golden churn; hand-derive each.
 
     *Landed.* The three landed together plus two more liars the honest
     contract flushed out in corpus tracing. `Ir::Group` and both conditional
-    arms honour an incoming `Flat` (a nested conditional resolves to its
+    arms honor an incoming `Flat` (a nested conditional resolves to its
     flat-most candidate, matching every measurement predicate); `expand` stays
     first, so a saturated forced group never pins. `pick_candidate` announces
     `Break`; `Cmd::PreferredFill` atoms inherit the fill's mode. Flushed out
@@ -148,7 +148,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `rest_fits` drift (a later `Group` measured in its real mode, a later
     `ConditionalGroup` measured flat-most) was exactly that failure.
 
-    *Landed, behaviour-neutral.* Two shared walkers replace the five bodies:
+    *Landed, behavior-neutral.* Two shared walkers replace the five bodies:
     `flat_end` with a `FlatMeasure` policy (`Footprint`/`Fits`/`HugPrefix`)
     is the one flat simulation behind `flat_width`, the hug fit, and
     `group_fits`'s flat phase; `line_fits` with a `CommentFit` policy
@@ -164,11 +164,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     widths 60/80/120 differ on 0 of 1069 files — S2 had already removed
     every reachable disagreement, so no baselines were re-recorded.
   - [x] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Landed
-    as `semantic::expl3` (per-slot arity from the argspec suffix: `N V` one
-    token, `n c v o x e f` a brace group, trailing `T F` branches, `p`
-    parameter text shape-scanned to the first explicit `{` — TeX's own static
-    rule, so the `Npn` family is fully structural; `w`/`D`/unknown letters
-    fall back) plus `semantic::expl3` (pure-shape segmentation with
+    as `semantic::expl3::expl3_slots` (per-slot arity from the argspec suffix:
+    `N V` one token, `n c v o x e f` a brace group, trailing `T F` branches,
+    `p` parameter text shape-scanned to the first explicit `{` — TeX's own
+    static rule, so the `Npn` family is fully structural; `w`/`D`/unknown
+    letters fall back) plus `semantic::expl3::segment_expl_statements`
+    (pure-shape segmentation with
     peel-back of greedily over-attached arguments) and the `core.rs` rewiring
     (`Statements::Structural`, boundary-map commits, region toggles as
     zero-arity units). The formatter owns one-call-per-line; a width wrap

@@ -182,7 +182,7 @@ The printer's layout mode is a *verified claim*, not a hint. A producer may
 dispatch a subtree in `Mode::Flat` only after verifying that the subtree's
 whole flat-mode rendering fits (every line, for subtrees whose structural
 `HardLine`s split it); consumers trust the claim, so a `Group` or conditional
-group dispatched in `Flat` honours it instead of re-deciding—the parent's
+group dispatched in `Flat` honors it instead of re-deciding—the parent's
 verification and the print agree by construction. A producer that cannot make
 the whole-subtree claim dispatches `Break` and lets children decide for
 themselves: the choice of a `ConditionalGroup` candidate by first-line fit is
@@ -287,7 +287,7 @@ later group in the rest is now decided with its own hug flags, a later
 conditional group through `pick_candidate` rather than assumed flat-most,
 and a `Break`-mode preferred fill by its first atom rather than measured
 whole-flat—the arms `first_line_fits` always had. All of it measured
-behaviour-neutral on the gate corpora (byte-identical sweeps at widths
+behavior-neutral on the gate corpora (byte-identical sweeps at widths
 60/80/120), because mode propagation (S2) had already removed every reachable
 disagreement: a group inside a flat parent is never *asked* whether it fits.
 

@@ -1680,7 +1680,7 @@ enum Statements {
 ///   sibling CST nodes, regardless of where the author's newlines fell (one
 ///   call per line, formatter-owned: same-line calls split, mid-call newlines
 ///   join). A head with no derivable arity falls back to the authored physical
-///   line for that statement (Tier 2; see [`super::expl_stmt`]). The exception
+///   line for that statement (Tier 2; see [`crate::semantic::expl3`]). The exception
 ///   is *within one command's attached arguments* ([`Statements::Ignore`]),
 ///   where a newline is inert whitespace and only the width fill breaks —
 ///   see the `COMMAND` arm in [`lower_node`].

@@ -274,7 +274,13 @@ had drifted apart:
   deliberate difference between those contexts: a candidate carrying a
   standalone comment can never render flat (`Fails`), while a comment in the
   rest of an already-committed line is there either way and counts its width
-  (`SharesLine`).
+  (`SharesLine`). Each work item also carries a *verified* flag so the
+  measurement honors the honest `Flat` contract exactly as the run loop
+  does: a stack command `rest_fits` seeds with a verified `Flat` (or a
+  subtree `line_fits` itself verified via `flat_end`) pins its nested
+  groups and conditional groups flat instead of re-deciding them, while a
+  `first_line_fits` candidate seed is a measurement `Flat` — unverified,
+  so nested groups still decide for themselves.
 
 Sharing the traversal dissolved the drift the copies had accumulated: a
 later group in the rest is now decided with its own hug flags, a later

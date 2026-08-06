@@ -1044,19 +1044,23 @@ impl Printer {
         // Seed the work stack from the printer stack (`rest` is bottom→top; `pop`
         // takes the top, i.e. the next thing to print). A `Cmd::Fill`'s parts are
         // pushed reversed so they `pop` back in fill order.
-        let mut work: Vec<(Mode, &Ir)> = Vec::new();
+        // A stack command's `Flat` is a *verified* flat (the honest contract:
+        // the printer only dispatches `Flat` after measuring the whole flat
+        // rendering), so it is seeded verified and pins nested groups exactly
+        // as the run loop will.
+        let mut work: Vec<(Mode, bool, &Ir)> = Vec::new();
         for cmd in rest {
             match cmd {
-                Cmd::Node { mode, node, .. } => work.push((*mode, node)),
+                Cmd::Node { mode, node, .. } => work.push((*mode, *mode == Mode::Flat, node)),
                 Cmd::Fill { mode, parts, .. } => {
                     for part in parts.iter().rev() {
-                        work.push((*mode, part));
+                        work.push((*mode, *mode == Mode::Flat, part));
                     }
                 }
                 Cmd::PreferredFill {
                     mode, atoms, index, ..
                 } => {
-                    work.push((*mode, &atoms[*index]));
+                    work.push((*mode, *mode == Mode::Flat, &atoms[*index]));
                 }
             }
         }
@@ -1069,8 +1073,16 @@ impl Printer {
     /// would actually be emitted as success. A single-line forced-break
     /// `Verbatim` (a standalone comment) fails ([`CommentFit::Fails`]), since
     /// a candidate carrying one can't be rendered flat.
+    ///
+    /// The seed's `Flat` is a *measurement* flat, not a verified one (nothing
+    /// has measured the candidate yet — that is what this call is doing), so
+    /// it is seeded unverified and nested groups re-decide.
     fn first_line_fits(&self, start_col: usize, node: &Ir) -> bool {
-        self.line_fits(start_col, vec![(Mode::Flat, node)], CommentFit::Fails)
+        self.line_fits(
+            start_col,
+            vec![(Mode::Flat, false, node)],
+            CommentFit::Fails,
+        )
     }
 
     /// The shared line measurement behind [`Self::rest_fits`] and
@@ -1080,9 +1092,14 @@ impl Printer {
     /// `Break` mode, a multi-line `Verbatim`'s own embedded newline, or a
     /// break inside a nested node decided `Break`) — success — or the line
     /// width is exceeded — failure. Modes govern trivia; a nested `Group` or
-    /// conditional group is always re-decided here, exactly as the printer
-    /// will decide it (the genuinely verified `Mode::Flat` never reaches this
-    /// measurement: under it nothing is being decided).
+    /// conditional group is re-decided here exactly as the printer will
+    /// decide it — including the honest contract: a work item carrying a
+    /// *verified* `Mode::Flat` (a stack command seeded by [`Self::rest_fits`],
+    /// or a subtree this measurement itself verified via [`Self::flat_end`])
+    /// pins its nested groups flat instead of re-deciding, mirroring the run
+    /// loop's `Group`/conditional arms. A *measurement* `Flat` (a
+    /// [`Self::first_line_fits`] candidate seed) is unverified and still
+    /// re-decides.
     ///
     /// A nested group is decided *in the mode it will actually print in*:
     /// flat when its own flat rendering still fits from here, broken
@@ -1098,11 +1115,11 @@ impl Printer {
     fn line_fits(
         &self,
         start_col: usize,
-        mut work: Vec<(Mode, &Ir)>,
+        mut work: Vec<(Mode, bool, &Ir)>,
         comments: CommentFit,
     ) -> bool {
         let mut col = start_col;
-        while let Some((mode, node)) = work.pop() {
+        while let Some((mode, verified, node)) = work.pop() {
             match node {
                 Ir::Nil | Ir::ZeroWidth(_) => {}
                 Ir::SoftLine => {
@@ -1143,13 +1160,17 @@ impl Printer {
                 },
                 Ir::Concat(items) => {
                     for item in items.iter().rev() {
-                        work.push((mode, item));
+                        work.push((mode, verified, item));
                     }
                 }
-                Ir::Indent(inner) | Ir::Align(_, inner) => work.push((mode, inner)),
-                Ir::MarginPrefix { inner, .. } => work.push((mode, inner)),
+                Ir::Indent(inner) | Ir::Align(_, inner) => work.push((mode, verified, inner)),
+                Ir::MarginPrefix { inner, .. } => work.push((mode, verified, inner)),
                 Ir::IfBreak { flat, broken } => {
-                    work.push((mode, if mode == Mode::Break { broken } else { flat }));
+                    work.push((
+                        mode,
+                        verified,
+                        if mode == Mode::Break { broken } else { flat },
+                    ));
                 }
                 Ir::Group {
                     inner,
@@ -1157,29 +1178,47 @@ impl Printer {
                     hug,
                     hug_excuse_overflow,
                 } => {
-                    let measure = if *hug {
-                        FlatMeasure::HugPrefix {
-                            excuse_overflow: *hug_excuse_overflow,
+                    // Mirrors the run loop's `Group` arm, honest contract
+                    // included: under a verified `Flat` the printer pins the
+                    // nested group flat (`expand` carve-out aside), so the
+                    // measurement must too, or the two diverge. A non-hug
+                    // group this measurement decides flat is itself verified
+                    // ([`Self::flat_end`] measured its whole flat rendering).
+                    let (m, v) = if *expand {
+                        (Mode::Break, false)
+                    } else if verified && mode == Mode::Flat {
+                        (Mode::Flat, true)
+                    } else {
+                        let measure = if *hug {
+                            FlatMeasure::HugPrefix {
+                                excuse_overflow: *hug_excuse_overflow,
+                            }
+                        } else {
+                            FlatMeasure::Fits
+                        };
+                        if self.flat_end(col, inner, measure).is_none() {
+                            (Mode::Break, false)
+                        } else if *hug {
+                            (Mode::FlatPrefix, false)
+                        } else {
+                            (Mode::Flat, true)
                         }
-                    } else {
-                        FlatMeasure::Fits
                     };
-                    let m = if *expand || self.flat_end(col, inner, measure).is_none() {
-                        Mode::Break
-                    } else if *hug {
-                        Mode::FlatPrefix
-                    } else {
-                        Mode::Flat
-                    };
-                    work.push((m, inner));
+                    work.push((m, v, inner));
                 }
                 Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
-                    let (m, chosen) = self.pick_candidate(col, cands);
-                    work.push((m, chosen));
+                    // Under a verified `Flat`, the flat-most candidate without
+                    // re-picking — exactly the run loop's conditional arms.
+                    let (m, chosen) = if verified && mode == Mode::Flat {
+                        (Mode::Flat, &cands[0])
+                    } else {
+                        self.pick_candidate(col, cands)
+                    };
+                    work.push((m, m == Mode::Flat, chosen));
                 }
                 Ir::Fill(parts) | Ir::StickyFill(parts) => {
                     for item in parts.iter().rev() {
-                        work.push((mode, item));
+                        work.push((mode, verified, item));
                     }
                 }
                 Ir::PreferredFill { atoms, .. } => match mode {
@@ -1191,7 +1230,7 @@ impl Printer {
                     // mode the whole fill stays on the line.
                     Mode::Break => {
                         return atoms.first().is_none_or(|atom| {
-                            self.line_fits(col, vec![(Mode::Flat, atom)], comments)
+                            self.line_fits(col, vec![(Mode::Flat, false, atom)], comments)
                         });
                     }
                     Mode::Flat | Mode::FlatPrefix => {

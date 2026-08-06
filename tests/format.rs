@@ -718,6 +718,11 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // too — the trailing `T`/`F` run is the branch count, so `:nT`/`:nF` is one
     // branch.
     ("expl_conditional_oneside", "sty"),
+    // A comment among the branches does not cost the exploded shape (issue #101):
+    // one trailing a branch rides that branch's line, an own-line one keeps its own
+    // line between branches, and a comment after the whole call (not a child of the
+    // command) leaves a fitting conditional flat.
+    ("expl_conditional_annotated_branches", "sty"),
     // Issue #101 in full: an annotated branch beside a multi-line one. Each brace
     // argument breaks on its own body — `{ > }` and `{ 1 }` stay inline rather than
     // detonating in sympathy with the sibling the comment forced open.

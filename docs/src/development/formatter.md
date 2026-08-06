@@ -518,7 +518,19 @@ width-driven path (issue #71, `expl_trailing_block_hug`). And a conditional
 whose branch groups do **not attach** to it—an `:NTF`/`:nNnTF` whose
 single-token `N`/`V`/operator argument breaks greedy brace attachment, leaving
 the branches on a following sibling—falls back to the width path rather than
-mis-lower a partial shape. The statement-leading break is width-independent, so
+mis-lower a partial shape.
+
+**Annotated branches stay on the path.** A `%` among the branch children does
+*not* fall back: a comment trailing a branch rides that branch's own line, an
+own-line one keeps its own line between branches (own-line-ness is a preserved
+predicate, so reading it is trivia-invariant and stable in both directions—
+relocating either way would rebind the comment under decision \#9). Bailing to
+the width path instead was issue \#101's real trigger: one
+`% You might prefer \nobreakspace to ~` between two branches dropped the whole
+call off the exploded shape, and the width path—then still coupling
+siblings—blew every argument, `{ > }` and `{ 1 }` included, into a three-line
+block. A comment *after* the whole call is not a child of the command, so it
+leaves a fitting conditional flat (`expl_conditional_annotated_branches`). The statement-leading break is width-independent, so
 it is a fixed point: the exploded output re-parses to the same greedy `COMMAND`
 (brace arguments attach across the inserted newlines) in statement position and
 re-explodes identically. A LaTeX2e conditional (`\@ifpackageloaded`, no

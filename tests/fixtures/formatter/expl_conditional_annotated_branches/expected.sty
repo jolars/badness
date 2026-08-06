@@ -1,0 +1,10 @@
+\ExplSyntaxOn
+\tl_if_empty:nTF {#1} { \module_a: } { \module_b: } % after the call
+\tl_if_empty:nTF {#1}
+  { \module_a: } % trailing the true branch
+  { \module_b: }
+\tl_if_empty:nTF {#1}
+  { \module_a: }
+  % own-line between the branches
+  { \module_b: }
+\ExplSyntaxOff

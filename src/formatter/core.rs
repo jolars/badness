@@ -2892,9 +2892,13 @@ fn expl_group_pieces(
 /// re-explodes identically. Each branch is a *soft* [`lower_expl_group`], so a
 /// short branch stays `{ … }` inline on its line and a long one breaks internally.
 ///
+/// An annotated branch keeps its comment: a trailing `%` rides the branch's own
+/// line, an own-line one stays on its own line between branches.
+///
 /// Returns `None` (leaving the shape on the width-driven head-hug path) unless the
-/// command's own last `n` argument children are `GROUP`s with only trivia beyond
-/// them — i.e. the branches actually attach to the conditional. An `:NTF`/`:nNnTF`
+/// command's own last `n` argument children are `GROUP`s with only trivia and
+/// comments beyond them — i.e. the branches actually attach to the conditional. An
+/// `:NTF`/`:nNnTF`
 /// whose single-token (`N`/`V`/operator) argument breaks greedy attachment leaves
 /// the branch groups on a following sibling, not the conditional, so it falls back
 /// rather than mis-lower a partial shape.
@@ -2912,13 +2916,17 @@ fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Optio
     // The last `n` groups are the branches; everything before the first of them is
     // the head (control word, leading brace/operator args, and their trivia).
     let first_branch = group_positions[group_positions.len() - n];
-    // The branches must be the *trailing* arguments: nothing but groups and trivia
-    // may sit from the first branch onward, else this is not a clean conditional
-    // call and the width path is safer.
+    // The branches must be the *trailing* arguments: nothing but groups, trivia, and
+    // comments may sit from the first branch onward, else this is not a clean
+    // conditional call and the width path is safer. Comments are admitted (rather
+    // than bailing to the width path) because annotated branches are ordinary l3
+    // style — `{ \exp_not:n { equations~ } } % You might prefer \nobreakspace to ~`
+    // — and the bail cost the whole exploded shape for one `%` (issue #101).
     for element in &children[first_branch..] {
         match element {
             SyntaxElement::Node(nd) if nd.kind() == SyntaxKind::GROUP => {}
-            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            SyntaxElement::Token(t)
+                if is_collapsible_trivia(t.kind()) || t.kind() == SyntaxKind::COMMENT => {}
             _ => return None,
         }
     }
@@ -2928,10 +2936,38 @@ fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Optio
         Statements::Ignore,
     ));
     let mut parts = vec![head];
-    for &pos in &group_positions[group_positions.len() - n..] {
-        let branch = children[pos].as_node().expect("group position is a node");
-        let group = lower_expl_group(branch, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
-        parts.push(Ir::indent(Ir::concat([Ir::hard_line(), group])));
+    // Trivia seen since the last emitted branch or comment: `gap` renders as the one
+    // space before a trailing comment, `own_line` (a newline in that run) keeps an
+    // own-line comment on its own line. Own-line-ness is a *preserved* predicate, so
+    // reading it is trivia-invariant and stable in both directions — a trailing
+    // comment re-parses trailing, an own-line one re-parses own-line. Relocating
+    // either way would rebind it under decision #9.
+    let mut gap = false;
+    let mut own_line = false;
+    for element in &children[first_branch..] {
+        match element {
+            SyntaxElement::Node(nd) if nd.kind() == SyntaxKind::GROUP => {
+                let group = lower_expl_group(nd, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+                parts.push(Ir::indent(Ir::concat([Ir::hard_line(), group])));
+                (gap, own_line) = (false, false);
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
+                let comment = Ir::verbatim(t.text());
+                parts.push(if own_line {
+                    Ir::indent(Ir::concat([Ir::hard_line(), comment]))
+                } else if gap {
+                    Ir::concat([Ir::verbatim(" "), comment])
+                } else {
+                    comment
+                });
+                (gap, own_line) = (false, false);
+            }
+            SyntaxElement::Token(t) => {
+                gap = true;
+                own_line |= t.kind() == SyntaxKind::NEWLINE;
+            }
+            SyntaxElement::Node(_) => unreachable!("scan above admits only GROUP nodes"),
+        }
     }
     Some(Ir::concat(parts))
 }

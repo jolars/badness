@@ -17,6 +17,7 @@
 pub mod builder;
 pub mod define;
 pub mod doc;
+pub mod expl3;
 pub mod label;
 pub mod load;
 pub mod outline;

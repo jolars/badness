@@ -10,6 +10,7 @@ pub(crate) mod colspec;
 pub(crate) mod context;
 pub mod core;
 pub(crate) mod ir;
+pub mod perturb;
 pub(crate) mod printer;
 pub(crate) mod sentence;
 pub mod style;

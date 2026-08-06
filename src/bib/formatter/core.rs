@@ -136,7 +136,10 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
 
 fn format_root(root: &SyntaxNode, style: FormatStyle) -> String {
     let cx = Lower { db: builtin() };
-    let ir = lower_root(root, cx);
+    // Saturate like the LaTeX `format_root`: the printer's `Group` arm trusts
+    // a `propagate_breaks`-saturated tree. The bib lowering builds no groups
+    // today, so this is future-proofing, not a behavior change.
+    let ir = lower_root(root, cx).propagate_breaks();
     Printer::new(style).print(&ir)
 }
 

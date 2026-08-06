@@ -46,6 +46,8 @@
 //! The lowering (`lower_node`) is the LaTeX-specific part; the surrounding
 //! `format`/`format_with_style` framework is generic.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::iter::Peekable;
 
 use rowan::{TextRange, TextSize};
@@ -55,8 +57,13 @@ use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
 use crate::parser::grammar::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
-use crate::semantic::{ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, scan_definitions};
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+use crate::semantic::expl3::{StatementMap, segment_expl_statements};
+use crate::semantic::{
+    ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
+};
+use crate::syntax::{
+    SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
+};
 
 use super::context::FormatContext;
 use super::ir::Ir;
@@ -339,6 +346,9 @@ fn format_root(
     // no-break slice `ctx` still owns for the whole call, so it rides `LowerCtx`
     // like the bare `wrap` mode. Never consulted under `reflow`/`preserve`.
     let profile = ctx.sentence().resolved();
+    // The grouped-sibling memo (see [`GroupedSiblingCache`]), owned here for the
+    // whole lowering like `user` and `regions`.
+    let grouped_sibling_cache = GroupedSiblingCache::default();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
         // Resolved here (never `Auto` past this point), so per-file-kind wrap
@@ -349,8 +359,13 @@ fn format_root(
         expl3_regions: &regions,
         profile,
         range,
+        grouped_sibling_cache: &grouped_sibling_cache,
     };
-    let ir = lower_node(root, cx);
+    // Saturate `Group::expand` at the lowering->printer seam: after this, the
+    // flag is the single representation of "forced open" the printer trusts.
+    // The lowering-time `contains_forced_break` queries above run on pre-pass
+    // sub-IR and keep their recursive traversal.
+    let ir = lower_node(root, cx).propagate_breaks();
     Printer::new(ctx.style()).print(&ir)
 }
 
@@ -720,7 +735,20 @@ struct LowerCtx<'a> {
     /// `ROOT` — every selected block still lowers in full, at its real indent-0
     /// context, so the formatter stays the sole authority on layout.
     range: Option<TextRange>,
+    /// Per-container memo for [`head_command_has_grouped_sibling_arg`]: the
+    /// gate re-segments the *enclosing* stream (which the [`Statements::Ignore`]
+    /// call lowering the owner's arguments cannot see), and doing that once per
+    /// trailing-group candidate is O(run²) over a paragraph run of
+    /// `\cmd:Nn \tgt {body}` statements. One linear pass per container instead,
+    /// shared through the whole lowering. Borrowed from [`format_root`] like
+    /// `expl3_regions`.
+    grouped_sibling_cache: &'a GroupedSiblingCache,
 }
+
+/// Memoized [`head_command_has_grouped_sibling_arg`] answers: per container
+/// node, the answer for every in-region `COMMAND` child, keyed by its start
+/// offset (unique among siblings). See [`grouped_sibling_answers`].
+type GroupedSiblingCache = RefCell<HashMap<SyntaxNode, HashMap<TextSize, bool>>>;
 
 impl<'a> LowerCtx<'a> {
     /// Whether the active wrap mode lays out prose paragraphs at all (as opposed to
@@ -1601,7 +1629,7 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
         let run = elements[start..i].iter().cloned();
         let ir = if in_region {
-            lower_expl_code(run, cx, Statements::SplitAtNewlines)
+            lower_expl_code(run, cx, Statements::Structural)
         } else if cx.wraps_prose() {
             reflow_elements(run, cx, ReflowKind::Prose)
         } else {
@@ -1628,12 +1656,15 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::concat(result)
 }
 
-/// How [`lower_expl_code`] reads a source newline: as a statement boundary (the
-/// expl3 one-call-per-line convention), or as inert catcode-9 whitespace (within
-/// one command's attached arguments, where the width fill owns the breaks).
+/// How [`lower_expl_code`] finds statement boundaries: **structurally**, from
+/// the argspec-arity segmentation ([`segment_expl_statements`] — a call unit
+/// per logical line, owned by the formatter, with the authored physical line
+/// as the per-statement fallback for underivable heads), or not at all
+/// ([`Statements::Ignore`]: within one command's attached arguments, where a
+/// newline is inert catcode-9 whitespace and the width fill owns the breaks).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Statements {
-    SplitAtNewlines,
+    Structural,
     Ignore,
 }
 
@@ -1642,11 +1673,14 @@ enum Statements {
 /// In an expl3 region TeX catcodes change: source spaces/tabs are **ignored**
 /// (catcode 9) and `~` is a **literal space** (catcode 10). Source whitespace is
 /// therefore insignificant and the formatter owns layout:
-/// - **Statements** are split on source newlines — each source line is its own
-///   logical line (the expl3 convention is one call per line). This sidesteps the
-///   unsolvable problem of grouping a multi-token call (`\cs_new:Npn \foo:n #1 {…}`
-///   is several sibling CST nodes, not one) and stays idempotent: a flushed
-///   continuation re-parses to a line already at the same indent. The exception
+/// - **Statements** are structural *call units*: the boundary map from
+///   [`segment_expl_statements`] — a head command plus the arguments its
+///   argspec arity consumes — decides where logical lines commit, so
+///   `\cs_new:Npn \foo:n #1 {…}` is one statement even though it is several
+///   sibling CST nodes, regardless of where the author's newlines fell (one
+///   call per line, formatter-owned: same-line calls split, mid-call newlines
+///   join). A head with no derivable arity falls back to the authored physical
+///   line for that statement (Tier 2; see [`crate::semantic::expl3`]). The exception
 ///   is *within one command's attached arguments* ([`Statements::Ignore`]),
 ///   where a newline is inert whitespace and only the width fill breaks —
 ///   see the `COMMAND` arm in [`lower_node`].
@@ -1667,6 +1701,9 @@ fn lower_expl_code(
     statements: Statements,
 ) -> Ir {
     let elements: Vec<SyntaxElement> = elements.collect();
+    // The statement-boundary map (structural mode only): computed over the very
+    // element vector lowered below, so indices align by construction.
+    let map = (statements == Statements::Structural).then(|| segment_expl_statements(&elements));
     // Sibling coupling: within one command's attached arguments ([`Statements::Ignore`]),
     // if any brace-group sibling detonates on a *forced* break (a guard, comment, or
     // `.dtx` margin — the width-independent trigger [`lower_expl_group`] uses for its
@@ -1710,7 +1747,8 @@ fn lower_expl_code(
     }
 
     /// Commit the in-progress line (if any) as the next logical line, recording the
-    /// pending line separator before it and resetting line state.
+    /// pending line separator before it and resetting line state (`sticky` resets
+    /// to `true`, the structural default).
     fn commit_line(
         atom: &mut Vec<Ir>,
         parts: &mut Vec<Ir>,
@@ -1718,25 +1756,35 @@ fn lower_expl_code(
         lines: &mut Vec<Ir>,
         seps: &mut Vec<Ir>,
         pending_sep: &mut Ir,
+        sticky: &mut bool,
     ) {
         flush_atom(atom, parts, sep_before_next);
         if !parts.is_empty() {
-            // A multi-atom line is a *sticky* fill: greedy, but once a hanging
-            // brace argument detonates onto its own line every later argument
-            // follows, rather than an empty false-branch gluing back onto the
-            // block's short closing `}` line — a glue that is not pass-stable,
-            // since where the block's own body breaks is not pass-invariant
-            // (issue #94). A single atom needs no fill.
+            // A multi-atom *structural* line is a *sticky* fill: greedy, but
+            // once a hanging brace argument detonates onto its own line every
+            // later argument follows, rather than an empty false-branch gluing
+            // back onto the block's short closing `}` line — a glue that is
+            // not pass-stable, since where the block's own body breaks is not
+            // pass-invariant (issue #94). A *fallback* (or junk-glued) line
+            // instead commits as a plain greedy fill: greedy packing is
+            // self-fulfilling (each printed line re-segments to a fallback
+            // statement that re-fills to itself), while a sticky cascade
+            // forces atoms that would fit onto broken lines — a shape the next
+            // pass's shorter per-line statements do not reproduce. A single
+            // atom needs no fill.
             let line = if parts.len() == 1 {
                 parts.drain(..).next().unwrap()
-            } else {
+            } else if *sticky {
                 Ir::StickyFill(std::mem::take(parts).into())
+            } else {
+                Ir::Fill(std::mem::take(parts).into())
             };
             seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
             lines.push(line);
         }
         parts.clear();
         *sep_before_next = None;
+        *sticky = true;
     }
 
     // True right after a multi-line block was pushed as its own line, surviving
@@ -1746,15 +1794,31 @@ fn lower_expl_code(
     // binds *leading* into the following command (decision #9) — a different
     // shape, so a different layout: idempotence would break.
     let mut after_block = false;
+    // Whether the line in progress commits as a sticky fill (structural
+    // statements) or a plain greedy fill (fallback/junk-glued statements) —
+    // see `commit_line`. Any fallback-marked element makes its line greedy.
+    let mut line_sticky = true;
     let mut idx = 0;
     while idx < elements.len() {
+        if let Some(m) = map.as_ref()
+            && (m.is_fallback(idx) || m.is_glued(idx))
+        {
+            line_sticky = false;
+        }
         match &elements[idx] {
-            // Insignificant whitespace: a single newline ends the statement line, a
-            // blank line promotes the next line separator, an inline run is a single
-            // (breakable) space before the next atom.
+            // Insignificant whitespace: a gap the boundary map marks ends the
+            // logical line, a blank line promotes the next line separator, and
+            // any other run is a single (breakable) space before the next atom.
+            // The run's newline count is read only for the blank-line promotion
+            // and the `after_block` clear — both preserved predicates — never
+            // for the boundary itself (trivia-invariant layout).
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let run_start = idx;
                 let newlines = consume_trivia_run_slice(&elements, &mut idx);
-                if newlines >= 1 && statements == Statements::SplitAtNewlines {
+                let boundary = map
+                    .as_ref()
+                    .is_some_and(|m| run_start > 0 && m.boundary_after(run_start - 1));
+                if boundary {
                     after_block = false;
                     commit_line(
                         &mut atom,
@@ -1763,31 +1827,67 @@ fn lower_expl_code(
                         &mut lines,
                         &mut seps,
                         &mut pending_sep,
+                        &mut line_sticky,
                     );
                     if newlines >= 2 {
                         pending_sep = Ir::empty_line();
                     }
                 } else {
                     // A trailing comment glues only to a directly-abutting `}`,
-                    // never across a line break.
+                    // never across a line break (own-line-ness is preserved).
                     if newlines >= 1 {
                         after_block = false;
                     }
                     flush_atom(&mut atom, &mut parts, &mut sep_before_next);
-                    // Keep a tie's soft break if one is already pending.
+                    // Keep a tie's soft break if one is already pending. A gap
+                    // before a recognized head mid-way through a fallback
+                    // statement, or any top-level gap of a junk-bearing glued
+                    // statement, is an unbreakable literal space: a width wrap
+                    // there would move material across a printed line boundary
+                    // the next pass segments differently (see
+                    // [`StatementMap::glue_before`] and
+                    // [`StatementMap::is_glued`]) — the line overflows instead.
                     if sep_before_next.is_none() {
-                        sep_before_next = Some(Ir::Line);
+                        sep_before_next = Some(
+                            if map
+                                .as_ref()
+                                .is_some_and(|m| m.glue_before(idx) || m.is_glued(idx))
+                            {
+                                Ir::verbatim(" ")
+                            } else {
+                                Ir::Line
+                            },
+                        );
                     }
                 }
                 continue;
             }
             // `~`: a literal space. Glue it to the end of the current atom, then
             // close the atom with a soft break (flat: nothing; broken: newline).
+            // A tie directly before a recognized head mid-fallback-statement
+            // must not break either (`xo-or.dtx`'s `=~ \exp_not:c {…}` trace
+            // lines), so that gap renders as nothing (`Nil`, the soft break's
+            // flat form).
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::TILDE => {
                 after_block = false;
                 atom.push(Ir::verbatim(token.text()));
                 flush_atom(&mut atom, &mut parts, &mut sep_before_next);
-                sep_before_next = Some(Ir::SoftLine);
+                let next = elements[idx + 1..]
+                    .iter()
+                    .position(|el| {
+                        !matches!(el, SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()))
+                    })
+                    .map(|off| idx + 1 + off);
+                sep_before_next = Some(
+                    if next.is_some_and(|n| {
+                        map.as_ref()
+                            .is_some_and(|m| m.glue_before(n) || m.is_glued(n))
+                    }) {
+                        Ir::Nil
+                    } else {
+                        Ir::SoftLine
+                    },
+                );
             }
             // A comment ends its line (it must terminate the source line). One
             // trailing a multi-line block glues onto the block's closing line
@@ -1817,6 +1917,7 @@ fn lower_expl_code(
                         &mut lines,
                         &mut seps,
                         &mut pending_sep,
+                        &mut line_sticky,
                     );
                 } else {
                     // A non-empty `atom` means the comment directly abuts it
@@ -1830,6 +1931,7 @@ fn lower_expl_code(
                         &mut lines,
                         &mut seps,
                         &mut pending_sep,
+                        &mut line_sticky,
                     );
                     let line = lines
                         .pop()
@@ -1861,6 +1963,7 @@ fn lower_expl_code(
                     &mut lines,
                     &mut seps,
                     &mut pending_sep,
+                    &mut line_sticky,
                 );
                 atom.push(lower_loose_token(token));
             }
@@ -1889,6 +1992,7 @@ fn lower_expl_code(
                     &mut lines,
                     &mut seps,
                     &mut pending_sep,
+                    &mut line_sticky,
                 );
                 let mut rest: Vec<SyntaxElement> = Vec::new();
                 for el in child.children_with_tokens() {
@@ -1913,21 +2017,30 @@ fn lower_expl_code(
             }
             SyntaxElement::Node(child) => {
                 after_block = false;
+                // A junk-bearing *glued* statement bypasses every layout
+                // special: its nodes accumulate as plain atoms joined by the
+                // hard separators the trivia arm supplies, so the authored
+                // line shape survives verbatim (see [`StatementMap::is_glued`]
+                // — a conditional explosion or head-hug here would commit a
+                // line mid-statement and strand the junk on a fresh line the
+                // next pass segments differently).
+                let in_glued = map.as_ref().is_some_and(|m| m.is_glued(idx));
                 // A *statement-leading* expl3 conditional (`\…:nTF {c} {T} {F}`,
                 // nothing on the logical line before it) explodes structurally: the
                 // head on its own line, then each `T`/`F` branch on its own line at
                 // +6 (R4/R5), regardless of whether it would fit inline. Keyed on the
-                // command name's argspec suffix ([`expl_conditional_branches`]); a
+                // command name's argspec suffix ([`expl3::conditional_branches`]); a
                 // conditional used mid-line as a value (`,key = \…:nTF …`, atom or
                 // parts non-empty) is not statement-leading and stays on the
                 // width-driven head-hug path (issue #71). `lower_expl_conditional`
                 // returns `None` for shapes whose branches do not attach to the
                 // command (`:NTF`), leaving those on the width path too.
-                if parts.is_empty()
+                if !in_glued
+                    && parts.is_empty()
                     && atom.is_empty()
                     && child.kind() == SyntaxKind::COMMAND
                     && let Some(cond_ir) = command_name(child)
-                        .and_then(|name| expl_conditional_branches(&name))
+                        .and_then(|name| expl3::conditional_branches(&name))
                         .and_then(|n| lower_expl_conditional(child, cx, n))
                 {
                     seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
@@ -1951,11 +2064,21 @@ fn lower_expl_code(
                 // explosion, which re-parses statement-leading and re-explodes to the
                 // identical bytes (idempotency failure, `lthooks.dtx`, issue #96). The
                 // `!(…)` guard leaves the statement-leading position to the block above.
-                if child.kind() == SyntaxKind::COMMAND
-                    && !(parts.is_empty() && atom.is_empty())
-                    && is_trailing_in_statement(&elements, idx, statements)
+                // Suppressed in a *fallback* statement too: a conditional name
+                // mid-way through an unrecognized line is data being spliced
+                // (`xtemplate`'s `cs_ \str_if_eq:nnT {#1} { global } { g }
+                // set:Npn` name assembly), not a call — and whether it sits
+                // trailing depends on where the line's junk ends, which is not
+                // pass-invariant.
+                let in_fallback = map.as_ref().is_some_and(|m| m.is_fallback(idx));
+                let statement_leading = parts.is_empty() && atom.is_empty();
+                if !in_glued
+                    && !in_fallback
+                    && !statement_leading
+                    && child.kind() == SyntaxKind::COMMAND
+                    && is_trailing_in_statement(&elements, idx, map.as_ref())
                     && let Some(exploded) = command_name(child)
-                        .and_then(|name| expl_conditional_branches(&name))
+                        .and_then(|name| expl3::conditional_branches(&name))
                         .and_then(|n| lower_expl_conditional(child, cx, n))
                 {
                     // The head↔conditional separator: a space when trivia flushed the
@@ -2013,9 +2136,13 @@ fn lower_expl_code(
                     && !couple_siblings
                     && !expl_group_forces_break(child)
                     && expl_group_body_is_multi_atom(child)
-                    && is_trailing_in_statement(&elements, idx, statements)
-                    && !statement_has_preceding_group(&elements, idx, statements)
-                    && !head_command_has_grouped_sibling_arg(child)
+                    && is_trailing_in_statement(&elements, idx, map.as_ref())
+                    && !statement_has_preceding_group(&elements, idx, map.as_ref())
+                    && !head_command_has_grouped_sibling_arg(
+                        child,
+                        cx.expl3_regions,
+                        cx.grouped_sibling_cache,
+                    )
                     && let ExplGroupPieces::Pieces {
                         open_ir,
                         body,
@@ -2109,10 +2236,10 @@ fn lower_expl_code(
                 // whose atoms the reparse reads as ordinary base-indent statements
                 // when a width break separates them (the group's own internal lines
                 // must sit at the deeper level either way, so break and body travel
-                // together). This holds identically whether source newlines are
-                // statement boundaries (`SplitAtNewlines`) or inert catcode-9
-                // whitespace within one command's attached arguments (`Ignore`), so
-                // the rule keys only on the group shape, not the statement mode.
+                // together). This holds identically whether statement boundaries
+                // are structural (`Structural`) or absent within one command's
+                // attached arguments (`Ignore`), so the rule keys only on the
+                // group shape, not the statement mode.
                 let hang_group = child.kind() == SyntaxKind::GROUP && atom.is_empty();
                 let starts_line = parts.is_empty();
                 // Sibling coupling (`Ignore` only): once one brace argument
@@ -2123,7 +2250,52 @@ fn lower_expl_code(
                 } else {
                     lower_node(child, cx)
                 };
-                if ir.contains_forced_break() {
+                // A junk-bearing glued statement: plain atom accumulation, hard
+                // separators, no line commits until the boundary (see above).
+                if in_glued {
+                    atom.push(ir);
+                }
+                // A trailing command carrying a block argument, with a head
+                // before it on the statement line: glue the head to the command
+                // with an unbreakable space and let the command's own internal
+                // hang absorb any overflow, so the head stays joined and only
+                // the block breaks below. Deliberately checked *before* the
+                // forced-break dispatch and applied to soft and forced bodies
+                // alike: whether such a body is soft or forced is not
+                // pass-invariant (a width wrap inside fallback content mints a
+                // statement boundary the reparse reads as a hard break —
+                // `expl_forced_block_body_mode`'s `\fp_eval:n` closing paren,
+                // l3doc's `\string \indexentry {…} {…}` write bodies), so any
+                // dispatch split on it — sticky fill when soft, `group_hug`
+                // when forced — renders different bytes on the two passes.
+                // Gluing renders identically either way: flat when everything
+                // fits, joined head with the block hanging otherwise.
+                // Structural streams only — under [`Statements::Ignore`] the
+                // nested hang branches already treat soft and forced uniformly.
+                else if map.is_some()
+                    && child.kind() == SyntaxKind::COMMAND
+                    && atom.is_empty()
+                    && !parts.is_empty()
+                    && is_trailing_in_statement(&elements, idx, map.as_ref())
+                    && child.children().any(|c| c.kind() == SyntaxKind::GROUP)
+                {
+                    let head = if parts.len() == 1 {
+                        parts.drain(..).next().unwrap()
+                    } else {
+                        Ir::Fill(std::mem::take(&mut parts).into())
+                    };
+                    // The head↔command separator is the pending gap's *flat*
+                    // form: a space for an ordinary inter-token gap, nothing
+                    // after a tie (`plus ~\__char_show_code:n {…}` must not
+                    // grow a space the next parse does not have).
+                    let sep = match sep_before_next.take() {
+                        Some(Ir::SoftLine) | Some(Ir::Nil) => Ir::Nil,
+                        _ => Ir::verbatim(" "),
+                    };
+                    seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
+                    lines.push(Ir::concat(vec![head, sep, ir]));
+                    after_block = true;
+                } else if ir.contains_forced_break() {
                     if !atom.is_empty() {
                         // A block hanging off a *directly-abutting* atom stays
                         // glued (`\cs_if_exist:NF\tag_if_active:T { … }` with a
@@ -2140,6 +2312,7 @@ fn lower_expl_code(
                             &mut lines,
                             &mut seps,
                             &mut pending_sep,
+                            &mut line_sticky,
                         );
                     } else if hang_group {
                         // A multi-line brace group separated from its head by a
@@ -2156,6 +2329,7 @@ fn lower_expl_code(
                             &mut lines,
                             &mut seps,
                             &mut pending_sep,
+                            &mut line_sticky,
                         );
                         if !lines.is_empty() {
                             let sep = std::mem::replace(&mut pending_sep, Ir::hard_line());
@@ -2193,6 +2367,7 @@ fn lower_expl_code(
                             &mut lines,
                             &mut seps,
                             &mut pending_sep,
+                            &mut line_sticky,
                         );
                         seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
                         lines.push(ir);
@@ -2207,13 +2382,32 @@ fn lower_expl_code(
                     // Mid-statement: if the width fill breaks at this gap, the
                     // group starts a continuation line hung one step. Flat, the
                     // leading `Line` is the single inter-token space (the `Nil`
-                    // separator adds nothing).
+                    // separator adds nothing). A `{`-led continuation line is
+                    // safe in a fallback statement too: the reparse reads it as
+                    // a statement-leading group and the continuation-hang fold
+                    // below re-indents it identically. (A glued statement never
+                    // reaches here — the `in_glued` arm above owns its nodes.)
                     sep_before_next = Some(Ir::Nil);
                     atom.push(Ir::indent(Ir::concat(vec![Ir::Line, ir])));
                 } else {
                     atom.push(ir);
                 }
             }
+        }
+        // A structural boundary whose gap holds no trivia (`\foo:\bar:`
+        // abutting, or a statement split out of an authored same-line pair):
+        // the trivia arm never sees a run there, so commit here. Re-committing
+        // an already-committed line is a no-op.
+        if map.as_ref().is_some_and(|m| m.boundary_after(idx)) {
+            commit_line(
+                &mut atom,
+                &mut parts,
+                &mut sep_before_next,
+                &mut lines,
+                &mut seps,
+                &mut pending_sep,
+                &mut line_sticky,
+            );
         }
         idx += 1;
     }
@@ -2224,6 +2418,7 @@ fn lower_expl_code(
         &mut lines,
         &mut seps,
         &mut pending_sep,
+        &mut line_sticky,
     );
 
     let mut result: Vec<Ir> = Vec::with_capacity(lines.len().saturating_mul(2));
@@ -2272,12 +2467,6 @@ fn expl_group_body_is_multi_atom(node: &SyntaxNode) -> bool {
         .filter(|n| n.kind() == SyntaxKind::COMMAND)
         .count()
         >= 2
-}
-
-/// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the shape
-/// that follows `#` in a parameter reference. Reads only the token text.
-fn is_param_digit(t: &SyntaxToken) -> bool {
-    matches!(t.text().as_bytes(), [b'1'..=b'9'])
 }
 
 /// Whether an expl3 brace group's body is a *simple run of parameters* — `{#1}`,
@@ -2335,46 +2524,27 @@ fn is_simple_param_run(node: &SyntaxNode) -> bool {
     saw_hash
 }
 
-/// The number of trailing `T`/`F` branch arguments of an expl3 conditional, read
-/// from the command *name*'s argspec (the substring after the final `:`).
-/// `\tl_if_empty:nTF` → `Some(2)`, `\bool_if:nT`/`:nF` → `Some(1)`; `None` for any
-/// name without a `:`-argspec ending in `T`/`F` — a non-conditional expl3 function
-/// (`\seq_new:N`), or a LaTeX2e command with no colon (`\@ifpackageloaded`). In an
-/// expl3 argspec `T`/`F` denote *only* the true/false branch slots, so a trailing
-/// `T`/`F` run is exactly the branch count. Pure text inspection — no signature or
-/// meaning lookup, mirroring [`expl_group_is_spaced`]'s name-only rule (decision
-/// #2). Only meaningful inside a region, where the whole name lexes as one
-/// `CONTROL_WORD` (outside, `:`/`_` split the token, but the conditional lowering
-/// never fires there).
-fn expl_conditional_branches(name: &str) -> Option<usize> {
-    let argspec = name.rsplit_once(':')?.1;
-    let n = argspec
-        .chars()
-        .rev()
-        .take_while(|c| *c == 'T' || *c == 'F')
-        .count();
-    (n > 0).then_some(n)
-}
-
 /// Whether the element at `idx` is the last *meaningful* element of its statement —
-/// only collapsible trivia (and, under [`Statements::SplitAtNewlines`], a newline
-/// that ends the statement) follow it. Used to gate the trailing-conditional
-/// width-conditional lowering in [`lower_expl_code`]: a conditional with content
-/// after it on the same statement is not a clean trailing value, so it stays on the
-/// ordinary fill path. A `~` (`TILDE`) or comment is not collapsible trivia, so it
-/// counts as following content.
+/// the boundary map ends the statement at it, or (under [`Statements::Ignore`],
+/// where `map` is `None`) only collapsible trivia follows it in the stream. Used
+/// to gate the trailing-conditional width-conditional lowering in
+/// [`lower_expl_code`]: a conditional with content after it on the same statement
+/// is not a clean trailing value, so it stays on the ordinary fill path. A `~`
+/// (`TILDE`) or comment is not collapsible trivia, so it counts as following
+/// content.
 fn is_trailing_in_statement(
     elements: &[SyntaxElement],
     idx: usize,
-    statements: Statements,
+    map: Option<&StatementMap>,
 ) -> bool {
+    if let Some(m) = map
+        && m.boundary_after(idx)
+    {
+        return true;
+    }
     for element in &elements[idx + 1..] {
         match element {
-            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                if statements == Statements::SplitAtNewlines && t.kind() == SyntaxKind::NEWLINE {
-                    return true;
-                }
-            }
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
             _ => return false,
         }
     }
@@ -2393,45 +2563,131 @@ fn is_trailing_in_statement(
 /// argument group instead). A lone `\cmd \target {body}` (`\tl_put_right:Ne
 /// \l…_tl {body}`, `\bool_if:NF \…_bool {body}`) has no such earlier grouped
 /// command and still qualifies.
-fn head_command_has_grouped_sibling_arg(child: &SyntaxNode) -> bool {
+///
+/// "Same statement" is decided by segmenting the owner's sibling stream
+/// ([`segment_expl_statements`], memoized per container in
+/// [`GroupedSiblingCache`]): the backward walk stops at the previous
+/// statement boundary, so a grouped command in an *earlier statement*
+/// (`\tl_set:Nn \l_x { v }` on the line above) no longer suppresses the
+/// three-way for an unrelated `\bool_if:NF \…_bool {body}`.
+///
+/// The re-segmented stream must be the stream the layout segmented, or the
+/// boundaries consulted here disagree with the boundaries committing lines: a
+/// `GROUP` container's braces never reach [`lower_expl_code`]
+/// ([`expl_group_pieces`] strips them — included, the `{` opens a fallback
+/// line that swallows every boundary on the group's first physical line), and
+/// a paragraph is lowered per in-region run ([`lower_expl_paragraph`]), so the
+/// stream is the contiguous in-region slice around the owner. A container that
+/// is itself a `COMMAND` is an [`Statements::Ignore`]-level stream with no
+/// statements to bound, so the walk runs to the stream start there, mirroring
+/// [`statement_has_preceding_group`]'s `map == None` arm.
+fn head_command_has_grouped_sibling_arg(
+    child: &SyntaxNode,
+    regions: &[TextRange],
+    cache: &GroupedSiblingCache,
+) -> bool {
     let Some(owner) = child.parent() else {
         return false;
     };
-    let mut sibling = owner.prev_sibling();
-    while let Some(node) = sibling {
-        if node.kind() == SyntaxKind::COMMAND
-            && node
-                .children()
-                .any(|c| matches!(c.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
-        {
-            return true;
-        }
-        sibling = node.prev_sibling();
+    // Only an *attached* argument has a head with sibling arguments: a
+    // stream-level group's parent is the container itself, where the walk
+    // below has no head command to inspect.
+    if owner.kind() != SyntaxKind::COMMAND {
+        return false;
     }
-    false
+    let Some(container) = owner.parent() else {
+        return false;
+    };
+    // Memoized per container: segmenting the enclosing stream once per
+    // trailing-group candidate is O(run²) over a paragraph run of qualifying
+    // statements (56x wall-clock at 2000 statements), and every candidate in
+    // the same container needs the same segmentation.
+    let mut cache = cache.borrow_mut();
+    let answers = cache
+        .entry(container)
+        .or_insert_with_key(|container| grouped_sibling_answers(container, regions));
+    answers
+        .get(&owner.text_range().start())
+        .copied()
+        .unwrap_or(false)
+}
+
+/// One linear pass computing [`head_command_has_grouped_sibling_arg`] for every
+/// in-region `COMMAND` child of `container`: split the (brace-stripped) sibling
+/// stream into maximal in-region runs, segment each run once, and sweep it
+/// forward carrying "a grouped command has appeared since the last statement
+/// boundary" — the state an element's backward same-statement walk would
+/// observe. A grouped command that itself *ends* a statement resets rather than
+/// sets the flag (the backward walk meets its boundary first). An owner absent
+/// from the map (out of region — unreachable from the expl3 lowering that asks)
+/// answers `false`.
+fn grouped_sibling_answers(
+    container: &SyntaxNode,
+    regions: &[TextRange],
+) -> HashMap<TextSize, bool> {
+    let stream: Vec<SyntaxElement> = container
+        .children_with_tokens()
+        .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
+        .collect();
+    let in_region =
+        |el: &SyntaxElement| regions.iter().any(|r| r.contains(el.text_range().start()));
+    let mut answers = HashMap::new();
+    let mut i = 0;
+    while i < stream.len() {
+        if !in_region(&stream[i]) {
+            i += 1;
+            continue;
+        }
+        let mut end = i + 1;
+        while end < stream.len() && in_region(&stream[end]) {
+            end += 1;
+        }
+        let run = &stream[i..end];
+        let map = (container.kind() != SyntaxKind::COMMAND).then(|| segment_expl_statements(run));
+        let mut seen_grouped = false;
+        for (j, el) in run.iter().enumerate() {
+            if let SyntaxElement::Node(node) = el
+                && node.kind() == SyntaxKind::COMMAND
+            {
+                answers.insert(node.text_range().start(), seen_grouped);
+            }
+            if map.as_ref().is_some_and(|m| m.boundary_after(j)) {
+                seen_grouped = false;
+            } else if el.as_node().is_some_and(|n| {
+                n.kind() == SyntaxKind::COMMAND
+                    && n.children()
+                        .any(|c| matches!(c.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+            }) {
+                seen_grouped = true;
+            }
+        }
+        i = end;
+    }
+    answers
 }
 
 /// Whether a `GROUP`/`OPTIONAL` sibling precedes the element at `idx` within its
-/// statement (back to the previous statement-ending newline under
-/// [`Statements::SplitAtNewlines`], or to the stream start under
-/// [`Statements::Ignore`]). Used to keep the trailing-hang three-way off a group
-/// that is *one of several* trailing brace groups — the branch list of a conditional
-/// call whose N/V argument broke greedy attachment (`\prop_get:NnNTF \g…_prop {#2}
-/// \l…_tl {T} {F}`), or any multi-argument shape — where the existing hang path
-/// already lays the branches out stably. A lone trailing group (`\l…_tl {body}`,
-/// `\bool_if:NF\…_bool {body}`) has no preceding group and still qualifies.
+/// statement (back to the previous boundary in the map, or to the stream start
+/// under [`Statements::Ignore`], where `map` is `None`). Used to keep the
+/// trailing-hang three-way off a group that is *one of several* trailing brace
+/// groups — the branch list of a conditional call whose N/V argument broke greedy
+/// attachment (`\prop_get:NnNTF \g…_prop {#2} \l…_tl {T} {F}`), or any
+/// multi-argument shape — where the existing hang path already lays the branches
+/// out stably. A lone trailing group (`\l…_tl {body}`, `\bool_if:NF\…_bool
+/// {body}`) has no preceding group and still qualifies.
 fn statement_has_preceding_group(
     elements: &[SyntaxElement],
     idx: usize,
-    statements: Statements,
+    map: Option<&StatementMap>,
 ) -> bool {
-    for element in elements[..idx].iter().rev() {
-        match element {
-            SyntaxElement::Token(t)
-                if statements == Statements::SplitAtNewlines && t.kind() == SyntaxKind::NEWLINE =>
-            {
-                return false;
-            }
+    for j in (0..idx).rev() {
+        // A boundary after `j` puts `j` in the previous statement.
+        if let Some(m) = map
+            && m.boundary_after(j)
+        {
+            return false;
+        }
+        match &elements[j] {
             SyntaxElement::Node(n)
                 if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
@@ -2504,35 +2760,24 @@ fn lower_expl_group(
                 forced,
             } => (open_ir, body, close_ir, spaced, forced),
         };
-    if has_comment || force_break {
-        // Wrapped in an *expanded* group, not a bare concat: the block is broken by
-        // construction, so its body must be laid out in break mode. A bare concat
-        // inherits whatever mode the caller was dispatched in, and inheriting `Flat`
-        // makes every fill gap inside the body render flat while the groups hanging
-        // off those gaps still re-decide and break — the K&R hybrid
-        // (`\int_set:Nn \l_…_int {` with the body wrapped below). That hybrid is not
-        // a fixed point: its wrapped lines re-parse as separate statements, so the
-        // body acquires a forced break and the next pass lays the block out Allman
-        // (issue #97, `l3auxdata.dtx`). `expand` also keeps
-        // [`Ir::contains_forced_break`] and the flat-width measurements answering
-        // exactly as the `HardLine`-bearing concat did.
-        Ir::group_expanded(Ir::concat([
-            open_ir,
-            Ir::indent(Ir::concat([Ir::hard_line(), body])),
-            Ir::hard_line(),
-            close_ir,
-        ]))
+    // A forced block gets hard boundary separators *in-shape*, so
+    // `propagate_breaks` marks the group `expand` and the printer lays the
+    // body out in break mode — never the K&R hybrid of a flat-dispatched
+    // concat (issue #97, `l3auxdata.dtx`). Otherwise the flat boundary is a
+    // space (l3 house style) or nothing (tight); both break identically.
+    let boundary = if has_comment || force_break {
+        Ir::hard_line()
+    } else if spaced {
+        Ir::Line
     } else {
-        // Flat boundary separators: a space (l3 house style) or nothing
-        // (tight); both break identically.
-        let boundary = if spaced { Ir::Line } else { Ir::SoftLine };
-        Ir::group(Ir::concat([
-            open_ir,
-            Ir::indent(Ir::concat([boundary.clone(), body])),
-            boundary,
-            close_ir,
-        ]))
-    }
+        Ir::SoftLine
+    };
+    Ir::group(Ir::concat([
+        open_ir,
+        Ir::indent(Ir::concat([boundary.clone(), body])),
+        boundary,
+        close_ir,
+    ]))
 }
 
 /// The result of decomposing an expl3 brace group into its layout pieces; see
@@ -2638,7 +2883,7 @@ fn expl_group_pieces(
     let body = trim_trailing_break(trim_leading_break(lower_expl_code(
         body_elements.into_iter(),
         cx,
-        Statements::SplitAtNewlines,
+        Statements::Structural,
     )));
     if matches!(body, Ir::Nil) {
         // A glued lead comment owns the rest of its line, so an empty body
@@ -2666,7 +2911,7 @@ fn expl_group_pieces(
 }
 
 /// Lower a statement-leading expl3 conditional (`\…:nTF {c} {T} {F}`, its branch
-/// count recognized by [`expl_conditional_branches`]) to the l3styleguide's
+/// count recognized by [`expl3::conditional_branches`]) to the l3styleguide's
 /// exploded shape (R4/R5): the head and any leading arguments on one line, then
 /// each of the `n` trailing brace branches on its own line hung one indent step
 /// (+2 relative to the head, so +6 inside a +4 body; a multi-line branch nests its
@@ -5859,12 +6104,6 @@ fn has_verbatim_body(node: &SyntaxNode) -> bool {
         .any(|t| t.kind() == SyntaxKind::VERBATIM_BODY)
 }
 
-/// Whitespace and newlines are the only trivia the formatter rewrites. Comments
-/// are preserved verbatim and so are *not* collapsible.
-fn is_collapsible_trivia(kind: SyntaxKind) -> bool {
-    matches!(kind, SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
-}
-
 /// Consume the maximal run of collapsible trivia beginning at `first`, returning
 /// the number of newlines it spans and the whitespace following the *last*
 /// newline (the run's preserved leading indentation; whitespace before a newline
@@ -6042,6 +6281,62 @@ mod expl3_region_tests {
     use super::*;
     use crate::parser::parse;
 
+    /// Run [`head_command_has_grouped_sibling_arg`] on the *innermost* `GROUP`
+    /// descendant of `input` whose text contains `marker`, with the document's
+    /// real expl3 regions.
+    fn grouped_sibling_walk(input: &str, marker: &str) -> bool {
+        let parsed = parse(input);
+        assert!(parsed.errors.is_empty(), "test input should parse cleanly");
+        let root = parsed.syntax();
+        let regions = expl3_regions(&root);
+        // Preorder puts an enclosing group before a nested one, so the last
+        // match is the innermost.
+        let group = root
+            .descendants()
+            .filter(|n| n.kind() == SyntaxKind::GROUP && n.text().to_string().contains(marker))
+            .last()
+            .expect("a group containing the marker");
+        head_command_has_grouped_sibling_arg(&group, &regions, &GroupedSiblingCache::default())
+    }
+
+    #[test]
+    fn grouped_sibling_walk_stops_at_the_statement_boundary() {
+        // A grouped command in the *previous statement* must not suppress the
+        // trailing-hang treatment for an unrelated `\bool_if:NF \l… {body}` —
+        // the backward walk stops at the segmentation boundary.
+        let src = "\\ExplSyntaxOn\n\\tl_set:Nn \\l_x { v }\n\\bool_if:NF \\l_bool { body }\n\\ExplSyntaxOff\n";
+        assert!(!grouped_sibling_walk(src, "body"));
+
+        // Within one statement the earlier grouped command still counts: the
+        // `\g_prop {#2}` of a `\prop_get:NnNTF` call marks the multi-argument
+        // shape whose branch list the hang path already lays out stably.
+        let src =
+            "\\ExplSyntaxOn\n\\prop_get:NnNTF \\g_prop {#2} \\l_tl { branch }\n\\ExplSyntaxOff\n";
+        assert!(grouped_sibling_walk(src, "branch"));
+    }
+
+    #[test]
+    fn grouped_sibling_walk_matches_the_body_stream_segmentation() {
+        // Inside a single-line brace body, the container's braces must not
+        // reach the re-segmentation: included, the leading `{` opens a
+        // fallback line spanning the whole body, hiding the `\tl_set:Nn`
+        // statement boundary before `\bool_if:NF` — a map disagreeing with
+        // the one the layout commits lines with (`expl_group_pieces` strips
+        // the braces before lowering).
+        let src = "\\ExplSyntaxOn\n\\use:n { \\tl_set:Nn \\l_x { v } \\bool_if:NF \\l_b { body } }\n\\ExplSyntaxOff\n";
+        assert!(!grouped_sibling_walk(src, "body"));
+    }
+
+    #[test]
+    fn grouped_sibling_walk_ignores_out_of_region_prefix() {
+        // A paragraph is lowered per in-region run, so the walk segments only
+        // the contiguous in-region slice around the owner: the out-of-region
+        // `\emph{y}` sharing the authored line must not read as an earlier
+        // grouped command of the `\tl_put_right:Ne` statement.
+        let src = "x \\emph{y} \\ExplSyntaxOn \\tl_put_right:Ne \\l_t { body } \\ExplSyntaxOff\n";
+        assert!(!grouped_sibling_walk(src, "body"));
+    }
+
     /// The expl3 regions of `input`, as `(start, end)` byte pairs.
     fn regions(input: &str) -> Vec<(usize, usize)> {
         let parsed = parse(input);
@@ -6050,24 +6345,6 @@ mod expl3_region_tests {
             .into_iter()
             .map(|r| (r.start().into(), r.end().into()))
             .collect()
-    }
-
-    #[test]
-    fn conditional_branches_read_from_name_suffix() {
-        // Trailing `T`/`F` run in the argspec (after the final `:`) is the branch
-        // count; non-conditionals and colonless 2e names are `None`.
-        assert_eq!(expl_conditional_branches("tl_if_empty:nTF"), Some(2));
-        assert_eq!(expl_conditional_branches("bool_if:nT"), Some(1));
-        assert_eq!(expl_conditional_branches("bool_if:nF"), Some(1));
-        assert_eq!(expl_conditional_branches("str_if_eq:nnTF"), Some(2));
-        assert_eq!(expl_conditional_branches("int_compare:nNnTF"), Some(2));
-        assert_eq!(expl_conditional_branches("seq_map_inline:Nn"), None);
-        assert_eq!(expl_conditional_branches("prg_return_true:"), None);
-        assert_eq!(expl_conditional_branches("tl_new:N"), None);
-        // A LaTeX2e conditional has no `:`-argspec, so it is never matched (issue
-        // #94's `\@ifpackageloaded` stays on the width path).
-        assert_eq!(expl_conditional_branches("@ifpackageloaded"), None);
-        assert_eq!(expl_conditional_branches("IfBooleanTF"), None);
     }
 
     #[test]

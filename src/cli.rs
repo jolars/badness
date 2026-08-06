@@ -195,15 +195,25 @@ pub enum DebugCommand {
     /// Check formatter and parser invariants per file, writing nothing back.
     ///
     /// Runs the selected checks (losslessness: `reconstruct(x) == x`;
-    /// idempotency: `fmt(fmt(x)) == fmt(x)`) over each input file. `--report`
-    /// emits a Markdown summary to stdout; `--dump-dir` writes per-pass
-    /// artifacts for triage.
+    /// idempotency: `fmt(fmt(x)) == fmt(x)`; trivia: every perturbed
+    /// `fmt(perturb(x))` is a fixed point, opt-in) over each input file.
+    /// `--report` emits a Markdown summary to stdout; `--dump-dir` writes
+    /// per-pass artifacts for triage.
     Format {
         /// Files or directories to check.
         paths: Vec<PathBuf>,
         /// Which invariant checks to run.
         #[arg(long, value_enum, default_value = "all")]
         checks: DebugChecksArg,
+        /// Maximum line width before the formatter breaks a line (overrides
+        /// config; the multi-width corpus sweep's knob).
+        #[arg(long)]
+        line_width: Option<usize>,
+        /// How to lay out line breaks inside a paragraph (overrides the
+        /// per-extension default; the trivia check ignores this and pins
+        /// `reflow`).
+        #[arg(long, value_enum)]
+        wrap: Option<WrapArg>,
         /// Emit a Markdown report to stdout instead of log lines.
         #[arg(long)]
         report: bool,
@@ -231,6 +241,13 @@ pub enum DebugChecksArg {
     Idempotency,
     /// Only the parser round-trip check: `reconstruct(x) == x`.
     Losslessness,
-    /// Both checks (default).
+    /// Only the trivia-convergence oracle: every TeX-identical
+    /// newline<->space perturbation of the input must format to a fixed
+    /// point (`fmt(fmt(p)) == fmt(p)`) upholding the invariants. Wrap is
+    /// pinned to `reflow` (`--wrap` ignored); `.bib` files are skipped.
+    /// Deliberately *not* part of `all` — the smoke-test workflow's failure
+    /// classes stay as they are.
+    Trivia,
+    /// Losslessness and idempotency (default). Does not include `trivia`.
     All,
 }

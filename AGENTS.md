@@ -132,9 +132,21 @@ links to the Development page carrying its full rationale, examples, and provena
    `Send`/`Eq`/`salsa::Update`; the tree is a pure function of the text, materialized
    to red cursors on demand. See `parser.md`.
 
-8. **Argument grouping is greedy and generic** (texlab-style); arity is refined by the
-   semantic layer. **`[…]` attachment is shape-gated**—a bracket is an argument only
-   when it reads as one, from static shape facts, never meaning. See `parser.md`.
+8. **Argument grouping is text-pure: greedy and generic by default, deviating only on
+   static lexical facts.** Greedy attachment (texlab-style) is the only total strategy
+   where the text carries no arity protocol; arity is refined by the semantic layer,
+   never consulted during attachment—grouping from mutable signature data (config,
+   package scopes, scanned definitions beyond the two-pass verbatim scan) would make
+   the tree a function of inputs other than the text (decision #7). Sanctioned
+   deviations read static facts only: **`[…]` attachment is shape-gated**—a bracket is
+   an argument only when it reads as one, from static shape facts, never meaning—and
+   the **expl3 argspec suffix** (the one dialect whose arity rides in the token
+   itself, so arity-directed attachment would be as text-pure as greed) is the
+   recorded *candidate* deviation, deliberately unimplemented: today the semantic
+   layer derives the arity (`semantic::expl3`) and the formatter consumes it, and
+   promoting attachment into the grammar is a migration with recorded open questions
+   (mixed-shape CST, false-positive blast radius, differential-oracle divergence),
+   not a patch. See `parser.md` (§ *Argument grouping and bracket policy*).
 
 9. **Trivia attachment follows the rust-analyzer rule:** comments bind *forward* (a
    run of own-line `%` before a `COMMAND`/`ENVIRONMENT` becomes a `DOC_COMMENT`),
@@ -174,6 +186,17 @@ awareness in `lsp.md`.
   (the whitespace-only invariant), so a layout invariant under trivia perturbation is
   idempotent *by proof*, not by corpus luck. Every bug in the K&R↔Allman family (issues
   \#71, \#94, \#96, \#97) is one decision keyed on the unsafe predicate.
+
+  S4 made expl3 statement boundaries **structural**: a call unit is the head plus the
+  arguments its argspec arity consumes (`semantic::expl3::expl3_slots`, decision #2's
+  "semantic layer assigns arity"; segmentation in
+  `semantic::expl3::segment_expl_statements`), so the formatter owns
+  one-call-per-line and a width wrap re-derives the same unit on every pass. The old
+  newline rule survives only as the per-statement **fallback** for underivable heads
+  (no `:` suffix, `w`/`D`/unknown letters, shape mismatches, guards mid-unit) and for
+  a unit's same-line trailing junk — Tier 2, with its fixed-point argument written in
+  `semantic::expl3` (greedy self-refilling lines, no wrap before a recognized
+  head, junk-glued statements all-hard).
 
 There is deliberately **no parse-stability invariant**: the formatter may still change
 CST *shape* (the math operator split re-groups a catcode-12 `WORD`, so `a+2` → `a + 2`
@@ -232,9 +255,10 @@ never match.
   width wrap and an authored newline are the same bytes to the next parse, so any rule
   that reads one is a latent idempotency bug. Blank lines and comments are fair game.
   A mode that genuinely needs the unsafe predicate (`WrapMode::Stable`, `Sentence`,
-  `Semantic`, `ReflowKind::Statement`) is Tier 2: it must carry a written fixed-point
-  argument showing every layout it can emit re-reads to itself, as
-  `ReflowKind::Statement`'s flush continuation does.
+  `Semantic`, `ReflowKind::Statement`, the expl3 fallback statement) is Tier 2: it
+  must carry a written fixed-point argument showing every layout it can emit re-reads
+  to itself, as `ReflowKind::Statement`'s flush continuation and the expl3 fallback's
+  greedy self-refilling lines do.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
   decision #1 without recording the decision here and on the relevant Development page.
 - New salsa **inputs** carrying rarely-changing data (config, package/class metadata)

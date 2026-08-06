@@ -98,3 +98,17 @@ impl Language for BadnessLang {
 pub type SyntaxNode = rowan::SyntaxNode<BadnessLang>;
 pub type SyntaxToken = rowan::SyntaxToken<BadnessLang>;
 pub type SyntaxElement = rowan::SyntaxElement<BadnessLang>;
+
+/// Whitespace and newlines are the only trivia the formatter rewrites; comments
+/// are preserved verbatim and so are *not* collapsible. A shared shape
+/// predicate: the formatter's gap normalization and the semantic layer's expl3
+/// statement segmentation both skip exactly this class.
+pub(crate) fn is_collapsible_trivia(kind: SyntaxKind) -> bool {
+    matches!(kind, SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
+}
+
+/// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the
+/// shape that follows `#` in a parameter reference. Reads only the token text.
+pub(crate) fn is_param_digit(t: &SyntaxToken) -> bool {
+    matches!(t.text().as_bytes(), [b'1'..=b'9'])
+}

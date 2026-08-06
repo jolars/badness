@@ -418,6 +418,52 @@ control-*word* name (`\def\foo…`) keeps its benign generic-command shape.
 The CST greedily attaches trailing `{…}`/`[…]` groups as argument nodes
 (texlab-style). Arity is unknown at parse time; the semantic layer refines it.
 
+### Why greedy: text purity, not uniformity
+
+Decision #8 is really two claims, and only one of them is load-bearing. The deep
+claim is **database independence**: attachment must read the input text (plus
+compiled-in data), never mutable signature inputs—config, package scopes, or
+scanned definitions beyond the two-pass verbatim scan. Consulting the signature
+DB during grouping would make the tree a function of inputs other than the text,
+breaking decision #7's "the tree is a pure function of the text" property that
+salsa storage, determinism, and error tolerance all lean on: every signature
+edit would invalidate every parse. For generic LaTeX this forces
+greed—`\foo{a}{b}` is a 2-argument call or a 0-argument command followed by two
+groups, and nothing in the text says which—so greedy is the only *total,
+text-pure* strategy available.
+
+The shallow claim—that attachment is therefore *uniform*—was never quite true
+(the bracket shape gates below, the `#`/control-word run breaks, and the
+starred-variant fold all deviate on static facts) and has one systematic
+counterexample: **expl3**. The argspec suffix rides in the `CONTROL_WORD` token
+itself (in-region, `:`/`_` are letters), so arity-directed attachment for
+derivable specs would be exactly as text-pure as greed. Greedy is not neutral
+there; it is a systematically wrong guess—every single-token slot (`N`/`V`)
+breaks the attachment run, so every `\tl_set:Nn \l_a {x}` attaches `{x}` to the
+definee. The measured cost of that guess is the formatter's S4 machinery (the
+peel-back queue and p-scan in `semantic::expl3`, which exist only to undo greedy
+ownership after the fact) and the compensating heuristics that accumulated
+before it (`head_command_has_grouped_sibling_arg`,
+`statement_has_preceding_group`, `lower_expl_conditional`'s bail-out when
+branches attach to the wrong sibling).
+
+Arity-directed expl3 attachment is therefore the **recorded candidate
+deviation**, deliberately unimplemented (see TODO.md). It would key on token
+shape alone—a colon-suffixed name only lexes as one token in-region, so the
+grammar needs no region awareness—and unknown or underivable specs (`w`, `D`,
+colonless names) would fall back to greed. The open questions the migration must
+answer before it lands: the **mixed-shape CST** (consumers must handle
+arity-attached and greedy nodes side by side, where today the in-region tree is
+uniformly greedy and every consumer opts into the arity view); the
+**false-positive blast radius** (a never-executed `\foo:n` spelling in data
+position gets a wrong *tree*, visible to the linter and LSP, where today the
+static model's misfires cost only layout); and **differential-oracle
+divergence** (texlab will not group this way, so the parse-compat skeletons need
+a divergence ledger). The semantic statement model (`semantic::expl3` driving
+the formatter's segmentation) doubles as the migration's differential oracle:
+grammar attachment can be tested against it over the gate corpora before any
+consumer flips.
+
 **`[…]` attachment is shape-gated** (issue #43). `[`/`]` are not real grouping
 in TeX, so a bracket is an argument only when it reads as one, decided from
 static shape facts, never meaning (`parser::grammar`, `BracketPolicy` +

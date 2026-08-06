@@ -3,8 +3,7 @@
   {
     \@ifpackageloaded {textcomp}
       {
-        \cs_set_protected:Npn
-        \__mypkg_print_text_aux:
+        \cs_set_protected:Npn \__mypkg_print_text_aux:
           { \tl_replace_all:Nnn \l__mypkg_print_arg_tl { \pm } { \textpm } }
       }
       {}

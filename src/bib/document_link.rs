@@ -2,7 +2,7 @@
 //! clickable external links.
 //!
 //! BibTeX has no include structure (the LaTeX document-link walk in
-//! [`crate::lsp::document_link`] finds none), but two verbatim fields carry a web
+//! `crate::lsp::document_link` finds none), but two verbatim fields carry a web
 //! resource an editor otherwise cannot follow: a `doi` holds a bare DOI (e.g.
 //! `10.1000/xyz`, which resolves under `https://doi.org/`) and a `url` holds a full
 //! address. We surface each as a link over the value span.

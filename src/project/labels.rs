@@ -1,4 +1,4 @@
-//! Cross-file label resolution: union the per-file [`\label`] sets across the
+//! Cross-file label resolution: union the per-file `\label` sets across the
 //! inclusion graph so a `\ref` can be resolved against the whole document, and a
 //! key defined in two files of one document can be flagged as a duplicate.
 //!

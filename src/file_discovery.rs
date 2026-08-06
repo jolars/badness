@@ -190,7 +190,8 @@ impl FileKind {
         }
     }
 
-    /// The full [`LexConfig`] to parse this kind with: its [`latex_flavor`] plus
+    /// The full [`LexConfig`] to parse this kind with: its
+    /// [`latex_flavor`](FileKind::latex_flavor) plus
     /// the `.dtx` docstrip mode for [`Dtx`](FileKind::Dtx).
     pub fn lex_config(self) -> LexConfig {
         LexConfig {

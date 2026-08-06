@@ -455,8 +455,9 @@ itself*):
 
 **Conformance.** The formatter satisfies R1, R2, R6 (it normalizes any alignment
 away—permitted, since R6 is optional), and R7. R3 is the
-`expl_group_is_spaced`/`is_simple_param_run` split below; R4/R5 are the
-conditional-break rule below. The brace-column progression (R5: body `{` at +2,
+`expl_group_is_spaced`/`is_simple_param_run` split and the
+`expl_arg_takes_leading_space` respacing below; R4/R5 are the conditional-break
+rule below. The brace-column progression (R5: body `{` at +2,
 body +4, `nTF` branches +6, nested +8) falls out of the nested `Ir::indent` the
 `hang_group` rule and the conditional lowering emit.
 
@@ -475,6 +476,32 @@ is not normalized.
 The l3styleguide's non-layout rules (naming prefixes, `:D`-primitive discipline,
 expandability) are **out of scope**—they are meaning, not trivia, and belong to
 a linter, not the layout engine.
+
+### The space before an attached argument (R3)
+
+R3's positive half applies *outside* the brace as well: an expl3 function's
+argument written flush against its head is respaced, `\clist_count:n{#1}` →
+`\clist_count:n {#1}`. `lower_expl_code` synthesizes the gap by flushing the atom
+exactly as a source gap would, so every branch below it—the `hang_group`
+continuation, the conditional explosion, the trailing-hang candidates—sees the
+state the spaced spelling already produced, and there is no second spelling to
+special-case.
+
+`expl_arg_takes_leading_space` reads the same purely lexical fact as
+`expl_group_is_spaced`: the parent command's name contains `_` or `:`. It is
+deliberately **not** subject to the simple-parameter-run exception below—that
+exception governs a group's *inner* padding, not the gap before it. l3kernel
+writes the space either way: a sweep of its `.dtx` sources counts **2883 spaced
+against 9 glued** for parameter-run arguments alone, and **8447 against 14** over
+all expl3-named heads. An embedded 2e-named command keeps its authored gap
+(`\eqref{#1}`, `\ProvidesExplPackage{demo}{…}`), where upstream is genuinely
+mixed (179 spaced, 227 glued) and the house style does not reach.
+
+Inserting the space is a trivia edit and catcode-safe: in-region source spaces
+are catcode 9, so the token stream is unchanged (a real space is `~`, catcode
+10). This is also why it cannot resurrect the classic `\def\foo#1 {…}`
+delimiter hazard—the inserted space never becomes a token. Junk-glued statements
+are exempt, their authored line shape being load-bearing.
 
 ### Simple parameter runs stay tight (R3)
 

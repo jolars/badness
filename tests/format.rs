@@ -727,6 +727,12 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // argument breaks on its own body — `{ > }` and `{ 1 }` stay inline rather than
     // detonating in sympathy with the sibling the comment forced open.
     ("expl_conditional_comment_siblings", "sty"),
+    // R3 outside the brace: an expl3 function's argument written flush against its
+    // head is respaced (`\clist_count:n{#1}` -> `\clist_count:n {#1}`), while an
+    // embedded 2e-named command keeps its authored gap (`\eqref{#1}`,
+    // `\ProvidesExplPackage{demo}{…}`). The parameter-run exception is inner-only,
+    // so `{#1}` stays tight *and* gains the leading space.
+    ("expl_arg_leading_space", "sty"),
     // The l3styleguide's *simple run of parameter* exception: `{#1}`, `{#1#2}`,
     // `{##1}` stay tight (and a padded `{ #1 }` normalizes to tight), while a
     // multi-parameter group with interior spaces (`{ #1 #2 }`) or any

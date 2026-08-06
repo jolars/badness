@@ -2004,6 +2004,25 @@ fn lower_expl_code(
                 // line mid-statement and strand the junk on a fresh line the
                 // next pass segments differently).
                 let in_glued = map.as_ref().is_some_and(|m| m.is_glued(idx));
+                // R2 ("everything divided up using spaces"): an expl3 function's
+                // brace argument written flush against its head
+                // (`\clist_count:n{#1}`) gets the house style's space. Synthesized
+                // *here*, by flushing the atom exactly as a source gap would, so
+                // every branch below sees the state the spaced spelling produces —
+                // hang, conditional explosion, trailing-hang candidates — with no
+                // second spelling to special-case. Inserting the space is a trivia
+                // edit and catcode-safe: in-region source spaces are catcode 9, so
+                // the token stream is unchanged (a real space is `~`, catcode 10).
+                // Junk-glued statements are exempt: their authored line shape is
+                // load-bearing (see above).
+                if !in_glued
+                    && !atom.is_empty()
+                    && child.kind() == SyntaxKind::GROUP
+                    && expl_arg_takes_leading_space(child)
+                {
+                    flush_atom(&mut atom, &mut parts, &mut sep_before_next);
+                    sep_before_next = Some(Ir::Line);
+                }
                 // A *statement-leading* expl3 conditional (`\…:nTF {c} {T} {F}`,
                 // nothing on the logical line before it) explodes structurally: the
                 // head on its own line, then each `T`/`F` branch on its own line at
@@ -2698,6 +2717,29 @@ fn expl_group_is_spaced(node: &SyntaxNode) -> bool {
         Some(name) => name.contains('_') || name.contains(':'),
         None => true,
     }
+}
+
+/// Whether an expl3-region brace group takes the l3 house style's space *before*
+/// its opening brace, so a flush-written `\clist_count:n{#1}` is respaced to
+/// `\clist_count:n {#1}`. True for the attached argument of an expl3-*named*
+/// command — the name contains `_` or `:`, the same purely lexical fact
+/// [`expl_group_is_spaced`] reads (no signature or meaning lookup).
+///
+/// Deliberately **not** subject to the *simple run of parameter* exception: that
+/// exception governs a group's *inner* padding (`{#1}`, never `{ #1 }`), not the
+/// gap before it. l3kernel writes the space either way — a sweep of its `.dtx`
+/// sources counts 2883 spaced against 9 glued for parameter-run arguments alone,
+/// and 8447 against 14 over all expl3-named heads.
+///
+/// False for an embedded LaTeX2e-named command (`\eqref{#1}`,
+/// `\ProvidesExplPackage{demo}{…}`), whose authors write flush braces and whom the
+/// house style does not govern; upstream is genuinely mixed there, so the authored
+/// gap stands.
+fn expl_arg_takes_leading_space(node: &SyntaxNode) -> bool {
+    node.parent()
+        .filter(|parent| parent.kind() == SyntaxKind::COMMAND)
+        .and_then(|parent| command_name(&parent))
+        .is_some_and(|name| name.contains('_') || name.contains(':'))
 }
 
 /// Lower a brace `{…}` or optional `[…]` group inside an expl3 region as a code

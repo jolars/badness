@@ -1,0 +1,12 @@
+\ExplSyntaxOn
+\cs_new:Npn \module_foo:nn #1#2
+  {
+    \int_compare:nNnTF { \clist_count:n {#1} } { > } { 1 }
+      { \module_a:n { x } }
+      { \module_b: }
+    \module_aux:nn {#1} {#2}
+    \tl_set:Nn \l_module_tl { text }
+    \eqref{#1}
+    \ProvidesExplPackage{demo}{2024-01-01}{}
+  }
+\ExplSyntaxOff

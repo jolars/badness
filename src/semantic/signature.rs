@@ -1098,6 +1098,34 @@ mod tests {
         }
     }
 
+    /// Verbatim bodies whose defining code no in-file scan can reach: the kernel's
+    /// `filecontents` (it `\@makeother`s `\dospecials`, `%` included, so the body is
+    /// written out byte-for-byte) and ltxdockit's listings-based `ltxcode`/
+    /// `ltxexample`, defined in an external class. Curation is the only place these
+    /// facts can live. Smoke-test issue #98 (`plk/biblatex`).
+    #[test]
+    fn externally_defined_verbatim_environments() {
+        let db = builtin();
+        for name in ["filecontents", "filecontents*"] {
+            let env = db.environment(name).unwrap();
+            assert!(env.verbatim_body, "{name} body is written verbatim");
+            assert!(!env.reflow);
+            // `\begin{filecontents}[force]{\jobname.bib}`: the two leading args are
+            // structured; everything after them is the opaque body.
+            assert_eq!(env.args.len(), 2, "{name} arity");
+            assert_eq!(env.args[0].kind, ArgKind::Bracket);
+            assert_eq!(env.args[1].kind, ArgKind::Brace);
+        }
+        for name in ["ltxcode", "ltxexample"] {
+            let env = db.environment(name).unwrap();
+            assert!(env.verbatim_body, "{name} body is opaque");
+            assert!(!env.reflow);
+            // `\lstnewenvironment{…}[1][]` — one optional `\lstset` argument.
+            assert_eq!(env.args.len(), 1, "{name} arity");
+            assert_eq!(env.args[0].kind, ArgKind::Bracket);
+        }
+    }
+
     #[test]
     fn block_flag_is_explicit_or_derived() {
         let db = builtin();

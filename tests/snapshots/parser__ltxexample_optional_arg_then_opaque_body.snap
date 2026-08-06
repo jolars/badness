@@ -1,0 +1,24 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{ltxexample}[style=latex]\\n\\\\begin{document}\\n\\\\newrefcontext}[labelprefix=B]\\n\\\\end{ltxexample}\\n\")"
+---
+ROOT@0..97
+  ENVIRONMENT@0..96
+    BEGIN@0..31
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..18
+        L_BRACE@6..7 "{"
+        WORD@7..17 "ltxexample"
+        R_BRACE@17..18 "}"
+      OPTIONAL@18..31
+        L_BRACKET@18..19 "["
+        WORD@19..30 "style=latex"
+        R_BRACKET@30..31 "]"
+    VERBATIM_BODY@31..80 "\n\\begin{document}\n\\newrefcontext}[labelprefix=B]\n"
+    END@80..96
+      CONTROL_WORD@80..84 "\\end"
+      NAME_GROUP@84..96
+        L_BRACE@84..85 "{"
+        WORD@85..95 "ltxexample"
+        R_BRACE@95..96 "}"
+  NEWLINE@96..97 "\n"

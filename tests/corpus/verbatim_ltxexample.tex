@@ -1,0 +1,36 @@
+% Minimized from plk/biblatex `doc/latex/biblatex/biblatex.tex` (smoke-test
+% issue #98). `ltxcode` and `ltxexample` are ltxdockit's listings-based example
+% environments (`\lstnewenvironment{ltxexample}[1][]`): one optional argument,
+% opaque body. The definition lives in an external class, so no in-file scan can
+% learn it -- the curated signature database is the only place the fact can live,
+% as for pgfmanual's `codeexample` and ltxdoc's `oldcomments`.
+%
+% Their bodies quote whole documents verbatim, so a `\begin{document}` with no
+% closer, a stray `}`, and a `%` are all data, not structure.
+\documentclass{ltxdockit}
+
+\begin{document}
+
+\begin{ltxexample}
+\usepackage[sorting=nyt]{biblatex}
+\begin{document}
+\cite{one}
+\printbibliography
+\end{ltxexample}
+
+\begin{ltxexample}[style=latex]
+\begin{refcontext}[labelprefix=A]{testrc}
+% reference context:
+%   labelprefix=A
+\end{refcontext}
+
+\newrefcontext}[labelprefix=B]
+\endrefcontext
+\end{ltxexample}
+
+\begin{ltxcode}[style=latex]
+\DeclareSortingNamekeyTemplate[mycitesorttemplate]{
+  \visibilty{cite}
+\end{ltxcode}
+
+\end{document}

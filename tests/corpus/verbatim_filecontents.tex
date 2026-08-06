@@ -1,0 +1,26 @@
+% Minimized from plk/biblatex `doc/latex/biblatex/examples/96-dates.tex`
+% (smoke-test issue #98). The kernel's `filecontents` writes its body verbatim:
+% it `\@makeother`s `\dospecials`, and `%` is in that list. So the `%` below is
+% part of the date literal, not a comment, and the `}` after it really closes
+% the field group. A reader that treats the body as ordinary LaTeX loses the
+% brace and strands the environment.
+\documentclass{article}
+\begin{filecontents}[force]{\jobname.bib}
+@misc{date2,
+  note      = {Dates with circa and uncertain markers},
+  date      = {1723%},        % approximate/uncertain markers, not a comment
+  origdate  = {1934-02~},
+}
+\end{filecontents}
+
+% The unbraced and starred forms take the same body treatment.
+\begin{filecontents*}{sample.tex}
+\documentclass{article}
+\begin{document}
+50% of {this} is unbalanced $ & # data
+\end{document}
+\end{filecontents*}
+
+\begin{document}
+\nocite{*}
+\end{document}

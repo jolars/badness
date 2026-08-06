@@ -1,0 +1,30 @@
+---
+source: tests/parser.rs
+expression: "tree(\"\\\\begin{filecontents}[force]{\\\\jobname.bib}\\n@misc{a,\\n  date = {1723%},\\n}\\n\\\\end{filecontents}\\n\")"
+---
+ROOT@0..90
+  ENVIRONMENT@0..89
+    BEGIN@0..41
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..20
+        L_BRACE@6..7 "{"
+        WORD@7..19 "filecontents"
+        R_BRACE@19..20 "}"
+      OPTIONAL@20..27
+        L_BRACKET@20..21 "["
+        WORD@21..26 "force"
+        R_BRACKET@26..27 "]"
+      GROUP@27..41
+        L_BRACE@27..28 "{"
+        COMMAND@28..36
+          CONTROL_WORD@28..36 "\\jobname"
+        WORD@36..40 ".bib"
+        R_BRACE@40..41 "}"
+    VERBATIM_BODY@41..71 "\n@misc{a,\n  date = {1723%},\n}\n"
+    END@71..89
+      CONTROL_WORD@71..75 "\\end"
+      NAME_GROUP@75..89
+        L_BRACE@75..76 "{"
+        WORD@76..88 "filecontents"
+        R_BRACE@88..89 "}"
+  NEWLINE@89..90 "\n"

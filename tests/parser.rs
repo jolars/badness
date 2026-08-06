@@ -737,6 +737,30 @@ fn codeexample_optional_arg_then_opaque_body() {
     ));
 }
 
+/// The kernel's `filecontents` writes its body to a file byte-for-byte: it
+/// `\@makeother`s `\dospecials`, which includes `%`. So a `%` inside a field value
+/// is data, not a comment, and the `}` it would otherwise swallow still closes its
+/// group. Curating the env verbatim is the only way a static reader gets this right
+/// (smoke-test issue #98, `plk/biblatex` `doc/latex/biblatex/examples/96-dates.tex`).
+#[test]
+fn filecontents_optional_and_required_args_then_opaque_body() {
+    insta::assert_snapshot!(tree(
+        "\\begin{filecontents}[force]{\\jobname.bib}\n@misc{a,\n  date = {1723%},\n}\n\\end{filecontents}\n"
+    ));
+}
+
+/// ltxdockit's `ltxexample` is `\lstnewenvironment{ltxexample}[1][]`: one optional
+/// argument, opaque body. It is defined in an external class, so no in-file scan can
+/// learn it — the curated database is the only place the fact can live, as for
+/// `codeexample` and `oldcomments`. Its bodies quote whole documents, `\begin` /
+/// `\end` pairs and all (smoke-test issue #98, `plk/biblatex` `doc/latex/biblatex/biblatex.tex`).
+#[test]
+fn ltxexample_optional_arg_then_opaque_body() {
+    insta::assert_snapshot!(tree(
+        "\\begin{ltxexample}[style=latex]\n\\begin{document}\n\\newrefcontext}[labelprefix=B]\n\\end{ltxexample}\n"
+    ));
+}
+
 /// An option-free `lstlisting` whose body's first line *is* a bracketed list: the
 /// signature has one optional arg, but it sits on the next line, so the `[1,2,3]`
 /// belongs to the opaque body, not to an `OPTIONAL` argument node.

@@ -31,6 +31,11 @@ const TEXLAB_KNOWN_DIVERGENT: &[&str] = &[
     // are plain data for badness, an unclosed math opener and an unmatched brace
     // for texlab.
     "char_constant.tex",
+    // ltxdockit's `ltxexample`/`ltxcode` are curated verbatim-body envs (issue
+    // #98); their bodies quote whole documents, so the `\begin{document}` and
+    // stray `}` inside are data for badness, an unclosed env and an unmatched
+    // brace for texlab, whose environment DB does not carry the signature.
+    "verbatim_ltxexample.tex",
 ];
 
 #[test]

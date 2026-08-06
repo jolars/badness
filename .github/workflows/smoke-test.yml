@@ -198,6 +198,14 @@ jobs:
         # ships a PDF, so the latent error stays in the source; no parser change is
         # correct here. Issue #93.
         josephwright/siunitx|siunitx-complex.dtx|format-error
+        # Genuinely broken upstream: biblatex-quickstart.tex has a stray
+        # `\end{ltxexample}` (line 352) with no opener -- a leftover from a 2019
+        # rewrite, still on upstream's dev branch. `ltxexample` is an ordinary
+        # lstlisting-based environment, so LaTeX reports
+        # `\begin{document} ended by \end{ltxexample}` for exactly the reason
+        # badness does; the other two diagnostics in the file are that error's
+        # cascade. No parser change is correct here. Issue #98.
+        plk/biblatex|doc/latex/biblatex/biblatex-quickstart.tex|format-error
     steps:
       - uses: actions/checkout@v7
 

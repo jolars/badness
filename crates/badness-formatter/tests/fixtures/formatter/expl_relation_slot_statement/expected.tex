@@ -1,0 +1,12 @@
+\ExplSyntaxOn
+\NewDocumentCommand{\autoeqrefs}{m}
+  {
+    \group_begin:
+    \__multiref_set:n {#1}
+    \int_compare:nNnTF { \seq_count:N \l__multiref_eqrefs_seq } = { 1 }
+      { Equation~ }
+      { Equations~ }
+    \__multiref_print:
+    \group_end:
+  }
+\ExplSyntaxOff

@@ -747,6 +747,13 @@ with three load-bearing rules:
   onto the scan queue for the *outer* head's remaining slots. Only the head's
   argspec ever drives consumption—an argument's own argspec is inert data,
   exactly as TeX grabs it.
+- **One token means one *character*.** A single-token slot also takes a bare
+  character, so `\int_compare:nNnTF {…} = {1} {T} {F}`'s relation satisfies its
+  `N` (issue #106); before that the whole conditional degraded to the fallback
+  and its trailing call's line was authored rather than derived. The lexer packs
+  a run of characters into one `WORD`, so only a *single-character* token
+  qualifies—consuming a longer run would take material TeX leaves for the next
+  slot, and that shape aborts to the fallback instead.
 - **The p-scan.** Parameter text ends at the first explicit `{` (TeX's own
   static rule), scanning the flattened peeled order so a delimited text
   (`#1 \q_stop {body}`) finds the body wherever attachment put it.

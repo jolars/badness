@@ -663,11 +663,12 @@ impl<'a> UnitCursor<'a> {
         }
     }
 
-    /// An `N`/`V` slot: one token — a control sequence, a `#`-parameter, a
-    /// braced group (TeX-faithful: braces around an `N` argument are grabbed
-    /// whole; `N` vs `n` is convention, not matching behavior), or a `COMMAND`
-    /// node whose *name* satisfies the slot and whose greedily-attached
-    /// children are peeled back for the head's remaining slots.
+    /// An `N`/`V` slot: one token — a control sequence, a single character, a
+    /// `#`-parameter, a braced group (TeX-faithful: braces around an `N`
+    /// argument are grabbed whole; `N` vs `n` is convention, not matching
+    /// behavior), or a `COMMAND` node whose *name* satisfies the slot and whose
+    /// greedily-attached children are peeled back for the head's remaining
+    /// slots.
     fn take_single_token(&mut self) -> Result<(), Stop> {
         let el = self.bump()?;
         match &el {
@@ -676,6 +677,17 @@ impl<'a> UnitCursor<'a> {
                     t.kind(),
                     SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL
                 ) =>
+            {
+                Ok(())
+            }
+            // A relation character: `\int_compare:nNnTF { … } = { 1 } {T} {F}`
+            // (issue #106). TeX grabs one character for an undelimited
+            // argument, so only a *single-character* `WORD` satisfies the slot
+            // — the lexer packs a run of characters into one token, and
+            // consuming a multi-character run would take material TeX leaves
+            // for the next slot. That shape aborts to the fallback instead.
+            SyntaxElement::Token(t)
+                if t.kind() == SyntaxKind::WORD && t.text().chars().count() == 1 =>
             {
                 Ok(())
             }
@@ -874,6 +886,57 @@ mod segmentation_tests {
         assert_eq!(
             got,
             vec!["\\ExplSyntaxOn", "\\tl_set:Nn #1 { x }", "\\ExplSyntaxOff"]
+        );
+    }
+
+    #[test]
+    fn relation_character_satisfies_single_token_slot() {
+        // `\int_compare:nNnTF`'s `N` slot is the relation `=` (issue #106).
+        // Without it the whole conditional degraded to the newline-keyed
+        // fallback, so the trailing call's line was authored, not derived.
+        let got = statements(
+            "\\ExplSyntaxOn\n\\int_compare:nNnTF { \\l_a } = { 1 } { yes } { no } \\foo:\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\int_compare:nNnTF { \\l_a } = { 1 } { yes } { no }",
+                "\\foo:",
+                "\\ExplSyntaxOff",
+            ]
+        );
+    }
+
+    #[test]
+    fn relation_character_unit_is_newline_invariant() {
+        // The same call broken across lines segments identically — the point
+        // of the structural model.
+        let inline = statements(
+            "\\ExplSyntaxOn\n\\int_compare:nNnTF { \\l_a } = { 1 } { yes } { no } \\foo:\n\\ExplSyntaxOff\n",
+        );
+        let broken = statements(
+            "\\ExplSyntaxOn\n\\int_compare:nNnTF { \\l_a } = { 1 }\n  { yes } { no }\n\\foo:\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(inline, broken);
+    }
+
+    #[test]
+    fn multi_character_word_does_not_satisfy_single_token_slot() {
+        // TeX grabs one character for an undelimited argument, so a lexed run
+        // of characters is the wrong shape and degrades to the fallback (here:
+        // the authored line).
+        let got = statements(
+            "\\ExplSyntaxOn\n\\int_compare:nNnT { \\l_a } <= { 1 } { yes }\n\\foo:\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\int_compare:nNnT { \\l_a } <= { 1 } { yes }",
+                "\\foo:",
+                "\\ExplSyntaxOff",
+            ]
         );
     }
 

@@ -237,10 +237,17 @@ mod tests {
 // - a **blank line** (a gap of two or more newlines) ends the unit where it
 //   stands — the partial unit commits as-is, pass-stably, because blank-line
 //   presence is preserved by the formatter;
-// - a **comment** is transparent to consumption (the layout loop makes it
-//   end its physical line; the unit continues), and a comment trailing a
-//   *complete* unit is pulled into the statement so it stays on the call's
-//   line — comment presence and own-line-ness are preserved predicates;
+// - a **comment** sharing a line with consumed material is transparent to
+//   consumption (the layout loop makes it end its physical line; the unit
+//   continues), while an **own-line** comment mid-unit ends the unit where it
+//   stands exactly like a blank line — its flanking newlines bound the gap
+//   (`advance` counts them across the skipped comment), so the partial unit
+//   commits pass-stably. When the comment rides *inside* a greedily-attached
+//   sibling, the committed unit still carries that sibling whole (boundaries
+//   never split a node), so the call's text stays together anyway. A comment
+//   trailing a *complete* unit is pulled into the statement so it stays on
+//   the call's line. Comment presence and own-line-ness are preserved
+//   predicates;
 // - a lone-newline-vs-space gap is **never** read on the structural path.
 //
 // Anything the shape scan cannot resolve — an unrecognized head (no `:`
@@ -972,5 +979,130 @@ mod segmentation_tests {
             .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
             .collect();
         assert_eq!(statement_texts(&body), vec!["\\tl_set:Nn \\l_a", "{ x }"]);
+    }
+
+    #[test]
+    fn guard_mid_unit_aborts_to_fallback() {
+        // A docstrip guard inside the unit (issue #78: guarded alternative
+        // bodies make arity lie) aborts consumption; the statement degrades to
+        // the fallback, and the guard-bearing sibling rides it whole because
+        // boundaries never split a node.
+        use crate::parser::lexer::LexConfig;
+        use crate::parser::{LatexFlavor, parse_with_flavor};
+        let src = "% \\begin{macrocode}\n\\ExplSyntaxOn\n\\tl_set:Nn \\l_a\n%<latexrelease>  { x }\n\\ExplSyntaxOff\n% \\end{macrocode}\n";
+        let config = LexConfig {
+            flavor: LatexFlavor::Package,
+            dtx: true,
+        };
+        let parsed = parse_with_flavor(src, config);
+        assert!(parsed.errors.is_empty(), "test source should parse cleanly");
+        let root = SyntaxNode::new_root(parsed.green);
+        let para = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::PARAGRAPH)
+            .expect("a paragraph");
+        let elements: Vec<SyntaxElement> = para.children_with_tokens().collect();
+        let map = segment_expl_statements(&elements);
+        assert_eq!(
+            statement_texts(&elements),
+            vec![
+                "\\ExplSyntaxOn",
+                "\\tl_set:Nn \\l_a %<latexrelease> { x }",
+                "\\ExplSyntaxOff",
+            ]
+        );
+        let guarded_end = elements
+            .iter()
+            .position(|el| el.to_string().contains("latexrelease"))
+            .expect("the guarded sibling");
+        assert!(
+            map.is_fallback(guarded_end),
+            "the aborted unit must be a fallback statement"
+        );
+    }
+
+    #[test]
+    fn e_and_f_letters_consume_braced_groups() {
+        let got = statements(
+            "\\ExplSyntaxOn\n\\tl_set:Ne \\l_a\n  { x }\n\\tl_set:Nf \\l_b\n  { y }\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\tl_set:Ne \\l_a { x }",
+                "\\tl_set:Nf \\l_b { y }",
+                "\\ExplSyntaxOff",
+            ]
+        );
+    }
+
+    #[test]
+    fn stream_ending_mid_unit_falls_back() {
+        // The `n` slot is still open when the group body runs out: the unit
+        // aborts to the fallback rather than committing a partial unit.
+        let src = "\\ExplSyntaxOn\n\\use:n { \\tl_set:Nn \\l_a }\n\\ExplSyntaxOff\n";
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty());
+        let root = SyntaxNode::new_root(parsed.green);
+        let group = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::GROUP)
+            .expect("a group");
+        let body: Vec<SyntaxElement> = group
+            .children_with_tokens()
+            .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
+            .collect();
+        let map = segment_expl_statements(&body);
+        assert_eq!(statement_texts(&body), vec!["\\tl_set:Nn \\l_a"]);
+        let head = body
+            .iter()
+            .position(|el| el.as_node().is_some())
+            .expect("the head command");
+        assert!(
+            map.is_fallback(head),
+            "a unit cut off by the stream end must be a fallback statement"
+        );
+    }
+
+    #[test]
+    fn own_line_comment_in_attached_span_rides_the_sibling() {
+        // The own-line comment's flanking newlines bound the gap like a blank
+        // line, ending the unit at the `N` slot — but greedy attachment put
+        // the comment *and* the group inside the `\l_a` sibling, and
+        // boundaries never split a node, so the committed partial unit still
+        // carries the whole sibling. Pass-stable either way (comment
+        // own-line-ness is a preserved predicate).
+        let got =
+            statements("\\ExplSyntaxOn\n\\tl_set:Nn \\l_a\n% note\n  { x }\n\\ExplSyntaxOff\n");
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\tl_set:Nn \\l_a % note { x }",
+                "\\ExplSyntaxOff",
+            ]
+        );
+    }
+
+    #[test]
+    fn own_line_comment_at_sibling_level_ends_the_unit() {
+        // Before a candidate no comment can bind to (`#1` parameter text, not
+        // a `COMMAND`), the own-line comment stays a sibling: the unit ends at
+        // the gap, the comment keeps its own line, and the leftover material
+        // falls back per-line.
+        let got = statements(
+            "\\ExplSyntaxOn\n\\cs_new:Npn \\foo:n\n% note\n#1 { body }\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\cs_new:Npn \\foo:n",
+                "% note",
+                "#1 { body }",
+                "\\ExplSyntaxOff",
+            ]
+        );
     }
 }

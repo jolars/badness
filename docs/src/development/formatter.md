@@ -98,22 +98,22 @@ the layout re-decides identically.
 
 ### Known violations
 
-Three sites read the unsafe predicate; one is a bounded residue and two are
-Tier 2:
+Three sites read the unsafe predicate; one is a bounded residue and two are Tier
+2:
 
-- The **expl3 fallback statement** (`semantic::expl3`)—a statement whose
-  head has no derivable arity (no `:` suffix; a `w`/`D`/mid-spec-`T`/`F` or
-  unknown letter; a slot-shape mismatch; a guard mid-unit; the stream ending
-  mid-unit) is the authored physical line, and a recognized unit's *same-line
-  trailing junk* extent is line-bounded too. This is `SplitAtNewlines`
-  demoted from *the* mechanism to a per-statement residue, and it carries its
-  fixed-point argument in the module docs: fallback lines commit as plain
-  greedy fills (each printed line re-segments to a fallback statement that
-  re-fills to itself), gaps that could put a *recognized* head at a printed
-  line start are unbreakable, and junk-glued statements render with every
-  top-level gap hard so their newline-keyed extent can never move. The
-  strict-invariance oracle cannot gate a stream containing a fallback head;
-  the convergence oracle validates the argument empirically.
+- The **expl3 fallback statement** (`semantic::expl3`)—a statement whose head
+  has no derivable arity (no `:` suffix; a `w`/`D`/mid-spec-`T`/`F` or unknown
+  letter; a slot-shape mismatch; a guard mid-unit; the stream ending mid-unit)
+  is the authored physical line, and a recognized unit's *same-line trailing
+  junk* extent is line-bounded too. This is `SplitAtNewlines` demoted from *the*
+  mechanism to a per-statement residue, and it carries its fixed-point argument
+  in the module docs: fallback lines commit as plain greedy fills (each printed
+  line re-segments to a fallback statement that re-fills to itself), gaps that
+  could put a *recognized* head at a printed line start are unbreakable, and
+  junk-glued statements render with every top-level gap hard so their
+  newline-keyed extent can never move. The strict-invariance oracle cannot gate
+  a stream containing a fallback head; the convergence oracle validates the
+  argument empirically.
 - `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups
   *outside* expl3 regions. **Accidental**; already filed in `TODO.md` as
   "Opaque-group layout non-determinism".
@@ -121,9 +121,8 @@ Tier 2:
 - `ReflowKind::Statement`—**Tier 2**, argument already written.
 
 Statement boundaries for *recognized* expl3 heads are no longer on this list:
-they are structural (S4, below), and the strict oracle holds for
-recognized-only streams
-(`perturb::tests::strict_oracle_accepts_structural_expl3_statements`).
+they are structural (S4, below), and the strict oracle holds for recognized-only
+streams (`perturb::tests::strict_oracle_accepts_structural_expl3_statements`).
 
 ### The oracle
 
@@ -139,27 +138,26 @@ meaning-preserving) and check the formatter over them. One generator
   trivia configuration `fmt` itself produces—a hybrid needs a corpus file to
   land on exactly the right column arithmetic, while the perturbations
   synthesize those configurations directly. Deliberate authored-break
-  *preservation* passes by construction, so a failure is always a real bug,
-  and the check is valid under **every** wrap mode: it empirically validates
-  the Tier-2 fixed-point arguments rather than exempting them.
+  *preservation* passes by construction, so a failure is always a real bug, and
+  the check is valid under **every** wrap mode: it empirically validates the
+  Tier-2 fixed-point arguments rather than exempting them.
 - **Strict invariance** (`check_trivia_invariance`, the end-state gate):
   `fmt(perturbed) == fmt(original)`. This is the full trivia-invariant-layout
-  contract; until the lowering no longer reads the unsafe predicate at all
-  (the Gap-enum endgame) it fails wherever the formatter preserves an
-  authored break, so it gates nothing yet.
+  contract; until the lowering no longer reads the unsafe predicate at all (the
+  Gap-enum endgame) it fails wherever the formatter preserves an authored break,
+  so it gates nothing yet.
 
 Per file the generator emits two bulk variants (every eligible lone newline →
 space, every eligible single space → newline) plus a few deterministic
-single-flip reproducers. Eligibility encodes *meaning* safety only—blank
-lines, comment-adjacent gaps, margined/guarded `.dtx` lines, and verbatim
-neighbors are never touched—never layout ownership. Each variant is verified
-post hoc (clean parse, identical non-trivia content, identical trivia-blind
-CST skeleton) so newline-sensitive *parser* shape gates are dropped and
-counted (`dropped_unsafe`) instead of polluting the layout inventory. The
-convergence oracle runs as `badness debug format --checks trivia` (wrap
-pinned to `reflow`, since `Preserve` converges trivially and stresses
-nothing; opt-in, not part of `--checks all`) and inside the corpus invariants
-sweep in `tests/format.rs`.
+single-flip reproducers. Eligibility encodes *meaning* safety only—blank lines,
+comment-adjacent gaps, margined/guarded `.dtx` lines, and verbatim neighbors are
+never touched—never layout ownership. Each variant is verified post hoc (clean
+parse, identical non-trivia content, identical trivia-blind CST skeleton) so
+newline-sensitive *parser* shape gates are dropped and counted
+(`dropped_unsafe`) instead of polluting the layout inventory. The convergence
+oracle runs as `badness debug format --checks trivia` (wrap pinned to `reflow`,
+since `Preserve` converges trivially and stresses nothing; opt-in, not part of
+`--checks all`) and inside the corpus invariants sweep in `tests/format.rs`.
 
 The staged rollout, with per-stage gates, is in `TODO.md`.
 
@@ -179,57 +177,55 @@ flag the single representation of "forced open" (see *One representation of
 ### `Mode::Flat` is an honest contract (S2)
 
 The printer's layout mode is a *verified claim*, not a hint. A producer may
-dispatch a subtree in `Mode::Flat` only after verifying that the subtree's
-whole flat-mode rendering fits (every line, for subtrees whose structural
-`HardLine`s split it); consumers trust the claim, so a `Group` or conditional
-group dispatched in `Flat` honors it instead of re-deciding—the parent's
-verification and the print agree by construction. A producer that cannot make
-the whole-subtree claim dispatches `Break` and lets children decide for
-themselves: the choice of a `ConditionalGroup` candidate by first-line fit is
-the whole decision (`pick_candidate` announces `Break`), and a
-`Cmd::PreferredFill` break plan *places* atoms without verifying them, so
-atoms inherit the fill's mode. Both dispatch decisions measure from
-`Writer::current_col()`—the column the next visible character lands at,
-counting a pending indent—because a fit verified from the wrong column is
-still a lie, one the honest contract would then pin instead of letting nested
-re-decisions paper over.
+dispatch a subtree in `Mode::Flat` only after verifying that the subtree's whole
+flat-mode rendering fits (every line, for subtrees whose structural `HardLine`s
+split it); consumers trust the claim, so a `Group` or conditional group
+dispatched in `Flat` honors it instead of re-deciding—the parent's verification
+and the print agree by construction. A producer that cannot make the
+whole-subtree claim dispatches `Break` and lets children decide for themselves:
+the choice of a `ConditionalGroup` candidate by first-line fit is the whole
+decision (`pick_candidate` announces `Break`), and a `Cmd::PreferredFill` break
+plan *places* atoms without verifying them, so atoms inherit the fill's mode.
+Both dispatch decisions measure from `Writer::current_col()`—the column the next
+visible character lands at, counting a pending indent—because a fit verified
+from the wrong column is still a lie, one the honest contract would then pin
+instead of letting nested re-decisions paper over.
 
 Two calibrated exceptions keep the contract honest at its edges:
 
-- An **`expand` group** prints `Break` even under an incoming `Flat`: a
-  subtree carrying a hard break was never a flat claim (its `HardLine`s fire
-  in either mode), and pinning its `Line`s flat would glue content onto a
-  forced-open line. This requires the `propagate_breaks`-saturated tree.
+- An **`expand` group** prints `Break` even under an incoming `Flat`: a subtree
+  carrying a hard break was never a flat claim (its `HardLine`s fire in either
+  mode), and pinning its `Line`s flat would glue content onto a forced-open
+  line. This requires the `propagate_breaks`-saturated tree.
 - A **trailing-block hug** claims only `Mode::FlatPrefix`: its prefix
   measurement (`FlatMeasure::HugPrefix`) stops *successfully* at the block's
-  first forced break, so only the prefix was verified. Trivia-level layout (`Line`, `SoftLine`, `IfBreak`, fill gaps)
-  renders flat exactly as under `Flat`—that keeps the head glued—but a group
-  may sit *past* the break the measurement stopped at, so groups under
-  `FlatPrefix` re-decide (`\@@_if_key_value:VTF {T}{F}`: the hug verified up
-  to `T`'s detonation; `F` was never measured, and pinning it flat printed a
-  125-column line).
+  first forced break, so only the prefix was verified. Trivia-level layout
+  (`Line`, `SoftLine`, `IfBreak`, fill gaps) renders flat exactly as under
+  `Flat`—that keeps the head glued—but a group may sit *past* the break the
+  measurement stopped at, so groups under `FlatPrefix` re-decide
+  (`\@@_if_key_value:VTF {T}{F}`: the hug verified up to `T`'s detonation; `F`
+  was never measured, and pinning it flat printed a 125-column line).
 
 The honest contract is what finally delivers the trailing-hang rule's stated
 intent (see *Trailing hang groups*): an `AllLines` candidate is verified by
 rendering the whole subtree flat and checking every line, so the chosen
 candidate's nested groups now keep exactly the measured layout in the real
-print, instead of re-deciding against the rest of the line and detonating
-into the K&R hybrid the measurement never saw. It also resolved the
-`latexrelease.sty` issue-#97 residue (the step-fill/`group_fits`
-rest-awareness disagreement) ahead of S3's predicate consolidation.
+print, instead of re-deciding against the rest of the line and detonating into
+the K&R hybrid the measurement never saw. It also resolved the
+`latexrelease.sty` issue-#97 residue (the step-fill/`group_fits` rest-awareness
+disagreement) ahead of S3's predicate consolidation.
 
 ### A group's fit measures the rest of the line in the mode it will print in
 
-Deciding a `Group` dispatched in `Break` mode measures its flat rendering
-*plus* the already-queued commands up to the next line break
-(`printer::group_fits` → `rest_fits`, the Wadler/Prettier "fits the rest of
-the line" rule); a group dispatched in `Flat` skips the decision entirely (the
-honest contract above). A later group in that rest is measured in the mode it
-will actually print in: **flat when its own flat form still fits from here,
-broken otherwise.** Measuring a doomed group flat charges the group being
-decided for width that will never land on this line—and the charge depends on
-where the doomed group's own body happens to break, which the *previous
-formatting pass* decided.
+Deciding a `Group` dispatched in `Break` mode measures its flat rendering *plus*
+the already-queued commands up to the next line break (`printer::group_fits` →
+`rest_fits`, the Wadler/Prettier "fits the rest of the line" rule); a group
+dispatched in `Flat` skips the decision entirely (the honest contract above). A
+later group in that rest is measured in the mode it will actually print in:
+**flat when its own flat form still fits from here, broken otherwise.**
+Measuring a doomed group flat charges the group being decided for width that
+will never land on this line—and the charge depends on where the doomed group's
+own body happens to break, which the *previous formatting pass* decided.
 
 That is a fixed-point hazard, not just a cosmetic one. In
 `\EditInstance{block}{thm}{␣…long keyvals…␣}` inside an expl3 region
@@ -241,55 +237,53 @@ gives the trailing block the hug the expl3 `COMMAND` lowering always intended:
 short leading arguments stay inline, only the over-long trailing one detonates.
 
 The same rest-awareness extends to a fill's *last* atom (`printer::step_fill`):
-the lowering glues trailing content after a statement's fill (a final
-`\l_…_tl` riding the line), so the last atom's flat claim must survive the
-rest of the line too. Without it the atom's folded hang break is never taken:
-the atom alone fits, goes `Flat`, and the glued tail overflows a line the
-measurement never saw (`\prop_get:cnN {…}{…}\l__tag_get_parent_tmpc_tl`,
-which wants the l3 continuation hang).
+the lowering glues trailing content after a statement's fill (a final `\l_…_tl`
+riding the line), so the last atom's flat claim must survive the rest of the
+line too. Without it the atom's folded hang break is never taken: the atom alone
+fits, goes `Flat`, and the glued tail overflows a line the measurement never saw
+(`\prop_get:cnN {…}{…}\l__tag_get_parent_tmpc_tl`, which wants the l3
+continuation hang).
 
 ### The fit predicates share two traversals (S3)
 
-Every fit decision is served by exactly two measurement walkers in
-`printer.rs`, each carrying a small explicit policy—the S3 consolidation of
-what had grown into five overlapping predicates (`flat_width`, `fits`,
-`group_fits`, `rest_fits`, `first_line_fits`) whose hand-copied traversals
-had drifted apart:
+Every fit decision is served by exactly two measurement walkers in `printer.rs`,
+each carrying a small explicit policy—the S3 consolidation of what had grown
+into five overlapping predicates (`flat_width`, `fits`, `group_fits`,
+`rest_fits`, `first_line_fits`) whose hand-copied traversals had drifted apart:
 
 - **`flat_end`** simulates a subtree laid out flat and returns the column it
   ends at (or `None`: the measurement failed). Its `FlatMeasure` policy names
-  the three deliberate readings. `Footprint` is the unbounded flat width
-  behind `flat_width` (a single-line comment counts—it shares the line,
-  forcing a break only after—and `expand` is ignored); `Fits` asks whether
-  the subtree lies fully flat within the width (any forced break or `expand`
-  group fails; the non-hug `Group` decision and `group_fits`'s flat phase);
-  `HugPrefix` is the trailing-block hug's claim (a forced line break stops
-  the measurement *successfully*, a comment still fails it, and
-  `excuse_overflow` excuses an atom no break could rescue).
-- **`line_fits`** walks a pending work list mode-aware up to the first
-  newline that would actually be emitted. `first_line_fits` (the
-  `ConditionalGroup` picker's probe) and `rest_fits` (the queued-commands
-  adapter behind `group_fits` and `step_fill`'s last-atom check) are thin
-  seeds over it. Its one policy knob, `CommentFit`, records the one
-  deliberate difference between those contexts: a candidate carrying a
-  standalone comment can never render flat (`Fails`), while a comment in the
-  rest of an already-committed line is there either way and counts its width
-  (`SharesLine`). Each work item also carries a *verified* flag so the
-  measurement honors the honest `Flat` contract exactly as the run loop
-  does: a stack command `rest_fits` seeds with a verified `Flat` (or a
-  subtree `line_fits` itself verified via `flat_end`) pins its nested
-  groups and conditional groups flat instead of re-deciding them, while a
-  `first_line_fits` candidate seed is a measurement `Flat` — unverified,
+  the three deliberate readings. `Footprint` is the unbounded flat width behind
+  `flat_width` (a single-line comment counts—it shares the line, forcing a break
+  only after—and `expand` is ignored); `Fits` asks whether the subtree lies
+  fully flat within the width (any forced break or `expand` group fails; the
+  non-hug `Group` decision and `group_fits`'s flat phase); `HugPrefix` is the
+  trailing-block hug's claim (a forced line break stops the measurement
+  *successfully*, a comment still fails it, and `excuse_overflow` excuses an
+  atom no break could rescue).
+- **`line_fits`** walks a pending work list mode-aware up to the first newline
+  that would actually be emitted. `first_line_fits` (the `ConditionalGroup`
+  picker's probe) and `rest_fits` (the queued-commands adapter behind
+  `group_fits` and `step_fill`'s last-atom check) are thin seeds over it. Its
+  one policy knob, `CommentFit`, records the one deliberate difference between
+  those contexts: a candidate carrying a standalone comment can never render
+  flat (`Fails`), while a comment in the rest of an already-committed line is
+  there either way and counts its width (`SharesLine`). Each work item also
+  carries a *verified* flag so the measurement honors the honest `Flat` contract
+  exactly as the run loop does: a stack command `rest_fits` seeds with a
+  verified `Flat` (or a subtree `line_fits` itself verified via `flat_end`) pins
+  its nested groups and conditional groups flat instead of re-deciding them,
+  while a `first_line_fits` candidate seed is a measurement `Flat` — unverified,
   so nested groups still decide for themselves.
 
-Sharing the traversal dissolved the drift the copies had accumulated: a
-later group in the rest is now decided with its own hug flags, a later
-conditional group through `pick_candidate` rather than assumed flat-most,
-and a `Break`-mode preferred fill by its first atom rather than measured
-whole-flat—the arms `first_line_fits` always had. All of it measured
-behavior-neutral on the gate corpora (byte-identical sweeps at widths
-60/80/120), because mode propagation (S2) had already removed every reachable
-disagreement: a group inside a flat parent is never *asked* whether it fits.
+Sharing the traversal dissolved the drift the copies had accumulated: a later
+group in the rest is now decided with its own hug flags, a later conditional
+group through `pick_candidate` rather than assumed flat-most, and a `Break`-mode
+preferred fill by its first atom rather than measured whole-flat—the arms
+`first_line_fits` always had. All of it measured behavior-neutral on the gate
+corpora (byte-identical sweeps at widths 60/80/120), because mode propagation
+(S2) had already removed every reachable disagreement: a group inside a flat
+parent is never *asked* whether it fits.
 
 ## Paragraph line breaks
 
@@ -574,56 +568,54 @@ decisions) for the recorded rationale.
 
 ### Statement boundaries are structural (S4)
 
-Statement boundaries are **call units**, not source newlines. A pure shape
-scan (`semantic::expl3::segment_expl_statements`) runs over each in-region
-element stream before layout and decides, per gap, whether a statement ends
-there; the layout loop commits logical lines where the map says. The formatter
-owns one-call-per-line: authored same-line calls split, authored mid-call
-newlines join, and `\cs_new:Npn \foo:n #1 {…}`—several sibling CST nodes—is one
-statement however it was authored.
+Statement boundaries are **call units**, not source newlines. A pure shape scan
+(`semantic::expl3::segment_expl_statements`) runs over each in-region element
+stream before layout and decides, per gap, whether a statement ends there; the
+layout loop commits logical lines where the map says. The formatter owns
+one-call-per-line: authored same-line calls split, authored mid-call newlines
+join, and `\cs_new:Npn \foo:n #1 {…}`—several sibling CST nodes—is one statement
+however it was authored.
 
 A unit is a head `COMMAND` whose name has derivable arity
 (`semantic::expl3::expl3_slots`, the argspec suffix read letter by letter:
 `N`/`V` one token, `n c v o x e f` one brace group, trailing `T`/`F` branch
 groups, `p` parameter text) plus the elements its slots consume. Consumption
-draws from the head's greedily-attached children first, then following
-siblings, with three load-bearing rules:
+draws from the head's greedily-attached children first, then following siblings,
+with three load-bearing rules:
 
 - **Peel-back.** Greedy attachment routinely gives an argument to the wrong
-  owner (`\cs_new:Nn \foo:n {body}` attaches `{body}` to `\foo:n`); a
-  `COMMAND` consumed into a single-token slot has its own attached children
-  pushed back onto the scan queue for the *outer* head's remaining slots.
-  Only the head's argspec ever drives consumption—an argument's own argspec
-  is inert data, exactly as TeX grabs it.
+  owner (`\cs_new:Nn \foo:n {body}` attaches `{body}` to `\foo:n`); a `COMMAND`
+  consumed into a single-token slot has its own attached children pushed back
+  onto the scan queue for the *outer* head's remaining slots. Only the head's
+  argspec ever drives consumption—an argument's own argspec is inert data,
+  exactly as TeX grabs it.
 - **The p-scan.** Parameter text ends at the first explicit `{` (TeX's own
   static rule), scanning the flattened peeled order so a delimited text
   (`#1 \q_stop {body}`) finds the body wherever attachment put it.
 - **Preserved-trivia reads only.** A blank line ends the unit where it stands
   (the partial unit commits, pass-stably); a comment is transparent to
-  consumption; a docstrip guard or doc margin aborts to the fallback
-  (guarded alternative bodies make arity lie, issue #78). The region toggles
-  are recognized zero-arity units, so a region's opening line is structural
-  too.
+  consumption; a docstrip guard or doc margin aborts to the fallback (guarded
+  alternative bodies make arity lie, issue #78). The region toggles are
+  recognized zero-arity units, so a region's opening line is structural too.
 
 Whatever the scan cannot resolve degrades to the **fallback**: the authored
 physical line, the old newline rule demoted to a per-statement residue (see
-*Known violations* for its fixed-point argument). A completed unit also
-absorbs trailing *same-line* junk—punctuation, unrecognized command tokens, a
-trailing comment (`\int_use:N \c@… , %mc-num`)—and a junk-bearing statement
-renders with every top-level gap unbreakable so the authored line shape
-survives (xparse's `\bool_if:NTF … { \cs_set:cpn } … ##1 \q_@@ …` definition
-trickery).
+*Known violations* for its fixed-point argument). A completed unit also absorbs
+trailing *same-line* junk—punctuation, unrecognized command tokens, a trailing
+comment (`\int_use:N \c@… , %mc-num`)—and a junk-bearing statement renders with
+every top-level gap unbreakable so the authored line shape survives (xparse's
+`\bool_if:NTF … { \cs_set:cpn } … ##1 \q_@@ …` definition trickery).
 
 Within one command's attached arguments (`Statements::Ignore`) there are no
-statements at all: a newline is inert whitespace and only the width fill
-breaks. A single inserted space at any preserved token boundary keeps
-re-lexing from merging two tokens.
+statements at all: a newline is inert whitespace and only the width fill breaks.
+A single inserted space at any preserved token boundary keeps re-lexing from
+merging two tokens.
 
 The subsumed idempotency mechanism: a width wrap inside a recognized unit is
-harmless because the next pass re-derives the same unit from content and
-re-runs the same width decisions—the K&R↔Allman family's root (a wrap
-re-reading as a statement boundary) is gone for recognized heads, by
-construction rather than per-shape countermeasures.
+harmless because the next pass re-derives the same unit from content and re-runs
+the same width decisions—the K&R↔Allman family's root (a wrap re-reading as a
+statement boundary) is gone for recognized heads, by construction rather than
+per-shape countermeasures.
 
 ### Trailing comments
 
@@ -649,10 +641,10 @@ same column either way for the layout to be a fixed point.
 The rule keys only on the group shape
 (`child.kind() == GROUP && atom.is_empty()`), **not** the statement mode, so it
 fires identically whether statement boundaries are structural
-(`Statements::Structural`) or absent within one command's attached
-arguments (`Statements::Ignore`). This is what gives an *attached* brace
-argument the l3 hang: `\hbox_set:Nn \l_tmpa_box` / `␣␣{ … }`, or the `T`/`F`
-branches of `\cs_if_exist:NTF` each hung one step. A directly-abutting argument
+(`Statements::Structural`) or absent within one command's attached arguments
+(`Statements::Ignore`). This is what gives an *attached* brace argument the l3
+hang: `\hbox_set:Nn \l_tmpa_box` / `␣␣{ … }`, or the `T`/`F` branches of
+`\cs_if_exist:NTF` each hung one step. A directly-abutting argument
 (`\EditInstance{a}{b}{…}`, no space) leaves `atom` non-empty and stays K&R-glued
 instead—the same `atom` emptiness discriminates space from glue.
 
@@ -661,15 +653,14 @@ is a head atom—e.g. the `N`-argument
 `\__kernel_dependency_version_check:nn{T}{F}` of `\cs_if_exist:NTF`) that
 follows a head on the current line, space-separated, is kept on that line by an
 `Ir::group_hug` wrapping `[head, sep, block]`. The hug is rest-aware (its
-`FlatMeasure::HugPrefix` measurement stops *successfully* at the block's
-first forced break), so it measures only the
-prefix `head␣<block-first-line>`, never the block body—the issue-#71-safe
-measurement, deliberately not the `step_fill` local `flat_width` cascade that
-would split a short head off a detonating trailing block. Because only the
-prefix was verified, a successful hug dispatches its inner as
-`Mode::FlatPrefix`, not `Flat` (see *`Mode::Flat` is an honest contract*): the
-head's gaps render flat, but any group past the first forced break re-decides
-for itself.
+`FlatMeasure::HugPrefix` measurement stops *successfully* at the block's first
+forced break), so it measures only the prefix `head␣<block-first-line>`, never
+the block body—the issue-#71-safe measurement, deliberately not the `step_fill`
+local `flat_width` cascade that would split a short head off a detonating
+trailing block. Because only the prefix was verified, a successful hug
+dispatches its inner as `Mode::FlatPrefix`, not `Flat` (see *`Mode::Flat` is an
+honest contract*): the head's gaps render flat, but any group past the first
+forced break re-decides for itself.
 
 **Sibling coupling.** Within one command's attached arguments (`Ignore` only),
 if any brace argument detonates on a *forced* break—a docstrip guard, comment,
@@ -686,8 +677,8 @@ After lowering, a single bottom-up prepass (`Ir::propagate_breaks`, run at the
 lowering→printer seam in `format_root`) marks every non-hug `Ir::Group` whose
 inner contains an unconditional forced break as `expand`, with
 `Ir::contains_forced_break`'s exact semantics: an `IfBreak` shields its
-branches, a conditional group's flat-most candidate decides, and every
-candidate and branch is still saturated inside. The flag is thereafter the one
+branches, a conditional group's flat-most candidate decides, and every candidate
+and branch is still saturated inside. The flag is thereafter the one
 representation of "forced open" the printer trusts; `contains_forced_break`
 survives as the *query* the lowering asks about pre-pass sub-IR (block-amid-
 prose, the hang paths, grid cells, flat-collapse).
@@ -695,13 +686,13 @@ prose, the hang paths, grid cells, flat-collapse).
 The mode pin that issue \#97 needed now falls out instead of being a hand-made
 special case. A group's body laid out as a bare concat inherits whatever mode
 the caller was dispatched in, and inheriting `Flat` was the bug:
-`printer::step_fill` in flat mode lays *every* gap flat without measuring,
-while the groups hanging off those gaps still decide their own break—the K&R
-hybrid `\int_set:Nn \l_…_int {` with the body wrapped below, not a fixed point
-since the wrapped lines re-parse as separate statements and the next pass lays
-the same group out Allman (latex3's `l3trial/l3auxdata/l3auxdata.dtx`).
-`lower_expl_group`'s forced (Allman) form now differs from the soft form only
-in its boundary separator—a `HardLine` instead of `Line`/`SoftLine`—and those
+`printer::step_fill` in flat mode lays *every* gap flat without measuring, while
+the groups hanging off those gaps still decide their own break—the K&R hybrid
+`\int_set:Nn \l_…_int {` with the body wrapped below, not a fixed point since
+the wrapped lines re-parse as separate statements and the next pass lays the
+same group out Allman (latex3's `l3trial/l3auxdata/l3auxdata.dtx`).
+`lower_expl_group`'s forced (Allman) form now differs from the soft form only in
+its boundary separator—a `HardLine` instead of `Line`/`SoftLine`—and those
 in-shape hard lines are what the prepass reads to mark the group, which is what
 pins the body's mode to `Break`. Fixture `expl_forced_block_body_mode` still
 pins the layout; its leading `%` comment is load-bearing, being what forces the
@@ -711,16 +702,16 @@ Two carve-outs keep the flag honest. Hug groups are never marked: their inner
 holds a forced break *by construction* (the trailing block), and their break
 decision is the hug fit, not the flag. And two measurements deliberately ignore
 `expand` (both now explicit `FlatMeasure` policies): the flat *footprint*
-(`Footprint`, behind `flat_width`) recurses instead (a group forced open only
-by a single-line comment still has a flat width—the comment shares the line,
-forcing a break only after), and the hug-prefix measurement (`HugPrefix`)
-lets the content decide, since a nested block's first hard break must stop
-the measurement *successfully* while a prefix comment must fail it—a
-distinction the flag cannot carry. That last point is S1's one deliberate, narrow layout
-change: an interior-comment-forced or sibling-coupled block detonating in a
-head-hug prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the
-head onto its own line, which is the head-hug rule's documented semantics
-(corpus sweep: 12 files, all this family, gate sets unchanged).
+(`Footprint`, behind `flat_width`) recurses instead (a group forced open only by
+a single-line comment still has a flat width—the comment shares the line,
+forcing a break only after), and the hug-prefix measurement (`HugPrefix`) lets
+the content decide, since a nested block's first hard break must stop the
+measurement *successfully* while a prefix comment must fail it—a distinction the
+flag cannot carry. That last point is S1's one deliberate, narrow layout change:
+an interior-comment-forced or sibling-coupled block detonating in a head-hug
+prefix now hugs (`\global\setbox9 \vtop{%`) instead of splitting the head onto
+its own line, which is the head-hug rule's documented semantics (corpus sweep:
+12 files, all this family, gate sets unchanged).
 
 ### Trailing hang groups (K&R↔Allman idempotence)
 
@@ -735,11 +726,11 @@ newline-split statements under the pre-S4 model, so the body then carried a
 *forced* break and the continuation branch detonated it Allman on pass 2—the
 same "a width break becomes a structural boundary on the next parse" class as
 the trailing conditional above. (Structural boundaries have since removed the
-re-split for recognized heads; the three-way remains for the body-fit
-flip a *fallback* body can still exhibit.) Since S2, the accepted candidate is dispatched in honest
-`Mode::Flat`, so the real print keeps exactly the layout all-lines-fit
-measured—before that, nested groups re-decided rest-aware at print time and
-could still detonate into the hybrid the measurement had rejected.
+re-split for recognized heads; the three-way remains for the body-fit flip a
+*fallback* body can still exhibit.) Since S2, the accepted candidate is
+dispatched in honest `Mode::Flat`, so the real print keeps exactly the layout
+all-lines-fit measured—before that, nested groups re-decided rest-aware at print
+time and could still detonate into the hybrid the measurement had rejected.
 
 `lower_expl_code` commits such a group as one `Ir::conditional_group_all_lines`
 over three candidates—**flat** (`head { body }` on one line), **Allman-inline**
@@ -765,18 +756,18 @@ group.
 
 ### Sticky-break statement fills
 
-Every *structural* expl3 statement line is committed as an `Ir::StickyFill`,
-not a plain `Ir::Fill`. (A *fallback* or junk-glued line instead commits as a
-plain greedy fill: greedy packing is self-fulfilling—each printed line
-re-segments to a fallback statement that re-fills to exactly itself—while a
-sticky cascade forces atoms that would fit onto broken lines, a shape the next
-pass's shorter per-line statements do not reproduce.) Both greedily fill atoms
-across the width; the difference is the
-break *cascade*: in a plain fill each gap decides independently (a long word
-breaks, the next words keep filling—correct for prose reflow), whereas in a
-sticky fill, **once any atom lands on a broken line every later atom breaks
-too**. The cascade lives in `printer::step_fill` (`sticky`/`broken` on
-`Cmd::Fill`); prose reflow keeps the plain greedy `Ir::Fill`.
+Every *structural* expl3 statement line is committed as an `Ir::StickyFill`, not
+a plain `Ir::Fill`. (A *fallback* or junk-glued line instead commits as a plain
+greedy fill: greedy packing is self-fulfilling—each printed line re-segments to
+a fallback statement that re-fills to exactly itself—while a sticky cascade
+forces atoms that would fit onto broken lines, a shape the next pass's shorter
+per-line statements do not reproduce.) Both greedily fill atoms across the
+width; the difference is the break *cascade*: in a plain fill each gap decides
+independently (a long word breaks, the next words keep filling—correct for prose
+reflow), whereas in a sticky fill, **once any atom lands on a broken line every
+later atom breaks too**. The cascade lives in `printer::step_fill`
+(`sticky`/`broken` on `Cmd::Fill`); prose reflow keeps the plain greedy
+`Ir::Fill`.
 
 This is what a *width*-broken sibling needs that the forced-only **sibling
 coupling** above cannot give. When a true-branch block detonates purely from

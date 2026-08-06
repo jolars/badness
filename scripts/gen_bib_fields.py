@@ -40,7 +40,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "bib_fields.json"
+DATA_FILE = Path(__file__).resolve().parent.parent / "crates" / "badness-parser" / "data" / "bib_fields.json"
 
 # biblatex datatype -> our coarse category. Anything not named here (integer, key,
 # entrykey, keyword, option, range, code) is a plain literal.

@@ -46,7 +46,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "crates" / "badness-parser" / "data"
 PACKAGE_FILE = DATA_DIR / "package_names.txt"
 CLASS_FILE = DATA_DIR / "class_names.txt"
 METADATA_FILE = DATA_DIR / "package_metadata.json"

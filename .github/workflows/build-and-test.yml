@@ -44,10 +44,34 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --workspace --verbose
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --workspace --verbose
+
+  wasm:
+    if: github.event_name != 'schedule'
+    name: Wasm Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      # `badness-formatter` is meant to be embedded by a dprint Wasm plugin,
+      # and `badness-parser` by other Wasm-hosted tools. Nothing else in the
+      # workspace targets wasm, so this job is the only thing keeping the two
+      # library crates free of filesystem/thread/time dependencies.
+      - name: Build library crates for wasm
+        run: >
+          cargo build -p badness-parser -p badness-formatter --release
+          --target wasm32-unknown-unknown
 
   extension:
     name: VS Code Extension
@@ -98,7 +122,7 @@ jobs:
 
   versionary:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, extension, cargo-audit, cargo-deny]
+    needs: [test, wasm, extension, cargo-audit, cargo-deny]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,7 +147,10 @@ jobs:
   build-release-assets:
     name: Build & Upload Release Assets
     needs: versionary
-    if: ${{ needs.versionary.outputs.release_created == 'true' }}
+    # Only the primary CLI stream (bare `v*` tags) may carry release assets;
+    # the member-crate streams (`badness-parser-v*`, `badness-formatter-v*`,
+    # `badness-code-v*`) must not upload any.
+    if: ${{ needs.versionary.outputs.release_created == 'true' && startsWith(needs.versionary.outputs.tag_name, 'v') }}
     uses: ./.github/workflows/packages.yml
     with:
       upload: "true"
@@ -136,7 +163,7 @@ jobs:
   publish-code-extensions:
     name: Publish Code Extensions
     needs: [versionary, build-release-assets]
-    if: ${{ needs.versionary.outputs.release_created == 'true' }}
+    if: ${{ needs.versionary.outputs.release_created == 'true' && startsWith(needs.versionary.outputs.tag_name, 'v') }}
     uses: ./.github/workflows/publish-code-extensions.yml
     secrets: inherit
     permissions:
@@ -145,7 +172,7 @@ jobs:
   publish-aur:
     name: Publish AUR Package
     needs: [versionary, build-release-assets]
-    if: ${{ needs.versionary.outputs.release_created == 'true' }}
+    if: ${{ needs.versionary.outputs.release_created == 'true' && startsWith(needs.versionary.outputs.tag_name, 'v') }}
     uses: ./.github/workflows/publish-aur.yml
     with:
       tag: ${{ needs.versionary.outputs.tag_name }}

@@ -7,7 +7,7 @@ tasks:
   build:
     desc: Dev build
     cmds:
-      - cargo build
+      - cargo build --workspace
 
   build-release:
     desc: Build release version
@@ -17,65 +17,65 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - cargo test
+      - cargo test --workspace
 
   fmt:
     desc: Format the code
     cmds:
-      - cargo fmt
+      - cargo fmt --all
 
   fmt-check:
     desc: Check formatting (CI)
     cmds:
-      - cargo fmt -- --check
+      - cargo fmt --all -- --check
 
   lint:
     desc: Clippy with warnings as errors
     cmds:
-      - cargo clippy --all-targets --all-features -- -D warnings
+      - cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   snapshots:
     desc: Regenerate / accept insta snapshots
     cmds:
-      - INSTA_UPDATE=always cargo test
+      - INSTA_UPDATE=always cargo test --workspace
 
   parse-compat:
     desc: Soft differential parse-concordance report vs texlab (writes PARSE_COMPAT.md)
     cmds:
-      - cargo test --test parse_compat -- --ignored --nocapture
+      - cargo test -p badness-parser --test parse_compat -- --ignored --nocapture
 
   bib-parse-compat:
     desc: Soft differential BibTeX parse-concordance report vs texlab (writes BIB_PARSE_COMPAT.md)
     cmds:
-      - cargo test --test bib_parse_compat -- --ignored --nocapture
+      - cargo test -p badness-parser --test bib_parse_compat -- --ignored --nocapture
 
   bib-fields:check:
-    desc: Check data/bib_fields.json is in sync with biblatex's data model (blx-dm.def)
+    desc: Check crates/badness-parser/data/bib_fields.json is in sync with biblatex's data model (blx-dm.def)
     cmds:
       - python3 scripts/gen_bib_fields.py
 
   bib-fields:sync:
-    desc: Re-sync data/bib_fields.json's mechanical facts from biblatex's data model
+    desc: Re-sync crates/badness-parser/data/bib_fields.json's mechanical facts from biblatex's data model
     cmds:
       - python3 scripts/gen_bib_fields.py --write
 
   cwl:check:
-    desc: Check data/cwl_signatures.json is in sync with the pinned TeXstudio CWL corpus
+    desc: Check crates/badness-parser/data/cwl_signatures.json is in sync with the pinned TeXstudio CWL corpus
     cmds:
       - python3 scripts/gen_cwl_signatures.py
 
   cwl:sync:
-    desc: Re-generate data/cwl_signatures.json from the pinned TeXstudio CWL corpus
+    desc: Re-generate crates/badness-parser/data/cwl_signatures.json from the pinned TeXstudio CWL corpus
     cmds:
       - python3 scripts/gen_cwl_signatures.py --write
 
   pkg-names:check:
-    desc: Check data/{package,class}_names.txt are in sync with the pinned TeX Live tlpdb
+    desc: Check crates/badness-parser/data/{package,class}_names.txt are in sync with the pinned TeX Live tlpdb
     cmds:
       - python3 scripts/gen_package_names.py
 
   pkg-names:sync:
-    desc: Re-generate data/{package,class}_names.txt from the pinned TeX Live tlpdb
+    desc: Re-generate crates/badness-parser/data/{package,class}_names.txt from the pinned TeX Live tlpdb
     cmds:
       - python3 scripts/gen_package_names.py --write
 
@@ -86,7 +86,12 @@ tasks:
 
   check:
     desc: Everything CI runs
-    deps: [fmt-check, lint, test]
+    deps: [fmt-check, lint, test, wasm]
+
+  wasm:
+    desc: Build the library crates for wasm32-unknown-unknown (dprint-embeddability guard, mirrors CI)
+    cmds:
+      - cargo build -p badness-parser -p badness-formatter --target wasm32-unknown-unknown
 
   bench:
     desc: Benchmark formatter speed vs tex-fmt & latexindent (writes benches/benchmark_results.json for the docs page)

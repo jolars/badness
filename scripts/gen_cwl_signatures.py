@@ -43,7 +43,7 @@ import tempfile
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "cwl_signatures.json"
+DATA_FILE = Path(__file__).resolve().parent.parent / "crates" / "badness-parser" / "data" / "cwl_signatures.json"
 
 # Pinned source: texstudio's completion/ directory at this commit. Bump deliberately
 # (then `--write`); the SHA is echoed into the generated file's header comment.

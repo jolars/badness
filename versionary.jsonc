@@ -7,7 +7,11 @@
   "release-reference-comments": "best-effort",
   "packages": {
     ".": {
-      "exclude-paths": ["editors"],
+      "exclude-paths": [
+        "editors",
+        "crates/badness-parser",
+        "crates/badness-formatter"
+      ],
       "extra-files": [
         {
           "type": "json",
@@ -21,6 +25,8 @@
         }
       ]
     },
+    "crates/badness-parser": {},
+    "crates/badness-formatter": {},
     "editors/code": {
       "release-type": "node",
       "package-name": "badness-code",

@@ -1,0 +1,18 @@
+{
+  "name": "badness-playground-build",
+  "private": true,
+  "description": "Builds the vendored CodeMirror bundle for the docs playground (docs/src/playground/vendor/codemirror.js). Run via `task playground:vendor`; commit the output.",
+  "scripts": {
+    "build": "esbuild src/editor.js --bundle --format=esm --minify --outfile=../src/playground/vendor/codemirror.js"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/legacy-modes": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@codemirror/theme-one-dark": "^6",
+    "esbuild": "^0.25"
+  }
+}

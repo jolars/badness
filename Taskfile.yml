@@ -89,9 +89,9 @@ tasks:
     deps: [fmt-check, lint, test, wasm]
 
   wasm:
-    desc: Build the library crates for wasm32-unknown-unknown (dprint-embeddability guard, mirrors CI)
+    desc: Build the wasm-targeting crates for wasm32-unknown-unknown (embeddability guard, mirrors CI)
     cmds:
-      - cargo build -p badness-parser -p badness-formatter --target wasm32-unknown-unknown
+      - cargo build -p badness-parser -p badness-formatter -p badness-wasm --target wasm32-unknown-unknown
 
   bench:
     desc: Benchmark formatter speed vs tex-fmt & latexindent (writes benches/benchmark_results.json for the docs page)
@@ -133,12 +133,26 @@ tasks:
 
   docs:build:
     desc: Build the mdBook docs into docs/book
-    deps: [docs:rules]
+    deps: [docs:rules, playground:wasm]
     dir: docs
     cmds:
       - mdbook build
       - task: docs:canonical
       - task: docs:sitemap
+
+  playground:wasm:
+    desc: Build the badness-wasm playground bundle into docs/src/playground/pkg
+    cmds:
+      - >-
+        wasm-pack build crates/badness-wasm --target web --release
+        --out-dir ../../docs/src/playground/pkg
+
+  playground:vendor:
+    desc: Rebuild the vendored CodeMirror bundle (commit the result)
+    dir: docs/playground-build
+    cmds:
+      - pnpm install
+      - pnpm run build
 
   docs:rules:
     desc: Regenerate the linter-rules reference from rule metadata

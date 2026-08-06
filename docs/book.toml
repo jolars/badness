@@ -17,11 +17,13 @@ additional-js = [
     "theme/vendor/vega-lite.min.js",
     "theme/vendor/vega-embed.min.js",
     "theme/bench-charts.js",
+    "theme/playground-nav.js",
 ]
-additional-css = ["theme/bench-charts.css", "theme/brand.css"]
+additional-css = ["theme/bench-charts.css", "theme/brand.css", "theme/playground-nav.css"]
 
 [output.html.redirect]
 "/reference/wrap-modes.html" = "configuration.html#wrap"
+"/playground.html" = "playground/index.html"
 
 [preprocessor]
 

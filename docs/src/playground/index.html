@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Playground — Badness</title>
+        <meta name="description"
+              content="Try the badness LaTeX formatter in your browser. Runs entirely client-side via WebAssembly." />
+        <link rel="icon" href="../images/logo.svg" type="image/svg+xml" />
+        <link rel="stylesheet" href="style.css" />
+        <script>
+      // Resolve the theme before first paint: explicit playground choice, then
+      // the book's mdBook theme, then the OS preference.
+      (() => {
+        const own = localStorage.getItem("badness-playground-theme");
+        const book = localStorage.getItem("mdbook-theme");
+        const dark =
+          own !== null
+            ? own === "dark"
+            : book !== null
+              ? ["coal", "navy", "ayu"].includes(book)
+              : window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+        </script>
+    </head>
+    <body>
+        <div id="playground-app">
+            <header class="pg-header">
+                <a class="pg-brand" href="../">
+                    <img class="pg-logo pg-logo-light" src="../images/logo.svg" alt="" />
+                    <img class="pg-logo pg-logo-dark" src="../images/logo-dark.svg" alt="" />
+                    <span><strong>Badness</strong> Playground</span>
+                </a>
+                <span class="pg-header-spacer"></span>
+                <a class="pg-doc-link" href="../reference/configuration.html">Options reference</a>
+                <a class="pg-doc-link" href="../">Docs</a>
+                <button id="pg-theme" type="button" title="Toggle light/dark theme">
+                    <span class="pg-theme-light">Dark</span><span class="pg-theme-dark">Light</span>
+                </button>
+            </header>
+            <noscript>The playground requires JavaScript and WebAssembly.</noscript>
+            <div class="pg-controls">
+                <label>
+                    File type
+                    <select id="pg-filetype">
+                        <option value="tex" selected>.tex</option>
+                        <option value="sty-cls">.sty / .cls</option>
+                        <option value="dtx">.dtx</option>
+                        <option value="bib">.bib</option>
+                    </select>
+                </label>
+                <label>
+                    Line width
+                    <input id="pg-line-width" type="number" min="20" max="200" value="80" />
+                </label>
+                <label>
+                    Indent
+                    <input id="pg-indent-width" type="number" min="0" max="8" value="2" />
+                </label>
+                <label>
+                    Wrap
+                    <select id="pg-wrap">
+                        <option value="reflow" selected>reflow (default)</option>
+                        <option value="stable">stable</option>
+                        <option value="sentence">sentence</option>
+                        <option value="semantic">semantic</option>
+                        <option value="preserve">preserve</option>
+                    </select>
+                </label>
+                <label>
+                    Math wrap
+                    <select id="pg-math-wrap">
+                        <option value="auto" selected>auto</option>
+                        <option value="preserve">preserve</option>
+                        <option value="single-line">single-line</option>
+                        <option value="break">break</option>
+                    </select>
+                </label>
+                <span class="pg-controls-spacer"></span>
+                <button id="pg-share"
+                        type="button"
+                        title="Copy a link with the current options">Share</button>
+            </div>
+            <div class="pg-panes">
+                <div class="pg-pane">
+                    <div class="pg-pane-title"><span>Input</span></div>
+                    <div id="pg-input"></div>
+                </div>
+                <div class="pg-pane">
+                    <div class="pg-pane-title">
+                        <span>Output</span>
+                        <button id="pg-copy" type="button" title="Copy the formatted output">Copy</button>
+                    </div>
+                    <div id="pg-output"></div>
+                </div>
+            </div>
+            <div id="pg-status" role="status" aria-live="polite"></div>
+            <ul id="pg-errors" class="pg-errors">
+            </ul>
+        </div>
+        <script type="module" src="app.js"></script>
+    </body>
+</html>

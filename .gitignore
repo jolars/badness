@@ -353,6 +353,11 @@ TSWLatexianTemp*
 # mdBook docs
 /docs/book/
 /docs/doc-utils/target/
+
+# Playground: wasm bundle (built by `task playground:wasm`) and the vendor
+# bundle's npm project deps (the built vendor/codemirror.js IS committed)
+/docs/src/playground/pkg/
+/docs/playground-build/node_modules/
 /test.bib
 
 # rust-analyzer reference checkout (audit only, not part of the project)

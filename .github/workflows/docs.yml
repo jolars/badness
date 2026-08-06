@@ -30,6 +30,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo dependencies
         uses: actions/cache@v6
@@ -41,6 +42,24 @@ jobs:
           key: ${{ runner.os }}-docs-${{ hashFiles('docs/doc-utils/Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-docs-
+
+      # Workspace target cache for the playground wasm build (the cache above
+      # only covers the doc-utils preprocessor).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs-wasm
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      # Build the playground's wasm bundle before the mdBook build so it is
+      # copied into the book alongside the committed playground assets.
+      - name: Build playground wasm bundle
+        run: >-
+          wasm-pack build crates/badness-wasm --target web --release
+          --out-dir ../../docs/src/playground/pkg
 
       - uses: jontze/action-mdbook@v4
         with:

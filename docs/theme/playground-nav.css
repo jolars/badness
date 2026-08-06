@@ -1,0 +1,16 @@
+/* The menu-bar "Playground" link injected by theme/playground-nav.js. */
+
+.menu-bar .right-buttons a.playground-link {
+  display: inline-block;
+  padding: 0 8px;
+  font-size: 1.6rem;
+  line-height: var(--menu-bar-height);
+  color: var(--icons);
+  text-decoration: none;
+  vertical-align: top;
+}
+
+.menu-bar .right-buttons a.playground-link:hover {
+  color: var(--icons-hover);
+  text-decoration: none;
+}

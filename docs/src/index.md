@@ -32,4 +32,5 @@ construction and enforced as test oracles:
 
 - [Installation](guide/installation.md): get the `badness` binary.
 - [Getting Started](guide/getting-started.md): format and lint your first file.
+- [Playground](playground/index.html): try the formatter in your browser.
 - [Editor Setup](guide/editor-setup.md): wire up the language server.

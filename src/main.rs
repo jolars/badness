@@ -1451,15 +1451,21 @@ fn render_window_diff(left: &str, right: &str, out: &mut String) {
 fn build_debug_report(
     checks: DebugChecksArg,
     files_checked: usize,
+    files_skipped: usize,
     failures: &[(String, DebugFailure)],
 ) -> String {
     let mut out = String::new();
     out.push_str("# Debug-format regression report\n\n");
     out.push_str(&format!(
-        "- Checks: `{}`\n- Files checked: {files_checked}\n- Failures: {}\n\n",
-        checks_label(checks),
-        failures.len()
+        "- Checks: `{}`\n- Files checked: {files_checked}\n",
+        checks_label(checks)
     ));
+    if files_skipped > 0 {
+        out.push_str(&format!(
+            "- Files skipped: {files_skipped} (`.bib` — the trivia oracle is LaTeX-CST-based)\n"
+        ));
+    }
+    out.push_str(&format!("- Failures: {}\n\n", failures.len()));
     if failures.is_empty() {
         out.push_str("All checks passed.\n");
         return out;
@@ -1719,7 +1725,7 @@ fn run_debug_format(
     // Checks are pure functions of the file content, so they parallelize like
     // `run_format_paths`; the order-preserving collect keeps output and report
     // numbering deterministic.
-    let outcomes: Vec<(String, Result<DebugArtifacts, String>)> = files
+    let outcomes: Vec<(String, FileKind, Result<DebugArtifacts, String>)> = files
         .par_iter()
         .map(|(path, kind)| {
             let label = path.display().to_string();
@@ -1735,21 +1741,29 @@ fn run_debug_format(
                 )),
                 Err(err) => Err(format!("badness: cannot read {label}: {err}")),
             };
-            (label, outcome)
+            (label, *kind, outcome)
         })
         .collect();
 
     let mut files_checked = 0usize;
+    let mut files_skipped = 0usize;
     let mut io_failed = false;
     let mut collected: Vec<(String, DebugFailure)> = Vec::new();
-    for (label, outcome) in outcomes {
+    for (label, kind, outcome) in outcomes {
         match outcome {
             Err(msg) => {
                 eprintln!("{msg}");
                 io_failed = true;
             }
             Ok(artifacts) => {
-                files_checked += 1;
+                // A `.bib` file under `--checks trivia` runs nothing (the
+                // oracle is LaTeX-CST-based): count it as skipped, not
+                // checked, so the summary reports real oracle coverage.
+                if checks == DebugChecksArg::Trivia && kind == FileKind::Bib {
+                    files_skipped += 1;
+                } else {
+                    files_checked += 1;
+                }
                 if let Some(dir) = dump_dir {
                     let stem = sanitize_path_for_filename(&label);
                     if let Err(err) = write_debug_artifacts(dir, &stem, &artifacts, dump_passes) {
@@ -1783,12 +1797,22 @@ fn run_debug_format(
     }
 
     if report {
-        print!("{}", build_debug_report(checks, files_checked, &collected));
-    } else if collected.is_empty() && !io_failed {
-        println!(
-            "All checks passed (checks: {}, files: {files_checked})",
-            checks_label(checks)
+        print!(
+            "{}",
+            build_debug_report(checks, files_checked, files_skipped, &collected)
         );
+    } else if collected.is_empty() && !io_failed {
+        if files_skipped > 0 {
+            println!(
+                "All checks passed (checks: {}, files: {files_checked}, skipped: {files_skipped})",
+                checks_label(checks)
+            );
+        } else {
+            println!(
+                "All checks passed (checks: {}, files: {files_checked})",
+                checks_label(checks)
+            );
+        }
     }
     if collected.is_empty() && !io_failed {
         ExitCode::SUCCESS
@@ -1912,7 +1936,7 @@ mod tests {
                 detail: None,
             },
         )];
-        let report = build_debug_report(DebugChecksArg::All, 3, &failures);
+        let report = build_debug_report(DebugChecksArg::All, 3, 0, &failures);
         assert!(report.contains("# Debug-format regression report"));
         assert!(report.contains("- Files checked: 3"));
         assert!(report.contains("### 1. `sub/file.tex` (idempotency)"));
@@ -1922,7 +1946,7 @@ mod tests {
 
     #[test]
     fn report_on_all_passing_files_has_no_failure_sections() {
-        let report = build_debug_report(DebugChecksArg::All, 2, &[]);
+        let report = build_debug_report(DebugChecksArg::All, 2, 0, &[]);
         assert!(report.contains("- Failures: 0"));
         assert!(report.contains("All checks passed."));
         assert!(!report.contains("## Failures"));
@@ -1941,7 +1965,7 @@ mod tests {
                 detail: None,
             },
         )];
-        let report = build_debug_report(DebugChecksArg::Idempotency, 1, &failures);
+        let report = build_debug_report(DebugChecksArg::Idempotency, 1, 0, &failures);
         assert!(report.contains("### 1. `bad.tex` (format-error)"));
         let lower = report.to_lowercase();
         // `- Checks: `idempotency`` is the run configuration, not a failure

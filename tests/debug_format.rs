@@ -125,6 +125,37 @@ fn trivia_check_passes_on_stable_prose() {
 }
 
 #[test]
+fn trivia_check_counts_skipped_bib_files_separately() {
+    // The trivia oracle is LaTeX-CST-based and runs nothing on a `.bib` file:
+    // the summary must report it as skipped, never fold it into the checked
+    // count (which would overstate oracle coverage on a `.bib`-heavy sweep).
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("ok.tex"), "alpha beta.\n").unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{key, title = {T}, year = {2020}}\n",
+    )
+    .unwrap();
+
+    let output = badness(dir.path(), &["debug", "format", "--checks", "trivia", "."]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("All checks passed (checks: trivia, files: 1, skipped: 1)"),
+        "stdout: {}",
+        stdout(&output)
+    );
+
+    let output = badness(
+        dir.path(),
+        &["debug", "format", "--checks", "trivia", "--report", "."],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let report = stdout(&output);
+    assert!(report.contains("- Files checked: 1"), "report: {report}");
+    assert!(report.contains("- Files skipped: 1"), "report: {report}");
+}
+
+#[test]
 fn trivia_check_fires_on_a_known_hybrid() {
     let dir = TempDir::new().unwrap();
     // A known convergence failure (found by the S0 sweep): joining

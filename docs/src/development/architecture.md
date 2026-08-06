@@ -18,9 +18,9 @@ and the LSP's environment awareness each have their own page:
 
 ## What the project is
 
-**A three-crate Cargo workspace** (edition 2024). The root package is the
-CLI/LSP/linter crate `badness`; two publishable library crates live under
-`crates/`:
+**A four-crate Cargo workspace** (edition 2024). The root package is the
+CLI/LSP/linter crate `badness`; two publishable library crates and one
+non-published wasm shim live under `crates/`:
 
 - **`badness-parser`** — the syntax layer (`syntax`, `ast`), the parser, the
   semantic layer (minus the disk/salsa-backed `load` module), the BibTeX parsing
@@ -29,10 +29,14 @@ CLI/LSP/linter crate `badness`; two publishable library crates live under
 - **`badness-formatter`** — the layout engine
   (`formatter/{core, ir, printer,   style, context, colspec, sentence, perturb}`)
   and the `.bib` formatter. Depends on `badness-parser`.
+- **`badness-wasm`** — a `publish = false` wasm-bindgen shim over the two
+  library crates that powers the [playground](../playground/index.html); built
+  with `wasm-pack` (`task playground:wasm`) into `docs/src/playground/pkg/` and
+  never released to crates.io.
 
-Both library crates build for `wasm32-unknown-unknown` (a CI job guards this;
-the formatter is embedded by the dprint Wasm plugin), so nothing in them may
-touch the filesystem, threads, or processes.
+The library crates build for `wasm32-unknown-unknown` (a CI job guards this,
+`badness-wasm` included; the formatter is embedded by the dprint Wasm plugin),
+so nothing in them may touch the filesystem, threads, or processes.
 
 The root crate keeps `linter/`, `lsp/`, `project/`, `text/`, plus top-level
 `incremental.rs` (salsa), `config.rs`, `cli.rs`, `completion.rs`, and

@@ -720,7 +720,10 @@ sources below are missing.
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
-- [ ] `wasm32` build for a web playground.
+- [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
+  crate + the docs playground page (`docs/src/playground.md`), formatter-only;
+  linting in the playground would first need the linter core extracted from the
+  root crate (its logic is fs/salsa-free, but its crate is not wasm-clean).
 
 ## Editor integration
 

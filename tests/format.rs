@@ -72,6 +72,17 @@ fn check_format_invariants(
     match perturb::check_trivia_convergence(input, config, TRIVIA_SINGLE_FLIP_SAMPLES, |s| {
         fmt(s).map_err(|e| e.to_string())
     }) {
+        // A dropped variant means a parser shape gate is newline-sensitive at
+        // one of the swapped gaps — a parser finding, and silently shrinking
+        // oracle coverage. Zero across the in-repo corpora today; keep it that
+        // way (an intentional exception would earn its own registry).
+        Ok(report) if report.dropped_unsafe > 0 => {
+            return Err(format!(
+                "trivia oracle dropped {} unsafe variant(s) — a parser shape gate is \
+                 newline-sensitive",
+                report.dropped_unsafe
+            ));
+        }
         Ok(_) => {}
         Err(perturb::ConvergenceError::Original(e)) => {
             return Err(format!("trivia oracle could not format the original: {e}"));
@@ -175,9 +186,12 @@ const SWEEP_WIDTHS: &[usize] = &[60, 72, 80, 100, 120];
 /// Corpus files known to violate an invariant at one or more sweep widths —
 /// the in-repo mirror of the S0 failure inventory. A registered file is
 /// asserted to *fail* somewhere in the sweep, so a fix in a later stage forces
-/// the entry's removal; an unregistered failure panics with the details. Never
-/// weaken the oracle to shrink this list.
-const KNOWN_INVARIANT_FAILURES: &[(&str, &str)] = &[
+/// the entry's removal; an unregistered failure panics with the details. The
+/// third field is a substring every observed failure message must contain, so
+/// a registration masks only its recorded failure mode — a *new, unrelated*
+/// regression in a registered file still panics. Never weaken the oracle to
+/// shrink this list.
+const KNOWN_INVARIANT_FAILURES: &[(&str, &str, &str)] = &[
     // S0 discovery: under `Reflow` the prose reflow relocates `^^A` doc
     // comments (joining them into or out of prose lines), and at the new
     // position the `^^A` re-lexes as content — a whitespace-only violation.
@@ -186,13 +200,15 @@ const KNOWN_INVARIANT_FAILURES: &[(&str, &str)] = &[
     (
         "dtx_caret_comment.dtx",
         "reflow moves ^^A doc comments into content positions",
+        "format changed non-trivia content",
     ),
 ];
 
 /// Run the invariants sweep over one corpus file, panicking on any
-/// unregistered failure and on any registered file that no longer fails.
+/// unregistered failure, any registered file that no longer fails, and any
+/// registered file whose failure does not match its recorded mode.
 fn sweep_corpus_file(name: &str, text: &str, config: LexConfig) {
-    let registered = KNOWN_INVARIANT_FAILURES.iter().find(|(n, _)| *n == name);
+    let registered = KNOWN_INVARIANT_FAILURES.iter().find(|(n, _, _)| *n == name);
     let mut failures: Vec<String> = Vec::new();
     for &width in SWEEP_WIDTHS {
         let style = FormatStyle {
@@ -204,11 +220,25 @@ fn sweep_corpus_file(name: &str, text: &str, config: LexConfig) {
         }
     }
     match registered {
-        Some((_, why)) => assert!(
-            !failures.is_empty(),
-            "{name} is registered in KNOWN_INVARIANT_FAILURES ({why}) but passes the whole \
-             sweep — remove its entry"
-        ),
+        Some((_, why, matches)) => {
+            assert!(
+                !failures.is_empty(),
+                "{name} is registered in KNOWN_INVARIANT_FAILURES ({why}) but passes the whole \
+                 sweep — remove its entry"
+            );
+            let unrelated: Vec<&String> =
+                failures.iter().filter(|f| !f.contains(matches)).collect();
+            assert!(
+                unrelated.is_empty(),
+                "{name} is registered in KNOWN_INVARIANT_FAILURES ({why}), but these failures do \
+                 not match its recorded mode ({matches:?}) — a new, unrelated regression:\n{}",
+                unrelated
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
         None => assert!(
             failures.is_empty(),
             "unregistered invariant failure(s) in {name}:\n{}",
@@ -816,22 +846,14 @@ fn package_fixtures_match_expected() {
             .unwrap_or_else(|e| panic!("format {name}: {e}"));
         assert_eq!(formatted, expected, "fixture {name} output mismatch");
 
-        // Idempotent (same flavor + style), clean, and lossless.
-        assert_eq!(
-            format_with_style_flavored(&formatted, style, LatexFlavor::Package).expect("reformat"),
-            formatted,
-            "fixture {name} is not idempotent"
-        );
-        let reparsed = parse_with_flavor(&formatted, LatexFlavor::Package);
-        assert!(
-            reparsed.errors.is_empty(),
-            "fixture {name} formatted output must parse cleanly"
-        );
-        assert_eq!(
-            reparsed.syntax().to_string(),
-            formatted,
-            "fixture {name} formatted output must round-trip losslessly"
-        );
+        // The full invariant set — whitespace-only, idempotent, clean, lossless,
+        // and the trivia-convergence oracle. The expl3 `.sty` fixtures are
+        // exactly the K&R<->Allman family the oracle exists to catch, so they
+        // must run under it in CI, not only via the `.dtx` corpus and the
+        // manual external gate.
+        if let Err(msg) = check_format_invariants(&input, style, LatexFlavor::Package.into()) {
+            panic!("fixture {name}: {msg}");
+        }
     }
 }
 

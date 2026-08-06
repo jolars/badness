@@ -36,10 +36,14 @@ crates and one non-published wasm shim under `crates/`:
   signature artifacts, and the phf codegen `build.rs`.
 - **`badness-formatter`** — the layout engine (`core`, `ir`, `printer`, `style`,
   `context`, `colspec`, `sentence`, `perturb`) and the `.bib` formatter.
-  Embedded by the dprint Wasm plugin, so it (and the parser it depends on) must
-  keep building for `wasm32-unknown-unknown` — a CI job guards this (and covers
-  `badness-wasm` too). Anything touching the filesystem, threads, or processes
-  stays in the root crate.
+  Embedded by the dprint Wasm plugin (`jolars/dprint-plugin-badness`, its own
+  repo so `plugin.wasm` stays out of this one's `v*` release stream), so it (and
+  the parser it depends on) must keep building for `wasm32-unknown-unknown` — a
+  CI job guards this (and covers `badness-wasm` too). Anything touching the
+  filesystem, threads, or processes stays in the root crate. The plugin is
+  sandboxed with no filesystem, so it passes an empty `SignatureDb` where the
+  CLI folds in signatures scanned from sibling `.sty`/`.cls` files — the one
+  sanctioned divergence from `badness format`.
 - **`badness-wasm`** — `publish = false` wasm-bindgen shim over the two library
   crates, powering the docs playground (`docs/src/playground/index.html`); built
   with `wasm-pack` via `task playground:wasm`, never released.

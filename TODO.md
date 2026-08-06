@@ -423,6 +423,44 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   on a mega-line read as an earlier grouped command). Resolved three trivia
   gate entries (`xparse-2020-10-01.sty` ×2, latex2e's `xparse.sty`),
   byte-neutral on authored corpus files at widths 60/80/120.
+- [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
+  call).** A key whose value continues on the next line should indent the value
+  one step, which is what an author writes and what upstream overwhelmingly does
+  (a sweep of latex3's `.dtx` sources: of 87 code lines ending in `=` with the
+  value on the following line, **65 indent it by +2**, the rest split between 0
+  and incidental alignment):
+
+  ```tex
+  ,begin-vspace:e =
+    \tl_if_empty:nTF {#2}
+      { \newtheoremstyle@vspace@default }
+      {#2}
+  ```
+
+  Badness neither produces nor preserves this: it emits the continuation *level
+  with the key*, discarding an authored `+2`. The cause is structural, not a
+  layout bug. `,begin-vspace:e = ` is a **fallback** statement (no derivable
+  arity), and in a fallback stream a newline is a statement *boundary* — the
+  Tier-2 residue. So `\tl_if_empty:nTF …` on the next line is a *sibling
+  statement* at the same base indent, not a continuation of the entry; and
+  indentation is always computed, never read, so the author's step is dropped.
+
+  Emitting +2 needs the formatter to know that `,key = ` is an *incomplete*
+  entry — key-value modelling inside a stream it explicitly declines to model.
+  The narrowest form is a rule like "a fallback statement whose last non-trivia
+  token is `=` hangs its successor +2", which reads only non-trivia token
+  content and is therefore trivia-invariant and permissible. **The open call is
+  whether to have it at all**: the l3styleguide is silent on key-value dialects,
+  so this is badness inventing layout for a dialect it cannot name — the same
+  objection recorded against the 2e-brace-tightening entry below. Upstream's
+  65/87 gives the rule an empirical basis; the tenet-#1 pressure is that a
+  `Keyval` content kind (see the parked keyval entry above) would be the
+  principled carrier, not a token-shape heuristic in `lower_expl_code`.
+
+  Surfaced while fixing the sibling-coupling and all-or-nothing conditional bugs
+  (issue #101); the conditional fix removed the *worse* half of this shape (the
+  branch list no longer splits across two indents), leaving only the
+  continuation indent itself.
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but

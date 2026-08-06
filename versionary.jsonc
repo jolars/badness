@@ -10,7 +10,8 @@
       "exclude-paths": [
         "editors",
         "crates/badness-parser",
-        "crates/badness-formatter"
+        "crates/badness-formatter",
+        "crates/badness-wasm"
       ],
       "extra-files": [
         {

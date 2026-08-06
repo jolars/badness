@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/badness-parser", "crates/badness-formatter"]
+members = [
+  "crates/badness-parser",
+  "crates/badness-formatter",
+  "crates/badness-wasm",
+]
 exclude = ["docs/doc-utils"]
 
 [workspace.package]

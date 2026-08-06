@@ -65,13 +65,13 @@ jobs:
           key: wasm
 
       # `badness-formatter` is meant to be embedded by a dprint Wasm plugin,
-      # and `badness-parser` by other Wasm-hosted tools. Nothing else in the
-      # workspace targets wasm, so this job is the only thing keeping the two
-      # library crates free of filesystem/thread/time dependencies.
+      # and `badness-parser` by other Wasm-hosted tools; `badness-wasm` is the
+      # wasm-bindgen shim behind the docs playground. This job is what keeps
+      # the library crates free of filesystem/thread/time dependencies.
       - name: Build library crates for wasm
         run: >
-          cargo build -p badness-parser -p badness-formatter --release
-          --target wasm32-unknown-unknown
+          cargo build -p badness-parser -p badness-formatter -p badness-wasm
+          --release --target wasm32-unknown-unknown
 
   extension:
     name: VS Code Extension

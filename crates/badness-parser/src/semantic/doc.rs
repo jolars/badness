@@ -175,14 +175,16 @@ fn documented_name(group: &SyntaxNode, kind: DocKind) -> Option<String> {
 }
 
 /// The flat literal text inside `group`, braces dropped. `None` if it holds a nested
-/// node (a `\macro` — not a flat literal). Mirrors [`crate::ast::nth_group_text`],
-/// which operates on a parent + index rather than a group node.
+/// node (a `\macro`) or a parameter token (`#1`) — not a flat literal. Mirrors
+/// [`crate::ast::nth_group_text`], which operates on a parent + index rather than a
+/// group node.
 fn group_inner_text(group: &SyntaxNode) -> Option<String> {
     let mut text = String::new();
     for element in group.children_with_tokens() {
         match element {
             rowan::NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
+                SyntaxKind::HASH => return None,
                 _ => text.push_str(token.text()),
             },
             rowan::NodeOrToken::Node(_) => return None,

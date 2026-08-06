@@ -31,7 +31,8 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
         };
 
         if name == "label" {
-            // A nested-macro key (`\label{\foo}`) yields `None`; skip it,
+            // A nested-macro key (`\label{\foo}`) or a parameter-template key
+            // (`\label{#1}` in a definition body) yields `None`; skip it,
             // conservative like an unresolvable include target. A label key is the
             // whole inner content (not comma-split): `split = false`.
             if let Some((inner_range, inner)) = nth_group_inner(&command, 0) {
@@ -363,6 +364,17 @@ mod tests {
         assert_eq!(def.name, "sec:intro");
         // The key range covers only the trimmed key, not the braces or padding.
         assert_eq!(&src[def.key_range], "sec:intro");
+    }
+
+    #[test]
+    fn parameter_template_keys_are_skipped() {
+        // A key holding a macro-parameter token exists only at expansion time
+        // (issue #104: `\eqref{##1}` in an expl3 definition body). Skip it like a
+        // nested-macro key, for defs and refs alike.
+        let model = model("\\def\\foo#1{\\label{#1}\\eqref{##1}\\cite{#1}}\n");
+        assert!(model.labels().is_empty());
+        assert!(model.refs().is_empty());
+        assert!(model.citations().is_empty());
     }
 
     #[test]

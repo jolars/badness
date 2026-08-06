@@ -159,6 +159,16 @@ mod tests {
     }
 
     #[test]
+    fn parameter_template_ref_is_not_flagged() {
+        // Issue #104: `\eqref{##1}` inside an expl3 definition body is a
+        // macro-parameter template, not a reference to a label named `##1`.
+        let r = resolution(&[], true);
+        let src = "\\cs_new_protected:Npn \\__multiref_set:n #1\n\
+                   { \\clist_map_inline:nn {#1} { \\eqref{##1} } }\n";
+        assert!(findings(src, Some(&r)).is_empty());
+    }
+
+    #[test]
     fn cref_list_flags_each_undefined_key() {
         let r = resolution(&["a"], true);
         // `a` resolves, `b` does not.

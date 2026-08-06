@@ -216,6 +216,15 @@ mod tests {
     }
 
     #[test]
+    fn nth_group_inner_none_for_parameter_token() {
+        // A macro-parameter template (`\ref{#1}`, doubled `##1` in a definition
+        // body) is not a flat literal — issue #104.
+        assert_eq!(nth_group_inner(&command("\\ref{#1}\n"), 0), None);
+        assert_eq!(nth_group_inner(&command("\\eqref{##1}\n"), 0), None);
+        assert_eq!(nth_group_text(&command("\\input{#1}\n"), 0), None);
+    }
+
+    #[test]
     fn nth_group_text_none_for_nested_command() {
         assert_eq!(nth_group_text(&command("\\input{\\jobname}\n"), 0), None);
     }

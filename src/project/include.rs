@@ -354,6 +354,14 @@ mod tests {
     }
 
     #[test]
+    fn parameter_argument_is_dynamic() {
+        // `\input{#1}` in a definition body: the target exists only at expansion
+        // time, the canonical dynamic include.
+        let e = edges("\\input{#1}\n", None);
+        assert_eq!(e[0].target, IncludeTarget::Dynamic);
+    }
+
+    #[test]
     fn bare_input_without_braces_is_not_an_edge() {
         // The greedy argument grammar only attaches `{…}`/`[…]`; a space-delimited
         // plain-TeX filename stays sibling text, so no group → Dynamic, but the

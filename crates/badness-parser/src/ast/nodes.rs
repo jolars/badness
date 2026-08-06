@@ -144,13 +144,16 @@ impl Group {
     /// The literal text inside this group, with the enclosing braces dropped.
     /// Concatenates the inner token text so content split across `WORD`/`.`/`/`/…
     /// tokens (e.g. `chapters/my_file`, `sec:intro`) reassembles. Returns `None` when
-    /// the group holds non-token content (a nested command — not a flat literal).
+    /// the group holds non-token content (a nested command — not a flat literal) or a
+    /// parameter token (`\ref{#1}`, `\eqref{##1}` — a macro-parameter template whose
+    /// literal value exists only at expansion time).
     pub fn inner_text(&self) -> Option<String> {
         let mut text = String::new();
         for element in self.syntax.children_with_tokens() {
             match element {
                 NodeOrToken::Token(token) => match token.kind() {
                     SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
+                    SyntaxKind::HASH => return None,
                     _ => text.push_str(token.text()),
                 },
                 // A nested node (e.g. a COMMAND) means the argument isn't a flat
@@ -183,6 +186,7 @@ impl Group {
                 NodeOrToken::Token(token) => match token.kind() {
                     SyntaxKind::L_BRACE => after_l_brace = token.text_range().end(),
                     SyntaxKind::R_BRACE => {}
+                    SyntaxKind::HASH => return None,
                     _ => {
                         let range = token.text_range();
                         start.get_or_insert(range.start());

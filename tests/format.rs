@@ -17,9 +17,6 @@ use badness::formatter::{
 use badness::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness::semantic::SignatureDb;
 
-/// How many localized single-flip variants the trivia oracle samples per input.
-const TRIVIA_SINGLE_FLIP_SAMPLES: usize = 8;
-
 /// Check the formatter invariants for a single clean-parsing input under
 /// `style` and `config`, returning a description of the first violation
 /// instead of panicking — the corpus sweep aggregates results against the
@@ -69,9 +66,12 @@ fn check_format_invariants(
     // TeX-identical newline<->space perturbation must format to a fixed point
     // upholding the invariants. Valid under every wrap mode — Tier-2 modes owe
     // convergence too (`formatter.md` § Trivia-invariant layout).
-    match perturb::check_trivia_convergence(input, config, TRIVIA_SINGLE_FLIP_SAMPLES, |s| {
-        fmt(s).map_err(|e| e.to_string())
-    }) {
+    match perturb::check_trivia_convergence(
+        input,
+        config,
+        perturb::DEFAULT_SINGLE_FLIP_SAMPLES,
+        |s| fmt(s).map_err(|e| e.to_string()),
+    ) {
         // A dropped variant means a parser shape gate is newline-sensitive at
         // one of the swapped gaps — a parser finding, and silently shrinking
         // oracle coverage. Zero across the in-repo corpora today; keep it that

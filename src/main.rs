@@ -19,7 +19,9 @@ use badness::config::{Config, ConfigSource};
 use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
-use badness::formatter::perturb::{ConvergenceError, check_trivia_convergence};
+use badness::formatter::perturb::{
+    ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence,
+};
 use badness::formatter::{
     FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
     format_file_with_packages_sentence, format_with_style_flavored_sentence,
@@ -1324,10 +1326,6 @@ fn run_format_paths(
 // failure classes stay as they are), and its label must likewise stay free of
 // the other three substrings.
 
-/// How many localized single-flip variants the trivia check samples per file,
-/// on top of the two bulk variants.
-const TRIVIA_SINGLE_FLIP_SAMPLES: usize = 8;
-
 /// One invariant (or the failure to even run it) checked per file.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CheckKind {
@@ -1460,6 +1458,8 @@ fn build_debug_report(
         "- Checks: `{}`\n- Files checked: {files_checked}\n",
         checks_label(checks)
     ));
+    // Only the trivia check skips files today (`.bib` runs nothing under it);
+    // parameterize the reason if a second skipping check ever appears.
     if files_skipped > 0 {
         out.push_str(&format!(
             "- Files skipped: {files_skipped} (`.bib` — the trivia oracle is LaTeX-CST-based)\n"
@@ -1662,7 +1662,7 @@ fn run_debug_checks_for_file(
             format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
                 .map_err(|e| e.to_string())
         };
-        match check_trivia_convergence(content, kind.lex_config(), TRIVIA_SINGLE_FLIP_SAMPLES, fmt)
+        match check_trivia_convergence(content, kind.lex_config(), DEFAULT_SINGLE_FLIP_SAMPLES, fmt)
         {
             Ok(_) => {}
             Err(ConvergenceError::Original(msg)) => artifacts.failures.push(DebugFailure {

@@ -130,6 +130,11 @@ pub fn nontrivia_content(text: &str, config: impl Into<LexConfig>) -> String {
     node_nontrivia_content(&parse_with_flavor(text, config).syntax())
 }
 
+/// The default number of localized single-flip variants an oracle run samples
+/// per input, on top of the two bulk variants — shared by the CLI trivia check
+/// and the invariant tests so the two gates cannot drift.
+pub const DEFAULT_SINGLE_FLIP_SAMPLES: usize = 8;
+
 /// Generate the verified, TeX-identical trivia perturbations of `input`:
 /// two bulk variants (every eligible lone newline → space; every eligible
 /// single space → newline) plus up to `single_flip_samples` deterministic
@@ -192,9 +197,9 @@ pub fn trivia_perturbations(
     }
 
     // Deterministic single-flip samples: localized reproducers for triage. The
-    // LCG (Numerical Recipes constants, as in the stable-wrap fuzz test) is
-    // seeded from an FNV-1a hash of the content, so runs are reproducible
-    // across platforms without a PRNG dependency.
+    // LCG (the same Numerical Recipes constants the stable-wrap fuzz test
+    // uses) is seeded from an FNV-1a hash of the content, so runs are
+    // reproducible across platforms without a PRNG dependency.
     let mut rng = Lcg(fnv1a(input));
     let mut picked: Vec<usize> = Vec::new();
     if gaps.len() <= single_flip_samples {
@@ -261,7 +266,9 @@ pub fn check_trivia_convergence(
         // trivia normalization, and for a degenerate trailing-`\` input it
         // folds that newline into a `\<newline>` control symbol — the
         // final-newline rule at work, not a content rewrite.
-        if node_nontrivia_content(&parse_with_flavor(&once, config).syntax())
+        let once_parsed = parse_with_flavor(&once, config);
+        let once_root = once_parsed.syntax();
+        if node_nontrivia_content(&once_root)
             != node_nontrivia_content(
                 &parse_with_flavor(&format!("{}\n", variant.text), config).syntax(),
             )
@@ -273,7 +280,7 @@ pub fn check_trivia_convergence(
                 String::new(),
             ));
         }
-        if !parse_with_flavor(&once, config).errors.is_empty() {
+        if !once_parsed.errors.is_empty() {
             return Err(violation(
                 variant,
                 "formatted output does not parse without diagnostics".to_string(),
@@ -281,7 +288,7 @@ pub fn check_trivia_convergence(
                 String::new(),
             ));
         }
-        if parse_with_flavor(&once, config).syntax().to_string() != once {
+        if once_root.to_string() != once {
             return Err(violation(
                 variant,
                 "formatted output does not round-trip losslessly".to_string(),
@@ -540,8 +547,8 @@ fn splice(input: &str, gaps: &[&Gap]) -> String {
     out
 }
 
-/// The deterministic LCG shared with the stable-wrap fuzz test (Numerical
-/// Recipes constants).
+/// A deterministic LCG (the same Numerical Recipes constants the stable-wrap
+/// fuzz test uses; a copy, not shared code — both are tiny and test-only).
 struct Lcg(u64);
 
 impl Lcg {

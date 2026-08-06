@@ -131,16 +131,11 @@
 ./required/tools/varioref.dtx	trivia	content-change
 ./required/tools/verbatim.dtx	trivia	content-change
 ./required/tools/xspace.dtx	trivia	content-change
-./support/lipsum.sty	trivia	non-fixed-point
 ./texmf/tex/latex/l3kernel/expl3-code.tex	format-error	format-error
-./texmf/tex/latex/l3kernel/expl3.sty	trivia	non-fixed-point
 ./texmf/tex/latex/l3kernel/l3doc.cls	trivia	non-fixed-point
 ./texmf/tex/latex/l3packages/xparse/xparse-2018-04-12.sty	trivia	non-fixed-point
 ./texmf/tex/latex/l3packages/xparse/xparse-generic.tex	trivia	non-fixed-point
 ./texmf/tex/latex/pdfmanagement/l3pdffield.sty	trivia	non-fixed-point
 ./texmf/tex/latex/pdfmanagement/latex-lab-testphase-bookmark.sty	trivia	non-fixed-point
 ./texmf/tex/latex/tagpdf/tagpdf-debug.sty	trivia	non-fixed-point
-./texmf/tex/latex/tagpdf/tagpdf-mc-code-generic.sty	trivia	non-fixed-point
-./texmf/tex/latex/tagpdf/tagpdf-mc-code-lua.sty	trivia	non-fixed-point
 ./texmf/tex/latex/tagpdf/tagpdf.sty	trivia	non-fixed-point
-./texmf/tex/lualatex/luamml/luamml.sty	trivia	non-fixed-point

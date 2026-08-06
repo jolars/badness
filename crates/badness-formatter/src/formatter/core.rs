@@ -2157,6 +2157,15 @@ fn lower_expl_code(
                     // multi-line body as a `flat` pick and freeze a hybrid the next
                     // parse re-breaks. Such a body wants the plain Allman block, which
                     // the ordinary hang path already emits stably, so fall through.
+                    // This read of the non-pass-invariant forced-break predicate is
+                    // safe *because* of that fall-through: the ordinary hang path's
+                    // plain Allman is byte-identical to `c_allman_broken`, the
+                    // candidate the three-way itself picks for a body that wraps, so
+                    // a body flipping soft->forced across passes lands on the same
+                    // bytes either way. (`expl_group_body_is_multi_atom` needs two
+                    // top-level commands, and two *recognized* commands always mint a
+                    // structural boundary, so this arm only ever sees fallback bodies
+                    // — gating it on `!in_fallback` would disable it entirely.)
                     && !body.contains_forced_break()
                 {
                     let sep = sep_before_next.take().unwrap_or(Ir::Line);
@@ -2249,6 +2258,47 @@ fn lower_expl_code(
                 // same throughout. A sibling's forced break is not this group's
                 // business.
                 let ir = lower_node(child, cx);
+                // A hanging brace group inside a *fallback* statement never takes
+                // the forced-break dispatch below: there, forced-ness is not
+                // pass-invariant. A fallback statement's extent is the authored
+                // physical line (Tier 2), so a width wrap inside the group's own
+                // *body* prints newlines the reparse re-segments into several
+                // fallback statements — the body's IR gains a `HardLine` and a
+                // soft group flips forced on pass 2 (l3kernel `expl3.sty`'s
+                // backend `.choices:nn` value; latex2e `lipsum.sty`'s
+                // `\int_do_until:nNnn` loop).
+                //
+                // The forced arm's only effect over the soft path is to *commit
+                // the line*, i.e. to force every later atom onto its own line —
+                // which is exactly what a `StickyFill` does anyway, since a
+                // forced atom's `flat_width` is `None` and
+                // `printer::step_fill`'s `remainder_broken` then fires
+                // unconditionally. Structural statements and
+                // [`Statements::Ignore`] streams are both sticky, so the two
+                // paths agree there; a *fallback* line commits as a plain greedy
+                // fill with no cascade, so they disagree, and the sibling after
+                // the group glued onto the closing `}` on pass 1 and dropped to
+                // its own line on pass 2. Committing mid-statement also falsifies
+                // the plain fill's own fixed-point argument (each printed line
+                // re-segments to a fallback statement that re-fills to itself,
+                // [`StatementMap::is_fallback`]) and silently drops the
+                // unbreakable `glue_before` space, since `flush_atom` emits a
+                // pending separator only when `parts` is non-empty.
+                //
+                // Nothing is lost by falling through to the soft continuation-hang
+                // branches: the group's `flat_width` is still `None`, so its own
+                // gap breaks on every pass at every width — only the *sibling* gap
+                // after it is left to the fill, which is the point. Same reasoning
+                // as the trailing-`COMMAND` arm below, which was given this
+                // treatment for its one shape while the `GROUP` hang was not.
+                // The remaining sub-arms (head-hug, the abutting-atom glue, and
+                // the no-head-to-hug commit) read the same unsafe predicate and
+                // are the recorded residue (TODO.md).
+                debug_assert!(
+                    !in_fallback || !line_sticky,
+                    "a fallback statement must commit as a plain fill"
+                );
+                let forced_dispatch = !(in_fallback && hang_group) && ir.contains_forced_break();
                 // A junk-bearing glued statement: plain atom accumulation, hard
                 // separators, no line commits until the boundary (see above).
                 if in_glued {
@@ -2294,7 +2344,7 @@ fn lower_expl_code(
                     seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
                     lines.push(Ir::concat(vec![head, sep, ir]));
                     after_block = true;
-                } else if ir.contains_forced_break() {
+                } else if forced_dispatch {
                     if !atom.is_empty() {
                         // A block hanging off a *directly-abutting* atom stays
                         // glued (`\cs_if_exist:NF\tag_if_active:T { … }` with a
@@ -2386,6 +2436,13 @@ fn lower_expl_code(
                     // a statement-leading group and the continuation-hang fold
                     // below re-indents it identically. (A glued statement never
                     // reaches here — the `in_glued` arm above owns its nodes.)
+                    // In a fallback statement this is also the *only* path a
+                    // hanging group takes, forced or soft (`forced_dispatch`
+                    // above): a forced body's `flat_width` is `None`, so
+                    // `step_fill` dispatches this atom `Mode::Break` on every
+                    // pass at every width and the leading `Line` breaks — the
+                    // same bytes the forced arm would have emitted, minus its
+                    // line commit.
                     sep_before_next = Some(Ir::Nil);
                     atom.push(Ir::indent(Ir::concat(vec![Ir::Line, ir])));
                 } else {

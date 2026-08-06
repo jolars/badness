@@ -845,6 +845,32 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // what still flips the body's forced-ness across passes and keeps this
     // fixture load-bearing).
     ("expl_forced_block_body_mode", "sty"),
+    // A brace group inside a *fallback* statement must never take the
+    // forced-break dispatch: a fallback statement's extent is the authored
+    // physical line (Tier 2), so a width wrap inside the group's body mints
+    // statement boundaries the reparse reads as hard breaks and the group flips
+    // soft->forced on pass 2. The forced arm hard-commits the line, which a
+    // plain greedy fill (what a fallback line commits as) has no sticky cascade
+    // to reproduce — so the *sibling after the group* glued onto the closing `}`
+    // line on pass 1 and dropped to its own line on pass 2.
+    //
+    // Load-bearing in the `_sibling` fixture (l3kernel's `expl3.sty` backend
+    // gate): the `.choices:nn` value is unrecognized, so the line is fallback;
+    // the backend list must genuinely wrap at width 80 (that is what mints the
+    // pass-2 boundaries); and a *second* group must follow it in the same
+    // statement — that trailing `{ \sys_load_backend:n {#1} }` is the gap that
+    // flipped. Do not shorten the list.
+    ("expl_fallback_forced_group_sibling", "sty"),
+    // The same defect where the sibling is a *recognized* head, so
+    // `StatementMap::glue_before` owes the gap an unbreakable space
+    // (latex2e's `support/lipsum.sty`): the forced arm's `commit_line` emptied
+    // `parts`, and `flush_atom` drops a pending separator when `parts` is empty,
+    // so the glue was silently discarded and `\tl_put_right:NV` dropped to its
+    // own line on pass 2. Load-bearing: `\int_do_until:nNnn`'s unit consumption
+    // must fail (that is what makes the line fallback), the multi-line group
+    // must be a *sibling* rather than a greedily-attached child, and the whole
+    // definition is authored on one physical line.
+    ("expl_fallback_forced_group_glue", "sty"),
 ];
 
 #[test]

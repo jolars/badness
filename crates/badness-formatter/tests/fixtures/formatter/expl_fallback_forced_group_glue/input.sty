@@ -1,0 +1,3 @@
+\ExplSyntaxOn
+\cs_new:Npn \lipsum_range_to_tokenlist:nn #1#2   {     \tl_clear:N \l__lipsum_pars_tl     \tl_put_right:NV \l__lipsum_pars_tl \l__lipsum_par_list_start_tl     \int_set:Nn \l_tmpa_int {#1}     \int_do_until:nNnn { \l_tmpa_int } > {#2}       {         \int_compare:nNnT \l_tmpa_int > {#1}           {             \tl_put_right:NV \l__lipsum_pars_tl             \l__lipsum_par_list_itemseparator_tl           } \lipsum_add_to_tokenlist:V { \l_tmpa_int } \int_incr:N\l_tmpa_int       } \tl_put_right:NV \l__lipsum_pars_tl \l__lipsum_par_list_end_tl   }
+\ExplSyntaxOff

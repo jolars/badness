@@ -20,8 +20,25 @@ in-region run): three `non-fixed-point` entries resolved
 (`xparse-2020-10-01.sty` in both corpora — two of the four S4 additions were
 this, not the mode/rest coupling — plus latex2e's long-standing `xparse.sty`),
 no additions, and production output is byte-identical over all three corpora at
-widths 60/80/120. Over the pinned gate corpora fetched by
-`task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
+widths 60/80/120.
+
+Re-recorded once more after the **fallback-statement forced-break gate**: a
+hanging brace group inside a *fallback* statement no longer takes the
+forced-break dispatch in `lower_expl_code`, because forced-ness is newline-keyed
+there (a width wrap inside the group's body mints statement boundaries the
+reparse reads as hard breaks) and a fallback line commits as a plain greedy fill
+with no sticky cascade to make the two paths agree. This was the real cause of
+the two entries the S4 note above filed under the out-of-region prefix mode/rest
+coupling — that diagnosis was wrong, and both were reachable as plain
+*idempotency* failures at the default wrap mode, not only through the mega-line
+trivia variant. Five `non-fixed-point` entries resolved (`lipsum.sty` and
+`expl3.sty` — the two named S4 residues — plus `tagpdf-mc-code-generic.sty`,
+`tagpdf-mc-code-lua.sty` and `luamml.sty`), no additions in any of the six
+files; latex3 and pgf byte-unchanged. Production output moved in 19 files across
+the three corpora, every diff the same shape: a sibling stranded on its own line
+after a multi-line group (`,`, `{#1}`, `\fi:`) re-glues onto the closing `}`.
+Over the pinned gate corpora fetched by `task gate-corpora:fetch`
+(`scripts/fetch_gate_corpora.sh`):
 
   | corpus  | repo @ pin                                                    | files |
   | ------- | ------------------------------------------------------------- | ----- |
@@ -46,8 +63,8 @@ badness --no-config debug format --checks trivia --report .  # -> <corpus>.trivi
 ```
 
 Distill each report's `### k. \`path\`
-(kind)` headings into sorted `path<TAB>kind` lines (`.all.txt`), adding a third class column for the trivia files from each failure's `-
-Variant:` reason (`.trivia.txt`) — the same distillation `check_gate_baselines.sh` implements, so its diff output can be applied to the baseline files directly. The width sweep behind `SWEEP.md` reruns both checks with `--line-width
+(kind)`headings into sorted`path<TAB>kind`lines (`.all.txt`), adding a third class column for the trivia files from each failure's`-
+Variant:`reason (`.trivia.txt`) — the same distillation`check_gate_baselines.sh`implements, so its diff output can be applied to the baseline files directly. The width sweep behind`SWEEP.md`reruns both checks with`--line-width
 60\|72\|100\|120\`.
 
 ## The sets
@@ -58,8 +75,8 @@ Variant:` reason (`.trivia.txt`) — the same distillation `check_gate_baselines
   before S0, i.e. S0 changed no production layout; S2 resolved the
   `latexrelease.sty` entry, leaving latex3 at 15 `format-error`.
 - `<corpus>.trivia.txt` — the `--checks trivia` convergence-oracle inventory at
-  width 80 (wrap pinned to reflow). Counts: latex3 149 (151 at S0), latex2e 146
-  (148 after S4), pgf 15.
+  width 80 (wrap pinned to reflow). Counts: latex3 149 (151 at S0), latex2e 141
+  (146 after the grouped-sibling-walk fix, 148 after S4), pgf 15.
 - `SWEEP.md` — failures that appear or vanish across widths 60–120; each is a
   column-arithmetic hybrid candidate.
 
@@ -81,10 +98,10 @@ Variant:` reason (`.trivia.txt`) — the same distillation `check_gate_baselines
      variant), so fixing them will both shrink these sets and potentially
      surface currently-hidden non-fixed-points.
 - `non-fixed-point` — a perturbed variant formats to a non-fixed-point: the
-  idempotency-hybrid family the umbrella exists to fix (latex3 3 after S2,
-  latex2e 18; predominantly expl3 package code — xparse, xtemplate, tagpdf,
-  pdfmanagement, luamml — the S2–S4 target set). `latexrelease.sty` was the
-  known issue-#97 residue (rest-aware fill disagreement); S2 resolved it.
+  idempotency-hybrid family the umbrella exists to fix (latex3 2, latex2e 11;
+  predominantly expl3 package code — xparse, xtemplate, tagpdf, pdfmanagement,
+  luamml — the S2–S4 target set). `latexrelease.sty` was the known issue-#97
+  residue (rest-aware fill disagreement); S2 resolved it.
 
 The generator's meaning-safety was spot-checked: 1 `dropped_unsafe` variant in
 \~157k eligible gaps over 120 latex2e files.

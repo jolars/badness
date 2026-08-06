@@ -139,7 +139,7 @@ the layout re-decides identically.
 
 ### Known violations
 
-Three sites read the unsafe predicate; one is a bounded residue and two are Tier
+Four sites read the unsafe predicate; two are bounded residues and two are Tier
 2:
 
 - The **expl3 fallback statement** (`semantic::expl3`)—a statement whose head
@@ -154,7 +154,14 @@ Three sites read the unsafe predicate; one is a bounded residue and two are Tier
   junk-glued statements render with every top-level gap hard so their
   newline-keyed extent can never move. The strict-invariance oracle cannot gate
   a stream containing a fallback head; the convergence oracle validates the
-  argument empirically.
+  argument empirically. A fallback line's plain greedy fill is also what forbids
+  *committing a line* mid-statement, which is why a hanging brace group there
+  never takes the forced-break dispatch (see [Sticky-break statement
+  fills](#sticky-break-statement-fills)). The dispatch's three other sub-arms
+  (head-hug, the abutting-atom glue, and the no-head-to-hug commit) still read
+  the predicate; gating them too resolves two more corpus entries but splits
+  head↔block pairs the hug currently keeps joined, so it is filed in `TODO.md`
+  rather than taken here.
 - `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups
   *outside* expl3 regions. **Accidental**; already filed in `TODO.md` as
   "Opaque-group layout non-determinism".
@@ -763,6 +770,15 @@ dispatches its inner as `Mode::FlatPrefix`, not `Flat` (see *`Mode::Flat` is an
 honest contract*): the head's gaps render flat, but any group past the first
 forced break re-decides for itself.
 
+The hug is reached from the forced-break dispatch, so on a *fallback* line it
+reads a predicate that is not pass-invariant there—whether the child detonates
+can flip between passes (see [Sticky-break statement
+fills](#sticky-break-statement-fills)). It is kept anyway: `glue_before` already
+makes the gap before a *recognized* head unbreakable, so the common case stays
+joined regardless, and dropping the hug splits pairs like
+`\vbox to \Gin@req@height{%` that no other rule rejoins. The residue is recorded
+in `TODO.md`.
+
 **No sibling coupling.** Each brace argument breaks on its own body; a
 *sibling's* forced break (guard, comment, `.dtx` margin) is none of its
 business. This is the styleguide's own worked example, whose short true-branch
@@ -899,6 +915,34 @@ to the printer's *actual*, column-aware break: the empty branch follows the
 block onto its own line on **every** pass. It does so without exploding any
 argument into a block—`{pkg}` stays inline on the head line, and the trailing
 `{}` lands on its own line still spelled `{}`.
+
+#### Corollary: a fallback line commits no interior lines
+
+A fallback line has *no* cascade, so nothing there defers the soft-vs-hard
+decision to the printer—and the same non-invariance bites through a different
+door. `lower_expl_code`'s node dispatch branches on the lowered child's
+`contains_forced_break()`, and every arm of that branch reacts by **committing
+the line**. Committing forces each later atom onto its own line, which is
+precisely what the sticky cascade produces anyway; that is why structural and
+`Statements::Ignore` streams agree on the two paths. A plain greedy fill does
+not, so on a fallback line the two paths render different bytes: the sibling
+after a multi-line group glued onto its closing `}` on pass 1 and dropped to its
+own line on pass 2 (l3kernel `expl3.sty`'s backend `.choices:nn` value, latex2e
+`lipsum.sty`'s `\int_do_until:nNnn` loop—both plain idempotency failures, no
+perturbation needed). Committing mid-statement also falsifies the plain fill's
+own fixed-point argument (each printed line re-segments to a fallback statement
+that re-fills to itself) and silently drops the unbreakable `glue_before` space,
+since `flush_atom` emits a pending separator only when `parts` is non-empty.
+
+So a **hanging brace group** inside a fallback statement always takes the soft
+continuation-hang path, forced or soft. Nothing is lost: a forced body's
+`flat_width` is `None`, so `step_fill` dispatches that atom `Mode::Break` on
+every pass at every width and its leading `Line` breaks—the same bytes, minus
+the line commit.
+
+The other three sub-arms of the same dispatch (head-hug, the abutting-atom glue,
+and the no-head-to-hug commit) still read the unsafe predicate; see the [known
+violations](#known-violations) list and TODO.md.
 
 ### Interaction with `.dtx` doc margins
 

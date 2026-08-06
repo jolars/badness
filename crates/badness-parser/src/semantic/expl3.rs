@@ -1066,6 +1066,76 @@ mod segmentation_tests {
     }
 
     #[test]
+    fn a_multi_line_group_node_does_not_end_a_fallback_line() {
+        // [`fallback_line`] scans *sibling* `NEWLINE` tokens only, so a group
+        // whose body spans several source lines carries those newlines inside
+        // the node and the fallback statement runs straight past it: the group
+        // and the following recognized head are one statement, and that head
+        // still owes an unbreakable `glue_before` space. The formatter's
+        // hanging-group dispatch relies on this — a forced-break commit there
+        // would split a pair the segmentation kept together (latex2e's
+        // `lipsum.sty`).
+        // The `>` keeps the block a *sibling* of the head rather than a
+        // greedily-attached argument, as in `\int_do_until:nNnn`'s real shape.
+        let src = "\\ExplSyntaxOn\n\
+                   \\int_do_until:w { \\l_tmpa_int } > {#2}\n\
+                   { \\lipsum_add:V { \\l_tmpa_int }\n\
+                   \\int_incr:N \\l_tmpa_int } \\tl_put_right:NV \\l_a \\l_b\n\
+                   \\ExplSyntaxOff\n";
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty());
+        let root = SyntaxNode::new_root(parsed.green);
+        let elements: Vec<SyntaxElement> = root
+            .first_child()
+            .expect("the paragraph")
+            .children_with_tokens()
+            .collect();
+        let map = segment_expl_statements(&elements);
+
+        // `\int_do_until:w` is underivable (`w`), so its line degrades to the
+        // fallback. The block starts the next fallback line, which then runs
+        // past the block's *internal* newlines and absorbs the
+        // `\tl_put_right:NV` call sharing the block's closing line.
+        assert_eq!(
+            statement_texts(&elements),
+            vec![
+                "\\ExplSyntaxOn",
+                "\\int_do_until:w { \\l_tmpa_int } > {#2}",
+                "{ \\lipsum_add:V { \\l_tmpa_int } \\int_incr:N \\l_tmpa_int } \
+                 \\tl_put_right:NV \\l_a \\l_b",
+                "\\ExplSyntaxOff",
+            ]
+        );
+
+        let group = elements
+            .iter()
+            .position(|el| el.kind() == SyntaxKind::GROUP && el.to_string().contains('\n'))
+            .expect("the multi-line group");
+        assert!(
+            map.is_fallback(group),
+            "the group belongs to a fallback statement"
+        );
+        assert!(
+            !map.boundary_after(group),
+            "a multi-line group's own newlines must not end the fallback line"
+        );
+
+        let head = elements
+            .iter()
+            .skip(group)
+            .position(|el| {
+                el.as_node()
+                    .is_some_and(|n| n.kind() == SyntaxKind::COMMAND)
+            })
+            .map(|off| group + off)
+            .expect("the trailing recognized head");
+        assert!(
+            map.glue_before(head),
+            "a recognized head mid-fallback-line owes an unbreakable gap"
+        );
+    }
+
+    #[test]
     fn own_line_comment_in_attached_span_rides_the_sibling() {
         // The own-line comment's flanking newlines bound the gap like a blank
         // line, ending the unit at the `N` slot — but greedy attachment put

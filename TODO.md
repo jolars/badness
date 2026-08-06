@@ -201,18 +201,48 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `semantic::expl3`).
 
   **S4 follow-ups:**
-  - [ ] *Out-of-region prefix flips an in-region group's inline/block form.*
-    A `\cmd {group}` in the generic (out-of-region) part of the same
-    paragraph flips a following in-region soft group between inline-tight
-    and Allman-block (`word {g} \ExplSyntaxOn … \DeclareOption* {…}` inline;
-    `\somecmd {g} \ExplSyntaxOn …` block) — an ambient printer mode/rest
-    coupling in the S2 fit-contract family, pre-existing, surfaced by S4's
-    width-deciding statements. Originally blamed for all 4 trivia-set
-    additions at S4, but two of them (`xparse-2020-10-01.sty` ×2) were the
-    grouped-sibling walk re-segmenting a stream the layout never saw
-    (container braces included, out-of-region prefix included) — fixed, see
-    below; `lipsum.sty` and `expl3.sty` remain in this family, all on the
-    all-newlines-to-spaces mega-line variant only.
+  - [x] ~~*Out-of-region prefix flips an in-region group's inline/block
+    form.*~~ **Misattributed; the real cause was the forced-break dispatch
+    firing inside a fallback statement.** The out-of-region prefix symptom no
+    longer reproduces at all (`word {g} \ExplSyntaxOn …` and
+    `\somecmd {g} \ExplSyntaxOn …` give identical output) — that half went
+    with the grouped-sibling-walk fix, along with the `xparse-2020-10-01.sty`
+    ×2 entries. The two remaining entries (`lipsum.sty`, `expl3.sty`) were
+    neither a printer mode/rest coupling nor mega-line-only: both are plain
+    **idempotency** failures at the *default* wrap mode, and both are
+    `lower_expl_code`'s node dispatch branching on the lowered child's
+    `contains_forced_break()`. Inside a fallback statement that predicate is
+    newline-keyed — a width wrap inside the child's body prints newlines the
+    reparse re-segments into several fallback statements, so a soft group
+    flips forced on pass 2. Every arm of the dispatch reacts by *committing
+    the line*, which is exactly the hard sibling gap a `StickyFill` produces
+    on its own (a forced atom's `flat_width` is `None`, so
+    `step_fill`'s `remainder_broken` fires unconditionally) — hence structural
+    and `Ignore` streams agree, and a fallback line's plain greedy fill does
+    not. Fixed by gating the **hanging brace group** off that dispatch when
+    `in_fallback`; the group still breaks (its `flat_width` is `None`), only
+    the *sibling* gap is left to the fill. Gate: 5 `non-fixed-point` entries
+    resolved (`lipsum.sty`, `expl3.sty`, `tagpdf-mc-code-generic.sty`,
+    `tagpdf-mc-code-lua.sty`, `luamml.sty`), no additions in any of the six
+    baseline files, latex3 and pgf byte-unchanged. Production output moved in
+    19 files, every diff the same shape: a sibling stranded on its own line
+    after a multi-line group (`,`, `{#1}`, `\fi:`) re-glues onto the closing
+    `}`. Pinned by `expl_fallback_forced_group_sibling` /
+    `expl_fallback_forced_group_glue` and
+    `a_multi_line_group_node_does_not_end_a_fallback_line`.
+  - [ ] *Forced-break dispatch residue: the other three sub-arms.* The
+    head-hug, abutting-atom-glue and no-head-to-hug arms of the same dispatch
+    still read `contains_forced_break()` on a fallback line. Measured:
+    gating all four resolves **two more** entries (`l3pdffield.sty`,
+    `tagpdf-debug.sty`, 7 total) with no additions and all tests green, but
+    the head-hug arm is the one that buys them and dropping it splits pairs no
+    other rule rejoins (`\vbox to` / `\Gin@req@height{%`, `\global\setbox9` /
+    `\vtop{%`, `\hbox_set_to_wd:Nnn \l_shipout_box` / `\l_shipout_box_wd_dim`).
+    Gating only the other two arms buys nothing at the gate and re-glues 14
+    files' authored abutments (`}\@ehc`, `}.`, `}{`) — arguably right, but
+    unmeasured. Resolution wants a *pass-invariant* head-hug for fallback
+    lines (hug soft and forced alike, the trailing-`COMMAND` arm's precedent),
+    not a plain removal.
   - [ ] *In-region `BracketPolicy` audit*: a wrap before an attached `[` can
     change CST shape across passes (pre-existing; S4's unit re-formation
     assumes bracket re-attachment is stable — verify which policies are

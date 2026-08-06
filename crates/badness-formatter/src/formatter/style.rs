@@ -108,7 +108,7 @@ impl FormatStyle {
     /// columns below the hard `line_width`, clamped to at least one column. It can
     /// never exceed the hard width, including for styles built directly by API
     /// callers.
-    pub(crate) fn stable_wrap_target(self) -> usize {
+    pub fn stable_wrap_target(self) -> usize {
         self.line_width
             .saturating_sub(STABLE_WRAP_TARGET_OFFSET)
             .clamp(1, self.line_width.max(1))

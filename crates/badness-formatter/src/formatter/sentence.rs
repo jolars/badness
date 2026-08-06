@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 /// A built-in language whose abbreviation/starter tables drive sentence
 /// segmentation. Unknown or absent languages fall back to [`Self::English`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) enum SentenceLanguage {
+pub enum SentenceLanguage {
     #[default]
     English,
     Czech,
@@ -194,7 +194,7 @@ impl<'a> SentenceOptions<'a> {
     /// Build options from already-resolved parts (see [`resolve_owned`]). The LSP
     /// resolves the language and merged no-break list once into owned, `Send` values
     /// it stores on a worker job, then borrows them here at format time.
-    pub(crate) fn from_resolved(lang: SentenceLanguage, extra_no_break: &'a [String]) -> Self {
+    pub fn from_resolved(lang: SentenceLanguage, extra_no_break: &'a [String]) -> Self {
         Self {
             lang,
             extra_no_break,
@@ -213,7 +213,7 @@ impl<'a> SentenceOptions<'a> {
 /// built-in language and the merged, normalized no-break list. For callers that
 /// must hold the result across threads before building a borrowed
 /// [`SentenceOptions`] with [`SentenceOptions::from_resolved`].
-pub(crate) fn resolve_owned(
+pub fn resolve_owned(
     lang: Option<&str>,
     no_break: &BTreeMap<String, Vec<String>>,
 ) -> (SentenceLanguage, Vec<String>) {

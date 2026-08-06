@@ -1,14 +1,11 @@
 //! Compatibility wrapper over the BibTeX pipeline, split across the workspace:
-//! parsing and semantics live in `badness-parser`, and the CLI-side layers
-//! (formatter — pending its move to `badness-formatter` — linter, and LSP
-//! integration) live here.
+//! parsing and semantics live in `badness-parser`, the formatter in
+//! `badness-formatter`, and the CLI-side layers (linter and LSP integration)
+//! here.
 
-pub use badness_parser::bib::*;
+pub use badness_formatter::bib::*;
 
 pub mod completion;
 pub mod document_link;
-pub mod formatter;
 pub mod linter;
 pub mod outline;
-
-pub use formatter::{FormatError, format, format_node, format_with_style};

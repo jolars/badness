@@ -174,42 +174,6 @@ pub fn format_with_style_flavored_with_signatures(
     format_node_with_signatures(&parsed.syntax(), style, external)
 }
 
-/// Format an on-disk file's `content` (located at `path`, parsed under `config`),
-/// pulling the signatures of its local loaded packages in from disk so calls to
-/// package-defined macros are shaped correctly. The shared CLI entry for both
-/// `format` and `format --check` — using one entry keeps the two consistent, so a
-/// formatted file checks clean. `path`'s directory anchors local `.sty`/`.cls`
-/// resolution; stdin (no path) uses [`format_with_style_flavored`] instead.
-pub fn format_file_with_packages(
-    content: &str,
-    path: &std::path::Path,
-    style: FormatStyle,
-    config: impl Into<crate::parser::LexConfig>,
-) -> Result<String, FormatError> {
-    format_file_with_packages_sentence(content, path, style, config, SentenceOptions::default())
-}
-
-/// Like [`format_file_with_packages`] but with explicit
-/// [`SentenceOptions`](crate::formatter::SentenceOptions) for the
-/// `sentence`/`semantic` wrap modes.
-pub fn format_file_with_packages_sentence(
-    content: &str,
-    path: &std::path::Path,
-    style: FormatStyle,
-    config: impl Into<crate::parser::LexConfig>,
-    sentence: SentenceOptions<'_>,
-) -> Result<String, FormatError> {
-    let parsed = parse_with_flavor(content, config);
-    if !parsed.errors.is_empty() {
-        return Err(FormatError::ParseErrors {
-            count: parsed.errors.len(),
-        });
-    }
-    let root = parsed.syntax();
-    let external = crate::semantic::disk_scope_signatures(&root, path);
-    format_node_with_signatures_sentence(&root, style, &external, sentence)
-}
-
 /// Format an already-parsed CST `root` under `style`. This is the
 /// reparse-free entry: the language server hands it the salsa-cached tree
 /// (`db.parsed_tree`) instead of re-running the parser. The caller owns the
@@ -452,10 +416,11 @@ fn toggle_is_top_level(token: &SyntaxToken) -> bool {
 /// not a toggle, exactly as in the lexer. The CST is untouched; this is a pure
 /// read-only side channel (the sanctioned byte-range pattern, `AGENTS.md` #4).
 ///
-/// `pub(crate)` so the linter shares the *same* region computation (the
-/// `unclosed-math-delimiter` rule suppresses inside expl3 code), keeping the
-/// formatter and linter from drifting on what counts as an expl3 region.
-pub(crate) fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
+/// `pub` so the linter (in the `badness` crate) shares the *same* region
+/// computation (the `unclosed-math-delimiter` rule suppresses inside expl3
+/// code), keeping the formatter and linter from drifting on what counts as an
+/// expl3 region.
+pub fn expl3_regions(root: &SyntaxNode) -> Vec<TextRange> {
     let mut regions: Vec<TextRange> = Vec::new();
     let mut open: Option<TextSize> = None;
     for token in root
@@ -4516,10 +4481,10 @@ fn token_is_rule_word(token: &SyntaxToken, cx: LowerCtx<'_>) -> bool {
 
 /// Whether `token` is a booktabs `\cmidrule` paren trim spec — a `WORD` of the form
 /// `(l)`, `(r)`, `(lr)`, or `(rl)` (catcode-12 text the lexer globs into one token).
-/// `pub(crate)` because the linter's rule-span gate
-/// ([`crate::linter::rules::in_rule_span_argument`]) recognizes the same shape;
-/// single-sourced so the two never drift.
-pub(crate) fn is_paren_trim_word(token: &SyntaxToken) -> bool {
+/// `pub` because the linter's rule-span gate (`in_rule_span_argument`, in the
+/// `badness` crate) recognizes the same shape; single-sourced so the two never
+/// drift.
+pub fn is_paren_trim_word(token: &SyntaxToken) -> bool {
     if token.kind() != SyntaxKind::WORD {
         return false;
     }

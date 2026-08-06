@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use super::{
+use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
+use crate::formatter::{
     FormatError, FormatStyle, SentenceOptions, WrapMode, format_file_with_packages_sentence,
 };
-use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
 
 /// A file whose formatted output differs from what is on disk. Both texts are
 /// retained so the CLI can render a diff without formatting a second time; they

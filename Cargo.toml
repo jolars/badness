@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/badness-parser"]
+members = ["crates/badness-parser", "crates/badness-formatter"]
 exclude = ["docs/doc-utils"]
 
 [workspace.package]
@@ -37,6 +37,7 @@ path = "src/main.rs"
 
 [dependencies]
 annotate-snippets = "0.12.16"
+badness-formatter = { path = "crates/badness-formatter", version = "0.1.0" }
 badness-parser = { path = "crates/badness-parser", version = "0.1.0" }
 clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"

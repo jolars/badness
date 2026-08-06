@@ -1,0 +1,22 @@
+[package]
+name = "badness-formatter"
+version = "0.1.0"
+edition.workspace = true
+readme = "README.md"
+description = "Deterministic, rule-based formatter for LaTeX and BibTeX"
+license.workspace = true
+repository.workspace = true
+homepage = "https://badness.dev/"
+documentation = "https://docs.rs/badness-formatter"
+authors.workspace = true
+include = ["/src/**/*", "/README.md", "/CHANGELOG.md"]
+keywords = ["latex", "bibtex", "formatter"]
+categories = ["development-tools", "text-processing"]
+
+[dependencies]
+badness-parser = { path = "../badness-parser", version = "0.1.0" }
+rowan = "0.16.1"
+
+[dev-dependencies]
+insta = "1.47.2"
+tempfile = "3"

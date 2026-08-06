@@ -527,6 +527,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // term (the two-level rule — relations align, binaries hang one relation-width
     // deeper).
     ("math_display_break_relations", WrapMode::Preserve, 80),
+    // Breaking at a relation does not drag the segment's binary operators along:
+    // each segment's right-hand side is its own group, so a segment that fits on
+    // its line stays flat (`… = \ilink ( \eta_i) - y_i` keeps `- y_i`) even when
+    // the body as a whole had to break at the second `=`.
+    ("math_display_break_segment_fits", WrapMode::Preserve, 80),
     // A break before a top-level binary operator does not gain a spurious space at
     // a tight command boundary (`\gamma)`, `}.` stay tight, role-aware like the
     // inline seq path), and an operator nested in parentheses is not a top-level

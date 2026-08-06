@@ -5768,7 +5768,9 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 /// `+`-chain tucks under the first summand). The left-hand side and the first
 /// relation stay flat on the opening line. The whole body is one [`Ir::group`], so
 /// it stays on a single line whenever it fits — degrading to [`lower_math_body`]
-/// otherwise.
+/// otherwise. Each segment's right-hand side is its own nested group: breaking
+/// the body at its relations does not also break a segment at its binary
+/// operators unless that segment overflows its own line.
 fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let Some(pieces) = collect_math_pieces(elements, cx) else {
         return lower_math_seq(elements.iter().cloned(), cx, false);
@@ -5896,7 +5898,7 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
             });
             rhs.push(piece.ir.clone());
         }
-        parts.push(Ir::align(relw + 1, Ir::concat(rhs)));
+        parts.push(Ir::group(Ir::align(relw + 1, Ir::concat(rhs))));
 
         first_segment = false;
         i = j;

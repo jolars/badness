@@ -54,7 +54,7 @@ use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
 use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
-use crate::parser::grammar::is_def_prefix_command;
+use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
 use crate::semantic::expl3::{StatementMap, segment_expl_statements};

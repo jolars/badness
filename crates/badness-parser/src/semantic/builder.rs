@@ -132,7 +132,7 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
 /// plus `\nocite`). Capitalized biblatex variants (`\Cite`, `\Textcite`, …) and
 /// the `cite`-prefixed natbib set are covered by the prefix check; an explicit
 /// short list catches the rest. Keys are comma-separated for all of them.
-pub(crate) fn is_cite_command(name: &str) -> bool {
+pub fn is_cite_command(name: &str) -> bool {
     const EXTRA: &[&str] = &[
         "parencite",
         "Parencite",
@@ -162,7 +162,7 @@ pub(crate) fn is_cite_command(name: &str) -> bool {
 /// explicit table — the analog of `project::include::include_kind`. Shared with
 /// the completion classifier (`crate::completion`) so the ref-family name set has
 /// a single source of truth.
-pub(crate) fn ref_command(name: &str) -> Option<RefCommand> {
+pub fn ref_command(name: &str) -> Option<RefCommand> {
     Some(match name {
         "ref" => RefCommand::Ref,
         "pageref" => RefCommand::PageRef,
@@ -212,7 +212,7 @@ pub(crate) fn color_definer(name: &str) -> Option<ColorDefKind> {
 /// [`is_cite_command`], so the name set has a single source of truth. Unlike
 /// citations, every command here takes exactly **one** key per group (no comma
 /// list).
-pub(crate) fn is_glossary_ref_command(name: &str) -> bool {
+pub fn is_glossary_ref_command(name: &str) -> bool {
     // The `\gls` core set: base name + first-letter-uppercase + all-caps
     // sentence-start variants, each with an optional plural `pl`.
     const GLS: &[&str] = &[
@@ -274,7 +274,7 @@ pub(crate) fn is_glossary_ref_command(name: &str) -> bool {
 /// stay single-sourced; shared with the linter's key-argument gate
 /// (`crate::linter::rules::in_key_argument`), which uses it to keep identifier
 /// keys like `\label{eq:thing_max}` out of the math-shape rules' scope.
-pub(crate) fn key_argument_command(name: &str) -> bool {
+pub fn key_argument_command(name: &str) -> bool {
     matches!(name, "label" | "tag" | "hyperref")
         || ref_command(name).is_some()
         || is_cite_command(name)

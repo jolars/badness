@@ -376,7 +376,7 @@ fn keeps_builtin_over_arity0(name: &str, arity: usize, body: &DefBody) -> bool {
 /// linter's `missing-required-argument` rule skips partial applications like
 /// `\newcommand{\bold}{\textbf}`) share the scanner's one name list instead of
 /// duplicating it.
-pub(crate) fn is_definition_command(name: &str) -> bool {
+pub fn is_definition_command(name: &str) -> bool {
     DefKind::of(name).is_some()
 }
 

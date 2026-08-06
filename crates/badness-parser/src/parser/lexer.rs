@@ -276,7 +276,7 @@ fn is_char_constant_command(text: &str) -> bool {
 /// region pre-pass ([`crate::formatter`] recomputes in-region byte spans), so the
 /// two read the *same* fixed toggle set and can never drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExplToggle {
+pub enum ExplToggle {
     /// `\ExplSyntaxOn`, or `\ProvidesExplPackage`/`Class`/`File` (which open expl3
     /// syntax for the rest of the file).
     On,
@@ -287,7 +287,7 @@ pub(crate) enum ExplToggle {
 /// Classify a control word's text as an expl3 catcode-mode toggle, if any. Only
 /// meaningful on [`SyntaxKind::CONTROL_WORD`] text: a `\ExplSyntaxOn` inside a
 /// `\verb`/comment lexes as a `VERB`/`COMMENT` token and so never reaches here.
-pub(crate) fn expl_toggle(text: &str) -> Option<ExplToggle> {
+pub fn expl_toggle(text: &str) -> Option<ExplToggle> {
     match text {
         "\\ExplSyntaxOn"
         | "\\ProvidesExplPackage"
@@ -1377,7 +1377,7 @@ fn is_letter(c: char, at_letter: bool, expl_syntax: bool) -> bool {
 
 /// Ordinary text: anything that is not whitespace, a line break, or one of the
 /// characters the lexer treats specially.
-pub(crate) fn is_word_char(c: char) -> bool {
+pub fn is_word_char(c: char) -> bool {
     !matches!(
         c,
         '\\' | '%'

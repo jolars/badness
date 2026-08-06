@@ -1,0 +1,31 @@
+[package]
+name = "badness-parser"
+version = "0.1.0"
+edition.workspace = true
+readme = "README.md"
+description = "Lossless CST parser, semantic model, and command-signature database for LaTeX and BibTeX"
+license.workspace = true
+repository.workspace = true
+homepage = "https://badness.dev/"
+documentation = "https://docs.rs/badness-parser"
+authors.workspace = true
+include = ["/src/**/*", "/build.rs", "/data/**/*", "/README.md", "/CHANGELOG.md"]
+keywords = ["latex", "bibtex", "parser", "cst"]
+categories = ["parsing", "parser-implementations", "text-processing"]
+
+[dependencies]
+phf = "0.14"
+rowan = "0.16.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol_str = "0.3.2"
+
+[build-dependencies]
+phf_codegen = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+insta = "1.47.2"
+texlab-parser = { git = "https://github.com/latex-lsp/texlab", package = "parser", rev = "adc91ff8a3b56ba4b72c489db33f32cfbb8b2c5c" }
+texlab-syntax = { git = "https://github.com/latex-lsp/texlab", package = "syntax", rev = "adc91ff8a3b56ba4b72c489db33f32cfbb8b2c5c" }

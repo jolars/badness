@@ -1,14 +1,25 @@
+[workspace]
+members = ["crates/badness-parser"]
+exclude = ["docs/doc-utils"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/jolars/badness"
+authors = ["Johan Larsson <johan@jolars.co>"]
+
 [package]
 name = "badness"
 version = "0.14.0"
-edition = "2024"
+edition.workspace = true
 readme = "README.md"
 description = "A language server, formatter, and linter for LaTeX"
-license = "MIT"
-repository = "https://github.com/jolars/badness"
+license.workspace = true
+repository.workspace = true
 homepage = "https://badness.dev/"
 documentation = "https://badness.dev"
-authors = ["Johan Larsson <johan@jolars.co>"]
+authors.workspace = true
+include = ["/src/**/*", "/build.rs", "/README.md", "/LICENSE"]
 keywords = ["latex", "language-server", "formatter", "linter"]
 categories = [
   "command-line-utilities",
@@ -26,6 +37,7 @@ path = "src/main.rs"
 
 [dependencies]
 annotate-snippets = "0.12.16"
+badness-parser = { path = "crates/badness-parser", version = "0.1.0" }
 clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"
 dirs = "6.0.0"
@@ -33,7 +45,6 @@ ignore = "0.4.26"
 log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.10"
 lsp-types = "0.97"
-phf = "0.14"
 rayon = "1.10"
 rowan = "0.16.1"
 salsa = "0.28.0"
@@ -48,9 +59,6 @@ clap = { version = "4.5.51", features = ["derive"] }
 clapdown = "0.1.0"
 clap_complete = "4.6.5"
 clap_mangen = "0.3.0"
-phf_codegen = "0.14"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 
 [package.metadata.deb]
 maintainer = "Johan Larsson <johan@jolars.co>"

@@ -10,7 +10,9 @@ and [`chktex`](https://ctan.org/pkg/chktex).
 These numbers measure *speed only*, never output or diagnostic equivalence, and
 the tools do genuinely different amounts of work:
 
-- `latexindent` only indents; it does no line breaking.
+- `latexindent` is a Perl script that parses LaTeX into a tree and reflows it
+  according a set of highly configurable rules. It is the most featureful
+  formatter here, but also the slowest.
 - `tex-fmt` breaks overfull lines greedily but does not reflow: it won't rewrap
   lines that already fit, so it moves far less text than `badness`, which
   reflows each paragraph to the target width.

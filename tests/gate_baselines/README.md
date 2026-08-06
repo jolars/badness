@@ -30,9 +30,17 @@ fetched by `task gate-corpora:fetch` (`scripts/fetch_gate_corpora.sh`):
 | latex2e | `latex3/latex2e` @ `3a9fdd88bdc53f16a0c2158aa70d259607de333a` | 384 |
 | pgf | `pgf-tikz/pgf` @ `1c7fc0fdc3ec8a6bdcfd68785c6bbd43ec110178` | 397 |
 
-## Regeneration
+## Checking and regeneration
 
-From each corpus root, with a release build:
+The ratchet is machine-checked: `task gate-corpora:check`
+(`scripts/check_gate_baselines.sh`) re-runs both gates over the pinned
+corpora and diffs the distilled failure sets against these files, two-sided —
+an added line is a regression, a removed line is a stale baseline, and either
+fails the check. It needs the corpora (`task gate-corpora:fetch`) and network,
+so it is a pre-merge/re-record step for formatter changes, not part of
+`cargo test`.
+
+To regenerate by hand, from each corpus root with a release build:
 
 ```sh
 badness --no-config debug format --checks all --report .     # -> <corpus>.all.txt
@@ -41,9 +49,10 @@ badness --no-config debug format --checks trivia --report .  # -> <corpus>.trivi
 
 Distill each report's `### k. \`path\` (kind)` headings into sorted
 `path<TAB>kind` lines (`.all.txt`), adding a third class column for the
-trivia files from each failure's `- Variant:` reason (`.trivia.txt`). The
-width sweep behind `SWEEP.md` reruns both checks with
-`--line-width 60|72|100|120`.
+trivia files from each failure's `- Variant:` reason (`.trivia.txt`) — the
+same distillation `check_gate_baselines.sh` implements, so its diff output
+can be applied to the baseline files directly. The width sweep behind
+`SWEEP.md` reruns both checks with `--line-width 60|72|100|120`.
 
 ## The sets
 

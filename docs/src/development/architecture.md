@@ -23,12 +23,12 @@ CLI/LSP/linter crate `badness`; two publishable library crates live under
 `crates/`:
 
 - **`badness-parser`** — the syntax layer (`syntax`, `ast`), the parser, the
-  semantic layer (minus the disk/salsa-backed `load` module), the BibTeX
-  parsing and semantic layers, the `data/` signature artifacts, and the phf
-  codegen `build.rs` that bakes them.
-- **`badness-formatter`** — the layout engine (`formatter/{core, ir, printer,
-  style, context, colspec, sentence, perturb}`) and the `.bib` formatter.
-  Depends on `badness-parser`.
+  semantic layer (minus the disk/salsa-backed `load` module), the BibTeX parsing
+  and semantic layers, the `data/` signature artifacts, and the phf codegen
+  `build.rs` that bakes them.
+- **`badness-formatter`** — the layout engine
+  (`formatter/{core, ir, printer,   style, context, colspec, sentence, perturb}`)
+  and the `.bib` formatter. Depends on `badness-parser`.
 
 Both library crates build for `wasm32-unknown-unknown` (a CI job guards this;
 the formatter is embedded by the dprint Wasm plugin), so nothing in them may
@@ -41,8 +41,7 @@ through **shim modules** — `src/parser.rs` is just
 `pub use badness_parser::parser::*;` — so code everywhere keeps writing
 `crate::parser::…`. Two **bridge modules** host the CLI-side halves of split
 concerns: `src/formatter.rs` (the `check` batch driver and the disk-backed
-`format_file_with_packages` entries) and `src/semantic.rs` (the `load`
-module).
+`format_file_with_packages` entries) and `src/semantic.rs` (the `load` module).
 
 ### Supported inputs
 

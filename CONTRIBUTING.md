@@ -7,11 +7,11 @@ typo fixes to new lint rules and parser features.
 
 ## Getting set up
 
-Badness is a Rust workspace (edition 2024): the root package is the
-`badness` CLI/LSP/linter crate, and the publishable `badness-parser` and
-`badness-formatter` library crates live under `crates/`. The toolchain is
-pinned by `rust-toolchain.toml`, so a stable `rustup` install picks up the
-right version automatically.
+Badness is a Rust workspace (edition 2024): the root package is the `badness`
+CLI/LSP/linter crate, and the publishable `badness-parser` and
+`badness-formatter` library crates live under `crates/`. The toolchain is pinned
+by `rust-toolchain.toml`, so a stable `rustup` install picks up the right
+version automatically.
 
 ```sh
 git clone https://github.com/jolars/badness

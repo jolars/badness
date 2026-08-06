@@ -192,7 +192,12 @@ awareness in `lsp.md`.
   braces `x^{2}` → `x^2`, `$$…$$` → `\[…\]`) are *linter autofixes*, never layout. Pinned
   by the non-trivia-content oracle in `assert_format_invariants` (`tests/format.rs`).
 - **Protected regions** (`verbatim`, `lstlisting`, `\verb`, comments) are never altered
-  by the formatter.
+  by the formatter—with one carve-out: **line terminators are normalized
+  document-wide**, protected regions included (`FormatStyle::line_ending`; `Auto`, the
+  default, keeps whatever the source used). A protected body is emitted from source
+  token text, so without the carve-out a CRLF document came out CRLF *inside* verbatim
+  and LF everywhere else. Only the `\r\n`/`\n` pair converts; every other byte of the
+  region is still untouched. Detail in `formatter.md` (§ *Line endings*).
 - **Trivia-invariant layout** *(being rolled out—see TODO.md)*: layout is a function of
   non-trivia content, config, and only those trivia predicates the formatter itself
   *preserves*. A predicate `P` is preserved when `P(fmt(x)) == P(x)`. Blank-line

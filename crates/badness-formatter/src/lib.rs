@@ -17,7 +17,9 @@ pub mod parser;
 pub mod semantic;
 pub mod syntax;
 
-pub use formatter::{FormatError, FormatStyle, MathWrap, SentenceOptions, WrapMode, format};
+pub use formatter::{
+    FormatError, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
+};
 
 // Re-export rowan so embedders can name the exact tree types this crate is
 // built against without pinning a matching rowan version themselves.

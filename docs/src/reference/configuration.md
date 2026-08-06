@@ -14,6 +14,7 @@ its default.
 # line-width = 80
 # indent-width = 2
 # wrap = "reflow"  # reflow | stable | sentence | semantic | preserve
+# line-ending = "auto"  # auto | lf | crlf | native
 
 [lint]
 # select = ["..."]  # if set, only these rules run
@@ -213,6 +214,36 @@ affected.
 ```toml
 [format]
 math-wrap = "preserve"
+```
+
+### `line-ending`
+
+How the line breaks in formatted output are spelled. The layout engine always
+decides *where* breaks go; this decides only the bytes they render as, and it
+applies to the whole document — including inside `verbatim`-style protected
+regions, which would otherwise keep their authored endings and leave the file
+mixed.
+
+  | Mode     | Behavior                                                                                       |
+  | -------- | ---------------------------------------------------------------------------------------------- |
+  | `auto`   | Keep the endings the file was written with: CRLF if its first line break is one, LF otherwise. |
+  | `lf`     | Always `\n`.                                                                                   |
+  | `crlf`   | Always `\r\n`.                                                                                 |
+  | `native` | The platform's convention: `\r\n` on Windows, `\n` elsewhere.                                  |
+
+The default is `auto`, so formatting never rewrites a repository's line endings
+on its own — set `lf` (or add a `.gitattributes` rule) if you want them
+normalized.
+
+**Default value**: `"auto"`
+
+**Type**: `"auto" | "lf" | "crlf" | "native"`
+
+**Example**:
+
+```toml
+[format]
+line-ending = "lf"
 ```
 
 ### `lang`

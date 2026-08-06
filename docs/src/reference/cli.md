@@ -74,6 +74,16 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
     - `single-line`: Never insert breaks; a long body overflows the line width
     - `break`: Break a too-long body before its top-level operators (amsmath style)
 
+`--line-ending <LINE_ENDING>`
+:   How to spell the line breaks in the formatted output
+
+    Possible values:
+
+    - `auto`: Keep the endings the file was written with (default)
+    - `lf`: Always LF (`\n`)
+    - `crlf`: Always CRLF (`\r\n`)
+    - `native`: The platform's convention: CRLF on Windows, LF elsewhere
+
 `--exclude <PATTERN>`
 :   Gitignore-style pattern to skip during directory discovery (repeatable). Added on top of any `exclude`/`extend-exclude` from `badness.toml`
 

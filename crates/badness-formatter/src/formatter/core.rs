@@ -69,7 +69,9 @@ use super::context::FormatContext;
 use super::ir::Ir;
 use super::printer::Printer;
 use super::sentence::{ResolvedProfile, SentenceOptions, is_sentence_boundary_text};
-use super::style::{FormatStyle, MathWrap, WrapMode};
+use super::style::{
+    FormatStyle, LineEnding, MathWrap, WrapMode, apply_line_ending, detect_line_ending,
+};
 
 /// Why a document could not be formatted. The formatter only operates on a clean
 /// parse: anything the parser flagged, or any `ERROR` token, is refused rather
@@ -218,6 +220,7 @@ pub fn format_node_with_signatures_sentence(
     if !formatted.is_empty() {
         formatted.push('\n');
     }
+    apply_line_ending(&mut formatted, resolve_line_ending(root, style));
     Ok(formatted)
 }
 
@@ -265,7 +268,21 @@ pub fn format_node_range_with_signatures_sentence(
     let mut formatted = format_root(root, ctx, external, Some(range));
     let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
     formatted.truncate(trimmed_len);
+    // Detected from the whole document, not the fragment: the replacement has to
+    // match the endings of the text it splices into, and a block that happens to
+    // hold no line break of its own would otherwise answer `Lf`.
+    apply_line_ending(&mut formatted, resolve_line_ending(root, style));
     Ok(formatted)
+}
+
+/// The concrete ending `style` calls for on this document ([`LineEnding::Auto`]
+/// resolved against what the source used).
+fn resolve_line_ending(root: &SyntaxNode, style: FormatStyle) -> LineEnding {
+    if style.line_ending == LineEnding::Auto {
+        style.line_ending.resolve(detect_line_ending(&root.text()))
+    } else {
+        style.line_ending.resolve(LineEnding::Lf)
+    }
 }
 
 /// Refuse any `ERROR` token. A clean parse should contain none, but the parser

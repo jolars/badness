@@ -11,7 +11,7 @@ use std::path::Path;
 use badness_formatter::bib::semantic::Model;
 use badness_formatter::bib::syntax::SyntaxKind;
 use badness_formatter::bib::{ast, format, format_with_style, parse, reconstruct};
-use badness_formatter::formatter::FormatStyle;
+use badness_formatter::formatter::{FormatStyle, LineEnding};
 
 /// The semantic facts formatting must preserve: the *multiset* of each entry's
 /// (type, key), the `@string` definition names, and the `@string` use names. Every
@@ -180,4 +180,37 @@ fn indent_width_is_honored() {
 fn empty_input_stays_empty() {
     assert_eq!(format("").expect("formats"), "");
     assert_eq!(format("   \n\n").expect("formats"), "");
+}
+
+// --- Line endings -----------------------------------------------------------
+
+#[test]
+fn crlf_input_keeps_crlf_under_auto() {
+    let input = "@misc{k,\r\n  t = {x}\r\n}\r\n";
+    let out = format(input).expect("formats");
+    assert_eq!(out, "@misc{k,\r\n  t = {x}\r\n}\r\n");
+    assert!(!out.replace("\r\n", "").contains('\n'), "no bare LF");
+}
+
+#[test]
+fn line_ending_overrides_the_source() {
+    let lf = format_with_style(
+        "@misc{k,\r\n  t = {x}\r\n}\r\n",
+        FormatStyle {
+            line_ending: LineEnding::Lf,
+            ..FormatStyle::default()
+        },
+    )
+    .expect("formats");
+    assert_eq!(lf, "@misc{k,\n  t = {x}\n}\n");
+
+    let crlf = format_with_style(
+        "@misc{k,\n  t = {x}\n}\n",
+        FormatStyle {
+            line_ending: LineEnding::Crlf,
+            ..FormatStyle::default()
+        },
+    )
+    .expect("formats");
+    assert_eq!(crlf, "@misc{k,\r\n  t = {x}\r\n}\r\n");
 }

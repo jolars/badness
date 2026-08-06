@@ -23,8 +23,9 @@ use badness::formatter::perturb::{
     ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence,
 };
 use badness::formatter::{
-    ChangedFile, FormatStyle, MathWrap, SentenceOptions, WrapMode, check_paths_with_style,
-    format_file_with_packages_sentence, format_with_style_flavored_sentence,
+    ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
+    check_paths_with_style, format_file_with_packages_sentence,
+    format_with_style_flavored_sentence,
 };
 use badness::linter::{
     Diagnostic, Fix, OutputMode, RuleSelection, apply_fixes, apply_fixes_multi,
@@ -33,7 +34,8 @@ use badness::linter::{
 use std::collections::{BTreeSet, HashMap};
 
 use badness::cli::{
-    Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, LintOutput, MathWrapArg, WrapArg,
+    Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, LineEndingArg, LintOutput,
+    MathWrapArg, WrapArg,
 };
 use badness::parser::{LexConfig, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
@@ -85,6 +87,17 @@ fn math_wrap_mode(arg: MathWrapArg) -> MathWrap {
     }
 }
 
+/// Lower the CLI [`LineEndingArg`] to the formatter's [`LineEnding`] (same
+/// orphan-rule story as [`wrap_mode`]).
+fn line_ending_mode(arg: LineEndingArg) -> LineEnding {
+    match arg {
+        LineEndingArg::Auto => LineEnding::Auto,
+        LineEndingArg::Lf => LineEnding::Lf,
+        LineEndingArg::Crlf => LineEnding::Crlf,
+        LineEndingArg::Native => LineEnding::Native,
+    }
+}
+
 fn main() -> ExitCode {
     let Cli {
         command,
@@ -103,6 +116,7 @@ fn main() -> ExitCode {
             indent_width,
             wrap,
             math_wrap,
+            line_ending,
             exclude,
             force_exclude,
         } => {
@@ -125,8 +139,14 @@ fn main() -> ExitCode {
                     Err(code) => return code,
                 };
 
-            let (style, wrap_override) =
-                resolve_style(&config, line_width, indent_width, wrap, math_wrap);
+            let (style, wrap_override) = resolve_style(
+                &config,
+                line_width,
+                indent_width,
+                wrap,
+                math_wrap,
+                line_ending,
+            );
             // The `sentence`/`semantic` language profile, resolved once from
             // `[format] lang` + `[format.no-break-abbreviations]`; `scratch` owns the
             // merged entries for the whole format run. Ignored by other wrap modes.
@@ -227,7 +247,8 @@ fn main() -> ExitCode {
                         Ok(filter) => filter.with_force_exclude(force_exclude),
                         Err(code) => return code,
                     };
-                let (style, wrap_override) = resolve_style(&config, line_width, None, wrap, None);
+                let (style, wrap_override) =
+                    resolve_style(&config, line_width, None, wrap, None, None);
                 let mut abbrev_scratch = Vec::new();
                 let sentence = SentenceOptions::resolve(
                     config.format.lang.as_deref(),
@@ -266,6 +287,7 @@ fn resolve_style(
     indent_width: Option<usize>,
     wrap: Option<WrapArg>,
     math_wrap: Option<MathWrapArg>,
+    line_ending: Option<LineEndingArg>,
 ) -> (FormatStyle, Option<WrapMode>) {
     let mut style = FormatStyle::from(&config.format);
     if let Some(w) = line_width {
@@ -278,6 +300,11 @@ fn resolve_style(
         wrap.map(wrap_mode).or(config.format.wrap.map(Into::into));
     if let Some(mw) = math_wrap {
         style.math_wrap = math_wrap_mode(mw);
+    }
+    // Same precedence story as `math-wrap`: the style already carries the config
+    // value (or `Auto`), and `Auto` resolves per document inside the formatter.
+    if let Some(le) = line_ending {
+        style.line_ending = line_ending_mode(le);
     }
     (style, wrap_override)
 }
@@ -341,6 +368,8 @@ const STARTER_CONFIG: &str = "\
 # math-wrap = \"auto\"  # auto | preserve | single-line | break
                         # display-math line breaking; auto derives from wrap
                         # (preserve -> preserve, else break)
+# line-ending = \"auto\"  # auto | lf | crlf | native
+                          # auto keeps the endings each file was written with
 
 [lint]
 # select = [\"...\"]  # if set, only these rules run

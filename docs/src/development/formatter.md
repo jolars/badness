@@ -31,6 +31,47 @@ re-lex into separate atoms. The oracle compares the *concatenated text* of
 non-trivia tokens (not their boundaries), so it tolerates this re-grouping while
 still catching any inserted or deleted non-trivia character.
 
+## Line endings
+
+The printer always builds output with `\n`; it is the sole authority on *where*
+breaks go. `FormatStyle::line_ending` decides only how those breaks are spelled
+in the final string, as a pass over the finished text:
+
+  | value    | effect                                                                                                  |
+  | -------- | ------------------------------------------------------------------------------------------------------- |
+  | `auto`   | Whatever the source used: CRLF if the document's first line break is `\r\n`, LF otherwise. The default. |
+  | `lf`     | Always `\n`.                                                                                            |
+  | `crlf`   | Always `\r\n`.                                                                                          |
+  | `native` | `\r\n` on Windows, `\n` elsewhere.                                                                      |
+
+`auto` is the default so formatting never rewrites a file's line endings behind
+the author's back—a CRLF repository does not get a whole-file diff the first
+time it is formatted, and `format --check` does not flag every file. Detection
+walks the tree's text chunk by chunk (`\r\n` is a single `NEWLINE` token, so the
+pair cannot straddle a chunk boundary) rather than materializing the document as
+a `String`.
+
+The pass is applied at the three entries every other one routes through:
+`format_node_with_signatures_sentence`,
+`format_node_range_with_signatures_sentence` (a fragment must match the endings
+of the text it splices into—and a selected block holding no line break of its
+own cannot answer for itself, so detection always reads the whole document), and
+the BibTeX `format_node`.
+
+**This is the one carve-out in the
+[protected-regions](#the-formatter-is-whitespace-only) rule.** A
+`verbatim`/`lstlisting` body is emitted from source token text, so before
+`line_ending` existed a CRLF document came out with CRLF *inside* the protected
+region and LF everywhere else—a mixed-ending file, which is arguably the bug
+this closes. The conversion is therefore document-wide. Only the `\r\n`/`\n`
+pair is touched; a lone `\r` (which the parser also lexes as a line break, but
+which can reach the output only through a protected region) is left exactly as
+authored, keeping this the well-understood CRLF/LF transformation and nothing
+more.
+
+Idempotence is preserved by construction: the conversion is a fixed point, and
+the non-trivia-content oracle is unaffected because `NEWLINE` is trivia.
+
 ## Trivia-invariant layout
 
 Whitespace-only says what the formatter may *write*. Trivia-invariant layout

@@ -147,6 +147,9 @@ fn build_style(
             Some(s) => parse_math_wrap(s)?,
             None => MathWrap::Auto,
         },
+        // The playground round-trips a textarea, which is always LF; `Auto` keeps
+        // whatever the pasted text used.
+        ..default
     })
 }
 

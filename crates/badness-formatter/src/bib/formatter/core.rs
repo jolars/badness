@@ -48,7 +48,7 @@ use crate::bib::semantic::{BibFieldDb, FieldCategory, builtin};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 use crate::formatter::ir::Ir;
 use crate::formatter::printer::Printer;
-use crate::formatter::style::FormatStyle;
+use crate::formatter::style::{FormatStyle, LineEnding, apply_line_ending, detect_line_ending};
 
 /// Why a `.bib` document could not be formatted. Mirrors
 /// [`crate::formatter::core::FormatError`] but over the bib [`SyntaxKind`]; the
@@ -114,6 +114,12 @@ pub fn format_node(root: &SyntaxNode, style: FormatStyle) -> Result<String, Form
     if !formatted.is_empty() {
         formatted.push('\n');
     }
+    let ending = if style.line_ending == LineEnding::Auto {
+        style.line_ending.resolve(detect_line_ending(&root.text()))
+    } else {
+        style.line_ending.resolve(LineEnding::Lf)
+    };
+    apply_line_ending(&mut formatted, ending);
     Ok(formatted)
 }
 

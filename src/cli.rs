@@ -70,6 +70,20 @@ pub enum MathWrapArg {
     Break,
 }
 
+/// CLI surface for `formatter::LineEnding`. Kept here for the same reason as
+/// [`WrapArg`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LineEndingArg {
+    /// Keep the endings the file was written with (default).
+    Auto,
+    /// Always LF (`\n`).
+    Lf,
+    /// Always CRLF (`\r\n`).
+    Crlf,
+    /// The platform's convention: CRLF on Windows, LF elsewhere.
+    Native,
+}
+
 #[derive(Parser)]
 #[command(
     name = "badness",
@@ -127,6 +141,9 @@ pub enum Command {
         /// How to lay out line breaks inside display math.
         #[arg(long, value_enum)]
         math_wrap: Option<MathWrapArg>,
+        /// How to spell the line breaks in the formatted output.
+        #[arg(long, value_enum)]
+        line_ending: Option<LineEndingArg>,
         /// Gitignore-style pattern to skip during directory discovery (repeatable).
         /// Added on top of any `exclude`/`extend-exclude` from `badness.toml`.
         #[arg(long, value_name = "PATTERN")]

@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::formatter::{FormatStyle, MathWrap, WrapMode};
+use crate::formatter::{FormatStyle, LineEnding, MathWrap, WrapMode};
 
 pub const CONFIG_FILE_NAME: &str = "badness.toml";
 
@@ -111,6 +111,10 @@ pub struct FormatConfig {
     /// breaker.
     #[serde(default)]
     pub math_wrap: Option<MathWrapConfig>,
+    /// How formatted line breaks are spelled. See [`LineEndingConfig`]. When
+    /// omitted (or `auto`), each file keeps the endings it was written with.
+    #[serde(default)]
+    pub line_ending: Option<LineEndingConfig>,
     /// Document language (a BCP-47-style code, e.g. `en`, `de`, `pt-BR`), used by
     /// the `sentence`/`semantic` wrap modes to pick the sentence-boundary
     /// abbreviation profile. Unknown or absent languages fall back to English.
@@ -132,6 +136,7 @@ impl Default for FormatConfig {
             indent_width: DEFAULT_INDENT_WIDTH,
             wrap: None,
             math_wrap: None,
+            line_ending: None,
             lang: None,
             no_break_abbreviations: BTreeMap::new(),
         }
@@ -200,6 +205,33 @@ impl From<MathWrapConfig> for MathWrap {
     }
 }
 
+/// The `line-ending` key under `[format]`. A serde-named mirror of
+/// [`LineEnding`], the same split as [`WrapModeConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LineEndingConfig {
+    /// Keep whatever the file was written with (CRLF if its first line break is
+    /// one, LF otherwise).
+    Auto,
+    /// Always `\n`.
+    Lf,
+    /// Always `\r\n`.
+    Crlf,
+    /// The platform's convention: `\r\n` on Windows, `\n` elsewhere.
+    Native,
+}
+
+impl From<LineEndingConfig> for LineEnding {
+    fn from(value: LineEndingConfig) -> Self {
+        match value {
+            LineEndingConfig::Auto => LineEnding::Auto,
+            LineEndingConfig::Lf => LineEnding::Lf,
+            LineEndingConfig::Crlf => LineEnding::Crlf,
+            LineEndingConfig::Native => LineEnding::Native,
+        }
+    }
+}
+
 impl FormatConfig {
     /// Validate values, returning a [`ConfigError::InvalidValue`] with the
     /// originating file path (when known) for diagnostics.
@@ -260,6 +292,10 @@ impl From<&FormatConfig> for FormatStyle {
             // configured value (or `Auto`) maps straight through, and `Auto`
             // resolves against the effective wrap inside the formatter.
             math_wrap: config.math_wrap.map_or(MathWrap::Auto, Into::into),
+            // Also unlike `wrap`: the same for every file kind, and `Auto` is
+            // resolved per document inside the formatter (from the endings the
+            // source used).
+            line_ending: config.line_ending.map_or(LineEnding::Auto, Into::into),
         }
     }
 }
@@ -657,6 +693,36 @@ mod tests {
     #[test]
     fn rejects_unknown_math_wrap() {
         let err = parse("[format]\nmath-wrap = \"never\"\n").expect_err("unknown variant");
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn parses_line_ending_variants() {
+        for (key, expected) in [
+            ("auto", LineEndingConfig::Auto),
+            ("lf", LineEndingConfig::Lf),
+            ("crlf", LineEndingConfig::Crlf),
+            ("native", LineEndingConfig::Native),
+        ] {
+            let text = format!("[format]\nline-ending = \"{key}\"\n");
+            let config = parse(&text).unwrap_or_else(|e| panic!("parse {key}: {e}"));
+            assert_eq!(config.format.line_ending, Some(expected), "for {key}");
+            let style = FormatStyle::from(&config.format);
+            assert_eq!(style.line_ending, LineEnding::from(expected), "for {key}");
+        }
+    }
+
+    #[test]
+    fn line_ending_defaults_to_none_and_maps_to_auto() {
+        let config = parse("[format]\n").expect("parse");
+        assert_eq!(config.format.line_ending, None);
+        let style = FormatStyle::from(&config.format);
+        assert_eq!(style.line_ending, LineEnding::Auto);
+    }
+
+    #[test]
+    fn rejects_unknown_line_ending() {
+        let err = parse("[format]\nline-ending = \"cr\"\n").expect_err("unknown variant");
         assert!(matches!(err, ConfigError::Parse { .. }));
     }
 

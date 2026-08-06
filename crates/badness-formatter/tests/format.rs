@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::collections::BTreeMap;
 
 use badness_formatter::formatter::{
-    FormatStyle, MathWrap, SentenceOptions, WrapMode, format, format_node_range_with_signatures,
-    format_with_style, format_with_style_flavored, format_with_style_flavored_sentence, perturb,
+    FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
+    format_node_range_with_signatures, format_with_style, format_with_style_flavored,
+    format_with_style_flavored_sentence, perturb,
 };
 use badness_formatter::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness_formatter::semantic::SignatureDb;
@@ -1755,4 +1756,155 @@ fn range_format_multiline_environment_block() {
         fragment.contains('\n'),
         "a multi-line block stays multi-line"
     );
+}
+
+// --- Line endings -----------------------------------------------------------
+//
+// The formatter's printer always builds output with `\n`; `LineEnding` decides
+// how those breaks — and any carried through from a protected region — are
+// spelled. `Auto` (the default) keeps what the source used, so formatting never
+// rewrites a file's line endings behind the author's back.
+
+/// A document with no bare LF outside a CRLF pair.
+fn assert_all_crlf(text: &str) {
+    assert!(text.contains("\r\n"), "expected CRLF output, got {text:?}");
+    assert!(
+        !text.replace("\r\n", "").contains('\n'),
+        "expected no bare LF, got {text:?}"
+    );
+}
+
+#[test]
+fn crlf_input_keeps_crlf_under_auto() {
+    let input = "\\section{One}\r\n\r\nsome    text\r\n";
+    let out = format(input).expect("formats");
+    assert_all_crlf(&out);
+    assert_eq!(out, "\\section{One}\r\n\r\nsome text\r\n");
+}
+
+#[test]
+fn lf_input_stays_lf_under_auto() {
+    let out = format("\\section{One}\n\nsome    text\n").expect("formats");
+    assert!(!out.contains('\r'), "auto must not invent a CR: {out:?}");
+}
+
+#[test]
+fn line_ending_lf_normalizes_crlf() {
+    let style = FormatStyle {
+        line_ending: LineEnding::Lf,
+        ..FormatStyle::default()
+    };
+    let out = format_with_style("a\r\n\r\nb\r\n", style).expect("formats");
+    assert_eq!(out, "a\n\nb\n");
+}
+
+#[test]
+fn line_ending_crlf_converts_lf() {
+    let style = FormatStyle {
+        line_ending: LineEnding::Crlf,
+        ..FormatStyle::default()
+    };
+    let out = format_with_style("a\n\nb\n", style).expect("formats");
+    assert_eq!(out, "a\r\n\r\nb\r\n");
+    assert_all_crlf(&out);
+}
+
+/// A verbatim body is emitted from source token text, so before `LineEnding`
+/// existed a CRLF document came out with CRLF inside the protected region and LF
+/// everywhere else. The conversion is document-wide precisely to close that gap.
+#[test]
+fn protected_regions_follow_the_document_ending() {
+    let input = "text\r\n\\begin{verbatim}\r\n  raw   line\r\n\\end{verbatim}\r\n";
+
+    let auto = format(input).expect("formats");
+    assert_all_crlf(&auto);
+    assert!(auto.contains("  raw   line"), "verbatim body is preserved");
+
+    let lf = format_with_style(
+        input,
+        FormatStyle {
+            line_ending: LineEnding::Lf,
+            ..FormatStyle::default()
+        },
+    )
+    .expect("formats");
+    assert!(
+        !lf.contains('\r'),
+        "lf must reach into verbatim too: {lf:?}"
+    );
+    assert!(lf.contains("  raw   line"), "verbatim body is preserved");
+}
+
+#[test]
+fn crlf_output_is_idempotent() {
+    for style in [
+        FormatStyle::default(),
+        FormatStyle {
+            line_ending: LineEnding::Crlf,
+            ..FormatStyle::default()
+        },
+        FormatStyle {
+            line_ending: LineEnding::Lf,
+            ..FormatStyle::default()
+        },
+    ] {
+        let input = "\\begin{itemize}\r\n\\item one\r\n\\item two\r\n\\end{itemize}\r\n";
+        let once = format_with_style(input, style).expect("formats");
+        let twice = format_with_style(&once, style).expect("re-formats");
+        assert_eq!(once, twice, "not idempotent for {:?}", style.line_ending);
+    }
+}
+
+/// A range fragment is spliced into the surrounding document, so it must carry
+/// the document's endings — including when the selected block holds no line
+/// break of its own and could not answer on its own.
+#[test]
+fn range_format_fragment_follows_the_document_ending() {
+    let style = FormatStyle::default();
+    let input = "first    paragraph.\r\n\r\nsecond    paragraph.\r\n";
+    let root = parse(input).syntax();
+    let second = root.children().nth(1).expect("a second top-level block");
+
+    let fragment = format_node_range_with_signatures(
+        &root,
+        style,
+        &SignatureDb::default(),
+        second.text_range(),
+    )
+    .expect("formats");
+    assert_eq!(fragment, "second paragraph.");
+
+    let env = "\\begin{itemize}\r\n\\item one\r\n\\end{itemize}\r\n";
+    let root = parse(env).syntax();
+    let block = root.children().next().expect("the environment block");
+    let fragment = format_node_range_with_signatures(
+        &root,
+        style,
+        &SignatureDb::default(),
+        block.text_range(),
+    )
+    .expect("formats");
+    assert_all_crlf(&fragment);
+}
+
+#[test]
+fn native_line_ending_matches_the_platform() {
+    let style = FormatStyle {
+        line_ending: LineEnding::Native,
+        ..FormatStyle::default()
+    };
+    let out = format_with_style("a\n\nb\n", style).expect("formats");
+    if cfg!(windows) {
+        assert_all_crlf(&out);
+    } else {
+        assert!(!out.contains('\r'));
+    }
+}
+
+#[test]
+fn detect_reads_the_first_line_break() {
+    assert_eq!(LineEnding::detect("a\r\nb\n"), LineEnding::Crlf);
+    assert_eq!(LineEnding::detect("a\nb\r\n"), LineEnding::Lf);
+    assert_eq!(LineEnding::detect("no break at all"), LineEnding::Lf);
+    assert_eq!(LineEnding::detect("\nleading"), LineEnding::Lf);
 }

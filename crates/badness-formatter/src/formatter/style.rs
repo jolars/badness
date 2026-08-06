@@ -75,12 +75,134 @@ impl MathWrap {
     }
 }
 
+/// The byte sequence the formatter's line breaks render as.
+///
+/// The layout engine always builds output with `\n` (the printer is the sole
+/// authority on *where* breaks go); this only selects how those breaks, and the
+/// ones carried through from the source, are spelled in the final string. The
+/// conversion is document-wide — protected regions included, since a `verbatim`
+/// body whose line terminators disagreed with the rest of the file would be a
+/// mixed-ending document (see the invariant note in
+/// `docs/src/development/formatter.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineEnding {
+    /// Keep what the source used: `\r\n` if the document's first line break is a
+    /// CRLF, `\n` otherwise. The default, so formatting never rewrites a file's
+    /// line endings behind the author's back.
+    #[default]
+    Auto,
+    /// Always `\n` (Unix).
+    Lf,
+    /// Always `\r\n` (Windows).
+    Crlf,
+    /// `\r\n` on Windows, `\n` everywhere else.
+    Native,
+}
+
+impl LineEnding {
+    /// Resolve to a concrete ending. `detected` is what the source used and is
+    /// consulted only by [`LineEnding::Auto`]; the result is never `Auto` or
+    /// `Native`.
+    #[must_use]
+    pub fn resolve(self, detected: Self) -> Self {
+        match self {
+            Self::Auto => match detected {
+                Self::Crlf => Self::Crlf,
+                _ => Self::Lf,
+            },
+            Self::Native => {
+                if cfg!(windows) {
+                    Self::Crlf
+                } else {
+                    Self::Lf
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// The bytes this ending renders as. `Auto`/`Native` answer as `Lf`; call
+    /// [`LineEnding::resolve`] first.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Crlf => "\r\n",
+            _ => "\n",
+        }
+    }
+
+    /// What `text` uses: [`LineEnding::Crlf`] if its first line break is a CRLF,
+    /// [`LineEnding::Lf`] otherwise (including a document with no line break at
+    /// all). Never returns `Auto` or `Native`.
+    #[must_use]
+    pub fn detect(text: &str) -> Self {
+        match text.find('\n') {
+            Some(idx) if idx > 0 && text.as_bytes()[idx - 1] == b'\r' => Self::Crlf,
+            _ => Self::Lf,
+        }
+    }
+}
+
+/// [`LineEnding::detect`] over a tree's text, chunk by chunk, so a whole-document
+/// `String` is never materialized just to look at the first line break. `\r\n` is
+/// a single `NEWLINE` token, so the pair cannot straddle a chunk boundary — the
+/// `prev_cr` carry is belt-and-braces.
+pub(crate) fn detect_line_ending(text: &rowan::SyntaxText) -> LineEnding {
+    let mut detected = LineEnding::Lf;
+    let mut prev_cr = false;
+    // `Err` is the early exit: the first line break decides.
+    let _: Result<(), ()> = text.try_for_each_chunk(|chunk| {
+        if let Some(idx) = chunk.find('\n') {
+            let crlf = if idx == 0 {
+                prev_cr
+            } else {
+                chunk.as_bytes()[idx - 1] == b'\r'
+            };
+            if crlf {
+                detected = LineEnding::Crlf;
+            }
+            return Err(());
+        }
+        prev_cr = chunk.ends_with('\r');
+        Ok(())
+    });
+    detected
+}
+
+/// Rewrite `out`'s line terminators as `resolved` (already through
+/// [`LineEnding::resolve`], so `Auto`/`Native` render as LF).
+///
+/// Only the `\r\n`/`\n` pair is converted; a lone `\r` — which the parser also
+/// lexes as a line break, but which can only reach the output through a verbatim
+/// region — is left exactly as authored, keeping this transformation the
+/// well-understood CRLF/LF one.
+pub(crate) fn apply_line_ending(out: &mut String, resolved: LineEnding) {
+    let needs_work = match resolved {
+        LineEnding::Crlf => out.contains('\n'),
+        _ => out.contains("\r\n"),
+    };
+    if !needs_work {
+        return;
+    }
+
+    let ending = resolved.as_str();
+    let mut result = String::with_capacity(out.len() + out.len() / 16);
+    for (i, segment) in out.split('\n').enumerate() {
+        if i > 0 {
+            result.push_str(ending);
+        }
+        result.push_str(segment.strip_suffix('\r').unwrap_or(segment));
+    }
+    *out = result;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FormatStyle {
     pub line_width: usize,
     pub indent_width: usize,
     pub wrap: WrapMode,
     pub math_wrap: MathWrap,
+    pub line_ending: LineEnding,
 }
 
 impl Default for FormatStyle {
@@ -90,6 +212,7 @@ impl Default for FormatStyle {
             indent_width: 2,
             wrap: WrapMode::default(),
             math_wrap: MathWrap::default(),
+            line_ending: LineEnding::default(),
         }
     }
 }

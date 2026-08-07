@@ -789,6 +789,39 @@ the same width decisions—the K&R↔Allman family's root (a wrap re-reading as 
 statement boundary) is gone for recognized heads, by construction rather than
 per-shape countermeasures.
 
+#### Bracket re-attachment is stable in-region (the `BracketPolicy` audit)
+
+Unit re-formation assumes the CST shape it consumes—which `[…]` groups attached
+where—is the same on every pass, and `[…]` attachment is shape-gated on trivia
+facts (`parser::grammar::BracketPolicy` and the closer-reachability scans). The
+audit that discharged the assumption rests on two facts:
+
+- **Only `Greedy` and `Forbid` are reachable in-region.** `Tight` rides the
+  curated math `\begin`, and inside a region `\begin`/`\end` are plain commands
+  (the issue-#60 carve-out, `in_macro_code`)—so the one policy that demands a
+  *directly abutting* `[` never gates in-region code. On `.dtx` doc-margin lines
+  the carve-out lifts, but there the ordinary environment-header layout
+  preserves flush-ness in both directions (a flush-attached `[a]` stays glued to
+  `\begin{align}`, a next-line one is never glued flush). `Forbid` never
+  attaches; `Greedy` attaches across trivia, and every bracket gate and scan
+  treats a space and a lone newline identically (both reset the `abuts_command`
+  flag; only a blank line bails)—so the formatter's free space↔newline
+  conversion is invisible to attachment.
+- **The formatter never creates or removes a *flush* junction before a `[`.**
+  That is the one perturbation the gates could see. The l3 leading-space respace
+  (R3) does not apply to an `OPTIONAL`; the fill never breaks a flush junction
+  (an authored gap is where the break lands); a math command is lowered as one
+  verbatim atom, so nothing can touch its `[` from inside; and the math sequence
+  never deletes an authored gap between atoms.
+
+The second-order shape (issue #55: an outer `[`'s verdict depends on whether an
+*inner* `[` abuts a command, via the scans' owed-`]` counting) is covered by the
+same invariant—and a *bare* flush `[` with a reachable closer cannot exist
+(flush + reachable ⇒ attached), so the counting only ever reads junctions inside
+attached nodes, whose flush-ness the formatter preserves. Pinned by the
+`expl_bracket_attachment` fixture and `bracket_attachment_stability`
+(`tests/format.rs`).
+
 ### Trailing comments
 
 A *trailing comment* rides its statement line **zero-width** (`Ir::ZeroWidth`,

@@ -180,6 +180,45 @@ fn format_invariants_units() {
     }
 }
 
+/// In-region `BracketPolicy` audit pins (TODO.md, S4) beyond the
+/// `expl_bracket_attachment` fixture: the abutting-sensitive gates. Inside an
+/// expl3 region `\begin`/`\end` are plain commands (the issue-#60 carve-out),
+/// so the curated math `\begin`'s `Tight` policy is unreachable in-region and a
+/// next-line `[` attaches greedily. Outside a region `Tight` reads flush-ness,
+/// which the header layout preserves in both directions. In math a command is
+/// lowered as one verbatim atom, so no layout can touch its `[` junction.
+#[test]
+fn bracket_attachment_stability() {
+    // In-region: the demoted `\begin{align}`'s next-line `[a]` attaches under
+    // Greedy and must survive relayout.
+    assert_format_invariants(
+        "\\ExplSyntaxOn\n\\begin{align}\n[a]_1 &= b\n\\end{align}\n\\ExplSyntaxOff\n",
+    );
+    // Tight, flush-attached: the header keeps `\begin{align}[a]` glued — a gap
+    // opened here would detach the optional on the next pass.
+    let flush = "\\begin{align}[a]_1 &= b \\\\ c &= d\n\\end{align}\n";
+    let out = format(flush).unwrap();
+    assert!(
+        out.contains("\\begin{align}[a]"),
+        "flush Tight optional must stay flush: {out:?}"
+    );
+    assert_format_invariants(flush);
+    // Tight, next-line: the unattached `[a]` must never glue flush onto the
+    // header — that would attach it on the next pass.
+    let detached = "\\begin{align}\n[a]_1 &= b \\\\ c &= d\n\\end{align}\n";
+    let out = format(detached).unwrap();
+    assert!(
+        !out.contains("\\begin{align}["),
+        "unattached bracket must not glue flush: {out:?}"
+    );
+    assert_format_invariants(detached);
+    // In-region math: `\sqrt[3]` stays tight inside its verbatim command atom,
+    // and the spaced bare `[ x ]` keeps its authored gap.
+    assert_format_invariants(
+        "\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl { $ \\bE [ x ] + \\sqrt[3]{x} $ }\n\\ExplSyntaxOff\n",
+    );
+}
+
 /// The widths the corpus invariants sweep runs at. Every layout hybrid is a
 /// column-arithmetic accident, so widths multiply detection (TODO.md, S0).
 const SWEEP_WIDTHS: &[usize] = &[60, 72, 80, 100, 120];
@@ -880,6 +919,19 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // never had. Load-bearing: the `\@latex@error` body must genuinely wrap at
     // width 80, or the block never detonates and the shape is already stable.
     ("expl_fallback_abutting_sibling", "sty"),
+    // In-region `BracketPolicy` audit (TODO.md, S4): bracket re-attachment is
+    // stable across passes because the formatter never creates or removes a
+    // *flush* junction before a `[` — flush-ness before an attached bracket is
+    // a preserved predicate, and space<->lone-newline conversion is invisible
+    // to every bracket gate. Four load-bearing shapes: a spaced attached `[…]`
+    // that overflows (the fill breaks before the `[`; greedy attachment
+    // crosses the newline and re-forms the same unit), a flush `[x]` on an
+    // expl3-named head (kept flush — the l3 leading-space respace does not
+    // apply to an `OPTIONAL`), the issue-#55 nested shape (the outer `[` stays
+    // a plain token only while the flush inner `[` claims the lone `]` in the
+    // reachability scan — the inner junction must stay flush), and a bare
+    // unattached `[` (its authored gap stands).
+    ("expl_bracket_attachment", "sty"),
 ];
 
 #[test]

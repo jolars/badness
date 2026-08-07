@@ -254,10 +254,18 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     (`}\@ehc`, `}.`, `}{`) re-glue. Pinned by `expl_fallback_hug_head`,
     `expl_fallback_abutting_sibling`, `dtx_expl3_fallback_head_fill` and the
     `hug_fill_*` printer units.
-  - [ ] *In-region `BracketPolicy` audit*: a wrap before an attached `[` can
-    change CST shape across passes (pre-existing; S4's unit re-formation
-    assumes bracket re-attachment is stable — verify which policies are
-    reachable in-region).
+  - [x] ~~*In-region `BracketPolicy` audit*.~~ **Verified stable.** Only
+    `Greedy` and `Forbid` are reachable in-region — `Tight` rides the curated
+    math `\begin`, demoted to a plain command by the issue-#60 carve-out
+    (`in_macro_code`) — and every gate and closer-reachability scan treats a
+    space and a lone newline identically, so the only perturbation attachment
+    could see is a created/removed *flush* junction before a `[`, which no
+    layout path produces (the R3 respace skips `OPTIONAL`, the fill breaks at
+    authored gaps only, a math command is one verbatim atom). The issue-#55
+    second-order scan flip needs a bare flush `[` with a reachable closer,
+    which cannot exist (flush + reachable ⇒ attached). Detail in
+    `formatter.md` (§ *Bracket re-attachment is stable in-region*); pinned by
+    the `expl_bracket_attachment` fixture and `bracket_attachment_stability`.
   - [ ] *Per-statement sibling coupling*: `couple_siblings` stays
     `Ignore`-only; a structural statement spanning siblings could couple its
     brace arguments the same way.

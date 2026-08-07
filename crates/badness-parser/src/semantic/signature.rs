@@ -1260,18 +1260,31 @@ mod tests {
 
     #[test]
     fn cwl_entries_carry_only_arity_no_behavior_flags() {
-        // The converter guard: every CWL command/environment is names+arity only, so
-        // none of its low-confidence data can flip a formatter/lexer/outline decision.
+        // The converter guard: every CWL command/environment is names, arity, and the
+        // mechanical `%keyvals` argument mark only, so none of its low-confidence
+        // *behaviour* data can flip a formatter/lexer/outline decision.
         let db = cwl();
         for sig in db.command_sigs() {
             assert!(sig.sectioning.is_none());
             assert!(!sig.verbatim && !sig.rule && !sig.inline);
-            assert!(sig.args.iter().all(|a| a.content == ContentKind::Opaque));
+            // `Keyval` is the one content kind the tier may carry, and only on an
+            // optional: `%keyvals` on a mandatory group is real but unconsumed, so
+            // the converter drops it rather than record an unvalidated claim.
+            assert!(sig.args.iter().all(|a| match a.content {
+                ContentKind::Opaque => true,
+                ContentKind::Keyval => !a.required,
+                _ => false,
+            }));
         }
         for sig in db.environment_sigs() {
             assert!(!sig.verbatim_body && !sig.math && !sig.code && !sig.align);
             assert!(!sig.no_indent && !sig.list && !sig.block);
             assert!(sig.outline.is_none());
+            assert!(sig.args.iter().all(|a| match a.content {
+                ContentKind::Opaque => true,
+                ContentKind::Keyval => !a.required,
+                _ => false,
+            }));
         }
     }
 

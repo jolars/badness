@@ -862,6 +862,24 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // must be a *sibling* rather than a greedily-attached child, and the whole
     // definition is authored on one physical line.
     ("expl_fallback_forced_group_glue", "sty"),
+    // The rest of that dispatch, gated the same way: inside a fallback
+    // statement *no* arm reads the forced-break predicate, because a fallback
+    // line's fill hugs ([`Ir::HugFill`]). A detonating atom is measured by its
+    // first line, so it stays on the head's line exactly where the old
+    // head-hug arm put it — without that arm's line commit. Load-bearing here
+    // (latex2e's `base/ltshipout.dtx`): `\hbox_set_to_wd:Nnn`'s `Nnn` shape
+    // does not consume `\l_shipout_box_wd_dim`, so the call is a *fallback*
+    // line whose last atom (the greedily-attached `\l_shipout_box_wd_dim
+    // {…}`) detonates. Gating the dispatch without the hugging fill splits the
+    // pair; no other rule rejoins it.
+    ("expl_fallback_hug_head", "sty"),
+    // The mirror: an atom the author *abutted* onto a detonating block's
+    // closing brace (`}\@ehc`, latex2e's `latex-lab-block.dtx`) stays abutted.
+    // The old no-head-to-hug arm committed the line at the block, so the
+    // abutting sibling was stranded on a line of its own — a gap the source
+    // never had. Load-bearing: the `\@latex@error` body must genuinely wrap at
+    // width 80, or the block never detonates and the shape is already stable.
+    ("expl_fallback_abutting_sibling", "sty"),
 ];
 
 #[test]
@@ -963,6 +981,18 @@ const DTX_FIXTURES: &[&str] = &[
     // frame opens a chunk exactly like the column-0 spelling. The formatter owns
     // the margin, so it re-pins the frame at column 0 — a trivia-only change.
     "dtx_indented_macrocode_frame",
+    // A fallback line's hugging fill and the *early line commits* that take its
+    // atoms away from `commit_line` must build the same fill: the trailing
+    // command arm hands a head off as one fill, and if that head were a plain
+    // [`Ir::Fill`] the very atoms that hugged mid-line would break instead
+    // (latex3's `xo-place.dtx`). Load-bearing: the `\int_compare:nNnT` line must
+    // be fallback (the `nNnT` shape does not consume `\c_one`), its
+    // greedily-attached `{…}` must detonate on a *guard* rather than width, and
+    // the statement must end in a trailing command carrying a block
+    // (`\bool_if:NT \g_xor_trial_failed_bool {…}`) — that is the arm that
+    // commits early. The mid-chunk `\cs_new_nopar:Npn … {` left open across the
+    // prose is the file's own shape, and what puts the closing `}` at the end.
+    "dtx_expl3_fallback_head_fill",
 ];
 
 /// The docstrip config a `.dtx` file resolves to (`FileKind::Dtx`).

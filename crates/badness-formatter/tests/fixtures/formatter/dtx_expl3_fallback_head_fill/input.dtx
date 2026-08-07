@@ -1,0 +1,17 @@
+% \begin{macro}{\xor_check_float_footnote_forbidden:}
+%    \begin{macrocode}
+\ProvidesExplPackage{xo-place}{2024-01-01}{0.1}{Float placement}
+\cs_new_nopar:Npn \xor_check_float_footnote_forbidden: {
+%    \end{macrocode}
+%    Finally we test if the float we are trying to place is going onto a
+%    bottom area.
+%    \begin{macrocode}
+    \int_compare:nNnT \g_xor_this_area_span_tl = \c_one {
+%<*trace>
+      \trace:n{this@area}
+%</trace>
+      \if b \g_xor_this_area_type_tl \fi } \bool_if:NT \g_xor_trial_failed_bool {
+%% need \g_xor_curr_col_block_int setting?
+    } }
+%    \end{macrocode}
+% \end{macro}

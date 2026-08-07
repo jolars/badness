@@ -303,7 +303,10 @@ never match.
   `Semantic`, `ReflowKind::Statement`, the expl3 fallback statement) is Tier 2: it
   must carry a written fixed-point argument showing every layout it can emit re-reads
   to itself, as `ReflowKind::Statement`'s flush continuation and the expl3 fallback's
-  greedy self-refilling lines do.
+  greedy self-refilling lines do. A fallback line's fill also *hugs*
+  (`Ir::HugFill`): an atom that carries a forced break is measured by its first
+  line, so where it lands never depends on forced-ness — which is why no arm of
+  the forced-break dispatch fires inside a fallback statement.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
   decision #1 without recording the decision here and on the relevant Development page.
 - New salsa **inputs** carrying rarely-changing data (config, package/class metadata)

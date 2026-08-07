@@ -30,7 +30,6 @@
 ./base/ltluatex.dtx	trivia	content-change
 ./base/ltmarks.dtx	trivia	non-fixed-point
 ./base/ltmath.dtx	trivia	content-change
-./base/ltmeta.dtx	trivia	non-fixed-point
 ./base/ltmiscen.dtx	trivia	content-change
 ./base/ltoutenc.dtx	trivia	content-change
 ./base/ltoutput.dtx	trivia	content-change
@@ -68,15 +67,11 @@
 ./required/latex-lab/latex-lab-block.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-context.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-enumitem.dtx	format-error	format-error
-./required/latex-lab/latex-lab-firstaid.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-graphic.dtx	trivia	non-fixed-point
-./required/latex-lab/latex-lab-l3doc-tagging.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-math.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-new-or-2.dtx	format-error	format-error
 ./required/latex-lab/latex-lab-sec-template.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-text.dtx	trivia	non-fixed-point
-./required/latex-lab/latex-lab-tikz.dtx	trivia	non-fixed-point
-./required/latex-lab/latex-lab-title.dtx	trivia	non-fixed-point
 ./required/tools/array-2024-06-01.sty	trivia	non-fixed-point
 ./required/tools/array.dtx	format-error	format-error
 ./required/tools/bm.dtx	trivia	content-change
@@ -99,7 +94,5 @@
 ./texmf/tex/latex/l3kernel/l3doc.cls	trivia	non-fixed-point
 ./texmf/tex/latex/l3packages/xparse/xparse-2018-04-12.sty	trivia	non-fixed-point
 ./texmf/tex/latex/l3packages/xparse/xparse-generic.tex	trivia	non-fixed-point
-./texmf/tex/latex/pdfmanagement/l3pdffield.sty	trivia	non-fixed-point
 ./texmf/tex/latex/pdfmanagement/latex-lab-testphase-bookmark.sty	trivia	non-fixed-point
-./texmf/tex/latex/tagpdf/tagpdf-debug.sty	trivia	non-fixed-point
 ./texmf/tex/latex/tagpdf/tagpdf.sty	trivia	non-fixed-point

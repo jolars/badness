@@ -1,0 +1,10 @@
+\ExplSyntaxOn
+\cs_if_free:NTF \@@_item_instance:n
+  {
+    \@latex@error{
+      Lonely~\string\item--perhaps~a~missing~
+      list~environment
+    }\@ehc
+  }
+  { \@@_item_instance:n }
+\ExplSyntaxOff

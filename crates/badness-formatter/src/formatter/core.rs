@@ -1968,6 +1968,23 @@ fn lower_expl_code(
         *sep_before_next = None;
     }
 
+    /// The fill a line's `[atom, sep, atom, …]` parts commit as: sticky for a
+    /// structural statement, hugging for a fallback (or junk-glued) one — see
+    /// `commit_line`. Every early line commit must build its head with this,
+    /// not a bare [`Ir::Fill`]: a statement that ends one atom earlier on the
+    /// next pass hands the same atoms to a different arm, and the two arms have
+    /// to measure them the same way (`xo-place.dtx`).
+    fn line_fill(mut parts: Vec<Ir>, sticky: bool) -> Ir {
+        if parts.len() == 1 {
+            return parts.drain(..).next().unwrap();
+        }
+        if sticky {
+            Ir::StickyFill(parts.into())
+        } else {
+            Ir::HugFill(parts.into())
+        }
+    }
+
     /// Commit the in-progress line (if any) as the next logical line, recording the
     /// pending line separator before it and resetting line state (`sticky` resets
     /// to `true`, the structural default).
@@ -1992,15 +2009,13 @@ fn lower_expl_code(
             // self-fulfilling (each printed line re-segments to a fallback
             // statement that re-fills to itself), while a sticky cascade
             // forces atoms that would fit onto broken lines — a shape the next
-            // pass's shorter per-line statements do not reproduce. A single
-            // atom needs no fill.
-            let line = if parts.len() == 1 {
-                parts.drain(..).next().unwrap()
-            } else if *sticky {
-                Ir::StickyFill(std::mem::take(parts).into())
-            } else {
-                Ir::Fill(std::mem::take(parts).into())
-            };
+            // pass's shorter per-line statements do not reproduce. It is a
+            // *hugging* greedy fill ([`Ir::HugFill`]): an atom that detonates
+            // is measured by its first line, so it stays glued to the head
+            // before it (`\vbox to \Gin@req@height{%`) instead of dropping to
+            // a line of its own — a placement that would otherwise be keyed on
+            // forced-ness, which is exactly what is not pass-invariant here.
+            let line = line_fill(std::mem::take(parts), *sticky);
             seps.push(std::mem::replace(pending_sep, Ir::hard_line()));
             lines.push(line);
         }
@@ -2496,8 +2511,8 @@ fn lower_expl_code(
                 // same throughout. A sibling's forced break is not this group's
                 // business.
                 let ir = lower_node(child, cx);
-                // A hanging brace group inside a *fallback* statement never takes
-                // the forced-break dispatch below: there, forced-ness is not
+                // No arm of the forced-break dispatch below fires inside a
+                // *fallback* statement: there, forced-ness is not
                 // pass-invariant. A fallback statement's extent is the authored
                 // physical line (Tier 2), so a width wrap inside the group's own
                 // *body* prints newlines the reparse re-segments into several
@@ -2513,8 +2528,8 @@ fn lower_expl_code(
                 // `printer::step_fill`'s `remainder_broken` then fires
                 // unconditionally. Structural statements and
                 // [`Statements::Ignore`] streams are both sticky, so the two
-                // paths agree there; a *fallback* line commits as a plain greedy
-                // fill with no cascade, so they disagree, and the sibling after
+                // paths agree there; a *fallback* line commits as a greedy fill
+                // with no cascade, so they disagree, and the sibling after
                 // the group glued onto the closing `}` on pass 1 and dropped to
                 // its own line on pass 2. Committing mid-statement also falsifies
                 // the plain fill's own fixed-point argument (each printed line
@@ -2523,20 +2538,24 @@ fn lower_expl_code(
                 // unbreakable `glue_before` space, since `flush_atom` emits a
                 // pending separator only when `parts` is non-empty.
                 //
-                // Nothing is lost by falling through to the soft continuation-hang
-                // branches: the group's `flat_width` is still `None`, so its own
-                // gap breaks on every pass at every width — only the *sibling* gap
-                // after it is left to the fill, which is the point. Same reasoning
-                // as the trailing-`COMMAND` arm below, which was given this
-                // treatment for its one shape while the `GROUP` hang was not.
-                // The remaining sub-arms (head-hug, the abutting-atom glue, and
-                // the no-head-to-hug commit) read the same unsafe predicate and
-                // are the recorded residue (TODO.md).
+                // Nothing is lost by falling through to the soft branches below.
+                // The *hanging group* keeps its own break either way: its
+                // `flat_width` is `None`, so its leading gap breaks on every pass
+                // at every width — only the *sibling* gap after it is left to the
+                // fill, which is the point. The other three arms (head-hug, the
+                // abutting-atom glue, the no-head-to-hug commit) differ from the
+                // fill only in *committing the line*, and a fallback line's fill
+                // hugs ([`Ir::HugFill`], `commit_line`): a detonating atom is
+                // measured by its first line, so it stays on the head's line
+                // exactly as `group_hug` would have put it, and the atoms after it
+                // are left to the fill instead of being stranded — which is what
+                // re-glues an authored abutment (`}\@ehc`, `}.`, `}{`) the
+                // no-head-to-hug commit used to split.
                 debug_assert!(
                     !in_fallback || !line_sticky,
-                    "a fallback statement must commit as a plain fill"
+                    "a fallback statement must commit as a hugging fill"
                 );
-                let forced_dispatch = !(in_fallback && hang_group) && ir.contains_forced_break();
+                let forced_dispatch = !in_fallback && ir.contains_forced_break();
                 // A junk-bearing glued statement: plain atom accumulation, hard
                 // separators, no line commits until the boundary (see above).
                 if in_glued {
@@ -2566,11 +2585,7 @@ fn lower_expl_code(
                     && is_trailing_in_statement(&elements, idx, map.as_ref())
                     && child.children().any(|c| c.kind() == SyntaxKind::GROUP)
                 {
-                    let head = if parts.len() == 1 {
-                        parts.drain(..).next().unwrap()
-                    } else {
-                        Ir::Fill(std::mem::take(&mut parts).into())
-                    };
+                    let head = line_fill(std::mem::take(&mut parts), line_sticky);
                     // The head↔command separator is the pending gap's *flat*
                     // form: a space for an ordinary inter-token gap, nothing
                     // after a tie (`plus ~\__char_show_code:n {…}` must not
@@ -2636,11 +2651,7 @@ fn lower_expl_code(
                         // `group_hug`, so pass-stable (never the `step_fill` local
                         // cascade that would split a short head off a detonating
                         // trailing block).
-                        let head = if parts.len() == 1 {
-                            parts.drain(..).next().unwrap()
-                        } else {
-                            Ir::Fill(std::mem::take(&mut parts).into())
-                        };
+                        let head = line_fill(std::mem::take(&mut parts), line_sticky);
                         let sep = sep_before_next.take().unwrap_or(Ir::Line);
                         seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
                         lines.push(Ir::group_hug(Ir::concat(vec![head, sep, ir])));

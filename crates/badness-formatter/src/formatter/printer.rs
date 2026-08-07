@@ -135,6 +135,9 @@ enum Cmd<'a> {
         prefix: Option<&'a str>,
         /// A [`Ir::StickyFill`]: once an atom has broken, the rest break too.
         sticky: bool,
+        /// A [`Ir::HugFill`]: an atom carrying a forced break is measured by
+        /// its first line instead of a flat width it cannot have.
+        hug: bool,
         /// Sticky bookkeeping: set once any earlier atom in this fill broke, so
         /// every remaining atom is forced to break. Always `false` for a plain
         /// (non-sticky) fill.
@@ -347,9 +350,12 @@ impl Printer {
                     parts,
                     prefix,
                     sticky,
+                    hug,
                     broken,
                 } => {
-                    self.step_fill(&w, indent, mode, parts, prefix, sticky, broken, &mut stack);
+                    self.step_fill(
+                        &w, indent, mode, parts, prefix, sticky, hug, broken, &mut stack,
+                    );
                     continue;
                 }
                 Cmd::PreferredFill {
@@ -412,6 +418,7 @@ impl Printer {
                     parts: &parts[..],
                     prefix,
                     sticky: false,
+                    hug: false,
                     broken: false,
                 }),
                 Ir::StickyFill(parts) => stack.push(Cmd::Fill {
@@ -420,6 +427,16 @@ impl Printer {
                     parts: &parts[..],
                     prefix,
                     sticky: true,
+                    hug: false,
+                    broken: false,
+                }),
+                Ir::HugFill(parts) => stack.push(Cmd::Fill {
+                    indent,
+                    mode,
+                    parts: &parts[..],
+                    prefix,
+                    sticky: false,
+                    hug: true,
                     broken: false,
                 }),
                 Ir::PreferredFill {
@@ -729,6 +746,11 @@ impl Printer {
     /// atom is forced to break regardless of its own fit — the greedy fill's
     /// independent gaps are exactly what would re-glue an expl3 false-branch onto a
     /// detonated block's short closing line (issue #94).
+    ///
+    /// A **hugging** fill (`hug`, [`Ir::HugFill`]) changes the fit question rather
+    /// than the cascade: an atom that carries a forced break is placed when its
+    /// *first line* fits (see [`Self::fill_atom_mode`]), instead of being pushed to
+    /// a line of its own for want of a flat width.
     #[allow(clippy::too_many_arguments)]
     fn step_fill<'a>(
         &self,
@@ -738,6 +760,7 @@ impl Printer {
         parts: &'a [Ir],
         prefix: Option<&'a str>,
         sticky: bool,
+        hug: bool,
         broken: bool,
         stack: &mut Vec<Cmd<'a>>,
     ) {
@@ -760,8 +783,11 @@ impl Printer {
         let content = &parts[0];
         let w0 = self.flat_width(content);
         // Under a sticky cascade every remaining atom breaks; otherwise the atom
-        // breaks only when it does not fit flat here.
-        let content_fits = !broken && matches!(w0, Some(width) if col + width <= self.line_width);
+        // is placed here when it fits — fully flat, or (in a hugging fill) with
+        // only its first line on this line.
+        let content_mode = (!broken)
+            .then(|| self.fill_atom_mode(col, content, hug))
+            .flatten();
 
         if parts.len() == 1 {
             // The fill's last atom shares its line with whatever the lowering
@@ -770,11 +796,24 @@ impl Printer {
             // rest-awareness `group_fits` has. Without this the atom's folded
             // hang break is never taken: the atom alone fits, goes `Flat`, and
             // the glued tail overflows the line the measurement never saw.
-            let flat =
-                content_fits && matches!(w0, Some(width) if self.rest_fits(col + width, stack));
+            //
+            // A hug claim is exempt: like [`Ir::group_hug`]'s, it never covered
+            // the rest of the line to begin with (what follows sits on the
+            // atom's *closing* line, not this one). Without the exemption the
+            // last atom of a hugging fill would break where the same atom
+            // mid-fill hugs, and those are the same atom on consecutive passes
+            // — a statement whose trailing `,` moved to its own line ends the
+            // fill one atom earlier (`xfm.dtx`).
+            let mode = match content_mode {
+                Some(Mode::Flat) if matches!(w0, Some(width) if self.rest_fits(col + width, stack)) => {
+                    Mode::Flat
+                }
+                Some(Mode::FlatPrefix) => Mode::FlatPrefix,
+                _ => Mode::Break,
+            };
             stack.push(Cmd::Node {
                 indent,
-                mode: if flat { Mode::Flat } else { Mode::Break },
+                mode,
                 node: content,
                 prefix,
             });
@@ -782,16 +821,26 @@ impl Printer {
         }
 
         let sep = &parts[1];
-        // Pair fit: the current atom, its separator, and the next atom, all flat.
-        // Alternating fills always end on an atom, so `parts[2]` exists here.
+        // Pair fit: the current atom, its separator, and the next atom, all
+        // flat — the next atom by the same rule as `content_mode`, so a hugging
+        // fill keeps a detonating atom glued to the head before it. The current
+        // atom must still claim a full flat width: after a multi-line atom the
+        // next atom's column is unknown, so the gap breaks (a `Nil` separator
+        // renders nothing either way, which is what re-glues a sibling onto a
+        // hanging group's closing line). Alternating fills always end on an
+        // atom, so `parts[2]` exists here.
         let pair_fits = !broken
-            && match (w0, self.flat_width(sep), self.flat_width(&parts[2])) {
-                (Some(a), Some(s), Some(b)) => col + a + s + b <= self.line_width,
+            && match (w0, self.flat_width(sep)) {
+                (Some(a), Some(s)) => self.fill_atom_mode(col + a + s, &parts[2], hug).is_some(),
                 _ => false,
             };
         // Once any atom breaks, a sticky fill stays broken for its remainder, so
         // the later gaps break unconditionally instead of each deciding afresh.
-        let remainder_broken = sticky && (broken || !content_fits);
+        // A *hugged* atom starts the cascade too: it was placed on this line,
+        // but only its first line fits — the rest of the line is gone, so the
+        // atoms after it are exactly the ones issue #94 must not re-glue onto a
+        // detonated block's short closing line.
+        let remainder_broken = sticky && (broken || content_mode != Some(Mode::Flat));
         // Push the remainder first (popped last), then the separator, then the
         // content (popped first), so they print in order.
         stack.push(Cmd::Fill {
@@ -800,6 +849,7 @@ impl Printer {
             parts: &parts[2..],
             prefix,
             sticky,
+            hug,
             broken: remainder_broken,
         });
         stack.push(Cmd::Node {
@@ -810,14 +860,39 @@ impl Printer {
         });
         stack.push(Cmd::Node {
             indent,
-            mode: if content_fits {
-                Mode::Flat
-            } else {
-                Mode::Break
-            },
+            mode: content_mode.unwrap_or(Mode::Break),
             node: content,
             prefix,
         });
+    }
+
+    /// The mode a fill atom is printed in when it can be placed at `col`, or
+    /// `None` when it must move to the next line.
+    ///
+    /// A plain fill asks one question: does the atom render *fully flat* within
+    /// the line width. A **hugging** fill ([`Ir::HugFill`]) accepts a second
+    /// answer: an atom carrying a forced break has no flat width at all, but its
+    /// *first line* may still fit here, in which case it is placed and prints as
+    /// [`Mode::FlatPrefix`] — the same claim [`Ir::group_hug`] makes about a
+    /// trailing block, so the atom's own body breaks below instead of the atom
+    /// being pushed to a line of its own. Flat is tried first, so a single-line
+    /// comment (which `HugPrefix` rejects but a flat footprint counts) still
+    /// shares its line.
+    fn fill_atom_mode(&self, col: usize, atom: &Ir, hug: bool) -> Option<Mode> {
+        if matches!(self.flat_width(atom), Some(width) if col + width <= self.line_width) {
+            return Some(Mode::Flat);
+        }
+        let prefix_fits = hug
+            && self
+                .flat_end(
+                    col,
+                    atom,
+                    FlatMeasure::HugPrefix {
+                        excuse_overflow: false,
+                    },
+                )
+                .is_some();
+        prefix_fits.then_some(Mode::FlatPrefix)
     }
 
     /// The flat-rendered width of `node`, or `None` if it cannot be laid flat
@@ -904,7 +979,9 @@ impl Printer {
                 }
                 // A fill measured flat is its atoms separated by single-space
                 // `Line`s; push the parts and let the arms above account them.
-                Ir::Fill(parts) | Ir::StickyFill(parts) => stack.extend(parts.iter().rev()),
+                Ir::Fill(parts) | Ir::StickyFill(parts) | Ir::HugFill(parts) => {
+                    stack.extend(parts.iter().rev());
+                }
                 Ir::PreferredFill { atoms, .. } => {
                     let gaps = atoms.len().saturating_sub(1);
                     col = col.saturating_add(gaps);
@@ -1216,7 +1293,7 @@ impl Printer {
                     };
                     work.push((m, m == Mode::Flat, chosen));
                 }
-                Ir::Fill(parts) | Ir::StickyFill(parts) => {
+                Ir::Fill(parts) | Ir::StickyFill(parts) | Ir::HugFill(parts) => {
                     for item in parts.iter().rev() {
                         work.push((mode, verified, item));
                     }
@@ -1688,5 +1765,74 @@ mod tests {
             ..FormatStyle::default()
         });
         assert_eq!(narrow.print(&ir), "* aa bbbb\n  cc");
+    }
+
+    #[test]
+    fn hug_fill_keeps_a_detonating_atom_on_the_head_line() {
+        let printer = Printer::new(FormatStyle::default());
+        let parts = [
+            Ir::text("head"),
+            Ir::line(),
+            Ir::concat([Ir::text("cmd"), block()]),
+        ];
+        // A plain fill has no flat width for the block-bearing atom, so its gap
+        // breaks and the atom starts a line of its own.
+        let plain = Ir::Fill(parts.to_vec().into()).propagate_breaks();
+        assert_eq!(printer.print(&plain), "head\ncmd{\n  body\n}");
+        // The hugging fill measures the atom's first line instead: `cmd{` fits
+        // after `head `, so the pair stays joined and only the body breaks.
+        let hug = Ir::HugFill(parts.to_vec().into()).propagate_breaks();
+        assert_eq!(printer.print(&hug), "head cmd{\n  body\n}");
+    }
+
+    #[test]
+    fn hug_fill_hugs_its_last_atom_too() {
+        // The rest-awareness that keeps a *flat* last atom honest must not
+        // demote a hug claim: the same atom mid-fill and last-in-fill has to
+        // land in the same place, since a statement can end one atom earlier on
+        // the next pass.
+        let printer = Printer::new(FormatStyle::default());
+        let last = Ir::HugFill(
+            vec![
+                Ir::text("head"),
+                Ir::line(),
+                Ir::concat([Ir::text("cmd"), block()]),
+            ]
+            .into(),
+        )
+        .propagate_breaks();
+        let mid = Ir::HugFill(
+            vec![
+                Ir::text("head"),
+                Ir::line(),
+                Ir::concat([Ir::text("cmd"), block()]),
+                Ir::line(),
+                Ir::text("tail"),
+            ]
+            .into(),
+        )
+        .propagate_breaks();
+        assert_eq!(printer.print(&last), "head cmd{\n  body\n}");
+        assert_eq!(printer.print(&mid), "head cmd{\n  body\n}\ntail");
+    }
+
+    #[test]
+    fn hug_fill_breaks_when_even_the_first_line_does_not_fit() {
+        let style = FormatStyle {
+            line_width: 8,
+            indent_width: 2,
+            ..FormatStyle::default()
+        };
+        let printer = Printer::new(style);
+        let ir = Ir::HugFill(
+            vec![
+                Ir::text("head"),
+                Ir::line(),
+                Ir::concat([Ir::text("command"), block()]),
+            ]
+            .into(),
+        )
+        .propagate_breaks();
+        assert_eq!(printer.print(&ir), "head\ncommand{\n  body\n}");
     }
 }

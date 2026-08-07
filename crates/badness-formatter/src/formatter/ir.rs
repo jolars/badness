@@ -136,6 +136,24 @@ pub(crate) enum Ir {
     /// pass-invariant (issue #94). Shares [`Ir::Fill`]'s builder shape; the
     /// expl3 statement lowering constructs it directly.
     StickyFill(Rc<[Ir]>),
+    /// A *hugging* fill: laid out greedily like [`Ir::Fill`], but an atom that
+    /// carries a forced break is measured by its **first line** (the prefix up
+    /// to that break, [`crate::formatter::printer::FlatMeasure::HugPrefix`])
+    /// instead of a whole-atom flat width it can never have. So a detonating
+    /// block stays glued to the head it follows and lets its own body break
+    /// below, exactly as [`Ir::group_hug`] does for a single trailing block —
+    /// the fill-level form of the same rule. Same alternating `[atom, sep,
+    /// atom, …]` shape as [`Ir::Fill`].
+    ///
+    /// Used for expl3 *fallback* statement lines, where whether an atom is
+    /// forced is not pass-invariant: a width wrap inside a fallback statement's
+    /// content mints newlines the next parse re-segments into hard-broken
+    /// statements, so a plain fill's `flat_width` dispatch renders one layout on
+    /// pass 1 and another on pass 2 (`\vbox to \Gin@req@height{%`,
+    /// `\hbox_set_to_wd:Nnn \l_shipout_box \l_shipout_box_wd_dim {…}`). Measuring
+    /// the first line is invariant under that flip: a soft atom's prefix *is* its
+    /// flat width, so both passes place the atom identically.
+    HugFill(Rc<[Ir]>),
     /// A paragraph fill whose gaps remember which ones were authored newlines.
     /// The printer selects a global minimum-cost layout: overflow first, then
     /// short lines relative to `target`, changed authored breaks, displacement,
@@ -392,7 +410,9 @@ impl Ir {
         match self {
             Ir::Group { .. } | Ir::ConditionalGroup(_) | Ir::ConditionalGroupAllLines(_) => true,
             Ir::Concat(items) => items.iter().any(Ir::contains_group),
-            Ir::Fill(parts) | Ir::StickyFill(parts) => parts.iter().any(Ir::contains_group),
+            Ir::Fill(parts) | Ir::StickyFill(parts) | Ir::HugFill(parts) => {
+                parts.iter().any(Ir::contains_group)
+            }
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_group),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
             Ir::MarginPrefix { inner, .. } => inner.contains_group(),
@@ -434,7 +454,9 @@ impl Ir {
             Ir::Concat(items) => items.iter().any(Ir::contains_forced_break),
             // A fill's separators are soft `Line`s; only its atoms could carry a
             // forced break (none do under reflow lowering, but stay correct).
-            Ir::Fill(parts) | Ir::StickyFill(parts) => parts.iter().any(Ir::contains_forced_break),
+            Ir::Fill(parts) | Ir::StickyFill(parts) | Ir::HugFill(parts) => {
+                parts.iter().any(Ir::contains_forced_break)
+            }
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_forced_break),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
             Ir::MarginPrefix { inner, .. } => inner.contains_forced_break(),
@@ -499,6 +521,10 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
         Ir::StickyFill(parts) => {
             let (forced, rewritten) = saturate_slice(parts);
             (forced.any, rewritten.map(Ir::StickyFill))
+        }
+        Ir::HugFill(parts) => {
+            let (forced, rewritten) = saturate_slice(parts);
+            (forced.any, rewritten.map(Ir::HugFill))
         }
         Ir::PreferredFill {
             atoms,
@@ -655,6 +681,7 @@ mod tests {
             Ir::Concat(items)
             | Ir::Fill(items)
             | Ir::StickyFill(items)
+            | Ir::HugFill(items)
             | Ir::ConditionalGroup(items)
             | Ir::ConditionalGroupAllLines(items) => items.iter().for_each(assert_saturated),
             Ir::PreferredFill { atoms, .. } => atoms.iter().for_each(assert_saturated),

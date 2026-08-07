@@ -139,8 +139,8 @@ the layout re-decides identically.
 
 ### Known violations
 
-Four sites read the unsafe predicate; two are bounded residues and two are Tier
-2:
+Four sites read the unsafe predicate; one is an accidental residue and three are
+Tier 2, each with a written fixed-point argument:
 
 - The **expl3 fallback statement** (`semantic::expl3`)—a statement whose head
   has no derivable arity (no `:` suffix; a `w`/`D`/mid-spec-`T`/`F` or unknown
@@ -155,13 +155,10 @@ Four sites read the unsafe predicate; two are bounded residues and two are Tier
   newline-keyed extent can never move. The strict-invariance oracle cannot gate
   a stream containing a fallback head; the convergence oracle validates the
   argument empirically. A fallback line's plain greedy fill is also what forbids
-  *committing a line* mid-statement, which is why a hanging brace group there
-  never takes the forced-break dispatch (see [Sticky-break statement
-  fills](#sticky-break-statement-fills)). The dispatch's three other sub-arms
-  (head-hug, the abutting-atom glue, and the no-head-to-hug commit) still read
-  the predicate; gating them too resolves two more corpus entries but splits
-  head↔block pairs the hug currently keeps joined, so it is filed in `TODO.md`
-  rather than taken here.
+  *committing a line* mid-statement, which is why **no** arm of the forced-break
+  dispatch fires there: the fill hugs instead (see [Sticky-break statement
+  fills](#sticky-break-statement-fills)), so the forced-break predicate is not
+  read on a fallback line at all.
 - `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups
   *outside* expl3 regions. **Accidental**; already filed in `TODO.md` as
   "Opaque-group layout non-determinism".
@@ -827,14 +824,13 @@ dispatches its inner as `Mode::FlatPrefix`, not `Flat` (see *`Mode::Flat` is an
 honest contract*): the head's gaps render flat, but any group past the first
 forced break re-decides for itself.
 
-The hug is reached from the forced-break dispatch, so on a *fallback* line it
-reads a predicate that is not pass-invariant there—whether the child detonates
-can flip between passes (see [Sticky-break statement
-fills](#sticky-break-statement-fills)). It is kept anyway: `glue_before` already
-makes the gap before a *recognized* head unbreakable, so the common case stays
-joined regardless, and dropping the hug splits pairs like
-`\vbox to \Gin@req@height{%` that no other rule rejoins. The residue is recorded
-in `TODO.md`.
+The hug is reached from the forced-break dispatch, which fires only on a
+*structural* statement: whether a child detonates is not pass-invariant on a
+fallback line. There the same placement comes from the line's own fill, which
+hugs (`Ir::HugFill`, see [Sticky-break statement
+fills](#sticky-break-statement-fills)) — so pairs like
+`\vbox to \Gin@req@height{%` stay joined without any arm reading the unsafe
+predicate.
 
 **No sibling coupling.** Each brace argument breaks on its own body; a
 *sibling's* forced break (guard, comment, `.dtx` margin) is none of its
@@ -945,12 +941,13 @@ one unit, so intercepting them would detonate a *preceding* argument group.
 ### Sticky-break statement fills
 
 Every *structural* expl3 statement line is committed as an `Ir::StickyFill`, not
-a plain `Ir::Fill`. (A *fallback* or junk-glued line instead commits as a plain
-greedy fill: greedy packing is self-fulfilling—each printed line re-segments to
-a fallback statement that re-fills to exactly itself—while a sticky cascade
-forces atoms that would fit onto broken lines, a shape the next pass's shorter
-per-line statements do not reproduce.) Both greedily fill atoms across the
-width; the difference is the break *cascade*: in a plain fill each gap decides
+a plain `Ir::Fill`. (A *fallback* or junk-glued line instead commits as a greedy
+fill that hugs, `Ir::HugFill`: greedy packing is self-fulfilling—each printed
+line re-segments to a fallback statement that re-fills to exactly itself—while a
+sticky cascade forces atoms that would fit onto broken lines, a shape the next
+pass's shorter per-line statements do not reproduce. See [the hugging
+fill](#the-hugging-fill).) Both greedily fill atoms across the width; the
+difference is the break *cascade*: in a plain fill each gap decides
 independently (a long word breaks, the next words keep filling—correct for prose
 reflow), whereas in a sticky fill, **once any atom lands on a broken line every
 later atom breaks too**. The cascade lives in `printer::step_fill`
@@ -991,15 +988,50 @@ own fixed-point argument (each printed line re-segments to a fallback statement
 that re-fills to itself) and silently drops the unbreakable `glue_before` space,
 since `flush_atom` emits a pending separator only when `parts` is non-empty.
 
-So a **hanging brace group** inside a fallback statement always takes the soft
-continuation-hang path, forced or soft. Nothing is lost: a forced body's
-`flat_width` is `None`, so `step_fill` dispatches that atom `Mode::Break` on
-every pass at every width and its leading `Line` breaks—the same bytes, minus
-the line commit.
+So **no** arm of that dispatch fires inside a fallback statement; the predicate
+is not read there at all. Nothing is lost, arm by arm:
 
-The other three sub-arms of the same dispatch (head-hug, the abutting-atom glue,
-and the no-head-to-hug commit) still read the unsafe predicate; see the [known
-violations](#known-violations) list and TODO.md.
+- The **hanging brace group** takes the soft continuation-hang path either way:
+  a forced body's `flat_width` is `None`, so `step_fill` dispatches that atom
+  `Mode::Break` on every pass at every width and its leading `Line` breaks—the
+  same bytes, minus the line commit.
+- The **abutting-atom glue** already glued (`atom.push`); only its line commit
+  is dropped.
+- The **no-head-to-hug commit** stranded whatever the author had *abutted* onto
+  the block's closing brace (`}\@ehc`, `}.`, `}{`) on a line of its own—a gap
+  the source never had. Left to the fill, the abutment survives.
+- The **head-hug** is the one that bought something: without it a detonating
+  atom has no flat width, so the fill's `pair_fits` fails and the gap before it
+  breaks, splitting `\vbox to` from `\Gin@req@height{%`. So the *fill itself*
+  hugs.
+
+#### The hugging fill
+
+A fallback (or junk-glued) line commits as an `Ir::HugFill`: a plain greedy fill
+whose atoms are measured by `FlatMeasure::HugPrefix` when they have no flat
+width—their **first line**, the prefix up to their first forced break, exactly
+the claim `Ir::group_hug` makes about a trailing block. A hugged atom prints
+`Mode::FlatPrefix`, so its own body still breaks below.
+
+This is pass-invariant where the dispatch was not. A soft atom's prefix *is* its
+flat width, so the measurement is unchanged for it; and the atom that flips
+soft→forced across passes (a width wrap inside fallback content mints statement
+boundaries the reparse reads as hard breaks) is placed at the same column both
+times, because the flip cannot change the *first line*. The rest-awareness that
+keeps a flat last atom honest is deliberately not applied to a hug claim—like
+`group_hug`'s, it never covered the rest of the line, and a statement that ends
+one atom earlier on the next pass must place that atom identically
+(`xo-place.dtx`).
+
+Every *early* line commit must therefore build its head with the same fill kind
+the line would have committed as (`line_fill`, mirroring `commit_line`): the
+trailing-command arm hands a head off as one fill, and a plain `Ir::Fill` there
+would break the very atoms that hugged mid-line.
+
+Gate: 17 `non-fixed-point` corpus entries resolved (latex3 10, latex2e 7), no
+additions in any of the six baseline sets; pgf byte-unchanged. Production output
+moved in 19 files across the three corpora, and every diff is a *join*—no hunk
+emits more lines than it replaced.
 
 ### Interaction with `.dtx` doc margins
 

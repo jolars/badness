@@ -1,0 +1,11 @@
+\ExplSyntaxOn
+\cs_new_protected:Npn \@@_shipout_box:n #1
+  {
+    \hbox_set_to_wd:Nnn \l_shipout_box \l_shipout_box_wd_dim
+      {
+        \hbox_set:Nn \l_@@_tmp_box { \l_@@_saved_badness_tl #1 }
+        \box_set_wd:Nn \l_@@_tmp_box \c_zero_dim
+        \hbox_unpack:N \l_shipout_box
+      }
+  }
+\ExplSyntaxOff

@@ -230,19 +230,30 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `}`. Pinned by `expl_fallback_forced_group_sibling` /
     `expl_fallback_forced_group_glue` and
     `a_multi_line_group_node_does_not_end_a_fallback_line`.
-  - [ ] *Forced-break dispatch residue: the other three sub-arms.* The
-    head-hug, abutting-atom-glue and no-head-to-hug arms of the same dispatch
-    still read `contains_forced_break()` on a fallback line. Measured:
-    gating all four resolves **two more** entries (`l3pdffield.sty`,
-    `tagpdf-debug.sty`, 7 total) with no additions and all tests green, but
-    the head-hug arm is the one that buys them and dropping it splits pairs no
-    other rule rejoins (`\vbox to` / `\Gin@req@height{%`, `\global\setbox9` /
-    `\vtop{%`, `\hbox_set_to_wd:Nnn \l_shipout_box` / `\l_shipout_box_wd_dim`).
-    Gating only the other two arms buys nothing at the gate and re-glues 14
-    files' authored abutments (`}\@ehc`, `}.`, `}{`) — arguably right, but
-    unmeasured. Resolution wants a *pass-invariant* head-hug for fallback
-    lines (hug soft and forced alike, the trailing-`COMMAND` arm's precedent),
-    not a plain removal.
+  - [x] ~~*Forced-break dispatch residue: the other three sub-arms.*~~ **Done:
+    the head-hug moved into the fill.** A fallback (or junk-glued) line now
+    commits as an `Ir::HugFill` — a greedy fill whose atoms, when they carry a
+    forced break and so have no flat width, are measured by their *first line*
+    (`FlatMeasure::HugPrefix`, `Ir::group_hug`'s own claim) and print
+    `Mode::FlatPrefix`. That is the pass-invariant head-hug the entry asked
+    for: a soft atom's prefix *is* its flat width, so the soft→forced flip
+    across passes cannot move it. With it, **no** arm of the dispatch reads
+    `contains_forced_break()` on a fallback line. Two supporting details: the
+    fill's rest-awareness is not applied to a hug claim (like `group_hug`'s it
+    never covered the rest of the line, and a statement that ends one atom
+    earlier next pass must place that atom identically — `xo-place.dtx`), and
+    every *early* line commit builds its head with the same fill kind
+    `commit_line` would (`line_fill`), or the trailing-command arm's plain
+    `Ir::Fill` head breaks the atoms that hugged mid-line. Gate: **17
+    `non-fixed-point` entries resolved** (latex3 10, latex2e 7 — the two this
+    entry predicted plus fifteen the reflow-default flip exposed), **no
+    additions** in any of the six sets, pgf byte-unchanged. Production moved in
+    19 files and every hunk is a *join*: the pairs the entry worried about stay
+    joined (`\vbox to \Gin@req@height{%`, `\hbox_set_to_wd:Nnn
+    \l_shipout_box \l_shipout_box_wd_dim`) and 14 files' authored abutments
+    (`}\@ehc`, `}.`, `}{`) re-glue. Pinned by `expl_fallback_hug_head`,
+    `expl_fallback_abutting_sibling`, `dtx_expl3_fallback_head_fill` and the
+    `hug_fill_*` printer units.
   - [ ] *In-region `BracketPolicy` audit*: a wrap before an attached `[` can
     change CST shape across passes (pre-existing; S4's unit re-formation
     assumes bracket re-attachment is stable — verify which policies are

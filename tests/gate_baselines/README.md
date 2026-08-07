@@ -69,6 +69,22 @@ Re-recorded once more after **a relation became an acceptable expl3 `N` slot**
 `non-fixed-point` entry resolved (latex3's `xpackages/xor/xo-or.dtx`), no
 additions.
 
+Re-recorded once more after the **hugging fallback fill** (`Ir::HugFill`), which
+retired the last of the forced-break dispatch inside fallback statements: an
+atom that carries a forced break is measured by its first line, so a fallback
+line places it without reading the non-pass-invariant forced-break predicate at
+all. **17 `non-fixed-point` entries resolved** — latex3 45 → 34 (`l3fp-aux.dtx`,
+`l3fp-trig.dtx`, `l3chk.dtx`, `l3tree.dtx`, `l3galley.dtx`, `xgalley.dtx`,
+`xcontents.dtx`, `xfm-test-cls.dtx`, `xo-footnote.dtx`, `xo-grid.dtx`), latex2e
+105 → 98 (`ltmeta.dtx`, `latex-lab-firstaid.dtx`, `latex-lab-l3doc-tagging.dtx`,
+`latex-lab-tikz.dtx`, `latex-lab-title.dtx`, `l3pdffield.sty`,
+`tagpdf-debug.sty`) — with **no additions** in any of the six sets and pgf
+byte-unchanged. Production output moved in 19 files across the three corpora and
+every hunk is a *join* (no hunk emits more lines than it replaced): head↔block
+pairs stay on one line (`\vbox to \Gin@req@height{%`,
+`\hbox_set_to_wd:Nnn \l_shipout_box \l_shipout_box_wd_dim`) and authored
+abutments onto a block's closing brace (`}\@ehc`, `}.`, `}{`) re-glue.
+
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):
 

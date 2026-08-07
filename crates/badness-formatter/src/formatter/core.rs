@@ -2957,10 +2957,11 @@ fn lower_expl_code(
 /// Whether an expl3-region brace group *forces* a broken (multi-line) block —
 /// independent of width — because its body holds a docstrip guard, a comment, or a
 /// `.dtx` margin, the same tokens that drive [`lower_expl_group`]'s block form. Used
-/// by the sibling-coupling scan in [`lower_expl_code`] to decide (without lowering)
-/// whether a command's other brace arguments must break in step. Keyed on this
-/// width-independent trigger only, so the decision is a pass-stable function of the
-/// arg-list content; a sibling that would break solely from width does not couple.
+/// as the forced-break *self* test in the trailing-hang guards of
+/// [`lower_expl_code`] (a body that already forces a break wants the plain Allman
+/// block, not the three-candidate hang). Keyed on this width-independent trigger
+/// only, so the decision is a pass-stable function of the group's own content —
+/// never of width, per the no-sibling-coupling rule (issue #101).
 fn expl_group_forces_break(node: &SyntaxNode) -> bool {
     node.descendants_with_tokens()
         .filter_map(SyntaxElement::into_token)

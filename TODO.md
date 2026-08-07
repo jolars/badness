@@ -266,9 +266,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     which cannot exist (flush + reachable ⇒ attached). Detail in
     `formatter.md` (§ *Bracket re-attachment is stable in-region*); pinned by
     the `expl_bracket_attachment` fixture and `bracket_attachment_stability`.
-  - [ ] *Per-statement sibling coupling*: `couple_siblings` stays
-    `Ignore`-only; a structural statement spanning siblings could couple its
-    brace arguments the same way.
   - [ ] *Sibling-attached branch explosion*: `\prop_get:NnNTF \p {k} \l {T}
     {F}` forms one unit now, but the R4 explosion still fires only via
     head-attached branches (`lower_expl_conditional` returns `None`); the

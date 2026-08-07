@@ -1143,12 +1143,17 @@ fn margin_floats_into_paragraph(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
 /// of scope for the first cut.
 ///
 /// [`dtx_paragraph_reflows`] is a cheap up-front gate; the exact one is the reflow
-/// itself. A paragraph whose reflow commits content *outside* the `% ` margin (a
-/// forced-break block, a column-0 guard — see [`LineBuilder::margin_escaped`]) is
-/// re-lowered on the preserve path instead: on an unmargined line a `.dtx` doc
-/// comment re-lexes as content, so keeping that layout would break the
-/// whitespace-only invariant. The gate reads content only, never [`LowerCtx::wrap`],
-/// so `--wrap reflow` on a `.dtx` is exactly as safe as any other mode.
+/// itself. A forced-break block whose interior lines ride their own margins is
+/// committed raw under a canonical first-line margin
+/// ([`LineBuilder::push_margined_block`]), and a clean guard line becomes its own
+/// column-0 segment ([`collect_guard_line`]), so both reflow with the prose around
+/// them. A paragraph whose reflow still commits content *outside* the `% ` margin
+/// (a block with an unmargined interior line, a guard line that cannot be
+/// isolated — see [`LineBuilder::margin_escaped`]) is re-lowered on the preserve
+/// path instead: on an unmargined line a `.dtx` doc comment re-lexes as content,
+/// so keeping that layout would break the whitespace-only invariant. The gate
+/// reads content only, never [`LowerCtx::wrap`], so `--wrap reflow` on a `.dtx`
+/// is exactly as safe as any other mode.
 fn lower_dtx_doc_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if dtx_doc_paragraph_reflows_safely(node, cx) {
         reflow_elements(node.children_with_tokens(), cx, ReflowKind::DtxProse)
@@ -1358,12 +1363,14 @@ struct LineBuilder<'a> {
     /// otherwise.
     margin: Option<&'static str>,
     /// Whether some content was committed *outside* the [`Self::margin`] — a
-    /// forced-break block placed by [`Self::push_segment`] (which applies no
-    /// margin), or a column-0 `GUARD` that can never sit under one. Such content
-    /// lands on a line with no leading `%`, where a `.dtx` doc comment (`^^A`, a
-    /// `%` run) re-lexes as content: the layout would no longer be
-    /// whitespace-only. [`lower_dtx_doc_paragraph`] reads this and falls back to
-    /// the byte-faithful preserve path. Always `false` when `margin` is `None`.
+    /// forced-break block whose interior lines do not all ride their own
+    /// margins ([`block_rides_own_margins`]), one opening on an unmargined
+    /// line, or a column-0 `GUARD` whose line could not be isolated
+    /// ([`collect_guard_line`]). Such content lands on a line with no leading
+    /// `%`, where a `.dtx` doc comment (`^^A`, a `%` run) re-lexes as content:
+    /// the layout would no longer be whitespace-only.
+    /// [`lower_dtx_doc_paragraph`] reads this and falls back to the
+    /// byte-faithful preserve path. Always `false` when `margin` is `None`.
     margin_escaped: bool,
     /// How a completed run is turned into a segment (fill vs. sentences).
     render: RunRender<'a>,
@@ -1425,6 +1432,18 @@ impl<'a> LineBuilder<'a> {
         self.seps
             .push(std::mem::replace(&mut self.pending_sep, Ir::hard_line()));
         self.lines.push(content);
+    }
+
+    /// Commit a forced-break block as its own segment under the `.dtx` margin:
+    /// the canonical `% ` re-attached for its first line (the source margin was
+    /// dropped by the `DOC_MARGIN` arm, or floated out of the paragraph), then
+    /// the block raw — its interior lines carry their own column-0 margins
+    /// byte-faithfully ([`block_rides_own_margins`]), so no [`Ir::margin_prefix`]
+    /// wrap is needed (or safe: the printer's re-emitted prefix would collide
+    /// with the block's own `Ir::column_zero` margins).
+    fn push_margined_block(&mut self, ir: Ir) {
+        let margin = self.margin.expect("only called under `.dtx` prose reflow");
+        self.push_segment(Ir::concat([Ir::column_zero(margin), ir]));
     }
 
     /// Glue a trailing comment onto the run so it rides the end of its line: onto
@@ -1563,6 +1582,13 @@ fn reflow_elements_checked(
     // reset at every physical-line boundary.
     let mut line_all_commands = true;
     let mut line_has_content = false;
+    // Whether the current physical source line rides a `% ` documentation margin.
+    // Only meaningful under `DtxProse`. Initialized `true`: both `DtxProse`
+    // callers gate on a margined first line ([`dtx_paragraph_starts_margined`],
+    // [`dtx_run_starts_margined`]) — a contract that covers the floated-margin
+    // paragraph, whose leading `%` sits *outside* the element stream. Cleared at
+    // every newline, re-established by the line's `DOC_MARGIN`.
+    let mut line_margined = true;
     // Whether the previous element was a forced-break node committed via
     // `push_segment` (a doc-commented command, an environment, …). A `COMMENT`
     // on the same physical line as such a block — glued directly
@@ -1589,6 +1615,7 @@ fn reflow_elements_checked(
                     b.pending_sep = Ir::empty_line();
                     line_all_commands = true;
                     line_has_content = false;
+                    line_margined = false;
                 } else if newlines == 1 {
                     // A single source newline. Under `Statement` reflow every source
                     // line is its own logical line, so the break always ends the line.
@@ -1614,6 +1641,7 @@ fn reflow_elements_checked(
                     }
                     line_all_commands = true;
                     line_has_content = false;
+                    line_margined = false;
                 } else {
                     // Pure inline whitespace: an atom boundary within the line.
                     // It stays on the block's physical line, so a comment next
@@ -1682,14 +1710,27 @@ fn reflow_elements_checked(
             // The single space following it is inter-word whitespace the run
             // re-derives. A `GUARD` is *not* dropped (guards keep their column-0 pin).
             SyntaxElement::Token(token)
-                if margin.is_some() && token.kind() == SyntaxKind::DOC_MARGIN => {}
-            // A `GUARD` (`%<…>`) pins to column 0, so it can never sit under the
-            // re-emitted `% ` margin: the two would collide (`%<package>% \def…`
-            // comments the guarded code out). Record the escape so the caller
-            // abandons the reflow for this paragraph.
+                if margin.is_some() && token.kind() == SyntaxKind::DOC_MARGIN =>
+            {
+                line_margined = true;
+            }
+            // A `GUARD` (`%<…>`) pins to column 0, so its line can never sit under
+            // the re-emitted `% ` margin: the two would collide (`%<package>% \def…`
+            // comments the guarded code out). Commit the guard's whole physical
+            // line as its own unmargined segment instead: the guard keeps its
+            // column-0 pin, and the margin resumes on the next margined line. When
+            // the line cannot be isolated (an element on it spans lines or forces a
+            // break), record the escape so the caller abandons the reflow.
             SyntaxElement::Token(token)
                 if margin.is_some() && token.kind() == SyntaxKind::GUARD =>
             {
+                if let Some(line) = collect_guard_line(&elements, &mut idx, cx) {
+                    b.end_line();
+                    b.push_segment(line);
+                    line_all_commands = true;
+                    line_has_content = false;
+                    continue;
+                }
                 b.note_margin_escape();
                 b.push_atom_piece(lower_loose_token(token), token.text());
                 line_has_content = true;
@@ -1743,13 +1784,23 @@ fn reflow_elements_checked(
                         // the escape route below applies instead.
                         b.push_atom_piece(ir, &child.text().to_string());
                         b.end_line();
+                    } else if margin.is_some() && line_margined && block_rides_own_margins(child) {
+                        // A block amid `.dtx` doc prose whose interior lines all
+                        // carry their own column-0 margins, opening on a margined
+                        // line: commit it raw on a fresh line with the canonical
+                        // margin re-attached for its first line. Its interior
+                        // bytes are untouched, so the layout stays within the
+                        // `% ` margin and the surrounding prose keeps reflowing.
+                        b.end_line();
+                        b.push_margined_block(ir);
                     } else {
                         // A block amid prose: end the current line, then place the
                         // block on its own line(s); a fresh run continues after.
                         // `push_segment` applies no margin, so under `.dtx` prose
-                        // reflow the block's lines escape the `% ` margin —
-                        // recorded so the caller abandons the reflow for this
-                        // paragraph.
+                        // reflow a block that does not ride its own interior
+                        // margins (or opens on an unmargined line) escapes the
+                        // `% ` margin — recorded so the caller abandons the
+                        // reflow for this paragraph.
                         b.end_line();
                         b.note_margin_escape();
                         b.push_segment(ir);
@@ -1779,6 +1830,46 @@ fn reflow_elements_checked(
     }
     let escaped = b.margin_escaped;
     (b.finish(), escaped)
+}
+
+/// Collect the guard-led physical line starting at `elements[*idx]` (a `GUARD`,
+/// always at column 0) as one byte-faithful, single-line segment, advancing
+/// `*idx` past the line's content; the terminating newline run is left for the
+/// caller's trivia arm. Trailing inline whitespace before that newline is
+/// skipped (the formatter never emits trailing whitespace — a trivia-only
+/// change). Returns `None` with `*idx` untouched when the line cannot be
+/// isolated — an element on it spans a newline, or its lowering carries a
+/// forced break — in which case the caller records a margin escape.
+fn collect_guard_line(elements: &[SyntaxElement], idx: &mut usize, cx: LowerCtx<'_>) -> Option<Ir> {
+    let mut end = *idx;
+    while let Some(element) = elements.get(end) {
+        let spans_lines = match element {
+            SyntaxElement::Token(t) => t.text().contains('\n'),
+            SyntaxElement::Node(n) => n.text().contains_char('\n'),
+        };
+        if spans_lines {
+            if matches!(element, SyntaxElement::Token(t) if is_collapsible_trivia(t.kind())) {
+                break;
+            }
+            return None;
+        }
+        end += 1;
+    }
+    let mut last = end;
+    while last > *idx
+        && matches!(&elements[last - 1], SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()))
+    {
+        last -= 1;
+    }
+    let ir = Ir::concat(lower_element_stream(
+        elements[*idx..last].iter().cloned(),
+        cx,
+    ));
+    if ir.contains_forced_break() {
+        return None;
+    }
+    *idx = end;
+    Some(ir)
 }
 
 /// Lower a `PARAGRAPH` that overlaps an expl3 region. The paragraph is split at the
@@ -6457,6 +6548,41 @@ fn contains_doc_margin(node: &SyntaxNode) -> bool {
     node.descendants_with_tokens()
         .filter_map(|e| e.into_token())
         .any(|t| matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD))
+}
+
+/// Whether a forced-break block's interior lines all ride their own column-0
+/// margins: the subtree spans at least one newline, every `NEWLINE` token is
+/// immediately followed (still inside the node) by a `DOC_MARGIN` or `GUARD`,
+/// and no other token embeds a newline (a multi-line `VERB`, a `\`-newline
+/// control symbol). Every relayout arm of [`lower_node`] refuses a doc-margined
+/// subtree, so such a block lowers through the byte-faithful stream and
+/// reproduces its margins exactly when committed raw — only its first line
+/// needs the canonical margin re-attached
+/// ([`LineBuilder::push_margined_block`]). A node-final `NEWLINE` (nothing
+/// follows it inside the node) fails conservatively: the check cannot see what
+/// the next line carries.
+fn block_rides_own_margins(node: &SyntaxNode) -> bool {
+    let tokens: Vec<SyntaxToken> = node
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .collect();
+    let mut saw_newline = false;
+    for (i, token) in tokens.iter().enumerate() {
+        if !token.text().contains('\n') {
+            continue;
+        }
+        if token.kind() != SyntaxKind::NEWLINE {
+            return false;
+        }
+        saw_newline = true;
+        if !tokens
+            .get(i + 1)
+            .is_some_and(|next| matches!(next.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD))
+        {
+            return false;
+        }
+    }
+    saw_newline
 }
 
 /// True if `node` directly contains a `VERBATIM_BODY` token — i.e. it is a

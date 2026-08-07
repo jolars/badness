@@ -1060,10 +1060,22 @@ const DTX_REFLOW_FIXTURES: &[(&str, usize)] = &[
     ("dtx_reflow_margin_blank_line", 80),
     // A margin-framed `itemize` stays byte-identical (no item-line reflow).
     ("dtx_reflow_itemize", 50),
-    // The margin-escape gate: a `\title{^^A…}` block whose argument carries `%`
-    // margins, and a guarded `%<package>` line, both stay byte-identical — while
+    // A `\title{^^A…}` block whose argument carries `%` margins, and a guarded
+    // `%<package>` line, both stay byte-identical — the block through the raw
+    // margined-block path, the guard through its column-0 line segment — while
     // the plain prose paragraph between them still rewraps.
     ("dtx_reflow_margin_escape", 50),
+    // A margin-framed `\changes{…}` block amid long prose: the prose on both
+    // sides rewraps under `% `, the block's interior lines stay byte-identical,
+    // and its non-canonical `%   ` first-line margin normalizes to `% `.
+    ("dtx_reflow_block_amid_prose", 50),
+    // A `%<package>` guard line inside a doc paragraph: the guard line keeps its
+    // column-0 pin byte-identically while the prose on both sides rewraps.
+    ("dtx_reflow_guard_mid_paragraph", 50),
+    // The residual margin-escape gate: a forced-break block with an *unmargined*
+    // interior line cannot ride the `% ` margin, so the whole paragraph stays
+    // byte-identical on the preserve path.
+    ("dtx_reflow_block_escape_residual", 50),
 ];
 
 #[test]

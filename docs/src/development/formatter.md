@@ -379,14 +379,21 @@ so an explicit `--wrap reflow` is exactly as safe as any other mode:
   fresh lines, which drops the `%` margin; on an unmargined line a `^^A` doc
   comment re-lexes as content, so the layout stops being whitespace-only and
   pass 2 no longer parses (`corpus/dtx_caret_comment.dtx`).
-- **The margin-escape detector.** Under `ReflowKind::DtxProse` the per-line
-  `DOC_MARGIN` is dropped and a canonical `%` re-emitted by
-  `LineBuilder::end_line`. Two paths commit content *outside* that wrap: a
-  forced-break block placed by `push_segment`, and a column-0 `GUARD`. Both set
-  `LineBuilder::margin_escaped`, and `lower_dtx_doc_paragraph` re-lowers the
-  paragraph on the byte-faithful preserve path when it fires. Because the same
-  answer decides whether a floated leading `%` may be dropped, both go through
-  `dtx_doc_paragraph_reflow`.
+- **The margin-escape detector, now a residual backstop.** Under
+  `ReflowKind::DtxProse` the per-line `DOC_MARGIN` is dropped and a canonical
+  `%` re-emitted by `LineBuilder::end_line`. A forced-break block amid the prose
+  whose interior lines all ride their own column-0 margins
+  (`block_rides_own_margins`) is committed raw with the canonical margin
+  re-attached for its first line (`LineBuilder::push_margined_block`), and a
+  column-0 `GUARD` whose physical line can be isolated (`collect_guard_line`)
+  becomes its own unmargined single-line segment—both stay inside the layout, so
+  the surrounding prose keeps reflowing. What remains escapes: a block with an
+  unmargined interior line, one opening on an unmargined line, or a guard line
+  that cannot be isolated sets `LineBuilder::margin_escaped`, and
+  `lower_dtx_doc_paragraph` re-lowers the paragraph on the byte-faithful
+  preserve path when it fires. Because the same answer decides whether a floated
+  leading `%` may be dropped, both go through
+  `dtx_doc_paragraph_reflows_safely`.
 - **`is_dtx_doc_paragraph` reads the paragraph's *first* content token**,
   descending into child nodes. Walking only direct child tokens skipped an
   opening `COMMAND` and read a margin from a later line, so a guarded
@@ -400,15 +407,11 @@ so an explicit `--wrap reflow` is exactly as safe as any other mode:
 
 Two adjacency rules keep package code looking like package code under the new
 default. A forced-break block *glued* to the command run in progress
-(`\newcommand\cls@hook{%`) hugs it via `LineBuilder::push_glued_segment` instead
-of breaking—the source offered no break opportunity there. And content still on
-a block's last physical line (`\input docstrip.tex`, where a leading `%%`
-comment bound to `\input` and made it a block) rides that line, the same rule
-the trailing `%` already had.
-
-The residual, deliberately deferred work is the *positive* fix: propagating the
-`%` margin through `push_segment` so those `.dtx` paragraphs reflow instead of
-falling back. Recorded in `TODO.md`.
+(`\newcommand\cls@hook{%`) hugs it—the glued-block branch of the forced-break
+arm extends the atom instead of breaking, since the source offered no break
+opportunity there. And content still on a block's last physical line
+(`\input docstrip.tex`, where a leading `%%` comment bound to `\input` and made
+it a block) rides that line, the same rule the trailing `%` already had.
 
 ## Display-math line breaks
 

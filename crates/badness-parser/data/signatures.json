@@ -23,9 +23,9 @@
     "author": { "args": ["opt", { "kind": "req", "content": "prose" }] },
     "date": { "args": ["opt", { "kind": "req", "content": "prose" }] },
     "thanks": { "args": [{ "kind": "req", "content": "prose" }], "inline": true },
-    "includegraphics": { "args": ["opt", "req"] },
-    "usepackage": { "args": ["opt", "req"] },
-    "documentclass": { "args": ["opt", "req"] },
+    "includegraphics": { "args": [{ "kind": "opt", "content": "keyval" }, "req"] },
+    "usepackage": { "args": [{ "kind": "opt", "content": "keyval" }, "req"] },
+    "documentclass": { "args": [{ "kind": "opt", "content": "keyval" }, "req"] },
 
     "NeedsTeXFormat": { "args": ["req", "opt"] },
     "ProvidesPackage": { "args": ["req", "opt"] },
@@ -57,9 +57,9 @@
 
     "newglossaryentry": { "args": ["req", "req"] },
     "longnewglossaryentry": { "args": ["req", "req", "req"] },
-    "newacronym": { "args": ["opt", "req", "req", "req"] },
-    "newabbreviation": { "args": ["opt", "req", "req", "req"] },
-    "loadglsentries": { "args": ["opt", "req"] },
+    "newacronym": { "args": [{ "kind": "opt", "content": "keyval" }, "req", "req", "req"] },
+    "newabbreviation": { "args": [{ "kind": "opt", "content": "keyval" }, "req", "req", "req"] },
+    "loadglsentries": { "args": [{ "kind": "opt", "content": "keyval" }, "req"] },
 
     "cite": { "args": ["opt", { "kind": "req", "content": "tokenList" }], "inline": true },
     "nocite": { "args": [{ "kind": "req", "content": "tokenList" }] },
@@ -83,8 +83,8 @@
 
     "verb": { "verbatim": true, "verbatimDelimited": true },
     "verb*": { "verbatim": true, "verbatimDelimited": true },
-    "lstinline": { "args": ["opt"], "verbatim": true, "verbatimDelimited": true },
-    "mintinline": { "args": ["opt", "req"], "verbatim": true, "verbatimDelimited": true },
+    "lstinline": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatim": true, "verbatimDelimited": true },
+    "mintinline": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "verbatim": true, "verbatimDelimited": true },
     "url": { "verbatim": true, "verbatimDelimited": true },
     "path": { "verbatim": true },
     "code": { "verbatim": true },
@@ -143,17 +143,17 @@
 
     "verbatim": { "verbatimBody": true, "block": true },
     "verbatim*": { "verbatimBody": true, "block": true },
-    "Verbatim": { "args": ["opt"], "verbatimBody": true, "block": true },
-    "Verbatim*": { "args": ["opt"], "verbatimBody": true, "block": true },
+    "Verbatim": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
+    "Verbatim*": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
     "alltt": { "verbatimBody": true, "block": true },
-    "lstlisting": { "args": ["opt"], "verbatimBody": true, "block": true },
-    "minted": { "args": ["opt", "req"], "verbatimBody": true, "block": true },
-    "codeexample": { "args": ["opt"], "verbatimBody": true, "block": true },
+    "lstlisting": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
+    "minted": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "verbatimBody": true, "block": true },
+    "codeexample": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
     "oldcomments": { "verbatimBody": true, "block": true },
-    "ltxcode": { "args": ["opt"], "verbatimBody": true, "block": true },
-    "ltxexample": { "args": ["opt"], "verbatimBody": true, "block": true },
-    "filecontents": { "args": ["opt", "req"], "verbatimBody": true, "block": true },
-    "filecontents*": { "args": ["opt", "req"], "verbatimBody": true, "block": true },
+    "ltxcode": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
+    "ltxexample": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
+    "filecontents": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "verbatimBody": true, "block": true },
+    "filecontents*": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "verbatimBody": true, "block": true },
 
     "macro": { "args": ["req"], "block": true, "verbatimArg": true },
     "function": { "args": ["req"], "block": true, "verbatimArg": true },
@@ -198,6 +198,6 @@
     "vmatrix": { "math": true, "align": true },
     "Vmatrix": { "math": true, "align": true },
     "smallmatrix": { "math": true, "align": true },
-    "tikzcd": { "args": ["opt"], "math": true }
+    "tikzcd": { "args": [{ "kind": "opt", "content": "keyval" }], "math": true }
   }
 }

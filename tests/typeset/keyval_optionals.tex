@@ -1,0 +1,28 @@
+\documentclass[a4paper,twoside,11pt]{article}
+\usepackage[margin=2cm,heightrounded,includeheadfoot,footskip=1cm,headsep=5mm]{geometry}
+\usepackage{graphicx,tikz,listings,pgfplots}
+\pgfplotsset{compat=1.18}
+\newcommand{\optdef}[1][alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota]{DEF<#1>}
+\begin{document}
+\section{S}
+\optdef\par
+\begin{description}
+\item[red,green,blue,cyan,magenta,yellow,black,white,orange] item body
+\end{description}
+\begin{tikzpicture}[scale=1,every node/.style={draw,thick,rounded corners,inner sep=2pt}]
+  \draw[thick,red,dashed,line width=1pt,opacity=0.8] (0,0) -- (1,1);
+\end{tikzpicture}\par
+\begin{tikzpicture}
+\begin{axis}[framed,width=6cm,xmin=-5,xmax=5,ymin=-1,ymax=5,xtick={-4,-2,0,2,4}]
+  \addplot expression[domain=-4.5:2.2]{2^x};
+\end{axis}
+\end{tikzpicture}\par
+\begin{figure}[htb]
+  \includegraphics[width=3cm,height=2cm,keepaspectratio,angle=0]{example-image}
+  \caption[short,list,entry,here,that,is,long]{Full caption}
+\end{figure}
+\begin{lstlisting}[caption=one,label=two,basicstyle=\ttfamily,frame=single,numbers=left]
+x = 1
+\end{lstlisting}
+\listoffigures
+\end{document}

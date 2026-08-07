@@ -514,6 +514,27 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // interior newlines becoming spaces) and keeps the indented block form when
     // it does not.
     ("optional_collapse_fits", WrapMode::Reflow, 30),
+    // A `[…]` is a group over its top-level entries: flat when it fits, one key
+    // per line when it does not. The three `\wide` calls carry *identical* option
+    // content and differ only in where the author broke the line, so they must
+    // format identically — the layout no longer reads `spans_multiple_lines`
+    // (see the trivia-invariant-layout section of `formatter.md`).
+    ("optional_expands_to_width", WrapMode::Reflow, 60),
+    // Splitting a comma the author *glued* needs the signature DB to prove the
+    // argument keyval (`ContentKind::Keyval`; `axis` via the CWL `%keyvals` mark).
+    // The lexer ends a `WORD` at every control sequence, so `width=\figurewidth`
+    // hands the splitter a word that *opens* with the comma closing that entry —
+    // it must still break there. A fitting bracket stays byte-identical to the
+    // source, glued commas and all, because the separator is a `SoftLine`.
+    ("optional_keyval_splits_glued", WrapMode::Reflow, 80),
+    // The mirror: a *textual* optional never gains a space, at any width. Compiling
+    // both spellings shows `\item[red,green]`, a `\newcommand` default, and a
+    // `\caption` short entry all typeset the inserted space, so these overflow
+    // rather than split.
+    ("optional_textual_keeps_glued", WrapMode::Reflow, 60),
+    // With no split point at all a `[…]` stays inline and overflows; a breakable
+    // group would push `[!htb]`-shaped brackets onto three lines to no gain.
+    ("optional_unsplittable_overflows", WrapMode::Reflow, 80),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts. Braces are kept
     // verbatim (dropping redundant single-token script braces is a *content*
@@ -1132,6 +1153,13 @@ const DTX_REFLOW_FIXTURES: &[(&str, usize)] = &[
     // (an out-of-region expl3 run): the prose rewraps under `% ` while each
     // chunk commits raw behind its byte-exact `%    ` frame lead.
     ("dtx_reflow_expl3_doc_run", 50),
+    // An over-width `[…]` *on* a doc-margin line must not expand: it carries no
+    // margin token of its own, so only `doc_margin_opens_line` sees that every
+    // line the break would create lands unmargined — promoting documentation to
+    // live code. The keyval `axis` bracket is held back for the same reason. The
+    // `\documentclass` inside the `%<*driver>` region *does* expand, glued commas
+    // and all: that line is ordinary code, not column-0-pinned documentation.
+    ("dtx_reflow_optional_on_doc_line", 50),
 ];
 
 #[test]

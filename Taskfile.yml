@@ -114,6 +114,12 @@ tasks:
       - cargo build --release
       - ./scripts/check_gate_baselines.sh
 
+  typeset:check:
+    desc: Compile tests/typeset/*.tex before and after formatting and diff the typeset output (needs a TeX install; not run in CI)
+    cmds:
+      - cargo build --release
+      - ./scripts/check_typeset_stability.sh
+
   bench:micro:
     desc: In-process formatter micro-bench (parse vs format vs full, no startup floor)
     cmds:

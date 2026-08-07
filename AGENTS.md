@@ -141,6 +141,18 @@ links to the Development page carrying its full rationale, examples, and provena
    verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See
    `architecture.md`.
 
+   - **`ContentKind` is where a *whitespace-safety* claim lives**
+     (`Opaque`/`Prose`/`TokenList`/`Keyval` on `ArgSpec`). `Keyval` is the
+     strongest: it asserts a keyval-family processor strips spaces around entries,
+     which is what lets the formatter break a `[…]` at a comma the author *glued*
+     (`formatter.md` § *Optional-argument layout*). Compiling both spellings shows
+     the claim is real for `\usepackage`/`\includegraphics`/tikz/`lstlisting` and
+     false for every *textual* optional (`\item`, `\caption`, `\cite`, a
+     `\newcommand` default), so a wrong flag changes typeset output — hold it to
+     the curated standard of the math-env routing. Sourced from CWL's mechanical
+     per-argument `%keyvals` placeholder mark plus hand-curated entries; never
+     from scanned user definitions.
+
 3. **Hand-written recursive descent is the spine; Pratt is local to math**
    (sub/superscript binding and `\left…\right` only). Math operator atoms and the
    `$`/`\[`/`\(` shape gates are bounded, sanctioned widenings of this rule, still
@@ -265,6 +277,11 @@ never match.
 - **Run `cargo fmt` before committing**—the rustfmt git hook rewrites unformatted
   files and aborts the commit otherwise. `clippy` warnings are errors:
   `cargo clippy --all-targets --all-features -- -D warnings`.
+- **Typeset stability is not a CST property.** The CST oracles cannot see the one
+  risk `ContentKind::Keyval` takes — a space token is trivia to the CST and content
+  to TeX — so `task typeset:check` compiles `tests/typeset/*.tex` before and after
+  formatting and diffs the typeset output. It needs a TeX install and never runs in
+  CI; run it when touching keyval signature data or the optional-argument lowering.
 - Task runner is `go-task` (`Taskfile.yml`). Performance is first-class (`perf`,
   `cargo-flamegraph`, `hyperfine`, `cargo-show-asm`, `cargo-llvm-cov` are in the dev
   shell)—benchmark before optimizing, never regress losslessness for speed.
@@ -297,6 +314,11 @@ never match.
   and `bib_fields.json` (`bib-fields:check`/`:sync`, tracking biblatex's `blx-dm.def`).
   `signatures.json`, `colors.json`, and `tikz_libraries.json` are curated by hand.
   Re-sync generated files via their model/task; don't hand-edit the mechanical facts.
+  The CWL tier carries *names, arity, and the `%keyvals` argument mark* only —
+  every behavior-classification suffix (`#V`, `#\math`, `#L0`-`#L5`, …) is
+  reported for human promotion, never applied. Note `signatures.json` **masks** the
+  CWL entry for a name wholesale (`.or_else`, not a field merge), so a curated
+  command that CWL marks keyval needs the flag added by hand too.
 
 ## Working agreements for agents
 

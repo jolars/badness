@@ -149,12 +149,24 @@ def _consume_group(s: str, i: int, open_ch: str, close_ch: str) -> int:
     return len(s)
 
 
-def _parse_arg_shape(rest: str) -> list[str]:
+def _parse_arg_shape(rest: str) -> list:
     """Walk the contiguous leading argument groups of ``rest``: ``{…}`` → ``"req"``,
     ``[…]`` → ``"opt"``, in order. Stops at the first non-bracket, non-space character
     (e.g. ``(`` picture coords, ``*`` stars, ``|`` verb delimiters) — deliberately
-    conservative: an uncounted trailing group stays ordinary content downstream."""
-    args: list[str] = []
+    conservative: an uncounted trailing group stays ordinary content downstream.
+
+    An optional whose placeholder carries CWL's ``%keyvals`` suffix
+    (``\\begin{axis}[options%keyvals]``) is emitted in the object form
+    ``{"kind": "opt", "content": "keyval"}``. Unlike the ``#V``/``#\\math``/``#L0``
+    *classification* suffixes — behaviour claims this bulk tier deliberately refuses
+    to trust — this is a mechanical per-argument fact, and it is the one thing that
+    licenses the formatter to break a key list at a comma the author glued (see
+    ``ContentKind::Keyval``).
+
+    Scoped to ``[…]``: a ``%keyvals``-marked *mandatory* group (``\\tikzset{…}``,
+    ``\\lstloadlanguages{…}``) is real but nothing consumes the flag there, and
+    recording an unused, unvalidated claim is worse than omitting it."""
+    args: list = []
     i = 0
     while i < len(rest):
         c = rest[i]
@@ -165,11 +177,22 @@ def _parse_arg_shape(rest: str) -> list[str]:
             i = _consume_group(rest, i, "{", "}")
             args.append("req")
         elif c == "[":
-            i = _consume_group(rest, i, "[", "]")
-            args.append("opt")
+            end = _consume_group(rest, i, "[", "]")
+            keyval = "%keyvals" in rest[i:end]
+            i = end
+            args.append({"kind": "opt", "content": "keyval"} if keyval else "opt")
         else:
             break
     return args
+
+
+def _arg_kind(arg) -> str:
+    """The ``"req"``/``"opt"`` kind of an arg entry in either shape."""
+    return arg["kind"] if isinstance(arg, dict) else arg
+
+
+def _arg_is_keyval(arg) -> bool:
+    return isinstance(arg, dict) and arg.get("content") == "keyval"
 
 
 # One parsed entry: kind in {"command", "environment"}, a name, and an arg shape.
@@ -220,12 +243,30 @@ def parse_line(line: str) -> Entry | None:
 # --- corpus -> database -------------------------------------------------------
 
 
-def _reconcile(variants: list[list[str]]) -> list[str]:
+def _reconcile(variants: list[list]) -> list:
     """Pick one canonical arg shape for a name seen with several arities. Bias to the
-    fewest **mandatory** (``req``) slots, then fewest total, then lexicographically —
-    deterministic, and conservative: under-attaching is lossless, over-attaching could
-    glue following content into a phantom argument."""
-    return min(variants, key=lambda a: (a.count("req"), len(a), a))
+    fewest **mandatory** (``req``) slots, then to the shape carrying the most keyval
+    marks, then fewest total, then lexicographically — deterministic, and
+    conservative: under-attaching is lossless, over-attaching could glue following
+    content into a phantom argument.
+
+    The keyval term sits *below* the ``req`` bias so that safety property is
+    untouched; it only breaks ties among equally-conservative shapes. Without it
+    ``\\begin{axis}`` (declared both bare and with ``[options%keyvals]``) reconciles
+    to no arguments at all, discarding the flag along with the arity — and an extra
+    declared *optional* is harmless anyway, since slot matching skips an optional the
+    document omitted."""
+
+    def key(a: list) -> tuple:
+        kinds = [_arg_kind(x) for x in a]
+        return (
+            kinds.count("req"),
+            -sum(1 for x in a if _arg_is_keyval(x)),
+            len(a),
+            kinds,
+        )
+
+    return min(variants, key=key)
 
 
 def build_db(files: dict[str, str], report: dict[str, set[str]] | None = None) -> OrderedDict:
@@ -336,6 +377,12 @@ def _selftest() -> int:
     eq(_parse_arg_shape("{%<num%>}{%<den%>}"), ["req", "req"], "placeholders")
     eq(_parse_arg_shape("[opt={x}]{w}"), ["opt", "req"], "brace inside bracket")
     eq(_parse_arg_shape("(w,h){len}"), [], "stop at picture coords")
+    kv = {"kind": "opt", "content": "keyval"}
+    eq(_parse_arg_shape("[options%keyvals]"), [kv], "keyval optional")
+    eq(_parse_arg_shape("[options%keyvals]{pkg}"), [kv, "req"], "keyval then req")
+    # Only `[…]` carries the mark; a `%keyvals` brace stays a plain `req`.
+    eq(_parse_arg_shape("{options%keyvals}"), ["req"], "keyval brace unmarked")
+    eq(_parse_arg_shape("[short text%text]{text}"), ["opt", "req"], "textual optional")
 
     def pl(line: str) -> Entry:
         e = parse_line(line)
@@ -352,12 +399,19 @@ def _selftest() -> int:
     eq(parse_line("\\end{foo}"), None, "end dropped")
     eq(parse_line("# a comment"), None, "comment dropped")
     eq(_reconcile([["opt", "req"], ["req"], ["opt", "opt", "req"]]), ["req"], "fewest req")
+    # A keyval-bearing variant beats an equally-conservative bare one — the
+    # `\begin{axis}` case, which otherwise reconciles to no arguments at all.
+    eq(_reconcile([[], [kv], ["opt"]]), [kv], "keyval beats bare")
+    # …but never at the cost of declaring a mandatory slot.
+    eq(_reconcile([["req", kv], []]), [], "req bias still wins")
 
     db = build_db({"t.cwl": "\\foo{a}\n\\foo[b]{a}\n\\bar#S\n\\baz\n\\begin{env}{x}\n"})
     eq(db["commands"]["foo"], {"args": ["req"]}, "reconciled foo")
     eq("bar" in db["commands"], False, "hidden bar skipped")
     eq(db["commands"]["baz"], {}, "no-arg baz")
     eq(db["environments"]["env"], {"args": ["req"]}, "env emitted")
+    kvdb = build_db({"t.cwl": "\\begin{axis}#/tikzpicture\n\\begin{axis}[options%keyvals]\n"})
+    eq(kvdb["environments"]["axis"], {"args": [kv]}, "axis keeps its keyval optional")
     eq(_dump(build_db({"a": _dump(db)})) is not None, True, "dump runs")  # smoke
     print("selftest: ok")
     return 0

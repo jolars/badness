@@ -70,6 +70,25 @@ pub enum ContentKind {
     /// only incidental source line breaks inside the braces are normalized away,
     /// so `\citep{\n a,\n b\n}` formats identically to `\citep{a, b}` (determinism).
     TokenList,
+    /// A `key=value` list consumed by a keyval-family processor — keyval, xkeyval,
+    /// pgfkeys, l3keys, or LaTeX's own option-list scanner — every one of which
+    /// strips spaces around keys and values before acting on them. That is what
+    /// licenses the formatter to break the list at a comma the author *glued*
+    /// (`[xmin=-5,xmax=5]`), materializing a space token TeX will see: in a keyval
+    /// argument the space is discarded, so the typeset output cannot change.
+    ///
+    /// The distinction is load-bearing and was settled by compiling both spellings:
+    /// keyval brackets (`\usepackage`, `\includegraphics`, `tikz`/`pgfplots`,
+    /// `lstlisting`) render identically, while *textual* optionals do not
+    /// (`\item[red,green]`, `\caption[short,list]`, `\cite[see,also]`, and a
+    /// `\newcommand` default all gain a visible space). So this flag must never be
+    /// set on an argument whose content is typeset — hold it to the same curated
+    /// standard as the math-env routing.
+    ///
+    /// Weaker than [`TokenList`](ContentKind::TokenList) about *where* the content
+    /// may go (a keyval list expands one key per line at the width rather than
+    /// staying one atom), stronger about what may be inserted between entries.
+    Keyval,
 }
 
 /// One argument slot in a command/environment signature.
@@ -729,7 +748,7 @@ impl RawArgKind {
 }
 
 /// An argument's content kind as written in the JSON: `"opaque"` (default),
-/// `"prose"`, or `"tokenList"`. Mirrors [`ContentKind`].
+/// `"prose"`, `"tokenList"`, or `"keyval"`. Mirrors [`ContentKind`].
 #[derive(Deserialize, Clone, Copy, Default)]
 #[serde(rename_all = "camelCase")]
 enum RawContentKind {
@@ -737,6 +756,7 @@ enum RawContentKind {
     Opaque,
     Prose,
     TokenList,
+    Keyval,
 }
 
 impl From<RawContentKind> for ContentKind {
@@ -745,6 +765,7 @@ impl From<RawContentKind> for ContentKind {
             RawContentKind::Opaque => ContentKind::Opaque,
             RawContentKind::Prose => ContentKind::Prose,
             RawContentKind::TokenList => ContentKind::TokenList,
+            RawContentKind::Keyval => ContentKind::Keyval,
         }
     }
 }
@@ -1017,7 +1038,9 @@ mod tests {
         let db = parse(
             r#"{ "commands": {
                 "short": { "args": ["req"] },
-                "full":  { "args": ["opt", { "kind": "req", "content": "prose" }] }
+                "full":  { "args": ["opt", { "kind": "req", "content": "prose" }] },
+                "kv":    { "args": [{ "kind": "opt", "content": "keyval" }, "req"] },
+                "list":  { "args": [{ "kind": "req", "content": "tokenList" }] }
             } }"#,
         )
         .expect("valid content schema");
@@ -1028,6 +1051,14 @@ mod tests {
         assert_eq!(full[0].content, ContentKind::Opaque); // no `content` → default
         assert_eq!(full[1].kind, ArgKind::Brace);
         assert_eq!(full[1].content, ContentKind::Prose);
+        // Every wire spelling round-trips, `keyval` included — the flag the
+        // optional-argument layout reads to license splitting a glued comma.
+        let kv = &db.command("kv").unwrap().args;
+        assert_eq!(kv[0].kind, ArgKind::Bracket);
+        assert_eq!(kv[0].content, ContentKind::Keyval);
+        assert_eq!(kv[1].content, ContentKind::Opaque);
+        let list = &db.command("list").unwrap().args;
+        assert_eq!(list[0].content, ContentKind::TokenList);
     }
 
     #[test]

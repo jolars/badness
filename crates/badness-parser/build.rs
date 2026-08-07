@@ -32,7 +32,7 @@ enum RawArgKind {
 }
 
 /// An argument's content kind as written in the JSON: `"opaque"` (default),
-/// `"prose"`, or `"tokenList"`. Mirrors `ContentKind`.
+/// `"prose"`, `"tokenList"`, or `"keyval"`. Mirrors `ContentKind`.
 #[derive(Deserialize, Clone, Copy, Default)]
 #[serde(rename_all = "camelCase")]
 enum RawContentKind {
@@ -40,6 +40,7 @@ enum RawContentKind {
     Opaque,
     Prose,
     TokenList,
+    Keyval,
 }
 
 impl RawContentKind {
@@ -48,6 +49,7 @@ impl RawContentKind {
             RawContentKind::Opaque => "ContentKind::Opaque",
             RawContentKind::Prose => "ContentKind::Prose",
             RawContentKind::TokenList => "ContentKind::TokenList",
+            RawContentKind::Keyval => "ContentKind::Keyval",
         }
     }
 }

@@ -281,44 +281,40 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
-  `TokenList`) the formatter dispatches whitespace and break policy on
+  `TokenList`/`Keyval`) the formatter dispatches whitespace and break policy on
   (`DocumentBody` stays an environment-body concept via
   `EnvironmentSig::no_indent`; add it when a command-arg case appears). What
   remains is the non-determinism fix: `spans_multiple_lines` decides
   block-vs-inline from incidental source newlines, sidestepped for the
-  `TokenList` kind but still governing every `Opaque` multi-line group. Give
-  `Opaque` groups a deterministic layout policy that does not depend on
-  incidental whitespace. *(An instance of the trivia-invariant-layout violation
-  above — `spans_multiple_lines` reads the unsafe lone-newline predicate. Fix it
-  under that umbrella, Tier 1, not on its own.)*
+  `TokenList` and `Keyval` kinds but still governing every `Opaque` multi-line
+  *brace* group. Give `Opaque` groups a deterministic layout policy that does not
+  depend on incidental whitespace. *(An instance of the trivia-invariant-layout
+  violation above — `spans_multiple_lines` reads the unsafe lone-newline
+  predicate. Fix it under that umbrella, Tier 1, not on its own.)* The `[…]` half
+  of this is done: an optional argument is now a group over its top-level entries
+  (`formatter.md` § *Optional-argument layout*), so `lower_optional` reads the
+  predicate only under `WrapMode::Preserve` and friends, which are defined by it.
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on
   its own separators rather than the paragraph fill.
-- [ ] **Keyval-aware optional-argument layout (parked; grew out of issue #47).**
-  The landed fix only collapses a fitting multi-line `[…]`; commas pass through
-  wherever the author put them. The Black/Ruff *magic trailing comma* (a trailing
-  `,` before `]` forcing one-key-per-line) was prototyped and **declined by
-  design**: it is deterministic but not canonical — content steering layout
-  conflicts with the formatter-is-sole-authority tenet. The parked replacement,
-  two independent pieces:
-  - *Count-based expansion:* expand one key per line when a `[…]` has more than N
-    top-level keys (or overflows the width); else collapse. Canonical — layout is
-    a pure function of content + width. Splits must stay meaning-safe: only at a
-    top-level comma already followed by whitespace (whitespace ↔ newline is
-    TeX-identical); a glued `[a=1,b=2,…]` has no safe split point and stays
-    inline. Semantics to settle: N (default, knob or fixed), and that comma count
-    is a proxy for keyval-ness (a comma-rich textual optional would expand too).
-  - *Formatter-owned trailing comma, signature-gated:* for an argument the
-    signature DB can *prove* keyval (a new `ContentKind::Keyval` or flag), add
-    the trailing comma when expanded and drop it when collapsed, Black-style —
-    safe because keyval/xkeyval/pgfkeys/l3keys and `\ProcessOptions` clists all
-    ignore empty entries. Data: curated built-ins first (`\usepackage`,
-    `\includegraphics`, `tcolorbox`, `minted`, …); the CWL corpus marks these via
-    `#keyvals:` sections, which `gen_cwl_signatures.py` currently skips. Content
-    insertion on a wrong flag changes typeset output, so hold it to the curated
-    standard of the math-env routing; never for scanned user definitions, never
-    for unknown commands.
+- [ ] **Formatter-owned trailing comma (parked; the last piece of issue #47).**
+  A `[…]` is now a width-driven group over its top-level entries, and a
+  `ContentKind::Keyval` argument may also break at a glued comma
+  (`formatter.md` § *Optional-argument layout*). What is left of the old parked
+  item is the Black-style trailing comma: for a proven-keyval argument, add the
+  `,` when expanded and drop it when collapsed — safe as *TeX*, because
+  keyval/xkeyval/pgfkeys/l3keys and `\ProcessOptions` clists all ignore empty
+  entries. **Blocked on a tenet, not on data:** inserting or deleting a `,` is a
+  non-trivia token edit, which the whitespace-only invariant forbids and
+  `assert_format_invariants` actively catches. Landing it means amending that
+  invariant and its oracle to carve out this one insertion — a decision worth
+  taking on its own, not as a ride-along. The count-based *expansion* half was
+  declined: width alone is already canonical, and an N-key threshold would need
+  the comma count to proxy for keyval-ness, exploding comma-rich textual
+  optionals. The Black/Ruff *magic trailing comma* (a trailing `,` in the
+  **source** forcing one-key-per-line) stays declined too — content steering
+  layout conflicts with the formatter-is-sole-authority tenet.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
 - [ ] **Head/definiendum split on a soft trailing block (rest-aware measurement

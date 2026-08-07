@@ -159,15 +159,22 @@ Tier 2, each with a written fixed-point argument:
   dispatch fires there: the fill hugs instead (see [Sticky-break statement
   fills](#sticky-break-statement-fills)), so the forced-break predicate is not
   read on a fallback line at all.
-- `spans_multiple_lines` (`core.rs`)—block-vs-inline for `Opaque` groups
-  *outside* expl3 regions. **Accidental**; already filed in `TODO.md` as
-  "Opaque-group layout non-determinism".
+- `spans_multiple_lines` (`core.rs`)—block-vs-inline for multi-line **brace**
+  `Opaque` groups outside expl3 regions. **Accidental**; already filed in
+  `TODO.md` as "Opaque-group layout non-determinism".
 - `RunAtom::preferred_break_before`—**Tier 2**, `WrapMode::Stable` and friends.
 - `ReflowKind::Statement`—**Tier 2**, argument already written.
 
 Statement boundaries for *recognized* expl3 heads are no longer on this list:
 they are structural (S4, below), and the strict oracle holds for recognized-only
 streams (`perturb::tests::strict_oracle_accepts_structural_expl3_statements`).
+
+Neither is the **optional argument** `[…]`, which used to share
+`spans_multiple_lines` with the brace case: it is now a group over its top-level
+entries (see [Optional-argument layout](#optional-argument-layout)), so whether
+the author broke the line decides nothing. The call survives there only as the
+gate for `WrapMode::Preserve` and the other non-prose-wrapping modes, which are
+*defined* by keeping authored breaks.
 
 ### The oracle
 
@@ -419,6 +426,113 @@ arm extends the atom instead of breaking, since the source offered no break
 opportunity there. And content still on a block's last physical line
 (`\input docstrip.tex`, where a leading `%%` comment bound to `\input` and made
 it a block) rides that line, the same rule the trailing `%` already had.
+
+## Optional-argument layout
+
+An optional argument `[…]` is a plain Wadler group over its top-level
+comma-separated entries (`lower_optional`/`segment_optional`, `core.rs`): flat
+when it fits the width, one entry per line when it does not.
+
+```latex
+\usepackage[unicode, colorlinks, linkcolor=blue, citecolor=green]{hyperref}
+
+\usepackage[
+  unicode,
+  colorlinks,
+  linkcolor=blue,
+  citecolor=green,
+  urlcolor=magenta
+]{hyperref}
+```
+
+Width alone decides. There is deliberately no "expand once the list has more
+than N keys" rule and no knob: the group is already a pure function of content
+and width, and a count threshold would need the comma count to proxy for
+keyval-ness—exploding a comma-rich textual optional. Nor is there a Black-style
+*magic trailing comma*; content steering layout conflicts with the
+formatter-is-sole-authority tenet.
+
+The flat rendering is byte-for-byte what the old collapse produced, so
+`\foo[a=1,\nb=2]` still comes out `\foo[a=1, b=2]` (issue #47). What is new is
+that an over-long bracket *expands* instead of silently overflowing, and that
+neither outcome depends on where the author happened to break the line.
+
+A body that is not safely segmentable—a blank-line `\par`, a `%` comment (which
+must end its line), or nested content carrying a forced break—falls back to the
+indented block form, the same three bail conditions `collapse_arg_group` uses.
+With no split point at all the bracket stays inline and is allowed to overflow:
+a breakable group would push `[!htb]`-shaped brackets onto three lines to no
+gain. Padding at the body's edges (`\baz [ me ]`) rides the flat rendering
+through an `Ir::IfBreak` and vanishes when the delimiters take their own lines.
+
+### Which commas are break opportunities
+
+Two kinds of split point, and they are not equally free.
+
+A **gap split** is a comma the author already followed by whitespace. Flat is a
+space, broken a newline—the whitespace ↔ newline exchange that is TeX-identical
+anywhere, so this needs no permission and applies to every `[…]`.
+
+A **glued split** cuts inside a `WORD` at a comma with nothing after it
+(`xmin=-5,xmax=5`). Broken, that materializes a space token TeX will see, so it
+is emitted only for an argument the signature DB proves is a `key=value` list
+(`ContentKind::Keyval`). Its separator is an `Ir::SoftLine` rather than an
+`Ir::Line`, so a bracket that fits stays byte-identical to the source—the space
+appears only on the line the split created.
+
+The distinction is not stylistic. Compiling both spellings and diffing the
+typeset output splits cleanly along keyval-ness:
+
+  | Bracket                                     | `[a,b]` vs `[a, b]` |
+  | ------------------------------------------- | ------------------- |
+  | `\documentclass[a4paper,twoside]`           | identical           |
+  | `\usepackage[english,french]{babel}`        | identical           |
+  | `\includegraphics[width=1cm,height=1cm]`    | identical           |
+  | `\draw[thick,red]`                          | identical           |
+  | `\begin{lstlisting}[caption=one,label=two]` | identical           |
+  | `\item[red,green]`                          | **differs**         |
+  | `\newcommand{\x}[1][alpha,beta]`            | **differs**         |
+  | `\caption[short,list]` (LOF entry)          | **differs**         |
+  | `\cite[see,also]`                           | **differs**         |
+
+keyval/xkeyval/pgfkeys/l3keys all strip spaces around entries, and LaTeX runs
+`\zap@space` over class and package option lists. A *textual* optional typesets
+them. So `Keyval` must never be set on an argument whose content is typeset;
+hold it to the same curated standard as the math-env routing.
+
+The flag comes from two tiers. The CWL corpus marks it per argument, inline in
+the placeholder name (`\begin{axis}[options%keyvals]`), and
+`gen_cwl_signatures.py` now preserves that as
+`{"kind": "opt", "content": "keyval"}`. Unlike the `#V`/`#\math`/`#L0`
+*classification* suffixes—behaviour claims the bulk tier deliberately refuses to
+trust—this is a mechanical per-argument fact, and it agreed with every row of
+the table above. Curated `signatures.json` entries mask the CWL tier wholesale,
+so the ones that need the flag (`\usepackage`, `\includegraphics`,
+`\documentclass`, `lstlisting`, `minted`, …) carry it by hand.
+
+Two details the segmentation has to get right. A comma is a split point only at
+bracket depth 0: the parser closes an `OPTIONAL` at its first `]`, so a stray
+`[` inside the body opens a region that never closes and everything after it
+stays glued (`\foo[a=[1,2]` must not break at the `1,2`). And the lexer ends a
+`WORD` at every control sequence, so a key list routinely hands the splitter a
+word that *opens* with the comma closing the previous token's entry (`width=`
+`\figurewidth` `,xmin=-5,…`)—that comma is a real split point, not the empty
+entry a leading comma would otherwise look like.
+
+### Why the split lives here and not in the parser
+
+`is_word_char` (`parser/lexer.rs`) excludes only TeX's special characters, and a
+comma is catcode 12 "other"—indistinguishable from `=`, `-`, or `5`. Lexing
+`xmin=-5,xmax=5,` as one `WORD` is the correct generic-TeX reading; splitting on
+`,` would encode the meaning "this is a keyval list" into the lexer, which
+decision #2 forbids.
+
+The sub-`WORD` precedent, the math operator split (`split_math_word`, via
+`SubTok`), does not transfer: it is licensed by a static fact the parser can see
+(we are in math) *plus* a safety property (TeX ignores spaces in math). Neither
+holds in a bracket, whose content is arbitrary text. So the comma split belongs
+in the formatter, gated on a semantic fact—exactly the layering the two-layer
+decision prescribes.
 
 ## Display-math line breaks
 

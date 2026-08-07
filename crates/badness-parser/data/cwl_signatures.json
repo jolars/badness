@@ -7,6 +7,10 @@
   "ACIRCUMFLEX": {},
   "ACRfull": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -19,6 +23,10 @@
   },
   "ACRfullpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -31,21 +39,37 @@
   },
   "ACRlong": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "ACRlongpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "ACRshort": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "ACRshortpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -60,11 +84,19 @@
   "Abreve": {},
   "Ac": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Acf": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -90,6 +122,10 @@
   },
   "Acfp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -106,11 +142,19 @@
   },
   "Acl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Aclp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -126,11 +170,19 @@
   },
   "Acp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Acrfull": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -143,6 +195,10 @@
   },
   "Acrfullpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -155,11 +211,19 @@
   },
   "Acrlong": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Acrlongpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -171,21 +235,37 @@
   },
   "Acrshort": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Acrshortpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Acs": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Acsp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -706,11 +786,19 @@
   "BState": {},
   "BUseVerbatim": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "BVerbatimInput": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -981,6 +1069,10 @@
   },
   "CheckBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -1013,6 +1105,10 @@
   },
   "ChoiceMenu": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -2972,7 +3068,14 @@
     "req"
    ]
   },
-  "DTMsetregional": {},
+  "DTMsetregional": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "DTMsetstyle": {
    "args": [
     "req"
@@ -3727,6 +3830,10 @@
   "DeclareAutoCiteCommand": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -3797,6 +3904,10 @@
   },
   "DeclareBoldMathCommand": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -3858,6 +3969,10 @@
   },
   "DeclareDataInheritance": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -3871,6 +3986,10 @@
   },
   "DeclareDatamodelConstant": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -3887,11 +4006,19 @@
   },
   "DeclareDatamodelEntrytypes": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "DeclareDatamodelFields": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -4631,6 +4758,10 @@
   },
   "DeclareSIUnit": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -4665,6 +4796,10 @@
   },
   "DeclareSortingTemplate": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -4702,6 +4837,10 @@
   },
   "DeclareTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -4709,6 +4848,10 @@
   },
   "DeclareTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -4812,6 +4955,10 @@
   },
   "DeclareTotalTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -4820,6 +4967,10 @@
   },
   "DeclareTotalTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -5558,86 +5709,154 @@
   },
   "GLS": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSdesc": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSdescplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSfirst": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSfirstplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSname": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSsymbol": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSsymbolplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLStext": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSuseri": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSuserii": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSuseriii": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSuseriv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSuserv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "GLSuservi": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -5741,6 +5960,10 @@
   },
   "Gls": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -5862,16 +6085,28 @@
   },
   "Glsdesc": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsdescplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsdisp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -5983,77 +6218,137 @@
   },
   "Glsfirst": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsfirstplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glslink": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "Glsname": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glspl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glssymbol": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glssymbolplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glstext": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsuseri": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsuserii": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsuseriii": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsuseriv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsuserv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "Glsuservi": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -6928,11 +7223,19 @@
   "LTright": {},
   "LUseVerbatim": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "LVerbatimInput": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -7152,6 +7455,10 @@
   },
   "MakeLowercase": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -7189,11 +7496,19 @@
   },
   "MakeTitlecase": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "MakeUppercase": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -7425,6 +7740,10 @@
   },
   "NewTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -7432,6 +7751,10 @@
   },
   "NewTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -7458,6 +7781,10 @@
   },
   "NewTotalTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -7466,6 +7793,10 @@
   },
   "NewTotalTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -7825,6 +8156,10 @@
   },
   "ProvideTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -7832,6 +8167,10 @@
   },
   "ProvideTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -7852,6 +8191,10 @@
   },
   "ProvideTotalTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -7860,6 +8203,10 @@
   },
   "ProvideTotalTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -7930,6 +8277,10 @@
   "Ptransfullcites": {},
   "PushButton": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -8075,6 +8426,10 @@
   },
   "RenewTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -8082,6 +8437,10 @@
   },
   "RenewTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -8089,6 +8448,10 @@
   },
   "RenewTotalTCBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -8097,6 +8460,10 @@
   },
   "RenewTotalTColorBox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -8145,6 +8512,10 @@
   },
   "RequirePackage": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -8160,6 +8531,10 @@
   },
   "Reset": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -8233,18 +8608,30 @@
   "S": {},
   "SI": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "SIlist": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "SIrange": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -8528,18 +8915,30 @@
   },
   "SetExpansion": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "SetExtraKerning": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "SetExtraSpacing": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -8850,6 +9249,10 @@
   },
   "SetProtrusion": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -8894,6 +9297,10 @@
   },
   "SetTracking": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -9084,6 +9491,10 @@
   "Stransfullcites": {},
   "Submit": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9145,6 +9556,10 @@
   "TeXXeTstate": {},
   "TextField": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9451,11 +9866,19 @@
   "UseUsedriverHook": {},
   "UseVerb": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "UseVerbatim": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9473,6 +9896,10 @@
   "VerbatimFootnotes": {},
   "VerbatimInput": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9647,6 +10074,10 @@
   "abvon": {},
   "ac": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9749,6 +10180,10 @@
   },
   "acf": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9779,6 +10214,10 @@
   },
   "acfp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9800,6 +10239,10 @@
   },
   "acl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9810,6 +10253,10 @@
   },
   "aclp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9842,12 +10289,20 @@
   "acotangent": {},
   "acp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "acresetall": {},
   "acrfull": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9860,6 +10315,10 @@
   },
   "acrfullpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9872,11 +10331,19 @@
   },
   "acrlong": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "acrlongpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9950,16 +10417,28 @@
   "acrpluralsuffix": {},
   "acrshort": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "acrshortpl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "acs": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -9971,6 +10450,10 @@
   },
   "acsp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10015,6 +10498,10 @@
   "addappheadtotoc": {},
   "addbibresource": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10042,6 +10529,10 @@
   },
   "addglobalbib": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10078,6 +10569,10 @@
   "addquestion": {},
   "addsectionbib": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10547,6 +11042,10 @@
   "anonb": {},
   "antecedent": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10748,19 +11247,28 @@
   },
   "assignrefcontextcats": {
    "args": [
-    "opt",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "assignrefcontextentries": {
    "args": [
-    "opt",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "assignrefcontextkeyws": {
    "args": [
-    "opt",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10911,12 +11419,20 @@
   },
   "babelensure": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "babelfont": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -10938,6 +11454,10 @@
   },
   "babelinterchar": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req",
@@ -10952,6 +11472,10 @@
   },
   "babelposthyphenation": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -10959,6 +11483,10 @@
   },
   "babelprehyphenation": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -10966,7 +11494,10 @@
   },
   "babelprovide": {
    "args": [
-    "opt",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -11097,9 +11628,30 @@
   "bibabstractprefix": {},
   "bibannotationprefix": {},
   "bibauthorfont": {},
-  "bibbycategory": {},
-  "bibbysection": {},
-  "bibbysegment": {},
+  "bibbycategory": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "bibbysection": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "bibbysegment": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "bibcleanup": {},
   "bibclosebracket": {},
   "bibcloseparen": {},
@@ -11594,6 +12146,10 @@
   },
   "cGls": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -11605,6 +12161,10 @@
   },
   "cGlspl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -12160,6 +12720,10 @@
   "cfttoctitlefont": {},
   "cgls": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -12171,6 +12735,10 @@
   },
   "cglspl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -12229,6 +12797,10 @@
   },
   "chemfig": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -12653,6 +13225,10 @@
   },
   "complexqty": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -12660,11 +13236,19 @@
   "cong": {},
   "consequent": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "constraint": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -13801,6 +14385,10 @@
   "dump": {},
   "duration": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -14451,6 +15039,10 @@
   "fi": {},
   "field": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -14480,6 +15072,10 @@
   "filright": {},
   "filter": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -14752,6 +15348,10 @@
   },
   "foreignlanguage": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -15152,6 +15752,10 @@
   "glqq": {},
   "gls": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -15200,10 +15804,21 @@
   },
   "glsadd": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
-  "glsaddall": {},
+  "glsaddall": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "glsaddallunused": {},
   "glsaddkey": {
    "args": [
@@ -15251,17 +15866,29 @@
   "glsdefaulttype": {},
   "glsdesc": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsdescplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsdisablehyper": {},
   "glsdisp": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -15517,11 +16144,19 @@
   },
   "glsfirst": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsfirstplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -15615,6 +16250,10 @@
   },
   "glslink": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -15694,6 +16333,10 @@
   },
   "glsname": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -15769,11 +16412,19 @@
   "glspercentchar": {},
   "glspl": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -15912,11 +16563,19 @@
   },
   "glssymbol": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glssymbolplural": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -15935,6 +16594,10 @@
   },
   "glstext": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -15974,31 +16637,55 @@
   },
   "glsuseri": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsuserii": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsuseriii": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsuseriv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsuserv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "glsuservi": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -16278,9 +16965,20 @@
     "req"
    ]
   },
-  "hreac": {},
+  "hreac": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "href": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -16583,6 +17281,10 @@
   },
   "ifbeamercolorempty": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -18137,11 +18839,19 @@
   },
   "includepdf": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "includepdfmerge": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -18152,6 +18862,10 @@
   },
   "includestandalone": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -18197,6 +18911,10 @@
   "infty": {},
   "inherit": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -18249,6 +18967,10 @@
   "inputlineno": {},
   "inputminted": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -18284,14 +19006,70 @@
   "insertsection": {},
   "insertsectionhead": {},
   "insertsectionnumber": {},
-  "insertshortauthor": {},
-  "insertshortdate": {},
-  "insertshortframetitle": {},
-  "insertshortinstitute": {},
-  "insertshortlecture": {},
-  "insertshortpart": {},
-  "insertshortsubtitle": {},
-  "insertshorttitle": {},
+  "insertshortauthor": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshortdate": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshortframetitle": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshortinstitute": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshortlecture": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshortpart": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshortsubtitle": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "insertshorttitle": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "insertslideintonotes": {
    "args": [
     "req"
@@ -19209,7 +19987,14 @@
    ]
   },
   "listfigurename": {},
-  "listfiles": {},
+  "listfiles": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "listgadd": {
    "args": [
     "req",
@@ -19311,6 +20096,10 @@
   },
   "localedate": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -19343,6 +20132,10 @@
   "localfootnotetext": {},
   "localrefcontext": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -19462,6 +20255,10 @@
   "lstinline": {},
   "lstinputlisting": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -19561,7 +20358,14 @@
   "makegapedcells": {},
   "makeglossaries": {},
   "makeglossary": {},
-  "makeindex": {},
+  "makeindex": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "makelabel": {},
   "makenoidxglossaries": {},
   "makenomenclature": {},
@@ -19576,11 +20380,19 @@
   "manuscriptdescriptionlabelpunct": {},
   "map": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "maps": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -19871,12 +20683,20 @@
   "mdfsplitboxwidth": {},
   "mdfsubsubtitle": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "mdfsubsubtitleheight": {},
   "mdfsubtitle": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -19887,6 +20707,10 @@
   "mdseries": {},
   "mdtheorem": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -19904,7 +20728,14 @@
   "mega": {},
   "mel": {},
   "mem": {},
-  "member": {},
+  "member": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "merge": {
    "args": [
     "req"
@@ -19973,6 +20804,10 @@
   "minute": {},
   "missingfigure": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -20768,6 +21603,10 @@
   "multiput": {},
   "multirow": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -20839,6 +21678,10 @@
   "namenumberdelim": {},
   "namepart": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -20901,6 +21744,10 @@
   },
   "newacronym": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -20992,12 +21839,20 @@
   "newfontface": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "newfontfamily": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -21096,11 +21951,19 @@
   },
   "newmdenv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "newmdtheoremenv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -21141,6 +22004,10 @@
   "newread": {},
   "newrefcontext": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -21172,18 +22039,30 @@
   },
   "newtcbox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "newtcolorbox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "newterm": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -21286,6 +22165,10 @@
   "node": {},
   "nodepart": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -21538,7 +22421,14 @@
     "req"
    ]
   },
-  "note": {},
+  "note": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "notecite": {
    "args": [
     "req"
@@ -21788,6 +22678,10 @@
   "oslash": {},
   "otherlanguage": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -23008,6 +23902,10 @@
   },
   "pgfplotscolormaptodatafile": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -24168,6 +25066,10 @@
   },
   "pgfplotstablecreatecol": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -24334,11 +25236,19 @@
   },
   "pgfplotstabletypeset": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "pgfplotstabletypesetfile": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -24696,6 +25606,10 @@
   "polishzx": {},
   "polymerdelim": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -24779,16 +25693,41 @@
   "prime": {},
   "primo": {},
   "principalvalue": {},
-  "printacronyms": {},
+  "printacronyms": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "printatom": {
    "args": [
     "req"
    ]
   },
-  "printbibheading": {},
-  "printbibliography": {},
+  "printbibheading": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "printbibliography": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "printbiblist": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -24819,8 +25758,22 @@
    ]
   },
   "printglossaries": {},
-  "printglossary": {},
-  "printindex": {},
+  "printglossary": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "printindex": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "printindexearly": {},
   "printlabeldate": {},
   "printlabeldateextra": {},
@@ -24836,13 +25789,41 @@
    ]
   },
   "printnoidxglossaries": {},
-  "printnoidxglossary": {},
+  "printnoidxglossary": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "printnomenclature": {},
-  "printnumbers": {},
+  "printnumbers": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "printorigdate": {},
   "printorigtime": {},
-  "printshorthands": {},
-  "printsymbols": {},
+  "printshorthands": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "printsymbols": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "printtext": {
    "args": [
     "req"
@@ -24920,12 +25901,20 @@
   "providefontface": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "providefontfamily": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -25067,18 +26056,30 @@
   "qty": {},
   "qtylist": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "qtyproduct": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "qtyrange": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req",
     "req"
@@ -25277,12 +26278,20 @@
   "renewfontface": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "renewfontfamily": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -25309,6 +26318,10 @@
   },
   "renewmdenv": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -25327,12 +26340,20 @@
   },
   "renewtcbox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
   },
   "renewtcolorbox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -25733,7 +26754,14 @@
     "req"
    ]
   },
-  "scoped": {},
+  "scoped": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "scriptfont": {},
   "scriptscriptfont": {},
   "scriptscriptstyle": {},
@@ -25804,6 +26832,10 @@
   "selectgalician": {},
   "selectlanguage": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -25864,6 +26896,10 @@
   },
   "setboldmathrm": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -25957,12 +26993,20 @@
   "setfontface": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "setfontfamily": {
    "args": [
     "req",
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26027,21 +27071,37 @@
   "setlongtables": {},
   "setmainfont": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "setmathrm": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "setmathsf": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "setmathtt": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26058,6 +27118,10 @@
   "setminus": {},
   "setmonofont": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26089,11 +27153,19 @@
   "setquotestyle": {},
   "setromanfont": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "setsansfont": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26294,6 +27366,10 @@
   },
   "si": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26392,6 +27468,10 @@
   },
   "smashoperator": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26419,6 +27499,10 @@
   },
   "sort": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26638,7 +27722,14 @@
   "stbscode": {},
   "stdidentifierspunct": {},
   "stdpunctuation": {},
-  "step": {},
+  "step": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "stepcounter": {},
   "steradian": {},
   "stigma": {},
@@ -26926,6 +28017,10 @@
   "surd": {},
   "surroundwithmdframed": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -26994,7 +28089,14 @@
     "req"
    ]
   },
-  "tableofcontents": {},
+  "tableofcontents": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "tabskip": {},
   "tabularnewline": {},
   "tabularxcolumn": {},
@@ -27062,11 +28164,19 @@
   "tcblower": {},
   "tcbox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "tcboxverb": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -27095,6 +28205,10 @@
   },
   "tcbsidebyside": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req",
     "req"
    ]
@@ -27110,6 +28224,10 @@
   },
   "tcbsubtitle": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -28499,7 +29617,14 @@
   "threadinfodict": {},
   "tick": {},
   "ticknum": {},
-  "tikz": {},
+  "tikz": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "tikzaddtikzonlycommandshortcutdef": {
    "args": [
     "req",
@@ -28641,6 +29766,10 @@
   },
   "titleline": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -28678,6 +29807,10 @@
   "todayRoman": {},
   "todo": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -28755,18 +29888,81 @@
   "tracingstacklevels": {},
   "tracingstats": {},
   "tracingtabularx": {},
-  "transblindshorizontal": {},
-  "transblindsvertical": {},
-  "transboxin": {},
-  "transboxout": {},
+  "transblindshorizontal": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transblindsvertical": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transboxin": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transboxout": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "transcites": {},
-  "transcover": {},
-  "transdissolve": {},
+  "transcover": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transdissolve": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "transduration": {},
-  "transfade": {},
-  "transfly": {},
+  "transfade": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transfly": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "transfullcites": {},
-  "transglitter": {},
+  "transglitter": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "translatortypedelim": {},
   "translit": {
    "args": [
@@ -28775,15 +29971,71 @@
     "req"
    ]
   },
-  "transpush": {},
-  "transreplace": {},
-  "transsplithorizontalin": {},
-  "transsplithorizontalout": {},
-  "transsplitverticalin": {},
-  "transsplitverticalout": {},
+  "transpush": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transreplace": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transsplithorizontalin": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transsplithorizontalout": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transsplitverticalin": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transsplitverticalout": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "transtypes": {},
-  "transuncover": {},
-  "transwipe": {},
+  "transuncover": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "transwipe": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "treatypartysep": {},
   "treatysubtype": {},
   "trede": {},
@@ -29084,6 +30336,10 @@
   },
   "unit": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -29168,6 +30424,10 @@
   "useasboundingbox": {},
   "usebeamercolor": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -29230,6 +30490,10 @@
   },
   "usepackage": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -29834,8 +31098,22 @@
   }
  },
  "environments": {
-  "BVerbatim": {},
-  "BVerbatim*": {},
+  "BVerbatim": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "BVerbatim*": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "Beispiel": {},
   "Beispiele": {},
   "Beweis": {},
@@ -29853,22 +31131,61 @@
   },
   "Fakt": {},
   "Folgerung": {},
-  "Form": {},
+  "Form": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "Huge": {},
   "LARGE": {},
-  "LVerbatim": {},
-  "LVerbatim*": {},
+  "LVerbatim": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "LVerbatim*": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "Large": {},
   "Loesung": {},
   "NoHyper": {},
   "Satz": {},
   "SaveVerbatim": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
-  "Verbatim": {},
-  "Verbatim*": {},
+  "Verbatim": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "Verbatim*": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "VerbatimOut": {
    "args": [
     "req"
@@ -29928,14 +31245,29 @@
   "asparadesc": {},
   "asparaenum": {},
   "asparaitem": {},
-  "axis": {},
+  "axis": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "beamerboxesrounded": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "beamercolorbox": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -29976,8 +31308,22 @@
   "dcases*": {},
   "definition": {},
   "definitions": {},
-  "description": {},
-  "description*": {},
+  "description": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "description*": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "descriptionFB": {},
   "displaycquote": {
    "args": [
@@ -29990,8 +31336,22 @@
   "doublespace": {},
   "drcases": {},
   "drcases*": {},
-  "enumerate": {},
-  "enumerate*": {},
+  "enumerate": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "enumerate*": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "enumerateFB": {},
   "eqnarray": {},
   "eqnarray*": {},
@@ -30005,11 +31365,19 @@
   "figure*": {},
   "filecontents": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
   "filecontents*": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -30028,7 +31396,14 @@
     "req"
    ]
   },
-  "frame": {},
+  "frame": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "framed": {},
   "fullexpotherlanguage": {
    "args": [
@@ -30061,8 +31436,22 @@
   "inparaenum": {},
   "inparaitem": {},
   "invisibleenv": {},
-  "itemize": {},
-  "itemize*": {},
+  "itemize": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "itemize*": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "itemizeFB": {},
   "large": {},
   "leftbar": {},
@@ -30089,7 +31478,14 @@
    ]
   },
   "listing": {},
-  "loglogaxis": {},
+  "loglogaxis": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "longtable": {
    "args": [
     "req"
@@ -30100,7 +31496,14 @@
     "req"
    ]
   },
-  "lstlisting": {},
+  "lstlisting": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "math": {},
   "matrix": {},
   "matrix*": {
@@ -30109,7 +31512,14 @@
    ]
   },
   "mcellbox": {},
-  "mdframed": {},
+  "mdframed": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "microtypecontext": {
    "args": [
     "req"
@@ -30122,6 +31532,10 @@
   },
   "minted": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -30149,6 +31563,10 @@
   },
   "otherlanguage*": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -30160,7 +31578,14 @@
   },
   "overprint": {},
   "pgfplotsinterruptdatabb": {},
-  "picture": {},
+  "picture": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "plnumgroup": {},
   "pmatrix": {},
   "pmatrix*": {
@@ -30185,6 +31610,10 @@
   "rcases*": {},
   "refcontext": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
@@ -30201,15 +31630,40 @@
    ]
   },
   "samepage": {},
-  "scope": {},
+  "scope": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "scriptsize": {},
   "selectlanguage": {
    "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    },
     "req"
    ]
   },
-  "semilogxaxis": {},
-  "semilogyaxis": {},
+  "semilogxaxis": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
+  "semilogyaxis": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "shaded": {},
   "shaded*": {},
   "sideways": {},
@@ -30301,7 +31755,14 @@
   "thenomenclature": {},
   "theorem": {},
   "theshorthands": {},
-  "tikzpicture": {},
+  "tikzpicture": {
+   "args": [
+    {
+     "kind": "opt",
+     "content": "keyval"
+    }
+   ]
+  },
   "tiny": {},
   "titled-frame": {},
   "titlepage": {},

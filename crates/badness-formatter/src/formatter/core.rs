@@ -345,6 +345,10 @@ fn format_root(
         grouped_sibling_cache: &grouped_sibling_cache,
         dtx_reflow_cache: &dtx_reflow_cache,
         dtx_margin_probe: false,
+        is_dtx: root
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD)),
     };
     // Saturate `Group::expand` at the lowering->printer seam: after this, the
     // flag is the single representation of "forced open" the printer trusts.
@@ -743,6 +747,12 @@ struct LowerCtx<'a> {
     /// floated margin is an emission detail that cannot change whether the reflow
     /// escapes the margin, so the probe simply keeps it.
     dtx_margin_probe: bool,
+    /// Whether the document carries any `.dtx` documentation margin at all — the
+    /// cheap short-circuit for the no-`.dtx` majority, so gates that would
+    /// otherwise walk back to the start of a physical line
+    /// ([`doc_margin_opens_line`]) cost nothing in an ordinary `.tex` file.
+    /// Computed once in [`format_root`].
+    is_dtx: bool,
 }
 
 /// Memoized [`dtx_doc_paragraph_reflows_safely`] answers, keyed by paragraph node.
@@ -1015,8 +1025,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
         // Same margin rule as the group above: a `[…]` continuing across
         // doc-margined lines keeps its authored margins.
+        // No signature context on the generic path, so no keyval proof: only gaps
+        // the author already wrote are break opportunities.
         SyntaxKind::OPTIONAL if !contains_doc_margin(node) => {
-            if let Some(ir) = lower_optional(node, cx) {
+            if let Some(ir) = lower_optional(node, cx, false) {
                 return ir;
             }
         }
@@ -1090,6 +1102,31 @@ fn dtx_paragraph_starts_margined(node: &SyntaxNode) -> bool {
         .filter_map(|e| e.into_token())
         .find(|t| !is_collapsible_trivia(t.kind()))
         .is_some_and(|t| t.kind() == SyntaxKind::DOC_MARGIN || margin_precedes_on_line(&t))
+}
+
+/// Whether the physical line `node` starts on opens with a `.dtx` documentation
+/// margin or docstrip guard — i.e. everything on it is documentation (or guarded
+/// code) that docstrip anchors at column 0.
+///
+/// Broader than [`margin_precedes_on_line`], which only accepts a margin
+/// *immediately* before its token: here the margin may be arbitrarily far back
+/// (`% \begin{function}[EXP, pTF]{…}`). A construct that introduces its own line
+/// break must consult this, because a break it emits lands on a line the doc layer
+/// never margined — turning documentation into live code. [`contains_doc_margin`]
+/// cannot see this: the margin sits *outside* the node, before it on the line.
+fn doc_margin_opens_line(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    if !cx.is_dtx {
+        return false;
+    }
+    let mut prev = node.first_token().and_then(|t| t.prev_token());
+    while let Some(t) = prev {
+        match t.kind() {
+            SyntaxKind::NEWLINE => return false,
+            SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => return true,
+            _ => prev = t.prev_token(),
+        }
+    }
+    false
 }
 
 /// Whether the nearest token before `token`, skipping inline `WHITESPACE` on the
@@ -3995,11 +4032,14 @@ fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// also take the generic path, so nothing regresses. A `\begin` header carrying a
 /// comment is left to the generic path too: gluing across a `%` comment would let
 /// it swallow the next line.
+///
+/// Each glued group is also matched to its signature slot ([`match_arg_slot`],
+/// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] `[…]` — `axis`,
+/// `tikzpicture`, `lstlisting` — reaches the keyval-aware optional layout. Every
+/// other content kind lowers exactly as the generic path would.
 fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let arity = environment_name(begin)
-        .and_then(|name| cx.signatures.environment(&name))
-        .map(|sig| sig.args.len())
-        .unwrap_or(0);
+    let sig = environment_name(begin).and_then(|name| cx.signatures.environment(&name));
+    let arity = sig.as_ref().map(|sig| sig.args.len()).unwrap_or(0);
     // A header carrying a `%` comment is left to the generic path: gluing
     // across it would let it swallow the next line. A `.dtx` doc margin or
     // guard likewise — both must open their own line, so a header whose
@@ -4017,9 +4057,11 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return lower_node(begin, cx);
     }
 
+    let args = sig.as_ref().map(|sig| &*sig.args).unwrap_or(&[]);
     let mut head: Vec<Ir> = Vec::new();
     let mut tail: Vec<SyntaxElement> = Vec::new();
     let mut args_seen = 0;
+    let mut slot = 0usize;
     let mut in_tail = false;
     for element in begin.children_with_tokens() {
         if in_tail {
@@ -4030,7 +4072,14 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             SyntaxElement::Node(child)
                 if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
-                head.push(lower_node(child, cx));
+                let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
+                let keyval = match_arg_slot(args, &mut slot, is_bracket)
+                    .is_some_and(|spec| spec.content == ContentKind::Keyval);
+                head.push(if keyval && is_bracket {
+                    lower_optional(child, cx, true).unwrap_or_else(|| lower_node(child, cx))
+                } else {
+                    lower_node(child, cx)
+                });
                 args_seen += 1;
                 if args_seen == arity {
                     in_tail = true;
@@ -5463,29 +5512,289 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
     }
 }
 
-/// Lower an [`SyntaxKind::OPTIONAL`] argument group, or `None` to leave it on the
-/// generic inline path (a single-line optional). A multi-line optional collapses
-/// to one line when it fits the width — a source line break inside `[…]` is
-/// incidental, so `\foo[a=1,\nb=2]` formats as `\foo[a=1, b=2]` (issue #47), the
-/// interior newlines becoming single spaces ([`collapse_arg_group`], a
-/// TeX-identical exchange) — and keeps the indented block form
-/// ([`lower_bracketed`]) when it does not. The fit decision is the enclosing
-/// [`Ir::group`]'s rest-aware measurement, so trailing same-line content (`]{c}`)
-/// counts toward it. A body that is not safely collapsible (a blank line, a `%`
-/// comment, nested block content) keeps the block form outright. Inert under
-/// [`WrapMode::Preserve`], which keeps the pre-existing block layout.
-fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Ir> {
-    if !spans_multiple_lines(node) {
+/// How a split point inside an `[…]` body renders in each mode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyBreak {
+    /// The author already wrote whitespace after the comma. Flat is a space,
+    /// broken a newline — the whitespace ↔ newline exchange that is TeX-identical
+    /// anywhere, so this split needs no permission.
+    Gap,
+    /// The comma was glued to the next key (`xmin=-5,xmax=5`). Flat renders
+    /// *nothing*, so a fitting bracket stays byte-identical to the source and only
+    /// the broken form materializes a space token TeX will see. Emitted solely for
+    /// a [`ContentKind::Keyval`] argument, whose processor discards that space.
+    Glued,
+}
+
+impl KeyBreak {
+    fn separator(self) -> Ir {
+        match self {
+            KeyBreak::Gap => Ir::line(),
+            KeyBreak::Glued => Ir::soft_line(),
+        }
+    }
+}
+
+/// Lower a [`SyntaxKind::OPTIONAL`] argument group, or `None` to leave it on the
+/// generic inline path.
+///
+/// A `[…]` is a plain Wadler group over its top-level comma-separated entries: flat
+/// when it fits the width, one key per line when it does not. The flat rendering is
+/// exactly the old collapsed form, so `\foo[a=1,\nb=2]` still formats as
+/// `\foo[a=1, b=2]` (issue #47) — a source line break inside `[…]` is incidental —
+/// while an over-long bracket now *expands* instead of silently overflowing, and the
+/// choice no longer depends on whether the author happened to break the line
+/// (`spans_multiple_lines` was the unsafe lone-newline predicate; see the
+/// trivia-invariant-layout section of `formatter.md`). The fit decision is this
+/// group's rest-aware measurement, so trailing same-line content (`]{c}`) counts
+/// toward it.
+///
+/// `keyval` reports that the signature DB proved this argument a `key=value` list
+/// (see [`ContentKind::Keyval`]), which additionally licenses splitting a comma the
+/// author *glued*. Without it only gaps the author already wrote are break
+/// opportunities, so a textual optional (`\item[red,green]`, a `\newcommand`
+/// default) can never gain a space that would be typeset.
+///
+/// A body that is not safely segmentable — a blank line, a `%` comment, nested
+/// block content — falls back to the indented block form ([`lower_bracketed`]),
+/// exactly as before, and with no split point at all the bracket stays inline
+/// rather than uselessly detonating into `[\n!htb\n]`. Inert under
+/// [`WrapMode::Preserve`] and the other non-prose-wrapping modes, which keep the
+/// pre-existing block layout.
+fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<Ir> {
+    // The pre-existing block form is the fallback everywhere, and the *whole*
+    // behaviour under a mode that does not wrap prose. Gating it on
+    // `spans_multiple_lines` there preserves today's single-line handling (the
+    // generic inline path) byte for byte.
+    let block = || {
+        spans_multiple_lines(node)
+            .then(|| lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx))
+    };
+    // A `[…]` continuing across `.dtx` doc-margined lines keeps its authored
+    // margins: `lower_node` already gates on this, but the signature-aware callers
+    // reach here directly, and relaying such a body would move content off its `%`.
+    //
+    // The second gate is the one that bites: a bracket *on* a doc line
+    // (`% \begin{function}[EXP, pTF]{…}`) holds no margin token of its own, so
+    // `contains_doc_margin` says nothing, yet every line a break here creates would
+    // land unmargined — silently promoting documentation to live code. The old
+    // lowering was safe by accident (it only ever broke an already-multi-line
+    // bracket); a width-driven group has to say so.
+    if !cx.wraps_prose() || contains_doc_margin(node) || doc_margin_opens_line(node, cx) {
+        return block();
+    }
+    let Some(segments) = segment_optional(node, cx, keyval) else {
+        return block();
+    };
+    let OptionalSegments {
+        open,
+        mut parts,
+        close,
+        splits,
+    } = segments;
+    // Interior padding (`\baz [ me ]`) is the author's, and a single-line bracket
+    // with nothing to break at must render byte-identically to the generic path —
+    // so hand those straight back to it rather than reproducing them here.
+    if splits == 0 && !spans_multiple_lines(node) {
         return None;
     }
-    let block = lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx);
-    if !cx.wraps_prose() {
-        return Some(block);
+    // Padding at the body's edges rides the flat rendering but must vanish when the
+    // delimiters take their own lines, or the first key lands at indent + 1.
+    let lead = peel_padding(&mut parts, Edge::Leading);
+    let trail = peel_padding(&mut parts, Edge::Trailing);
+    let body = Ir::concat(parts);
+    if splits == 0 {
+        // Nothing to break at: emit the collapsed atom and let it overflow. A
+        // breakable group here would push `[!htb]` onto three lines to no gain.
+        return Some(Ir::concat([open, lead, body, trail, close]));
     }
-    match collapse_arg_group(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx) {
-        Some(collapsed) => Some(Ir::group(Ir::if_break(collapsed, block))),
-        None => Some(block),
+    Some(Ir::group(Ir::concat([
+        open,
+        Ir::indent(Ir::concat([
+            Ir::soft_line(),
+            Ir::if_break(lead, Ir::Nil),
+            body,
+        ])),
+        Ir::if_break(trail, Ir::Nil),
+        Ir::soft_line(),
+        close,
+    ])))
+}
+
+/// Which end of an `[…]` body [`peel_padding`] works on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    Leading,
+    Trailing,
+}
+
+/// Remove and return the whitespace padding at one end of a segmented `[…]` body
+/// (see [`is_trimmable_break`]). A [`Ir::Nil`] result means there was none.
+fn peel_padding(parts: &mut Vec<Ir>, edge: Edge) -> Ir {
+    let mut padding = Ir::Nil;
+    loop {
+        let at = match edge {
+            Edge::Leading => 0,
+            Edge::Trailing => parts.len().saturating_sub(1),
+        };
+        match parts.get(at) {
+            Some(ir) if is_trimmable_break(ir) => {
+                let taken = parts.remove(at);
+                if matches!(padding, Ir::Nil) {
+                    padding = taken;
+                }
+            }
+            _ => return padding,
+        }
     }
+}
+
+/// An `[…]` body cut into its top-level entries: the delimiters, the entry IR with
+/// [`KeyBreak`] separators already interleaved, and how many separators there are.
+struct OptionalSegments {
+    open: Ir,
+    parts: Vec<Ir>,
+    close: Ir,
+    splits: usize,
+}
+
+/// Segment an `OPTIONAL` body at its top-level commas, or `None` when the body is
+/// not safely segmentable — the same three bail conditions as
+/// [`collapse_arg_group`]: a blank-line `\par`, a `%` comment (which must end its
+/// line), or nested content carrying a forced break.
+///
+/// A comma is a split point only at bracket depth 0. The parser closes an
+/// `OPTIONAL` at its first `]`, so a stray `[` inside the body (TeX does not nest
+/// `[`) opens a region that never closes — everything after it stays glued, which
+/// is the conservative reading: `\foo[a=[1,2]` must not break at the `1,2`.
+fn segment_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<OptionalSegments> {
+    let mut open = Ir::Nil;
+    let mut close = Ir::Nil;
+    let mut parts: Vec<Ir> = Vec::new();
+    let mut splits = 0usize;
+    let mut depth = 0usize;
+    // Whether the last content token was a `WORD` ending in `,` at depth 0, so the
+    // *next* gap is a break opportunity.
+    let mut open_entry = false;
+    // Whether the entry currently being accumulated holds any content yet — what
+    // tells [`push_entry_word`] a leading comma closes a real entry rather than an
+    // empty one.
+    let mut entry_open = false;
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Token(t)
+                if t.kind() == SyntaxKind::L_BRACKET && matches!(open, Ir::Nil) =>
+            {
+                open = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::R_BRACKET => {
+                close = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::L_BRACKET => {
+                depth += 1;
+                open_entry = false;
+                entry_open = true;
+                parts.push(Ir::verbatim(t.text()));
+            }
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
+                if newlines >= 2 {
+                    return None; // a blank-line `\par`: keep the block form
+                }
+                if open_entry && depth == 0 {
+                    parts.push(KeyBreak::Gap.separator());
+                    splits += 1;
+                    entry_open = false;
+                } else if newlines == 1 {
+                    // A lone newline collapses to a single space; pure inline
+                    // whitespace stays verbatim, matching the generic lowering.
+                    parts.push(Ir::verbatim(" "));
+                } else {
+                    parts.push(Ir::verbatim(trailing_ws));
+                }
+                open_entry = false;
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::WORD && depth == 0 => {
+                splits += push_entry_word(t.text(), keyval, &mut parts, entry_open);
+                // A word ending in `,` closes its entry and opens an empty one.
+                open_entry = t.text().ends_with(',');
+                entry_open = !open_entry;
+            }
+            SyntaxElement::Token(t) => {
+                parts.push(lower_loose_token(&t));
+                open_entry = false;
+                entry_open = true;
+            }
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(&child, cx);
+                if ir.contains_forced_break() {
+                    return None; // nested block content: keep the block form
+                }
+                parts.push(ir);
+                open_entry = false;
+                entry_open = true;
+            }
+        }
+    }
+    // A trailing separator (`[a, b, ]`) would put the closing `]` two lines down.
+    // Drop it; the whitespace it stood for is trailing and is dropped anyway.
+    while matches!(parts.last(), Some(Ir::Line | Ir::SoftLine)) {
+        parts.pop();
+        splits = splits.saturating_sub(1);
+    }
+    Some(OptionalSegments {
+        open,
+        parts,
+        close,
+        splits,
+    })
+}
+
+/// Push one body `WORD` onto `parts`, cutting it at each *interior* comma when
+/// `keyval` licenses it, and return how many separators were emitted. The comma
+/// stays on the piece it terminates (`xmin=-5,` / `xmax=5,`), since it belongs to
+/// the key before it.
+///
+/// A comma whose entry holds nothing at all is an empty entry (a doubled `,`), not
+/// a key: it never earns a line of its own and rides along on the next piece
+/// instead. That emptiness is *not* a property of this word alone — the lexer ends
+/// a `WORD` at every control sequence, so a key list routinely hands us a word that
+/// opens with the comma closing the previous token's entry
+/// (`width=` `\figurewidth` `,xmin=-5,…`). Hence `entry_open`: whether the caller
+/// has already emitted content for the entry this word continues.
+fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bool) -> usize {
+    if !keyval || !text.contains(',') {
+        parts.push(Ir::verbatim(text));
+        return 0;
+    }
+    let mut splits = 0usize;
+    let mut start = 0usize;
+    let mut pushed = 0usize;
+    let mut has_content = entry_open;
+    for (i, _) in text.match_indices(',') {
+        let piece = &text[start..=i];
+        if piece.len() == 1 && !has_content {
+            continue; // an empty entry: let the comma ride on the next piece
+        }
+        if pushed > 0 {
+            parts.push(KeyBreak::Glued.separator());
+            splits += 1;
+        }
+        parts.push(Ir::verbatim(piece));
+        pushed += 1;
+        start = i + 1;
+        has_content = false;
+    }
+    if start < text.len() {
+        if pushed > 0 {
+            parts.push(KeyBreak::Glued.separator());
+            splits += 1;
+        }
+        parts.push(Ir::verbatim(&text[start..]));
+    }
+    splits
 }
 
 /// Whether `command`'s signature marks any argument the [`lower_command`] path
@@ -5675,6 +5984,15 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                         // generic block form when the body is not safely collapsible.
                         out.push(
                             collapse_arg_group(&child, open, close, cx)
+                                .unwrap_or_else(|| lower_node(&child, cx)),
+                        );
+                    }
+                    // A proven `key=value` list: its processor strips spaces around
+                    // entries, so the layout may also break at a comma the author
+                    // glued (see [`ContentKind::Keyval`]).
+                    Some(ContentKind::Keyval) if is_bracket => {
+                        out.push(
+                            lower_optional(&child, cx, true)
                                 .unwrap_or_else(|| lower_node(&child, cx)),
                         );
                     }

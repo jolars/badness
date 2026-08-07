@@ -14,7 +14,7 @@ authors = ["Johan Larsson <johan@jolars.co>"]
 
 [package]
 name = "badness"
-version = "0.14.0"
+version = "0.15.0"
 edition.workspace = true
 readme = "README.md"
 description = "A language server, formatter, and linter for LaTeX"
@@ -41,8 +41,8 @@ path = "src/main.rs"
 
 [dependencies]
 annotate-snippets = "0.12.16"
-badness-formatter = { path = "crates/badness-formatter", version = "0.1.0" }
-badness-parser = { path = "crates/badness-parser", version = "0.1.0" }
+badness-formatter = { path = "crates/badness-formatter", version = "0.2.0" }
+badness-parser = { path = "crates/badness-parser", version = "0.1.1" }
 clap = { version = "4.5.51", features = ["derive"] }
 crossbeam-channel = "0.5"
 dirs = "6.0.0"

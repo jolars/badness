@@ -2,6 +2,15 @@
 //!
 //! The LaTeX-specific [`WrapMode`] (paragraph line-break policy, modeled on the
 //! `panache` formatter) is the one field specific to badness.
+//!
+//! Under the optional `serde` feature every type here is (de)serializable, and
+//! under `schema` it also derives `schemars::JsonSchema`. Both are off by
+//! default: the CLI keeps its own serde-named mirrors in `config.rs` so the
+//! TOML spelling stays a config concern. The features exist for embedders that
+//! publish a config schema of their own — the dprint plugin borrows these
+//! schemas rather than hand-listing the accepted values a third time. The wire
+//! spellings are therefore load-bearing and must keep matching `badness.toml`:
+//! `kebab-case` throughout (`single-line`, `line-width`).
 
 /// How the formatter lays out the line breaks *inside* a paragraph. Modeled on
 /// panache's `WrapMode` (`crates/panache-formatter/src/config.rs`).
@@ -12,6 +21,12 @@
 /// resolved from config into the [`SentenceOptions`](super::SentenceOptions)
 /// threaded through the lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WrapMode {
     /// Greedy fill: pack words up to `line_width`, breaking only where the next
     /// word would not fit. The default.
@@ -39,6 +54,12 @@ pub enum WrapMode {
 /// `equation`) is line-broken. Grid environments (`align`, `gather`, matrices)
 /// and inline `$…$` are unaffected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MathWrap {
     /// Derive from the resolved [`WrapMode`]: [`WrapMode::Preserve`] gives
     /// [`MathWrap::Preserve`], every other wrap mode gives [`MathWrap::Break`].
@@ -85,6 +106,12 @@ impl MathWrap {
 /// mixed-ending document (see the invariant note in
 /// `docs/src/development/formatter.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum LineEnding {
     /// Keep what the source used: `\r\n` if the document's first line break is a
     /// CRLF, `\n` otherwise. The default, so formatting never rewrites a file's
@@ -197,6 +224,12 @@ pub(crate) fn apply_line_ending(out: &mut String, resolved: LineEnding) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default, rename_all = "kebab-case")
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FormatStyle {
     pub line_width: usize,
     pub indent_width: usize,
@@ -235,5 +268,159 @@ impl FormatStyle {
         self.line_width
             .saturating_sub(STABLE_WRAP_TARGET_OFFSET)
             .clamp(1, self.line_width.max(1))
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::{FormatStyle, LineEnding, MathWrap, WrapMode};
+
+    /// The wire spelling of every variant, as a `match` so a new variant fails
+    /// to compile here instead of silently shipping an unchecked spelling.
+    /// These strings are `badness.toml`'s, and embedders (the dprint plugin)
+    /// publish them in their own config schema.
+    fn wrap_wire(mode: WrapMode) -> &'static str {
+        match mode {
+            WrapMode::Reflow => "reflow",
+            WrapMode::Stable => "stable",
+            WrapMode::Sentence => "sentence",
+            WrapMode::Semantic => "semantic",
+            WrapMode::Preserve => "preserve",
+        }
+    }
+
+    fn math_wrap_wire(mode: MathWrap) -> &'static str {
+        match mode {
+            MathWrap::Auto => "auto",
+            MathWrap::Preserve => "preserve",
+            MathWrap::SingleLine => "single-line",
+            MathWrap::Break => "break",
+        }
+    }
+
+    fn line_ending_wire(ending: LineEnding) -> &'static str {
+        match ending {
+            LineEnding::Auto => "auto",
+            LineEnding::Lf => "lf",
+            LineEnding::Crlf => "crlf",
+            LineEnding::Native => "native",
+        }
+    }
+
+    fn round_trip<T>(value: T, expected: &str)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let json = serde_json::to_string(&value).expect("serializes");
+        assert_eq!(json, format!("\"{expected}\""));
+        let back: T = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn wrap_modes_use_their_toml_spelling() {
+        for mode in [
+            WrapMode::Reflow,
+            WrapMode::Stable,
+            WrapMode::Sentence,
+            WrapMode::Semantic,
+            WrapMode::Preserve,
+        ] {
+            round_trip(mode, wrap_wire(mode));
+        }
+    }
+
+    #[test]
+    fn math_wraps_use_their_toml_spelling() {
+        for mode in [
+            MathWrap::Auto,
+            MathWrap::Preserve,
+            MathWrap::SingleLine,
+            MathWrap::Break,
+        ] {
+            round_trip(mode, math_wrap_wire(mode));
+        }
+    }
+
+    #[test]
+    fn line_endings_use_their_toml_spelling() {
+        for ending in [
+            LineEnding::Auto,
+            LineEnding::Lf,
+            LineEnding::Crlf,
+            LineEnding::Native,
+        ] {
+            round_trip(ending, line_ending_wire(ending));
+        }
+    }
+
+    #[test]
+    fn format_style_keys_are_kebab_case_and_default_the_rest() {
+        let json = serde_json::to_value(FormatStyle::default()).expect("serializes");
+        let object = json.as_object().expect("an object");
+        let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "indent-width",
+                "line-ending",
+                "line-width",
+                "math-wrap",
+                "wrap"
+            ]
+        );
+
+        let partial: FormatStyle =
+            serde_json::from_str(r#"{"line-width": 100}"#).expect("deserializes");
+        assert_eq!(
+            partial,
+            FormatStyle {
+                line_width: 100,
+                ..FormatStyle::default()
+            }
+        );
+    }
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use super::{LineEnding, MathWrap, WrapMode};
+
+    /// The schema an embedder publishes has to enumerate the accepted values,
+    /// not just say "string".
+    fn variants(schema: schemars::Schema) -> Vec<String> {
+        let json = serde_json::to_value(schema).expect("schema serializes");
+        let mut values: Vec<String> = json
+            .get("oneOf")
+            .and_then(|one_of| one_of.as_array())
+            .expect("an enum schema is a oneOf")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("const")
+                    .and_then(|value| value.as_str())
+                    .expect("each variant is a const")
+                    .to_string()
+            })
+            .collect();
+        values.sort();
+        values
+    }
+
+    #[test]
+    fn enums_advertise_their_wire_values() {
+        assert_eq!(
+            variants(schemars::schema_for!(WrapMode)),
+            ["preserve", "reflow", "semantic", "sentence", "stable"]
+        );
+        assert_eq!(
+            variants(schemars::schema_for!(MathWrap)),
+            ["auto", "break", "preserve", "single-line"]
+        );
+        assert_eq!(
+            variants(schemars::schema_for!(LineEnding)),
+            ["auto", "crlf", "lf", "native"]
+        );
     }
 }

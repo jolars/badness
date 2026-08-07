@@ -9,6 +9,11 @@
 //!
 //! This crate is embeddable (it builds for `wasm32-unknown-unknown`); the
 //! batch path-walking check API and the CLI live in the `badness` crate.
+//!
+//! With the optional `serde` feature, [`FormatStyle`] and its enums are
+//! (de)serializable under `badness.toml`'s kebab-case spellings; the `schema`
+//! feature additionally derives `schemars::JsonSchema` for embedders that
+//! publish a config schema (see [`formatter::style`]).
 
 pub mod ast;
 pub mod bib;

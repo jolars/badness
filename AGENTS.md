@@ -43,7 +43,13 @@ crates and one non-published wasm shim under `crates/`:
   filesystem, threads, or processes stays in the root crate. The plugin is
   sandboxed with no filesystem, so it passes an empty `SignatureDb` where the
   CLI folds in signatures scanned from sibling `.sty`/`.cls` files — the one
-  sanctioned divergence from `badness format`.
+  sanctioned divergence from `badness format`. Its optional `serde`/`schema`
+  features (off by default, exercised by their own CI steps) put `badness.toml`'s
+  kebab-case spellings on `FormatStyle` and its enums so the plugin's published
+  config schema can `$ref` them instead of restating the accepted values; the CLI
+  keeps its own `*Config` mirrors in `src/config.rs` regardless. **The wire
+  spellings are public API** — `style.rs`'s `serde_tests` pin them, and a new
+  enum variant will not compile until it is listed there.
 - **`badness-wasm`** — `publish = false` wasm-bindgen shim over the two library
   crates, powering the docs playground (`docs/src/playground/index.html`); built
   with `wasm-pack` via `task playground:wasm`, never released.

@@ -49,6 +49,12 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --verbose
 
+      # `badness-formatter`'s `serde`/`schema` features are off by default, so
+      # the workspace run above never compiles them. They are what the dprint
+      # plugin borrows its published config schema from.
+      - name: Run formatter feature tests
+        run: cargo test -p badness-formatter --features schema --verbose
+
   wasm:
     if: github.event_name != 'schedule'
     name: Wasm Build
@@ -71,6 +77,13 @@ jobs:
       - name: Build library crates for wasm
         run: >
           cargo build -p badness-parser -p badness-formatter -p badness-wasm
+          --release --target wasm32-unknown-unknown
+
+      # The dprint plugin builds `badness-formatter` for wasm *with* `schema`,
+      # so schemars has to stay wasm-clean too.
+      - name: Build formatter with the schema feature for wasm
+        run: >
+          cargo build -p badness-formatter --features schema
           --release --target wasm32-unknown-unknown
 
   extension:

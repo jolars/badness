@@ -19,6 +19,13 @@ live in the `badness` CLI crate instead.
 Entry points: `formatter::format` / `formatter::format_with_style` with
 `FormatStyle`, and `bib::format` / `bib::format_with_style`.
 
+Two optional features, both off by default, exist for embedders that expose the
+style as configuration: `serde` makes `FormatStyle` and its enums
+(de)serializable under `badness.toml`'s kebab-case spellings (`single-line`),
+and `schema` additionally derives `schemars::JsonSchema`, so an embedder can
+publish a config schema that enumerates the real accepted values instead of
+restating them.
+
 See the [development
 documentation](https://badness.dev/development/formatter.html) for the engine's
 design.

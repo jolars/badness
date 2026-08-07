@@ -265,54 +265,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     {F}` forms one unit now, but the R4 explosion still fires only via
     head-attached branches (`lower_expl_conditional` returns `None`); the
     consumer's slot-to-sibling mapping could drive it.
-- [x] **Reflow-on-`.dtx` violates the whitespace-only invariant (S0 discovery;
-  dominated the trivia gate sets).** Three root causes, all reachable without any
-  perturbation via `badness format --wrap reflow` on a `.dtx`, and all now gated
-  structurally (independent of `WrapMode`, so an explicit `--wrap reflow` is as
-  safe as any other mode) — which is what let the per-file-kind `Preserve`
-  default go away:
-  1. *`^^A` relocation*: reflowing a managed command argument
-     (`\title{...^^A...}` — essentially every l3 `.dtx`) broke its body onto
-     fresh lines, dropping the `%` margin, and at the new position `^^A` re-lexed
-     as content. Fixed by gating the `COMMAND`-with-managed-argument arm on
-     `!contains_doc_margin`, the same margin rule the environment/math/group/
-     optional arms already carried. `dtx_caret_comment.dtx` is out of
-     `KNOWN_INVARIANT_FAILURES`.
-  2. *Guarded-line content loss*: `is_dtx_doc_paragraph` walked only direct child
-     tokens, so it skipped an opening `COMMAND` and read a margin from a later
-     line — wrapping `%<package>\def\x{1}` in a `% ` margin that commented the
-     code out. It now reads the paragraph's first content token, descending into
-     nodes.
-  3. *Doc-prose relocating a `macrocode` frame*: `lower_expl_paragraph` reflowed
-     an out-of-region run as generic prose, joining `%    \begin{macrocode}` onto
-     the prose line above. A run carrying a `DOC_MARGIN`/`GUARD`
-     (`run_carries_doc_margin`) now takes the byte-faithful element stream.
-  Backstop for anything not enumerated above: `LineBuilder::margin_escaped`
-  records a `DtxProse` reflow that committed content outside the `% ` margin, and
-  `lower_dtx_doc_paragraph` re-lowers on the preserve path when it fires.
-- [x] **Propagate the `.dtx` `% ` margin through `push_segment`** so the
-  paragraphs the escape detector above sends to the preserve path can reflow
-  again. Landed as three positive paths, all probe-gated so the escape stays the
-  residual backstop (no printer change — a block's interior is byte-faithful by
-  the relayout gates, so wrapping it in `Ir::margin_prefix` is never both safe
-  and needed):
-  1. A forced-break block whose interior lines all ride their own column-0
-     margins (`block_rides_own_margins`) commits raw with a canonical `% `
-     re-attached for its first line (`LineBuilder::push_margined_block`).
-  2. A `GUARD` whose physical line can be isolated (`collect_guard_line`)
-     becomes its own unmargined column-0 segment; the margin resumes after.
-  3. The `run_carries_doc_margin` bail narrowed: a doc-margined out-of-region
-     expl3 run reflows under `ReflowKind::DtxProse` when it starts margined,
-     sits under no environment, and contains at most margin-framed `macrocode`
-     chunks (`dtx_run_reflows_safely`) — each chunk commits raw behind its
-     byte-exact source frame lead (`dtx_env_line_lead`), never the canonical
-     `% `, since docstrip matches `%    \begin{macrocode}` literally. The
-     prose-only run the original entry imagined turned out not to exist:
-     region clipping puts every margined run either whole-paragraph (with its
-     chunks) or guard-led, so the chunk-admitting gate *is* the positive fix.
-  Pinned by `dtx_reflow_block_amid_prose`, `dtx_reflow_guard_mid_paragraph`,
-  `dtx_reflow_block_escape_residual` (the surviving fallback), and
-  `dtx_reflow_expl3_doc_run`.
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
@@ -388,113 +340,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   traded pretty-but-unstable for stable-but-ugly. The right trade, but it makes
   this entry the most visible remaining formatter wart.
 
-  **Sequence after S2/S3** of the trivia-invariant-layout entry above, not before.
-  The fix needs the fill to measure an atom by *where its first line would end*,
-  which depends on a decision the atom has not made yet (whether its own inner
-  hang breaks). `Ir::group_hug` does exactly this for a *forced* block by stopping
-  the measurement successfully at the first hard break; a soft-hanging block has no
-  hard break to stop at, so it needs a speculative sub-layout — and a speculative
-  answer is only safe once the mode contract guarantees it cannot disagree with
-  what the printer actually does.
-- [x] **Hanging brace argument flips K&R <-> Allman on wrap (idempotency;
-  smoke-test issue #96 residue).** In an expl3 statement a command whose greedily
-  absorbed `{body}` holds a long *single-source-line* body rendered K&R on pass 1
-  (`\tl_put_right:Ne \l_tmpa_tl {` — `{` glued to the head, body wrapped below) but
-  Allman on pass 2 (`{` on its own line at +2), because `contains_forced_break` on
-  the body is true only when the body's fill already wrapped to multiple *source*
-  lines (each a `SplitAtNewlines` statement), so the pass-1 soft K&R became a pass-2
-  hard Allman and `fmt(fmt(x)) != fmt(x)`. Fixed in `lower_expl_code`: a trailing
-  greedily-hung `{body}` whose body is a *multi-command* fill is committed as one
-  `conditional_group_all_lines` over flat / Allman-inline / Allman-broken candidates,
-  keyed on the body's *real* one-line fit (all-lines-fit measures each candidate with
-  nested groups forced flat) rather than its incidental source-line count, so the
-  `{`-placement stops depending on the reparse. Narrow guards keep it off the shapes
-  the ordinary hang path already lays out stably (single-command/bare-value bodies,
-  forced-break bodies, coupled siblings, and multi-argument/conditional-branch shapes
-  whose head this branch cannot measure from inside a single argument). Fixture
-  `expl_trailing_hang_group`; verified idempotent on `tagpdf.sty` (line 1007) and
-  `pdfmanagement/latex-lab-testphase-bookmark.sty` (line 298).
-- [x] **Forced expl3 block inherited a flat mode and hybridized (idempotency;
-  smoke-test issue #97, `l3auxdata.dtx`).** The broken form `lower_expl_group`
-  builds for a group forced open by a comment/guard/`.dtx` margin was a bare
-  `Ir::concat`, so its body was laid out in whatever mode the *caller* was
-  dispatched in. Dispatched `Flat`, `step_fill` lays every gap flat without
-  measuring while the groups hanging off those gaps still re-decide and break —
-  the K&R hybrid `\int_set:Nn \l_@@_groups_int {` with the body wrapped below,
-  which pass 2 re-reads as several statements and lays out Allman. Fixed by
-  wrapping the forced form in `Ir::group_expanded`: `expand` pins the body's mode
-  to break while leaving `contains_forced_break` and every flat-width measurement
-  answering exactly as the `HardLine`-bearing concat did. Fixture
-  `expl_forced_block_body_mode` (the leading `%` comment is load-bearing — it is
-  what forces the enclosing blocks open). Measured on `latex3/latex3` at
-  `3d1d347`: 17 -> 16 failing files of 288 (idempotency 2 -> 1), no new failures;
-  `latex3/latex2e` (384 files) and `pgf-tikz/pgf` (397) unchanged.
-- [x] **Residual K&R <-> Allman flip: a fill atom's flat check is not rest-aware
-  (idempotency; smoke-test issue #97 residue).** One shape survived on
-  `latex3/latex3` at `3d1d347`, `texmf/tex/latex/base/latexrelease.sty`'s
-  `{ is~\__hook_if_disabled:nTF {#1} {disabled} {undeclared} }`: pass 1 rendered
-  `{ is~` inline with the body wrapping below and `}` glued onto the last wrapped
-  line, pass 2 laid the group out as a block.
-
-  Root cause is a *disagreement between two fit rules*, not the `{`-column rule
-  the entry below blamed. `printer::step_fill` decided a fill atom flat on
-  `col + flat_width(atom) <= line_width` — purely local. A nested `Ir::Group`
-  inside that atom then re-decided with the **rest-aware** `group_fits`, which
-  also charges what follows on the line (the issue-#71 rule). So the fill
-  committed the atom to one line while a group inside it broke: the hybrid.
-
-  *Resolved by S2* (the honest-`Mode::Flat` stage above), exactly as predicted:
-  once `Mode::Flat` propagates honestly, a group inside a flat parent is never
-  asked whether it fits, so the two rules cannot disagree — `latexrelease.sty`
-  left both latex3 gate sets without any `step_fill`-in-isolation patch. (S2
-  did also make `step_fill`'s *last-atom* decision rest-aware, but as part of
-  the honest-contract landing, not as the isolated patch the dead ends below
-  warn against.) The dead-end record stays for the archaeology:
-
-  **Measured dead ends — do not repeat.** Baseline over the whole repo is 17
-  failing files, 288 checked (15 `format-error`, 2 `idempotency`); counts below
-  are total failing files unless stated.
-  - Cheaply widening the trailing-hang carve-out fixed **zero** files: dropping
-    `expl_group_body_is_multi_atom` *and* `!body.contains_forced_break()` gave
-    17 -> 23; dropping only `!body.contains_forced_break()` gave 17 -> 20. "A
-    forced body always wants Allman-broken" is **false**: when the soft body fits,
-    all-lines-fit legitimately picks flat or Allman-inline.
-  - Making `lower_expl_group`'s *soft* form a two-candidate
-    `conditional_group_all_lines` (inline / broken) so the inline form is accepted
-    only as a genuine one-liner: idempotency 2 -> 35, and 2 -> 10 even after
-    routing a forced body to the broken candidate. All-lines-fit is not rest-aware,
-    so it drops the #71 rule that a later group is measured *in the mode it will
-    print in*; `rest_fits` then charges a following candidate list its full flat
-    width and pass 1 over-breaks (`\SetKeys [l3doc / options]` exploded on pass 1,
-    inline on pass 2). Teaching `rest_fits` to decide a later candidate list
-    locally recovered 10 -> 3, still worse than baseline.
-  - Moving the head↔`{` gap *into* a three-candidate hang group in
-    `lower_expl_code` (so K&R is unrepresentable at the hang site): fixes
-    `l3auxdata.dtx` but destroys the sticky-fill cascade (issue #94) — the gap is
-    no longer a fill separator, so each brace argument independently picks the
-    glued candidate and conditional branches glue two per line
-    (`{ \prg_return_true: } { \prg_return_false: }`).
-  - Making `Ir::Group` honor an incoming `Mode::Flat` (the textbook Wadler rule)
-    fixes this exact shape but is **unsound as the engine stands**: `Mode::Flat` is
-    also pushed by producers that never checked a full flat fit —
-    `pick_candidate` (first-*line* fits) and `Cmd::PreferredFill` (unconditional) —
-    so groups inside them are forced flat and overflow. Measured 1 -> 9
-    idempotency failures. Viable only after those producers are made honest.
-
-  ~~One genuine sub-bug remains isolated but **unreachable**:
-  `head_command_has_grouped_sibling_arg` walks `prev_sibling()` across statement
-  boundaries.~~ Fixed with S4, which made it observable: the walk now re-segments
-  the owner's sibling stream and stops at the previous statement boundary
-  (`grouped_sibling_walk_stops_at_the_statement_boundary` carries the test).
-  A post-S4 follow-up made the re-segmented stream *the layout's own*: the
-  container's braces are stripped (matching `expl_group_pieces`) and the
-  stream is sliced to the contiguous in-region run (matching
-  `lower_expl_paragraph`), since a map over a differently-shaped stream can
-  disagree with the map committing lines (a `{` opens a fallback line that
-  swallows every boundary on a single-line body; an out-of-region `\emph{y}`
-  on a mega-line read as an earlier grouped command). Resolved three trivia
-  gate entries (`xparse-2020-10-01.sty` ×2, latex2e's `xparse.sty`),
-  byte-neutral on authored corpus files at widths 60/80/120.
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value
   one step, which is what an author writes and what upstream overwhelmingly does
@@ -543,17 +388,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   code embedded in a region), chosen for determinism. Whether tightening — vs.
   preserving, or spacing — is the right default for a 2e command in an expl3
   region is an open call; the tightening can read as worse than the input.
-- [x] **Close the remaining l3styleguide layout deltas (R4/R5).** Done. **R4** is
-  the structural conditional break (`lower_expl_conditional`/
-  `expl_conditional_branches`, `formatter.md` § *Conditional branches break
-  structurally*): a statement-leading `nTF`/`TF` conditional explodes each branch
-  onto its own line at +6, width-independently. **R5**'s brace-column progression
-  falls out of the nested `Ir::indent`. The premised **(a) path divergence was a
-  misdiagnosis**: `.sty`/`.tex` and `.dtx` `macrocode` lay out genuine expl3 code
-  byte-identically (both route through `lower_expl_code`); the "body `{` at column
-  0" only occurs for a *non-region* `macrocode` (no `\ExplSyntaxOn`), which is
-  generic LaTeX, not expl3. A mid-line conditional value keeps head-hug (#71) and
-  a 2e conditional (#94) is untouched.
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
   blocked on structure).** A wrapped brace-body line ideally hangs its continuation
   one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather
@@ -621,17 +455,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 The remaining linter findings from the cam-notes sweep are recorded below as open
 follow-ups (each with a minimal reproducer); none is fixed yet.
 
-- [x] **`math-operator-name` fires inside upright font groups and text escapes.**
-  `printf '$\\mathrm{exp}(x)$\n' | badness lint` flagged `exp` although `\mathrm{exp}`
-  already typesets upright (the message "typesets as italic variables" was false here),
-  and `--unsafe-fixes` produced `$\mathrm{\exp}$` (nests `\exp` inside `\mathrm`). It
-  also fired on prose inside `\text{…}`/`\intertext{…}` (`$\text{the gcd is}\gcd(x)$`).
-  Resolved by a shared `in_upright_or_text_math_argument` gate: the rule now rejects a
-  `\mathrm`/`\mathsf`/`\mathbf`/`\mathit`/`\mathtt`/`\mathnormal`/`\mathcal`/`\mathbb`/
-  `\mathfrak`/`\mathscr`/`\text`/`\textrm`/`\textnormal`/`\mbox`/`\intertext`/
-  `\operatorname` ancestor (the math-alphabet fonts, the text escapes, and the explicit
-  operator builder). (Same family as the pgf `calc`-coordinate FP below.)
-
 - [x] **`dash-length` corrupts pgf/TikZ coordinate arithmetic under
   `--unsafe-fixes`.** The `in_math` guard covered only `$…$`, not a pgfplots
   expression in `{…}`: `printf '\\addplot3 {(y^2-1)^2};\n' | badness lint --fix
@@ -646,18 +469,6 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
     intentional; these are `Unsafe`-gated so `--fix` withholds them, so they are
     noise rather than corruption. Distinguishing `0-1 law` from `pages 5-10`
     statically is the open part.
-
-- [x] **`math-operator-name` fires inside TikZ `calc` `($…$)` coordinates.** The
-  `calc` library repurposes `$…$` as coordinate-arithmetic delimiters, where
-  `sin`/`cos` are backslash-less pgfmath functions; badness read the `$` as math
-  shift and flagged the bare names (9 findings on pgf), and the `--unsafe-fixes`
-  `sin`→`\sin` rewrite would break the pgfmath parser. Resolved with the candidate
-  signal from this note: the rule-local `in_calc_coordinate` gate suppresses the
-  finding when the operator is *glued* to `(` (a pgfmath call `sin(…)`) **and** the
-  enclosing inline math is a parenthesized coordinate (`(` directly before the `$`,
-  `)` directly after). Both facts are required, so ordinary math still flags —
-  `$lim(x)$` (glued but not paren-wrapped) and `($sin x$)` (paren-wrapped but
-  spaced) both remain findings.
 
 - [ ] **`makeat-macro` residual on plain-`.tex` package internals.** Recognizing
   `*.code.tex` as package flavor fixed 98.9% of the pgf `makeat-macro` FPs, but

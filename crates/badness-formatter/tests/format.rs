@@ -738,6 +738,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // one source line is still sentence-split (`semantic_adds_sentence_break`).
     ("semantic_preserve_authored_break", WrapMode::Semantic, 80),
     ("semantic_adds_sentence_break", WrapMode::Semantic, 80),
+    // An expl3 conditional in a `.tex` document body, whose `N` slot is the relation
+    // `=` (issue #106). The relation is a `WORD` sibling, so greedy attachment never
+    // reaches the branch groups and they sit at the *stream* level rather than on the
+    // command — the sibling-attached shape.
+    ("expl_relation_slot_statement", WrapMode::Reflow, 80),
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {

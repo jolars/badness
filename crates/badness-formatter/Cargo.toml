@@ -1,6 +1,6 @@
 [package]
 name = "badness-formatter"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 readme = "README.md"
 description = "Deterministic, rule-based formatter for LaTeX and BibTeX"
@@ -14,7 +14,7 @@ keywords = ["latex", "bibtex", "formatter"]
 categories = ["development-tools", "text-processing"]
 
 [dependencies]
-badness-parser = { path = "../badness-parser", version = "0.1.0" }
+badness-parser = { path = "../badness-parser", version = "0.1.1" }
 rowan = "0.16.1"
 
 [dev-dependencies]

@@ -1137,54 +1137,74 @@ fn dtx_fixtures_match_expected() {
     }
 }
 
-/// `.dtx` reflow fixtures: `(name, line_width)`. The same mode as [`DTX_FIXTURES`]
-/// under the same docstrip [`LexConfig`], but at a narrow width, so the
-/// documentation *prose* layer rewraps while a canonical `% ` margin
+/// Whether every line of a `.dtx` reflow fixture's output has to fit the width.
+///
+/// The width guarantee covers what the formatter *lays out*; a construct it
+/// declines to break on a structural gate is out of its scope and legitimately
+/// overflows. Opting out is per fixture and has to name the gate, so a new
+/// overflow cannot appear silently.
+#[derive(Clone, Copy)]
+enum WidthBound {
+    /// Every output line fits `line_width`.
+    Enforced,
+    /// The fixture pins a line the formatter deliberately leaves over-width.
+    DeclinedBreak,
+}
+
+/// `.dtx` reflow fixtures: `(name, line_width, width_bound)`. The same mode as
+/// [`DTX_FIXTURES`] under the same docstrip [`LexConfig`], but at a narrow width,
+/// so the documentation *prose* layer rewraps while a canonical `% ` margin
 /// is re-emitted on every wrapped line. Structured content (margin-framed lists,
 /// `macrocode` frames) and the `%`-only paragraph separator must round-trip
 /// byte-for-byte; only running prose reflows.
-const DTX_REFLOW_FIXTURES: &[(&str, usize)] = &[
+const DTX_REFLOW_FIXTURES: &[(&str, usize, WidthBound)] = &[
     // A single long doc line wrapped onto several `% ` lines.
-    ("dtx_reflow_prose_wrap", 50),
+    ("dtx_reflow_prose_wrap", 50, WidthBound::Enforced),
     // Short lines join; a `%no-space` margin normalizes to `% `.
-    ("dtx_reflow_prose_joins", 80),
+    ("dtx_reflow_prose_joins", 80, WidthBound::Enforced),
     // The `%`-only separator round-trips; the two paragraphs rewrap independently
     // (the second one's leading margin floats out of its paragraph).
-    ("dtx_reflow_margin_blank_line", 80),
+    ("dtx_reflow_margin_blank_line", 80, WidthBound::Enforced),
     // A margin-framed `itemize` stays byte-identical (no item-line reflow).
-    ("dtx_reflow_itemize", 50),
+    ("dtx_reflow_itemize", 50, WidthBound::Enforced),
     // A `\title{^^A…}` block whose argument carries `%` margins, and a guarded
     // `%<package>` line, both stay byte-identical — the block through the raw
     // margined-block path, the guard through its column-0 line segment — while
     // the plain prose paragraph between them still rewraps.
-    ("dtx_reflow_margin_escape", 50),
+    ("dtx_reflow_margin_escape", 50, WidthBound::Enforced),
     // A margin-framed `\changes{…}` block amid long prose: the prose on both
     // sides rewraps under `% `, the block's interior lines stay byte-identical,
     // and its non-canonical `%   ` first-line margin normalizes to `% `.
-    ("dtx_reflow_block_amid_prose", 50),
+    ("dtx_reflow_block_amid_prose", 50, WidthBound::Enforced),
     // A `%<package>` guard line inside a doc paragraph: the guard line keeps its
     // column-0 pin byte-identically while the prose on both sides rewraps.
-    ("dtx_reflow_guard_mid_paragraph", 50),
+    ("dtx_reflow_guard_mid_paragraph", 50, WidthBound::Enforced),
     // The residual margin-escape gate: a forced-break block with an *unmargined*
     // interior line cannot ride the `% ` margin, so the whole paragraph stays
     // byte-identical on the preserve path.
-    ("dtx_reflow_block_escape_residual", 50),
+    ("dtx_reflow_block_escape_residual", 50, WidthBound::Enforced),
     // A root-level paragraph sharing doc prose with two `macrocode` chunks
     // (an out-of-region expl3 run): the prose rewraps under `% ` while each
     // chunk commits raw behind its byte-exact `%    ` frame lead.
-    ("dtx_reflow_expl3_doc_run", 50),
+    ("dtx_reflow_expl3_doc_run", 50, WidthBound::Enforced),
     // An over-width `[…]` *on* a doc-margin line must not expand: it carries no
     // margin token of its own, so only `doc_margin_opens_line` sees that every
     // line the break would create lands unmargined — promoting documentation to
     // live code. The keyval `axis` bracket is held back for the same reason. The
     // `\documentclass` inside the `%<*driver>` region *does* expand, glued commas
     // and all: that line is ordinary code, not column-0-pinned documentation.
-    ("dtx_reflow_optional_on_doc_line", 50),
+    // Declining that break is exactly what leaves the `\begin{function}` and
+    // `\begin{axis}` lines over the width, so this fixture opts out of the bound.
+    (
+        "dtx_reflow_optional_on_doc_line",
+        50,
+        WidthBound::DeclinedBreak,
+    ),
 ];
 
 #[test]
 fn dtx_reflow_fixtures_match_expected() {
-    for &(name, line_width) in DTX_REFLOW_FIXTURES {
+    for &(name, line_width, width_bound) in DTX_REFLOW_FIXTURES {
         let style = FormatStyle {
             wrap: WrapMode::Reflow,
             line_width,
@@ -1206,12 +1226,15 @@ fn dtx_reflow_fixtures_match_expected() {
         assert_eq!(formatted, expected, "fixture {name} output mismatch");
 
         // No reflowed line exceeds the width (a fill never overflows except an
-        // unbreakable atom wider than the line, which these fixtures avoid).
-        for line in formatted.lines() {
-            assert!(
-                line.chars().count() <= line_width,
-                "fixture {name} line exceeds width {line_width}: {line:?}"
-            );
+        // unbreakable atom wider than the line, which these fixtures avoid) —
+        // unless the fixture exists to pin a break the formatter declines.
+        if let WidthBound::Enforced = width_bound {
+            for line in formatted.lines() {
+                assert!(
+                    line.chars().count() <= line_width,
+                    "fixture {name} line exceeds width {line_width}: {line:?}"
+                );
+            }
         }
 
         // Idempotent (same config + style), clean, and lossless.

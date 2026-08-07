@@ -17,12 +17,12 @@
         {
           "type": "json",
           "path": "npm/badness/package.json",
-          "jsonpath": "$.version"
+          "field-path": "$.version"
         },
         {
           "type": "json",
           "path": "npm/badness/package.json",
-          "jsonpath": "$.optionalDependencies.*"
+          "field-path": "$.optionalDependencies.*"
         }
       ]
     },

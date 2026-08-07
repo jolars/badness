@@ -64,6 +64,11 @@ inventory has seen:
   sets contain **no** `content-change` entry — production formatting corrupts
   nothing. pgf is byte-identical in both gates.
 
+Re-recorded once more after **a relation became an acceptable expl3 `N` slot**
+(`\int_compare:nNnTF {…} = {1}` no longer degrades to a fallback statement): one
+`non-fixed-point` entry resolved (latex3's `xpackages/xor/xo-or.dtx`), no
+additions.
+
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):
 

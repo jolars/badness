@@ -40,6 +40,5 @@
 ./xpackages/xor/xo-balance.tex	format-error	format-error
 ./xpackages/xor/xo-footnote.dtx	trivia	non-fixed-point
 ./xpackages/xor/xo-grid.dtx	trivia	non-fixed-point
-./xpackages/xor/xo-or.dtx	trivia	non-fixed-point
 ./xpackages/xor/xo-page.dtx	format-error	format-error
 ./xpackages/xor/xo-pfloat.tex	format-error	format-error

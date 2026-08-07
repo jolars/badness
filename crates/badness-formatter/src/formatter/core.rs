@@ -1770,6 +1770,18 @@ fn reflow_elements_checked(
             SyntaxElement::Node(child) => {
                 let ir = lower_node(child, cx);
                 if ir.contains_forced_break() {
+                    // A margin-framed `macrocode` chunk opening its own margined
+                    // source line, reachable only through a reflowing expl3 run
+                    // ([`dtx_run_reflows_safely`]; the paragraph gate admits no
+                    // environment): committed raw behind its byte-exact source
+                    // frame lead, never the canonical `% ` — docstrip matches the
+                    // `%    \begin{macrocode}` line literally.
+                    let frame_lead = (margin.is_some()
+                        && line_margined
+                        && !line_has_content
+                        && is_margin_framed_macrocode(child))
+                    .then(|| dtx_env_line_lead(child))
+                    .flatten();
                     if margin.is_none() && !b.atom.is_empty() {
                         // The block is glued directly to the atom in progress
                         // (`\newcommand\cls@hook{%`) — no whitespace, so the source
@@ -1784,6 +1796,9 @@ fn reflow_elements_checked(
                         // the escape route below applies instead.
                         b.push_atom_piece(ir, &child.text().to_string());
                         b.end_line();
+                    } else if let Some(lead) = frame_lead {
+                        b.end_line();
+                        b.push_segment(Ir::concat([lead, ir]));
                     } else if margin.is_some() && line_margined && block_rides_own_margins(child) {
                         // A block amid `.dtx` doc prose whose interior lines all
                         // carry their own column-0 margins, opening on a margined
@@ -1892,8 +1907,9 @@ fn ride_after_block(ir: Ir, gap: bool) -> Ir {
 
 /// Whether an element run carries a `.dtx` documentation margin or docstrip guard
 /// anywhere inside it. Both pin to column 0, so a run containing one is never
-/// prose-reflowed (see [`lower_expl_paragraph`]). Always false outside the `.dtx`
-/// lexer config, where neither token kind exists.
+/// *generic*-prose-reflowed (see [`lower_expl_paragraph`]); a margined run may
+/// still reflow under the `% ` margin when [`dtx_run_reflows_safely`] holds.
+/// Always false outside the `.dtx` lexer config, where neither token kind exists.
 fn run_carries_doc_margin(run: &[SyntaxElement]) -> bool {
     run.iter().any(|element| match element {
         SyntaxElement::Token(t) => {
@@ -1901,6 +1917,109 @@ fn run_carries_doc_margin(run: &[SyntaxElement]) -> bool {
         }
         SyntaxElement::Node(n) => contains_doc_margin(n),
     })
+}
+
+/// Slice analogue of [`dtx_paragraph_starts_margined`] for an out-of-region expl3
+/// run: the run's first non-trivia token (descending into nodes) must be a
+/// `DOC_MARGIN`. Deliberately without the [`margin_precedes_on_line`] backward
+/// walk — `prev_token` would cross the run boundary into the previous run's
+/// byte-faithful output, and a margin owned there must not count (the reflow
+/// would re-emit a second `% ` onto the same physical line).
+fn dtx_run_starts_margined(run: &[SyntaxElement]) -> bool {
+    for element in run {
+        let first = match element {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => continue,
+            SyntaxElement::Token(t) => Some(t.clone()),
+            SyntaxElement::Node(n) => n
+                .descendants_with_tokens()
+                .filter_map(|e| e.into_token())
+                .find(|t| !is_collapsible_trivia(t.kind())),
+        };
+        if let Some(token) = first {
+            return token.kind() == SyntaxKind::DOC_MARGIN;
+        }
+    }
+    false
+}
+
+/// Run analogue of [`dtx_doc_paragraph_reflows_safely`] for a doc-margined
+/// out-of-region expl3 run: opening on a margined line
+/// ([`dtx_run_starts_margined`]), unstructured, and the speculative reflow keeps
+/// every line under the `% ` margin. Three deliberate differences from the
+/// paragraph gate. "Unstructured" *admits* a margin-framed `macrocode` chunk as
+/// a direct run element — such a run is exactly how a doc-layer paragraph
+/// overlaps an expl3 region (the chunk bodies are the region; the doc lines
+/// around them are the out-of-region rest), and the chunk commits raw behind
+/// its byte-exact source frame lead ([`dtx_env_line_lead`]), so docstrip's
+/// literal `%    \begin{macrocode}` match survives. Any other environment in
+/// the run — or around it, like [`dtx_paragraph_reflows`]'s ancestor half
+/// (prose inside a `% \begin{macro}` doc block keeps its authored `%    `
+/// margins; reflowing structured doc content stays out of scope) — still
+/// declines. And unmemoized: nothing asks twice for a run
+/// ([`margin_floats_into_paragraph`] consults only `PARAGRAPH` nodes), so each
+/// run is probed at most once.
+fn dtx_run_reflows_safely(run: &[SyntaxElement], cx: LowerCtx<'_>) -> bool {
+    if !dtx_run_starts_margined(run) {
+        return false;
+    }
+    let structured = run.iter().any(|element| match element {
+        SyntaxElement::Node(n) if is_margin_framed_macrocode(n) => false,
+        SyntaxElement::Node(n) => n.descendants().any(|d| d.kind() == SyntaxKind::ENVIRONMENT),
+        SyntaxElement::Token(_) => false,
+    }) || run
+        .first()
+        .and_then(SyntaxElement::parent)
+        .is_some_and(|p| p.ancestors().any(|a| a.kind() == SyntaxKind::ENVIRONMENT));
+    if structured {
+        return false;
+    }
+    let probe = LowerCtx {
+        dtx_margin_probe: true,
+        ..cx
+    };
+    !reflow_elements_checked(run.iter().cloned(), probe, ReflowKind::DtxProse).1
+}
+
+/// Whether `node` is a margin-framed `macrocode`/`macrocode*` chunk — the one
+/// environment [`dtx_run_reflows_safely`] admits inside a reflowing run. The
+/// curated name set matches [`intersect_macrocode_bodies`]: these are the chunks
+/// whose bodies *are* the expl3 regions, so a doc paragraph cannot overlap a
+/// region without containing one.
+fn is_margin_framed_macrocode(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::ENVIRONMENT
+        && Environment::cast(node.clone())
+            .is_some_and(|e| matches!(e.name().as_deref(), Some("macrocode" | "macrocode*")))
+        && is_margin_framed(node)
+}
+
+/// The byte-exact line lead of a margin-framed block opening a fresh source
+/// line: its preceding siblings walked backward are optional inline
+/// `WHITESPACE` then the line's `DOC_MARGIN`. Returns the lead re-lowered as
+/// column-0 IR (`%` pinned, whitespace verbatim), or `None` when the block is
+/// not led by a directly-preceding margin. Used to commit a `macrocode` chunk
+/// raw during `DtxProse` reflow with its source frame margin — docstrip
+/// recognizes the literal `%    \begin{macrocode}` line, so the canonical `% `
+/// re-emitted for prose must never replace a frame lead.
+fn dtx_env_line_lead(node: &SyntaxNode) -> Option<Ir> {
+    let mut ws: Option<String> = None;
+    let mut prev = node.prev_sibling_or_token();
+    if let Some(SyntaxElement::Token(t)) = &prev
+        && t.kind() == SyntaxKind::WHITESPACE
+        && !t.text().contains('\n')
+    {
+        ws = Some(t.text().to_string());
+        prev = t.prev_sibling_or_token();
+    }
+    match prev {
+        Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::DOC_MARGIN => {
+            let margin = Ir::column_zero(t.text());
+            Some(match ws {
+                Some(ws) => Ir::concat([margin, Ir::verbatim(ws)]),
+                None => margin,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
@@ -1955,12 +2074,20 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             lower_expl_code(run.iter().cloned(), cx, Statements::Structural)
         } else if cx.wraps_prose() && !run_carries_doc_margin(run) {
             reflow_elements(run.iter().cloned(), cx, ReflowKind::Prose)
+        } else if cx.wraps_prose() && dtx_run_reflows_safely(run, cx) {
+            // `.dtx` documentation prose between expl3 regions, riding `% `
+            // margins: reflow it under the margin like a doc paragraph. Gated
+            // exactly like [`lower_dtx_doc_paragraph`] — margined first line, no
+            // environments, and the speculative escape probe — so a run the
+            // reflow cannot keep under the margin still falls through below.
+            reflow_elements(run.iter().cloned(), cx, ReflowKind::DtxProse)
         } else {
             // Either a non-wrapping mode, or `.dtx` documentation-layer text
-            // between expl3 regions. The latter rides `%` margins and margin-framed
-            // `macrocode` frames that generic prose reflow would relocate off column
-            // 0 — a meaning change that leaves the next pass unparseable — so it
-            // takes the byte-faithful stream in every wrap mode.
+            // between expl3 regions that the gate above declined: it rides
+            // margin-framed `macrocode` frames or unmargined lines that generic
+            // prose reflow would relocate off column 0 — a meaning change that
+            // leaves the next pass unparseable — so it takes the byte-faithful
+            // stream in every wrap mode.
             Ir::concat(lower_element_stream(run.iter().cloned(), cx))
         };
         if !matches!(ir, Ir::Nil) {

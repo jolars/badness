@@ -398,12 +398,19 @@ so an explicit `--wrap reflow` is exactly as safe as any other mode:
   descending into child nodes. Walking only direct child tokens skipped an
   opening `COMMAND` and read a margin from a later line, so a guarded
   `%<package>\def\x{1}` was wrapped in a `%` margin that commented the code out.
-- **Doc-margined runs between expl3 regions are never prose-reflowed.**
-  `lower_expl_paragraph` splits a paragraph at the toggles; an out-of-region run
-  carrying a `DOC_MARGIN`/`GUARD` (`run_carries_doc_margin`) is
-  documentation-layer text riding `%` margins and margin-framed `macrocode`
-  frames, so it takes the element stream in every wrap mode rather than generic
-  prose reflow.
+- **Doc-margined runs between expl3 regions are never
+  *generic*-prose-reflowed.** `lower_expl_paragraph` splits a paragraph at the
+  toggles; an out-of-region run carrying a `DOC_MARGIN`/`GUARD`
+  (`run_carries_doc_margin`) is documentation-layer text riding `%` margins and
+  margin-framed `macrocode` frames, so generic prose reflow never touches it. A
+  run that opens on a margined line, sits under no enclosing environment, and
+  contains at most margin-framed `macrocode` chunks does reflow under the `%`
+  margin (`dtx_run_reflows_safely`, probe-gated like the paragraph case): the
+  doc prose rewraps while each chunk commits raw behind its byte-exact source
+  frame lead (`dtx_env_line_lead`)—docstrip matches the `%    \begin{macrocode}`
+  line literally, so a frame lead is never normalized to the canonical `%`. Any
+  run the gate declines still takes the byte-faithful element stream in every
+  wrap mode.
 
 Two adjacency rules keep package code looking like package code under the new
 default. A forced-break block *glued* to the command run in progress

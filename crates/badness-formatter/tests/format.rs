@@ -1076,6 +1076,10 @@ const DTX_REFLOW_FIXTURES: &[(&str, usize)] = &[
     // interior line cannot ride the `% ` margin, so the whole paragraph stays
     // byte-identical on the preserve path.
     ("dtx_reflow_block_escape_residual", 50),
+    // A root-level paragraph sharing doc prose with two `macrocode` chunks
+    // (an out-of-region expl3 run): the prose rewraps under `% ` while each
+    // chunk commits raw behind its byte-exact `%    ` frame lead.
+    ("dtx_reflow_expl3_doc_run", 50),
 ];
 
 #[test]

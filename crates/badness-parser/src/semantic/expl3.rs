@@ -256,7 +256,7 @@ mod tests {
 // issue #78), or the stream ending mid-unit — degrades that statement to the
 // **fallback**: the authored physical line is the statement, exactly the old
 // `SplitAtNewlines` behavior demoted to a per-line escape hatch (Tier 2; see
-// `formatter.md`, § Known violations). Recognition is re-attempted at every
+// `formatter.md`, § Trivia-invariant layout). Recognition is re-attempted at every
 // statement start, so recognized and fallback statements interleave
 // deterministically; a recognized head *mid*-fallback-line is never split
 // out.

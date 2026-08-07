@@ -4,7 +4,7 @@ Guidance for AI agents working with Badness, a formatter, linter, and language
 server for LaTeX.
 
 This file is the **rules** you work under: the tenets, the load-bearing
-architectural decisions (stated tersely), and the invariants and conventions to
+architectural decisions, and the invariants and conventions to
 respect. The **why**—worked examples, issue provenance, and the full catalog of
 statically-recognized patterns—lives in the book's Development section, which is the
 source of truth for design detail:

@@ -1,201 +1,200 @@
 # Architecture
 
-Badness parses LaTeX into a **lossless concrete syntax tree (CST)** and builds a
-**formatter** (`badness format`), a **linter** (diagnostics), and a **language
-server** (LSP) on top. The architecture follows
+Badness parses LaTeX into a lossless concrete syntax tree (CST) and puts a
+formatter, a linter, and a language server on top of it. The design follows
 [rust-analyzer](https://rust-analyzer.github.io/): a generic, error-tolerant,
-hand-written parser produces a lossless tree; semantics are layered on top as a
-separate concern; recomputation is incremental via
-[salsa](https://github.com/salsa-rs/salsa). (We were also inspired by
-[arity](https://github.com/jolars/arity), the same kind of tool for R.)
+hand-written parser produces a lossless tree, semantics live in a separate layer
+above it, and recomputation is incremental via
+[salsa](https://github.com/salsa-rs/salsa).
+[arity](https://github.com/jolars/arity), the same kind of tool for R, was the
+other influence.
 
-This page is the orientation map. The parser internals, the formatter internals,
-and the LSP's environment awareness each have their own page:
+The [parser](parser.md), the [formatter](formatter.md), the [linter](linter.md),
+and the [language server](lsp.md) have their own pages.
 
-- [Parser & Lexer Modes](parser.md)
-- [Formatter](formatter.md)
-- [LSP & Environment Awareness](lsp.md)
+## What it does
 
-## What the project is
+Badness turns source text into a syntax tree, and the tree into diagnostics and
+formatted text. It does not typeset, it does not run TeX, and, outside the
+language server, it does not look at the machine it runs on.
 
-**A four-crate Cargo workspace** (edition 2024). The root package is the
-CLI/LSP/linter crate `badness`; two publishable library crates and one
-non-published wasm shim live under `crates/`:
+The pipeline is:
 
-- **`badness-parser`** — the syntax layer (`syntax`, `ast`), the parser, the
-  semantic layer (minus the disk/salsa-backed `load` module), the BibTeX parsing
-  and semantic layers, the `data/` signature artifacts, and the phf codegen
-  `build.rs` that bakes them.
-- **`badness-formatter`** — the layout engine
-  (`formatter/{core, ir, printer,   style, context, colspec, sentence, perturb}`)
-  and the `.bib` formatter. Depends on `badness-parser`.
-- **`badness-wasm`** — a `publish = false` wasm-bindgen shim over the two
-  library crates that powers the [playground](../playground/index.html); built
-  with `wasm-pack` (`task playground:wasm`) into `docs/src/playground/pkg/` and
-  never released to crates.io.
+```
+text → lexer → token stream → parser → event stream → tree_builder → GreenNode
+```
 
-The library crates build for `wasm32-unknown-unknown` (a CI job guards this,
-`badness-wasm` included; the formatter is embedded by the dprint Wasm plugin),
-so nothing in them may touch the filesystem, threads, or processes.
+The parser emits events (`Start`, `Tok(idx)`, `Finish`) instead of building a
+tree directly. Tokens are referred to by index and diagnostics travel on a side
+channel keyed by byte range, so there is no `Error` event. The tree builder
+re-attaches trivia and feeds rowan's `GreenNodeBuilder`.
 
-The root crate keeps `linter/`, `lsp/`, `project/`, `text/`, plus top-level
+Everything downstream reads that tree. The formatter lowers it to a `Doc` IR and
+prints the IR, the linter walks it once and collects diagnostics, and the
+language server answers requests from salsa queries over it.
+
+The tree is a pure function of the file's text. Config, the signature database,
+and the filesystem take no part in producing it. Determinism, error tolerance,
+and incremental recomputation all rest on that.
+
+## The crates
+
+Badness is a four-crate Cargo workspace on edition 2024. The root package is the
+CLI, LSP, and linter crate `badness`; two publishable library crates and one
+unpublished wasm shim live under `crates/`.
+
+`badness-parser` holds the syntax layer (`syntax`, `ast`), the parser, the
+semantic layer, the BibTeX parsing and semantic layers, the `data/` signature
+artifacts, and the `build.rs` that bakes them into phf tables.
+
+`badness-formatter` holds the layout engine (`core`, `ir`, `printer`, `style`,
+`context`, `colspec`, `sentence`, `perturb`) and the `.bib` formatter. It
+depends on `badness-parser`.
+
+`badness-wasm` is a `publish = false` wasm-bindgen shim over the two library
+crates. It powers the [playground](../playground/index.html) and is built with
+`wasm-pack` through `task playground:wasm`.
+
+Both library crates build for `wasm32-unknown-unknown`, so nothing in them may
+touch the filesystem, threads, or processes. The formatter is embedded by the
+dprint Wasm plugin, and a CI job guards the target. Anything that needs the
+outside world lives in the root crate.
+
+The root crate keeps `linter/`, `lsp/`, `project/`, `text/`, plus
 `incremental.rs` (salsa), `config.rs`, `cli.rs`, `completion.rs`, and
-`file_discovery.rs`, and re-exports the member crates at the old module paths
-through **shim modules** — `src/parser.rs` is just
-`pub use badness_parser::parser::*;` — so code everywhere keeps writing
-`crate::parser::…`. Two **bridge modules** host the CLI-side halves of split
-concerns: `src/formatter.rs` (the `check` batch driver and the disk-backed
-`format_file_with_packages` entries) and `src/semantic.rs` (the `load` module).
+`file_discovery.rs`. It re-exports the member crates at their old module paths
+through shim modules, so `src/parser.rs` is one
+`pub use badness_parser::parser::*;` line and callers keep writing
+`crate::parser::…`. Two modules are real bridges rather than shims:
+`src/formatter.rs` holds the `check` batch driver and the disk-backed
+`format_file_with_packages` entries, and `src/semantic.rs` holds `load`.
 
-### Supported inputs
+## The BibTeX side
 
-The CLI processes `.tex`, `.sty`/`.cls`, `.dtx`, `.ins`, and `.bib` files.
-Directories are walked with the [`ignore`](https://docs.rs/ignore) crate,
-honoring `.gitignore` plus `badness.toml` excludes (see `file_discovery.rs`).
+`.bib` files get their own pipeline in `bib/`, a sibling of `parser/` rather
+than a mode of it. It is built on the same lossless rowan CST and the same flat
+event stream, but has its own grammar, `SyntaxKind`, `BibLang` marker, lexer,
+parser, tree builder, typed AST, formatter, linter, semantic layer, completion,
+and outline. The invariants below apply to it unchanged.
 
-The lexer's `LatexFlavor` (`Document` vs `Package`) picks the starting catcode
-regime: `.sty`/`.cls`/`.dtx` begin with `@` already a letter (implicit
-`\makeatletter`). `.dtx` docstrip surface syntax is parsed. The wrap mode is
-*not* a `FileKind` fact: every kind defaults to `WrapMode::Reflow`, and content
-that is unsafe to reflow is refused structurally in every mode (see
-[Formatter](formatter.md#reflow-is-safe-by-construction-not-by-file-kind)).
+## Inputs and configuration
 
-### The BibTeX subsystem
+The CLI processes `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, and `.bib`.
+Directories are walked with [`ignore`](https://docs.rs/ignore), honoring
+`.gitignore` and `badness.toml` excludes.
 
-`.bib` files get their own full pipeline in `bib/`—a sibling of `parser/` built
-on the *same* lossless rowan CST plus flat event-stream architecture, but with a
-distinct grammar, its own `SyntaxKind`/`BibLang` marker, and its own lexer,
-parser, `tree_builder`, `ast/`, formatter, linter, semantic layer, completion,
-and outline. The same invariants apply (losslessness, idempotence), and the bib
-CST has typed AST wrappers too (`bib/ast.rs`).
+The lexer's `LatexFlavor` picks the starting catcode regime. `Package` (`.sty`,
+`.cls`, `.dtx`) begins with `@` already a letter, as if under `\makeatletter`;
+`Document` does not. `.dtx` docstrip surface syntax is parsed.
 
-### Configuration
+Wrap mode is not a property of the file kind. Every kind defaults to
+`WrapMode::Reflow`, and content that cannot be safely reflowed is refused
+structurally in every mode. See
+[Formatter](formatter.md#reflow-is-safe-by-construction-not-by-file-kind).
 
-`badness.toml` is discovered by an ancestor walk from each input (`config.rs`),
-and the **CLI is its only consumer**—the library API takes a fully-resolved
-`FormatStyle`. Sections include `[format]` (`line-width`, `indent-width`,
-`wrap`, `math-wrap`, `lang`, `no-break-abbreviations`) and `[build]`
-(`aux-dir`). Excludes follow the [Ruff](https://docs.astral.sh/ruff/) model
-(`exclude` *replaces* the built-in `DEFAULT_EXCLUDE`; `extend-exclude` is
-additive). `wrap` is optional; when omitted every file kind reflows. It stays an
-`Option` so the LSP can tell "unset" from "set" when merging editor settings
-over project config, not because the fallback depends on the file.
+`badness.toml` is found by walking ancestors from each input. The CLI is its
+only consumer; the library API takes a resolved `FormatStyle`. Sections are
+`[format]` (`line-width`, `indent-width`, `wrap`, `math-wrap`, `lang`,
+`no-break-abbreviations`), `[lint]` (`select`, `ignore`), and `[build]`
+(`aux-dir`). Excludes follow Ruff: `exclude` replaces the built-in default,
+`extend-exclude` adds to it. `wrap` is an `Option` so the LSP can tell "unset"
+from "set" when merging editor settings over project config, not because the
+fallback depends on the file.
 
-This keeps the formatter hermetic: config is local project data, not the
-environment. TEXMF discovery is deliberately **not** a section here—where a TeX
-installation lives is machine state, not project data, so it arrives via the LSP
-editor settings, never `badness.toml`. See [LSP & Environment
-Awareness](lsp.md).
+TEXMF discovery is deliberately not a section here. Where a TeX installation
+lives is machine state rather than project data, so it arrives through editor
+settings. See [LSP](lsp.md).
 
-## The pipeline
+## Two layers
 
-```
-lexer → flat token stream → parser emits events → tree_builder → rowan GreenNode
-                              (Start / Tok(idx) / Finish)   (re-attaches trivia)
-```
+The syntactic layer is the generic CST. It knows nothing about what a command
+means.
 
-The parser emits an **event stream**, not a tree directly. Tokens are referenced
-by index, and diagnostics ride a side channel keyed by byte range—there is no
-`Error` event. The tree builder re-attaches trivia and feeds
-[rowan](https://github.com/rust-analyzer/rowan)'s `GreenNodeBuilder`. This is
-the rust-analyzer event-stream pattern; the details, including the one extra
-`SubTok` event, are on the [Parser](parser.md) page.
+The semantic layer is a signature database: a curated built-in table, a bulk
+CWL-derived tier, and `\newcommand`/`\newenvironment` scanning. It assigns
+arity, verbatim-ness, sectioning, and per-argument content kinds.
+
+Meaning never leaks downward. The parser may read static lexical facts, never
+signature data that config, package scopes, or scanned definitions can change.
 
 ## Tenets
 
-1. **Deterministic, rule-based formatting.** Layout is decided solely by the
-   formatter's rules and the layout engine—the formatter is the **sole authority
-   on layout**. Push back against hard-coding special cases. Autofixes are
-   textual edits that never invoke the formatter: a fix decides *what* to
-   rewrite, never *how to lay it out*, and owes only correctness (the result
-   still parses and is still lossless), never line-width. When a fix can't meet
-   that bar for some shape, make it correct by construction or withhold it for
-   that shape (still report the finding). The pipeline is fix-then-format; the
-   formatter never runs inside `--fix`.
-2. **Incremental parsing is first-class.** Parser/CST work must keep the
-   salsa-based reparse path (`incremental.rs`) viable.
-3. **Parsing is the parser's job.** Never paper over parser mistakes in the
-   formatter, and never let parsing logic creep into the formatter. If the
-   formatter hits something the parser got wrong, fix it in the parser.
-4. **Losslessness is the parser's job.** `reconstruct(text) == text`, always.
-   The formatter may assume a lossless CST.
+1. Layout is decided solely by the formatter's rules and the layout engine. The
+   formatter is the sole authority on layout, so push back against hard-coded
+   special cases.
+2. Autofixes are textual edits that never invoke the formatter. A fix decides
+   what to rewrite, never how to lay it out, and owes correctness (the result
+   still parses and is still lossless) but not line width. When a fix cannot
+   meet that bar for some shape, make it correct by construction or withhold it
+   for that shape while still reporting the finding. The pipeline is
+   fix-then-format, and the mirror holds: content rewrites never run inside
+   `format`.
+3. Parser and CST work must keep the salsa reparse path viable.
+4. Parsing is the parser's job. Never paper over a parser mistake in the
+   formatter, and never let parsing logic creep into the formatter.
+5. Losslessness is the parser's job. The formatter may assume a lossless CST.
 
-## Two layers: syntactic vs. semantic
+## Invariants
 
-The **syntactic** layer is the generic CST and knows nothing about what a
-command means. The **semantic** layer is a *signature database*—a built-in table
-plus CWL-style data plus `\newcommand`/`\newenvironment` scanning—that assigns
-arity, verbatim-ness, and sectioning.
+These are held by construction and enforced as test oracles. Breaking one is a
+bug, not a trade-off.
 
-**Meaning never leaks into the parser.** The parser has one narrow, sanctioned
-window onto static data (argument-shape facts used for verbatim capture),
-described under [sanctioned lexer modes](parser.md#sanctioned-lexer-modes); it
-never resolves what a macro *does*.
+- Losslessness: `reconstruct(text) == text`, byte for byte.
+- Idempotence: `fmt(fmt(x)) == fmt(x)`.
+- The formatter is whitespace-only. It changes trivia (whitespace, newlines,
+  comments, `.dtx` margins and guards) and nothing else. It never inserts,
+  deletes, or rewrites a non-trivia token. Meaning-preserving content rewrites,
+  such as `x^{2}` → `x^2` or `$$…$$` → `\[…\]`, are linter autofixes.
+- Protected regions (`verbatim`, `lstlisting`, `\verb`, comments) are never
+  altered, with one carve-out for line terminators; see
+  [Formatter](formatter.md#line-endings).
+- Trivia-invariant layout: layout may read only those trivia predicates the
+  formatter itself preserves. This is being rolled out; see
+  [Formatter](formatter.md#trivia-invariant-layout).
 
-## Invariants (test oracles)
+There is deliberately no parse-stability invariant. The formatter may change CST
+shape: the math operator split re-groups a catcode-12 `WORD`, so `a+2` → `a + 2`
+re-lexes into separate atoms. The whitespace-only invariant pins the non-trivia
+content the tree carries, which is the part that matters. Running the formatter
+over a corpus is a good way to find parser modeling gaps, so this freedom is
+useful rather than merely tolerated.
 
-Three properties are held by construction and enforced as test oracles. A change
-that breaks any of them is a bug, not a trade-off:
-
-- **Losslessness:** `reconstruct(text) == text`, byte-for-byte.
-- **Idempotence:** `fmt(fmt(x)) == fmt(x)`.
-- **Whitespace-only formatter:** the formatter changes only *trivia*
-  (whitespace, newlines, comments, `.dtx` margins/guards); it never inserts,
-  deletes, or rewrites a non-trivia token. Meaning-preserving *content*
-  normalizations—stripping redundant single-token script braces (`x^{2}` →
-  `x^2`), rewriting `$$…$$` → `\[…\]`—are *linter autofixes*, not layout (see
-  [Linter](linter.md) and
-  [Formatter](formatter.md#the-formatter-is-whitespace-only)). Pinned by the
-  non-trivia-content oracle in `assert_format_invariants` (`tests/format.rs`).
-- **Protected regions** (`verbatim`, `lstlisting`, `\verb`, comments) are never
-  altered by the formatter.
-
-There is deliberately **no parse-stability invariant.** The formatter may still
-change CST *shape*—the math operator split re-groups a catcode-12 `WORD`, so
-`a+2` → `a + 2` re-lexes into separate atoms—but the whitespace-only invariant
-above pins the non-trivia *content* it carries. The formatter is intentionally
-used to stress the parser—any formatter ambiguity should surface a parser
-modeling gap.
-
-**Differential oracle.** We use [texlab](https://github.com/latex-lsp/texlab)'s
-parser as a differential *parse* oracle over a corpus—skeletonize both trees and
-compare. It is a reference we measure against, never one we match.
+We also run [texlab](https://github.com/latex-lsp/texlab)'s parser as a
+differential oracle over a corpus, skeletonizing both trees and comparing. It is
+a reference we measure against, not one we match.
 
 ## Technology choices
 
-- **rowan** for the CST; **salsa** for incremental queries;
-  [**smol_str**](https://docs.rs/smol_str) for interned token text;
-  [**insta**](https://insta.rs/) for snapshot tests;
-  [**annotate-snippets**](https://docs.rs/annotate-snippets) for diagnostics
-  rendering.
-- **Storing green nodes, never red.** Red trees (`SyntaxNode`) aren't
-  `Send`/`Eq`/`salsa::Update`. `incremental.rs` uses
-  `#[salsa::input] SourceFile {   text }` and a `parsed_document` query
-  returning `rowan::GreenNode` plus diagnostics under
-  `no_eq, unsafe(non_update_types)`—sound because the tree is a pure function of
-  the text—materializing red cursors on demand. See
-  [Parser](parser.md#incrementality) for the incrementality story.
-- **LSP:** `lsp-server` + `lsp-types` (rust-analyzer's stack), *not*
-  `tower-lsp-server`. See [LSP & Environment
-  Awareness](lsp.md#why-lsp-server-not-tower-lsp).
-- **Formatter engine:** a Wadler/Prettier-style `Doc` IR. See
-  [Formatter](formatter.md#the-doc-ir).
-- **CLI:** [`clap`](https://docs.rs/clap) + `build.rs` generating man pages,
-  completions, and markdown (`clap_mangen`, `clap_complete`, `clapdown`).
+rowan for the CST, salsa for incremental queries,
+[smol_str](https://docs.rs/smol_str) for token text, [insta](https://insta.rs/)
+for snapshot tests, [annotate-snippets](https://docs.rs/annotate-snippets) for
+diagnostic rendering, and [`clap`](https://docs.rs/clap) for the CLI, with
+`build.rs` generating man pages, completions, and markdown.
+
+Salsa stores green nodes, never red ones: `SyntaxNode` is not `Send`, `Eq`, or
+`salsa::Update`. `incremental.rs` stores `rowan::GreenNode` under
+`no_eq, unsafe(non_update_types)`, which is sound because the tree is a pure
+function of the text, and materializes red cursors on demand. See
+[Parser](parser.md#incrementality).
+
+The LSP is built on `lsp-server` and `lsp-types` rather than `tower-lsp-server`;
+see [LSP](lsp.md#why-lsp-server-not-tower-lsp). The formatter uses a
+Wadler/Prettier-style `Doc` IR; see [Formatter](formatter.md#the-doc-ir).
 
 ## Non-goals
 
-- No general macro expansion, no TeX evaluator, no execution of TeX primitives
-  or arbitrary `\def` semantics. (Common `\newcommand`/`\newenvironment`/xparse
-  *signatures* may feed the semantic DB—extracted, never executed.)
-- No general `\catcode` handling beyond the bounded, statically-recognizable
-  patterns described on the [Parser](parser.md#sanctioned-lexer-modes) page.
-- We never typeset.
-- **The formatter never reads the environment.** `badness format` output is a
-  pure function of the input plus shipped data (curated tables, CWL, the
-  tlpdb-derived name lists and CTAN metadata). It resolves only *local*
-  `.sty`/`.cls` next to the document (`semantic::load::DiskPackageSource`)—never
-  the installed TEXMF tree—so output can't depend on what's installed. This is
-  load-bearing for the deterministic-formatting tenet and the
-  idempotence/losslessness oracles. The language server is allowed more
-  latitude; see [LSP & Environment Awareness](lsp.md).
+No macro expansion, no TeX evaluator, no execution of primitives or `\def`
+semantics. Common `\newcommand`, `\newenvironment`, and xparse *signatures* may
+feed the semantic database, but they are extracted, never executed.
+
+No general `\catcode` handling beyond the bounded patterns listed under
+[sanctioned lexer modes](parser.md#sanctioned-lexer-modes).
+
+No typesetting.
+
+The formatter never reads the environment. Its output is a function of the input
+plus shipped data (the curated tables, CWL, and the tlpdb-derived name lists and
+CTAN metadata). It resolves local `.sty` and `.cls` files sitting next to the
+document, never the installed TEXMF tree, so output cannot depend on what
+happens to be installed. The language server is allowed more latitude; see
+[LSP](lsp.md).

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0](https://github.com/jolars/badness/compare/badness-parser-v0.1.1...badness-parser-v0.2.0) (2026-08-07)
+
+### Features
+- **formatter:** explode sibling-attached expl3 branches ([`d3fc51a`](https://github.com/jolars/badness/commit/d3fc51a9c5f7e8274e3cca8db885be1cc4831d77))
+- **formatter:** expand optional arguments to the width ([`4c28ba4`](https://github.com/jolars/badness/commit/4c28ba4898ee417516acbc168b62388c3e3ba6d5))
+
 ## [0.1.1](https://github.com/jolars/badness/compare/badness-parser-v0.1.0...badness-parser-v0.1.1) (2026-08-07)
 
 ### Bug Fixes

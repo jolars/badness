@@ -26,6 +26,6 @@ and `schema` additionally derives `schemars::JsonSchema`, so an embedder can
 publish a config schema that enumerates the real accepted values instead of
 restating them.
 
-See the [development
-documentation](https://badness.dev/development/formatter.html) for the engine's
-design.
+See the [architecture
+documentation](https://badness.dev/development/architecture.html#the-formatter)
+for the engine's design.

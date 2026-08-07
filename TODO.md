@@ -25,14 +25,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   LSP feature needing correct argument ownership in-region (expl3 signature
   help). The semantic statement model is the migration's differential oracle —
   test grammar attachment against `semantic::expl3`'s segmentation over the
-  gate corpora before flipping any consumer. Rationale in `parser.md`
-  (§ *Why greedy: text purity, not uniformity*).
+  gate corpora before flipping any consumer. Rationale in `docs/src/development/architecture.md`
+  (§ *Argument grouping and bracket policy*).
 
 ## Formatter
 
 - [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
   (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
-  `formatter.md` (§ *Trivia-invariant layout*). Layout may read only trivia
+  `docs/src/development/architecture.md` (§ *Trivia-invariant layout*). Layout may read only trivia
   predicates the formatter *preserves*; blank lines, comments, and column-0
   margins/guards qualify, **a lone newline vs. a space does not**. Since `fmt(x)`
   is by construction a trivia-perturbation of `x`, layout invariant under trivia
@@ -264,7 +264,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     authored gaps only, a math command is one verbatim atom). The issue-#55
     second-order scan flip needs a bare flush `[` with a reachable closer,
     which cannot exist (flush + reachable ⇒ attached). Detail in
-    `formatter.md` (§ *Bracket re-attachment is stable in-region*); pinned by
+    `.claude/rules/formatter.md` (§ *expl3*); pinned by
     the `expl_bracket_attachment` fixture and `bracket_attachment_stability`.
   - [ ] *Sibling-attached branch explosion*: `\prop_get:NnNTF \p {k} \l {T}
     {F}` forms one unit now, but the R4 explosion still fires only via
@@ -292,7 +292,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   violation above — `spans_multiple_lines` reads the unsafe lone-newline
   predicate. Fix it under that umbrella, Tier 1, not on its own.)* The `[…]` half
   of this is done: an optional argument is now a group over its top-level entries
-  (`formatter.md` § *Optional-argument layout*), so `lower_optional` reads the
+  (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*), so `lower_optional` reads the
   predicate only under `WrapMode::Preserve` and friends, which are defined by it.
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
@@ -301,7 +301,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] **Formatter-owned trailing comma (parked; the last piece of issue #47).**
   A `[…]` is now a width-driven group over its top-level entries, and a
   `ContentKind::Keyval` argument may also break at a glued comma
-  (`formatter.md` § *Optional-argument layout*). What is left of the old parked
+  (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*). What is left of the old parked
   item is the Black-style trailing comma: for a proven-keyval argument, add the
   `,` when expanded and drop it when collapsed — safe as *TeX*, because
   keyval/xkeyval/pgfkeys/l3keys and `\ProcessOptions` clists all ignore empty

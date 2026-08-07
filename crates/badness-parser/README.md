@@ -22,5 +22,6 @@ The crate builds for `wasm32-unknown-unknown`.
 Entry points: `parser::parse` / `parser::parse_with_flavor`, `bib::parse`,
 `semantic::SemanticModel::build`, and the typed wrappers in `ast`.
 
-See the [development documentation](https://badness.dev/development/parser.html)
-for the architecture.
+See the [architecture
+documentation](https://badness.dev/development/architecture.html#the-parser) for
+the design.

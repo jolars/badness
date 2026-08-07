@@ -104,7 +104,7 @@ impl MathWrap {
 /// conversion is document-wide — protected regions included, since a `verbatim`
 /// body whose line terminators disagreed with the rest of the file would be a
 /// mixed-ending document (see the invariant note in
-/// `docs/src/development/formatter.md`).
+/// `docs/src/development/architecture.md`, § *The formatter*).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(
     feature = "serde",

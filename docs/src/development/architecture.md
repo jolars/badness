@@ -9,8 +9,11 @@ above it, and recomputation is incremental via
 [arity](https://github.com/jolars/arity), the same kind of tool for R, was the
 other influence.
 
-The [parser](parser.md), the [formatter](formatter.md), the [linter](linter.md),
-and the [language server](lsp.md) have their own pages.
+This page is the whole design in one place. It is deliberately a tour rather
+than a specification: where a decision has a long provenance of worked examples
+and issue references, that detail lives in `.claude/rules/`, which is written
+for contributors working inside a specific subsystem. If you want to build and
+test the project, start with [Contributing](contributing.md).
 
 ## What it does
 
@@ -26,8 +29,9 @@ text → lexer → token stream → parser → event stream → tree_builder →
 
 The parser emits events (`Start`, `Tok(idx)`, `Finish`) instead of building a
 tree directly. Tokens are referred to by index and diagnostics travel on a side
-channel keyed by byte range, so there is no `Error` event. The tree builder
-re-attaches trivia and feeds rowan's `GreenNodeBuilder`.
+channel keyed by byte range, so there is no `Error` event. One extra event,
+`SubTok`, attaches a `WORD` sub-slice for the math operator split. The tree
+builder re-attaches trivia and feeds rowan's `GreenNodeBuilder`.
 
 Everything downstream reads that tree. The formatter lowers it to a `Doc` IR and
 prints the IR, the linter walks it once and collects diagnostics, and the
@@ -57,8 +61,11 @@ crates. It powers the [playground](../playground/index.html) and is built with
 
 Both library crates build for `wasm32-unknown-unknown`, so nothing in them may
 touch the filesystem, threads, or processes. The formatter is embedded by the
-dprint Wasm plugin, and a CI job guards the target. Anything that needs the
-outside world lives in the root crate.
+[dprint plugin](https://github.com/jolars/dprint-plugin-badness), and a CI job
+guards the target. The plugin is sandboxed with no filesystem, so it passes an
+empty signature database where the CLI folds in signatures scanned from sibling
+`.sty` and `.cls` files. That is the one sanctioned divergence from
+`badness format`.
 
 The root crate keeps `linter/`, `lsp/`, `project/`, `text/`, plus
 `incremental.rs` (salsa), `config.rs`, `cli.rs`, `completion.rs`, and
@@ -89,8 +96,8 @@ The lexer's `LatexFlavor` picks the starting catcode regime. `Package` (`.sty`,
 
 Wrap mode is not a property of the file kind. Every kind defaults to
 `WrapMode::Reflow`, and content that cannot be safely reflowed is refused
-structurally in every mode. See
-[Formatter](formatter.md#reflow-is-safe-by-construction-not-by-file-kind).
+structurally in every mode; see [reflow
+safety](#reflow-is-safe-by-construction).
 
 `badness.toml` is found by walking ancestors from each input. The CLI is its
 only consumer; the library API takes a resolved `FormatStyle`. Sections are
@@ -103,7 +110,7 @@ fallback depends on the file.
 
 TEXMF discovery is deliberately not a section here. Where a TeX installation
 lives is machine state rather than project data, so it arrives through editor
-settings. See [LSP](lsp.md).
+settings.
 
 ## Two layers
 
@@ -117,18 +124,468 @@ arity, verbatim-ness, sectioning, and per-argument content kinds.
 Meaning never leaks downward. The parser may read static lexical facts, never
 signature data that config, package scopes, or scanned definitions can change.
 
+One content kind is worth naming here, because it is the only place where a
+signature claim can change typeset output. `ContentKind::Keyval` asserts that a
+keyval-family processor strips spaces around entries, which is what licenses the
+formatter to break a `[…]` at a comma the author glued. Compiling both spellings
+shows the claim is real for `\usepackage`, `\includegraphics`, tikz, and
+`lstlisting`, and false for every textual optional such as `\item`, `\caption`,
+`\cite`, or a `\newcommand` default. It is held to the same curated standard as
+the math-environment routing.
+
+## The parser
+
+The parser is hand-written recursive descent over a flat token stream. It treats
+its input as generic TeX surface syntax and always produces a lossless tree.
+
+Resolving macros and catcodes in full generality means running a TeX engine, and
+we do not do that. Anything we cannot resolve statically degrades to a generic
+node, with a diagnostic where one is useful, never to a crash or to corrupted
+output.
+
+### Sanctioned lexer modes
+
+What we do handle is a bounded, growing set of patterns recognizable from static
+shape alone. They are deliberately conservative: when in doubt, a construct
+stays generic. The catalog:
+
+- **Letter modes.** `\makeatletter` makes `@` a letter; `\ExplSyntaxOn` and the
+  `\ProvidesExpl*` declarations open expl3, where `_` and `:` are letters. The
+  two flags are independent and compose. In a `.dtx` a file-level signal (a
+  `%<@@=…>` guard or a `\ProvidesExpl*` anywhere) puts every `macrocode` body
+  under expl3 catcodes.
+- **Verbatim.** `\verb`, verbatim-like environments, and verbatim-argument
+  commands capture their body as a single token. Built-ins are curated;
+  user-defined ones are found by a bounded two-pass definition scan that
+  fingerprints catcode-othering signals and recognizes definer identities such
+  as `\lstnewenvironment`.
+- **Delimiter isolation.** The token after `\left` or `\right` is emitted on its
+  own, so the parser can build the `LEFT_RIGHT` pair.
+- **Math environments.** An environment the curated table flags `math` has its
+  body parsed in math mode and wrapped in a `MATH` node, exactly as `\[…\]`.
+  This is a grammar decision needing no lexer math state, and it reads the
+  curated flag only, never the bulk or user tiers.
+- **Definition bodies.** Inside the argument groups of the curated definer set
+  (`\newcommand` and `\newenvironment` families, xparse, the LaTeX2e hooks),
+  `\begin` and `\end` parse as plain commands, because TeX does not require them
+  to balance within one group.
+- **Macrocode chunks.** A frame-lexed `macrocode` body is macro code terminated
+  only by the literal frame line, a line-oriented docstrip fact. Unmatched
+  braces inside a chunk are plain tokens, since a `\def` regularly opens `{` in
+  one chunk and closes it several chunks later.
+- **Short verbs.** `\MakeShortVerb{\|}` toggles a character's short-verb
+  catcode, so `|…|` on one line captures as an opaque `VERB`. Curated doc
+  classes and `.dtx` mode enable `|` from the start.
+- **Docstrip guards and `^^A` doc comments.** A line-leading `%<…>` lexes as a
+  `GUARD` trivia leaf; on a doc-margin line the literal `^^A` comments to end of
+  line, matching ltxdoc's catcode 14.
+- **expl3 regions.** In-region, token lists pass `\begin` and `\end` around as
+  data, so they parse as plain commands and an orphan `\]` is data with no
+  diagnostic.
+- **Char constants.** After a numeric-context primitive from a closed curated
+  set, a backtick opens TeX's char-constant notation, so ``\char`$`` can never
+  open math.
+- **Signatures.** `\newcommand` and xparse signatures are extracted into the
+  semantic database, never executed.
+
+Two shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
+matching closer is reachable before an unbalanced `}`, a paragraph break, or
+EOF, because macro code passes the delimiters around as data at least as often
+as prose uses them. And environment pairing is gated on brace structure rather
+than a command set: an environment can never outlive the brace group its
+`\begin` opened in, since braces are catcode structure while `\begin` and `\end`
+are only macros. Both gates degrade to a plain token with no diagnostic, because
+parser diagnostics gate the formatter and so must be high precision.
+
+### Recursive descent, with Pratt local to math
+
+Hand-written recursive descent is the spine. Precedence climbing is used only
+for sub- and superscript binding and for `\left…\right` matching; the text-level
+parser has no precedence.
+
+Arithmetic operators are catcode-12 "other" characters, so a faithful lexer
+globs them into `WORD` runs and `a+2*1` is one token. Operator-ness is a
+math-semantic fact assigned after catcode lexing, which makes it the parser's
+job: inside math a `WORD` is split at operator boundaries into flat sibling
+atoms, by byte range rather than by re-lexing. Only the trailing operand is the
+scriptable base, so `a+2*1^5` binds `^5` to `1`, matching TeX. Operators become
+atoms so the formatter can space them and the display breaker can break long
+chains. There is no arithmetic-precedence expression tree.
+
+### Argument grouping and bracket policy
+
+The CST greedily attaches trailing `{…}` and `[…]` groups as argument nodes,
+texlab-style. Arity is unknown at parse time; the semantic layer refines it.
+
+The load-bearing claim is database independence. Attachment reads the input text
+plus compiled-in data, never mutable signature inputs such as config, package
+scopes, or scanned definitions. Consulting the signature database during
+grouping would make the tree a function of something other than the text, and
+every signature edit would invalidate every parse. For generic LaTeX that forces
+greed: `\foo{a}{b}` is either a two-argument call or a zero-argument command
+followed by two groups, and nothing in the text says which.
+
+Attachment is therefore text-pure, but not uniform. Deviations read static facts
+only. Brackets are shape-gated, since `[` and `]` are not real grouping in TeX:
+a bracket attaches only when it reads as an argument, which in math means
+directly abutting the command with its `]` reachable before the math ends, and
+in text mirrors the `$` gate. A lone `*` tight to a command and followed by an
+argument folds in as a starred-variant marker instead of breaking the run.
+
+expl3 is the one systematic counterexample. The argspec suffix rides in the
+`CONTROL_WORD` token itself, since in-region `:` and `_` are letters, so
+arity-directed attachment there would be exactly as text-pure as greed. Greed is
+not neutral in that dialect, it is a systematically wrong guess: every
+single-token slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
+definee, and the formatter's peel-back queue exists only to undo that after the
+fact. Arity-directed expl3 attachment is the recorded candidate deviation,
+deliberately unimplemented until three questions have answers: the mixed-shape
+CST every consumer would have to handle, a false-positive blast radius that
+moves from layout into the tree, and the divergence ledger against texlab.
+
+### Trivia attachment
+
+Comments bind forward, whitespace floats, and a blank line breaks the bind.
+Trivia is never dropped, so the only question is which node owns it.
+
+By default trivia floats at the nearest enclosing node. A contiguous run of
+own-line `%` comments immediately preceding a `COMMAND` or `ENVIRONMENT` binds
+leading into it as a `DOC_COMMENT` node, with "documentable" decided on node
+kind alone so no signature lookup leaks into the parser. A same-line trailing
+comment never binds.
+
+This diverges from rust-analyzer's `n_attached_trivias`, which peeks past a
+blank line when the next comment is an outer doc comment. That peek keys on the
+`///` versus `//` distinction, and LaTeX's single catcode-14 `%` has no
+equivalent, so we bind only the maximal blank-line-free suffix. Otherwise a
+license header would glue into the following command's doc comment.
+
+### Error recovery
+
+A single syntactic error never fails the whole parse; errors travel alongside
+the tree. The recovery anchors are `\end{…}`, `\begin`, a blank line, `}`, `$`,
+`&`, and `\\`. The parser always makes progress and never loops on unexpected
+input.
+
+### Incrementality
+
+Incrementality is salsa-first. Cross-file and cross-query incrementality is the
+v1 story; intra-file reparse that reuses green subtrees is a later optimization,
+since a whole-file reparse of a typical `.tex` is sub-millisecond.
+
+Green nodes are stored in salsa, never red ones, because red trees are not
+`Send`, `Eq`, or `salsa::Update`. `incremental.rs` stores `rowan::GreenNode`
+under `no_eq, unsafe(non_update_types)`, sound because the tree is a pure
+function of the text, and materializes red cursors on demand.
+
+Salsa's default input durability is `LOW`. `SourceFile.path` is built at
+`Durability::HIGH` because it is set once and never mutated; `text` keeps `LOW`,
+since a keystroke rewrites it. Any future input promoted from config or package
+metadata must be constructed at `HIGH` or `MEDIUM`, or every keystroke's global
+revision bump will invalidate it.
+
+### Typed AST wrappers
+
+On top of the untyped rowan CST sits a thin typed layer: rust-analyzer-style
+`AstNode` and `AstToken` traits, an identity macro, and one wrapper struct per
+node kind. Wrappers are a read-only view, never a re-model of the tree. They
+expose structure and never meaning, so no signature lookup lives here, and
+because the CST is greedy and generic the accessors are positional and tolerate
+over-attachment by construction. `Command::title()` would be a lie, since a
+`\section` and a `\newcommand` share the `COMMAND` shape.
+
+The formatter deliberately stays raw for structural work, where the `lower_node`
+dispatch and the token-classification loops are ordinary tree walking that
+wrappers would only obscure. It adopts wrappers for field access alone.
+
+## The formatter
+
+The formatter is the sole authority on layout. It lowers the CST into a
+Wadler/Prettier-style `Doc` IR, and a printer lays that IR out under a
+flat-or-break fit model.
+
+### It is whitespace-only
+
+The layout engine changes trivia and nothing else: whitespace, newlines,
+comments, and `.dtx` margins and guards. It never inserts, deletes, or rewrites
+a non-trivia token. Mechanically, each maximal run of whitespace and newline
+trivia is replaced by a break primitive, and the printer computes indentation.
+
+Meaning-preserving content rewrites therefore do not live here. Stripping
+redundant braces around a single-token script (`x^{2}` → `x^2`) and rewriting
+`$$…$$` → `\[…\]` are linter autofixes. This mirrors the fix-then-format rule:
+just as the formatter never runs inside `--fix`, content rewrites never run
+inside `format`. The payoff is a guarantee by construction, checked by the
+non-trivia-content oracle, instead of a meaning-preservation argument defended
+one fixture at a time.
+
+The formatter may still change CST *shape*. The math operator split re-groups a
+catcode-12 `WORD`, so inserting insignificant math whitespace makes the output
+re-lex into separate atoms. The oracle compares the concatenated text of
+non-trivia tokens rather than their boundaries, so it tolerates the re-grouping
+while still catching any inserted or deleted non-trivia character.
+
+### Trivia-invariant layout
+
+Whitespace-only says what the formatter may write. Trivia-invariant layout says
+what the lowering may read:
+
+> Layout is a function of non-trivia content, config, and only those trivia
+> predicates the formatter itself preserves.
+
+A predicate `P` is preserved when `P(fmt(x)) == P(x)`. Reading a preserved
+predicate is safe, because the formatter cannot change the answer; reading an
+unpreserved one means pass 1's layout silently edits pass 2's input.
+
+Three predicates are preserved and may be read: whether a blank line is present,
+whether a comment is present and whether it is own-line or trailing, and whether
+a `%` margin or `%<…>` guard sits at column 0. One is not, and must never be
+read: whether a gap is a lone newline or a space. The formatter converts freely
+in both directions, turning `alpha\nbeta` into `alpha beta` and writing a
+newline where a width wrap needs one.
+
+This makes idempotence a theorem rather than an empirical property. Since the
+formatter changes only trivia, `fmt(x)` is by construction a trivia-perturbation
+of `x`, so layout invariant under trivia perturbation gives
+`fmt(fmt(x)) == fmt(x)` for free. The alternative does not scale: every layout
+decision that reads the unsafe predicate is an independent latent bug, and the
+supply of decisions is unbounded. The whole K&R-versus-Allman family of bugs is
+that one pattern, where a soft width break becomes a hard statement boundary on
+the reparse and the layout flips with it.
+
+Enforcement is to delete the information at the boundary. The lowering consumes
+a normalized inter-token gap with no `Newline` variant rather than raw trivia
+tokens, so a rule cannot key on what it cannot see. Modes that are *defined* by
+reading authored breaks (`WrapMode::Stable`, `Sentence`, `Semantic`, and
+`ReflowKind::Statement`) take a widened gap, and each owes a written fixed-point
+argument showing that every layout it can emit re-reads to itself. The rollout
+is not finished: a handful of sites still read the unsafe predicate, tracked in
+`TODO.md`.
+
+The oracle is `formatter::perturb`, which generates TeX-identical trivia
+perturbations of each input and requires every variant to format to a fixed
+point that parses cleanly, round-trips losslessly, and carries the same
+non-trivia content. That is strictly stronger than idempotence, which only ever
+exercises the single trivia configuration `fmt` itself produces.
+
+### Paragraph line breaks
+
+Paragraph line breaks are controlled by `WrapMode`, modeled on the sibling
+[panache](https://github.com/jolars/panache) formatter and mechanized through
+the `Doc` IR rather than a separate line filler. All five modes are implemented.
+`Reflow`, the default, width-fills. `Stable` keeps acceptable authored breaks
+while optimizing overflow, change, displacement, and raggedness against a soft
+target. `Preserve` keeps authored breaks. `Sentence` and `Semantic` split one
+sentence per line and ignore width, with `Semantic` additionally ending a line
+at every authored newline.
+
+Sentence-boundary detection is a per-language abbreviation profile ported from
+panache, resolved from `[format] lang` and `[format.no-break-abbreviations]`.
+
+Display math has its own knob, `MathWrap`, scoped to single-formula display
+bodies. Its default resolves against the effective `WrapMode`, so one `wrap`
+setting carries over to math for free.
+
+### Reflow is safe by construction
+
+`WrapMode` used to be resolved per file extension, with `.tex` reflowing while
+`.sty`, `.cls`, and `.dtx` fell back to `Preserve`. That default is gone.
+Whether content is safe to reflow is a property of the content, not of the file
+name, and answering it by extension left `--wrap reflow` on a `.dtx` free to
+corrupt the document.
+
+The safety is now structural, and every gate is independent of the wrap mode, so
+an explicit `--wrap reflow` is exactly as safe as any other mode. Every relayout
+arm refuses a node whose subtree carries a `.dtx` margin or guard, because
+reflowing one drops the `%` margin and on an unmargined line a `^^A` doc comment
+re-lexes as content. A residual margin-escape detector backs that up: when a
+probe-gated reflow would commit content outside the margin, the paragraph
+re-lowers on the byte-faithful preserve path. Never re-introduce a file-kind
+wrap default to paper over a layout bug; fix the gate.
+
+### Optional arguments, tables, and math spacing
+
+An optional argument is a plain Wadler group over its top-level comma-separated
+entries: flat when it fits the width, one entry per line when it does not. Width
+alone decides. There is deliberately no "expand once the list has more than N
+keys" rule and no Black-style magic trailing comma, since content steering
+layout conflicts with the sole-authority tenet.
+
+Which commas are break opportunities is the subtle part. A comma the author
+already followed by whitespace is free, since flat-to-broken is just a
+space-to-newline exchange. A comma glued inside a `WORD` is not: breaking there
+materializes a space token TeX will see, so it is emitted only for an argument
+the signature database proves is a key-value list.
+
+Table column alignment is layout, so the formatter owns it. The `{lcr}` column
+spec is parsed from static argument text only, conservatively bailing to
+all-left on anything it does not model, and the grid renderer pads cells left,
+center, or right. Routing to the grid is primarily semantic, through the curated
+`align` flag, but one arm additionally routes any remaining environment whose
+body carries a top-level `&`, since a `&` at catcode 4 is a column tab and the
+signature database cannot name a user-defined alignment.
+
+Math operator spacing is a single space around each binary and relation atom,
+with unary signs and scripts tight.
+
+### expl3 code formatting
+
+Inside an expl3 region, source spaces and tabs are catcode 9 (ignored) and `~`
+is catcode 10. Because inter-token whitespace is provably insignificant there,
+the formatter owns the layout of in-region code, indentation and line breaks
+alike, regardless of `WrapMode`. This is idempotent by construction: the
+inserted whitespace is itself catcode-insignificant, so re-lexing the output
+yields the same token sequence.
+
+The target is the LaTeX Project's own house style, `l3styleguide.tex`. Its
+mechanical rules are an 80-column target, a two-space indent per level, single
+spaces between everything except simple runs of parameter tokens, one
+conceptually separate step per line, a canonical brace layout, and no tabs. The
+non-layout rules, such as naming prefixes and expandability, are meaning rather
+than trivia and belong to a linter.
+
+Two decisions carry most of the weight. Statement boundaries are **structural**
+rather than newline-keyed: a call unit is a head command whose argspec suffix
+gives derivable arity, plus the elements its slots consume, so the formatter
+owns one-call-per-line and a width wrap re-derives the same unit on the next
+pass. Whatever the scan cannot resolve degrades to a per-statement fallback that
+is the authored physical line, which is the old newline rule demoted to a
+residue and carrying its own fixed-point argument. And layout ownership is
+positionally gated: the lexer and the formatter share the toggle-*name* set so a
+new spelling is recognized in both, but only the formatter additionally requires
+the toggle to be a top-level statement. A toggle spelling TeX never executes is
+a false positive of the static model, and mis-owning its layout rewrites real
+space tokens even though the byte-level oracles stay green. The lexer keeps the
+naive name-only model on purpose, because mis-lexing a name only splits CST
+tokens, which is lossless and cosmetic.
+
+### Line endings
+
+The printer always builds output with `\n` and is the sole authority on where
+breaks go. `FormatStyle::line_ending` decides only how those breaks are spelled,
+as a pass over the finished text: `auto` (the default) follows the source, `lf`
+and `crlf` are unconditional, and `native` follows the platform. `auto` is the
+default so a CRLF repository does not get a whole-file diff the first time it is
+formatted.
+
+This is the one carve-out in the protected-regions rule. A `verbatim` body is
+emitted from source token text, so without a document-wide conversion a CRLF
+document came out CRLF inside the protected region and LF everywhere else. Only
+the `\r\n` and `\n` pair is touched; every other byte of the region is still
+untouched.
+
+## The linter
+
+The linter reports diagnostics over the same lossless CST the formatter
+consumes, and like the formatter it is a pure function of the input plus shipped
+data. The user-facing catalog of shipped rules lives in the reference section
+([Linter Rules](../reference/linter-rules.md), [BibTeX Linter
+Rules](../reference/bib-linter-rules.md)), generated from each rule's own
+description and examples.
+
+### Rules and dispatch
+
+Every lint implements `Rule`, which is `Send + Sync` so the registry can be
+shared across the LSP's read pool. A rule declares a stable kebab-case `id`, a
+`default_severity`, the description and worked examples that generate the rule
+reference, and whether it can ever emit a fix.
+
+No rule walks the tree on its own. Each participates in the driver's single
+shared traversal one of three ways. Node-shape rules name the `SyntaxKind`s they
+care about and get called once per matching element. Whole-file rules run once
+after the walk, which suits rules driven by the semantic model or by cross-file
+resolution. Streaming rules return a visitor fed every element in document
+order, for findings that depend on the sequence, such as a running toggle or the
+previous heading's level.
+
+Each rule reads a `RuleContext` assembled once per file. Besides the syntax root
+and the semantic model it carries the cross-file resolution a project view
+provides (labels, cite keys, and package options), each `None` when there is no
+project view, which makes the corresponding rules inert rather than wrong. It
+also precomputes two shared side indexes, one of math byte ranges and one of
+`\if…\else…\fi` branch paths, so the many rules that need them share one
+membership test instead of each climbing the ancestor chain per token.
+
+The registry compiles the rule list into a dispatch table indexed by
+`SyntaxKind`, so node dispatch is a slice index, and it is cached across files
+and shared by reference across the CLI's rayon lint phase. Configuration narrows
+the active set as a post-filter, so the shared driver stays config-unaware.
+
+### Autofixes
+
+A diagnostic may carry a `Fix`: one or more edits applied atomically, so a
+paired insertion can never half-apply. Each edit names its target file, so a fix
+may reach across files, and atomicity then spans files.
+
+A fix decides what to rewrite, never how to lay it out. It owes correctness, so
+the result still parses and is still lossless, but not line width. When a fix
+cannot meet that bar for some shape, make it correct by construction or withhold
+it for that shape while still reporting the finding. Because a fix owes
+correctness as a raw edit, with no formatter spacing to lean on, such a rule can
+be strictly more conservative than a layout pass would be:
+`redundant-script-braces` withholds the strip when a following character would
+re-glue the argument, so `x^{2}-3` stays braced.
+
+Each fix declares an applicability. `Safe` fixes preserve meaning and are
+applied by `lint --fix`; `Unsafe` ones, those that could change typeset output,
+require `--unsafe-fixes` or an explicit editor code action. The apply engine is
+a pure function over source, fixes, and that flag, shared by the CLI and the LSP
+code-action path. It drops any malformed or overlapping fix so the output stays
+well-formed, and `lint --fix` runs it to a fixpoint, re-linting between rounds.
+
+Findings are suppressed inline with `% badness-ignore <rule>: <reason>`, which
+covers the next meaningful sibling, or `% badness-ignore-file` for the whole
+file.
+
+## The language server
+
+The formatter is hermetic: its output is a function of the input plus shipped
+data. The language server is allowed more latitude, because navigation is
+inherently about the local environment. A runtime query of the TeX distribution
+feeding the *formatter* stays a non-goal; a read-only index or metadata feeding
+LSP navigation is sanctioned.
+
+The LSP is built on `lsp-server` and `lsp-types`, rust-analyzer's stack, rather
+than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
+`lsp-server`'s sync main loop plus threadpool and fights tower-lsp's async
+`&self` model.
+
+Environment awareness has three sources, all reading static facts only, with no
+macro meaning and no typesetting.
+
+**Shipped CTAN metadata**, generated from the pinned tlpdb, maps a package stem
+to a description and catalogue id, and drives package hover and completion
+detail. It has the same read-only posture as the name lists and CWL.
+
+**A read-only TEXMF file index** (`project::texmf`) indexes the installed
+`.sty`, `.cls`, and `.dtx` files, delegating root discovery to
+`kpsewhich -var-value` since reimplementing kpathsea is out of scope. It is
+cached to the OS cache directory keyed by a distro fingerprint, and it powers
+document links, go-to-definition, and installed-set completion. It is gated by
+editor settings, and it is never wired into signature resolution.
+
+**The compile's `.aux` artifacts** (`project::aux`) are read by a dedicated
+line-oriented scanner, never the LaTeX parser, since aux files are written under
+`\makeatletter`. It extracts label numbers and toc entries, following `\@input`
+chains, with freshness keyed by mtime and length so a recompile is picked up
+without a watcher. This powers label hover and document-symbol number
+enrichment. A test guards that the formatter never reads the aux file.
+
+Citation completion returns the entire bibliography namespace rather than
+prefix-filtering server-side, with each item carrying a `filterText` of key,
+title, and authors so the client matches on any of those fields. That is
+deliberately editor-agnostic: `filterText` is LSP-standard, so every compliant
+client filters against it with no client-specific code.
+
 ## Tenets
 
 1. Layout is decided solely by the formatter's rules and the layout engine. The
    formatter is the sole authority on layout, so push back against hard-coded
    special cases.
 2. Autofixes are textual edits that never invoke the formatter. A fix decides
-   what to rewrite, never how to lay it out, and owes correctness (the result
-   still parses and is still lossless) but not line width. When a fix cannot
-   meet that bar for some shape, make it correct by construction or withhold it
-   for that shape while still reporting the finding. The pipeline is
-   fix-then-format, and the mirror holds: content rewrites never run inside
-   `format`.
+   what to rewrite, never how to lay it out, and owes correctness but not line
+   width. The pipeline is fix-then-format, and the mirror holds: content
+   rewrites never run inside `format`.
 3. Parser and CST work must keep the salsa reparse path viable.
 4. Parsing is the parser's job. Never paper over a parser mistake in the
    formatter, and never let parsing logic creep into the formatter.
@@ -139,29 +596,30 @@ signature data that config, package scopes, or scanned definitions can change.
 These are held by construction and enforced as test oracles. Breaking one is a
 bug, not a trade-off.
 
-- Losslessness: `reconstruct(text) == text`, byte for byte.
-- Idempotence: `fmt(fmt(x)) == fmt(x)`.
-- The formatter is whitespace-only. It changes trivia (whitespace, newlines,
-  comments, `.dtx` margins and guards) and nothing else. It never inserts,
-  deletes, or rewrites a non-trivia token. Meaning-preserving content rewrites,
-  such as `x^{2}` → `x^2` or `$$…$$` → `\[…\]`, are linter autofixes.
-- Protected regions (`verbatim`, `lstlisting`, `\verb`, comments) are never
-  altered, with one carve-out for line terminators; see
-  [Formatter](formatter.md#line-endings).
-- Trivia-invariant layout: layout may read only those trivia predicates the
-  formatter itself preserves. This is being rolled out; see
-  [Formatter](formatter.md#trivia-invariant-layout).
+- **Losslessness**: `reconstruct(text) == text`, byte for byte.
+- **Idempotence**: `fmt(fmt(x)) == fmt(x)`.
+- **The formatter is whitespace-only.** It changes trivia and nothing else, and
+  never inserts, deletes, or rewrites a non-trivia token.
+- **Protected regions** (`verbatim`, `lstlisting`, `\verb`, comments) are never
+  altered, with the single line-terminator carve-out described above.
+- **Reflow safety is structural**, never config-derived, so no wrap mode can
+  corrupt a `.dtx`.
+- **Trivia-invariant layout**: layout may read only those trivia predicates the
+  formatter itself preserves. This one is still being rolled out.
 
 There is deliberately no parse-stability invariant. The formatter may change CST
-shape: the math operator split re-groups a catcode-12 `WORD`, so `a+2` → `a + 2`
-re-lexes into separate atoms. The whitespace-only invariant pins the non-trivia
-content the tree carries, which is the part that matters. Running the formatter
-over a corpus is a good way to find parser modeling gaps, so this freedom is
-useful rather than merely tolerated.
+shape, and the whitespace-only invariant pins the non-trivia content the tree
+carries, which is the part that matters. Running the formatter over a corpus is
+a good way to find parser modeling gaps, so this freedom is useful rather than
+merely tolerated.
 
-We also run [texlab](https://github.com/latex-lsp/texlab)'s parser as a
-differential oracle over a corpus, skeletonizing both trees and comparing. It is
-a reference we measure against, not one we match.
+Two oracles sit outside the fast test suite. We run
+[texlab](https://github.com/latex-lsp/texlab)'s parser as a differential parse
+oracle over a corpus, skeletonizing both trees and comparing; it is a reference
+we measure against, not one we match. And because the CST cannot see the one
+risk `ContentKind::Keyval` takes, where a space token is trivia to the CST and
+content to TeX, `task typeset:check` compiles fixtures before and after
+formatting and diffs the typeset output.
 
 ## Technology choices
 
@@ -171,16 +629,6 @@ for snapshot tests, [annotate-snippets](https://docs.rs/annotate-snippets) for
 diagnostic rendering, and [`clap`](https://docs.rs/clap) for the CLI, with
 `build.rs` generating man pages, completions, and markdown.
 
-Salsa stores green nodes, never red ones: `SyntaxNode` is not `Send`, `Eq`, or
-`salsa::Update`. `incremental.rs` stores `rowan::GreenNode` under
-`no_eq, unsafe(non_update_types)`, which is sound because the tree is a pure
-function of the text, and materializes red cursors on demand. See
-[Parser](parser.md#incrementality).
-
-The LSP is built on `lsp-server` and `lsp-types` rather than `tower-lsp-server`;
-see [LSP](lsp.md#why-lsp-server-not-tower-lsp). The formatter uses a
-Wadler/Prettier-style `Doc` IR; see [Formatter](formatter.md#the-doc-ir).
-
 ## Non-goals
 
 No macro expansion, no TeX evaluator, no execution of primitives or `\def`
@@ -188,13 +636,11 @@ semantics. Common `\newcommand`, `\newenvironment`, and xparse *signatures* may
 feed the semantic database, but they are extracted, never executed.
 
 No general `\catcode` handling beyond the bounded patterns listed under
-[sanctioned lexer modes](parser.md#sanctioned-lexer-modes).
+[sanctioned lexer modes](#sanctioned-lexer-modes).
 
 No typesetting.
 
 The formatter never reads the environment. Its output is a function of the input
-plus shipped data (the curated tables, CWL, and the tlpdb-derived name lists and
-CTAN metadata). It resolves local `.sty` and `.cls` files sitting next to the
-document, never the installed TEXMF tree, so output cannot depend on what
-happens to be installed. The language server is allowed more latitude; see
-[LSP](lsp.md).
+plus shipped data, and it resolves local `.sty` and `.cls` files sitting next to
+the document rather than the installed TEXMF tree, so output cannot depend on
+what happens to be installed.

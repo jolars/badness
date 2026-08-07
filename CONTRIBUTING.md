@@ -44,50 +44,72 @@ Badness uses [insta](https://insta.rs/) for snapshot tests. When a change
 deliberately alters formatter or parser output, review and accept the new
 snapshots with `task snapshots` (`cargo insta review`).
 
+Performance is first-class. Benchmark before optimizing, and never regress
+losslessness for speed.
+
+### Checks that don't run in CI
+
+Two oracles need more than a Rust toolchain, so run them by hand when your
+change touches what they cover.
+
+`task typeset:check` compiles `tests/typeset/*.tex` before and after formatting
+and diffs the typeset output. The CST oracles cannot see the one risk the
+key-value argument flag takes, where a space token is trivia to the CST and
+content to TeX, so run this when touching keyval signature data or the
+optional-argument lowering. It needs a TeX install.
+
+`task parse-compat` runs [texlab](https://github.com/latex-lsp/texlab)'s parser
+as a differential oracle over a corpus, skeletonizing both trees and comparing.
+It is a reference we measure against, not one we match, so a divergence is
+something to explain rather than automatically fix.
+
 ## Project layout
 
 Badness parses LaTeX into a **lossless concrete syntax tree** and builds three
-tools on top of it:
+tools on top of it: a **formatter** (`badness format`), a **linter**
+(`badness lint`), and a **language server** (`badness lsp`). The architecture
+follows [rust-analyzer](https://rust-analyzer.github.io/): a hand-written,
+error-tolerant lexer and parser turn LaTeX into a flat token stream, then an
+event stream that a tree builder feeds into
+[rowan](https://github.com/rust-analyzer/rowan); a **semantic layer** assigns
+meaning on top of the generic tree; and incremental recomputation is
+[salsa](https://github.com/salsa-rs/salsa)-first.
 
-- a **formatter** (`badness format`) that lays out source deterministically,
-- a **linter** (`badness lint`) that reports diagnostics, and
-- a **language server** (`badness lsp`).
+The [Architecture](https://badness.dev/development/architecture.html) page in
+the book is the full tour, and it is worth reading before a non-trivial change.
 
-The architecture follows [rust-analyzer](https://rust-analyzer.github.io/):
+Where things live:
 
-- A hand-written, error-tolerant **lexer and parser** turn LaTeX into a flat
-  token stream, then an **event stream** (`Start`/`Tok`/`Finish`), which a tree
-  builder re-attaches trivia to and feeds into
-  [rowan](https://github.com/rust-analyzer/rowan) to produce the lossless tree.
-- A **semantic layer** (a signature database) assigns meaning (arity,
-  verbatim-ness, sectioning) on top of the generic tree. Meaning never leaks
-  into the parser.
-- The **formatter** lowers the tree into a Wadler-style `Doc` IR, laid out under
-  a flat/break fit model.
-- Incremental recomputation is [salsa](https://github.com/salsa-rs/salsa)-first.
+- `crates/badness-parser` — syntax layer, parser, semantic layer, the BibTeX
+  pipeline, and the `data/` signature artifacts.
+- `crates/badness-formatter` — the layout engine and the `.bib` formatter.
+- `crates/badness-wasm` — the wasm shim powering the docs playground.
+- `src/` — the CLI, LSP, linter, and project layers, plus shim modules
+  re-exporting the member crates at their old paths.
 
-The source lives in one crate, organized into module folders: `parser/`,
-`formatter/`, `linter/`, `semantic/`, `project/`, `text/`, plus `syntax.rs` and
-`incremental.rs`.
+Both library crates must keep building for `wasm32-unknown-unknown`, so nothing
+in them may touch the filesystem, threads, or processes. A CI job guards this.
+Anything that needs the outside world belongs in the root crate.
 
 ## Invariants
 
-Three properties are held by construction and enforced as test oracles. A change
-that breaks any of them is a bug, not a trade-off:
+These properties are held by construction and enforced as test oracles. A change
+that breaks one is a bug, not a trade-off.
 
-- **Losslessness**: `reconstruct(text) == text`, byte-for-byte. The parser never
-  loses or corrupts input.
+- **Losslessness**: `reconstruct(text) == text`, byte for byte.
 - **Idempotence**: `format(format(x)) == format(x)`.
+- **The formatter is whitespace-only**: it changes trivia (whitespace, newlines,
+  comments, `.dtx` margins and guards) and nothing else. Content rewrites such
+  as `x^{2}` → `x^2` are linter autofixes, not layout.
 - **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
-  `\verb`, comments) is never altered by the formatter.
-
-The formatter *may* normalize structure on purpose (for example, `x^{2}` becomes
-`x^2`); it preserves meaning, not the exact parse tree.
+  `\verb`, comments) is never altered by the formatter, apart from a
+  document-wide line-terminator normalization.
 
 A couple of ground rules keep the design coherent:
 
 - Keep the syntactic layer free of semantic knowledge. Parsing is the parser's
-  job; layout is the formatter's job.
+  job; layout is the formatter's job. Never paper over a parser mistake in the
+  formatter.
 - New parser features need corpus and snapshot tests **and** a losslessness
   assertion.
 
@@ -106,12 +128,44 @@ A couple of ground rules keep the design coherent:
 - A rustfmt git hook rewrites unformatted files and aborts the commit, so run
   `cargo fmt` first. Clippy warnings are treated as errors.
 
+Each workspace crate is its own versionary package with its own changelog and
+version. The root CLI tags bare `v*`; the members tag `badness-parser-v*` and
+`badness-formatter-v*`. Only the bare `v*` stream carries release assets.
+
 ### Adding a lint rule
 
-New lint rules implement the `Rule` trait, register in the rule list, ship unit
-and integration tests with a losslessness-safe fix, and regenerate the rules
-reference with `task docs:rules`. Look at the existing rules in
-`src/linter/rules/` for the pattern.
+The `add-lint-rule` workflow automates this, but the shape is fixed:
+
+1. Implement `Rule` in a new `src/linter/rules/<name>.rs`, choosing node-shape,
+   whole-file, or streaming dispatch, with an `id`, a `default_severity`, a
+   description, and at least one triggering example. Emit a losslessness-safe
+   fix where one is warranted, and set `emits_fix` accordingly.
+2. Register it in the three lockstep lists in `src/linter/rules.rs`: the module
+   declaration, the re-export, and the entry in `all_rules()`.
+3. Ship unit tests next to the rule and an integration test, plus a losslessness
+   assertion on any fixture.
+4. Regenerate the rules reference with `task docs:rules`. Do not edit the
+   rendered page by hand.
+
+### Generated data files
+
+Several files in `crates/badness-parser/data/` are generated from pinned
+upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check` and
+`:sync` targets: `cwl_signatures.json`, the package and class name lists with
+`package_metadata.json`, and `bib_fields.json`. Re-sync them through their task
+rather than hand-editing the mechanical facts. `signatures.json`, `colors.json`,
+and `tikz_libraries.json` are curated by hand and may be edited directly.
+
+### Windows CI bites twice
+
+Line endings: the formatter emits LF and tests compare bytes against checked-in
+fixtures. When you add a fixture in a new extension under
+`crates/*/tests/fixtures/**` or `crates/badness-parser/tests/corpus/**`, add a
+matching `… eol=lf` line to `.gitattributes`. Never normalize line endings in
+code to pass a test; fix the attribute instead.
+
+URIs: decode LSP URIs to filesystem paths only through `uri_to_fs_path` and
+`path_to_uri` in `lsp.rs`. Tests and snapshots must not assume `/` versus `\`.
 
 ## Documentation
 
@@ -121,12 +175,17 @@ with `task docs`. The linter-rules reference and the benchmark page are
 generated; regenerate them with `task docs:rules` and `task bench` respectively
 rather than editing the rendered pages by hand.
 
-## A note on `AGENTS.md`
+## A note on `AGENTS.md` and `.claude/rules/`
 
-The repo also contains an `AGENTS.md` file. It is a detailed,
-decision-by-decision record of the architecture aimed at AI coding agents.
-Humans are welcome to read it for the deep rationale behind a design choice, but
-this file is the contributor guide you should start from.
+The repo also contains an `AGENTS.md` file and a `.claude/rules/` directory
+aimed at AI coding agents. `AGENTS.md` records the load-bearing decisions and
+invariants; `.claude/rules/` holds terse per-subsystem directives, path-scoped
+so each loads only when the agent touches that subsystem.
+
+Both are short on purpose and are worth skimming as a checklist of "things not
+to break." For the reasoning behind any of it, read the book's
+[Architecture](https://badness.dev/development/architecture.html) page, which is
+the narrative version and the source of truth for design detail.
 
 ## License
 

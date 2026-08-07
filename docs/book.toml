@@ -24,6 +24,11 @@ additional-css = ["theme/bench-charts.css", "theme/brand.css", "theme/playground
 [output.html.redirect]
 "/reference/wrap-modes.html" = "configuration.html#wrap"
 "/playground.html" = "playground/index.html"
+# The four per-subsystem development pages were merged into Architecture.
+"/development/parser.html" = "architecture.html#the-parser"
+"/development/formatter.html" = "architecture.html#the-formatter"
+"/development/linter.html" = "architecture.html#the-linter"
+"/development/lsp.html" = "architecture.html#the-language-server"
 
 [preprocessor]
 

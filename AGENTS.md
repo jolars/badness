@@ -4,19 +4,26 @@ Guidance for AI agents working with Badness, a formatter, linter, and language
 server for LaTeX.
 
 This file is the **rules** you work under: the tenets, the load-bearing
-architectural decisions, and the invariants and conventions to
-respect. The **why**—worked examples, issue provenance, and the full catalog of
-statically-recognized patterns—lives in the book's Development section, which is the
-source of truth for design detail:
+architectural decisions, and the invariants and conventions to respect.
 
-- Architecture (`docs/src/development/architecture.md`)
-- Parser & lexer modes (`docs/src/development/parser.md`)
-- Formatter (`docs/src/development/formatter.md`)
-- Linter (`docs/src/development/linter.md`)
-- LSP & environment awareness (`docs/src/development/lsp.md`)
+Two other places carry design guidance:
 
-When a decision below changes, update both this file (the rule) and the relevant
-Development page (the detail). Extended roadmap rationale is threaded through TODO.md.
+- **`.claude/rules/*.md`** — per-subsystem directives (parser, formatter,
+  linter, lsp), path-scoped in frontmatter so each loads only when you touch
+  that subsystem's files. Terse by design: a rule, the one clause that keeps it
+  from looking arbitrary, and a pointer. Keep each under 200 lines.
+- **`docs/src/development/architecture.md`** — the narrative tour of the whole
+  system, one section per subsystem. This is where a decision gets *explained*.
+
+When a decision below changes, update this file (the rule), the matching
+`.claude/rules/` file if it carries a directive, and the Architecture page if
+the change is visible at the level of the tour. Contributor-facing process lives
+in `CONTRIBUTING.md`. Extended roadmap rationale is threaded through TODO.md.
+
+Worked examples and issue archaeology deliberately do **not** live in any of
+these. They live in the issue tracker, in `git log`, and above all in named
+tests and fixtures — those are the artifacts that fail when a rule is violated,
+so that is where a regression case belongs.
 
 ## What this project is
 
@@ -88,7 +95,8 @@ tour.
 ## Core architectural decisions
 
 Load-bearing. If a change pushes against one, raise it explicitly. Each rule below
-links to the Development page carrying its full rationale, examples, and provenance.
+links to the `.claude/rules/` file carrying its full rationale, examples, and
+provenance.
 
 1. **The parser treats input as generic TeX surface syntax and always produces a
    lossless tree.** It never *requires* resolving macros or catcodes; we do **not**
@@ -99,8 +107,9 @@ links to the Development page carrying its full rationale, examples, and provena
    definition bodies, short verbs, macrocode chunks, `^^A` doc comments, expl3
    regions, char-constant isolation, signatures—as lexer modes or grammar routing, all
    reading static facts only (no macro meaning). The catalog, with examples and issue
-   references, is in `parser.md` (§ *Sanctioned lexer modes*). The related expl3 *code
-   formatting* is a formatter concern (`formatter.md`).
+   references, is in `docs/src/development/architecture.md`
+   (§ *Sanctioned lexer modes*). The related expl3 *code formatting* is a
+   formatter concern (§ *expl3 code formatting*).
 
    - **expl3 toggles: shared name set, formatter-only positional gate.** The lexer and
      the formatter read the *same* fixed toggle *name* set (`parser::lexer::expl_toggle`)
@@ -113,7 +122,8 @@ links to the Development page carrying its full rationale, examples, and provena
      the resulting damage. The lexer keeps the naive name-only model on purpose—mis-lexing
      a name in letter mode only splits CST tokens (lossless, cosmetic), whereas mis-owning
      layout rewrites real space tokens (meaning). So only the higher-stakes side gates.
-     Detail in `formatter.md` (§ *Positional gate on layout ownership*).
+     Detail in `docs/src/development/architecture.md`
+     (§ *expl3 code formatting*).
 
    - **Environment pairing is shape-gated on brace structure, not a command set.**
      An environment can never outlive the brace group its `\begin` opened in: braces
@@ -133,19 +143,19 @@ links to the Development page carrying its full rationale, examples, and provena
      made, so that closer is demoted in step rather than unwinding every enclosing
      environment on its way to the root (`amsldoc.tex`'s
      `\lowercase{…\begin{error}{…}}`); the mirror is scoped to demoted names, so a
-     genuine typo still reports. Detail in `parser.md` (§ *The environment
-     group-boundary gate*).
+     genuine typo still reports. Detail in
+     `docs/src/development/architecture.md` (§ *Sanctioned lexer modes*).
 
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
    a command means; the semantic layer is a signature database assigning arity,
    verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See
-   `architecture.md`.
+   `docs/src/development/architecture.md`.
 
    - **`ContentKind` is where a *whitespace-safety* claim lives**
      (`Opaque`/`Prose`/`TokenList`/`Keyval` on `ArgSpec`). `Keyval` is the
      strongest: it asserts a keyval-family processor strips spaces around entries,
      which is what lets the formatter break a `[…]` at a comma the author *glued*
-     (`formatter.md` § *Optional-argument layout*). Compiling both spellings shows
+     (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*). Compiling both spellings shows
      the claim is real for `\usepackage`/`\includegraphics`/tikz/`lstlisting` and
      false for every *textual* optional (`\item`, `\caption`, `\cite`, a
      `\newcommand` default), so a wrong flag changes typeset output — hold it to
@@ -156,23 +166,23 @@ links to the Development page carrying its full rationale, examples, and provena
 3. **Hand-written recursive descent is the spine; Pratt is local to math**
    (sub/superscript binding and `\left…\right` only). Math operator atoms and the
    `$`/`\[`/`\(` shape gates are bounded, sanctioned widenings of this rule, still
-   producing no expression tree. See `parser.md`.
+   producing no expression tree. See `docs/src/development/architecture.md`.
 
 4. **The parser emits an event stream, not a tree directly**
    (`Start`/`Tok(idx)`/`Finish`); diagnostics ride a byte-range side channel (no
    `Error` event), and a `SubTok` event attaches `WORD` sub-slices for the math split.
-   See `parser.md`.
+   See `docs/src/development/architecture.md`.
 
 5. **Errors travel alongside the tree, never abort it.** A single syntactic error
    never fails the whole parse. Recovery anchors: `\end{…}`, `\begin`, blank line,
-   `}`, `$`, `&`, `\\`. Always make progress; never infinite-loop. See `parser.md`.
+   `}`, `$`, `&`, `\\`. Always make progress; never infinite-loop. See `docs/src/development/architecture.md`.
 
 6. **Incrementality is salsa-first.** Cross-file/cross-query incrementality via salsa
-   is the v1 story; intra-file reparse is a later optimization. See `parser.md`.
+   is the v1 story; intra-file reparse is a later optimization. See `docs/src/development/architecture.md`.
 
 7. **Store green nodes in salsa, never red (`SyntaxNode`).** Red trees aren't
    `Send`/`Eq`/`salsa::Update`; the tree is a pure function of the text, materialized
-   to red cursors on demand. See `parser.md`.
+   to red cursors on demand. See `docs/src/development/architecture.md`.
 
 8. **Argument grouping is text-pure: greedy and generic by default, deviating only on
    static lexical facts.** Greedy attachment (texlab-style) is the only total strategy
@@ -188,21 +198,22 @@ links to the Development page carrying its full rationale, examples, and provena
    layer derives the arity (`semantic::expl3`) and the formatter consumes it, and
    promoting attachment into the grammar is a migration with recorded open questions
    (mixed-shape CST, false-positive blast radius, differential-oracle divergence),
-   not a patch. See `parser.md` (§ *Argument grouping and bracket policy*).
+   not a patch. See `docs/src/development/architecture.md`
+   (§ *Argument grouping and bracket policy*).
 
 9. **Trivia attachment follows the rust-analyzer rule:** comments bind *forward* (a
    run of own-line `%` before a `COMMAND`/`ENVIRONMENT` becomes a `DOC_COMMENT`),
-   whitespace floats, a blank line breaks the bind. See `parser.md`.
+   whitespace floats, a blank line breaks the bind. See `docs/src/development/architecture.md`.
 
 10. **Typed AST wrappers are a read-only view, never a re-model of the tree.** They
     expose structure, never meaning; accessors are positional and tolerate
     over-attachment. The formatter stays raw for structural work, adopting wrappers
-    only for field access. See `parser.md`.
+    only for field access. See `docs/src/development/architecture.md`.
 
 The **formatter engine** (Wadler-style `Doc` IR, `WrapMode`, `MathWrap`, table
-alignment, expl3 layout) is documented in `formatter.md`; the **linter** (Rule trait,
-autofix model, registration) in `linter.md`; the **LSP's** sanctioned environment
-awareness in `lsp.md`.
+alignment, expl3 layout), the **linter** (Rule trait, autofix model,
+registration), and the **LSP's** sanctioned environment awareness are all
+covered in `docs/src/development/architecture.md`.
 
 ## Invariants (test oracles—enforce them)
 
@@ -219,7 +230,7 @@ awareness in `lsp.md`.
   default, keeps whatever the source used). A protected body is emitted from source
   token text, so without the carve-out a CRLF document came out CRLF *inside* verbatim
   and LF everywhere else. Only the `\r\n`/`\n` pair converts; every other byte of the
-  region is still untouched. Detail in `formatter.md` (§ *Line endings*).
+  region is still untouched. Detail in `docs/src/development/architecture.md` (§ *Line endings*).
 - **Reflow safety is structural, never config-derived.** Every file kind defaults to
   `WrapMode::Reflow`; there is no per-extension default. Whether content may be
   relaid is decided by the content, in *every* wrap mode — the `contains_doc_margin`
@@ -231,7 +242,8 @@ awareness in `lsp.md`.
   doc-margined out-of-region expl3 runs alike — `dtx_run_reflows_safely`). So a
   user asking for `--wrap reflow` on a `.dtx` cannot corrupt it. Never re-introduce a
   file-kind wrap default to paper over a layout bug; fix the gate. Detail in
-  `formatter.md` (§ *Reflow is safe by construction, not by file kind*).
+  `docs/src/development/architecture.md`
+  (§ *Reflow is safe by construction*).
 - **Trivia-invariant layout** *(being rolled out—see TODO.md)*: layout is a function of
   non-trivia content, config, and only those trivia predicates the formatter itself
   *preserves*. A predicate `P` is preserved when `P(fmt(x)) == P(x)`. Blank-line
@@ -239,7 +251,8 @@ awareness in `lsp.md`.
   preserved, so layout may read them. **Whether a gap is a lone newline or a space is
   not** — the formatter converts freely in both directions (`alpha\nbeta` → `alpha beta`)
   — so layout must never key on it. Detail, the classification table, and the two-tier
-  escape hatch in `formatter.md` (§ *Trivia-invariant layout*).
+  escape hatch in `docs/src/development/architecture.md`
+  (§ *Trivia-invariant layout*).
 
   This subsumes idempotence: `fmt(x)` is by construction a trivia-perturbation of `x`
   (the whitespace-only invariant), so a layout invariant under trivia perturbation is
@@ -339,10 +352,11 @@ never match.
   line, so where it lands never depends on forced-ness — which is why no arm of
   the forced-break dispatch fires inside a fallback statement.
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
-  decision #1 without recording the decision here and on the relevant Development page.
+  decision #1 without recording the decision here and in the relevant
+  `.claude/rules/` file.
 - New salsa **inputs** carrying rarely-changing data (config, package/class metadata)
   must be constructed at `Durability::HIGH`/`MEDIUM`; per-file `text` stays `LOW`
   (salsa's default). Otherwise every keystroke's `LOW`-revision bump invalidates them.
-  Detail in `parser.md` (§ *Incrementality*).
+  Detail in `docs/src/development/architecture.md` (§ *Incrementality*).
 - Update TODO.md as phases progress; update this file when a decision changes, and keep
-  the matching Development page in sync.
+  the matching `.claude/rules/` file in sync.

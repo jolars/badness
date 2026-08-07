@@ -459,6 +459,24 @@ space tokens even though the byte-level oracles stay green. The lexer keeps the
 naive name-only model on purpose, because mis-lexing a name only splits CST
 tokens, which is lossless and cosmetic.
 
+Conditionals are the one construct with a layout of its own. The guide's worked
+example puts each `T`/`F` branch on its own line one indent step under the call,
+even though joining them would fit the line, so a conditional that starts a
+statement breaks that way regardless of width. Which is a decision about the
+*call*, not about the tree: greedy attachment hangs the branch groups off the
+head in `\tl_if_empty:nTF {#1} {T} {F}`, but a single-token slot breaks
+attachment and hands them to a sibling instead, and
+`\int_compare:nNnTF {a} = {1} {T} {F}` leaves them at the stream level once the
+relation intervenes. Keying on the head node's own children would format those
+differently for no reason an author could see, so the branches come from the
+resolved call unit — the same argspec scan that decides statement boundaries,
+which already had to find them.
+
+The rescan is confined to statement-leading position. Anywhere else the
+segmentation has already established that the conditional is an argument being
+passed as a token rather than a call, and resolving a unit headed there would
+claim the enclosing call's arguments as branches.
+
 ### Line endings
 
 The printer always builds output with `\n` and is the sole authority on where

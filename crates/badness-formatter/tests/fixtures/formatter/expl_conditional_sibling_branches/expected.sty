@@ -1,0 +1,19 @@
+\ExplSyntaxOn
+\cs_new_protected:Npn \mypkg_lookup:nn #1#2
+  {
+    \seq_if_in:NnTF \l_mypkg_seq {#1}
+      { \mypkg_hit:n {#1} }
+      { \mypkg_miss:n {#2} }
+    \prop_get:NnNTF \l_mypkg_prop {#1} \l_tmpa_tl
+      { \mypkg_use:V \l_tmpa_tl }
+      {}
+    \int_compare:nNnTF {#1} > { 1 }
+      { \mypkg_many: }
+      { \mypkg_one: }
+    \tl_if_empty:nTF {#2}
+      { \mypkg_blank: }
+      { \mypkg_full:n {#2} }
+    \cs_if_exist:NT \mypkg_hook:
+      { \mypkg_hook: }
+  }
+\ExplSyntaxOff

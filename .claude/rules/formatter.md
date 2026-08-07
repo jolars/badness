@@ -118,6 +118,16 @@ predicates the formatter *preserves*.
   same fill kind the line would have committed as.**
 - **Each brace argument breaks on its own body.** No sibling coupling — a
   sibling's forced break is none of its business (l3styleguide's own example).
+- **A conditional's branches are resolved from the call *unit*, not the head
+  node** (`semantic::expl3::expl3_unit` records each `T`/`F` slot's range). Where
+  greedy attachment put a branch group is an accident of the surrounding tokens
+  — an `N`/`V` slot hands it to a sibling — so it must never decide the layout.
+  A *statement-leading* conditional explodes on that, unconditionally.
+- **Only statement-leading position may use the unit rescan.** Mid-statement the
+  conditional is an argument being passed as a token, not a call
+  (`\@@_patch_check:NNnn \cs_if_exist:NTF #1 { undef }`); resolving a unit headed
+  there claims the *outer* call's arguments as branches. The trailing arm reads
+  the node's own attached children only.
 - Trailing comments ride their line zero-width and are **never relocated**;
   moving one rebinds it as the next statement's doc comment.
 - A group whose body carries a `DOC_MARGIN`/`GUARD` must take the broken form;

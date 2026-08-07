@@ -266,10 +266,39 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     which cannot exist (flush + reachable ⇒ attached). Detail in
     `.claude/rules/formatter.md` (§ *expl3*); pinned by
     the `expl_bracket_attachment` fixture and `bracket_attachment_stability`.
-  - [ ] *Sibling-attached branch explosion*: `\prop_get:NnNTF \p {k} \l {T}
-    {F}` forms one unit now, but the R4 explosion still fires only via
-    head-attached branches (`lower_expl_conditional` returns `None`); the
-    consumer's slot-to-sibling mapping could drive it.
+  - [x] ~~*Sibling-attached branch explosion*~~ **Done: the slot mapping now
+    escapes the scan.** `consume_unit` already resolved these branches (that is
+    why the call is one unit), it just discarded which slot took what —
+    `Group | Branch => take_group()`. It now records each `Branch`'s range in an
+    `Expl3Unit`, and `expl3_unit` exposes the scan for one head so the formatter
+    can ask without a `StatementMap` (the layout runs inside a command's attached
+    arguments too). `lower_expl_conditional_unit` splits the unit at the first
+    branch — the owning sibling's leading children finish the head line, the rest
+    are the branch list — and requires the tail's groups to be *exactly* the
+    recorded branches, which rejects both an over-attached trailing group and a
+    group that merely contains a branch deeper down. So all four shapes now
+    explode alike: branches on the head (`\tl_if_empty:nTF`), peeled off one
+    sibling (`\seq_if_in:NnTF \l_seq {item}`), split across two
+    (`\prop_get:NnNTF \p {k} \l`), and at the stream level once a `WORD` relation
+    breaks attachment (`\int_compare:nNnTF {a} = {1}`). Gate: all six
+    `gate-corpora` baselines byte-identical, and the corpus-wide two-pass
+    non-idempotent set is the same 16 files before and after. Production moved in
+    58 files / 300 hunks (latex3 25, latex2e 33, pgf 0), every one a branch list
+    moving to +2 — these calls were *collapsed onto one line* before, so the
+    formatter was undoing the house style on correctly authored code. Pinned by
+    `expl_conditional_sibling_branches` and the now-registered
+    `expl_relation_slot_statement` (committed in `4a3d92b`, in no fixture table
+    until now, so it had never run).
+
+    Two deliberate remainders. The **trailing (mid-line) arm** stays
+    head-attached-only: mid-statement the conditional is not the head of its own
+    unit, the segmentation already decided it is an argument being passed as a
+    token, and re-scanning it as a head claimed the *outer* call's arguments as
+    branches — a misread at all eight latex2e/latex3 sites it reached
+    (`\@@_patch_check:NNnn \cs_if_exist:NTF #1 { undef }`, `\exp_not:N \…:nTF`).
+    Pinned by `expl_conditional_sibling_trailing`. And `lower_node`'s node-keyed
+    all-or-nothing arm keeps needing head-attached branches by construction: it
+    has no sibling stream to resolve a unit from.
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->

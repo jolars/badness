@@ -1,0 +1,8 @@
+\ExplSyntaxOn
+\cs_new_protected:Npn \mypkg_patch:NNnn #1#2#3#4 { }
+\cs_new_protected:Npn \mypkg_probe:n #1
+  {
+    \mypkg_patch:NNnn \cs_if_exist:NTF #1 { undef } { \mypkg_known: }
+    \exp_args:NNn \tl_if_empty:nTF {#1} { \mypkg_blank: } { \mypkg_full: }
+  }
+\ExplSyntaxOff

@@ -789,6 +789,21 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // argument breaks on its own body — `{ > }` and `{ 1 }` stay inline rather than
     // detonating in sympathy with the sibling the comment forced open.
     ("expl_conditional_comment_siblings", "sty"),
+    // The explosion does not depend on where greedy attachment put the branches. A
+    // single-token (`N`/`V`) slot breaks attachment, so the branch groups end up on a
+    // later sibling — all three peeled off `\l_mypkg_seq`, two off `\l_tmpa_tl`, or at
+    // the stream level once a `WORD` relation intervenes — and every one of these fits
+    // 80 columns, so the width path would have collapsed it onto one line. Resolved
+    // from the call unit's `T`/`F` slots (`expl3_unit`), not from the head node's
+    // children, so all four shapes here lay out identically.
+    ("expl_conditional_sibling_branches", "sty"),
+    // The *mid-line* mirror, pinning that the unit rescan stays out of it. A
+    // conditional consumed as another call's `N` slot is a token being passed, not a
+    // call: `{ undef }` is `\mypkg_patch:NNnn`'s third argument, so resolving a unit
+    // headed at `\cs_if_exist:NTF` would claim it as a true branch and explode the
+    // outer call's arguments. Neither line may move — the trailing arm reads only the
+    // conditional node's own greedily attached children, which is empty here.
+    ("expl_conditional_sibling_trailing", "sty"),
     // A recognized conditional renders all-or-nothing even inside a *fallback*
     // statement, where both position-keyed paths are gated off: a fitting call stays
     // flat, an overflowing one explodes wholly rather than hanging only its last

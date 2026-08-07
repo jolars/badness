@@ -42,6 +42,8 @@
 
 use std::collections::VecDeque;
 
+use rowan::TextRange;
+
 use crate::ast::command_name;
 use crate::parser::lexer::expl_toggle;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, is_collapsible_trivia, is_param_digit};
@@ -351,17 +353,14 @@ pub fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMap {
                 // A region toggle (`\ExplSyntaxOn`, `\ProvidesExplPackage`, …)
                 // is colonless but in the shared toggle name set and takes no
                 // trailing call-site material beyond its greedily-attached
-                // groups: a recognized zero-arity unit. Without this, every
-                // region's opening line would stay a newline-keyed fallback
-                // statement and strict trivia-invariance could never hold for
-                // any expl3 stream.
-                let slots = if node_is_expl_toggle(n) {
-                    Some(Vec::new())
-                } else {
-                    command_name(n).and_then(|name| expl3_slots(&name))
-                };
-                match slots.and_then(|slots| consume_unit(elements, i, &slots)) {
-                    Some(end) => {
+                // groups: a recognized zero-arity unit — handled inside
+                // [`expl3_unit`], which resolves the whole shape. Without it,
+                // every region's opening line would stay a newline-keyed
+                // fallback statement and strict trivia-invariance could never
+                // hold for any expl3 stream.
+                match expl3_unit(elements, i) {
+                    Some(unit) => {
+                        let end = unit.last;
                         let full = absorb_trailing_junk(elements, end);
                         if full > end {
                             glued[i..=full].fill(true);
@@ -522,25 +521,88 @@ enum Stop {
     Abort,
 }
 
-/// Consume `slots` for the head at `head_idx`, returning the index of the last
-/// sibling element the unit spans (the head itself for a zero-arity or
-/// entirely head-internal unit), or `None` to degrade to the fallback.
-fn consume_unit(elements: &[SyntaxElement], head_idx: usize, slots: &[Expl3Slot]) -> Option<usize> {
+/// Consume `slots` for the head at `head_idx`, returning the resolved unit, or
+/// `None` to degrade to the fallback.
+fn consume_unit(
+    elements: &[SyntaxElement],
+    head_idx: usize,
+    slots: &[Expl3Slot],
+) -> Option<Expl3Unit> {
     let head = elements[head_idx].as_node()?;
     let mut cur = UnitCursor::new(elements, head_idx, head);
+    let mut branches = Vec::new();
+    let mut complete = true;
     for slot in slots {
         let took = match slot {
             Expl3Slot::SingleToken => cur.take_single_token(),
-            Expl3Slot::Group | Expl3Slot::Branch => cur.take_group(),
+            Expl3Slot::Group => cur.take_group().map(|_| ()),
+            // The one slot whose *identity* escapes the scan: a branch may live
+            // inside a peeled sibling, so its range is the only handle a consumer
+            // can use to find it again (see [`Expl3Unit::branches`]).
+            Expl3Slot::Branch => cur.take_group().map(|el| branches.push(el.text_range())),
             Expl3Slot::ParameterText => cur.take_parameter_text(),
         };
         match took {
             Ok(()) => {}
-            Err(Stop::End) => break,
+            Err(Stop::End) => {
+                complete = false;
+                break;
+            }
             Err(Stop::Abort) => return None,
         }
     }
-    Some(cur.last_sib)
+    Some(Expl3Unit {
+        last: cur.last_sib,
+        // A blank line cut the unit short, so the branch list is partial. Report
+        // none rather than a prefix: a layout keyed on "the branches" must never
+        // see two of a `TF` call's three.
+        branches: if complete { branches } else { Vec::new() },
+    })
+}
+
+/// The resolved shape of one expl3 call unit — what [`consume_unit`]'s slot scan
+/// learns, kept rather than discarded.
+///
+/// [`segment_expl_statements`] needs only `last`; the formatter's conditional
+/// layout needs `branches`, because *where* greedy attachment put a branch group
+/// is an accident of the surrounding tokens and must not be a layout input. In
+/// `\tl_if_empty:nTF {#1} {T} {F}` the branches hang off the head command, but a
+/// single-token slot breaks attachment and hands them to a sibling
+/// (`\seq_if_in:NnTF \l_seq {item} {T} {F}` peels all three off `\l_seq`) or to
+/// the stream itself (`\int_compare:nNnTF {a} = {1} {T} {F}`, where the relation
+/// is a `WORD`). The scan resolves all three the same way, so the branch ranges
+/// are the one handle that works for every shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expl3Unit {
+    /// Last sibling index the unit spans (the head itself for a zero-arity or
+    /// entirely head-internal unit).
+    pub last: usize,
+    /// The `T`/`F` branch groups, in argspec order. Empty for a non-conditional
+    /// head, and also for a unit a blank line cut short before every branch slot
+    /// was filled.
+    pub branches: Vec<TextRange>,
+}
+
+/// Resolve the expl3 call unit headed by `elements[head_idx]`, or `None` when the
+/// shape scan cannot (an unrecognized head, a slot facing the wrong shape, a
+/// docstrip guard mid-unit, or the stream ending mid-unit) — exactly the
+/// conditions under which [`segment_expl_statements`] degrades that statement to
+/// the fallback.
+///
+/// Public so the formatter can ask about one head directly, without a
+/// [`StatementMap`]: the conditional layout runs inside a command's attached
+/// arguments too, where there are no statements to segment.
+pub fn expl3_unit(elements: &[SyntaxElement], head_idx: usize) -> Option<Expl3Unit> {
+    let node = elements.get(head_idx)?.as_node()?;
+    if node.kind() != SyntaxKind::COMMAND {
+        return None;
+    }
+    let slots = if node_is_expl_toggle(node) {
+        Vec::new()
+    } else {
+        expl3_slots(&command_name(node)?)?
+    };
+    consume_unit(elements, head_idx, &slots)
 }
 
 /// The consumption cursor: candidates come from the peel **queue** first (an
@@ -716,14 +778,15 @@ impl<'a> UnitCursor<'a> {
         }
     }
 
-    /// An `n`-family or `T`/`F` slot: exactly a braced group. A bare token is
-    /// legal TeX for an undelimited argument, but accepting it would let
-    /// sloppy shapes (and the `\::n` expansion-driver protocol) swallow the
-    /// next statement's head — those stay on the fallback path instead.
-    fn take_group(&mut self) -> Result<(), Stop> {
+    /// An `n`-family or `T`/`F` slot: exactly a braced group, returned so a
+    /// `T`/`F` slot can record which one it took. A bare token is legal TeX for
+    /// an undelimited argument, but accepting it would let sloppy shapes (and
+    /// the `\::n` expansion-driver protocol) swallow the next statement's head —
+    /// those stay on the fallback path instead.
+    fn take_group(&mut self) -> Result<SyntaxElement, Stop> {
         let el = self.bump()?;
         match &el {
-            SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP => Ok(()),
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP => Ok(el),
             _ => Err(Stop::Abort),
         }
     }
@@ -1023,6 +1086,124 @@ mod segmentation_tests {
                 "\\ExplSyntaxOff",
             ]
         );
+    }
+
+    /// The source text of each `T`/`F` branch [`expl3_unit`] resolved for the
+    /// head at index `head`, whitespace-collapsed for stable assertions.
+    fn branch_texts(src: &str, head: usize) -> Option<Vec<String>> {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "test source should parse cleanly");
+        let root = SyntaxNode::new_root(parsed.green);
+        let para = root
+            .children()
+            .find(|n| n.kind() == SyntaxKind::PARAGRAPH)
+            .expect("a paragraph");
+        let elements: Vec<SyntaxElement> = para.children_with_tokens().collect();
+        let unit = expl3_unit(&elements, head)?;
+        Some(
+            unit.branches
+                .iter()
+                .map(|range| normalize(&root.text().slice(*range).to_string()))
+                .collect(),
+        )
+    }
+
+    /// The sibling index of the `COMMAND` named `name` in the first paragraph.
+    /// Keyed on the name rather than on position because the leading
+    /// `\ExplSyntaxOn` is itself a `COMMAND` — and a recognized zero-arity unit.
+    fn head_of(src: &str, name: &str) -> usize {
+        let parsed = parse(src);
+        let root = SyntaxNode::new_root(parsed.green);
+        let para = root
+            .children()
+            .find(|n| n.kind() == SyntaxKind::PARAGRAPH)
+            .expect("a paragraph");
+        para.children_with_tokens()
+            .position(|el| {
+                el.as_node().is_some_and(|n| {
+                    n.kind() == SyntaxKind::COMMAND
+                        && command_name(n).is_some_and(|got| got == name)
+                })
+            })
+            .unwrap_or_else(|| panic!("no command named {name}"))
+    }
+
+    #[test]
+    fn branches_are_resolved_wherever_attachment_put_them() {
+        // The point of [`Expl3Unit::branches`]: the same call shape, with the
+        // branch groups on the head, peeled off one sibling, split across two,
+        // and at the stream level — all four resolve to the same two branches.
+        let head_attached = "\\ExplSyntaxOn\n\\tl_if_empty:nTF {#1} { T } { F }\n";
+        assert_eq!(
+            branch_texts(head_attached, head_of(head_attached, "tl_if_empty:nTF")),
+            Some(vec!["{ T }".to_string(), "{ F }".to_string()])
+        );
+
+        // `\l_seq` swallowed all three trailing groups; the `n` slot takes the
+        // first back off the peel queue and the branches are the other two.
+        let one_sibling = "\\ExplSyntaxOn\n\\seq_if_in:NnTF \\l_seq {item} { T } { F }\n";
+        assert_eq!(
+            branch_texts(one_sibling, head_of(one_sibling, "seq_if_in:NnTF")),
+            Some(vec!["{ T }".to_string(), "{ F }".to_string()])
+        );
+
+        // The TODO's own example: `{k}` on `\p`, both branches on `\l`.
+        let two_siblings = "\\ExplSyntaxOn\n\\prop_get:NnNTF \\p {k} \\l { T } { F }\n";
+        assert_eq!(
+            branch_texts(two_siblings, head_of(two_siblings, "prop_get:NnNTF")),
+            Some(vec!["{ T }".to_string(), "{ F }".to_string()])
+        );
+
+        // A `WORD` relation breaks attachment outright, so every group after it
+        // is a top-level sibling (issue #106).
+        let stream_level = "\\ExplSyntaxOn\n\\int_compare:nNnTF {a} = { 1 } { T } { F }\n";
+        assert_eq!(
+            branch_texts(stream_level, head_of(stream_level, "int_compare:nNnTF")),
+            Some(vec!["{ T }".to_string(), "{ F }".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_non_conditional_unit_has_no_branches() {
+        let src = "\\ExplSyntaxOn\n\\tl_set:Nn \\l_a { x }\n";
+        assert_eq!(branch_texts(src, head_of(src, "tl_set:Nn")), Some(vec![]));
+    }
+
+    #[test]
+    fn an_underivable_head_resolves_no_unit() {
+        // `conditional_branches` still reports 2 for `:wTF`
+        // ([`branches_survive_underivable_arity`]), but the arity model bows out,
+        // so there is no unit and no branch list — the consumer must not be handed
+        // a guess.
+        let src = "\\ExplSyntaxOn\n\\odd_if:wTF \\a \\b { T } { F }\n";
+        assert_eq!(branch_texts(src, head_of(src, "odd_if:wTF")), None);
+    }
+
+    #[test]
+    fn a_blank_line_cut_unit_reports_no_branches() {
+        // The unit still commits as far as it got (`last` is real), but a partial
+        // branch list must never drive a layout keyed on "the branches" — a `TF`
+        // call would otherwise explode with one of its two. Inside a group body,
+        // because at the *stream* level a blank line ends the paragraph and the
+        // unit aborts on the stream end instead ([`Stop::Abort`], no unit at all).
+        let src = "\\ExplSyntaxOn\n\\use:n { \\prop_get:NnNTF \\p {k} \\l { T }\n\n{ F } }\n";
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty());
+        let root = SyntaxNode::new_root(parsed.green);
+        let group = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::GROUP)
+            .expect("a group");
+        let body: Vec<SyntaxElement> = group
+            .children_with_tokens()
+            .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
+            .collect();
+        let head = body
+            .iter()
+            .position(|el| el.as_node().is_some())
+            .expect("the head command");
+        let unit = expl3_unit(&body, head).expect("the partial unit still resolves");
+        assert_eq!(unit.branches, vec![]);
     }
 
     #[test]

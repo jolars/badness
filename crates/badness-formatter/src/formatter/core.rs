@@ -57,7 +57,7 @@ use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
 use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
-use crate::semantic::expl3::{StatementMap, segment_expl_statements};
+use crate::semantic::expl3::{Expl3Unit, StatementMap, expl3_unit, segment_expl_statements};
 use crate::semantic::{
     ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
 };
@@ -2543,21 +2543,23 @@ fn lower_expl_code(
                 // command name's argspec suffix ([`expl3::conditional_branches`]); a
                 // conditional used mid-line as a value (`,key = \…:nTF …`, atom or
                 // parts non-empty) is not statement-leading and stays on the
-                // width-driven head-hug path (issue #71). `lower_expl_conditional`
-                // returns `None` for shapes whose branches do not attach to the
-                // command (`:NTF`), leaving those on the width path too.
+                // width-driven head-hug path (issue #71).
+                //
+                // [`expl_conditional_at`] covers the branches wherever greedy
+                // attachment put them — on the head, or on a sibling an `N`/`V` slot
+                // handed them to — so the explosion does not depend on an accident of
+                // the surrounding tokens, and the unit may span several siblings
+                // (hence the `last`-driven resume rather than `idx += 1`).
                 if !in_glued
                     && parts.is_empty()
                     && atom.is_empty()
                     && child.kind() == SyntaxKind::COMMAND
-                    && let Some(cond_ir) = command_name(child)
-                        .and_then(|name| expl3::conditional_branches(&name))
-                        .and_then(|n| lower_expl_conditional(child, cx, n))
+                    && let Some((cond_ir, last)) = expl_conditional_at(&elements, idx, cx)
                 {
                     seps.push(std::mem::replace(&mut pending_sep, Ir::hard_line()));
                     lines.push(cond_ir);
                     after_block = true;
-                    idx += 1;
+                    idx = last + 1;
                     continue;
                 }
                 // A *trailing* expl3 conditional — one used mid-line as a value, with
@@ -2581,6 +2583,18 @@ fn lower_expl_code(
                 // set:Npn` name assembly), not a call — and whether it sits
                 // trailing depends on where the line's junk ends, which is not
                 // pass-invariant.
+                //
+                // **Head-attached branches only** — deliberately, unlike the
+                // statement-leading arm above. Mid-statement the conditional is not
+                // the head of its own unit; the enclosing segmentation already
+                // decided it is an *argument* being passed as a token
+                // (`\@@_patch_check:NNnn \cs_if_exist:NTF #1 { undef } {…}`, where
+                // `{ undef }` is `\@@_patch_check:NNnn`'s third argument, and
+                // `\exp_not:N \…:nTF`). Re-scanning it as a head would resolve
+                // "branches" belonging to the outer call and explode them — a misread
+                // in every one of the eight latex2e/latex3 sites it reached.
+                // [`lower_expl_conditional`] reads only the node's own greedily
+                // attached children, so it cannot make that mistake.
                 let in_fallback = map.as_ref().is_some_and(|m| m.is_fallback(idx));
                 let statement_leading = parts.is_empty() && atom.is_empty();
                 if !in_glued
@@ -3504,13 +3518,13 @@ fn expl_group_pieces(
 /// An annotated branch keeps its comment: a trailing `%` rides the branch's own
 /// line, an own-line one stays on its own line between branches.
 ///
-/// Returns `None` (leaving the shape on the width-driven head-hug path) unless the
-/// command's own last `n` argument children are `GROUP`s with only trivia and
-/// comments beyond them — i.e. the branches actually attach to the conditional. An
-/// `:NTF`/`:nNnTF`
-/// whose single-token (`N`/`V`/operator) argument breaks greedy attachment leaves
-/// the branch groups on a following sibling, not the conditional, so it falls back
-/// rather than mis-lower a partial shape.
+/// Returns `None` unless the command's own last `n` argument children are `GROUP`s
+/// with only trivia and comments beyond them — i.e. the branches actually attach to
+/// the conditional. An `:NTF`/`:nNnTF` whose single-token (`N`/`V`/operator)
+/// argument breaks greedy attachment leaves the branch groups on a following
+/// sibling, which this node-local scan cannot see;
+/// [`lower_expl_conditional_unit`] picks those up from the resolved call unit, and
+/// [`expl_conditional_at`] tries the two in order.
 fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Option<Ir> {
     let children: Vec<SyntaxElement> = cmd.children_with_tokens().collect();
     let group_positions: Vec<usize> = children
@@ -3539,12 +3553,38 @@ fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Optio
             _ => return None,
         }
     }
+    let branch_lines = expl_branch_lines(&children[first_branch..], cx)?;
     let head = trim_trailing_break(lower_expl_code(
         children[..first_branch].iter().cloned(),
         cx,
         Statements::Ignore,
     ));
-    let mut parts = vec![head];
+    Some(Ir::concat(std::iter::once(head).chain(branch_lines)))
+}
+
+/// The exploded branch lines of a conditional: each `GROUP` in `tail` on its own
+/// line hung one indent step, as a *soft* [`lower_expl_group`] so a short branch
+/// stays `{ … }` inline on its line and a long one breaks internally.
+///
+/// `None` when `tail` holds anything but groups, collapsible trivia, and comments
+/// — the branch list is then not clean and the width-driven path is safer. Shared
+/// by [`lower_expl_conditional`] (branches attached to the head node) and
+/// [`lower_expl_conditional_unit`] (branches greedy attachment gave to a sibling),
+/// so the two spellings of the same layout cannot drift.
+fn expl_branch_lines(tail: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<Ir>> {
+    // Comments are admitted (rather than bailing to the width path) because
+    // annotated branches are ordinary l3 style — `{ \exp_not:n { equations~ } } %
+    // You might prefer \nobreakspace to ~` — and the bail cost the whole exploded
+    // shape for one `%` (issue #101).
+    for element in tail {
+        match element {
+            SyntaxElement::Node(nd) if nd.kind() == SyntaxKind::GROUP => {}
+            SyntaxElement::Token(t)
+                if is_collapsible_trivia(t.kind()) || t.kind() == SyntaxKind::COMMENT => {}
+            _ => return None,
+        }
+    }
+    let mut parts = Vec::new();
     // Trivia seen since the last emitted branch or comment: `gap` renders as the one
     // space before a trailing comment, `own_line` (a newline in that run) keeps an
     // own-line comment on its own line. Own-line-ness is a *preserved* predicate, so
@@ -3553,9 +3593,9 @@ fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Optio
     // either way would rebind it under decision #9.
     let mut gap = false;
     let mut own_line = false;
-    for element in &children[first_branch..] {
+    for element in tail {
         match element {
-            SyntaxElement::Node(nd) if nd.kind() == SyntaxKind::GROUP => {
+            SyntaxElement::Node(nd) => {
                 let group = lower_expl_group(nd, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
                 parts.push(Ir::indent(Ir::concat([Ir::hard_line(), group])));
                 (gap, own_line) = (false, false);
@@ -3575,10 +3615,103 @@ fn lower_expl_conditional(cmd: &SyntaxNode, cx: LowerCtx<'_>, n: usize) -> Optio
                 gap = true;
                 own_line |= t.kind() == SyntaxKind::NEWLINE;
             }
-            SyntaxElement::Node(_) => unreachable!("scan above admits only GROUP nodes"),
         }
     }
-    Some(Ir::concat(parts))
+    Some(parts)
+}
+
+/// The same explosion as [`lower_expl_conditional`], for a call whose branches
+/// greedy attachment did **not** give to the head command.
+///
+/// A single-token (`N`/`V`) slot breaks attachment, so the branch groups land on a
+/// later sibling (`\seq_if_in:NnTF \l_seq {item} {T} {F}` hangs all three off
+/// `\l_seq`; `\prop_get:NnNTF \p {k} \l {T} {F}` hangs two off `\l`) or on the
+/// stream itself when a `WORD` intervenes (`\int_compare:nNnTF {a} = {1} {T} {F}`).
+/// Where a branch ended up is an accident of the surrounding tokens, so it must not
+/// decide the layout — [`Expl3Unit::branches`] resolves all three shapes alike.
+///
+/// The head is assembled as a plain element vector mixing the unit's top-level
+/// siblings with a *prefix* of the owning node's children; nothing in the tree is
+/// moved, and lowering that prefix through [`lower_expl_code`] under
+/// [`Statements::Ignore`] is byte-for-byte what [`lower_node`]'s `COMMAND` arm
+/// would have done with the whole node.
+///
+/// Pass-stable for the same reason the head-attached explosion is: brace arguments
+/// attach across the inserted newlines, so the exploded output re-parses to the
+/// same unit with the same branches and re-explodes identically.
+///
+/// `None` unless the tail is a clean branch list — the `GROUP`s after the split
+/// must be *exactly* `unit.branches`, which rejects both an over-attached trailing
+/// group and a group that merely *contains* a branch deeper down.
+fn lower_expl_conditional_unit(
+    elements: &[SyntaxElement],
+    head_idx: usize,
+    unit: &Expl3Unit,
+    cx: LowerCtx<'_>,
+) -> Option<Ir> {
+    let first = unit.branches.first()?.start();
+    let mut head: Vec<SyntaxElement> = Vec::new();
+    let mut tail: Vec<SyntaxElement> = Vec::new();
+    for element in &elements[head_idx..=unit.last] {
+        let range = element.text_range();
+        if range.end() <= first {
+            head.push(element.clone());
+        } else if range.start() >= first {
+            tail.push(element.clone());
+        } else {
+            // The *owner*: the sibling greedy attachment gave the branches to. Its
+            // children split at the first branch — the leading ones (its own name
+            // token, and any argument satisfying an earlier slot) finish the head
+            // line, the rest start the branch list.
+            let owner = element.as_node()?;
+            for child in owner.children_with_tokens() {
+                if child.text_range().end() <= first {
+                    head.push(child);
+                } else {
+                    tail.push(child);
+                }
+            }
+        }
+    }
+    let found: Vec<TextRange> = tail
+        .iter()
+        .filter(|el| el.kind() == SyntaxKind::GROUP)
+        .map(|el| el.text_range())
+        .collect();
+    if found != unit.branches {
+        return None;
+    }
+    let branch_lines = expl_branch_lines(&tail, cx)?;
+    let head = trim_trailing_break(lower_expl_code(head.into_iter(), cx, Statements::Ignore));
+    Some(Ir::concat(std::iter::once(head).chain(branch_lines)))
+}
+
+/// The exploded form of the expl3 conditional headed by `elements[idx]`, plus the
+/// index of the unit's last element (the caller resumes at `last + 1`).
+///
+/// Tries the head-attached shape first ([`lower_expl_conditional`], which needs
+/// only the node and so also covers a head whose *arity* is underivable while its
+/// branch count is not — `:wTF`), then the unit-scoped one. Returns `None` when
+/// neither resolves, leaving the call on the width-driven path.
+fn expl_conditional_at(
+    elements: &[SyntaxElement],
+    idx: usize,
+    cx: LowerCtx<'_>,
+) -> Option<(Ir, usize)> {
+    let node = elements.get(idx)?.as_node()?;
+    if node.kind() != SyntaxKind::COMMAND {
+        return None;
+    }
+    let n = expl3::conditional_branches(&command_name(node)?)?;
+    if let Some(ir) = lower_expl_conditional(node, cx, n) {
+        return Some((ir, idx));
+    }
+    let unit = expl3_unit(elements, idx)?;
+    if unit.branches.len() != n {
+        return None;
+    }
+    let ir = lower_expl_conditional_unit(elements, idx, &unit, cx)?;
+    Some((ir, unit.last))
 }
 
 /// Lower a single loose token (one not collapsed into a trivia run) to inline IR.

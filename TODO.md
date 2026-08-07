@@ -290,16 +290,29 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   Backstop for anything not enumerated above: `LineBuilder::margin_escaped`
   records a `DtxProse` reflow that committed content outside the `% ` margin, and
   `lower_dtx_doc_paragraph` re-lowers on the preserve path when it fires.
-- [ ] **Propagate the `.dtx` `% ` margin through `push_segment`** so the
+- [x] **Propagate the `.dtx` `% ` margin through `push_segment`** so the
   paragraphs the escape detector above sends to the preserve path can reflow
-  again. Today `Ir::margin_prefix` is applied only in `LineBuilder::end_line`, so
-  a forced-break block placed by `push_segment` lands unmargined; moving the wrap
-  into `push_segment` (and not injecting a margin after a `GUARD`) is the
-  positive fix the conservative gate stands in for. Same for the
-  `run_carries_doc_margin` bail: a doc-margined out-of-region expl3 run could
-  reflow under `ReflowKind::DtxProse` with the escape fallback, rather than not
-  at all — but only once the run's *first* line is known to be margined, or the
-  reflow would prepend a `%` to unmargined content (a content change).
+  again. Landed as three positive paths, all probe-gated so the escape stays the
+  residual backstop (no printer change — a block's interior is byte-faithful by
+  the relayout gates, so wrapping it in `Ir::margin_prefix` is never both safe
+  and needed):
+  1. A forced-break block whose interior lines all ride their own column-0
+     margins (`block_rides_own_margins`) commits raw with a canonical `% `
+     re-attached for its first line (`LineBuilder::push_margined_block`).
+  2. A `GUARD` whose physical line can be isolated (`collect_guard_line`)
+     becomes its own unmargined column-0 segment; the margin resumes after.
+  3. The `run_carries_doc_margin` bail narrowed: a doc-margined out-of-region
+     expl3 run reflows under `ReflowKind::DtxProse` when it starts margined,
+     sits under no environment, and contains at most margin-framed `macrocode`
+     chunks (`dtx_run_reflows_safely`) — each chunk commits raw behind its
+     byte-exact source frame lead (`dtx_env_line_lead`), never the canonical
+     `% `, since docstrip matches `%    \begin{macrocode}` literally. The
+     prose-only run the original entry imagined turned out not to exist:
+     region clipping puts every margined run either whole-paragraph (with its
+     chunks) or guard-led, so the chunk-admitting gate *is* the positive fix.
+  Pinned by `dtx_reflow_block_amid_prose`, `dtx_reflow_guard_mid_paragraph`,
+  `dtx_reflow_block_escape_residual` (the surviving fallback), and
+  `dtx_reflow_expl3_doc_run`.
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->

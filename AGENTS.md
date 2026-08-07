@@ -205,9 +205,12 @@ awareness in `lsp.md`.
 - **Reflow safety is structural, never config-derived.** Every file kind defaults to
   `WrapMode::Reflow`; there is no per-extension default. Whether content may be
   relaid is decided by the content, in *every* wrap mode — the `contains_doc_margin`
-  gates on the relayout arms, the `.dtx` margin-escape detector
-  (`LineBuilder::margin_escaped` → `lower_dtx_doc_paragraph` falls back to the
-  preserve path), and `run_carries_doc_margin` for out-of-region expl3 runs. So a
+  gates on the relayout arms, and the `.dtx` margin-escape detector as the residual
+  backstop (`LineBuilder::margin_escaped` → `lower_dtx_doc_paragraph` falls back to
+  the preserve path when a probe-gated reflow would commit content outside the `% `
+  margin; margin-riding blocks, isolable guard lines, and macrocode chunks behind
+  their byte-exact frame leads stay *inside* the reflow, for paragraphs and
+  doc-margined out-of-region expl3 runs alike — `dtx_run_reflows_safely`). So a
   user asking for `--wrap reflow` on a `.dtx` cannot corrupt it. Never re-introduce a
   file-kind wrap default to paper over a layout bug; fix the gate. Detail in
   `formatter.md` (§ *Reflow is safe by construction, not by file kind*).

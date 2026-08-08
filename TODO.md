@@ -30,28 +30,33 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [ ] **`]` is deleted inside prose-reflowable command arguments
-  (whitespace-only invariant violated in production).** `\emph{a [b] c}` formats
-  to `\emph{a [b c}` at default settings — no width pressure, no perturbation.
-  Scoped to signature-known prose arguments (`\emph`, `\textbf`, `\footnote`
-  corrupt; `\caption`, `\section`, unknown commands and bare groups are all
-  fine), and it nests (`\emph{a \emph{[b]} c}` -> `\emph{a \emph{[b} c}`). This
-  is the whitespace-only invariant — tenet 1's "layout never rewrites a
-  non-trivia token" — broken outright, so it outranks every layout entry below.
-  Surfaced by the `latexindent` gate corpus
-  (`oneSentencePerLine/pcc-program-review3*`, 3 of the 15 `content-change`
-  entries); the other 12 are the `figureValign` family below. Land the fix with
-  a fixture pinning the bracket *inside* a reflowed prose argument, and re-record
-  `tests/gate_baselines/latexindent.trivia.txt`.
-- [ ] **`--checks all` does not run the non-trivia-content oracle.** The check
-  that would have caught the entry above lives in the trivia path
-  (`perturb::check_trivia_convergence`) and in `assert_format_invariants`, not in
-  `debug format --checks all` — which reports `\emph{a [b] c}` clean. So the
-  primary gate, the smoke-test workflow, and the `*.all.txt` baselines are all
-  blind to content corruption that needs no perturbation to reproduce. Add the
-  `nontrivia_content(fmt(x)) == nontrivia_content(x)` comparison to the `all`
-  gate and re-record every `*.all.txt`. Worth doing independently of the bug:
-  this is a hole in the oracle, not one bad layout decision.
+- [x] ~~**`]` is deleted inside prose-reflowable command arguments.**~~ **Fixed.**
+  `\emph{a [b] c}` formatted to `\emph{a [b c}` at default settings — the
+  whitespace-only invariant (tenet 1) broken outright, with no width pressure and
+  no perturbation needed. Cause: `splice_prose_group` matched *any* closer
+  (`R_BRACE | R_BRACKET`) as the prose group's delimiter, so a `]` inside a brace
+  argument was pulled out of the body and then silently overwritten by the
+  group's real `}`. The `open` arm had always been guarded by `open.is_none()`;
+  the asymmetry was the whole bug. The close arm now takes the node's *own*
+  matching kind, passed in like [`lower_prose_group`] already did. Kind-matching
+  alone suffices — the formatter runs only on clean parses, where a `GROUP` holds
+  exactly one `R_BRACE` and the parser ends an `OPTIONAL` at its first `]`.
+  Surfaced by the `latexindent` corpus (`oneSentencePerLine/pcc-program-review3*`);
+  pinned by `reflow_bracket_in_prose_argument`; 3 `content-change` entries
+  resolved, no additions.
+- [x] ~~**`--checks all` does not run the non-trivia-content oracle.**~~ **Fixed:
+  `CheckKind::ContentChange`.** The comparison lived only in the trivia path and
+  in `assert_format_invariants`, so the primary gate, the smoke-test workflow and
+  every `*.all.txt` baseline were blind to content corruption that needs no
+  perturbation — `--checks all` called `\emph{a [b] c}` clean. `all` now compares
+  `nontrivia_content` across the first format pass (`.bib` skipped; the
+  comparison is LaTeX-CST-based). Landed *before* the fix above so the bug failed
+  a gate first. Re-record surfaced **92 pre-existing** `content-change` entries
+  (latex2e 69, latex3 11, latexindent 12) and **no new bugs**: the counts land
+  exactly on what the trivia sets already recorded, i.e. the `.dtx` doc-layer
+  family below, which the baseline README had already predicted was reachable
+  without perturbation. It also falsifies that README's "production formatting
+  corrupts nothing" — that held only because the gate could not look.
 - [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
   (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
   `docs/src/development/architecture.md` (§ *Trivia-invariant layout*). Layout may read only trivia

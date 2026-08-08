@@ -62,7 +62,11 @@ inventory has seen:
   reachable at the default; the fix is the S-series work, not a wrap default.
 - **No file that previously passed now fails**, in either gate, and the `all`
   sets contain **no** `content-change` entry — production formatting corrupts
-  nothing. pgf is byte-identical in both gates.
+  nothing. pgf is byte-identical in both gates. *(Corrected later: the `all`
+  gate did not yet run the non-trivia-content comparison, so it could not have
+  recorded a `content-change` entry whatever the formatter did. See the
+  content-change note below — production formatting did corrupt 80 of these
+  files.)*
 
 Re-recorded once more after **a relation became an acceptable expl3 `N` slot**
 (`\int_compare:nNnTF {…} = {1}` no longer degrades to a fallback statement): one
@@ -84,6 +88,31 @@ every hunk is a *join* (no hunk emits more lines than it replaced): head↔block
 pairs stay on one line (`\vbox to \Gin@req@height{%`,
 `\hbox_set_to_wd:Nnn \l_shipout_box \l_shipout_box_wd_dim`) and authored
 abutments onto a block's closing brace (`}\@ehc`, `}.`, `}{`) re-glue.
+
+Re-recorded once more after **`--checks all` gained the non-trivia-content
+comparison** and the **`]`-deletion fix** it exposed. Two independent movements:
+
+- **3 `content-change` entries resolved** (latexindent's
+  `oneSentencePerLine/pcc-program-review3*`), by fixing `splice_prose_group`: it
+  matched *any* closer as a prose group's delimiter, so a `]` inside a brace
+  argument (`\emph{a [b] c}`) was pulled out of the body and then overwritten by
+  the group's real `}` — deleted outright, at default settings, no perturbation
+  needed. The `open` arm had always been guarded (`open.is_none()`); the `close`
+  arm now takes the node's own matching kind. Pinned by
+  `reflow_bracket_in_prose_argument`.
+- **92 `content-change` additions to the `all` sets** (latex2e 69, latex3 11,
+  latexindent 12) — **no new bugs**. The `all` gate never ran the
+  whitespace-only comparison, so this class was invisible to it; the counts land
+  exactly on the `content-change` totals the *trivia* sets already recorded
+  (latex2e 69, latex3
+  11) plus latexindent's `figureValign` family (12), which is what the
+      classification note below predicted when it said these reproduce "without
+      any perturbation via `badness format --wrap reflow`". The gate now says
+      so.
+
+Net: `all` grew latex2e 28 → 97, latex3 16 → 27, latexindent 190 → 202, pgf
+unchanged; `trivia` shrank latexindent 161 → 158, the others unchanged. No file
+that previously passed either gate now fails.
 
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):
@@ -156,10 +185,11 @@ Variant:`reason (`.trivia.txt`) — the same distillation`check_gate_baselines.s
 ## The `latexindent` inventory at first record
 
 190 `all` (178 `format-error`, 12 `idempotency`) and 161 `trivia` (145
-`format-error`, 15 `content-change`, 1 `non-fixed-point`) over 5329 files. Both
-gates run in seconds — 1.4s and 16s — because the files are small. Triaged into
-families, most of the `format-error` bulk is the corpus being adversarial on
-purpose rather than a gap on our side:
+`format-error`, 15 `content-change`, 1 `non-fixed-point`) over 5329 files. (Now
+202 / 158 — see the re-record note above.) Both gates run in seconds — 1.4s and
+16s — because the files are small. Triaged into families, most of the
+`format-error` bulk is the corpus being adversarial on purpose rather than a gap
+on our side:
 
 - **`unmatched \]` — 102 files, almost all `test-cases/specials`.** A blank line
   inside `\[…\]`, which is a genuine TeX error ("Missing $ inserted"), so the
@@ -180,17 +210,18 @@ purpose rather than a gap on our side:
 - **12 `idempotency`, all `commands/figureValign-mod*`** — one family, not
   twelve: `%`-terminated argument braces (`\includegraphics[…]%\n{%\n…%\n}`).
 
-The 15 `content-change` entries are the severe class and reduce to **two**
+The 15 `content-change` entries were the severe class and reduced to **two**
 causes: the 12 `figureValign` files above, and the three
-`oneSentencePerLine/pcc-program-review3*`, which minimize to a **production
-content-deletion bug** — `\emph{a [b] c}` formats to `\emph{a [b c}`, dropping
-the `]`. It fires at default settings, in signature-known prose-reflowable
-arguments only (`\emph`, `\textbf`, `\footnote`; `\caption`, `\section`, unknown
-commands, and bare groups are all fine), and needs no width pressure. Note that
-`--checks all` reports it clean: the non-trivia-content oracle lives in the
-trivia path and in `assert_format_invariants`, not in the `all` gate, so this
-whole class is invisible to the primary gate — worth closing independently of
-the bug itself.
+`oneSentencePerLine/pcc-program-review3*`, which minimized to a **production
+content-deletion bug** — `\emph{a [b] c}` formatted to `\emph{a [b c}`, dropping
+the `]` at default settings in signature-known prose arguments (`\emph`,
+`\textbf`, `\footnote`; `\caption`, `\section`, unknown commands and bare groups
+were unaffected). **Both are now closed or reclassified**: the `]` deletion is
+fixed (see the re-record note above), and `figureValign` moved into
+`latexindent.all.txt` once that gate learned to see this class. `--checks all`
+reported the bug clean at first record — the non-trivia-content oracle lived
+only in the trivia path and in `assert_format_invariants` — which is why closing
+that hole was done first, so the bug failed a gate before it was fixed.
 
 A separate finding the oracles do *not* flag: the sectioning-command line break
 reads the forbidden lone-newline predicate. `\subsection{X}\nprose` keeps the

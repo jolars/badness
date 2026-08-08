@@ -37,9 +37,6 @@
 ./test-cases/keyEqualsValueBraces/dodge-double-back-slash.tex	format-error	format-error
 ./test-cases/keyEqualsValueBraces/outn-tiny-default.cls	format-error	format-error
 ./test-cases/keyEqualsValueBraces/outn-tiny.cls	format-error	format-error
-./test-cases/oneSentencePerLine/pcc-program-review3-mod1.tex	trivia	content-change
-./test-cases/oneSentencePerLine/pcc-program-review3-mod2.tex	trivia	content-change
-./test-cases/oneSentencePerLine/pcc-program-review3.tex	trivia	content-change
 ./test-cases/poly-switch-blank-line/special1-bl-end-mod1.tex	format-error	format-error
 ./test-cases/poly-switch-blank-line/special1-bl-mod1.tex	format-error	format-error
 ./test-cases/replacements/test7-mod2123.tex	format-error	format-error

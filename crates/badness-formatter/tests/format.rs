@@ -493,6 +493,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_prose_arg_blank_line", WrapMode::Reflow, 40),
     ("reflow_prose_arg_nested_in_paragraph", WrapMode::Reflow, 50),
     ("reflow_inline_prose_in_paragraph", WrapMode::Reflow, 50),
+    // A `[` inside a *brace* prose argument is content, not a delimiter: splicing
+    // an inline prose command matched any closer, so `\emph{a [b] c}` lost its `]`
+    // at default settings (whitespace-only invariant, tenet 1).
+    ("reflow_bracket_in_prose_argument", WrapMode::Reflow, 80),
     ("reflow_caption_block", WrapMode::Reflow, 40),
     // A signature-marked collapsible token list (`\citep` and the cite family, via
     // the DB's `collapse` arg flag): a key list written across lines folds to one

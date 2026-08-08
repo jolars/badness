@@ -6021,7 +6021,12 @@ fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<Syntax
                 let prose = match_arg_slot(&sig.args, &mut slot, is_bracket)
                     .is_some_and(|spec| spec.content == ContentKind::Prose);
                 if prose {
-                    splice_prose_group(&group, cx, out);
+                    let (open, close) = if is_bracket {
+                        (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET)
+                    } else {
+                        (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
+                    };
+                    splice_prose_group(&group, open, close, cx, out);
                 } else {
                     out.push(SyntaxElement::Node(group));
                 }
@@ -6032,25 +6037,37 @@ fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<Syntax
 }
 
 /// Splice a prose group's delimiters and body into `out` (see
-/// [`flatten_inline_prose`]). The group's own `{`/`[` and `}`/`]` tokens are
-/// emitted around the body; the body's leading and trailing whitespace is dropped
-/// so the delimiters glue tight to the first and last words, and nested inline
-/// prose commands inside the body are expanded recursively.
-fn splice_prose_group(group: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<SyntaxElement>) {
+/// [`flatten_inline_prose`]). The group's own `open`/`close` tokens are emitted
+/// around the body; the body's leading and trailing whitespace is dropped so the
+/// delimiters glue tight to the first and last words, and nested inline prose
+/// commands inside the body are expanded recursively.
+///
+/// The delimiter kinds are the node's *own* pair — `{`/`}` for a `GROUP`, `[`/`]`
+/// for an `OPTIONAL` — never "any closer". A bracket is ordinary prose content
+/// inside a brace group (`\emph{a [b] c}`), and matching it as a delimiter dropped
+/// it from the body: the `open` arm is guarded by `open.is_none()`, but a `close`
+/// arm matching both kinds is overwritten by the group's real closer, so the `]`
+/// vanished from the output entirely — the whitespace-only invariant broken at
+/// default settings. Kind-matching is sufficient without also demanding the *last*
+/// such token: the formatter only runs on clean parses, where a `GROUP` holds
+/// exactly one `R_BRACE` (a second would have closed it) and the parser ends an
+/// `OPTIONAL` at its first `]`.
+fn splice_prose_group(
+    group: &SyntaxNode,
+    open_kind: SyntaxKind,
+    close_kind: SyntaxKind,
+    cx: LowerCtx<'_>,
+    out: &mut Vec<SyntaxElement>,
+) {
     let mut open: Option<SyntaxElement> = None;
     let mut close: Option<SyntaxElement> = None;
     let mut body: Vec<SyntaxElement> = Vec::new();
     for element in group.children_with_tokens() {
         match &element {
-            SyntaxElement::Token(t)
-                if matches!(t.kind(), SyntaxKind::L_BRACE | SyntaxKind::L_BRACKET)
-                    && open.is_none() =>
-            {
+            SyntaxElement::Token(t) if t.kind() == open_kind && open.is_none() => {
                 open = Some(element);
             }
-            SyntaxElement::Token(t)
-                if matches!(t.kind(), SyntaxKind::R_BRACE | SyntaxKind::R_BRACKET) =>
-            {
+            SyntaxElement::Token(t) if t.kind() == close_kind => {
                 close = Some(element);
             }
             _ => body.push(element),

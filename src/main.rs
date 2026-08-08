@@ -20,7 +20,7 @@ use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
 use badness::formatter::perturb::{
-    ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence,
+    ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence, nontrivia_content,
 };
 use badness::formatter::{
     ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
@@ -1521,6 +1521,7 @@ fn run_format_paths(
 enum CheckKind {
     Losslessness,
     Idempotency,
+    ContentChange,
     Trivia,
     FormatError,
 }
@@ -1530,6 +1531,7 @@ impl CheckKind {
         match self {
             CheckKind::Losslessness => "losslessness",
             CheckKind::Idempotency => "idempotency",
+            CheckKind::ContentChange => "content-change",
             CheckKind::Trivia => "trivia",
             CheckKind::FormatError => "format-error",
         }
@@ -1808,30 +1810,51 @@ fn run_debug_checks_for_file(
                 right: String::new(),
                 detail: None,
             }),
-            Ok(once) => match fmt(&once) {
-                Ok(twice) => {
-                    artifacts.idempotency =
-                        Some((content.to_string(), once.clone(), twice.clone()));
-                    if once != twice {
+            Ok(once) => {
+                // Whitespace-only: the formatter changes only trivia, never a
+                // non-trivia token (tenet 1). Checked here, not just in the
+                // trivia oracle, because content corruption needs no
+                // perturbation to reproduce — `\emph{a [b] c}` dropped its `]`
+                // at default settings while this gate reported the file clean.
+                // `.bib` is skipped: the comparison is LaTeX-CST-based.
+                if kind != FileKind::Bib {
+                    let config = kind.lex_config();
+                    let before = nontrivia_content(&format!("{content}\n"), config);
+                    let after = nontrivia_content(&once, config);
+                    if before != after {
                         artifacts.failures.push(DebugFailure {
-                            kind: CheckKind::Idempotency,
-                            left: once,
-                            right: twice,
+                            kind: CheckKind::ContentChange,
+                            left: before,
+                            right: after,
                             detail: None,
                         });
                     }
                 }
-                Err(msg) => {
-                    artifacts.idempotency =
-                        Some((content.to_string(), once.clone(), String::new()));
-                    artifacts.failures.push(DebugFailure {
-                        kind: CheckKind::Idempotency,
-                        left: once,
-                        right: format!("second pass failed to format: {msg}"),
-                        detail: None,
-                    });
+                match fmt(&once) {
+                    Ok(twice) => {
+                        artifacts.idempotency =
+                            Some((content.to_string(), once.clone(), twice.clone()));
+                        if once != twice {
+                            artifacts.failures.push(DebugFailure {
+                                kind: CheckKind::Idempotency,
+                                left: once,
+                                right: twice,
+                                detail: None,
+                            });
+                        }
+                    }
+                    Err(msg) => {
+                        artifacts.idempotency =
+                            Some((content.to_string(), once.clone(), String::new()));
+                        artifacts.failures.push(DebugFailure {
+                            kind: CheckKind::Idempotency,
+                            left: once,
+                            right: format!("second pass failed to format: {msg}"),
+                            detail: None,
+                        });
+                    }
                 }
-            },
+            }
         }
     }
 

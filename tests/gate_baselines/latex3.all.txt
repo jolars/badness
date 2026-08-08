@@ -1,5 +1,16 @@
+./l3kernel/l3box.dtx	content-change
+./l3kernel/l3doc.dtx	content-change
+./l3kernel/l3fp-extended.dtx	content-change
+./l3kernel/l3fp.dtx	content-change
 ./l3kernel/l3fp.dtx	idempotency
+./l3kernel/l3kernel-functions.dtx	content-change
+./l3kernel/l3seq.dtx	content-change
+./l3kernel/l3str-convert.dtx	content-change
 ./l3kernel/testfiles-backend/support/driver.tex	format-error
+./l3leftovers/cs-input.dtx	content-change
+./l3leftovers/l3precom.dtx	content-change
+./l3leftovers/tl-act.dtx	content-change
+./l3trial/l3doc/examples/testing.dtx	content-change
 ./support/docstrip.tex	format-error
 ./texmf/tex/latex/base/doc-2016-02-15.sty	format-error
 ./texmf/tex/latex/base/doc-2021-06-01.sty	format-error

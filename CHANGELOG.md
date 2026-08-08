@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.0](https://github.com/jolars/badness/compare/v0.15.0...v0.16.0) (2026-08-07)
+
+### Features
+- **formatter:** explode sibling-attached expl3 branches ([`d3fc51a`](https://github.com/jolars/badness/commit/d3fc51a9c5f7e8274e3cca8db885be1cc4831d77))
+- **formatter:** expand optional arguments to the width ([`4c28ba4`](https://github.com/jolars/badness/commit/4c28ba4898ee417516acbc168b62388c3e3ba6d5))
+- **formatter:** add optional serde and schema features ([`80726c7`](https://github.com/jolars/badness/commit/80726c75438afedf4f4d272ddae41707c178c364))
+- **formatter:** reflow doc-margined out-of-region expl3 runs ([`aa9445a`](https://github.com/jolars/badness/commit/aa9445a015b47f3cee85980ca7aa259e05b29562))
+- **formatter:** reflow dtx prose around margined blocks ([`4f118a2`](https://github.com/jolars/badness/commit/4f118a2a946cc2a6ef44afd4129f082aa2c68c34))
+
+### Dependencies
+- updated crates/badness-formatter to v0.3.0
+- updated crates/badness-parser to v0.2.0
+
 ## [0.15.0](https://github.com/jolars/badness/compare/v0.14.0...v0.15.0) (2026-08-07)
 
 ### Features

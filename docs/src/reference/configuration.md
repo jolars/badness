@@ -336,9 +336,11 @@ ignore = ["missing-nonbreaking-space"]
 
 ## `[build]`
 
-Where the TeX compiler leaves its artifacts. Read by the **language server**
-only, which pulls resolved label and section numbers from the `.aux` files for
-hover and document symbols; never by the formatter or linter.
+Where the TeX compiler leaves its artifacts, and which file it was run on. Read
+by the **language server** only — it pulls resolved label and section numbers
+from the `.aux` files for hover and document symbols, and locates the compiled
+PDF for [forward search](../guide/editor-setup.md#forward-and-inverse-search).
+Never read by the formatter or linter.
 
 ### `aux-dir`
 
@@ -356,6 +358,64 @@ unset, each document's `.aux` is expected next to it, as in plain
 ```toml
 [build]
 aux-dir = "out"
+```
+
+### `pdf-dir`
+
+Directory holding the build's PDF output (latexmk's `-outdir`), resolved
+relative to the root document's directory when not absolute. When unset, the PDF
+is expected next to the root document.
+
+**Default value**: unset (the root document's own directory)
+
+**Type**: path
+
+**Example**:
+
+```toml
+[build]
+pdf-dir = "out"
+```
+
+### `pdf-filename`
+
+The compiled PDF's file name, when the build does not name it after the root
+document (latexmk's `-jobname`). A **bare file name**, never a path — use
+`pdf-dir` for the directory — and `.pdf` is appended when it carries no
+extension, so `"thesis"` and `"thesis.pdf"` mean the same thing.
+
+**Default value**: unset (`<root document stem>.pdf`)
+
+**Type**: string
+
+**Example**:
+
+```toml
+[build]
+pdf-filename = "thesis.pdf"
+```
+
+### `root`
+
+The project's root document — the file the compiler was run on — resolved
+relative to this `badness.toml`'s directory when not absolute.
+
+Normally the root is found by scanning the project for a file carrying
+`\documentclass` or `\begin{document}`, and you do not need this key. But that
+scan only sees files the server has already loaded, and it loads them one
+directory at a time: editing `chapters/ch1.tex` in a project rooted at
+`../main.tex` never loads `main.tex`, so the scan finds no root at all and
+forward search resolves the wrong PDF. Set `root` for that layout.
+
+**Default value**: unset (scan the project for a document root)
+
+**Type**: path
+
+**Example**:
+
+```toml
+[build]
+root = "main.tex"
 ```
 
 > **Note**: TEXMF-tree discovery (the former `[texmf]` section) is configured

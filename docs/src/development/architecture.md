@@ -568,7 +568,7 @@ than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
 `lsp-server`'s sync main loop plus threadpool and fights tower-lsp's async
 `&self` model.
 
-Environment awareness has three sources, all reading static facts only, with no
+Environment awareness has four sources, all reading static facts only, with no
 macro meaning and no typesetting.
 
 **Shipped CTAN metadata**, generated from the pinned tlpdb, maps a package stem
@@ -656,7 +656,10 @@ feed the semantic database, but they are extracted, never executed.
 No general `\catcode` handling beyond the bounded patterns listed under
 [sanctioned lexer modes](#sanctioned-lexer-modes).
 
-No typesetting.
+No typesetting. Badness never runs `latexmk`, `pdflatex`, or any other engine,
+and it never parses a `.synctex.gz`. Forward search *launches* a viewer, which
+is an outbound side effect but not a build: it is an explicit user action, and
+nothing it touches feeds back into the formatter or linter.
 
 The formatter never reads the environment. Its output is a function of the input
 plus shipped data, and it resolves local `.sty` and `.cls` files sitting next to

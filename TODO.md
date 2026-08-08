@@ -644,12 +644,28 @@ texlab bundles PDF-workflow features. Only position mapping (no typesetting by
 badness) is admissible; the rest are explicit non-goals recorded here so they are
 not re-proposed.
 
-- [ ] **Forward/inverse SyncTeX search (no typesetting).**
-  `textDocument/forwardSearch` (a custom LSP method) locates a configured PDF and
-  drives an external viewer; inverse search receives a viewer position over IPC
-  and answers with `window/showDocument`. Badness never typesets—it only maps
-  source↔PDF positions via SyncTeX and shells the viewer. texlab:
-  `crates/commands/fwd_search` + the `ipc` crate.
+- [x] **Forward/inverse SyncTeX search (no typesetting).**
+  `textDocument/forwardSearch` (a custom LSP method, texlab-wire-compatible)
+  resolves the root document's PDF from `[build]` and launches a viewer
+  configured through editor settings, with `%f`/`%p`/`%l` substituted
+  (`lsp/forward_search.rs`). Inverse search receives a viewer position over IPC
+  and answers with `window/showDocument` (`ipc.rs`, `badness inverse-search`).
+  Badness never typesets. It also never *maps*: investigating texlab showed it
+  parses no SyncTeX either, because every SyncTeX-aware viewer links libsynctex
+  and so takes a file and a line, never a coordinate. Servers publish per-process
+  advertisements rather than sharing texlab's single fixed socket, which a second
+  editor window silently steals.
+- [ ] *(Design decision)* **Native `.synctex.gz` reader.** Would let forward
+  search drive viewers with *no* SyncTeX support at all by resolving a page
+  number (qpdfview, a browser), and report an honest `Failure` when a line
+  produces no output instead of launching a viewer onto nothing. Costs a gzip
+  dependency, a parser with real traps (compressed `,=` points, `Input:` lines
+  interleaved mid-file, `./`-segment path matching, leaf-vs-enclosing-box lookup
+  semantics), and a fixture corpus validated against the `synctex` CLI with no
+  existing oracle to lean on. The seam is already in place: `SearchTarget` in,
+  `ForwardSearchStatus` out — a backend behind it changes no LSP surface, no
+  `[build]` key, and no config. Not worth it until a page-only viewer is a real
+  target.
 
 ## BibTeX/BibLaTeX
 

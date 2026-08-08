@@ -400,6 +400,16 @@ const STARTER_CONFIG: &str = "\
 [lint]
 # select = [\"...\"]  # if set, only these rules run
 # ignore = []        # rules to disable
+
+# Where the compiler leaves its artifacts, and which file it ran on. Read by the
+# language server only: `.aux` for label/section numbers, the PDF for forward
+# search. Paths are relative to the root document's directory (`root` itself is
+# relative to this file).
+# [build]
+# aux-dir = \"out\"
+# pdf-dir = \"out\"
+# pdf-filename = \"main.pdf\"  # bare file name; defaults to the root's stem
+# root = \"main.tex\"          # only needed when the root is not auto-detected
 ";
 
 /// `badness inverse-search`: hand a viewer's source position to a running

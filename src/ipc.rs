@@ -261,9 +261,29 @@ type Acceptor = SysListener;
 #[cfg(not(unix))]
 type Acceptor = std::net::TcpListener;
 
+/// The longest socket path a Unix domain socket can carry. `sun_path` is 108
+/// bytes on Linux and 104 on macOS and the BSDs; take the smaller so a diagnosis
+/// is never wrong in the direction that matters.
+#[cfg(unix)]
+const MAX_SOCKET_PATH: usize = 104;
+
 #[cfg(unix)]
 fn bind(dir: &Path) -> std::io::Result<(Acceptor, Transport, String)> {
     let path = dir.join(format!("{}.sock", std::process::id()));
+    // `bind` reports this as a bare "File name too long", which tells the user
+    // nothing they can act on. The default directory is nowhere near the limit,
+    // so anyone hitting it set `ipcDir` themselves and can move it.
+    if path.as_os_str().len() > MAX_SOCKET_PATH {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "the socket path {} is {} bytes, over the {MAX_SOCKET_PATH}-byte limit \
+                 for a Unix socket; set `forwardSearch.ipcDir` to a shorter directory",
+                path.display(),
+                path.as_os_str().len(),
+            ),
+        ));
+    }
     // A previous run with the same pid (after a reboot, or a recycled pid) may
     // have left the node behind; `bind` fails on an existing path.
     let _ = std::fs::remove_file(&path);
@@ -679,6 +699,22 @@ mod tests {
             .expect_err("the advertised server is not there");
         assert!(matches!(err, IpcError::NoServerForFile(_)), "{err:?}");
         assert!(!stale.exists(), "a stale advertisement must be unlinked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_over_long_socket_path_is_diagnosed() {
+        // `bind` reports only "File name too long"; the user needs to be told
+        // which knob moves it.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut dir = tmp.path().to_path_buf();
+        while dir.as_os_str().len() <= MAX_SOCKET_PATH {
+            dir.push("deeply-nested-directory-name");
+        }
+        let err = bind(&dir).expect_err("this path cannot hold a socket");
+        let message = err.to_string();
+        assert!(message.contains("ipcDir"), "{message}");
+        assert!(message.contains(&MAX_SOCKET_PATH.to_string()), "{message}");
     }
 
     #[test]

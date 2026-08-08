@@ -55,6 +55,50 @@
           "default": true,
           "markdownDescription": "Enable Badness language features: hover, completion, signature help, go-to-definition, references, document/workspace symbols, rename, code actions, folding, selection ranges, and document links. When `false`, these are suppressed. Formatting and diagnostics are unaffected."
         },
+        "badness.lineWidth": {
+          "type": "number",
+          "markdownDescription": "Maximum line width before the formatter breaks a line. A fallback only: a discovered `badness.toml` always wins. Unset by default."
+        },
+        "badness.indentWidth": {
+          "type": "number",
+          "markdownDescription": "Spaces per indent step. A fallback only: a discovered `badness.toml` wins outright, and absent one your editor's tab size wins. Unset by default."
+        },
+        "badness.texmf": {
+          "type": "object",
+          "default": {},
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to scan the TEXMF tree at all."
+            },
+            "roots": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Extra TEXMF root directories to index ahead of the discovered ones."
+            },
+            "useKpsewhich": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to shell out to `kpsewhich` to discover TEXMF roots."
+            }
+          },
+          "markdownDescription": "How the language server discovers the installed TeX tree, for document links, package hover, go-to-definition, and installed-set completion. Where TeX is installed is a fact about the machine, not the project, so this lives here rather than in `badness.toml`. Never affects `badness format` or `badness lint`."
+        },
+        "badness.forwardSearch.executable": {
+          "type": "string",
+          "markdownDescription": "PDF viewer launched by the **Badness: Forward Search** command. A program name, **not a command line** \u2014 it is spawned directly, with no shell, so flags must go in `#badness.forwardSearch.args#`. Unset by default, which disables forward search."
+        },
+        "badness.forwardSearch.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Arguments for the viewer. `%f` is the file the cursor is in, `%p` the root document's PDF, `%l` the line number counting from 1, and `%%f` a literal `%f`. Required \u2014 forward search stays off until both this and `#badness.forwardSearch.executable#` are set. For zathura: `[\"--synctex-forward\", \"%l:1:%f\", \"%p\"]`."
+        },
         "badness.executableStrategy": {
           "type": "string",
           "enum": [
@@ -155,6 +199,11 @@
       {
         "command": "badness.restart",
         "title": "Restart Server",
+        "category": "Badness"
+      },
+      {
+        "command": "badness.forwardSearch",
+        "title": "Forward Search",
         "category": "Badness"
       }
     ]

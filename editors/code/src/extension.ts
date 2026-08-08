@@ -130,6 +130,40 @@ function mergeServerEnvironment(
   return env;
 }
 
+/**
+ * The settings the server reads as `initializationOptions` rather than from
+ * `badness.toml`: machine state (where TeX is installed, which PDF viewer exists)
+ * plus the width fallbacks. Only keys the user actually set are sent, so an unset
+ * setting stays unset rather than pinning a default over a discovered
+ * `badness.toml`.
+ */
+function buildInitializationOptions(): Record<string, unknown> {
+  const config = vscode.workspace.getConfiguration("badness");
+  const options: Record<string, unknown> = {};
+
+  for (const key of ["lineWidth", "indentWidth"] as const) {
+    const value = config.inspect<number>(key);
+    if (value?.globalValue ?? value?.workspaceValue ?? value?.workspaceFolderValue) {
+      options[key] = config.get<number>(key);
+    }
+  }
+
+  const texmf = config.get<Record<string, unknown>>("texmf");
+  if (texmf && Object.keys(texmf).length > 0) {
+    options.texmf = texmf;
+  }
+
+  // Both halves are required server-side: an executable with no arguments would
+  // launch a viewer on no document at all.
+  const executable = config.get<string>("forwardSearch.executable");
+  const args = config.get<string[]>("forwardSearch.args");
+  if (executable && args) {
+    options.forwardSearch = { executable, args };
+  }
+
+  return options;
+}
+
 /** Whether a `badness.<section>.enable` toggle is on (default on). Read live so
  *  the middleware reflects the current setting without a server round-trip. */
 function featureEnabled(section: "formatting" | "diagnostics" | "languageFeatures"): boolean {
@@ -245,6 +279,7 @@ async function startClient(
     outputChannel,
     traceOutputChannel: outputChannel,
     middleware: buildMiddleware(),
+    initializationOptions: buildInitializationOptions(),
   };
 
   client = new LanguageClient(
@@ -288,6 +323,45 @@ async function restartClient(
   await startClient(context, outputChannel);
 }
 
+/** The server's `textDocument/forwardSearch` status codes. */
+const FORWARD_SEARCH_MESSAGES: Record<number, string> = {
+  1: "Badness could not launch the PDF viewer. Check `badness.forwardSearch.executable` — it must be a program name, not a command line.",
+  2: "Badness found no compiled PDF. Build the document first, or set `[build] pdf-dir`/`root` in badness.toml.",
+  3: "No PDF viewer is configured. Set `badness.forwardSearch.executable` and `badness.forwardSearch.args`.",
+};
+
+/**
+ * Reveal the active editor's cursor position in the compiled PDF.
+ *
+ * The server does the work; this only supplies the position and turns a
+ * non-success status into something actionable.
+ */
+async function forwardSearch(outputChannel: vscode.LogOutputChannel): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !client) {
+    return;
+  }
+  try {
+    const result = await client.sendRequest<{ status: number }>(
+      "textDocument/forwardSearch",
+      {
+        textDocument: { uri: editor.document.uri.toString() },
+        position: {
+          line: editor.selection.active.line,
+          character: editor.selection.active.character,
+        },
+      },
+    );
+    const message = FORWARD_SEARCH_MESSAGES[result.status];
+    if (message) {
+      void vscode.window.showWarningMessage(message);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel.appendLine(`Forward search failed: ${message}`);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel(
     "Badness Language Server",
@@ -299,6 +373,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("badness.restart", () =>
       restartClient(context, outputChannel),
     ),
+    vscode.commands.registerCommand("badness.forwardSearch", () =>
+      forwardSearch(outputChannel),
+    ),
   );
 
   // The middleware reads the toggles live, so formatting/languageFeatures need no
@@ -306,6 +383,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // already-published set: clear on disable, restart to repopulate on enable.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
+      // Everything in `initializationOptions` is read once, at startup, so a
+      // change to any of it needs a restart to take effect.
+      const restartNeeded = [
+        "badness.texmf",
+        "badness.forwardSearch",
+        "badness.lineWidth",
+        "badness.indentWidth",
+      ].some((section) => event.affectsConfiguration(section));
+      if (restartNeeded) {
+        void restartClient(context, outputChannel);
+        return;
+      }
       if (!event.affectsConfiguration("badness.diagnostics")) {
         return;
       }

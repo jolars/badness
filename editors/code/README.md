@@ -25,6 +25,10 @@ restricted or offline networks.
   (re-reads settings and re-resolves the binary). Useful if the LSP gets wedged
   or after changing settings such as `badness.version` or
   `badness.executablePath`.
+- `Badness: Forward Search`: opens your PDF viewer at the cursor's position.
+  Requires `badness.forwardSearch.executable` and `badness.forwardSearch.args`,
+  plus a PDF built with SyncTeX enabled (`latexmk -pdf -synctex=1`). Badness
+  never builds the document itself.
 
 ## Binary installation
 
@@ -147,6 +151,22 @@ Badness registers itself as the default formatter for `[latex]` files.
   (`off`, `error`, `warn`, `info`, `debug`, `trace`; unset by default).
   `badness.serverEnv.RUST_LOG` overrides this if both are set.
 - `badness.trace.server`: LSP trace level (`off`, `messages`, `verbose`)
+- `badness.lineWidth`, `badness.indentWidth`: formatter width fallbacks. A
+  discovered `badness.toml` always wins; absent one, your editor's tab size wins
+  over `indentWidth`.
+- `badness.texmf`: how the server finds your installed TeX tree (`enabled`,
+  `roots`, `useKpsewhich`), for document links, package hover, go-to-definition,
+  and installed-set completion. Never affects formatting or linting.
+- `badness.forwardSearch.executable`: the PDF viewer for **Badness: Forward
+  Search**. A program name, *not* a command line — it is spawned directly, so
+  flags belong in `args`.
+- `badness.forwardSearch.args`: the viewer's arguments, where `%f` is the file
+  the cursor is in, `%p` the root document's PDF, and `%l` the line number
+  counting from 1. For zathura: `["--synctex-forward", "%l:1:%f", "%p"]`.
+
+These four are read once, when the server starts, so changing them restarts it
+automatically. Where the PDF *lands* is project data and belongs in
+`badness.toml`'s `[build]` section (`pdf-dir`, `pdf-filename`, `root`).
 
 ## Security and trust
 

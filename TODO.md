@@ -670,10 +670,12 @@ sources below are missing.
   detect it either. Add a test that walks the fixture dir and asserts every slug
   is registered exactly once (and every registered slug exists on disk).
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
-  ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read as a
-  coverage map only — which constructs occur and in what shapes — never as a
-  layout target, since latexindent is a config-driven indenter whose committed
-  outputs answer a different question. Measured gaps against the 195 existing
+  ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read
+  primarily as a coverage map — which constructs occur and in what shapes.
+  latexindent's own outputs are a soft target only: usable as inspiration where
+  our tenets underdetermine a construct, never a form to match case by case,
+  since it is a config-driven indenter whose committed outputs are one settings
+  stack's answer to a different question. Measured gaps against the 195 existing
   slugs: sectioning/`headings` (no fixture at all, and the Tier-1 lone-newline
   bug lives there), `ifelsefi` (402 corpus files, no coverage), `items` (157
   files, one fixture), `filecontents`, bare/named brace groups.

@@ -104,17 +104,20 @@ braces, alignment torture, 120 `.bib`. Where the other three are expl3-heavy
 all. The median file is \~200 bytes: a failure here is a near-minimal repro
 already, which is most of its value.
 
-**Its expected outputs are deliberately not used.** latexindent's harness writes
-results in-tree and asserts `git diff` is clean, so every committed
-`*-mod1.tex`/`*-output.tex` is the output of one specific YAML settings stack
-from that tool's config model — and latexindent is an *indenter* that preserves
-author line breaks, where badness owns layout outright. Those files are a
-different function's answers, not a stricter or looser version of ours; treating
-them as targets would mean reverse-engineering another tool's config surface
-into badness's rules, one special case per divergence. We mine the corpus purely
-as oracle *input*. It is GPL-3.0 to badness's MIT, which the fetch-don't-vendor
-setup (`corpora/` is gitignored) already keeps clean; a fixture derived from a
-case here should be hand-authored, never copied.
+**The gate reads inputs only; its expected outputs are not an oracle here.**
+latexindent's harness writes results in-tree and asserts `git diff` is clean, so
+every committed `*-mod1.tex`/`*-output.tex` is the output of one specific YAML
+settings stack from that tool's config model — and latexindent is an *indenter*
+that preserves author line breaks, where badness owns layout outright. Those
+files are a different function's answers, not a stricter or looser version of
+ours, so a divergence from them is not a failure and nothing in this directory
+compares against them. (For *fixture authoring* they are a legitimate soft
+target where our own tenets underdetermine a construct — the guards are in
+`.claude/skills/formatter-fixture/`. What neither use permits is matching them
+case by case, which would reverse-engineer another tool's config surface into
+badness's rules.) The corpus is GPL-3.0 to badness's MIT, which the
+fetch-don't-vendor setup (`corpora/` is gitignored) already keeps clean; a
+fixture derived from a case here should be hand-authored, never copied.
 
 ## Checking and regeneration
 

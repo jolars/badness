@@ -5,34 +5,55 @@ description: >-
   seeded from the latexindent gate corpus. You surface representative inputs,
   propose the canonical formatting under the tenets, the user edits or accepts
   `expected.tex`, then you implement the rule and register the fixture. The
-  corpus supplies coverage, never answers: latexindent's own outputs are a
-  different tool's config-driven behavior and are deliberately never consulted.
-  Use for "take the next construct", "add a formatter fixture for X", or
-  "mine the latexindent corpus for X".
+  corpus is primarily a coverage map; latexindent's own outputs are a soft
+  target only — inspiration where the tenets underdetermine a construct, never
+  a form to match. Use for "take the next construct", "add a formatter fixture
+  for X", or "mine the latexindent corpus for X".
 ---
 
 Use this skill to add formatter coverage for a *construct*, not to fix a
 reported bug (that is `smoke-test-triage`) and not to triage a corpus sweep
 (that is the failure inventory in `tests/gate_baselines/README.md`).
 
-## Why the corpus, and what it is not for
+## How to read the corpus
 
 `corpora/latexindent` (pinned in `scripts/fetch_gate_corpora.sh`, fetched by
 `task gate-corpora:fetch`) is latexindent.pl's own test suite: ~5.3k small
-hand-written files of deliberately adversarial LaTeX. It exists here to answer
-**"which constructs occur in the wild, and in what nasty shapes"** — a coverage
-map that the expl3-heavy latex3/latex2e/pgf corpora do not provide.
+hand-written files of deliberately adversarial LaTeX. Its primary job here is to
+answer **"which constructs occur in the wild, and in what nasty shapes"** — a
+coverage map that the expl3-heavy latex3/latex2e/pgf corpora do not provide.
 
-**Never read latexindent's expected output.** Its harness writes results in-tree
-and asserts `git diff` is clean, so every committed `*-mod1.tex` /
-`*-output.tex` is the output of one specific YAML settings stack from that
-tool's config model — and latexindent is an *indenter* that preserves author
-line breaks, where badness owns layout outright. Those files answer a different
-question. Treating them as targets means reverse-engineering another tool's
-config surface into badness's rules, one special case per divergence, which is
-exactly the failure mode this skill exists to avoid. If you want to know what a
-construct *is*, read the input; if you want to know how badness should lay it
-out, derive it from the tenets.
+### latexindent's output is a soft target, never a hard one
+
+Know what those files are first. The harness writes results in-tree and asserts
+`git diff` is clean, so every committed `*-mod1.tex` / `*-output.tex` is the
+output of **one specific YAML settings stack** — read the directory's
+`*-test-cases.sh` to see which (`-l=env-all-on,env-mod-lines9` and friends).
+latexindent is also an *indenter*: it fixes leading whitespace and largely
+preserves author line breaks, where badness reflows and owns layout outright.
+So its output is never a target to match, and a divergence from it is not by
+itself a defect.
+
+But it does encode a lot of accumulated community taste about what LaTeX
+*should* look like, and discarding that wholesale is throwing away real signal.
+**Consult it where the tenets underdetermine the answer** — a construct with no
+governing rule and no precedent among the existing fixtures — as inspiration for
+a canonical form you then justify on our own terms. Three guards keep that from
+sliding into reverse-engineering:
+
+- **Form your own proposal first**, then look. Looking first anchors you, and
+  the anchor is another tool's config default.
+- **Never consult it to settle a question the tenets already decide.** If a rule
+  or an existing fixture governs the construct, that is the answer; latexindent
+  agreeing or disagreeing changes nothing.
+- **Never cite it as the justification.** The fixture and commit must stand on
+  the rule. "latexindent does it this way" is not a reason; "this is what the
+  reflow rule yields, and it happens to match the convention latexindent
+  encodes" is.
+
+If you want to know what a construct *is*, read the input; if you want to know
+how badness lays it out, derive it from the tenets and use their output to
+sanity-check taste where the tenets are silent.
 
 **Hand-author fixture inputs; never copy corpus files.** latexindent is GPL-3.0
 and badness is MIT — the fetch-don't-vendor setup keeps `corpora/` out of the
@@ -53,7 +74,11 @@ it yet.
    <file>` rewrites in place.
 3. **Propose `expected.tex`.** Author the canonical form you believe is right
    under the tenets — deterministic, rule-based, input-independent — and explain
-   the reasoning. Keep the input minimal and hand-written. Hand it to the user.
+   the reasoning. Keep the input minimal and hand-written. *Then*, if no rule or
+   existing fixture governs the construct, check latexindent's output for the
+   same shape as a taste check (soft target, see above); say so in the proposal
+   if it moved your answer, and say which settings stack produced what you
+   looked at. Hand it to the user.
 4. **The user edits or accepts.**
 5. **Push back when warranted.** If the choice is unprincipled, breaks a tenet
    (especially "layout is decided solely by the formatter's rules"), reads a

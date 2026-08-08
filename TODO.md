@@ -662,6 +662,21 @@ sources below are missing.
   benchmark page `docs/src/reference/benchmarks.md`). In-process parse/format micro-bench +
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
+- [ ] **No orphan guard on formatter fixtures.** A directory under
+  `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
+  `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`
+  silently never runs — `expl_relation_slot_statement` shipped that way. Since
+  each table is one looping test, a slug is not a test name, so filtering cannot
+  detect it either. Add a test that walks the fixture dir and asserts every slug
+  is registered exactly once (and every registered slug exists on disk).
+- [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
+  ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read as a
+  coverage map only — which constructs occur and in what shapes — never as a
+  layout target, since latexindent is a config-driven indenter whose committed
+  outputs answer a different question. Measured gaps against the 195 existing
+  slugs: sectioning/`headings` (no fixture at all, and the Tier-1 lone-newline
+  bug lives there), `ifelsefi` (402 corpus files, no coverage), `items` (157
+  files, one fixture), `filecontents`, bare/named brace groups.
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
   crate + the docs playground page (`docs/src/playground.md`), formatter-only;

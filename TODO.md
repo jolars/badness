@@ -30,6 +30,28 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
+- [ ] **`]` is deleted inside prose-reflowable command arguments
+  (whitespace-only invariant violated in production).** `\emph{a [b] c}` formats
+  to `\emph{a [b c}` at default settings — no width pressure, no perturbation.
+  Scoped to signature-known prose arguments (`\emph`, `\textbf`, `\footnote`
+  corrupt; `\caption`, `\section`, unknown commands and bare groups are all
+  fine), and it nests (`\emph{a \emph{[b]} c}` -> `\emph{a \emph{[b} c}`). This
+  is the whitespace-only invariant — tenet 1's "layout never rewrites a
+  non-trivia token" — broken outright, so it outranks every layout entry below.
+  Surfaced by the `latexindent` gate corpus
+  (`oneSentencePerLine/pcc-program-review3*`, 3 of the 15 `content-change`
+  entries); the other 12 are the `figureValign` family below. Land the fix with
+  a fixture pinning the bracket *inside* a reflowed prose argument, and re-record
+  `tests/gate_baselines/latexindent.trivia.txt`.
+- [ ] **`--checks all` does not run the non-trivia-content oracle.** The check
+  that would have caught the entry above lives in the trivia path
+  (`perturb::check_trivia_convergence`) and in `assert_format_invariants`, not in
+  `debug format --checks all` — which reports `\emph{a [b] c}` clean. So the
+  primary gate, the smoke-test workflow, and the `*.all.txt` baselines are all
+  blind to content corruption that needs no perturbation to reproduce. Add the
+  `nontrivia_content(fmt(x)) == nontrivia_content(x)` comparison to the `all`
+  gate and re-record every `*.all.txt`. Worth doing independently of the bug:
+  this is a hole in the oracle, not one bad layout decision.
 - [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
   (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
   `docs/src/development/architecture.md` (§ *Trivia-invariant layout*). Layout may read only trivia
@@ -299,6 +321,27 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     Pinned by `expl_conditional_sibling_trailing`. And `lower_node`'s node-keyed
     all-or-nothing arm keeps needing head-attached branches by construction: it
     has no sibling stream to resolve a unit from.
+- [ ] **The sectioning line break reads the lone-newline predicate (Tier-1
+  violation, no oracle catches it).** `\subsection{X}\nprose` keeps the break;
+  `\subsection{X} prose` glues the prose onto the head line. Those are the same
+  bytes to the next parse, so this is exactly the predicate the
+  trivia-invariant-layout invariant forbids reading — but no gate fires: the
+  perturbation oracle only reports a *content* change or a non-fixed-point, and
+  both spellings are self-consistent fixed points. That is the interesting part:
+  the corpus can only surface this class by eye, so the strict oracle
+  (`fmt(perturbed) == fmt(original)`, already written in `perturb.rs` and
+  currently failing wherever an authored break is deliberately preserved) is the
+  only mechanical route to the rest of the family. Decide the canonical form
+  first — always break after a sectioning command is the obvious rule, and it is
+  input-independent — then check what else the strict oracle names.
+  Surfaced by the `latexindent` corpus (`oneSentencePerLine/`).
+- [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
+  one family.** `%`-terminated argument braces
+  (`\includegraphics[…]%\n{%\n…%\n}`) — a comment ends every line inside an
+  argument group, so the layout's comment handling and its argument grouping
+  disagree across passes. All 12 `latexindent.all.txt` idempotency entries and 12
+  of the 15 `content-change` entries are this one shape. Minimize before fixing;
+  the files are large but the construct repeats.
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
@@ -487,6 +530,17 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
 
 ## Semantic layer & signatures
 
+- [ ] **Verbatim-ish command arguments: `\href` with a literal `%` in its URL.**
+  `\href{https://…/Chang_1983_Handbook%20for%30Spoken%40Mathematics.pdf}{…}`
+  fails to parse (`unclosed {`) because the `%` lexes as a comment start.
+  hyperref reads `\href`'s first argument under a modified catcode regime, so the
+  `%` is literal there — this is a `ContentKind`-adjacent claim the signature DB
+  does not currently carry (a *verbatim argument*, distinct from `Opaque`). 18
+  `format-error` entries in the `latexindent` gate corpus, dominated by the
+  `href` family in `test-cases/verbatim` and `test-cases/fine-tuning` — which is
+  exactly what that corpus's `verbatim/` directory exists to probe. Scope the
+  claim like the `Keyval` one: curated, compile-verified per command, never
+  inferred. Check `\url`, `\path`, and `\lstinline` in the same pass.
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
   decision)*
 
@@ -645,6 +699,15 @@ not re-proposed.
 
 ## BibTeX/BibLaTeX
 
+- [ ] **`expected ',' between fields` when a blank line or comment separates a
+  field value from its comma.** 33 `format-error` entries in the `latexindent`
+  gate corpus, all the `keyEqualsValueBraces/contributors-mod*` family:
+  `keywords =\n  {\n    contributor\n  }\n\n  ,}` and the `}%\n,}` variant. That
+  separation is legal BibTeX — whitespace and comments are not significant
+  between a value and the following `,` — so if this is confirmed the bib parser
+  is over-strict. Confirm against the texlab bib oracle (`bib-parse-compat`)
+  before treating it as a bug; it is the largest single non-noise family in the
+  corpus's `format-error` bulk.
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
   single-file-sound, same caveat as `unused-string`).

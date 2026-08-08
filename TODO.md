@@ -346,30 +346,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   layout conflicts with the formatter-is-sole-authority tenet.
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
-- [ ] **Head/definiendum split on a soft trailing block (rest-aware measurement
-  gap).** In an expl3 statement, a bare command followed by another command that
-  greedily absorbs a wide `{body}` (`\cs_set_protected:Npn \__foo_aux: { … }`) is
-  width-split at the head — `\cs_set_protected:Npn` / `\__foo_aux:` land on
-  separate lines — because the statement fill measures the `\__foo_aux: {body}`
-  atom *flat* (~90 cols) and breaks before it, even though that atom will *hang*
-  its body and only needs the command name (~25 cols) on the line. Both parts fit
-  together with the body hanging. Same rest-aware-measurement gap as #71's
-  head-hug (`Ir::group_hug`), which currently fires only for *forced* breaks; a
-  soft-hanging trailing block gets no hug. Stable/idempotent, just not the
-  prettiest. Surfaced by the #94 fixture (`expl_trailing_empty_branch`, whose
-  single-statement body is kept precisely because this split is what makes the
-  block's break soft-then-hard across passes).
-
-  **Now fixture-visible, and more prominent since the `group_expanded` fix.**
-  `expl_forced_block_body_mode` splits `\int_set:Nn` / `\l_@@_groups_int` although
-  they join at 36 columns and the *input* already has them joined — so on this
-  shape the formatter degrades its input. That fixture is the reproducer; its
-  registry comment in `tests/format.rs` marks the split NOT ENDORSED. Before the
-  mode fix the head stayed joined only by accident (a flat-dispatched fill skips
-  per-atom measurement entirely) while the block hybridized anyway, so the fix
-  traded pretty-but-unstable for stable-but-ugly. The right trade, but it makes
-  this entry the most visible remaining formatter wart.
-
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value
   one step, which is what an author writes and what upstream overwhelmingly does

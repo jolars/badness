@@ -140,6 +140,29 @@ fn start_server(
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(1));
     let init: InitializeResult = serde_json::from_value(resp.result().unwrap()).unwrap();
+    assert_server_capabilities(&init);
+    assert!(
+        init.capabilities.diagnostic_provider.is_none(),
+        "diagnosticProvider is gated on client pull support, which this client lacks"
+    );
+    assert_eq!(
+        init.capabilities.position_encoding,
+        Some(PositionEncodingKind::UTF16),
+        "a client offering no positionEncodings gets the mandatory UTF-16 default"
+    );
+    send_notification(
+        &client,
+        "initialized",
+        serde_json::to_value(InitializedParams {}).unwrap(),
+    );
+    (client, server_thread)
+}
+
+/// Every capability the server advertises to *every* client, asserted in one
+/// place so each handshake helper checks the same list. Client-dependent
+/// capabilities (`diagnosticProvider`, `positionEncoding`) stay with their
+/// helper.
+fn assert_server_capabilities(init: &InitializeResult) {
     assert!(
         init.capabilities.document_formatting_provider.is_some(),
         "server must advertise documentFormattingProvider"
@@ -260,21 +283,14 @@ fn start_server(
         "server must advertise the changeEnvironment execute-commands"
     );
     assert!(init.capabilities.text_document_sync.is_some());
-    assert!(
-        init.capabilities.diagnostic_provider.is_none(),
-        "diagnosticProvider is gated on client pull support, which this client lacks"
-    );
     assert_eq!(
-        init.capabilities.position_encoding,
-        Some(PositionEncodingKind::UTF16),
-        "a client offering no positionEncodings gets the mandatory UTF-16 default"
+        init.capabilities
+            .experimental
+            .as_ref()
+            .and_then(|caps| caps.get("textDocumentForwardSearch")),
+        Some(&serde_json::Value::Bool(true)),
+        "server must advertise the forwardSearch experimental capability"
     );
-    send_notification(
-        &client,
-        "initialized",
-        serde_json::to_value(InitializedParams {}).unwrap(),
-    );
-    (client, server_thread)
 }
 
 /// Spawn an in-process server and handshake as a **pull-capable** client (advertises
@@ -309,6 +325,7 @@ fn start_server_pull() -> (Connection, std::thread::JoinHandle<()>) {
     let resp = recv_response(&client);
     assert_eq!(resp.id, RequestId::from(1));
     let init: InitializeResult = serde_json::from_value(resp.result().unwrap()).unwrap();
+    assert_server_capabilities(&init);
     assert!(
         init.capabilities.diagnostic_provider.is_some(),
         "server must advertise diagnosticProvider (pull diagnostics)"
@@ -4169,6 +4186,259 @@ fn lsp_definition_user_command_and_environment() {
     // A built-in with no project definition yields nothing.
     let builtin = definition(&client, 4, &main_uri, Position::new(6, 3));
     assert!(builtin.is_empty(), "`\\textbf` has no definition site");
+
+    shutdown(&client, server_thread);
+}
+
+// ---------------------------------------------------------------------------
+// Forward search (`textDocument/forwardSearch`).
+//
+// The "viewer" throughout is `badness debug echo-args`, which records its argv
+// to a file: the one program guaranteed to exist wherever CI runs, and it shows
+// exactly what `%f`/`%p`/`%l` expanded to.
+// ---------------------------------------------------------------------------
+
+/// `initializationOptions` configuring `badness debug echo-args --out <record>`
+/// as the PDF viewer, with `args` appended after the recorder's own flags.
+fn viewer_options(record: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    let mut argv = vec![
+        "debug".to_owned(),
+        "echo-args".to_owned(),
+        "--out".to_owned(),
+        record.display().to_string(),
+    ];
+    argv.extend(args.iter().map(|a| (*a).to_owned()));
+    serde_json::json!({
+        "forwardSearch": {
+            "executable": env!("CARGO_BIN_EXE_badness"),
+            "args": argv,
+        }
+    })
+}
+
+fn forward_search(client: &Connection, id: i32, uri: &Uri, position: Position) -> u8 {
+    send_request(
+        client,
+        id,
+        "textDocument/forwardSearch",
+        serde_json::to_value(TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position,
+        })
+        .unwrap(),
+    );
+    let resp = loop {
+        match recv(client) {
+            Message::Response(resp) if resp.id == RequestId::from(id) => break resp,
+            // Diagnostics for the `didOpen` may still be in flight.
+            Message::Notification(_) => continue,
+            other => panic!("expected the forwardSearch response, got {other:?}"),
+        }
+    };
+    let result = resp
+        .result()
+        .expect("forwardSearch never fails the request");
+    result["status"].as_u64().expect("a numeric status") as u8
+}
+
+/// The viewer runs in its own process, so the recording lands asynchronously.
+/// Poll on the same ~5 s bound [`recv`] uses.
+fn recorded_args(record: &std::path::Path) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(record) {
+            return text.lines().map(str::to_owned).collect();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the viewer never wrote {}",
+            record.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn forward_search_without_settings_is_unconfigured() {
+    // No viewer configured: status 3, and nothing is spawned.
+    let dir = tempfile::tempdir().unwrap();
+    let main = "\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    assert_eq!(forward_search(&client, 2, &uri, Position::new(2, 0)), 3);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn forward_search_without_a_pdf_reports_failure() {
+    // A configured viewer but an uncompiled project: status 2, so the client can
+    // say "build it first" instead of the viewer opening onto nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let main = "\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, main).unwrap();
+    let record = dir.path().join("viewer-args.txt");
+
+    let (client, server_thread) = start_server(Some(viewer_options(&record, &["%p"])));
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    assert_eq!(forward_search(&client, 2, &uri, Position::new(2, 0)), 2);
+    assert!(
+        !record.exists(),
+        "no viewer may be launched when the PDF is missing"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn forward_search_invokes_the_viewer_with_substituted_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = "\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(dir.path().join("main.pdf"), "%PDF-1.7\n").unwrap();
+    let record = dir.path().join("viewer-args.txt");
+
+    let (client, server_thread) =
+        start_server(Some(viewer_options(&record, &["%p", "%f", "%l", "%%f"])));
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    // Line 2 (0-based) is `hi`; SyncTeX counts from 1, so `%l` must be `3`.
+    assert_eq!(forward_search(&client, 2, &uri, Position::new(2, 0)), 0);
+    assert_eq!(
+        recorded_args(&record),
+        vec![
+            dir.path().join("main.pdf").display().to_string(),
+            main_path.display().to_string(),
+            "3".to_owned(),
+            "%f".to_owned(),
+        ]
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn forward_search_targets_the_root_documents_pdf_from_a_child() {
+    // `%f` is the *cursor's* file (SyncTeX indexes per input file) while `%p` is
+    // the *root's* PDF — a `\input`ed child has no PDF of its own.
+    let dir = tempfile::tempdir().unwrap();
+    let main = "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n";
+    let chapter = "Chapter text.\n";
+    let main_path = dir.path().join("main.tex");
+    let chapter_path = dir.path().join("chapter.tex");
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(&chapter_path, chapter).unwrap();
+    std::fs::write(dir.path().join("main.pdf"), "%PDF-1.7\n").unwrap();
+    let record = dir.path().join("viewer-args.txt");
+
+    let (client, server_thread) = start_server(Some(viewer_options(&record, &["%p", "%f"])));
+    let main_uri = path_to_file_uri(&main_path);
+    let chapter_uri = path_to_file_uri(&chapter_path);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+    did_open(&client, &chapter_uri, 1, chapter);
+    let _ = recv_diagnostics(&client);
+
+    assert_eq!(
+        forward_search(&client, 2, &chapter_uri, Position::new(0, 0)),
+        0
+    );
+    assert_eq!(
+        recorded_args(&record),
+        vec![
+            dir.path().join("main.pdf").display().to_string(),
+            chapter_path.display().to_string(),
+        ],
+        "%p must be the root's PDF while %f stays the cursor's file"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn forward_search_honors_build_pdf_dir_and_pdf_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = "\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[build]\npdf-dir = \"out\"\npdf-filename = \"thesis\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("out")).unwrap();
+    std::fs::write(dir.path().join("out/thesis.pdf"), "%PDF-1.7\n").unwrap();
+    let record = dir.path().join("viewer-args.txt");
+
+    let (client, server_thread) = start_server(Some(viewer_options(&record, &["%p"])));
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    assert_eq!(forward_search(&client, 2, &uri, Position::new(2, 0)), 0);
+    assert_eq!(
+        recorded_args(&record),
+        vec![
+            dir.path()
+                .join("out")
+                .join("thesis.pdf")
+                .display()
+                .to_string()
+        ],
+        "`pdf-filename` without an extension must still resolve to a .pdf"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn forward_search_honors_build_root_for_an_unseeded_parent() {
+    // The classic layout: the root lives one directory above the chapter being
+    // edited. The server seeds directories lazily, so opening only
+    // `chapters/ch1.tex` never loads `../main.tex` and the include-graph scan
+    // finds no root at all. `[build] root` is what makes this work.
+    let dir = tempfile::tempdir().unwrap();
+    let main =
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapters/ch1}\n\\end{document}\n";
+    std::fs::write(dir.path().join("main.tex"), main).unwrap();
+    std::fs::write(dir.path().join("main.pdf"), "%PDF-1.7\n").unwrap();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[build]\nroot = \"main.tex\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("chapters")).unwrap();
+    let chapter = "Chapter text.\n";
+    let chapter_path = dir.path().join("chapters").join("ch1.tex");
+    std::fs::write(&chapter_path, chapter).unwrap();
+    let record = dir.path().join("viewer-args.txt");
+
+    let (client, server_thread) = start_server(Some(viewer_options(&record, &["%p", "%f"])));
+    let uri = path_to_file_uri(&chapter_path);
+    did_open(&client, &uri, 1, chapter);
+    let _ = recv_diagnostics(&client);
+
+    assert_eq!(forward_search(&client, 2, &uri, Position::new(0, 0)), 0);
+    assert_eq!(
+        recorded_args(&record),
+        vec![
+            dir.path().join("main.pdf").display().to_string(),
+            chapter_path.display().to_string(),
+        ]
+    );
 
     shutdown(&client, server_thread);
 }

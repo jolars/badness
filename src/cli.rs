@@ -216,7 +216,8 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Debug utilities for parser and formatter diagnostics.
+    /// Debug utilities for parser and formatter diagnostics, and test
+    /// scaffolding.
     ///
     /// Intended for CI smoke tests and local triage; hidden from help and the
     /// generated docs, and covered by no stability promise.
@@ -268,6 +269,20 @@ pub enum DebugCommand {
         /// too (they are normally always processed).
         #[arg(long)]
         force_exclude: bool,
+    },
+    /// Write the trailing arguments to a file, one per line, and exit 0.
+    ///
+    /// A stand-in PDF viewer for the forward-search integration tests: it is the
+    /// one program guaranteed to exist on every platform CI runs on, and it
+    /// records exactly what `%f`/`%p`/`%l` expanded to.
+    EchoArgs {
+        /// File to write the arguments to.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+        /// The arguments to record. Taken verbatim, so a leading `-` or a `%`
+        /// placeholder is never interpreted.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 }
 

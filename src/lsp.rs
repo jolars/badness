@@ -58,6 +58,7 @@ mod code_action;
 mod completion_resolve;
 mod document_link;
 mod folding;
+mod forward_search;
 mod hover;
 mod name_refs;
 mod selection_range;
@@ -141,6 +142,7 @@ use crate::semantic::{
 };
 use crate::syntax::{SyntaxKind, SyntaxNode};
 use crate::text::{LineIndex, PositionEncoding};
+use forward_search::{ForwardSearchRequest, ForwardSearchStatus};
 use name_refs::{NameKind, NameTarget};
 
 use task_pool::{Spawner, TaskPool, read_pool_size};
@@ -312,6 +314,12 @@ fn server_capabilities(
             resolve_provider: Some(true),
             ..Default::default()
         }),
+        // texlab's spelling for the custom `textDocument/forwardSearch` method,
+        // so a client that already probes for it finds badness too. Advertised
+        // unconditionally: the viewer settings can arrive later (or change) via
+        // `didChangeConfiguration`, and it is the `Unconfigured` status — not a
+        // missing capability — that tells a client to prompt for a viewer.
+        experimental: Some(serde_json::json!({ "textDocumentForwardSearch": true })),
         ..Default::default()
     }
 }
@@ -369,6 +377,44 @@ struct EditorSettings {
     /// [`texmf::global_index`](crate::project::texmf::global_index) it drives is
     /// first-config-wins.
     texmf: TexmfConfig,
+    /// The PDF viewer forward search drives (see [`ForwardSearchSettings`]).
+    forward_search: ForwardSearchSettings,
+}
+
+/// The external PDF viewer `textDocument/forwardSearch` launches.
+///
+/// *Machine* configuration with no `badness.toml` counterpart, for the same
+/// reason as [`TexmfConfig`]: which viewer is installed, and under what name, is
+/// a fact about the machine rather than about the project. The editor is its only
+/// source, and the file-wins rule does not apply. Where the *PDF* lives is
+/// project data and belongs to `[build]` instead.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ForwardSearchSettings {
+    /// The viewer program. Spawned directly, never through a shell, so there is
+    /// no word splitting: flags belong in [`args`](Self::args), and
+    /// `"zathura --synctex-forward"` is a misconfiguration that cannot launch.
+    executable: Option<String>,
+    /// The viewer's argument vector, each element admitting `%f`/`%p`/`%l` (see
+    /// [`forward_search::viewer_args`]). There is no useful default — every
+    /// viewer spells forward search differently — so an unset `args` leaves
+    /// forward search unconfigured exactly as an unset `executable` does.
+    args: Option<Vec<String>>,
+    /// Override for the inverse-search IPC directory. An escape hatch for
+    /// containers and sandboxes, where the runtime directory may not be shared
+    /// between the viewer and the server.
+    ipc_dir: Option<PathBuf>,
+}
+
+impl ForwardSearchSettings {
+    /// The configured viewer, or `None` when forward search is unconfigured.
+    ///
+    /// Both halves are required. That matches texlab, and it is not mere
+    /// compatibility: an `executable` with no `args` would launch a viewer on no
+    /// document at all.
+    fn viewer(&self) -> Option<(&str, &[String])> {
+        Some((self.executable.as_deref()?, self.args.as_deref()?))
+    }
 }
 
 impl EditorSettings {
@@ -514,6 +560,17 @@ impl GlobalState {
                     let root = source.exclude_root(&anchor);
                     if let Ok(filter) = ExcludeFilter::new(root, &config.exclude_patterns(&[])) {
                         resolved.exclude = filter;
+                    }
+                    // `[build] root` is documented relative to the config's own
+                    // directory, and the consumers (forward search) only ever see
+                    // the resolved `BuildConfig`. Absolutize once, here, where that
+                    // directory is still in hand. `pdf-dir` is deliberately left
+                    // alone: it resolves against the *root document's* directory,
+                    // which is not known until the root is.
+                    if let Some(build_root) =
+                        resolved.build.root.as_ref().filter(|p| p.is_relative())
+                    {
+                        resolved.build.root = Some(root.join(build_root));
                     }
                 }
                 resolved
@@ -674,6 +731,22 @@ enum WorkerJob {
         /// `[build]` settings for the label-number lookup (a `\label`/`\ref` hover
         /// reads the compile's `.aux`).
         build: BuildConfig,
+    },
+    /// A `textDocument/forwardSearch` request: resolve the cursor file's document
+    /// root and that root's compiled PDF, then hand `(%f, %p, %l)` to the
+    /// configured viewer. Cross-file — the root scan runs the salsa
+    /// `file_is_document_root` query over the label namespace — so the worker
+    /// snapshots project membership when it dispatches, like [`Hover`](Self::Hover),
+    /// and none of it can run on the main loop, which holds no database.
+    ForwardSearch {
+        id: RequestId,
+        path: PathBuf,
+        /// 1-based, as SyncTeX and every viewer count.
+        line: u32,
+        /// `[build]` settings locating the PDF, with `root` already absolutized.
+        build: BuildConfig,
+        executable: String,
+        args: Vec<String>,
     },
     /// A signature-help request: describe the command/environment whose argument
     /// the cursor is typing in on the read pool and reply to `id`. Cross-file
@@ -953,6 +1026,9 @@ fn main_loop(
                             }
                             HoverRequest::METHOD => {
                                 on_hover(&connection, &mut state, &job_tx, req)
+                            }
+                            ForwardSearchRequest::METHOD => {
+                                on_forward_search(&connection, &mut state, &job_tx, req)
                             }
                             SignatureHelpRequest::METHOD => {
                                 on_signature_help(&connection, &mut state, &job_tx, req)
@@ -1764,6 +1840,71 @@ fn on_hover(
         text,
         position,
         build,
+    });
+}
+
+/// `textDocument/forwardSearch`: launch the configured PDF viewer at the cursor's
+/// source position.
+///
+/// Ordered so the cheap rejections never cost a database snapshot: an
+/// unconfigured viewer and a pathless buffer are both answered here, and only a
+/// request that can actually reach a viewer becomes a worker job.
+///
+/// The document need *not* be open — the database may know it as a seeded
+/// sibling, and the namespace scan falls back to the file itself either way.
+///
+/// One deliberate divergence from texlab, which answers every forward search with
+/// a status and never a JSON-RPC error: malformed params is a *client* bug, not a
+/// search outcome, and the four statuses describe semantic results. A client that
+/// sends a well-formed request can never see this error.
+fn on_forward_search(
+    connection: &Connection,
+    state: &mut GlobalState,
+    job_tx: &Sender<WorkerJob>,
+    req: Request,
+) {
+    let id = req.id.clone();
+    let reply = |status: ForwardSearchStatus| {
+        let result = serde_json::to_value(status.result()).unwrap_or(serde_json::Value::Null);
+        let _ = connection
+            .sender
+            .send(Message::Response(Response::new_ok(id.clone(), result)));
+    };
+    let params = match req.extract::<TextDocumentPositionParams>(ForwardSearchRequest::METHOD) {
+        Ok((_, params)) => params,
+        Err(_) => {
+            let resp = Response::new_err(
+                id,
+                ErrorCode::InvalidParams as i32,
+                "invalid forwardSearch params".to_owned(),
+            );
+            let _ = connection.sender.send(Message::Response(resp));
+            return;
+        }
+    };
+
+    let Some((executable, args)) = state.editor_settings.forward_search.viewer() else {
+        reply(ForwardSearchStatus::Unconfigured);
+        return;
+    };
+    let (executable, args) = (executable.to_owned(), args.to_vec());
+
+    let uri = params.text_document.uri;
+    // An untitled buffer has no path, so it was never compiled into anything.
+    let Some(path) = uri_to_fs_path(&uri) else {
+        reply(ForwardSearchStatus::Failure);
+        return;
+    };
+    // SyncTeX's granularity is the line, so `position.character` is ignored.
+    let line = params.position.line + 1;
+    let build = state.resolve_settings(&uri).build;
+    let _ = job_tx.send(WorkerJob::ForwardSearch {
+        id,
+        path,
+        line,
+        build,
+        executable,
+        args,
     });
 }
 
@@ -2644,6 +2785,33 @@ impl Worker {
                 self.read_spawner.spawn(move || {
                     run_hover(
                         &snapshot, id, &path, &text, position, members, &build, enc, &out_tx,
+                    )
+                });
+            }
+            WorkerJob::ForwardSearch {
+                id,
+                path,
+                line,
+                build,
+                executable,
+                args,
+            } => {
+                // The root-document scan walks the label namespace, so — like
+                // hover — snapshot project membership on the write side.
+                let snapshot = self.db.snapshot();
+                let members = self.project_members();
+                let out_tx = self.out_tx.clone();
+                self.read_spawner.spawn(move || {
+                    run_forward_search(
+                        &snapshot,
+                        id,
+                        &path,
+                        line,
+                        members,
+                        &build,
+                        &executable,
+                        &args,
+                        &out_tx,
                     )
                 });
             }
@@ -4251,6 +4419,38 @@ fn compute_bib_document_link(
         .collect()
 }
 
+/// `path`'s label namespace — its include-graph component — falling back to just
+/// `path` for a standalone or untracked file, so a caller always has something to
+/// scan.
+fn namespace_of<'a>(resolution: &'a ResolvedLabels, path: &'a Path) -> Vec<&'a Path> {
+    let members = resolution.namespace_members(path);
+    if members.is_empty() {
+        vec![path]
+    } else {
+        members
+    }
+}
+
+/// The document root of `namespace`: its first member carrying a
+/// `\documentclass` or `\begin{document}` ([`project::labels::is_document_root`],
+/// via the salsa `file_is_document_root` firewall). `None` when no member is a
+/// root — an uncompilable fragment, or a project whose root the server has not
+/// loaded (the db seeds one directory at a time, so a child in `chapters/` may
+/// never have seen `../main.tex`; that is what `[build] root` is for).
+///
+/// The single place the "which file did the compiler run on?" question is
+/// answered, shared by `.aux` resolution ([`document_aux`]) and PDF resolution
+/// ([`forward_search::pdf_path`]).
+///
+/// [`project::labels::is_document_root`]: crate::project::labels::is_document_root
+fn root_document_of<'a>(snapshot: &Analysis, namespace: &[&'a Path]) -> Option<&'a Path> {
+    namespace.iter().copied().find(|p| {
+        snapshot
+            .lookup_file(p)
+            .is_some_and(|f| snapshot.file_is_document_root(f))
+    })
+}
+
 /// The merged `.aux` facts for `path`'s label namespace: the aux root is the
 /// namespace's document root's directory (where the compiler ran), falling back
 /// to `path`'s own; an unknown/untracked file still checks its sibling `.aux`.
@@ -4262,20 +4462,9 @@ fn document_aux(
     path: &Path,
     build: &BuildConfig,
 ) -> Option<AuxData> {
-    let namespace = resolution.namespace_members(path);
-    let namespace: Vec<&Path> = if namespace.is_empty() {
-        vec![path]
-    } else {
-        namespace
-    };
-    let root_dir = namespace
-        .iter()
-        .find(|p| {
-            snapshot
-                .lookup_file(p)
-                .is_some_and(|f| snapshot.file_is_document_root(f))
-        })
-        .and_then(|p| p.parent())
+    let namespace = namespace_of(resolution, path);
+    let root_dir = root_document_of(snapshot, &namespace)
+        .and_then(Path::parent)
         .or_else(|| path.parent())
         .unwrap_or(Path::new(""));
     crate::project::aux::aux_data_for(&namespace, root_dir, build.aux_dir.as_deref())
@@ -4721,6 +4910,69 @@ fn run_hover(
     let result = hover::compute_hover(snapshot, path, text, position, members, build, enc)
         .and_then(|hover| serde_json::to_value(hover).ok())
         .unwrap_or(serde_json::Value::Null);
+    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+}
+
+/// Locate the cursor file's compiled PDF, launch the configured viewer at
+/// `line`, and reply with the resulting status.
+///
+/// The document root is the first of: `[build] root`, the label namespace's
+/// `\documentclass`/`\begin{document}` member ([`root_document_of`]), or the file
+/// itself. `%f` stays the *cursor's* file throughout — SyncTeX indexes per input
+/// file — while `%p` is the *root's* PDF, which is the whole reason the root
+/// matters here.
+///
+/// The PDF must exist. Without that check a stale or never-built project would
+/// launch a viewer onto nothing, and the client would have no way to say so;
+/// with it, `Failure` is a signal the editor can turn into "build the document
+/// first". Reading one directory entry is the same class of environment access
+/// the `.aux` freshness check already performs.
+#[allow(clippy::too_many_arguments)]
+fn run_forward_search(
+    snapshot: &Analysis,
+    id: RequestId,
+    path: &Path,
+    line: u32,
+    members: Vec<ProjectMember>,
+    build: &BuildConfig,
+    executable: &str,
+    args: &[String],
+    out_tx: &Sender<Outbound>,
+) {
+    // A cancelled read leaves the root unresolved; fall back to the cursor's own
+    // file rather than failing the request, since a single-file project resolves
+    // to exactly that anyway.
+    let root = salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        let (resolution, _) = snapshot.resolve_project(members);
+        root_document_of(snapshot, &namespace_of(resolution, path)).map(Path::to_path_buf)
+    }))
+    .ok()
+    .flatten();
+    let root = build
+        .root
+        .clone()
+        .or(root)
+        .unwrap_or_else(|| path.to_path_buf());
+
+    let status = match forward_search::pdf_path(&root, build) {
+        Some(pdf) if pdf.is_file() => {
+            let target = forward_search::SearchTarget {
+                tex: path.to_path_buf(),
+                pdf,
+                line,
+            };
+            forward_search::spawn_viewer(executable, args, &target)
+        }
+        Some(pdf) => {
+            log::info!(
+                "forward search: no PDF at {} (has the document been compiled?)",
+                pdf.display()
+            );
+            ForwardSearchStatus::Failure
+        }
+        None => ForwardSearchStatus::Failure,
+    };
+    let result = serde_json::to_value(status.result()).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 

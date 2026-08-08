@@ -251,10 +251,11 @@ fn default_indent_width() -> u32 {
     DEFAULT_INDENT_WIDTH
 }
 
-/// The `[build]` section: where the TeX compiler leaves its artifacts. Read by the
-/// language server only (label-number hover and document symbols pull resolved
-/// numbers from the `.aux`); never by the formatter or linter, which stay hermetic
-/// (see `AGENTS.md`).
+/// The `[build]` section: where the TeX compiler leaves its artifacts, and which
+/// file it was run on. Read by the language server only (label-number hover and
+/// document symbols pull resolved numbers from the `.aux`; forward search locates
+/// the compiled PDF); never by the formatter or linter, which stay hermetic (see
+/// `AGENTS.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BuildConfig {
@@ -264,6 +265,46 @@ pub struct BuildConfig {
     /// `latex`/`pdflatex` runs).
     #[serde(default)]
     pub aux_dir: Option<PathBuf>,
+    /// Directory holding the build's PDF output (latexmk's `-outdir`), resolved
+    /// relative to the root document's directory when not absolute. When unset,
+    /// the PDF is expected next to the root document. Read by forward search.
+    #[serde(default)]
+    pub pdf_dir: Option<PathBuf>,
+    /// The compiled PDF's file name, when the build does not name it after the
+    /// root document (latexmk's `-jobname`). A bare file name resolved inside
+    /// [`pdf_dir`](Self::pdf_dir), never a path; `.pdf` is appended when it
+    /// carries no extension.
+    #[serde(default)]
+    pub pdf_filename: Option<String>,
+    /// The project's root document — the file the compiler was run on — resolved
+    /// relative to this `badness.toml`'s directory when not absolute.
+    ///
+    /// Overrides the include-graph scan for a `\documentclass`/`\begin{document}`
+    /// member, which can only see files the server has already loaded: editing
+    /// `chapters/ch1.tex` in a project rooted at `../main.tex` seeds only
+    /// `chapters/`, so the scan finds no root at all.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
+}
+
+impl BuildConfig {
+    fn validate(&self, path: Option<&Path>) -> Result<(), ConfigError> {
+        // A directory here would be silently ignored (the name is joined onto
+        // `pdf-dir`), so reject it rather than resolve a PDF the user did not
+        // mean.
+        if let Some(name) = &self.pdf_filename
+            && Path::new(name).components().count() != 1
+        {
+            return Err(ConfigError::InvalidValue {
+                path: path.map(Path::to_path_buf),
+                field: "pdf-filename",
+                message: format!(
+                    "must be a bare file name; use `pdf-dir` for the directory, got `{name}`"
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -381,7 +422,8 @@ impl Config {
     }
 
     fn validate(&self, path: Option<&Path>) -> Result<(), ConfigError> {
-        self.format.validate(path)
+        self.format.validate(path)?;
+        self.build.validate(path)
     }
 
     /// Walk `start` and its ancestors looking for a `badness.toml`. Stops at the
@@ -627,13 +669,36 @@ mod tests {
     #[test]
     fn build_aux_dir_defaults_to_none() {
         let config = parse("").expect("parse");
-        assert_eq!(config.build.aux_dir, None);
+        assert_eq!(config.build, BuildConfig::default());
     }
 
     #[test]
     fn parses_build_section() {
-        let config = parse("[build]\naux-dir = \"out\"\n").expect("parse");
+        let config = parse(
+            "[build]\naux-dir = \"out\"\npdf-dir = \"out\"\npdf-filename = \"thesis.pdf\"\nroot = \"main.tex\"\n",
+        )
+        .expect("parse");
         assert_eq!(config.build.aux_dir, Some(PathBuf::from("out")));
+        assert_eq!(config.build.pdf_dir, Some(PathBuf::from("out")));
+        assert_eq!(config.build.pdf_filename, Some("thesis.pdf".to_owned()));
+        assert_eq!(config.build.root, Some(PathBuf::from("main.tex")));
+    }
+
+    #[test]
+    fn rejects_a_pdf_filename_carrying_a_directory() {
+        for name in ["out/thesis.pdf", ""] {
+            let err = parse(&format!("[build]\npdf-filename = \"{name}\"\n"))
+                .expect_err("a path is not a bare file name");
+            assert!(
+                matches!(err, ConfigError::InvalidValue { field, .. } if field == "pdf-filename"),
+                "unexpected error for `{name}`: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_build_key() {
+        assert!(parse("[build]\npdf-directory = \"out\"\n").is_err());
     }
 
     #[test]

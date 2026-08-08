@@ -267,7 +267,26 @@ fn main() -> ExitCode {
                     &exclude_filter,
                 )
             }
+            DebugCommand::EchoArgs { out, args } => run_debug_echo_args(&out, &args),
         },
+    }
+}
+
+/// `badness debug echo-args`: record the trailing arguments, one per line.
+///
+/// The forward-search tests configure this as their PDF viewer, so what lands in
+/// `out` is exactly the argument vector the viewer would have been launched with.
+fn run_debug_echo_args(out: &Path, args: &[String]) -> ExitCode {
+    let mut body = args.join("\n");
+    if !args.is_empty() {
+        body.push('\n');
+    }
+    match std::fs::write(out, body) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("badness: failed to write {}: {err}", out.display());
+            ExitCode::from(2)
+        }
     }
 }
 

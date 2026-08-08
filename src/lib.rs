@@ -10,6 +10,7 @@ pub mod config;
 pub mod file_discovery;
 pub mod formatter;
 pub mod incremental;
+pub mod ipc;
 pub mod linter;
 pub mod lsp;
 pub mod parser;

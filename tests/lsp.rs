@@ -4442,3 +4442,179 @@ fn forward_search_honors_build_root_for_an_unseeded_parent() {
 
     shutdown(&client, server_thread);
 }
+
+// ---------------------------------------------------------------------------
+// Inverse search (viewer -> IPC -> `window/showDocument`).
+// ---------------------------------------------------------------------------
+
+/// Spawn an in-process server that advertises `window/showDocument` support and
+/// points its inverse-search IPC at `ipc_dir`, so the test can play the viewer.
+fn start_server_show_document(
+    ipc_dir: &std::path::Path,
+    roots: &[&std::path::Path],
+) -> (Connection, std::thread::JoinHandle<()>) {
+    let (server, client) = Connection::memory();
+    let server_thread = std::thread::spawn(move || badness::lsp::serve(server).unwrap());
+
+    // `window.showDocument` and `workspaceFolders` are both read straight off the
+    // raw `initialize` JSON by the server, so build the params as JSON rather
+    // than round-tripping a partly-defaulted `InitializeParams`.
+    let params = serde_json::json!({
+        "capabilities": { "window": { "showDocument": { "support": true } } },
+        "workspaceFolders": roots
+            .iter()
+            .map(|root| serde_json::json!({
+                "uri": path_to_file_uri(root).as_str(),
+                "name": "test",
+            }))
+            .collect::<Vec<_>>(),
+        "initializationOptions": {
+            "forwardSearch": { "ipcDir": ipc_dir.display().to_string() }
+        },
+    });
+    send_request(&client, 1, "initialize", params);
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(1));
+    let init: InitializeResult = serde_json::from_value(resp.result().unwrap()).unwrap();
+    assert_server_capabilities(&init);
+    send_notification(
+        &client,
+        "initialized",
+        serde_json::to_value(InitializedParams {}).unwrap(),
+    );
+    (client, server_thread)
+}
+
+/// Block until the server has published its inverse-search advertisement.
+///
+/// The `initialize` response is sent before `main_loop` runs, so a test that
+/// dials immediately can beat the server to its own socket. A real viewer runs
+/// minutes later; this just restores that ordering.
+fn wait_for_ipc_advertisement(ipc_dir: &std::path::Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let published = std::fs::read_dir(ipc_dir).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        });
+        if published {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the server never published an inverse-search advertisement in {}",
+            ipc_dir.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Wait for the server's `window/showDocument`, acking anything else on the way.
+fn recv_show_document(client: &Connection) -> lsp_types::ShowDocumentParams {
+    loop {
+        match recv(client) {
+            Message::Request(req) if req.method == "window/showDocument" => {
+                let params = serde_json::from_value(req.params).expect("ShowDocumentParams");
+                client
+                    .sender
+                    .send(Message::Response(Response::new_ok(
+                        req.id,
+                        serde_json::json!({ "success": true }),
+                    )))
+                    .unwrap();
+                return params;
+            }
+            Message::Notification(_) => continue,
+            // Ack any other server-initiated request (e.g. watcher registration).
+            Message::Request(req) => {
+                client
+                    .sender
+                    .send(Message::Response(Response::new_ok(
+                        req.id,
+                        serde_json::Value::Null,
+                    )))
+                    .unwrap();
+            }
+            other => panic!("expected window/showDocument, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn inverse_search_reveals_the_position_via_show_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let ipc_dir = dir.path().join("ipc");
+    let main = "\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server_show_document(&ipc_dir, &[dir.path()]);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    wait_for_ipc_advertisement(&ipc_dir);
+
+    // Play the viewer. The client blocks on the server's ack, so it has to run
+    // off-thread: this test is both ends of the IPC at once.
+    let viewer = {
+        let (ipc_dir, main_path) = (ipc_dir.clone(), main_path.clone());
+        std::thread::spawn(move || badness::ipc::send_inverse_search_in(&ipc_dir, &main_path, 3, 0))
+    };
+
+    let params = recv_show_document(&client);
+    assert_eq!(params.uri, uri);
+    assert_eq!(params.take_focus, Some(true));
+    assert_eq!(params.external, Some(false));
+    // The wire is 1-based, LSP is 0-based, and the selection is collapsed.
+    assert_eq!(
+        params.selection,
+        Some(Range {
+            start: Position::new(2, 0),
+            end: Position::new(2, 0),
+        })
+    );
+    viewer.join().unwrap().expect("the server accepted");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn inverse_search_declines_a_file_outside_the_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let ipc_dir = dir.path().join("ipc");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+
+    let (client, server_thread) = start_server_show_document(&ipc_dir, &[&workspace]);
+    wait_for_ipc_advertisement(&ipc_dir);
+
+    // A file under neither the workspace root nor any open buffer: the server must
+    // decline, so the viewer-side command can report that nobody owns it rather
+    // than have this server answer for a project it knows nothing about.
+    let stranger = dir.path().join("elsewhere.tex");
+    let err = badness::ipc::send_inverse_search_in(&ipc_dir, &stranger, 1, 0)
+        .expect_err("no server owns this file");
+    assert!(
+        matches!(err, badness::ipc::IpcError::NoServerForFile(_)),
+        "{err:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn a_client_without_show_document_support_never_advertises() {
+    // Inverse search ends in `window/showDocument`; a server that cannot finish
+    // the job must not claim the request from one that can.
+    let dir = tempfile::tempdir().unwrap();
+    let ipc_dir = dir.path().join("ipc");
+    let (client, server_thread) = start_server(Some(serde_json::json!({
+        "forwardSearch": { "ipcDir": ipc_dir.display().to_string() }
+    })));
+
+    let err = badness::ipc::send_inverse_search_in(&ipc_dir, &dir.path().join("main.tex"), 1, 0)
+        .expect_err("nothing should be listening");
+    assert!(matches!(err, badness::ipc::IpcError::NoServer), "{err:?}");
+
+    shutdown(&client, server_thread);
+}

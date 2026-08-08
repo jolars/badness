@@ -68,6 +68,7 @@ mod task_pool;
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
@@ -81,8 +82,8 @@ use lsp_types::request::{
     DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, ExecuteCommand,
     FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, OnTypeFormatting,
     PrepareRenameRequest, RangeFormatting, References, RegisterCapability, Rename, Request as _,
-    ResolveCompletionItem, SelectionRangeRequest, SignatureHelpRequest, WorkspaceDiagnosticRefresh,
-    WorkspaceSymbolRequest,
+    ResolveCompletionItem, SelectionRangeRequest, ShowDocument, SignatureHelpRequest,
+    WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     ApplyWorkspaceEditParams, CodeActionParams, CodeActionProviderCapability, CodeDescription,
@@ -103,7 +104,7 @@ use lsp_types::{
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
     RegistrationParams, RelatedFullDocumentDiagnosticReport,
     RelatedUnchangedDocumentDiagnosticReport, RenameOptions, RenameParams, SelectionRange,
-    SelectionRangeParams, SelectionRangeProviderCapability, ServerCapabilities,
+    SelectionRangeParams, SelectionRangeProviderCapability, ServerCapabilities, ShowDocumentParams,
     SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
     UnchangedDocumentDiagnosticReport, Uri, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
@@ -360,6 +361,23 @@ struct GlobalState {
     /// [`negotiate_position_encoding`]), governing every `Position` ↔ byte-offset
     /// conversion on the main loop (`didChange` splicing).
     position_encoding: PositionEncoding,
+    /// The workspace folders this server was started on (see [`workspace_roots`]),
+    /// used to decide which inverse searches are ours. Empty when the client
+    /// opened a bare file, which means "anything".
+    workspace_roots: Vec<PathBuf>,
+}
+
+impl GlobalState {
+    /// Whether `path` falls inside this server's workspace. A server with no
+    /// roots claims everything — it has no basis to decline, and declining would
+    /// leave the request unanswered by anyone.
+    fn owns_path(&self, path: &Path) -> bool {
+        self.workspace_roots.is_empty()
+            || self
+                .workspace_roots
+                .iter()
+                .any(|root| path.starts_with(root))
+    }
 }
 
 /// Settings supplied by the editor, as `initializationOptions` at startup or via
@@ -953,6 +971,97 @@ fn client_watched_files_support(init_params: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the client supports `window/showDocument`, i.e.
+/// `capabilities.window.showDocument.support == true`. Pointer-walks the JSON
+/// like [`client_diagnostic_support`].
+///
+/// This is the whole of inverse search's client contract, so the IPC listener is
+/// bound only when it holds: a server that cannot reveal the position has no
+/// business advertising itself to viewers and stealing the request from one that
+/// can.
+fn client_show_document_support(init_params: &serde_json::Value) -> bool {
+    init_params
+        .get("capabilities")
+        .and_then(|c| c.get("window"))
+        .and_then(|w| w.get("showDocument"))
+        .and_then(|s| s.get("support"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The workspace this server owns, as filesystem paths: the `workspaceFolders`,
+/// falling back to the deprecated `rootUri`. Empty when the client opened a bare
+/// file, which an inverse-search client reads as "will take anything".
+fn workspace_roots(init_params: &serde_json::Value) -> Vec<PathBuf> {
+    let folders = init_params
+        .get("workspaceFolders")
+        .and_then(serde_json::Value::as_array)
+        .map(|folders| {
+            folders
+                .iter()
+                .filter_map(|folder| folder.get("uri"))
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(|uri| uri.parse::<Uri>().ok())
+                .filter_map(|uri| uri_to_fs_path(&uri))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !folders.is_empty() {
+        return folders;
+    }
+    init_params
+        .get("rootUri")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|uri| uri.parse::<Uri>().ok())
+        .and_then(|uri| uri_to_fs_path(&uri))
+        .into_iter()
+        .collect()
+}
+
+/// A bound inverse-search listener and the thread parked in its accept loop.
+struct IpcHandle {
+    listener: Arc<crate::ipc::Listener>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+/// One accepted inverse-search request, on its way to the main loop.
+struct IpcMessage {
+    request: crate::ipc::InverseSearchRequest,
+    responder: crate::ipc::Responder,
+}
+
+/// Bind the inverse-search socket and park a thread on its accept loop, forwarding
+/// each request to the main loop over `ipc_tx`.
+///
+/// `None` when the socket cannot be bound. Inverse search is a convenience, so a
+/// server that cannot listen still serves everything else — the viewer-side
+/// command is what reports the absence, and it says so in terms the user can act
+/// on.
+fn spawn_ipc_listener(
+    settings: &EditorSettings,
+    roots: Vec<PathBuf>,
+    ipc_tx: Sender<IpcMessage>,
+) -> Option<IpcHandle> {
+    let dir = settings
+        .forward_search
+        .ipc_dir
+        .clone()
+        .unwrap_or_else(crate::ipc::ipc_dir);
+    let listener = Arc::new(crate::ipc::Listener::bind_in(&dir, roots)?);
+    let accept = Arc::clone(&listener);
+    let thread = std::thread::Builder::new()
+        .name("badness-lsp-ipc".to_owned())
+        .spawn(move || {
+            while let Some((request, responder)) = accept.accept_one() {
+                if ipc_tx.send(IpcMessage { request, responder }).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok()?;
+    Some(IpcHandle { listener, thread })
+}
+
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
 /// the read pool, then shuttles messages between the client and the workers.
 /// `encoding` is the position encoding [`serve`] negotiated (and advertised) at
@@ -978,6 +1087,7 @@ fn main_loop(
         supports_dynamic_watchers,
         next_request_id: 1,
         position_encoding: encoding,
+        workspace_roots: workspace_roots(&init_params),
     };
 
     // Register on-disk watchers now: `lsp-server`'s `Connection::initialize` already
@@ -985,6 +1095,20 @@ fn main_loop(
     // notification — the post-handshake point here is the LSP-legal place to fire
     // dynamic registrations.
     register_file_watchers(&connection, &mut state);
+
+    // Inverse search, gated on the one client capability it needs. A client that
+    // cannot `window/showDocument` never binds a socket, which is also why the
+    // default test client is unaffected by any of this.
+    let (ipc_tx, ipc_rx) = unbounded::<IpcMessage>();
+    let ipc = client_show_document_support(&init_params)
+        .then(|| {
+            spawn_ipc_listener(
+                &state.editor_settings,
+                workspace_roots(&init_params),
+                ipc_tx,
+            )
+        })
+        .flatten();
 
     let read_pool = TaskPool::new("badness-lsp-read", read_pool_size());
     let (job_tx, job_rx) = unbounded::<WorkerJob>();
@@ -1078,7 +1202,20 @@ fn main_loop(
                 let Ok(outbound) = outbound else { continue };
                 forward_outbound(&connection, &mut state, &job_tx, outbound);
             }
+            recv(ipc_rx) -> msg => {
+                let Ok(msg) = msg else { continue };
+                on_inverse_search(&connection, &mut state, msg);
+            }
         }
+    }
+
+    // The accept thread is parked in a blocking `accept`, which dropping a
+    // channel cannot wake, and `serve` runs *in-process* in the LSP test binary —
+    // so a detached listener would hold a bound socket for the whole run. Dial
+    // ourselves once, join, and let `Listener`'s `Drop` unlink both nodes.
+    if let Some(ipc) = ipc {
+        ipc.listener.wake();
+        let _ = ipc.thread.join();
     }
 
     // Dropping `job_tx` disconnects the worker's receiver so it exits; the read
@@ -2355,6 +2492,56 @@ fn forward_outbound(
         }
         Outbound::RelintAll => relint_all_open(connection, state, job_tx),
     }
+}
+
+/// Answer a viewer's inverse search: reveal `msg`'s source position in the editor.
+///
+/// Acceptance first, because the client is fanning out across every listening
+/// server and a wrong "yes" strands the request here. A file counts as ours when
+/// it is open, when it sits under one of our workspace roots, or when we have no
+/// roots at all (a client that opened a bare file takes anything).
+///
+/// The responder is answered *before* the editor is told, in that order
+/// deliberately: the viewer-side command blocks on the ack, and the integration
+/// test drives both ends from one process.
+fn on_inverse_search(connection: &Connection, state: &mut GlobalState, msg: IpcMessage) {
+    let IpcMessage { request, responder } = msg;
+    let Some(uri) = path_to_uri(&request.path) else {
+        responder.reject("not a representable path");
+        return;
+    };
+    if !state.documents.contains_key(&uri) && !state.owns_path(&request.path) {
+        responder.reject("outside this server's workspace");
+        return;
+    }
+    responder.accept();
+
+    // The wire is 1-based (SyncTeX's convention, and every viewer's); LSP is
+    // 0-based. A viewer reporting line 0 would be out of contract, so saturate
+    // rather than wrap.
+    let position = Position::new(request.line.saturating_sub(1), request.character);
+    let params = ShowDocumentParams {
+        uri,
+        external: Some(false),
+        take_focus: Some(true),
+        selection: Some(Range {
+            start: position,
+            end: position,
+        }),
+    };
+    let Ok(params) = serde_json::to_value(params) else {
+        return;
+    };
+    // Fire-and-forget, like `workspace/applyEdit`: the client's `{success}` reply
+    // is swallowed by the main loop's `Message::Response` arm, since there is
+    // nothing we would do differently on a `false`.
+    let id = state.next_request_id;
+    state.next_request_id += 1;
+    let _ = connection.sender.send(Message::Request(Request {
+        id: RequestId::from(id),
+        method: ShowDocument::METHOD.to_owned(),
+        params,
+    }));
 }
 
 /// Re-lint every open document, because cross-file resolution may have changed for all
@@ -7115,6 +7302,7 @@ mod tests {
             supports_dynamic_watchers: false,
             next_request_id: 1,
             position_encoding: PositionEncoding::Utf16,
+            workspace_roots: Vec::new(),
         }
     }
 

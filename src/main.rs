@@ -220,6 +220,13 @@ fn main() -> ExitCode {
         }
         Command::Parse { path } => run_parse(path.as_deref()),
         Command::Lsp => run_lsp(),
+        Command::InverseSearch {
+            input,
+            line,
+            line0,
+            character,
+            ipc_dir,
+        } => run_inverse_search(&input, line, line0, character, ipc_dir.as_deref()),
         Command::Init { force } => run_init(force),
         Command::Debug { command } => match command {
             DebugCommand::Format {
@@ -394,6 +401,43 @@ const STARTER_CONFIG: &str = "\
 # select = [\"...\"]  # if set, only these rules run
 # ignore = []        # rules to disable
 ";
+
+/// `badness inverse-search`: hand a viewer's source position to a running
+/// language server.
+///
+/// The path is canonicalized first: a viewer's `%f` is often relative to the
+/// compile directory, or reached through a symlink, and the server matches
+/// against the paths its editor opened.
+///
+/// Exits `2` — the CLI's usage/environment code — with a message naming the
+/// likely cause, rather than texlab's `-1` (which reaches the shell as 255 and
+/// says nothing). The viewer shows this to the user, so it has to be readable.
+fn run_inverse_search(
+    input: &Path,
+    line: Option<u32>,
+    line0: Option<u32>,
+    character: u32,
+    ipc_dir: Option<&Path>,
+) -> ExitCode {
+    let Some(line) = line.or_else(|| line0.map(|l| l + 1)) else {
+        eprintln!(
+            "badness: pass --line (counting from 1, what most viewers emit) \
+             or --line0 (counting from 0)"
+        );
+        return ExitCode::from(2);
+    };
+    let path = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+    let dir = ipc_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(badness::ipc::ipc_dir);
+    match badness::ipc::send_inverse_search_in(&dir, &path, line, character) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("badness: {err}");
+            ExitCode::from(2)
+        }
+    }
+}
 
 /// `badness init`: write a commented starter config to `<cwd>/badness.toml`.
 fn run_init(force: bool) -> ExitCode {

@@ -210,6 +210,42 @@ pub enum Command {
     },
     /// Run the language server over stdio.
     Lsp,
+    /// Answer a PDF viewer's inverse (backward) search.
+    ///
+    /// Point your viewer's inverse-search command here — for zathura,
+    /// `--synctex-editor-command "badness inverse-search --input %{input} --line
+    /// %{line}"`. The position is handed to a running badness language server,
+    /// which reveals it in your editor via `window/showDocument`, so the file must
+    /// belong to a workspace some editor currently has open.
+    InverseSearch {
+        /// The `.tex` file the viewer resolved.
+        #[arg(long, short, value_name = "PATH")]
+        input: PathBuf,
+        /// Line number, counting from 1 — what SyncTeX-aware viewers emit.
+        ///
+        /// Required unless `--line0` is given. Deliberately not enforced by
+        /// clap, whose message for that would name only `--line` and so send a
+        /// `--line0` user the wrong way.
+        #[arg(
+            long,
+            short,
+            alias = "line1",
+            value_name = "LINE",
+            conflicts_with = "line0"
+        )]
+        line: Option<u32>,
+        /// Line number counting from 0, for a viewer that reports it that way.
+        #[arg(long, value_name = "LINE")]
+        line0: Option<u32>,
+        /// Column, counting from 0, when the viewer supplies one.
+        #[arg(long, value_name = "COLUMN", default_value_t = 0)]
+        character: u32,
+        /// Directory holding the servers' IPC advertisements. Defaults to
+        /// `$BADNESS_IPC_DIR`, then a per-user directory under the runtime (or
+        /// temporary) directory.
+        #[arg(long, value_name = "DIR")]
+        ipc_dir: Option<PathBuf>,
+    },
     /// Write a commented starter `badness.toml` to the current directory.
     Init {
         /// Overwrite an existing `badness.toml`.

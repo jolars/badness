@@ -159,6 +159,35 @@ Run the language server over stdio
 
 **Usage:** `badness lsp`
 
+## `badness inverse-search`
+
+Answer a PDF viewer's inverse (backward) search.
+
+Point your viewer's inverse-search command here — for zathura, `--synctex-editor-command "badness inverse-search --input %{input} --line %{line}"`. The position is handed to a running badness language server, which reveals it in your editor via `window/showDocument`, so the file must belong to a workspace some editor currently has open.
+
+**Usage:** `badness inverse-search [OPTIONS] --input <PATH>`
+
+### Options
+
+`-i`, `--input <PATH>`
+:   The `.tex` file the viewer resolved
+
+`-l`, `--line <LINE>`
+:   Line number, counting from 1 — what SyncTeX-aware viewers emit.
+
+    Required unless `--line0` is given. Deliberately not enforced by clap, whose message for that would name only `--line` and so send a `--line0` user the wrong way.
+
+`--line0 <LINE>`
+:   Line number counting from 0, for a viewer that reports it that way
+
+`--character <COLUMN>`
+:   Column, counting from 0, when the viewer supplies one
+
+    Default value: `0`
+
+`--ipc-dir <DIR>`
+:   Directory holding the servers' IPC advertisements. Defaults to `$BADNESS_IPC_DIR`, then a per-user directory under the runtime (or temporary) directory
+
 ## `badness init`
 
 Write a commented starter `badness.toml` to the current directory

@@ -88,11 +88,33 @@ abutments onto a block's closing brace (`}\@ehc`, `}.`, `}{`) re-glue.
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):
 
-  | corpus  | repo @ pin                                                    | files |
-  | ------- | ------------------------------------------------------------- | ----- |
-  | latex3  | `latex3/latex3` @ `3d1d347d8937863c0786988b14d307a6091ee397`  | 288   |
-  | latex2e | `latex3/latex2e` @ `3a9fdd88bdc53f16a0c2158aa70d259607de333a` | 384   |
-  | pgf     | `pgf-tikz/pgf` @ `1c7fc0fdc3ec8a6bdcfd68785c6bbd43ec110178`   | 397   |
+  | corpus      | repo @ pin                                                             | files |
+  | ----------- | ---------------------------------------------------------------------- | ----- |
+  | latex3      | `latex3/latex3` @ `3d1d347d8937863c0786988b14d307a6091ee397`           | 288   |
+  | latex2e     | `latex3/latex2e` @ `3a9fdd88bdc53f16a0c2158aa70d259607de333a`          | 384   |
+  | pgf         | `pgf-tikz/pgf` @ `1c7fc0fdc3ec8a6bdcfd68785c6bbd43ec110178`            | 397   |
+  | latexindent | `cmhughes/latexindent.pl` @ `748f0f68397793b4646fa48762b0041b889cfcb4` | 5329  |
+
+`latexindent` is not package source and is read differently from the other
+three. It is latexindent.pl's own test suite (`test-cases/` plus
+`documentation/`): \~5.3k small hand-written files of deliberately adversarial
+LaTeX — blank lines in display math, verbatim-argument commands, unmatched
+braces, alignment torture, 120 `.bib`. Where the other three are expl3-heavy
+`.dtx`/`.sty`, this is document-level pathology, so the two overlap barely at
+all. The median file is \~200 bytes: a failure here is a near-minimal repro
+already, which is most of its value.
+
+**Its expected outputs are deliberately not used.** latexindent's harness writes
+results in-tree and asserts `git diff` is clean, so every committed
+`*-mod1.tex`/`*-output.tex` is the output of one specific YAML settings stack
+from that tool's config model — and latexindent is an *indenter* that preserves
+author line breaks, where badness owns layout outright. Those files are a
+different function's answers, not a stricter or looser version of ours; treating
+them as targets would mean reverse-engineering another tool's config surface
+into badness's rules, one special case per divergence. We mine the corpus purely
+as oracle *input*. It is GPL-3.0 to badness's MIT, which the fetch-don't-vendor
+setup (`corpora/` is gitignored) already keeps clean; a fixture derived from a
+case here should be hand-authored, never copied.
 
 ## Checking and regeneration
 
@@ -128,11 +150,57 @@ Variant:`reason (`.trivia.txt`) — the same distillation`check_gate_baselines.s
 - `SWEEP.md` — failures that appear or vanish across widths 60–120; each is a
   column-arithmetic hybrid candidate.
 
+## The `latexindent` inventory at first record
+
+190 `all` (178 `format-error`, 12 `idempotency`) and 161 `trivia` (145
+`format-error`, 15 `content-change`, 1 `non-fixed-point`) over 5329 files. Both
+gates run in seconds — 1.4s and 16s — because the files are small. Triaged into
+families, most of the `format-error` bulk is the corpus being adversarial on
+purpose rather than a gap on our side:
+
+- **`unmatched \]` — 102 files, almost all `test-cases/specials`.** A blank line
+  inside `\[…\]`, which is a genuine TeX error ("Missing $ inserted"), so the
+  shape gate refusing it is correct modeling. Corpus noise, not a bug.
+- **`expected ',' between fields` — 33 `.bib`,** the
+  `keyEqualsValueBraces/contributors-mod*` family: a blank line or comment
+  between a field value and the following `,`. Worth a look — that separation is
+  legal BibTeX.
+- **`unclosed {` — 18 files,** dominated by the `href` family in
+  `test-cases/verbatim` and `test-cases/fine-tuning`:
+  `\href{…%20for%30Spoken…}`, a URL with literal `%`. hyperref reads that
+  argument verbatim-ish, so the `%` is not a comment. A real semantic-layer gap
+  (verbatim-argument modeling), and precisely what latexindent's `verbatim/`
+  directory exists to probe.
+- **`unclosed environment` / `unmatched }` — 20 files,** mostly deliberately
+  partial documents (`test-cases/broken/`, files carrying `\end{document}` with
+  no `\begin{document}`). Corpus noise.
+- **12 `idempotency`, all `commands/figureValign-mod*`** — one family, not
+  twelve: `%`-terminated argument braces (`\includegraphics[…]%\n{%\n…%\n}`).
+
+The 15 `content-change` entries are the severe class and reduce to **two**
+causes: the 12 `figureValign` files above, and the three
+`oneSentencePerLine/pcc-program-review3*`, which minimize to a **production
+content-deletion bug** — `\emph{a [b] c}` formats to `\emph{a [b c}`, dropping
+the `]`. It fires at default settings, in signature-known prose-reflowable
+arguments only (`\emph`, `\textbf`, `\footnote`; `\caption`, `\section`, unknown
+commands, and bare groups are all fine), and needs no width pressure. Note that
+`--checks all` reports it clean: the non-trivia-content oracle lives in the
+trivia path and in `assert_format_invariants`, not in the `all` gate, so this
+whole class is invisible to the primary gate — worth closing independently of
+the bug itself.
+
+A separate finding the oracles do *not* flag: the sectioning-command line break
+reads the forbidden lone-newline predicate. `\subsection{X}\nprose` keeps the
+break while `\subsection{X} prose` glues, which is the Tier-1 violation
+`AGENTS.md` forbids outright.
+
 ## Classification (third column of `.trivia.txt`)
 
 - `format-error` — the formatter refuses the file (statically unmodelable
   constructs; matches the smoke-test workflow's ALLOWLIST families). latex3 15,
-  latex2e 13, pgf 15. pgf has **no** trivia failures at all.
+  latex2e 13, pgf 15, latexindent 145. pgf has **no** trivia failures at all;
+  latexindent's 145 are triaged by family in the section above and are mostly
+  deliberately-invalid input.
 - `content-change` — `fmt` violated the whitespace-only invariant on a perturbed
   input (latex3 132, latex2e 117). Two root causes identified, both
   **pre-existing reflow-on-`.dtx` doc-layer bugs**, reachable without any

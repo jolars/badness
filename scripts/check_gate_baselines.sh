@@ -8,7 +8,7 @@
 # baseline is stale (something got fixed) and also fails, with instructions to
 # re-record — so the recorded sets always match reality.
 #
-# Usage: check_gate_baselines.sh [corpus...]   (default: latex3 latex2e pgf)
+# Usage: check_gate_baselines.sh [corpus...]   (default: latex3 latex2e pgf latexindent)
 # Env:   BADNESS=/path/to/badness   (default: target/release/badness)
 set -euo pipefail
 
@@ -19,7 +19,7 @@ BASELINE_DIR="${REPO_ROOT}/tests/gate_baselines"
 
 CORPORA=("$@")
 if [ "${#CORPORA[@]}" -eq 0 ]; then
-  CORPORA=(latex3 latex2e pgf)
+  CORPORA=(latex3 latex2e pgf latexindent)
 fi
 
 if [ ! -x "${BADNESS}" ]; then

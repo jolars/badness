@@ -104,7 +104,7 @@ tasks:
       - ./benches/documents/download.sh
 
   gate-corpora:fetch:
-    desc: Clone/pin the trivia-invariant-layout gate corpora into corpora/ (latex3, latex2e, pgf)
+    desc: Clone/pin the trivia-invariant-layout gate corpora into corpora/ (latex3, latex2e, pgf, latexindent)
     cmds:
       - ./scripts/fetch_gate_corpora.sh
 

@@ -8,6 +8,14 @@
 #
 # The latex3/latex3 pin is the SHA the S1-S4 stage gates in TODO.md are
 # measured against; the other two were recorded at the S0 baseline run.
+#
+# `latexindent` is the odd one out: not package source but latexindent.pl's own
+# test suite, ~5.3k small hand-written files of deliberately adversarial LaTeX
+# (blank lines in display math, verbatim-argument commands, unmatched braces,
+# alignment torture). Its *outputs* are not a target — latexindent is an
+# indenter driven by its own YAML config model, so every committed `*-mod1.tex`
+# is that tool's answer to a different question. We mine it purely as oracle
+# input: the median file is ~200 bytes, so a failure is a near-minimal repro.
 
 set -euo pipefail
 
@@ -19,6 +27,7 @@ PINS="
 latex3|latex3/latex3|3d1d347d8937863c0786988b14d307a6091ee397
 latex2e|latex3/latex2e|3a9fdd88bdc53f16a0c2158aa70d259607de333a
 pgf|pgf-tikz/pgf|1c7fc0fdc3ec8a6bdcfd68785c6bbd43ec110178
+latexindent|cmhughes/latexindent.pl|748f0f68397793b4646fa48762b0041b889cfcb4
 "
 
 mkdir -p "${CORPORA_DIR}"

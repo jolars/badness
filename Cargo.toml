@@ -51,7 +51,7 @@ log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.10"
 lsp-types = "0.97"
 rayon = "1.10"
-rowan = "0.16.1"
+rowan = "0.17.0"
 salsa = "0.28.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -61,7 +61,7 @@ toml = "1"
 
 [build-dependencies]
 clap = { version = "4.5.51", features = ["derive"] }
-clapdown = "0.1.0"
+clapdown = "0.2.0"
 clap_complete = "4.6.5"
 clap_mangen = "0.3.0"
 

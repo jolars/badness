@@ -15,7 +15,7 @@ categories = ["parsing", "parser-implementations", "text-processing"]
 
 [dependencies]
 phf = "0.14"
-rowan = "0.16.1"
+rowan = "0.17.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smol_str = "0.3.2"

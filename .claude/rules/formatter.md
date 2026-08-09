@@ -79,6 +79,12 @@ predicates the formatter *preserves*.
   `lower_dtx_doc_paragraph` falls back to the byte-faithful preserve path.
 - A `.dtx` `macrocode` frame lead is matched literally by docstrip — commit it
   byte-exact, never normalized to the canonical `%`.
+- **A sectioning command is a block-level statement:** a break before it and
+  after it, from `CommandSig::sectioning` (`command_is_sectioning`), never from
+  the trivia the author wrote. Routing headings through the command-only-line
+  rule instead read the lone-newline predicate. A trailing `%` still rides the
+  heading's line (`prev_block_closes_line` lets the comment ride but not
+  content); blank lines around it are preserved, never synthesized.
 
 ## Optional arguments
 

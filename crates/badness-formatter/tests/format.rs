@@ -441,6 +441,18 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // `\section{…}` header — stays on its own line; the prose around it still
     // reflows.
     ("reflow_command_lines_preserved", WrapMode::Reflow, 80),
+    // A sectioning command (`\part` … `\subparagraph`, per the signature DB's
+    // `sectioning` level) is a block-level statement: a break before it and after it,
+    // whatever trivia the author wrote. The old rule kept the break only when the
+    // source happened to have a newline there, so `\subsection{X}\nprose` and
+    // `\subsection{X} prose` — the same bytes to the next parse — laid out
+    // differently, reading exactly the predicate trivia-invariant layout forbids.
+    ("sectioning_starts_own_line", WrapMode::Reflow, 80),
+    // The trivia predicates the rule *may* read still hold around a heading: an
+    // authored blank line survives (none is added or removed), a `%` on the heading's
+    // own physical line rides it, and a `%` on its own line stays on its own line
+    // (where it binds forward as the heading's `DOC_COMMENT`).
+    ("sectioning_blank_line_and_comment", WrapMode::Reflow, 80),
     // List environments (`itemize`/`enumerate`/`description`): each `\item` on
     // its own line, the body reflowed with continuation lines hanging-indented at
     // the control word's width (`\item `). A `description` `[label]` trails on the

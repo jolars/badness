@@ -326,19 +326,22 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     Pinned by `expl_conditional_sibling_trailing`. And `lower_node`'s node-keyed
     all-or-nothing arm keeps needing head-attached branches by construction: it
     has no sibling stream to resolve a unit from.
-- [ ] **The sectioning line break reads the lone-newline predicate (Tier-1
-  violation, no oracle catches it).** `\subsection{X}\nprose` keeps the break;
-  `\subsection{X} prose` glues the prose onto the head line. Those are the same
-  bytes to the next parse, so this is exactly the predicate the
-  trivia-invariant-layout invariant forbids reading — but no gate fires: the
-  perturbation oracle only reports a *content* change or a non-fixed-point, and
-  both spellings are self-consistent fixed points. That is the interesting part:
-  the corpus can only surface this class by eye, so the strict oracle
+- [x] **The sectioning line break reads the lone-newline predicate (Tier-1
+  violation, no oracle catches it).** `\subsection{X}\nprose` kept the break;
+  `\subsection{X} prose` glued the prose onto the head line — the same bytes to
+  the next parse, so exactly the predicate the trivia-invariant-layout invariant
+  forbids reading. No gate fired: the perturbation oracle only reports a
+  *content* change or a non-fixed-point, and both spellings were self-consistent
+  fixed points. Fixed by making a sectioning command a block-level statement — a
+  break before it and after it, read from the signature DB's
+  `CommandSig::sectioning` (`command_is_sectioning`) rather than the source
+  trivia, so headings no longer reach `line_is_command_only` at all. Pinned by
+  `sectioning_starts_own_line` and `sectioning_blank_line_and_comment`. **The
+  rest of the family is still open:** the strict oracle
   (`fmt(perturbed) == fmt(original)`, already written in `perturb.rs` and
   currently failing wherever an authored break is deliberately preserved) is the
-  only mechanical route to the rest of the family. Decide the canonical form
-  first — always break after a sectioning command is the obvious rule, and it is
-  input-independent — then check what else the strict oracle names.
+  only mechanical route to it — the corpus surfaces this class by eye only, and
+  the four gate baselines did not move when this one landed.
   Surfaced by the `latexindent` corpus (`oneSentencePerLine/`).
 - [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
   one family.** `%`-terminated argument braces
@@ -680,10 +683,10 @@ sources below are missing.
   latexindent's own outputs are a soft target only: usable as inspiration where
   our tenets underdetermine a construct, never a form to match case by case,
   since it is a config-driven indenter whose committed outputs are one settings
-  stack's answer to a different question. Measured gaps against the 195 existing
-  slugs: sectioning/`headings` (no fixture at all, and the Tier-1 lone-newline
-  bug lives there), `ifelsefi` (402 corpus files, no coverage), `items` (157
-  files, one fixture), `filecontents`, bare/named brace groups.
+  stack's answer to a different question. Measured gaps against the 197 existing
+  slugs: `ifelsefi` (402 corpus files, no coverage), `items` (157 files, one
+  fixture), `filecontents`, bare/named brace groups. Sectioning/`headings` is
+  done (two slugs, and the Tier-1 lone-newline bug that lived there).
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
   crate + the docs playground page (`docs/src/playground.md`), formatter-only;

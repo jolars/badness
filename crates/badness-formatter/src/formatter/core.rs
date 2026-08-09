@@ -1637,11 +1637,18 @@ fn reflow_elements_checked(
     // riding comment keeps a single space before it.
     let mut prev_was_block = false;
     let mut block_gap = false;
+    // Set alongside `prev_was_block` when the committed block *closes* its line: a
+    // sectioning command, whose whole rule is that the line ends after it. A trailing
+    // `%` still rides (it must never be relocated), but content starts a fresh line
+    // instead of riding the way it does after an environment or a doc-commented
+    // `\input`.
+    let mut prev_block_closes_line = false;
 
     let mut idx = 0;
     while idx < elements.len() {
         let after_block = std::mem::take(&mut prev_was_block);
         let after_block_gap = std::mem::take(&mut block_gap);
+        let after_block_closed = std::mem::take(&mut prev_block_closes_line);
         match &elements[idx] {
             // Whitespace / newline run: a physical-line and atom boundary.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
@@ -1687,6 +1694,7 @@ fn reflow_elements_checked(
                     if after_block {
                         prev_was_block = true;
                         block_gap = true;
+                        prev_block_closes_line = after_block_closed;
                     }
                 }
                 continue;
@@ -1778,13 +1786,14 @@ fn reflow_elements_checked(
             // so this physical line is no longer command-only. A `.dtx` margin/guard
             // (only under the dtx config) pins to column 0 instead of reflowing.
             SyntaxElement::Token(token) => {
-                if after_block {
+                if after_block && !after_block_closed {
                     // Content on the block segment's last physical line
                     // (`\input docstrip.tex`, where the doc comment bound to
                     // `\input` made it a block): ride that line instead of
                     // starting one of its own. Same rule as the `COMMENT` arm
                     // above, and the chain continues so the rest of the line
-                    // rides too.
+                    // rides too. A block that *closes* its line (a heading) is
+                    // excluded — content after it starts a fresh line.
                     b.append_to_last_line(ride_after_block(
                         lower_loose_token(token),
                         after_block_gap,
@@ -1806,6 +1815,38 @@ fn reflow_elements_checked(
             }
             SyntaxElement::Node(child) => {
                 let ir = lower_node(child, cx);
+                // A sectioning command (`\part` … `\subparagraph`) is a block-level
+                // statement: it opens a line and closes one, whatever trivia the
+                // author wrote around it. The old behavior kept the break only when
+                // the source had a newline there (via `line_is_command_only` below),
+                // which is exactly the lone-newline predicate trivia-invariant layout
+                // forbids — `\subsection{X}\nprose` and `\subsection{X} prose` are the
+                // same bytes to the next parse, so both must lay out alike. Reading
+                // `CommandSig::sectioning` keeps the rule in the semantic layer
+                // (decision #2) instead of a name list here.
+                //
+                // Forced-break lowerings (a comment inside the title) fall through to
+                // the block path below, which already opens and closes a line — and
+                // does so through the `.dtx` margin-aware routes this arm's plain
+                // `end_line` pair would bypass.
+                let is_sectioning =
+                    child.kind() == SyntaxKind::COMMAND && command_is_sectioning(child, cx);
+                if is_sectioning && !ir.contains_forced_break() {
+                    b.end_line();
+                    b.push_atom_piece(ir, &child.text().to_string());
+                    b.end_line();
+                    line_all_commands = true;
+                    line_has_content = false;
+                    // Committed as a block, so a `%` still on the heading's physical
+                    // line rides it (the `COMMENT` arm's `after_block` path) instead
+                    // of being stranded on a line of its own, where it would rebind as
+                    // the next construct's `DOC_COMMENT` at the next parse. Content
+                    // does *not* ride: closing the line is the whole rule.
+                    prev_was_block = true;
+                    prev_block_closes_line = true;
+                    idx += 1;
+                    continue;
+                }
                 if ir.contains_forced_break() {
                     // A margin-framed `macrocode` chunk opening its own margined
                     // source line, reachable only through a reflowing expl3 run
@@ -1860,11 +1901,16 @@ fn reflow_elements_checked(
                     line_all_commands = true;
                     line_has_content = false;
                     prev_was_block = true;
+                    // A heading whose lowering forced a break (a `%` bound to it as a
+                    // `DOC_COMMENT`, a comment inside its title) took this path rather
+                    // than the sectioning arm above, which cannot route a `.dtx`
+                    // margin. It still closes its line.
+                    prev_block_closes_line = is_sectioning;
                 } else {
                     // A block-level `COMMAND` keeps the line command-only; an inline
                     // command (`\citep`, `\ref`, …) is running-text content, as is any
                     // other inline node (math, an inline group), and disqualifies it.
-                    if after_block {
+                    if after_block && !after_block_closed {
                         // Same as the token arm: content still on the previous
                         // block's last physical line rides it.
                         b.append_to_last_line(ride_after_block(ir, after_block_gap));
@@ -5978,6 +6024,20 @@ fn command_is_inline(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
         .is_some_and(|sig| sig.inline)
+}
+
+/// Whether `command` is a *sectioning* command (`\part` … `\subparagraph`), per the
+/// signature DB's [`CommandSig::sectioning`] level. Prose reflow treats such a
+/// command as a block-level statement: a hard break before it and after it, whatever
+/// trivia the author wrote (see [`reflow_elements`]).
+///
+/// Read from the semantic layer, never from a name list in the formatter (decision
+/// #2): sectioning level is exactly the kind of meaning the signature DB owns, and
+/// `\section` is only a heading because the DB says so.
+fn command_is_sectioning(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| sig.sectioning.is_some())
 }
 
 /// Pre-pass over a reflow element stream: replace each *inline* prose command

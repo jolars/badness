@@ -86,7 +86,7 @@ it yet.
    conflict and the affected fixture and resolve it before writing code.
    Diverging from a prior decision is allowed but must be conscious.
 6. **Implement the rule**, then **register and lock** it (below).
-7. **Guardrails**, then commit.
+7. **Guardrails**, then **record the rule** (below), then commit.
 
 ## Registering a fixture — the trap
 
@@ -106,9 +106,21 @@ driven by *one* looping test, so a slug is not a test name — filtering by it
 (`cargo test … <slug>`) reports `0 tests` whether or not the fixture is
 registered, and proves nothing. To confirm it really runs, corrupt
 `expected.tex`, watch `formatter_fixtures_match_expected` (or the table's own
-test) fail naming your slug, then restore it. Also add a
-`… eol=lf` line to `.gitattributes` if you introduce a new extension under
-`crates/*/tests/fixtures/**` (Windows CI compares bytes).
+test) fail naming your slug, then restore it.
+
+**Corrupt one slug at a time.** The looping test asserts *inside* the loop, so it
+aborts at the first mismatch and never reaches the rest of the table. Corrupting
+two `expected.tex` files together proves only that the earlier one runs — the
+later one is exactly as unverified as if you had skipped the check, and the run
+looks like a pass of the whole thing. Do corrupt → run → restore once per
+fixture, and read the slug named in each failure.
+
+Restore by **regenerating** (`badness --no-config format < input.tex >
+expected.tex`), not `git checkout`: a fixture added this session is untracked, so
+`git checkout` on its directory silently leaves the corruption in place.
+
+Also add a `… eol=lf` line to `.gitattributes` if you introduce a new extension
+under `crates/*/tests/fixtures/**` (Windows CI compares bytes).
 
 ## What keeps this rule-based
 
@@ -143,24 +155,48 @@ the way every prior re-record does (what resolved, what was added, whether
 production output moved). The pre-commit hook runs `panache-format` and
 rustfmt — never `--no-verify`.
 
+## Recording the rule
+
+The output of this skill *is* a new layout rule, so the fixture is only half the
+artifact. Before committing, write the rule down where the next session will meet
+it — AGENTS.md's own upkeep rule, applied to what you just landed:
+
+- **`.claude/rules/formatter.md`** — a bullet whenever the rule is a directive
+  someone could violate later ("never route X through Y", "keep Z structural").
+  Terse: the rule, the one clause that keeps it from looking arbitrary, and the
+  function name that carries it. This is the common case and the easiest to skip.
+- **`docs/src/development/architecture.md`** — only if the change is visible at
+  the level of the tour (a new lowering path, a new gate, a changed subsystem
+  boundary). A line-break rule inside an existing lowerer usually is not.
+- **`AGENTS.md`** — only if one of the numbered core decisions or the invariant
+  list actually changed. Rare; say so explicitly rather than editing by reflex.
+- **TODO.md** — if the construct had an open entry, close it *in place* and say
+  what is still open. A Tier-1 fix usually resolves one member of a family, not
+  the family; leaving the entry as a bare `[x]` loses that.
+
+Also refresh this file's coverage-gap backlog when you take an item off it —
+including the slug count, which the next session reads as fact.
+
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 195 existing fixture slugs, which cluster in reflow (32),
+Measured against the 198 existing fixture slugs, which cluster in reflow (32),
 math (30), expl3 (29), dtx (25), align (18), and tabular (10). Thin or absent,
 each with a large corpus directory behind it:
 
-1. **Sectioning / `headings`** — no fixture slug at all, and there is a *known*
-   Tier-1 bug here: `\subsection{X}\nprose` keeps the break while
-   `\subsection{X} prose` glues (TODO.md, Formatter). Decide the canonical form
-   before authoring, since the fix and the fixture are the same change.
-2. **`ifelsefi`** (`\if…\else…\fi` outside expl3) — no coverage; 402 corpus
+1. **`ifelsefi`** (`\if…\else…\fi` outside expl3) — no coverage; 402 corpus
    files. Note the parser's shape gates interact here.
-3. **`items`** (`\item` lists) — one `list_item_continuation_hang` fixture
+2. **`items`** (`\item` lists) — one `list_item_continuation_hang` fixture
    against 157 corpus files; issue #82's hang rule deserves more shapes.
-4. **`filecontents`** — no coverage; the environment's body is protected, so
+3. **`filecontents`** — no coverage; the environment's body is protected, so
    this is mostly a protected-region question.
-5. **`unnamed-braces` / `namedGroupingBracesBrackets`** — four `group_*`
+4. **`unnamed-braces` / `namedGroupingBracesBrackets`** — four `group_*`
    fixtures; bare and named brace groups at statement level.
+
+Done: sectioning / `headings` (`sectioning_starts_own_line`,
+`sectioning_blank_line_and_comment`) — a sectioning command is a block-level
+statement, breaking before and after from `CommandSig::sectioning`. That landed
+the Tier-1 lone-newline fix its TODO entry described; the rest of that family is
+still open.
 
 Skip constructs whose corpus family is currently a known failure until the
 underlying bug lands (`oneSentencePerLine` and `commands/figureValign` both wait

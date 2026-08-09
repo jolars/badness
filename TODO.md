@@ -745,6 +745,38 @@ not re-proposed.
   two would need one directive grammar and a decision about what an in-entry
   comment attaches to (the field below it, presumably, matching the formatter's
   forward bind).
+- [ ] **`task bib-error-compat`: biber as a `.bib` *error* oracle.** The gap the
+  `%`-comment bug exposed — `bib-parse-compat` cannot see over-strictness at all,
+  because texlab's bib parser has no error channel (the skill says so outright),
+  so a whole family of files we wrongly refused sat in a gate baseline instead of
+  failing a gauge. biber does have one: btparse reports real syntax errors, e.g.
+  `ERROR - BibTeX subsystem: …, line 2, syntax error: found "author", expected
+  end of entry ("}" or ")") (skipping to next "@")`, plus an `INFO - ERRORS: n`
+  tally. Cross-tabulate per corpus file, `badness has diagnostics` × `biber has
+  ERRORS`: agreement on the diagonal, **badness dirty + biber clean = over-strict**
+  (this bug's class), badness clean + biber dirty = under-strict (we would format
+  something biber rejects).
+
+  Two constraints, both learned by trying it:
+
+  - **Boolean per file only** — never error counts or positions. biber recovers by
+    skipping to the next `@`, so it under-counts badly; in a three-entry probe it
+    never reported an unterminated `@misc` at EOF at all, having swallowed it
+    during recovery.
+  - **Do not project `biber --tool` output onto a skeleton.** Tool mode exposes
+    biber's *data model*, not its parse, and the transformation would swamp any
+    real divergence: `author = {Ann Author and Bo Beispiel}` comes back as
+    `{Author, Ann and Beispiel, Bo}`, `year` + `month` merge into `DATE = {2021-11}`
+    (both source field names *gone*), `#` concatenation is resolved, and
+    `--output-format=biblatexml` additionally explodes names into
+    `<bltx:namepart>` and resolves `@string` uses away. texlab stays the right
+    *structural* oracle precisely because it is coarse and syntactic; biber's job
+    here is only "is this legal BibTeX".
+
+  Placement: biber is an external binary, not a crate, so this cannot be an
+  in-process dev-dependency like `texlab-parser` (and Text::BibTeX is not
+  separately installed — biber bundles it). Same bucket as `task typeset:check`:
+  needs a local install, runs on demand, never in CI.
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
   single-file-sound, same caveat as `unused-string`).

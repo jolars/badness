@@ -84,6 +84,46 @@ event stream, but has its own grammar, `SyntaxKind`, `BibLang` marker, lexer,
 parser, tree builder, typed AST, formatter, linter, semantic layer, completion,
 and outline. The invariants below apply to it unchanged.
 
+### `%` comments in `.bib`
+
+BibTeX's two readers disagree about `%`, so we had to pick one. Classic `bibtex`
+(0.99d) has no comment syntax at all and rejects a `%` inside an entry;
+**biber**'s reader (btparse) ends a comment at the newline and resumes parsing.
+Badness follows biber, as the rest of the bib layer does (`bib_fields.json`
+tracks biblatex's `blx-dm.def`) — verified by compiling both readings.
+
+The context-dependence is the interesting part: `%` is a comment between a value
+and the following `,`, but ordinary text inside a braced or quoted value
+(`title = {50% off}` keeps the `%`). So the **lexer stays context-free** — `%`
+is a bare `PERCENT` token wherever it appears — and the **grammar** decides,
+wrapping `%` … end-of-line in a `COMMENT` node at exactly the positions where it
+skips trivia inside an entry (before a field name, `=`, `#`, `,`, the closer). A
+`BRACE_GROUP`, a `QUOTED` string, an `@comment` body, and top-level junk never
+call that skip, so a `%` there stays an ordinary token. This mirrors the LaTeX
+side's split, where brace *structure* is likewise the grammar's job, not the
+lexer's.
+
+texlab's bib parser models no comment at all, so this is a recorded deliberate
+deviation in `bib_parse_compat_allowlist.toml`, not a gauge regression.
+
+A `%` *inside* a value is where the two languages collide: BibTeX passes it
+through as an ordinary character, and the LaTeX that finally typesets the value
+reads it as a comment. So the value's line breaks are content, and value reflow
+refuses any value carrying an unescaped `%` (guard 5 in `lower_value_reflowed`)
+and emits it byte-exact. No CST oracle can catch this — joining two lines there
+is byte-legal and typeset-wrong.
+
+The formatter re-emits every comment: one that **shares a line** with the field
+before it rides that field's line (the bib analog of the LaTeX rule that a
+trailing comment is never relocated), and every other one binds **forward** to
+the field it precedes (decision #9) and prints on its own line above it. Binding
+to a *field* rather than an offset is what keeps a comment attached through the
+canonical field sort. A comment past the last field prints above the closing
+delimiter; a `@string`/`@preamble`/field-less entry carrying one has no line to
+put it on, so that whole block is emitted verbatim rather than losing it. Both
+rules read only comment own-line-ness, which the formatter preserves, so the
+placement is a fixed point.
+
 ## Inputs and configuration
 
 The CLI processes `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, and `.bib`.

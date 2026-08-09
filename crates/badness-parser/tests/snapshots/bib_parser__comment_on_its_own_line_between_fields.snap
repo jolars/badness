@@ -1,0 +1,53 @@
+---
+source: crates/badness-parser/tests/bib_parser.rs
+expression: "tree(\"@misc{k,\\n  title = {a},\\n  % why this author\\n  author = {b},\\n}\")"
+---
+ROOT@0..61
+  ENTRY@0..61
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..7
+      WORD@6..7 "k"
+    COMMA@7..8 ","
+    NEWLINE@8..9 "\n"
+    WHITESPACE@9..11 "  "
+    FIELD@11..22
+      FIELD_NAME@11..16
+        WORD@11..16 "title"
+      WHITESPACE@16..17 " "
+      EQ@17..18 "="
+      WHITESPACE@18..19 " "
+      VALUE@19..22
+        BRACE_GROUP@19..22
+          L_BRACE@19..20 "{"
+          WORD@20..21 "a"
+          R_BRACE@21..22 "}"
+    COMMA@22..23 ","
+    NEWLINE@23..24 "\n"
+    WHITESPACE@24..26 "  "
+    COMMENT@26..43
+      PERCENT@26..27 "%"
+      WHITESPACE@27..28 " "
+      WORD@28..31 "why"
+      WHITESPACE@31..32 " "
+      WORD@32..36 "this"
+      WHITESPACE@36..37 " "
+      WORD@37..43 "author"
+    NEWLINE@43..44 "\n"
+    WHITESPACE@44..46 "  "
+    FIELD@46..58
+      FIELD_NAME@46..52
+        WORD@46..52 "author"
+      WHITESPACE@52..53 " "
+      EQ@53..54 "="
+      WHITESPACE@54..55 " "
+      VALUE@55..58
+        BRACE_GROUP@55..58
+          L_BRACE@55..56 "{"
+          WORD@56..57 "b"
+          R_BRACE@57..58 "}"
+    COMMA@58..59 ","
+    NEWLINE@59..60 "\n"
+    R_BRACE@60..61 "}"

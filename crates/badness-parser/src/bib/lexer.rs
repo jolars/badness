@@ -8,11 +8,17 @@
 //! the LaTeX lexer leaves `{`/`}` grouping to its grammar. BibTeX needs no
 //! verbatim or catcode modes, so this lexer is simpler than the LaTeX one.
 //!
-//! The specials `@ { } ( ) , = # "` each lex as a single-character token; runs of
-//! whitespace, line breaks, and "word" characters (anything else) coalesce. A
+//! The specials `@ { } ( ) , = # " %` each lex as a single-character token; runs
+//! of whitespace, line breaks, and "word" characters (anything else) coalesce. A
 //! word run made up solely of ASCII digits is classified [`SyntaxKind::NUMBER`],
 //! else [`SyntaxKind::WORD`] — so a later formatter / linter can tell an unquoted
 //! number from a macro name.
+//!
+//! `%` is a *bare* [`SyntaxKind::PERCENT`] token here, not a comment: whether it
+//! opens a comment depends on brace/quote context (`{50% off}` is literal text),
+//! and that context is the grammar's to know. The grammar wraps the run from a
+//! `%` to the end of its line in a [`SyntaxKind::COMMENT`] node only where BibTeX
+//! allows one.
 
 use smol_str::SmolStr;
 
@@ -37,6 +43,7 @@ fn special_kind(c: u8) -> Option<SyntaxKind> {
         b'=' => SyntaxKind::EQ,
         b'#' => SyntaxKind::HASH,
         b'"' => SyntaxKind::QUOTE,
+        b'%' => SyntaxKind::PERCENT,
         _ => return None,
     })
 }

@@ -115,6 +115,53 @@ fn junk_between_entries() {
     insta::assert_snapshot!(tree("leading junk\n@misc{a}\n\nsome notes\n@misc{b}\n"));
 }
 
+// --- `%` comments ----------------------------------------------------------
+//
+// A `%` runs to the end of its line wherever the grammar expects structure, and
+// is an ordinary character everywhere else. Ground truth is biber 2.21 (btparse):
+// every input below compiles clean, and the braced/quoted `%`s survive verbatim
+// into the `.bbl`. (Classic `bibtex` 0.99d rejects all of them — it has no
+// comment syntax at all — so this follows biber, as the rest of the bib layer
+// does.)
+
+#[test]
+fn comment_between_value_and_comma() {
+    // The `latexindent` corpus shape that motivated this: a comment separating a
+    // field's value from the `,` that ends the field.
+    insta::assert_snapshot!(tree(
+        "@online{k,\n  keywords =\n    {contributor}\n  %\n  ,}"
+    ));
+}
+
+#[test]
+fn comment_on_its_own_line_between_fields() {
+    insta::assert_snapshot!(tree(
+        "@misc{k,\n  title = {a},\n  % why this author\n  author = {b},\n}"
+    ));
+}
+
+#[test]
+fn comment_inside_field_and_around_concatenation() {
+    insta::assert_snapshot!(tree("@misc{k, title = % pick one\n  {a} % or\n  # {b}}"));
+}
+
+#[test]
+fn percent_in_braced_and_quoted_values_is_literal() {
+    // Not a comment: the value keeps `% off` and the field list keeps parsing.
+    insta::assert_snapshot!(tree(
+        "@misc{k, title = {50% off}, note = \"90% sure\", year = 2020}"
+    ));
+}
+
+#[test]
+fn comment_eats_the_rest_of_a_bare_value_line() {
+    // A bare (unbraced) value ends at the `%`, and so does the `,` behind it —
+    // biber reads the comma on the *next* line as the field separator.
+    insta::assert_snapshot!(tree(
+        "@misc{k, month = nov % and the comma,\n  , year = 2020}"
+    ));
+}
+
 // --- error recovery --------------------------------------------------------
 
 #[test]

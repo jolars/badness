@@ -135,6 +135,22 @@ predicates the formatter *preserves*.
 - Target is `l3styleguide.tex`. Its non-layout rules (naming, expandability) are
   meaning, not trivia — out of scope, linter territory.
 
+## BibTeX
+
+- The bib formatter is a canonical re-emitter, not a trivia-only pass: it
+  reorders entries and fields and rebuilds every line. **So anything it does not
+  explicitly emit is deleted.** Adding a node kind to the bib CST means teaching
+  `lower_entry` (and the `@string`/`@preamble` bails) to emit it, or the
+  content silently disappears.
+- **A value carrying an unescaped `%` never reflows.** `%` is an ordinary
+  character to BibTeX and a comment to the LaTeX that typesets the value, so its
+  line breaks are content. Neither the bib CST oracles nor the gate can see
+  this — joining two lines there is byte-legal and typeset-wrong.
+- **A `%` comment binds to a field, never to an offset** — that is what carries
+  it through the canonical sort. Same-line comments ride their field's line
+  (never relocated, as on the LaTeX side); every other one hoists above the
+  field below it. Pinned by the comment multiset oracle in `bib_format.rs`.
+
 ## Line endings
 
 The printer always emits `\n`; `line_ending` is a post-pass over finished text.

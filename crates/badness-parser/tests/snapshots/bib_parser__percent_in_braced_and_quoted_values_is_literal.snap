@@ -1,0 +1,56 @@
+---
+source: crates/badness-parser/tests/bib_parser.rs
+expression: "tree(\"@misc{k, title = {50% off}, note = \\\"90% sure\\\", year = 2020}\")"
+---
+ROOT@0..59
+  ENTRY@0..59
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..7
+      WORD@6..7 "k"
+    COMMA@7..8 ","
+    WHITESPACE@8..9 " "
+    FIELD@9..26
+      FIELD_NAME@9..14
+        WORD@9..14 "title"
+      WHITESPACE@14..15 " "
+      EQ@15..16 "="
+      WHITESPACE@16..17 " "
+      VALUE@17..26
+        BRACE_GROUP@17..26
+          L_BRACE@17..18 "{"
+          NUMBER@18..20 "50"
+          PERCENT@20..21 "%"
+          WHITESPACE@21..22 " "
+          WORD@22..25 "off"
+          R_BRACE@25..26 "}"
+    COMMA@26..27 ","
+    WHITESPACE@27..28 " "
+    FIELD@28..45
+      FIELD_NAME@28..32
+        WORD@28..32 "note"
+      WHITESPACE@32..33 " "
+      EQ@33..34 "="
+      WHITESPACE@34..35 " "
+      VALUE@35..45
+        QUOTED@35..45
+          QUOTE@35..36 "\""
+          NUMBER@36..38 "90"
+          PERCENT@38..39 "%"
+          WHITESPACE@39..40 " "
+          WORD@40..44 "sure"
+          QUOTE@44..45 "\""
+    COMMA@45..46 ","
+    WHITESPACE@46..47 " "
+    FIELD@47..58
+      FIELD_NAME@47..51
+        WORD@47..51 "year"
+      WHITESPACE@51..52 " "
+      EQ@52..53 "="
+      WHITESPACE@53..54 " "
+      VALUE@54..58
+        LITERAL@54..58
+          NUMBER@54..58 "2020"
+    R_BRACE@58..59 "}"

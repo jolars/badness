@@ -28,6 +28,7 @@ pub enum SyntaxKind {
     EQ,         // =
     HASH,       // #  (value concatenation)
     QUOTE,      // "
+    PERCENT,    // %  (opens a comment only where the grammar says so)
     WORD,       // a run of identifier / value characters
     NUMBER,     // a pure-digit run (kept distinct from a macro name)
     WHITESPACE, // spaces / tabs
@@ -35,6 +36,7 @@ pub enum SyntaxKind {
     ERROR,      // lexer fallback; the lexer is total, so this is unused today
 
     // --- Nodes (composites, produced by the parser) ---
+    COMMENT,        // `%` … end of line, where a comment is legal (see grammar)
     JUNK,           // free text between entries (BibTeX ignores it)
     ENTRY,          // a regular bibliographic entry: @type{ key, fields }
     STRING_ENTRY,   // @string{ name = value }

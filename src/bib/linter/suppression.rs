@@ -1,9 +1,10 @@
 //! Comment-based suppression for `.bib`: the `badness-ignore` directive family,
 //! carried inside `@comment{…}` entries.
 //!
-//! BibTeX has no line-comment token (free text outside an entry lexes as `JUNK`),
-//! so unlike the LaTeX side (`% badness-ignore …` in a `COMMENT` token) the
-//! carrier is a structured `@comment` entry — a [`COMMENT_ENTRY`] node:
+//! A `%` line comment only exists *inside* an entry in BibTeX — free text between
+//! entries lexes as `JUNK`, with no comment token to hang a directive on — so
+//! unlike the LaTeX side (`% badness-ignore …` in a `COMMENT` token) the carrier is
+//! a structured `@comment` entry, a [`COMMENT_ENTRY`] node:
 //!
 //! ```text
 //! @comment{badness-ignore <rule>: <reason>}        suppress <rule> on the next entry

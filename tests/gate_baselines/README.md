@@ -114,6 +114,16 @@ Net: `all` grew latex2e 28 → 97, latex3 16 → 27, latexindent 190 → 202, pg
 unchanged; `trivia` shrank latexindent 161 → 158, the others unchanged. No file
 that previously passed either gate now fails.
 
+Re-recorded once more after the bib parser learned **`%` comments**. The 33
+`.bib` `format-error` entries below (`keyEqualsValueBraces/contributors-mod*`)
+are gone: `latexindent.all.txt` 202 → 169, every other set byte-unchanged, no
+additions. The over-strictness was `%`, not the blank line the inventory note
+below guessed at — the blank-line variants already parsed. Ground truth is biber
+2.21 / btparse, where a `%` runs to end of line outside braced and quoted
+values; classic `bibtex` 0.99d has no comment syntax and rejects all of these,
+and texlab models none either (recorded as a deliberate deviation in
+`bib_parse_compat_allowlist.toml`).
+
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):
 
@@ -186,7 +196,7 @@ Variant:`reason (`.trivia.txt`) — the same distillation`check_gate_baselines.s
 
 190 `all` (178 `format-error`, 12 `idempotency`) and 161 `trivia` (145
 `format-error`, 15 `content-change`, 1 `non-fixed-point`) over 5329 files. (Now
-202 / 158 — see the re-record note above.) Both gates run in seconds — 1.4s and
+169 / 158 — see the re-record notes above.) Both gates run in seconds — 1.4s and
 16s — because the files are small. Triaged into families, most of the
 `format-error` bulk is the corpus being adversarial on purpose rather than a gap
 on our side:
@@ -196,8 +206,9 @@ on our side:
   shape gate refusing it is correct modeling. Corpus noise, not a bug.
 - **`expected ',' between fields` — 33 `.bib`,** the
   `keyEqualsValueBraces/contributors-mod*` family: a blank line or comment
-  between a field value and the following `,`. Worth a look — that separation is
-  legal BibTeX.
+  between a field value and the following `,`. **Now fixed** — the cause was the
+  `%` comment alone (the blank-line variants always parsed), and the bib parser
+  was over-strict. See the last re-record note above.
 - **`unclosed {` — 18 files,** dominated by the `href` family in
   `test-cases/verbatim` and `test-cases/fine-tuning`:
   `\href{…%20for%30Spoken…}`, a URL with literal `%`. hyperref reads that

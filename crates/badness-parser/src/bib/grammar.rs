@@ -76,15 +76,34 @@ impl<'t> Parser<'t> {
         matches!(self.kind(), Some(SyntaxKind::WORD | SyntaxKind::NUMBER))
     }
 
-    /// The kind of the next non-trivia token at or after the cursor, without
-    /// moving it. Used to probe for a `#` value continuation without pulling the
-    /// intervening trivia into the current node.
-    fn peek_past_trivia(&self) -> Option<SyntaxKind> {
-        let mut i = self.pos;
-        while self.tokens.get(i).is_some_and(|t| Self::is_trivia(t.kind)) {
-            i += 1;
+    /// Index of the first token at or after `i` that is neither trivia nor part of
+    /// a comment. A `%` swallows the rest of its line, so the scan resumes at the
+    /// `NEWLINE` that ends it (which is trivia, and skipped in turn).
+    fn past_trivia_from(&self, mut i: usize) -> usize {
+        loop {
+            match self.tokens.get(i).map(|t| t.kind) {
+                Some(k) if Self::is_trivia(k) => i += 1,
+                Some(SyntaxKind::PERCENT) => {
+                    while self
+                        .tokens
+                        .get(i)
+                        .is_some_and(|t| t.kind != SyntaxKind::NEWLINE)
+                    {
+                        i += 1;
+                    }
+                }
+                _ => return i,
+            }
         }
-        self.tokens.get(i).map(|t| t.kind)
+    }
+
+    /// The kind of the next token at or after the cursor that is neither trivia nor
+    /// commented out, without moving it. Used to probe for a `#` value continuation
+    /// without pulling the intervening trivia into the current node.
+    fn peek_past_trivia(&self) -> Option<SyntaxKind> {
+        self.tokens
+            .get(self.past_trivia_from(self.pos))
+            .map(|t| t.kind)
     }
 
     // --- event emission ----------------------------------------------------
@@ -123,6 +142,37 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// Skip trivia *and* comments. Used at every position inside an entry where the
+    /// grammar expects structure (a field name, `=`, `#`, `,`, the closer), which is
+    /// exactly where a `%` comment is legal: `btparse` (biber's reader) ends a
+    /// comment at the newline and resumes parsing, so
+    /// `keywords = {…}\n  %\n  ,}` is a well-formed field list.
+    ///
+    /// Never called from inside a `BRACE_GROUP`, a `QUOTED` string, an `@comment`
+    /// body, or top-level junk — a `%` is an ordinary character there (`{50% off}`),
+    /// which is why comment-ness is decided here and not in the lexer.
+    fn skip_trivia_and_comments(&mut self) {
+        loop {
+            match self.kind() {
+                Some(k) if Self::is_trivia(k) => self.bump(),
+                Some(SyntaxKind::PERCENT) => self.comment(),
+                _ => break,
+            }
+        }
+    }
+
+    /// A `%` comment: the `%` and every token up to (not including) the newline that
+    /// ends it. The newline stays outside the node, so a `COMMENT` is always
+    /// single-line and the line break remains ordinary trivia.
+    fn comment(&mut self) {
+        self.open(SyntaxKind::COMMENT);
+        self.bump(); // `%`
+        while self.kind().is_some_and(|k| k != SyntaxKind::NEWLINE) {
+            self.bump();
+        }
+        self.close();
+    }
+
     // --- grammar rules -----------------------------------------------------
 
     /// The whole file: a sequence of entries interleaved with free text. Trivia
@@ -159,7 +209,7 @@ impl<'t> Parser<'t> {
         };
         self.open(node_kind);
         self.bump(); // `@`
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
 
         if self.kind() == Some(SyntaxKind::WORD) {
             self.open(SyntaxKind::ENTRY_TYPE);
@@ -170,7 +220,7 @@ impl<'t> Parser<'t> {
             self.close();
             return;
         }
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
 
         let closer = match self.kind() {
             Some(SyntaxKind::L_BRACE) => {
@@ -197,13 +247,11 @@ impl<'t> Parser<'t> {
         self.close();
     }
 
-    /// Peek the entry-type word that follows the `@` at the cursor (skipping
-    /// trivia), without consuming. Empty if there is no word.
+    /// Peek the entry-type word that follows the `@` at the cursor (skipping trivia
+    /// and comments, exactly as [`Self::entry`] then does), without consuming. Empty
+    /// if there is no word.
     fn peek_entry_type(&self) -> String {
-        let mut i = self.pos + 1; // skip `@`
-        while self.tokens.get(i).is_some_and(|t| Self::is_trivia(t.kind)) {
-            i += 1;
-        }
+        let i = self.past_trivia_from(self.pos + 1); // skip `@`
         match self.tokens.get(i) {
             Some(t) if t.kind == SyntaxKind::WORD => t.text.to_string(),
             _ => String::new(),
@@ -213,7 +261,7 @@ impl<'t> Parser<'t> {
     /// The body of a regular entry: an optional cite key, then a comma-separated
     /// list of fields, then the closing delimiter.
     fn entry_body(&mut self, closer: SyntaxKind) {
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
         // A cite key is present unless the first item is already a `name =` field
         // (a malformed key-less entry) or the body is empty.
         if self.at_name() && !self.looks_like_field() {
@@ -230,7 +278,7 @@ impl<'t> Parser<'t> {
         // a fresh field anyway.
         let mut need_comma = false;
         loop {
-            self.skip_trivia();
+            self.skip_trivia_and_comments();
             match self.kind() {
                 None => {
                     self.error("unterminated entry");
@@ -273,9 +321,7 @@ impl<'t> Parser<'t> {
         {
             i += 1;
         }
-        while self.tokens.get(i).is_some_and(|t| Self::is_trivia(t.kind)) {
-            i += 1;
-        }
+        let i = self.past_trivia_from(i);
         self.tokens.get(i).map(|t| t.kind) == Some(SyntaxKind::EQ)
     }
 
@@ -298,11 +344,11 @@ impl<'t> Parser<'t> {
             self.bump();
         }
         self.close();
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
 
         let complete = if self.kind() == Some(SyntaxKind::EQ) {
             self.bump();
-            self.skip_trivia();
+            self.skip_trivia_and_comments();
             self.value(closer);
             true
         } else {
@@ -326,9 +372,9 @@ impl<'t> Parser<'t> {
             if self.peek_past_trivia() != Some(SyntaxKind::HASH) {
                 break;
             }
-            self.skip_trivia();
+            self.skip_trivia_and_comments();
             self.bump(); // `#`
-            self.skip_trivia();
+            self.skip_trivia_and_comments();
             // Defend against a `#` with nothing after it before the closer/EOF.
             if self.at_end() || self.kind() == Some(closer) {
                 break;
@@ -396,7 +442,7 @@ impl<'t> Parser<'t> {
 
     /// `@string{ name = value }`: a single field, then the closer.
     fn string_body(&mut self, closer: SyntaxKind) {
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
         if self.at_name() {
             self.field(closer);
         } else if self.kind() != Some(closer) && !self.at_end() {
@@ -407,7 +453,7 @@ impl<'t> Parser<'t> {
 
     /// `@preamble{ value }`: a lone value, then the closer.
     fn preamble_body(&mut self, closer: SyntaxKind) {
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
         if self.kind() != Some(closer) && !self.at_end() {
             self.value(closer);
         }
@@ -434,7 +480,7 @@ impl<'t> Parser<'t> {
 
     /// Consume the closing delimiter, reporting if it is missing.
     fn expect_close(&mut self, closer: SyntaxKind) {
-        self.skip_trivia();
+        self.skip_trivia_and_comments();
         match self.kind() {
             Some(k) if k == closer => self.bump(),
             None => self.error("unterminated entry"),

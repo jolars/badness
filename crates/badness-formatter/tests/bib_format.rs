@@ -54,10 +54,21 @@ fn meaning(text: &str) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
 /// bag of `(name, value)` pairs, not their positions. The relative order of *duplicate*
 /// fields (`note =` twice) is therefore not pinned here — that is covered by the
 /// dedicated `sort_*` fixtures plus the stable-sort guarantee in the formatter.
+///
+/// A `%` comment sitting inside a value (`title = {a} # % pick one\n {b}`) is trivia,
+/// not content, and the formatter hoists it out to its own line — so `COMMENT` nodes
+/// are excluded here and checked by [`comments`] instead.
 fn field_values(text: &str) -> Vec<(String, String)> {
-    fn signature(value_text: &str) -> String {
-        value_text
-            .chars()
+    fn signature(value: &badness_formatter::bib::syntax::SyntaxNode) -> String {
+        value
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| {
+                token
+                    .parent()
+                    .is_none_or(|parent| parent.kind() != SyntaxKind::COMMENT)
+            })
+            .flat_map(|token| token.text().chars().collect::<Vec<_>>())
             .filter(|c| !c.is_whitespace() && !matches!(c, '"' | '{' | '}'))
             .collect()
     }
@@ -68,11 +79,28 @@ fn field_values(text: &str) -> Vec<(String, String)> {
         .filter_map(|field| {
             let name = ast::field_name(&field)?.to_lowercase();
             let value = ast::field_value(&field)?;
-            Some((name, signature(&value.to_string())))
+            Some((name, signature(&value)))
         })
         .collect();
     values.sort();
     values
+}
+
+/// The *multiset* of every `%` comment in the document, trailing whitespace trimmed.
+/// The formatter relocates comments (they ride their bound field through the canonical
+/// sort) but must never drop, duplicate, or rewrite one — the check the entry- and
+/// value-level oracles above cannot make, since neither looks at trivia.
+///
+/// Sorted, so it is order-insensitive for the same reason `field_values` is.
+fn comments(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = parse(text)
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMMENT)
+        .map(|n| n.to_string().trim_end().to_string())
+        .collect();
+    found.sort();
+    found
 }
 
 /// Assert the formatter invariants for one clean-parsing input. Inputs the parser
@@ -108,6 +136,13 @@ fn assert_bib_format_invariants(input: &str) {
         field_values(input),
         field_values(&formatted),
         "formatting changed a field value's content for {input:?}"
+    );
+
+    // Comments preserved: relocation is allowed, loss is not.
+    assert_eq!(
+        comments(input),
+        comments(&formatted),
+        "formatting dropped or rewrote a comment for {input:?}"
     );
 }
 

@@ -1,0 +1,14 @@
+---
+source: crates/badness-parser/tests/bib_lexer_snapshots.rs
+expression: "dump(\"{50% off} % note\")"
+---
+L_BRACE "{"
+NUMBER "50"
+PERCENT "%"
+WHITESPACE " "
+WORD "off"
+R_BRACE "}"
+WHITESPACE " "
+PERCENT "%"
+WHITESPACE " "
+WORD "note"

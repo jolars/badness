@@ -10,3 +10,4 @@
 
 [deviations]
 # example.bib = "reason badness's skeleton intentionally differs from texlab's here"
+comments.bib = "texlab models no `%` comment at all, so each comment word lands as a bogus field name; badness follows biber/btparse (verified against biber 2.21), where `%` runs to end of line outside braced/quoted values."

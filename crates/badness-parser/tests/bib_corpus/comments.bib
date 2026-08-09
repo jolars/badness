@@ -1,0 +1,33 @@
+% A file-leading comment lives outside any entry, so it is plain JUNK.
+
+@string{jnl = {Journal of Comments} % kept as authored
+}
+
+@article{percent2020,
+  % why this entry is here
+  title        = {Fifty 50% off is not a comment},
+  author       = {Ann Author and Bo Beispiel},
+  journaltitle = jnl,
+  % a comment can also sit between two fields
+  year         = 2020,
+  note         = "90% sure this stays quoted",
+  keywords     =
+    {
+      contributor
+    }
+  %
+  ,
+}
+
+@article{percent2021,
+  title        = {A value split by} # % pick one
+    { concatenation},
+  author       = {Cy Citer},
+  journaltitle = jnl,
+  month        = nov % this comment eats the comma behind it
+  ,
+  year         = 2021,
+  % a trailing comment, past the last field
+}
+
+@comment{ a @comment body keeps its % verbatim }

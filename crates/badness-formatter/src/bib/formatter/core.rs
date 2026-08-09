@@ -30,10 +30,19 @@
 //!   (`author`/`editor`) reflows **only** at top-level ` and ` boundaries, breaking
 //!   *after* "and" so the next name starts the continuation line, never inside a
 //!   name. `Verbatim`/`Date` values, `#`-concatenated values, and bare-`LITERAL`
-//!   macros/numbers are never reflowed. Brace- and `$…$`-spanning tokens stay glued
+//!   macros/numbers are never reflowed, and neither is a value carrying an unescaped
+//!   `%` — that is an ordinary character to BibTeX but a comment to the LaTeX that
+//!   typesets the value, so its line breaks decide the output. Brace- and `$…$`-spanning tokens stay glued
 //!   so inner braces and math never straddle a wrap; every whitespace run collapses
 //!   to one break, so a reflowed value re-reflows identically (idempotent).
 //! - **Trailing comma:** none after the last field.
+//! - **`%` comments:** a comment inside an entry binds *forward* to the field that
+//!   follows it (the bib analog of the LaTeX doc-comment rule, AGENTS.md decision
+//!   \#9) and is re-emitted, byte-exact, on its own line above that field's line —
+//!   so it travels with its field through the canonical sort. A comment with no
+//!   following field is *trailing* and prints just above the closing delimiter. A
+//!   `@string` / `@preamble` / field-less entry that carries a comment has nowhere
+//!   to hang it, so the whole block is emitted verbatim rather than losing it.
 //!
 //! Protected regions are emitted byte-exact: `@comment` bodies and inter-entry
 //! `JUNK` are spliced through untouched (only the blank-line spacing *around* them
@@ -41,6 +50,10 @@
 //!
 //! Like the LaTeX formatter, this refuses any input the parser flagged — parsing is
 //! the parser's job, and the formatter never reshapes around a parse error.
+
+use std::collections::HashMap;
+
+use rowan::TextSize;
 
 use crate::bib::ast;
 use crate::bib::parse;
@@ -216,10 +229,19 @@ fn lower_entry(entry: &SyntaxNode, cx: Lower) -> Ir {
         .iter()
         .map(|field| ast::field_name(field).unwrap_or_default().to_lowercase())
         .collect();
+    let CommentPlacement {
+        leading,
+        same_line,
+        trailing,
+    } = place_comments(entry);
 
-    // A keyless and/or fieldless entry stays on a single line: `@misc{key}`.
+    // A keyless and/or fieldless entry stays on a single line: `@misc{key}` — unless
+    // it carries a comment, which then has no field to bind to and no line to sit on.
     if fields.is_empty() {
-        return Ir::text(format!("@{etype}{open}{key}{close}"));
+        if trailing.is_empty() {
+            return Ir::text(format!("@{etype}{open}{key}{close}"));
+        }
+        return Ir::verbatim(entry.to_string());
     }
 
     let width = names
@@ -231,9 +253,28 @@ fn lower_entry(entry: &SyntaxNode, cx: Lower) -> Ir {
 
     let lines = fields.iter().enumerate().map(|(i, field)| {
         let last = i + 1 == fields.len();
-        lower_field(field, &names[i], width, last, cx)
+        let at = field.text_range().start();
+        // The field's bound comments travel with it through the canonical sort: the
+        // same-line one after its comma, the rest stacked above its line.
+        let mut line = vec![lower_field(field, &names[i], width, last, cx)];
+        if let Some(text) = same_line.get(&at) {
+            line.push(Ir::text(format!(" {text}")));
+        }
+        match leading.get(&at) {
+            None => Ir::concat(line),
+            Some(above) => Ir::concat(above.iter().map(|text| comment_line(text)).chain(line)),
+        }
     });
-    let body = Ir::concat([Ir::hard_line(), Ir::join(Ir::hard_line(), lines)]);
+    let body = Ir::concat([
+        Ir::hard_line(),
+        Ir::join(Ir::hard_line(), lines),
+        // Comments past the last field print just above the closing delimiter.
+        Ir::concat(
+            trailing
+                .iter()
+                .flat_map(|text| [Ir::hard_line(), Ir::text(text.clone())]),
+        ),
+    ]);
 
     Ir::concat([
         header,
@@ -241,6 +282,86 @@ fn lower_entry(entry: &SyntaxNode, cx: Lower) -> Ir {
         Ir::hard_line(),
         Ir::text(close.to_string()),
     ])
+}
+
+/// Where each `%` comment in an entry goes. Both maps are keyed by a field's start
+/// offset rather than by index, because the caller emits fields in *canonical* order.
+/// See [`place_comments`].
+#[derive(Default)]
+struct CommentPlacement {
+    /// Comment lines printed above a field's line, in source order.
+    leading: HashMap<TextSize, Vec<String>>,
+    /// The one comment that rides the end of a field's own line.
+    same_line: HashMap<TextSize, String>,
+    /// Comments with no field to bind to; printed above the closing delimiter.
+    trailing: Vec<String>,
+}
+
+/// Bind every `COMMENT` in `entry` to a field, so the comment travels with that field
+/// through the canonical sort instead of being pinned to a source position.
+///
+/// A comment that *shares a line* with the field before it stays a trailing comment on
+/// that field's line — the bib analog of the LaTeX rule that a trailing comment rides
+/// its line and is never relocated. Every other comment binds **forward** to the field
+/// it precedes (AGENTS.md decision #9), printing on its own line above it; one past the
+/// last field binds to nothing and becomes `trailing`.
+///
+/// Both rules key only on comment own-line-ness, which the formatter *preserves*
+/// (trivia-invariant layout): an own-line comment is re-emitted on its own line and a
+/// same-line one stays on its field's line, so the next pass binds identically.
+fn place_comments(entry: &SyntaxNode) -> CommentPlacement {
+    let fields: Vec<SyntaxNode> = ast::fields(entry).collect();
+    let base = entry.text_range().start();
+    let source = entry.to_string();
+    let mut placement = CommentPlacement::default();
+
+    for comment in entry
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::COMMENT)
+    {
+        let start = comment.text_range().start();
+        // Trailing whitespace is dropped so a re-read yields the identical text.
+        let text = comment.to_string().trim_end().to_string();
+
+        let next = fields.iter().find(|field| field.text_range().end() > start);
+        // A comment *inside* a field (`title = % pick one` … ) has no preceding field
+        // on its line to ride, so it always hoists above that field's line.
+        let inside_next = next.is_some_and(|field| field.text_range().start() <= start);
+        let prev = fields
+            .iter()
+            .rev()
+            .find(|field| field.text_range().end() <= start);
+
+        let same_line = prev.filter(|field| {
+            !inside_next
+                && !source[usize::from(field.text_range().end() - base)..usize::from(start - base)]
+                    .contains('\n')
+        });
+        match (same_line, next) {
+            (Some(field), _) => {
+                placement.same_line.insert(field.text_range().start(), text);
+            }
+            (None, Some(field)) => placement
+                .leading
+                .entry(field.text_range().start())
+                .or_default()
+                .push(text),
+            (None, None) => placement.trailing.push(text),
+        }
+    }
+    placement
+}
+
+/// One comment on its own line, above whatever follows it.
+fn comment_line(text: &str) -> Ir {
+    Ir::concat([Ir::text(text.to_string()), Ir::hard_line()])
+}
+
+/// Whether `node` contains a `%` comment anywhere. Used by the block lowerings that
+/// have no per-line structure to hang one on, so they fall back to verbatim.
+fn has_comment(node: &SyntaxNode) -> bool {
+    node.descendants()
+        .any(|child| child.kind() == SyntaxKind::COMMENT)
 }
 
 /// One `name = value` field line. `name_lc` is the lowercased field name; `width` is
@@ -278,7 +399,11 @@ fn lower_field(field: &SyntaxNode, name_lc: &str, width: usize, last: bool, cx: 
 /// 3. A single bare `LITERAL` (macro reference or number) never reflows — wrapping
 ///    would change its meaning.
 /// 4. A single `BRACE_GROUP` (or a `QUOTED` piece that safely rewrites to braces)
-///    reflows: `Literal` as prose, `Name` at ` and ` boundaries only.
+///    reflows: `Literal` as prose, `Name` at ` and ` boundaries only —
+/// 5. …unless the content carries an unescaped `%`. A `%` is an ordinary character
+///    to BibTeX but a *comment* to the LaTeX that finally typesets the value, so
+///    where the line breaks fall decides what is typeset. Reflow moves them, so it
+///    would silently change output.
 fn lower_value_reflowed(
     value: &SyntaxNode,
     normalize: bool,
@@ -313,6 +438,11 @@ fn lower_value_reflowed(
         },
         _ => return lower_value(value, normalize),
     };
+
+    // Guard 5: a LaTeX comment inside the value makes its line breaks load-bearing.
+    if has_unescaped_percent(&inner) {
+        return lower_value(value, normalize);
+    }
 
     match category {
         FieldCategory::Name => reflow_name_value(&inner, prefix_width),
@@ -473,7 +603,9 @@ fn lower_string_entry(entry: &SyntaxNode) -> Ir {
     let etype = ast::entry_type(entry).unwrap_or_default().to_lowercase();
     let (open, close) = entry_delimiters(entry);
 
-    let Some(field) = ast::fields(entry).next() else {
+    // A comment has no line of its own in the single-line `@string` layout, so an
+    // entry carrying one is preserved as authored rather than losing it.
+    let Some(field) = ast::fields(entry).next().filter(|_| !has_comment(entry)) else {
         return Ir::verbatim(entry.to_string());
     };
     let name = ast::field_name(&field).unwrap_or_default();
@@ -496,7 +628,12 @@ fn lower_preamble_entry(entry: &SyntaxNode) -> Ir {
     let etype = ast::entry_type(entry).unwrap_or_default().to_lowercase();
     let (open, close) = entry_delimiters(entry);
 
-    let Some(value) = entry.children().find(|n| n.kind() == SyntaxKind::VALUE) else {
+    // As in `lower_string_entry`: a comment would have nowhere to go on one line.
+    let Some(value) = entry
+        .children()
+        .find(|n| n.kind() == SyntaxKind::VALUE)
+        .filter(|_| !has_comment(entry))
+    else {
         return Ir::verbatim(entry.to_string());
     };
     let value = lower_value(&value, false);
@@ -555,6 +692,21 @@ fn lower_quoted(piece: &SyntaxNode, normalize: bool) -> Ir {
         return Ir::verbatim(format!("{{{inner}}}"));
     }
     Ir::verbatim(raw)
+}
+
+/// Whether `s` contains a `%` that LaTeX would read as starting a comment — i.e. one
+/// not escaped as `\%`. A preceding `\\` is itself an escaped backslash, so the `%` in
+/// `\\%` is live.
+fn has_unescaped_percent(s: &str) -> bool {
+    let mut escaped = false;
+    for ch in s.chars() {
+        match ch {
+            '%' if !escaped => return true,
+            '\\' => escaped = !escaped,
+            _ => escaped = false,
+        }
+    }
+    false
 }
 
 /// Whether every `{` in `s` is matched by a later `}` and vice versa. Mirrors the

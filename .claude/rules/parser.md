@@ -60,6 +60,12 @@ Prefer false negatives; when in doubt a construct stays generic.
   paragraph-break anchor applies only between top-level atoms of the math body.
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.
+- **`.bib` `%` comment-ness is the grammar's call, never the lexer's.** The
+  lexer emits a bare `PERCENT`; the grammar wraps `%`…EOL in a `COMMENT` node
+  only where it skips trivia inside an entry. A brace group, a quoted string, an
+  `@comment` body, and junk never do, so `{50% off}` keeps its `%`. We follow
+  biber/btparse here, not classic `bibtex` (which has no comment at all);
+  texlab models none either, hence the recorded gauge deviation.
 
 ## Argument grouping
 

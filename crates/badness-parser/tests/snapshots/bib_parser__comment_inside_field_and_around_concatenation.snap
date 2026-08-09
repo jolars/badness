@@ -1,0 +1,47 @@
+---
+source: crates/badness-parser/tests/bib_parser.rs
+expression: "tree(\"@misc{k, title = % pick one\\n  {a} % or\\n  # {b}}\")"
+---
+ROOT@0..47
+  ENTRY@0..47
+    AT@0..1 "@"
+    ENTRY_TYPE@1..5
+      WORD@1..5 "misc"
+    L_BRACE@5..6 "{"
+    KEY@6..7
+      WORD@6..7 "k"
+    COMMA@7..8 ","
+    WHITESPACE@8..9 " "
+    FIELD@9..46
+      FIELD_NAME@9..14
+        WORD@9..14 "title"
+      WHITESPACE@14..15 " "
+      EQ@15..16 "="
+      WHITESPACE@16..17 " "
+      COMMENT@17..27
+        PERCENT@17..18 "%"
+        WHITESPACE@18..19 " "
+        WORD@19..23 "pick"
+        WHITESPACE@23..24 " "
+        WORD@24..27 "one"
+      NEWLINE@27..28 "\n"
+      WHITESPACE@28..30 "  "
+      VALUE@30..46
+        BRACE_GROUP@30..33
+          L_BRACE@30..31 "{"
+          WORD@31..32 "a"
+          R_BRACE@32..33 "}"
+        WHITESPACE@33..34 " "
+        COMMENT@34..38
+          PERCENT@34..35 "%"
+          WHITESPACE@35..36 " "
+          WORD@36..38 "or"
+        NEWLINE@38..39 "\n"
+        WHITESPACE@39..41 "  "
+        HASH@41..42 "#"
+        WHITESPACE@42..43 " "
+        BRACE_GROUP@43..46
+          L_BRACE@43..44 "{"
+          WORD@44..45 "b"
+          R_BRACE@45..46 "}"
+    R_BRACE@46..47 "}"

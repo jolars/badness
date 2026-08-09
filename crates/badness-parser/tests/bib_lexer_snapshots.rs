@@ -27,6 +27,13 @@ fn lex_word_vs_number() {
 }
 
 #[test]
+fn lex_percent_is_a_bare_special() {
+    // The lexer never decides comment-ness — `%` is one token wherever it appears
+    // and the grammar wraps only the legal ones in a `COMMENT` node.
+    insta::assert_snapshot!(dump("{50% off} % note"));
+}
+
+#[test]
 fn lex_newlines_and_whitespace() {
     insta::assert_snapshot!(dump("a\r\nb\n\n  c"));
 }

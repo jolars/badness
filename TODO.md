@@ -721,15 +721,30 @@ not re-proposed.
 
 ## BibTeX/BibLaTeX
 
-- [ ] **`expected ',' between fields` when a blank line or comment separates a
-  field value from its comma.** 33 `format-error` entries in the `latexindent`
-  gate corpus, all the `keyEqualsValueBraces/contributors-mod*` family:
-  `keywords =\n  {\n    contributor\n  }\n\n  ,}` and the `}%\n,}` variant. That
-  separation is legal BibTeX — whitespace and comments are not significant
-  between a value and the following `,` — so if this is confirmed the bib parser
-  is over-strict. Confirm against the texlab bib oracle (`bib-parse-compat`)
-  before treating it as a bug; it is the largest single non-noise family in the
-  corpus's `format-error` bulk.
+- [x] **`expected ',' between fields` when a comment separates a field value from
+  its comma.** Was 33 `format-error` entries in the `latexindent` gate corpus
+  (`keyEqualsValueBraces/contributors-mod*`); all gone, `latexindent.all` 202 →
+  169 with no additions. The blank-line variant was a red herring — it always
+  parsed — and the real gap was that the bib layer had no `%` comment at all. The
+  two BibTeX readers disagree: classic `bibtex` 0.99d rejects a `%` inside an
+  entry, biber/btparse ends the comment at the newline; we follow biber, as the
+  rest of the bib layer does. `%` is context-dependent (literal inside a braced or
+  quoted value), so the lexer stays context-free with a bare `PERCENT` token and
+  the grammar builds the `COMMENT` node only where it skips trivia inside an
+  entry. The formatter keeps every comment: same-line ones ride their field's
+  line, the rest bind forward to the field below them and travel with it through
+  the canonical sort. texlab models no bib comment, so the gauge divergence is a
+  recorded deviation. Value reflow also grew a guard for the *other* `%`: one
+  inside a value is BibTeX-ordinary but a LaTeX comment, so its line breaks are
+  content and the value is emitted byte-exact. That hazard predated this work (it
+  was already reachable through the `namedGroupingBracesBrackets` family) and no
+  CST oracle can see it. See `architecture.md` § *`%` comments in `.bib`*.
+- [ ] `% badness-ignore` in `.bib`. Now that a `%` comment exists inside an entry,
+  the LaTeX-side directive carrier could work here too; today only the
+  `@comment{badness-ignore …}` entry form does (`bib/linter/suppression.rs`). The
+  two would need one directive grammar and a decision about what an in-entry
+  comment attaches to (the field below it, presumably, matching the formatter's
+  forward bind).
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
   single-file-sound, same caveat as `unused-string`).

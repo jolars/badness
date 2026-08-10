@@ -486,6 +486,28 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // `\newif` declaration, a `\fi` assembled inside a definition body, and a
     // brace-argument `\ifthenelse` all stay plain commands.
     ("conditional_demoted_unchanged", WrapMode::Reflow, 80),
+    // An own-line `%` run before the opener binds forward and the grammar reparents
+    // it *inside* the `CONDITIONAL`, as a sibling of the branches. It must survive:
+    // a lowering that walks only the branches and the closer deletes it outright,
+    // and no oracle but the comment one can see that (a comment is trivia to the
+    // CST, so non-trivia content is unchanged).
+    ("conditional_bound_comment", WrapMode::Reflow, 80),
+    // `WrapMode::Preserve` promises authored line breaks are untouched, so the
+    // all-or-nothing relayout does not run there at all — it would rejoin a
+    // conditional the author deliberately spread over lines.
+    ("conditional_preserve_keeps_breaks", WrapMode::Preserve, 80),
+    // A branch interior is laid out the way its *enclosing context* lays out the
+    // same elements. In running text that means the prose reflow: the branch wraps
+    // at the line width and its inter-word spacing normalizes, exactly as the same
+    // words would outside the construct. No `PARAGRAPH` nests in a branch to carry
+    // that lowering, so it is read off the conditional's ancestors.
+    ("conditional_prose_reflows", WrapMode::Reflow, 80),
+    // The mirror: inside a `\def` body the enclosing `GROUP` emits the byte-faithful
+    // stream, so the branches do too and macro code keeps its authored lines.
+    // Feeding this to the prose reflow is not merely cosmetic — `\ifx\\#1\\` has a
+    // `LINE_BREAK` node in an operand slot, and the "a `\\` ends its line" rule
+    // oscillates on it pass over pass (`pagesel.sty`).
+    ("conditional_in_definition_body", WrapMode::Reflow, 80),
     // List environments (`itemize`/`enumerate`/`description`): each `\item` on
     // its own line, the body reflowed with continuation lines hanging-indented at
     // the control word's width (`\item `). A `description` `[label]` trails on the

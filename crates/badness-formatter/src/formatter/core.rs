@@ -3995,8 +3995,13 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::concat([leading, env])
 }
 
-/// How the gap before a conditional divider was authored. The three cases differ
-/// in whether the formatter is *allowed* to put a line break there.
+/// How the gap before a conditional divider was authored. Only [`Self::Glued`] is
+/// discriminated by the layout — it is the one case that is *not* a break
+/// opportunity. The other two are distinguished so that a comment-terminated
+/// boundary never lands in `Glued`: the `%` itself is not collapsible trivia, so
+/// nothing is peeled behind it, and without its own case a branch ending
+/// `… % note` would read as glued and send the whole construct down the
+/// byte-faithful path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DividerGap {
     /// No whitespace at all (`\ifmmode y\else`). Breaking here would materialize a
@@ -4008,7 +4013,9 @@ enum DividerGap {
     /// opportunity.
     Gap,
     /// A `%` comment. The comment must end its line, so the break is forced — and
-    /// costs nothing, because the `%` already absorbs the line end.
+    /// costs nothing, because the `%` already absorbs the line end. Laid out
+    /// exactly like [`Self::Gap`]; the flat candidate is separately refused by
+    /// [`collapse_conditional_elements`], which sees the same `%`.
     Comment,
 }
 
@@ -4034,6 +4041,89 @@ fn split_branch_gap(node: &SyntaxNode) -> (Vec<SyntaxElement>, DividerGap) {
         _ => DividerGap::Glued,
     };
     (elements, gap)
+}
+
+/// Whether a `CONDITIONAL`'s branch interiors should be reflowed as prose, or
+/// `None` when the construct must not be relaid at all.
+///
+/// Read off the *enclosing* context, since a branch carries no `PARAGRAPH` of its
+/// own to answer with (the gate keeps a conditional inside one paragraph, so one
+/// never nests in a branch). A conditional whose nearest non-conditional ancestor
+/// is a `PARAGRAPH` sits in running text and reflows like it; one inside a `GROUP`
+/// or `ARGUMENT` is macro code — a `\def` body — where the enclosing group emits
+/// the byte-faithful stream, so the branches do too. Nested conditionals inherit
+/// the answer by walking past their parent branch.
+///
+/// `None` for a `.dtx` documentation paragraph: the broken candidate commits hard
+/// lines, and a line committed inside a doc paragraph lands outside its `% `
+/// margin. The `contains_doc_margin` guard on the dispatch arm only catches a
+/// conditional carrying a margin *itself*, not one riding a margined line whose
+/// `DOC_MARGIN` sits before the opener.
+fn conditional_interior_reflows(node: &SyntaxNode) -> Option<bool> {
+    let mut ancestor = node.parent();
+    while let Some(parent) = ancestor {
+        match parent.kind() {
+            SyntaxKind::CONDITIONAL | SyntaxKind::CONDITIONAL_BRANCH => ancestor = parent.parent(),
+            SyntaxKind::PARAGRAPH => return (!is_dtx_doc_paragraph(&parent)).then_some(true),
+            _ => return Some(false),
+        }
+    }
+    Some(false)
+}
+
+/// A `CONDITIONAL`'s children, decomposed for [`lower_conditional`]: the elements
+/// before the first branch, the branches, and the closing `\fi`.
+///
+/// The leading run is **not** always empty, which is the whole reason this exists.
+/// An own-line `%` run immediately before the opener binds forward as a
+/// `DOC_COMMENT` and the grammar reparents it *inside* the `CONDITIONAL`
+/// (`Parser::conditional`, and `parse_block` for a top-level one), so it is a
+/// sibling of the branches. A lowering that walked only `CONDITIONAL_BRANCH`
+/// children would drop it on the floor — and the non-trivia-content oracle cannot
+/// see that, because a comment is trivia to the CST. Hence
+/// [`comments_survive_formatting`] in `tests/format.rs`.
+///
+/// `None` when the node is not in the shape the all-or-nothing layout assumes (no
+/// closer, no branch, or a stray element between two branches); the caller then
+/// takes the byte-faithful stream, which emits every child by construction.
+struct ConditionalParts {
+    leading: Vec<SyntaxElement>,
+    branches: Vec<SyntaxNode>,
+    closer: SyntaxNode,
+}
+
+fn split_conditional(node: &SyntaxNode) -> Option<ConditionalParts> {
+    let mut leading: Vec<SyntaxElement> = Vec::new();
+    let mut branches: Vec<SyntaxNode> = Vec::new();
+    let mut closer: Option<SyntaxNode> = None;
+    for element in node.children_with_tokens() {
+        match &element {
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::CONDITIONAL_BRANCH => {
+                // The closer is last, positionally (`Conditional::closer`); a branch
+                // after one means the walk stopped somewhere this layout cannot model.
+                if closer.is_some() {
+                    return None;
+                }
+                branches.push(child.clone());
+            }
+            SyntaxElement::Node(child)
+                if child.kind() == SyntaxKind::COMMAND && !branches.is_empty() =>
+            {
+                if closer.replace(child.clone()).is_some() {
+                    return None;
+                }
+            }
+            _ if branches.is_empty() => leading.push(element),
+            // Anything else between the branches would be dropped by the branch
+            // walk, so decline the whole construct rather than lose it.
+            _ => return None,
+        }
+    }
+    Some(ConditionalParts {
+        leading,
+        branches,
+        closer: closer?,
+    })
 }
 
 /// Lower an `\if… … \else … \or … \fi` conditional **all-or-nothing**: flat when
@@ -4071,19 +4161,38 @@ fn split_branch_gap(node: &SyntaxNode) -> (Vec<SyntaxElement>, DividerGap) {
 /// When no flat candidate exists (a `%` comment, a nested block), the broken form
 /// is unconditional, which is a content fact and fair to read.
 ///
-/// Interiors are lowered exactly as they are anywhere else, so a conditional wrapping
-/// package code keeps that code's line structure instead of refilling it.
+/// A branch *interior* is lowered the way the construct's **enclosing context**
+/// would lower the same elements ([`conditional_interior_reflows`]). That is what
+/// "as anywhere else" has to mean, and it cannot be read off the branch itself: the
+/// gate keeps a `CONDITIONAL` inside one paragraph, so no `PARAGRAPH` node ever
+/// nests in a branch to carry the prose lowering the way an environment body's
+/// does. In prose the branch therefore reflows — its words wrap and its inter-word
+/// spacing normalizes, exactly as they would outside the construct — while in a
+/// `\def` body it takes the byte-faithful stream, because that is what the
+/// enclosing `GROUP` does. Feeding macro code to the prose reflow is not merely
+/// cosmetic: `pagesel.sty`'s `\ifx\\#2\\%` has the parser's `LINE_BREAK` node in an
+/// `\ifx` operand slot, and the reflow's "a `\\` ends its line" rule oscillates on
+/// it pass over pass.
+///
+/// The whole relayout is confined to the modes that lay prose out at all
+/// ([`LowerCtx::wraps_prose`]). [`WrapMode::Preserve`] promises authored line
+/// breaks are untouched, and the all-or-nothing choice would rejoin a conditional
+/// the author spread over lines — so that mode takes the byte-faithful stream.
+/// The other three rebuild every prose line from runs already, so the choice is
+/// theirs to make.
 fn lower_conditional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let generic = || Ir::concat(lower_element_stream(node.children_with_tokens(), cx));
-    let branches: Vec<SyntaxNode> = node
-        .children()
-        .filter(|c| c.kind() == SyntaxKind::CONDITIONAL_BRANCH)
-        .collect();
-    // The closer is the last child, positionally (`Conditional::closer`). The gate
-    // guarantees one; without it there is no construct to lay out all-or-nothing.
-    let Some(closer) = node
-        .last_child()
-        .filter(|c| c.kind() == SyntaxKind::COMMAND)
+    if !cx.wraps_prose() {
+        return generic();
+    }
+    let Some(reflow_interior) = conditional_interior_reflows(node) else {
+        return generic();
+    };
+    let Some(ConditionalParts {
+        leading,
+        branches,
+        closer,
+    }) = split_conditional(node)
     else {
         return generic();
     };
@@ -4094,23 +4203,33 @@ fn lower_conditional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return generic();
     }
 
+    // The bound `DOC_COMMENT` run, if any. Lowered outside the candidates (as
+    // `lower_environment` does with its own leading run): it is not part of the
+    // construct's width, and it must survive whichever candidate the printer picks.
+    let leading = if leading.is_empty() {
+        Ir::Nil
+    } else {
+        Ir::concat(lower_element_stream(leading.into_iter(), cx))
+    };
+
     let closer_ir = lower_node(&closer, cx);
     let mut broken = Vec::with_capacity(split.len() * 2 + 1);
     for (elements, _) in &split {
-        broken.push(Ir::concat(lower_element_stream(
-            elements.iter().cloned(),
-            cx,
-        )));
+        broken.push(if reflow_interior {
+            reflow_elements(elements.iter().cloned(), cx, ReflowKind::Prose)
+        } else {
+            Ir::concat(lower_element_stream(elements.iter().cloned(), cx))
+        });
         broken.push(Ir::hard_line());
     }
     broken.push(closer_ir.clone());
     let broken = Ir::concat(broken);
 
-    let flat = collapse_conditional(&split, &closer_ir, cx);
-    match flat {
+    let group = match collapse_conditional(&split, &closer_ir, cx) {
         Some(flat) => Ir::conditional_group_all_lines([flat, broken]),
         None => broken,
-    }
+    };
+    Ir::concat([leading, group])
 }
 
 /// The one-line candidate for [`lower_conditional`]: every branch collapsed to a

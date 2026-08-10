@@ -4432,11 +4432,25 @@ fn forward_search_honors_build_root_for_an_unseeded_parent() {
     let _ = recv_diagnostics(&client);
 
     assert_eq!(forward_search(&client, 2, &uri, Position::new(0, 0)), 0);
+    // Compare *files*, not path spellings. This is the one branch where the root
+    // comes from `[build] root`, which is absolutized against the config's own
+    // directory — and `Config::discover` reaches that directory by canonicalizing.
+    // So on macOS `%p` comes back under `/private/var` while `%f`, taken straight
+    // off the LSP URI, stays under `/var`. Which of the two spellings a viewer
+    // receives is not what this test pins.
+    let recorded: Vec<std::path::PathBuf> = recorded_args(&record)
+        .iter()
+        .map(|arg| {
+            std::path::Path::new(arg)
+                .canonicalize()
+                .unwrap_or_else(|err| panic!("recorded viewer path `{arg}`: {err}"))
+        })
+        .collect();
     assert_eq!(
-        recorded_args(&record),
+        recorded,
         vec![
-            dir.path().join("main.pdf").display().to_string(),
-            chapter_path.display().to_string(),
+            dir.path().join("main.pdf").canonicalize().unwrap(),
+            chapter_path.canonicalize().unwrap(),
         ]
     );
 

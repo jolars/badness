@@ -1,0 +1,40 @@
+% Conditional layout is the one formatter rule whose risk the CST oracles cannot
+% see: a divider separator renders as a space when flat and a newline when
+% broken, and TeX makes a space token of *either*. So breaking where the author
+% glued adds a space to the horizontal list — trivia to the CST, content to TeX.
+% Every conditional below is long enough that a naive rule would break it.
+\documentclass[11pt]{article}
+\usepackage[margin=2cm]{geometry}
+\newif\ifdrafting
+\draftingtrue
+\begin{document}
+\section{Glued dividers}
+
+% Glued on both sides: the whole construct must stay on one line, however wide.
+% If a break lands at either divider, the extra space shows up right here.
+Inline\ifnum1<2 glued-then-branch-that-is-quite-long-indeed\else glued-else-branch-longer-still\fi trailing.
+
+% Glued inside math-mode switching, the case where a stray space is loudest.
+The value $x\ifmmode y_{\text{subscripted}}\else z_{\text{alternate}}\fi w$ ends the sentence here.
+
+\section{Spaced dividers}
+
+% Every boundary already carries a gap, so relayout is free: flat or broken, TeX
+% sees one space either way.
+Inline \ifnum1<2 spaced-then-branch-that-is-quite-long-indeed \else spaced-else-branch-longer-still \fi trailing.
+
+\section{Mixed}
+
+% One glued boundary, one spaced: the construct keeps its authored bytes rather
+% than breaking the spaced one and leaving its glued sibling inline.
+Inline \ifnum1<2 spaced-then-branch-that-is-quite-long-indeed \else glued-else-branch-longer-still\fi trailing.
+
+\section{Multi-branch}
+
+\ifcase\value{page}\relax zeroth-branch-text \or first-branch-text \or second-branch-text \else default-branch-text \fi
+
+\section{Toggle}
+
+\ifdrafting This is the drafting branch, which runs long enough to overflow the line. \else This is the final branch. \fi
+
+\end{document}

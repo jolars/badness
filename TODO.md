@@ -707,6 +707,20 @@ sources below are missing.
   benchmark page `docs/src/reference/benchmarks.md`). In-process parse/format micro-bench +
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
+- [ ] **95 corpus files change their `%` comments** (`comment-change` in the gate
+  baselines). Surfaced by the comment oracle added alongside the conditional node —
+  the `content-change` check compares `nontrivia_content`, and a comment is trivia
+  to the CST, so this whole class was invisible. All 95 predate the conditional
+  work (verified file by file against `main`; that change fixes 12 of them and
+  regresses none). Two shapes so far:
+  - **Adjacent comments merge.** `%\n% just backwards compatibility…` comes out as
+    `% % just backwards compatibility…`, the empty comment's `%` swallowed onto the
+    next line (`pgfrcs.code.tex`, `latexrelease.sty`). Byte-identical meaning to
+    TeX, but the formatter still rewrote a protected region.
+  - **`.dtx` guards re-lex as comments.** A `%<+debug>` that no longer opens its
+    line is a comment, not a docstrip guard, so the extracted file changes — a
+    meaning change, not a cosmetic one. Every `.dtx` in the list is this shape.
+    Likely the same margin/guard column-0 pinning the reflow already backstops.
 - [ ] **No orphan guard on formatter fixtures.** A directory under
   `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
   `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`

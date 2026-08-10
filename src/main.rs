@@ -1522,6 +1522,7 @@ enum CheckKind {
     Losslessness,
     Idempotency,
     ContentChange,
+    CommentChange,
     Trivia,
     FormatError,
 }
@@ -1532,10 +1533,29 @@ impl CheckKind {
             CheckKind::Losslessness => "losslessness",
             CheckKind::Idempotency => "idempotency",
             CheckKind::ContentChange => "content-change",
+            CheckKind::CommentChange => "comment-change",
             CheckKind::Trivia => "trivia",
             CheckKind::FormatError => "format-error",
         }
     }
+}
+
+/// Every `%` comment in `text`, one per line, in document order and with trailing
+/// whitespace trimmed (the printer drops a comment's trailing spaces with the
+/// line's). Rendered as text so a divergence diffs like the other checks.
+///
+/// `DOC_MARGIN` and `GUARD` are excluded on purpose: a `.dtx` margin is
+/// re-synthesized per output line by the doc-paragraph reflow, so its count is
+/// layout. A `COMMENT` never is.
+fn comment_sequence(text: &str, config: LexConfig) -> String {
+    parse_with_flavor(text, config)
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| token.kind() == badness::syntax::SyntaxKind::COMMENT)
+        .map(|token| token.text().trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A failed check: the two texts whose divergence is the finding. For
@@ -1824,6 +1844,24 @@ fn run_debug_checks_for_file(
                     if before != after {
                         artifacts.failures.push(DebugFailure {
                             kind: CheckKind::ContentChange,
+                            left: before,
+                            right: after,
+                            detail: None,
+                        });
+                    }
+                    // Comments are a protected region: the formatter picks the line a
+                    // `%` lands on, never whether it exists. Invisible to the check
+                    // above, since a comment is trivia to the CST — which is how a
+                    // lowering that walked a node's *expected* children silently
+                    // deleted a `DOC_COMMENT` the grammar had bound into it. Its own
+                    // kind rather than a second `content-change`, so the two-sided
+                    // ratchet keeps telling them apart; the smoke-test workflow's
+                    // colour map already falls through for anything it does not name.
+                    let before = comment_sequence(&format!("{content}\n"), config);
+                    let after = comment_sequence(&once, config);
+                    if before != after {
+                        artifacts.failures.push(DebugFailure {
+                            kind: CheckKind::CommentChange,
                             left: before,
                             right: after,
                             detail: None,

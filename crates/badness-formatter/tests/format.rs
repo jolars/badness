@@ -17,6 +17,23 @@ use badness_formatter::formatter::{
 };
 use badness_formatter::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness_formatter::semantic::SignatureDb;
+use badness_formatter::syntax::SyntaxKind;
+
+/// Every `%` comment in `text`, in document order, trailing whitespace trimmed
+/// (the printer may drop a comment's trailing spaces along with the line's).
+///
+/// `DOC_MARGIN` and `GUARD` are deliberately excluded: a `.dtx` margin is
+/// re-synthesized per output line by the doc-paragraph reflow, so its *count* is
+/// layout, not content. A `COMMENT` never is.
+fn comment_texts(text: &str, config: LexConfig) -> Vec<String> {
+    parse_with_flavor(text, config)
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| token.kind() == SyntaxKind::COMMENT)
+        .map(|token| token.text().trim_end().to_string())
+        .collect()
+}
 
 /// Check the formatter invariants for a single clean-parsing input under
 /// `style` and `config`, returning a description of the first violation
@@ -41,6 +58,22 @@ fn check_format_invariants(
         != perturb::nontrivia_content(&format!("{input}\n"), config)
     {
         return Err("format changed non-trivia content".to_string());
+    }
+
+    // Comments are a *protected region*: the formatter decides which line a `%`
+    // lands on, but never drops, duplicates, reorders, or rewrites one. The oracle
+    // above cannot see this — a comment is trivia to the CST, so a dropped comment
+    // leaves non-trivia content untouched. It is a real failure mode, not a
+    // hypothetical: a lowering that walks a node's *expected* children (branches
+    // and a closer) silently loses a `DOC_COMMENT` the grammar bound into it.
+    // The sequence is compared in document order, since LaTeX comments ride their
+    // line and never reorder (unlike the `.bib` side's multiset).
+    if comment_texts(&formatted, config) != comment_texts(input, config) {
+        return Err(format!(
+            "format changed the document's comments:\n--- before ---\n{:?}\n--- after ---\n{:?}",
+            comment_texts(input, config),
+            comment_texts(&formatted, config)
+        ));
     }
 
     // Idempotence: fmt(fmt(x)) == fmt(x).
@@ -134,6 +167,11 @@ const CLEAN_CASES: &[&str] = &[
     // delimiter — the new lowering must stay idempotent, clean, and lossless.
     r"$\left[ \left( a \right) \right]^2 + \left\langle x \right\rangle$",
     "a % comment\nb",
+    // An own-line `%` run bound forward into a paired conditional: the comment is a
+    // child of the `CONDITIONAL`, not of a branch, so it is exactly the shape a
+    // branches-only lowering drops. Here for the *oracle*'s sake — the fixture pins
+    // the bytes, this pins that `check_format_invariants` itself catches the loss.
+    "% why\n\\ifnum1>0 a \\else b \\fi\n",
     r"\begin{itemize}\item one\end{itemize}",
     // Own-line `%`s in a list body (issue #48): a multi-line comment run bound
     // leading into the next `\item`, and a floating comment isolated between

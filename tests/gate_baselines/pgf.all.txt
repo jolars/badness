@@ -10,6 +10,7 @@
 ./tex/generic/pgf/frontendlayer/tikz/libraries/tikzexternalshared.code.tex	format-error
 ./tex/generic/pgf/libraries/pgflibraryprofiler.code.tex	format-error
 ./tex/generic/pgf/modules/pgfmoduleplot.code.tex	format-error
+./tex/generic/pgf/utilities/pgfrcs.code.tex	comment-change
 ./tex/generic/pgf/utilities/pgfutil-common.tex	format-error
 ./tex/latex/pgf/doc/pgfmanual-en-macros.tex	format-error
 ./tex/latex/pgf/doc/pgfmanual.prettyprinter.code.tex	format-error

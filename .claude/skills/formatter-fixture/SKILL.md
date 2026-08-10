@@ -183,13 +183,11 @@ Measured against the 198 existing fixture slugs, which cluster in reflow (32),
 math (30), expl3 (29), dtx (25), align (18), and tabular (10). Thin or absent,
 each with a large corpus directory behind it:
 
-1. **`ifelsefi`** (`\if…\else…\fi` outside expl3) — no coverage; 402 corpus
-   files. Note the parser's shape gates interact here.
-2. **`items`** (`\item` lists) — one `list_item_continuation_hang` fixture
+1. **`items`** (`\item` lists) — one `list_item_continuation_hang` fixture
    against 157 corpus files; issue #82's hang rule deserves more shapes.
-3. **`filecontents`** — no coverage; the environment's body is protected, so
+2. **`filecontents`** — no coverage; the environment's body is protected, so
    this is mostly a protected-region question.
-4. **`unnamed-braces` / `namedGroupingBracesBrackets`** — four `group_*`
+3. **`unnamed-braces` / `namedGroupingBracesBrackets`** — four `group_*`
    fixtures; bare and named brace groups at statement level.
 
 Done: sectioning / `headings` (`sectioning_starts_own_line`,
@@ -202,6 +200,17 @@ Skip constructs whose corpus family is currently a known failure until the
 underlying bug lands (`oneSentencePerLine` and `commands/figureValign` both wait
 on Formatter entries in TODO.md) — authoring an `expected.tex` against a
 formatter that corrupts the input wastes the user's review.
+
+**`ifelsefi` (402 files) is surveyed and parser-blocked** — the `CONDITIONAL`
+node entry under *Parser* in TODO.md carries the full survey. Do not re-derive a
+formatter-only rule for it: a per-boundary divider rule half-breaks the
+construct (one divider breaks, its glued sibling does not), breaking glued ones
+too manufactures a space token TeX contributes to the horizontal list, and
+firing only where the author already broke is the trivia read. The coherent
+all-or-nothing form needs the construct's extent, which is a parser scan. It is
+also the standing example of the more general lesson: when every available rule
+for a construct is arbitrary, the construct has no node, and the output of the
+session is the recorded blocker rather than a fixture.
 
 ## Report-back
 

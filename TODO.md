@@ -28,6 +28,69 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   gate corpora before flipping any consumer. Rationale in `docs/src/development/architecture.md`
   (§ *Argument grouping and bracket policy*).
 
+- [ ] **Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
+  node.** The `latexindent` corpus's largest uncovered construct (402 files).
+  Surveyed under the formatter-fixture skill and handed back to the parser,
+  because every formatter-only rule for it is unprincipled. Today `\ifnum`,
+  `\else` and `\fi` are plain `COMMAND` nodes, so layout falls through to
+  `line_is_command_only` — the lone-newline read: `\ifnum1<2 b \else c \fi` stays
+  flat while the same content spelled across lines keeps its breaks. Two
+  self-consistent fixed points, so no oracle fires. Same Tier-1 violation the
+  sectioning entry below fixed, but the sectioning cure does not transfer.
+
+  **Why the formatter cannot own it.** A per-boundary rule ("a divider starts a
+  line") half-breaks the construct. Fired only across a gap the author already
+  spelled, it emits `prose x\ifmmode y` / `\else z\fi w prose` — one divider
+  broken, its sibling not, decided by where the author happened to glue. Fired
+  unconditionally, it manufactures a space token at the ~22% glued sites, which
+  TeX contributes to the horizontal list: a typeset change, and `\ifmmode
+  y\else z\fi` is exactly where it shows. Fired only where the author already
+  broke, it *is* the trivia read. Trivia-reading, typeset-unsafe, or lopsided —
+  there is no fourth option at that layer. The coherent form is all-or-nothing
+  over the whole conditional (flat when it fits, every divider breaking when it
+  does not), which needs the construct's extent, i.e. a balanced opener→`\fi`
+  scan. That is parsing (tenet 3).
+
+  **What the node can and cannot deliver.** The `\if` *test* extent is not
+  statically resolvable — `\ifnum\radius>5` scans ⟨number⟩⟨rel⟩⟨number⟩ by TeX's
+  own scanner, `\ifx` takes two tokens, a `\newif`-defined `\if@foo` takes none.
+  So head/body separation, and with it a body indent, stay **out of reach even
+  with the node**: the environment-shaped layout the corpus files are written in
+  is not the target. What the node buys is each branch riding its divider line,
+  all-or-nothing, with short conditionals staying flat:
+
+  ```tex
+  \ifodd\value{totalchapters}=#1 \typeout{Total Chapters match auxilary file (#1)}
+  \else \typeout{Warning: total Chapter count updated from …}
+  \fi
+  ```
+
+  **The shape gate is real**, and generalizes decision #1's environment gate (an
+  environment cannot outlive the brace group its `\begin` opened in). Naive
+  `\if`-prefix matching misfires on two families, measured over
+  latex2e/latex3/pgf/latexindent: `\newif\if@foo` (574 occurrences, where the
+  `\ifX` is an *argument*, not an opener) and the etoolbox/ifthen family
+  (`\ifthenelse`, `\ifnumgreater`, `\iftoggle`, …; 102 occurrences), which takes
+  braced arguments and is never `\fi`-terminated — and which nests *inside* a
+  real conditional in `test-cases/ifelsefi/issue-250.tex`, so a wrong pairing
+  steals the enclosing `\ifluatex`'s `\else`. After subtracting both families,
+  268 of 6205 corpus files still have unbalanced opener/`\fi` counts (openers
+  assembled by `\def`, `\expandafter\fi`, `\iffalse…\fi` comment tricks), so the
+  gate must **demote silently** rather than diagnose, exactly as the environment
+  gate does.
+
+  Divider placement in real code, for calibration (latex2e/latex3/pgf):
+
+  | | line-start | mid-line, spaced | glued |
+  |---|---|---|---|
+  | `\else` (9407) | 66.4% | 12.7% | 20.9% |
+  | `\fi` (15819) | 58.4% | 16.8% | 24.8% |
+  | `\or` (1914) | 41.5% | 16.2% | 42.3% |
+
+  Authors already put ~60% of dividers at line start, so the rule largely makes
+  an existing convention deterministic rather than imposing one. `\or` is the
+  weakest member (42% glued) and worth deciding separately.
+
 ## Formatter
 
 - [x] ~~**`]` is deleted inside prose-reflowable command arguments.**~~ **Fixed.**
@@ -683,10 +746,13 @@ sources below are missing.
   latexindent's own outputs are a soft target only: usable as inspiration where
   our tenets underdetermine a construct, never a form to match case by case,
   since it is a config-driven indenter whose committed outputs are one settings
-  stack's answer to a different question. Measured gaps against the 197 existing
-  slugs: `ifelsefi` (402 corpus files, no coverage), `items` (157 files, one
-  fixture), `filecontents`, bare/named brace groups. Sectioning/`headings` is
-  done (two slugs, and the Tier-1 lone-newline bug that lived there).
+  stack's answer to a different question. Measured gaps against the 198 existing
+  slugs: `items` (157 files, one fixture), `filecontents`, bare/named brace
+  groups. Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
+  bug that lived there). **`ifelsefi` (402 files) is surveyed but parser-blocked**
+  — see the `CONDITIONAL` node entry under *Parser*; do not re-derive a
+  formatter-only rule for it, the survey already showed every such rule is
+  trivia-reading, typeset-unsafe, or lopsided.
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
 - [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
   crate + the docs playground page (`docs/src/playground.md`), formatter-only;

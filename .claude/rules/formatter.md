@@ -99,6 +99,20 @@ predicates the formatter *preserves*.
   author glued (`\ifmmode y\else z\fi`) materializes a space token — a typeset
   change no CST oracle can see. Any glued boundary sends the whole construct down
   the byte-faithful path; breaking only the unglued siblings is the lopsided form.
+- **The relayout runs only where prose is laid out** (`cx.wraps_prose()`).
+  `WrapMode::Preserve` promises authored breaks are untouched, and the
+  all-or-nothing choice would rejoin a conditional the author spread over lines.
+- **A branch interior is lowered by its *enclosing* context, not by itself.** No
+  `PARAGRAPH` nests in a branch (the gate keeps a conditional inside one), so the
+  ancestor decides: paragraph → prose reflow, group/argument → byte-faithful
+  stream. Feeding macro code to the prose reflow oscillates — `\ifx\\#1\\` puts a
+  `LINE_BREAK` node in an operand slot and the "a `\\` ends its line" rule flips
+  it every pass (`pagesel.sty`).
+- **A `CONDITIONAL` child is not always a branch or the closer.** An own-line `%`
+  run before the opener is reparented *into* the node as a `DOC_COMMENT`. Walk
+  the expected children only and it is deleted — invisibly, since a comment is
+  trivia to the non-trivia-content oracle. The comment oracle in
+  `assert_format_invariants` is what catches this; keep it green.
 
 ## Optional arguments
 

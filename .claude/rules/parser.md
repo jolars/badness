@@ -63,11 +63,19 @@ Prefer false negatives; when in doubt a construct stays generic.
   ways, and the walk is bounded by the located closer index. A gate that counts a
   `\fi` the walk will consume inside another construct promises a pairing it
   cannot honor, and the walk overruns (`ltboxes.dtx`, three `\fi`s inside `$…$`).
-  Opener recognition lives in `parser::conditional`, **shared with the linter's
-  `ConditionalIndex`** so the two cannot drift; subtracting the brace-argument
-  `if*` family is load-bearing, since shape alone mis-pairs rather than fails.
-  Demotes silently; no conditionals in expl3 regions (the formatter owns layout
-  there).
+  The bound is **one-directional on purpose**: the walk never runs past the
+  located closer, but may close earlier when it demotes a nested opener the scan
+  counted by name — so `Conditional::closer` is fallible and no consumer may
+  assume the two indices agree. Opener recognition lives in `parser::conditional`,
+  **shared with the linter's `ConditionalIndex`**, recognizer and state machine
+  both, so the two can never disagree about what an opener *is*; each still
+  layers its own filter on the result (parser: no expl3 regions, since the
+  formatter owns layout there; linter: `\def` bodies withheld entirely, since a
+  carried `\let` must not arm the operand countdown). Subtracting the
+  brace-argument `if*` family is load-bearing, since shape alone mis-pairs rather
+  than fails. Demotes silently. One forward scan per live opener; every ordinary
+  anchor cuts it short, so real corpora are unaffected — see `TODO.md` for the
+  pathological shape.
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.
 - **`.bib` `%` comment-ness is the grammar's call, never the lexer's.** The

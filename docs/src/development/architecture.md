@@ -259,8 +259,16 @@ families measured over the gate corpora: the brace-argument `if*` macros
 being declared or compared rather than live control flow. Subtracting the first
 is load-bearing rather than cosmetic: shape alone does not merely fail on an
 `\ifnumgreater`, it *mis-pairs*, stealing an enclosing conditional's `\fi`. The
-name sets live in `parser::conditional` and are shared with the linter's
-`ConditionalIndex`, so branch paths and CST nodes cannot disagree.
+name sets live in `parser::conditional`, along with the small state machine that
+turns them into a positional verdict (the operand countdown, the `\ifcsname`
+body), and the linter's `ConditionalIndex` drives the same one. So branch paths
+and CST nodes can never disagree about what an opener *is*. They can still reach
+different verdicts on a token, because each consumer decides for itself which
+stream to interpret: the parser visits every token and then drops the openers
+inside an expl3 region, while the linter withholds a `\def` body's span
+altogether — a `\let` that a definition merely carries must not arm the operand
+countdown for the code after it, whereas the parser needs no such rule because
+its brace anchor already refuses to pair across the body's group.
 
 The gate itself demands a reachable `\fi`, and demands it at the opener's own
 level of **every nesting the parse recognizes** — braces, environments, and math
@@ -275,6 +283,25 @@ chunk terminator for every chunk-bounded scan downstream. So math anchors the
 scan, a `macrocode` frame is a hard boundary in both directions, and the walk is
 additionally bounded by the closer index the gate located — belt and braces,
 since the scan reads tokens while the walk reads structure.
+
+That bound is deliberately one-directional, and it is worth being exact about
+which direction. The walk can never run *past* the located `\fi`; it can still
+stop *before* it, because the scan counts nested openers by name while the walk
+re-gates each one and may demote it — and a demoted opener's `\fi` is then a
+closer the walk reaches first. `\ifA \begin{center} \ifB \end{center} \fi \fi`
+is the shape: the scan counts `\ifB` and picks the second `\fi`, the walk
+demotes `\ifB` and closes at the first, and the leftover `\fi` is a plain
+command. The tree is still well formed and still lossless, which is the bar; but
+it is why `ast::Conditional::closer` is fallible and why no consumer may assume
+the scan's index and the walk's agree.
+
+The cost is one forward scan per live opener. Every ordinary anchor cuts it
+short, so conditional-heavy real packages (`biblatex.sty`, `latexrelease.sty`,
+`memoir.cls`) measure the same as they did before the node existed. The shape
+that does not cut short is thousands of top-level openers with no blank line, no
+unbalanced brace, and no reachable `\fi`, which is quadratic; no corpus file
+hits it, and the linear rewrite is recorded in `TODO.md` against the day one
+does.
 
 Two anchors differ from the environment gate on purpose. Running out of file
 demotes here, where the environment gate keeps the node so it can still report
@@ -548,8 +575,36 @@ breaking at a divider the author glued (`\ifmmode y\else z\fi`) changes what TeX
 sets — a change no CST oracle can see, since whitespace is trivia to them and
 content to TeX. A construct with any glued divider therefore keeps its authored
 bytes rather than relayout: breaking only the unglued siblings would be the
-lopsided form again. Interiors are lowered as they are anywhere else, so package
-code wrapped in a conditional keeps its own line structure.
+lopsided form again.
+
+The whole relayout is confined to the modes that lay prose out at all.
+`WrapMode::Preserve` promises authored line breaks are untouched, and rejoining
+a conditional the author spread over lines is exactly what that forbids, so
+there the construct takes the byte-faithful stream. The other three rebuild
+every prose line from runs already, so the choice is theirs to make.
+
+A branch *interior* is lowered the way the construct's enclosing context would
+lower the same elements, which is what "as anywhere else" has to mean here. It
+cannot be read off the branch: the gate keeps a conditional inside one
+paragraph, so no `PARAGRAPH` node ever nests in a branch to carry the prose
+lowering the way an environment body's does. Instead the lowering looks at the
+conditional's nearest non-conditional ancestor. In running text that is a
+paragraph, and the branch reflows with it — its words wrap and its inter-word
+spacing normalizes, just as they would outside the construct. Inside a `\def`
+body it is a group, which emits the byte-faithful stream, so the branch does too
+and package code keeps its authored lines. That second case is not a nicety:
+`pagesel.sty`'s `\ifx\\#2\\%` has the parser's `LINE_BREAK` node sitting in an
+`\ifx` operand slot, and the prose reflow's "a `\\` ends its line" rule
+oscillates on it pass over pass.
+
+One further child can hang off a `CONDITIONAL`, and it is easy to lose. An
+own-line `%` run before the opener binds forward as a `DOC_COMMENT`, and the
+grammar reparents it *inside* the node, as a sibling of the branches. A lowering
+that walks only the branches and the closer drops it silently — and the
+non-trivia-content oracle cannot object, because a comment is trivia to the CST.
+The comment oracle in `assert_format_invariants` exists for exactly this class
+of bug, mirroring the one the `.bib` formatter has carried since it started
+reordering fields.
 
 There is no body indent, because the parser cannot separate the `\if` test from
 the then-body (see § *The conditional gate*). The environment-shaped layout that

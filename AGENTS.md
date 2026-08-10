@@ -154,24 +154,31 @@ provenance.
      comment tricks leave 268 of 6205 corpus files unbalanced). Recognition is
      pair-and-trust over the `if`-prefix minus two curated families —
      `NOT_FI_TERMINATED` and the `\newif`/`\let` operand slots
-     (`parser::conditional`, a set shared with the linter's `ConditionalIndex` so
-     the two cannot drift). Subtracting the brace-argument family is load-bearing,
-     not cosmetic: shape alone *mis-pairs* rather than fails, stealing an enclosing
-     `\fi` (`test-cases/ifelsefi/issue-250.tex`).
+     (`parser::conditional`, the recognizer *and* its state machine shared with the
+     linter's `ConditionalIndex`, so the two can never disagree about what an
+     opener is; each still layers its own filter on top — the parser suppresses
+     expl3 regions, the linter withholds `\def` bodies). Subtracting the
+     brace-argument family is load-bearing, not cosmetic: shape alone *mis-pairs*
+     rather than fails, stealing an enclosing `\fi`
+     (`test-cases/ifelsefi/issue-250.tex`).
 
-     The load-bearing constraint is that **the token scan must reach the same
-     closer the recursive walk will**. Counting a `\fi` the walk consumes inside
-     some other construct promises a pairing it cannot honor, and the walk then
-     runs on looking for a closer that is gone — `ltboxes.dtx` puts three `\fi`s
-     inside a `$…$` and ran the construct over 160 lines and every `macrocode`
-     chunk between, stranding the cursor past `macrocode_end` for every
+     The load-bearing constraint is that **the token scan must never promise a
+     closer past the one the recursive walk reaches**. Counting a `\fi` the walk
+     consumes inside some other construct promises a pairing it cannot honor, and
+     the walk then runs on looking for a closer that is gone — `ltboxes.dtx` puts
+     three `\fi`s inside a `$…$` and ran the construct over 160 lines and every
+     `macrocode` chunk between, stranding the cursor past `macrocode_end` for every
      chunk-bounded scan downstream. So the closer counts only at the opener's own
      *brace, environment, and math* level, a `macrocode` frame is a hard boundary
      in both directions, and the walk is bounded by the located closer index. The
-     `\if` *test*'s extent stays unresolvable by design (`\ifnum\radius>5` scans
-     ⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner), so there is no head node and no
-     body indent. Detail in `docs/src/development/architecture.md`
-     (§ *Sanctioned lexer modes*).
+     guarantee is one-directional by design: the walk may still close *earlier*
+     (a nested opener the scan counted by name may be demoted when the walk
+     re-gates it, and its `\fi` is then reached first), which is why
+     `ast::Conditional::closer` is fallible and nothing downstream may assume the
+     two indices agree. The `\if` *test*'s extent stays unresolvable by design
+     (`\ifnum\radius>5` scans ⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner), so there
+     is no head node and no body indent. Detail in
+     `docs/src/development/architecture.md` (§ *Sanctioned lexer modes*).
 
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
    a command means; the semantic layer is a signature database assigning arity,

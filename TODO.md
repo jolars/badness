@@ -721,6 +721,19 @@ sources below are missing.
     line is a comment, not a docstrip guard, so the extracted file changes — a
     meaning change, not a cosmetic one. Every `.dtx` in the list is this shape.
     Likely the same margin/guard column-0 pinning the reflow already backstops.
+- [ ] **The conditional gate is O(n·openers) in the worst case.**
+  `Parser::conditional_closer` runs one forward token scan per live opener. Every
+  ordinary anchor cuts it short — an unbalanced `}`, an unowed `\end`, a blank
+  line, a math delimiter, the `macrocode` chunk end — which is why the
+  conditional-heaviest packages in TeXLive (`biblatex.sty`, `latexrelease.sty`,
+  `memoir.cls`, `chemstr.sty`) measure within noise of the pre-node parser. The
+  shape that cuts nothing short is thousands of *top-level* openers with no blank
+  line, no unbalanced brace, and no reachable `\fi`: 8000 such lines cost ~2.2s
+  against ~0.07s, growing 4x per doubling. No corpus file is anywhere near it, so
+  this is recorded rather than fixed — a scan budget would be a hard-coded special
+  case, and the honest fix is to compute every opener's closer in one backward
+  sweep with an explicit stack (the counters — brace depth, environments, math,
+  `macrocode` — make that a rewrite, not a patch).
 - [ ] **No orphan guard on formatter fixtures.** A directory under
   `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
   `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`

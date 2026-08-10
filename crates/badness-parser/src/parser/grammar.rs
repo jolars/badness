@@ -2359,8 +2359,28 @@ impl<'t> Parser<'t> {
     /// `ltboxes.dtx`'s `\else\@pboxswtrue $\vcenter \fi\fi\fi … \if@pboxsw
     /// \m@th$\fi` puts all three `\fi`s inside a `$…$`, and the construct ran over
     /// 160 lines and every `macrocode` chunk in between. Hence the `envs == 0`
-    /// requirement on the closer and the math anchor: this returns the token index
-    /// of the `\fi` the walk will actually reach, and the walk is bounded by it.
+    /// requirement on the closer and the math anchor.
+    ///
+    /// The guarantee this buys is **one-directional, and that is the direction
+    /// that matters**: the walk never runs *past* the index returned here (it is
+    /// bounded by it outright). The walk may still stop *earlier*, because this
+    /// scan counts nested openers by name while the walk re-gates each one and may
+    /// demote it — and a demoted opener's `\fi` is then a closer the walk reaches
+    /// first. `\ifA \begin{center} \ifB \end{center} \fi \fi` is the shape: the
+    /// scan counts `\ifB` as nested and picks the second `\fi`, while the walk
+    /// demotes `\ifB` (whose own scan meets an unowed `\end`) and closes at the
+    /// first, leaving the second a plain `COMMAND`. Lossless, and the node is still
+    /// well formed — but it is why [`crate::ast::Conditional::closer`] is fallible
+    /// and why nothing downstream may assume the two indices agree
+    /// (`conditional_walk_may_close_before_the_located_fi`, `tests/parser.rs`).
+    ///
+    /// **Cost.** One forward scan per live opener, so O(n·openers) worst case. Every
+    /// ordinary anchor cuts it short, which is why real conditional-heavy packages
+    /// show no measurable change (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`
+    /// all within noise of the pre-node parser). The shape that does not cut short is
+    /// thousands of *top-level* openers with no blank line, no unbalanced brace, and
+    /// no reachable `\fi`: 8000 such lines cost ~2s against ~0.07s. No real corpus
+    /// file hits it; see `TODO.md` for the linear rewrite if one ever does.
     fn conditional_closer(&self, open: usize) -> Option<usize> {
         let mut depth = 0usize;
         let mut envs = 0usize;

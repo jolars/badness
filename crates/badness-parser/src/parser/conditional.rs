@@ -5,7 +5,18 @@
 //! Shared by the grammar (which builds [`SyntaxKind::CONDITIONAL`] nodes behind
 //! a shape gate) and the linter's `ConditionalIndex` (which derives branch paths
 //! for `duplicate-label`/`duplicate-package`), so the two read the *same* name
-//! set and can never drift — the same arrangement as [`super::lexer::expl_toggle`].
+//! sets and the *same* state machine — the same arrangement as
+//! [`super::lexer::expl_toggle`].
+//!
+//! What that buys is precise, and worth stating precisely: the two can never
+//! disagree about **what an opener is**. They can still reach different verdicts
+//! on a given token, because each feeds this scan a different stream on purpose.
+//! The parser walks every token and suppresses openers inside an expl3 region
+//! (in-region layout is the formatter's); the linter walks `COMMAND` nodes and
+//! skips definition-command spans wholesale (`\def\stopit{\fi}` carries a `\fi`,
+//! it does not run one), which the parser has no need to do because its own brace
+//! anchor already refuses to pair across the body's group. Those are deliberate
+//! per-consumer filters layered *around* a shared recognizer, not two recognizers.
 //!
 //! Recognition is **pair-and-trust**: a lowercase-`if`-prefixed name opens a
 //! conditional unless it is a known brace-argument macro. That leaves two
@@ -150,10 +161,19 @@ pub enum Word {
 /// The running state that turns [`is_conditional_opener`] into a positional
 /// decision: the operand-slot countdown and the `\ifcsname` body.
 ///
-/// Feed every control word in document order through [`Self::visit`]. Both
-/// consumers do exactly that — the parser in a pre-pass over the token stream,
-/// the linter walking `COMMAND` nodes in preorder — so the two agree by
-/// construction.
+/// Feed the control words in document order through [`Self::visit`] — the parser
+/// in a pre-pass over the token stream, the linter walking `COMMAND` nodes in
+/// preorder.
+///
+/// The state is a running countdown, so *whether* a word is visited is itself a
+/// decision, and the two consumers make it differently on purpose (module doc).
+/// The rule is which question the filter answers. Tokens the document does not
+/// **execute** must not be visited at all — the linter withholds the whole span of
+/// a `\def` body, because a `\let` carried inside one must not arm the countdown
+/// for the code after it. Tokens that merely have no *node* to build are visited
+/// and then discarded from the result — the parser does this for expl3 regions,
+/// so an in-region `\ifcsname` still opens and closes its skip window for the
+/// words that follow.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenerScan {
     /// Remaining control words claimed as operands by an earlier command.

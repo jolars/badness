@@ -58,6 +58,16 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **`$`, `\[`, `\(` open math only when a closer is reachable** before an
   unbalanced `}`, an unowed `\end`, a paragraph break, chunk end, or EOF. The
   paragraph-break anchor applies only between top-level atoms of the math body.
+- **`\if…\else…\or…\fi` pairs only when the `\fi` is reachable at the opener's
+  own brace, environment, *and* math level**; a `macrocode` frame bounds it both
+  ways, and the walk is bounded by the located closer index. A gate that counts a
+  `\fi` the walk will consume inside another construct promises a pairing it
+  cannot honor, and the walk overruns (`ltboxes.dtx`, three `\fi`s inside `$…$`).
+  Opener recognition lives in `parser::conditional`, **shared with the linter's
+  `ConditionalIndex`** so the two cannot drift; subtracting the brace-argument
+  `if*` family is load-bearing, since shape alone mis-pairs rather than fails.
+  Demotes silently; no conditionals in expl3 regions (the formatter owns layout
+  there).
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.
 - **`.bib` `%` comment-ness is the grammar's call, never the lexer's.** The

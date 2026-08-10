@@ -453,6 +453,39 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // own physical line rides it, and a `%` on its own line stays on its own line
     // (where it binds forward as the heading's `DOC_COMMENT`).
     ("sectioning_blank_line_and_comment", WrapMode::Reflow, 80),
+    // A paired `\if…\else…\or…\fi` renders all-or-nothing. Flat when the whole
+    // construct fits — and the same content spelled across lines rejoins to
+    // exactly that, which is the fix: before the `CONDITIONAL` node the two
+    // spellings were separate fixed points, so no oracle could see the
+    // lone-newline read between them.
+    ("conditional_flat_when_it_fits", WrapMode::Reflow, 80),
+    ("conditional_authored_breaks_rejoin", WrapMode::Reflow, 80),
+    // Too wide to fit: *every* divider opens a line, never just the ones the
+    // author already broke. Breaking one and not its sibling is the lopsided form
+    // a per-divider rule at this layer cannot avoid.
+    ("conditional_breaks_all_dividers", WrapMode::Reflow, 80),
+    // `\or` is a divider like `\else` — `\ifcase` bodies would collapse into a
+    // single branch otherwise.
+    ("conditional_ifcase_or_branches", WrapMode::Reflow, 80),
+    // A `%` inside a branch must end its line, so no flat candidate exists and the
+    // construct is unconditionally broken. Comment *presence* is a trivia
+    // predicate the formatter preserves, so layout may read it.
+    ("conditional_comment_forces_break", WrapMode::Reflow, 80),
+    // A divider the author glued (`\ifmmode y\else z\fi`) is never broken: the
+    // newline would materialize a space token TeX contributes to the horizontal
+    // list — a typeset change no CST oracle can see, since whitespace is trivia to
+    // them and content to TeX. Any glued divider sends the whole construct down
+    // the byte-faithful path.
+    ("conditional_glued_divider_stays_flat", WrapMode::Reflow, 80),
+    // All-or-nothing composes: the outer construct breaks because it does not fit,
+    // while the inner one fits on the line it lands on and stays flat. Neither
+    // gets a body indent — the `\if` test's extent is not statically resolvable,
+    // so there is no head/body split to hang one off.
+    ("conditional_nested", WrapMode::Reflow, 80),
+    // The gate's demotions format exactly as they did before the node existed: a
+    // `\newif` declaration, a `\fi` assembled inside a definition body, and a
+    // brace-argument `\ifthenelse` all stay plain commands.
+    ("conditional_demoted_unchanged", WrapMode::Reflow, 80),
     // List environments (`itemize`/`enumerate`/`description`): each `\item` on
     // its own line, the body reflowed with continuation lines hanging-indented at
     // the control word's width (`\item `). A `description` `[label]` trails on the

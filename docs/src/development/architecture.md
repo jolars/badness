@@ -228,14 +228,64 @@ stays generic. The catalog:
 - **Signatures.** `\newcommand` and xparse signatures are extracted into the
   semantic database, never executed.
 
-Two shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
+Three shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
 matching closer is reachable before an unbalanced `}`, a paragraph break, or
 EOF, because macro code passes the delimiters around as data at least as often
-as prose uses them. And environment pairing is gated on brace structure rather
-than a command set: an environment can never outlive the brace group its
-`\begin` opened in, since braces are catcode structure while `\begin` and `\end`
-are only macros. Both gates degrade to a plain token with no diagnostic, because
-parser diagnostics gate the formatter and so must be high precision.
+as prose uses them. Environment pairing is gated on brace structure rather than
+a command set: an environment can never outlive the brace group its `\begin`
+opened in, since braces are catcode structure while `\begin` and `\end` are only
+macros. And a conditional pairs only when its `\fi` is reachable, as below. All
+three degrade to a plain token with no diagnostic, because parser diagnostics
+gate the formatter and so must be high precision.
+
+### The conditional gate
+
+`\if…\else…\or…\fi` becomes a `CONDITIONAL` holding a run of
+`CONDITIONAL_BRANCH`es with the `\fi` as its last child, mirroring
+`ENVIRONMENT > BEGIN … END`. The first branch carries the opener, its test, and
+the then-body; every later one opens with its own divider, so a consumer finds
+the boundaries positionally and never by matching the name `\else`.
+
+The `\if` *test*'s extent is not statically resolvable — `\ifnum\radius>5` scans
+⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner, `\ifx` takes two tokens, a
+`\newif`-defined `\if@foo` takes none — so there is deliberately no head node,
+and with it no body indent. What the node buys is the construct's *extent*,
+which is what lets the formatter lay it out all-or-nothing.
+
+Recognition is pair-and-trust over the lowercase `if` prefix, minus two curated
+families measured over the gate corpora: the brace-argument `if*` macros
+(`\ifthenelse`, `\iftoggle`, the etoolbox test family) and the operand slots of
+`\if`/`\ifx`/`\ifcat`/`\ifdefined`/`\newif`/`\let`, where an `\ifX` is a token
+being declared or compared rather than live control flow. Subtracting the first
+is load-bearing rather than cosmetic: shape alone does not merely fail on an
+`\ifnumgreater`, it *mis-pairs*, stealing an enclosing conditional's `\fi`. The
+name sets live in `parser::conditional` and are shared with the linter's
+`ConditionalIndex`, so branch paths and CST nodes cannot disagree.
+
+The gate itself demands a reachable `\fi`, and demands it at the opener's own
+level of **every nesting the parse recognizes** — braces, environments, and math
+alike. This is the subtle part. A token scan that counts a `\fi` the recursive
+walk will consume inside some other construct promises a pairing the walk cannot
+honor, and the walk then runs on looking for a closer that is gone.
+`ltboxes.dtx` is the case that taught this: its
+`\else\@pboxswtrue $\vcenter \fi\fi\fi … \if@pboxsw \m@th$\fi` puts all three
+`\fi`s inside a `$…$`, and a brace-only gate carried the construct over 160
+lines and every `macrocode` chunk in between, stranding the cursor past the
+chunk terminator for every chunk-bounded scan downstream. So math anchors the
+scan, a `macrocode` frame is a hard boundary in both directions, and the walk is
+additionally bounded by the closer index the gate located — belt and braces,
+since the scan reads tokens while the walk reads structure.
+
+Two anchors differ from the environment gate on purpose. Running out of file
+demotes here, where the environment gate keeps the node so it can still report
+an unclosed environment; a conditional has no diagnostic to preserve. And there
+is no `.dtx` doc-margin exemption: that exists so the documentation layer keeps
+pairing `\begin{macro}` across the chunks between them, and a conditional has no
+such split-across-chunks story. A paragraph break anchors at the construct's own
+level, which keeps `CONDITIONAL` a within-paragraph construct — it can never
+straddle a `PARAGRAPH` boundary, so no paragraph nests inside one. Conditionals
+are not recognized inside expl3 regions, where the formatter owns layout through
+the expl3 statement segmentation, nor (yet) in math mode.
 
 ### Recursive descent, with Pratt local to math
 
@@ -467,6 +517,43 @@ signature database cannot name a user-defined alignment.
 
 Math operator spacing is a single space around each binary and relation atom,
 with unary signs and scripts tight.
+
+### Conditionals
+
+A conditional the parser paired lays out all-or-nothing: flat when the whole
+construct fits, and with every divider opening a line when it does not. That is
+the only coherent form available, and the reason the construct needed a node at
+all. A per-divider rule at the layout layer has no good version of itself. Fired
+only across a gap the author already wrote, it *is* the lone-newline read. Fired
+unconditionally, it manufactures a space token at the roughly one boundary in
+four that authors glue, which TeX contributes to the horizontal list. Fired only
+where the author already broke, it breaks one divider and leaves its sibling
+glued, decided by nothing but where the author happened to type.
+
+The two forms are handed to the printer as whole candidates rather than as a
+single Wadler group of soft lines, and that distinction is load-bearing. A group
+saturates its break state from whatever forced breaks its subtree carries, and a
+branch *interior* carries one for every physical line the command-only-line rule
+keeps — so a group would end up deciding the dividers from the interior's
+authored newlines, which is exactly the predicate that must not decide them. The
+flat candidate is instead collapsed from content alone, so its width, and with
+it the choice between the two, is a function of non-trivia content and the
+config. When no flat candidate exists at all — a `%` comment in a branch, a
+nested environment — the broken form is unconditional, and both of those are
+content facts that layout may read.
+
+One carve-out keeps the rule typeset-safe. A separator renders as a space when
+flat and a newline when broken, and TeX makes a space token of either, so
+breaking at a divider the author glued (`\ifmmode y\else z\fi`) changes what TeX
+sets — a change no CST oracle can see, since whitespace is trivia to them and
+content to TeX. A construct with any glued divider therefore keeps its authored
+bytes rather than relayout: breaking only the unglued siblings would be the
+lopsided form again. Interiors are lowered as they are anywhere else, so package
+code wrapped in a conditional keeps its own line structure.
+
+There is no body indent, because the parser cannot separate the `\if` test from
+the then-body (see § *The conditional gate*). The environment-shaped layout that
+much package code is written in is therefore not the target.
 
 ### expl3 code formatting
 

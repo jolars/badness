@@ -85,6 +85,20 @@ predicates the formatter *preserves*.
   rule instead read the lone-newline predicate. A trailing `%` still rides the
   heading's line (`prev_block_closes_line` lets the comment ride but not
   content); blank lines around it are preserved, never synthesized.
+- **A `CONDITIONAL` is all-or-nothing:** flat when the whole construct fits, else
+  every divider opens a line. Offered as two whole candidates
+  (`Ir::conditional_group_all_lines`), **never as one `Ir::group` of `Ir::Line`s**
+  — a group saturates its break state from the subtree, and a branch interior
+  carries a forced break for every line the command-only-line rule keeps, so the
+  group would decide the dividers from the interior's authored newlines. The flat
+  candidate is collapsed from *content* (`collapse_conditional`), so the choice
+  reads width and content only. No body indent: the `\if` test's extent is not
+  statically resolvable, so there is no head/body split to hang one off.
+- **A glued divider is never broken.** `Ir::Line` is a space flat and a newline
+  broken, and TeX contributes both to the horizontal list, so breaking where the
+  author glued (`\ifmmode y\else z\fi`) materializes a space token — a typeset
+  change no CST oracle can see. Any glued boundary sends the whole construct down
+  the byte-faithful path; breaking only the unglued siblings is the lopsided form.
 
 ## Optional arguments
 

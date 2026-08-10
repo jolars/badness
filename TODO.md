@@ -28,68 +28,42 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   gate corpora before flipping any consumer. Rationale in `docs/src/development/architecture.md`
   (§ *Argument grouping and bracket policy*).
 
-- [ ] **Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
-  node.** The `latexindent` corpus's largest uncovered construct (402 files).
-  Surveyed under the formatter-fixture skill and handed back to the parser,
-  because every formatter-only rule for it is unprincipled. Today `\ifnum`,
-  `\else` and `\fi` are plain `COMMAND` nodes, so layout falls through to
-  `line_is_command_only` — the lone-newline read: `\ifnum1<2 b \else c \fi` stays
-  flat while the same content spelled across lines keeps its breaks. Two
-  self-consistent fixed points, so no oracle fires. Same Tier-1 violation the
-  sectioning entry below fixed, but the sectioning cure does not transfer.
+- [x] ~~**Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
+  node.**~~ **Landed.** The `latexindent` corpus's largest uncovered construct
+  (402 files), surveyed under the formatter-fixture skill and handed to the
+  parser because every formatter-only rule for it was trivia-reading,
+  typeset-unsafe, or lopsided. `\if…\else…\or…\fi` now parses as a
+  `CONDITIONAL` of `CONDITIONAL_BRANCH`es behind a shape gate that demotes
+  silently, and the formatter lays it out all-or-nothing, so
+  `\ifnum1<2 b \else c \fi` and the same content spelled across lines are one
+  fixed point instead of two. Rationale in `AGENTS.md` decision #1 and
+  `docs/src/development/architecture.md` (§ *The conditional gate*,
+  § *Conditionals*).
 
-  **Why the formatter cannot own it.** A per-boundary rule ("a divider starts a
-  line") half-breaks the construct. Fired only across a gap the author already
-  spelled, it emits `prose x\ifmmode y` / `\else z\fi w prose` — one divider
-  broken, its sibling not, decided by where the author happened to glue. Fired
-  unconditionally, it manufactures a space token at the ~22% glued sites, which
-  TeX contributes to the horizontal list: a typeset change, and `\ifmmode
-  y\else z\fi` is exactly where it shows. Fired only where the author already
-  broke, it *is* the trivia read. Trivia-reading, typeset-unsafe, or lopsided —
-  there is no fourth option at that layer. The coherent form is all-or-nothing
-  over the whole conditional (flat when it fits, every divider breaking when it
-  does not), which needs the construct's extent, i.e. a balanced opener→`\fi`
-  scan. That is parsing (tenet 3).
+  The gate's load-bearing lesson, recorded because it is not obvious: **the token
+  scan must reach the same closer the recursive walk will.** Counting a `\fi` the
+  walk consumes inside another construct promises a pairing it cannot honor, and
+  the walk then runs on looking for a closer that is gone — `ltboxes.dtx` puts
+  three `\fi`s inside a `$…$` and carried the construct over 160 lines and every
+  `macrocode` chunk between, stranding the cursor past `macrocode_end` for every
+  chunk-bounded scan downstream. Hence math and environment level tracking
+  alongside braces, `macrocode` frames as hard boundaries, and the walk bounded
+  by the located closer index. Fixed two latex2e gate baselines whose formatting
+  had been corrupting content (`ltdirchk.dtx`, `ltfsstrc.dtx`).
 
-  **What the node can and cannot deliver.** The `\if` *test* extent is not
-  statically resolvable — `\ifnum\radius>5` scans ⟨number⟩⟨rel⟩⟨number⟩ by TeX's
-  own scanner, `\ifx` takes two tokens, a `\newif`-defined `\if@foo` takes none.
-  So head/body separation, and with it a body indent, stay **out of reach even
-  with the node**: the environment-shaped layout the corpus files are written in
-  is not the target. What the node buys is each branch riding its divider line,
-  all-or-nothing, with short conditionals staying flat:
+  Three pieces deliberately deferred:
 
-  ```tex
-  \ifodd\value{totalchapters}=#1 \typeout{Total Chapters match auxilary file (#1)}
-  \else \typeout{Warning: total Chapter count updated from …}
-  \fi
-  ```
-
-  **The shape gate is real**, and generalizes decision #1's environment gate (an
-  environment cannot outlive the brace group its `\begin` opened in). Naive
-  `\if`-prefix matching misfires on two families, measured over
-  latex2e/latex3/pgf/latexindent: `\newif\if@foo` (574 occurrences, where the
-  `\ifX` is an *argument*, not an opener) and the etoolbox/ifthen family
-  (`\ifthenelse`, `\ifnumgreater`, `\iftoggle`, …; 102 occurrences), which takes
-  braced arguments and is never `\fi`-terminated — and which nests *inside* a
-  real conditional in `test-cases/ifelsefi/issue-250.tex`, so a wrong pairing
-  steals the enclosing `\ifluatex`'s `\else`. After subtracting both families,
-  268 of 6205 corpus files still have unbalanced opener/`\fi` counts (openers
-  assembled by `\def`, `\expandafter\fi`, `\iffalse…\fi` comment tricks), so the
-  gate must **demote silently** rather than diagnose, exactly as the environment
-  gate does.
-
-  Divider placement in real code, for calibration (latex2e/latex3/pgf):
-
-  | | line-start | mid-line, spaced | glued |
-  |---|---|---|---|
-  | `\else` (9407) | 66.4% | 12.7% | 20.9% |
-  | `\fi` (15819) | 58.4% | 16.8% | 24.8% |
-  | `\or` (1914) | 41.5% | 16.2% | 42.3% |
-
-  Authors already put ~60% of dividers at line start, so the rule largely makes
-  an existing convention deterministic rather than imposing one. `\or` is the
-  weakest member (42% glued) and worth deciding separately.
+  - **Conditionals spanning a blank line** (~11% of corpus occurrences) demote,
+    because the gate anchors on a paragraph break exactly as the `$`/`\[` gates
+    do. That keeps `CONDITIONAL` a within-paragraph construct — it can never
+    straddle a `PARAGRAPH` boundary, so no paragraph nests inside one. Those
+    keep their pre-node layout, and with it the two-fixed-point bug.
+  - **Math-mode conditionals.** `math_atom` carries its own copy of the
+    environment gate; conditionals are text-mode only for now.
+  - **expl3 in-region conditionals** (`\if_int_compare:w … \else: … \fi:`, 14.5%
+    of corpus openers) are skipped: the formatter owns in-region layout through
+    `semantic::expl3`'s statement segmentation, and a node there would contend
+    with it.
 
 ## Formatter
 
@@ -749,8 +723,8 @@ sources below are missing.
   stack's answer to a different question. Measured gaps against the 198 existing
   slugs: `items` (157 files, one fixture), `filecontents`, bare/named brace
   groups. Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
-  bug that lived there). **`ifelsefi` (402 files) is surveyed but parser-blocked**
-  — see the `CONDITIONAL` node entry under *Parser*; do not re-derive a
+  bug that lived there). `ifelsefi` (402 files) is done too, via the
+  `CONDITIONAL` node under *Parser* and eight fixtures — do not re-derive a
   formatter-only rule for it, the survey already showed every such rule is
   trivia-reading, typeset-unsafe, or lopsided.
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).

@@ -146,6 +146,33 @@ provenance.
      genuine typo still reports. Detail in
      `docs/src/development/architecture.md` (§ *Sanctioned lexer modes*).
 
+   - **Conditionals pair behind a shape gate, and the gate must mirror the walk.**
+     `\if…\else…\or…\fi` becomes a `CONDITIONAL` of `CONDITIONAL_BRANCH`es (the
+     `\fi` last, positionally) only when the closer is reachable; otherwise the
+     opener is a plain command with **no diagnostic**, since a `\fi` is routinely
+     assembled elsewhere (`\def\stopit{\fi}`, `\expandafter\fi`, `\iffalse…\fi`
+     comment tricks leave 268 of 6205 corpus files unbalanced). Recognition is
+     pair-and-trust over the `if`-prefix minus two curated families —
+     `NOT_FI_TERMINATED` and the `\newif`/`\let` operand slots
+     (`parser::conditional`, a set shared with the linter's `ConditionalIndex` so
+     the two cannot drift). Subtracting the brace-argument family is load-bearing,
+     not cosmetic: shape alone *mis-pairs* rather than fails, stealing an enclosing
+     `\fi` (`test-cases/ifelsefi/issue-250.tex`).
+
+     The load-bearing constraint is that **the token scan must reach the same
+     closer the recursive walk will**. Counting a `\fi` the walk consumes inside
+     some other construct promises a pairing it cannot honor, and the walk then
+     runs on looking for a closer that is gone — `ltboxes.dtx` puts three `\fi`s
+     inside a `$…$` and ran the construct over 160 lines and every `macrocode`
+     chunk between, stranding the cursor past `macrocode_end` for every
+     chunk-bounded scan downstream. So the closer counts only at the opener's own
+     *brace, environment, and math* level, a `macrocode` frame is a hard boundary
+     in both directions, and the walk is bounded by the located closer index. The
+     `\if` *test*'s extent stays unresolvable by design (`\ifnum\radius>5` scans
+     ⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner), so there is no head node and no
+     body indent. Detail in `docs/src/development/architecture.md`
+     (§ *Sanctioned lexer modes*).
+
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
    a command means; the semantic layer is a signature database assigning arity,
    verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See

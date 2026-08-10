@@ -14,26 +14,25 @@
 //! `\newif`-defined `\ifmyflag` alike. Pairing `\else`/`\or`/`\fi` against
 //! *every* `if*` opener (rather than a curated primitive list) is what keeps
 //! the stack in sync: an unrecognized conditional's `\else` must bump its own
-//! frame, never an enclosing one. The exceptions are a curated
-//! [`NOT_FI_TERMINATED`] denylist of `if*`-named *macros* that take brace
-//! arguments instead of a `\fi` terminator (`\iff`, `\ifthenelse`, the
-//! etoolbox test family); the list is judgment-curated and trivially
-//! extensible. Capital-`If` commands (`\IfFileExists`, xparse `\IfValueTF`)
-//! never match the lowercase prefix.
+//! frame, never an enclosing one.
 //!
-//! Two further sources of stray conditional tokens are neutralized:
+//! Recognition itself — the denylist of `if*`-named brace-argument macros, the
+//! operand slots of `\ifx`/`\newif`/`\let`, and the `\ifcsname` body — lives in
+//! [`badness_parser::parser::conditional`] and is driven here through
+//! [`OpenerScan`]. The parser's `CONDITIONAL` shape gate reads the same set, so
+//! the linter's branch paths and the CST's conditional nodes cannot disagree
+//! about what an opener is. Capital-`If` commands (`\IfFileExists`, xparse
+//! `\IfValueTF`) never match the lowercase prefix.
 //!
-//! - **Operand positions.** `\ifx\ifabc\iftrue` tests two `if*`-named tokens
-//!   without running them; [`OPERAND_SKIPS`] suppresses conditional
-//!   interpretation for the following operand tokens (`\newif\ifmyflag` and
-//!   `\let\ifpdf\iftrue` are the declaration-side analogs). `\ifcsname`
-//!   skips everything up to `\endcsname`. A flow word (`\else`/`\or`/`\fi`)
-//!   cancels a pending skip, so textual operands (`\if ab\else`) never eat
-//!   real control flow.
+//! One further source of stray conditional tokens is neutralized here rather
+//! than in the shared scan, because it needs the tree:
+//!
 //! - **Definition bodies.** Tokens inside `\newcommand{\x}{\else}` or
 //!   `\def\stopit{\fi}` are code carried, not executed; the span of a
 //!   definition command (per [`crate::semantic::define::is_definition_command`])
-//!   is skipped wholesale.
+//!   is skipped wholesale. (The parser needs no equivalent: a `\fi` inside a
+//!   definition body sits inside a brace group, which its shape gate already
+//!   refuses to pair across.)
 //!
 //! Known limitations, accepted rather than chased: `\def\x#1{\fi}` (parameter
 //! text between name and body) may under-cover the definition span, and a live
@@ -43,6 +42,7 @@
 //! bodies keep being counted by the rules; only conditional interpretation is
 //! suppressed there.
 
+use badness_parser::parser::conditional::{FlowWord, OpenerScan, Word};
 use rowan::TextSize;
 
 use crate::ast::command_name;
@@ -69,62 +69,6 @@ pub(crate) struct ConditionalIndex {
     snapshots: Vec<(TextSize, Vec<Frame>)>,
 }
 
-/// `if*`-named control words that are **not** `\fi`-terminated conditionals:
-/// ordinary macros taking brace arguments (`{true}{false}`), which must not
-/// open a frame. Curated — amsmath's `\iff` arrow, ifthen's `\ifthenelse`,
-/// babel's `\iflanguage`, and etoolbox's test family. Extend freely; a missing
-/// entry costs a desynced stack only until its `\fi`-less shape is added here.
-const NOT_FI_TERMINATED: &[&str] = &[
-    "iff",        // amsmath: the ⟺ arrow, not a conditional
-    "ifthenelse", // ifthen/xifthen: {test}{then}{else}
-    "iflanguage", // babel: {lang}{then}{else}
-    "iftoggle",   // etoolbox toggles: {toggle}{then}{else}
-    // etoolbox def/cs/str/bool/num/dim tests, all brace-argument shaped:
-    "ifdef",
-    "ifcsdef",
-    "ifundef",
-    "ifcsundef",
-    "ifdefmacro",
-    "ifcsmacro",
-    "ifdefempty",
-    "ifcsempty",
-    "ifdefvoid",
-    "ifcsvoid",
-    "ifdefstring",
-    "ifcsstring",
-    "ifdefequal",
-    "ifcsequal",
-    "ifbool",
-    "ifboolexpr",
-    "ifboolexpe",
-    "ifstrequal",
-    "ifstrempty",
-    "ifblank",
-    "ifnumcomp",
-    "ifnumequal",
-    "ifnumgreater",
-    "ifnumless",
-    "ifnumodd",
-    "ifdimcomp",
-    "ifdimequal",
-    "ifdimgreater",
-    "ifdimless",
-];
-
-/// Commands whose next N command tokens are *operands* (tokens being tested or
-/// aliased), not live control flow: `\if`/`\ifx`/`\ifcat` compare two tokens,
-/// eTeX's `\ifdefined` tests one, `\newif\ifmyflag` declares one, and
-/// `\let\ifpdf\iftrue` aliases two. `\ifcsname` is handled separately
-/// (skip-until-`\endcsname`); `\ifincsname` takes no operand at all.
-const OPERAND_SKIPS: &[(&str, u8)] = &[
-    ("if", 2),
-    ("ifx", 2),
-    ("ifcat", 2),
-    ("ifdefined", 1),
-    ("newif", 1),
-    ("let", 2),
-];
-
 /// Whether two branch paths are provably mutually exclusive: some conditional
 /// instance contains both sites in *different* branches. The positional zip is
 /// sound because a frame id always occupies one nesting depth — two paths that
@@ -142,8 +86,7 @@ impl ConditionalIndex {
         let mut stack: Vec<Frame> = Vec::new();
         let mut next_id = 0u32;
         let mut snapshots: Vec<(TextSize, Vec<Frame>)> = Vec::new();
-        let mut pending_skips = 0u8;
-        let mut in_csname = false;
+        let mut scan = OpenerScan::new();
         let mut suppress_until = TextSize::from(0);
 
         for node in root.descendants() {
@@ -161,58 +104,27 @@ impl ConditionalIndex {
                 suppress_until = suppress_until.max(definition_span_end(&node));
                 continue;
             }
-            let is_flow = matches!(name.as_str(), "else" | "or" | "fi");
-            if in_csname {
-                if name == "endcsname" {
-                    in_csname = false;
-                    continue;
-                }
-                if !is_flow {
-                    continue;
-                }
-                // Malformed input (an `\ifcsname` never closed): a flow word
-                // re-enables interpretation rather than going dark to EOF.
-                in_csname = false;
-            }
-            if pending_skips > 0 {
-                if is_flow {
-                    pending_skips = 0;
-                } else {
-                    pending_skips -= 1;
-                    continue;
-                }
-            }
-            match name.as_str() {
-                "else" | "or" => {
+            match scan.visit(&name) {
+                Word::Flow(FlowWord::Else | FlowWord::Or) => {
                     if let Some(top) = stack.last_mut() {
                         top.branch += 1;
                         snapshots.push((start, stack.clone()));
                     }
                 }
-                "fi" => {
+                Word::Flow(FlowWord::Fi) => {
                     if stack.pop().is_some() {
                         snapshots.push((start, stack.clone()));
                     }
                 }
-                _ if is_conditional_opener(&name) => {
+                Word::Opens => {
                     stack.push(Frame {
                         id: next_id,
                         branch: 0,
                     });
                     next_id += 1;
-                    if name == "ifcsname" {
-                        in_csname = true;
-                    } else if let Some(&(_, n)) = OPERAND_SKIPS.iter().find(|(op, _)| *op == name) {
-                        pending_skips = n;
-                    }
                     snapshots.push((start, stack.clone()));
                 }
-                _ => {
-                    // `\newif`/`\let`: an operand skip without opening a frame.
-                    if let Some(&(_, n)) = OPERAND_SKIPS.iter().find(|(op, _)| *op == name) {
-                        pending_skips = n;
-                    }
-                }
+                Word::Inert => {}
             }
         }
         Self { snapshots }
@@ -230,12 +142,6 @@ impl ConditionalIndex {
             &self.snapshots[i - 1].1
         }
     }
-}
-
-/// Pair-and-trust: a lowercase-`if`-prefixed name opens a frame unless it is a
-/// known brace-argument macro.
-fn is_conditional_opener(name: &str) -> bool {
-    name.starts_with("if") && !NOT_FI_TERMINATED.contains(&name)
 }
 
 /// The end of a definition command's span, mirroring the definition scanner's

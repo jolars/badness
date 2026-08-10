@@ -5,6 +5,7 @@
 //! [`tree_builder::build_tree`] turns tokens + events into a rowan green tree,
 //! re-attaching trivia along the way.
 
+pub mod conditional;
 pub mod core;
 pub(crate) mod events;
 pub(crate) mod grammar;

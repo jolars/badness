@@ -13,6 +13,7 @@
 //! Recovery anchors are the LaTeX-natural ones: `\end`, `}`, `]`, `$`, blank
 //! lines, and end of input.
 
+use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
 use crate::parser::lexer::{
@@ -312,6 +313,21 @@ struct Parser<'t> {
     /// doc-layer markup between them (`\begin{macro}`, the frames) must keep
     /// pairing.
     expl_toggles: Vec<(usize, bool)>,
+    /// Token indices of the `CONTROL_WORD`s that are *live* conditional openers:
+    /// `\if`-prefixed, not one of the brace-argument `if*` macros, and not
+    /// sitting in an operand slot (`\newif\if@foo`, `\let\ifpdf\iftrue`) or an
+    /// `\ifcsname` body. Pre-scanned once in [`Self::new`] because the
+    /// operand-slot rule is a *running* state over the whole token stream, which
+    /// the recursive-descent walk cannot carry, and because both
+    /// [`Self::element`] and [`Self::conditional_pairs`] need the same verdict.
+    ///
+    /// Openers inside an expl3 region are excluded outright: in-region layout is
+    /// the formatter's, owned through `semantic::expl3`'s statement segmentation
+    /// (`AGENTS.md`, expl3 code formatting), and a `CONDITIONAL` node there would
+    /// contend with it. The exclusion also keeps the `\else:`/`\or:`/`\fi:`
+    /// spellings out of scope. Recognition itself is shared with the linter's
+    /// `ConditionalIndex` ([`conditional::OpenerScan`]) so the two cannot drift.
+    conditional_openers: std::collections::HashSet<usize>,
 }
 
 impl<'t> Parser<'t> {
@@ -319,13 +335,26 @@ impl<'t> Parser<'t> {
         let mut starts = Vec::with_capacity(tokens.len() + 1);
         let mut off = 0;
         let mut expl_toggles = Vec::new();
+        let mut conditional_openers = std::collections::HashSet::new();
+        let mut opener_scan = conditional::OpenerScan::new();
+        // `expl_on` mirrors `in_expl_region` exactly: the state is the one in
+        // force *before* this token, so a toggle sits outside its own region.
+        let mut expl_on = false;
         for (i, t) in tokens.iter().enumerate() {
             starts.push(off);
             off += t.text.len();
-            if t.kind == SyntaxKind::CONTROL_WORD
-                && let Some(toggle) = expl_toggle(&t.text)
+            if t.kind != SyntaxKind::CONTROL_WORD {
+                continue;
+            }
+            if let Some(name) = t.text.strip_prefix('\\')
+                && opener_scan.visit(name) == conditional::Word::Opens
+                && !expl_on
             {
+                conditional_openers.insert(i);
+            }
+            if let Some(toggle) = expl_toggle(&t.text) {
                 expl_toggles.push((i, toggle == ExplToggle::On));
+                expl_on = toggle == ExplToggle::On;
             }
         }
         starts.push(off);
@@ -348,7 +377,20 @@ impl<'t> Parser<'t> {
             macrocode_end: None,
             plain_braces: std::collections::HashSet::new(),
             expl_toggles,
+            conditional_openers,
         }
+    }
+
+    /// The conditional divider or closer at token `idx`, if any. Flow words are
+    /// classified from the name alone — `\else`/`\or`/`\fi` are never anything
+    /// else — but never inside an expl3 region, where the openers are excluded
+    /// too (see [`Self::conditional_openers`]).
+    fn conditional_flow_at(&self, idx: usize) -> Option<conditional::FlowWord> {
+        let t = &self.tokens[idx];
+        if t.kind != SyntaxKind::CONTROL_WORD || self.in_expl_region(idx) {
+            return None;
+        }
+        t.text.strip_prefix('\\').and_then(conditional::flow_word)
     }
 
     /// True when token `idx` sits inside an expl3 region (after an
@@ -922,6 +964,13 @@ impl<'t> Parser<'t> {
                     } else {
                         self.stray_end();
                     }
+                } else if self.conditional_openers.contains(&self.pos)
+                    && self.conditional_pairs(self.pos)
+                {
+                    // Shape-gated like `\[` and `\begin`: an `\if` whose own
+                    // `\fi` is not reachable is macro code — a plain command,
+                    // no diagnostic ([`Self::conditional_pairs`]).
+                    self.conditional();
                 } else {
                     self.command();
                 }
@@ -2251,6 +2300,196 @@ impl<'t> Parser<'t> {
             i += 1;
         }
         false
+    }
+
+    /// The conditional twin of [`Self::delim_math_closes`]: whether the live
+    /// opener at token `open` ([`Self::conditional_openers`]) has its own `\fi`
+    /// reachable before a token that would end it.
+    ///
+    /// `\if…\else…\or…\fi` is not a construct the surface syntax guarantees. A
+    /// `\fi` is routinely assembled elsewhere — `\def\stopit{\fi}`,
+    /// `\expandafter\fi`, an `\iffalse…\fi` used to comment a region out — so
+    /// after subtracting the `\newif` and `\ifthenelse` families 268 of 6205
+    /// corpus files still have unbalanced opener/`\fi` counts. An opener that
+    /// does not pair is therefore ordinary macro code: it stays a plain
+    /// `COMMAND` with **no diagnostic**, exactly as a gated `$`/`\[`/`\begin`
+    /// does (`AGENTS.md` decision #1). Does not consume.
+    ///
+    /// The anchors mirror the math gates — an unbalanced `}`, an `\end` not owed
+    /// to an intervening `\begin`, a paragraph break, the macrocode chunk end,
+    /// EOF — with two deliberate differences from
+    /// [`Self::environment_escapes_group`]:
+    ///
+    /// - **EOF does not pair.** The environment gate keeps a run-out-of-file
+    ///   `\begin` so `finish_environment` can still report an unclosed
+    ///   environment. A conditional has no diagnostic to preserve, and an
+    ///   unpaired `\if` is routine, so running out of file just demotes.
+    /// - **No `.dtx` doc-margin exemption.** That exemption exists so the
+    ///   documentation layer keeps pairing `\begin{macro}` across the macrocode
+    ///   chunks between them. A conditional has no such split-across-chunks
+    ///   story, and bounding the scan at `macrocode_end` is precisely what makes
+    ///   the `\iffalse}\fi` editor-balance hack demote instead of swallowing the
+    ///   chunk.
+    ///
+    /// A paragraph break anchors at the construct's own level only
+    /// ([`Self::paragraph_break_blocks`]), so the ~11% of corpus conditionals
+    /// that span a blank line demote and keep their pre-node layout. That keeps
+    /// `CONDITIONAL` a within-paragraph construct: it can never straddle a
+    /// `PARAGRAPH` boundary, so no paragraph nests inside one.
+    fn conditional_pairs(&self, open: usize) -> bool {
+        let mut depth = 0usize;
+        let mut envs = 0usize;
+        let mut nested = 0usize;
+        let mut newlines = 0;
+        let end = self
+            .macrocode_end
+            .unwrap_or(self.tokens.len())
+            .min(self.tokens.len());
+        let mut i = open + 1;
+        while i < end {
+            let t = &self.tokens[i];
+            match t.kind {
+                SyntaxKind::NEWLINE => {
+                    newlines += 1;
+                    if newlines >= 2 && Self::paragraph_break_blocks(depth, envs) {
+                        return false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {
+                    i += 1;
+                    continue;
+                }
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
+                    if depth == 0 {
+                        // A `}` closing a group opened before the opener always
+                        // wins: braces are catcode structure while `\if`/`\fi`
+                        // are only macros. At the outer level there is no such
+                        // group, so a stray `}` is somebody else's business and
+                        // the scan carries on (the `\begin` gate's `group_depth`
+                        // guard, transcribed).
+                        if self.group_depth > 0 {
+                            return false;
+                        }
+                    } else {
+                        depth -= 1;
+                    }
+                }
+                SyntaxKind::CONTROL_WORD if depth == 0 => {
+                    if self.conditional_openers.contains(&i) {
+                        nested += 1;
+                    } else if self.conditional_flow_at(i) == Some(conditional::FlowWord::Fi) {
+                        if nested == 0 {
+                            return true;
+                        }
+                        nested -= 1;
+                    } else if !self.in_macro_code(i) {
+                        // In a definition body or an expl3 region `\begin`/`\end`
+                        // are plain commands that need not pair, so neither
+                        // anchors nor nests there (issues #45/#60).
+                        if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
+                            envs += 1;
+                        } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
+                            if envs == 0 {
+                                return false;
+                            }
+                            envs -= 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            newlines = 0;
+            i += 1;
+        }
+        false
+    }
+
+    /// `\if… … \else … \or … \fi`, once [`Self::conditional_pairs`] has verified
+    /// the closer is reachable.
+    ///
+    /// The shape is a run of `CONDITIONAL_BRANCH` nodes closed by the `\fi` as
+    /// the last child, mirroring `ENVIRONMENT > BEGIN … END`. The opener and its
+    /// *test* ride the first branch rather than a head node of their own: the
+    /// test's extent is not statically resolvable — `\ifnum\radius>5` scans
+    /// ⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner, `\ifx` takes two tokens, a
+    /// `\newif`-defined `\if@foo` takes none — and inventing a boundary there
+    /// would be the macro expansion the parser does not do.
+    ///
+    /// Every later branch *starts with* its divider, so a consumer finds the
+    /// boundaries positionally and never by matching the name `\else`.
+    fn conditional(&mut self) {
+        self.open(SyntaxKind::CONDITIONAL);
+        self.open(SyntaxKind::CONDITIONAL_BRANCH);
+        self.command(); // the opener, with its usual greedy attachment
+        loop {
+            // Defensive: `conditional_pairs` guarantees a reachable `\fi`, so
+            // the loop always terminates on the `Fi` arm. Bailing at EOF too
+            // keeps "always make progress" true even if the gate and the parse
+            // ever disagree.
+            if self.at_end() {
+                break;
+            }
+            match self.conditional_flow_at(self.pos) {
+                Some(conditional::FlowWord::Fi) => break,
+                Some(conditional::FlowWord::Else | conditional::FlowWord::Or) => {
+                    self.close(); // CONDITIONAL_BRANCH
+                    self.open(SyntaxKind::CONDITIONAL_BRANCH);
+                    self.flow_command();
+                    continue;
+                }
+                None => {}
+            }
+            // Leading comment-bind, as in [`Self::parse_block`]: an own-line `%`
+            // run immediately before a documentable construct attaches *leading*
+            // into it. A divider is not documentable, so a comment run before one
+            // floats (the trivia falls through to `element` a token at a time and
+            // the loop reaches the divider above).
+            if let Some((comment_start, construct_pos, _)) = self.binding_run(self.pos)
+                && self.conditional_flow_at(construct_pos).is_none()
+            {
+                while self.pos < comment_start {
+                    self.bump();
+                }
+                let checkpoint = self.events.len();
+                self.open(SyntaxKind::DOC_COMMENT);
+                while self.pos < construct_pos {
+                    self.bump();
+                }
+                self.close();
+                let construct_start = self.events.len();
+                self.element();
+                if let Event::Start(kind) = self.events[construct_start] {
+                    self.events.remove(construct_start);
+                    self.events.insert(checkpoint, Event::Start(kind));
+                }
+                continue;
+            }
+            self.element();
+        }
+        self.close(); // CONDITIONAL_BRANCH
+        if self.conditional_flow_at(self.pos) == Some(conditional::FlowWord::Fi) {
+            self.flow_command();
+        }
+        self.close(); // CONDITIONAL
+    }
+
+    /// A conditional divider or closer as a bare `COMMAND`, with **no** argument
+    /// attachment.
+    ///
+    /// Inside a `CONDITIONAL` an `\else`/`\or`/`\fi` is a structural delimiter,
+    /// parsed like `\end`, so a following group is the next branch's first
+    /// element rather than the divider's argument. Greedy attachment is the
+    /// text-pure default precisely because the text carries no arity protocol
+    /// (`AGENTS.md` decision #8); here position in the construct *is* that
+    /// protocol, and it is a static fact, so this is a sanctioned deviation on
+    /// the same footing as the starred-variant fold.
+    fn flow_command(&mut self) {
+        self.open(SyntaxKind::COMMAND);
+        self.bump();
+        self.close();
     }
 
     /// `\begin{name} … \end{name}`, with environment-mismatch recovery.

@@ -37,14 +37,25 @@ pub enum SyntaxKind {
     ERROR,          // lexer fallback; the lexer is total, so this is unused today
 
     // --- Nodes (composites, produced by the Phase 1 parser) ---
-    GROUP,        // { … }
-    OPTIONAL,     // [ … ] optional argument
-    ARGUMENT,     // an argument attached to a command
-    COMMAND,      // a control sequence with its arguments
-    ENVIRONMENT,  // \begin{…} … \end{…}
-    BEGIN,        // \begin{name}
-    END,          // \end{name}
-    NAME_GROUP,   // {name} following \begin / \end
+    GROUP,       // { … }
+    OPTIONAL,    // [ … ] optional argument
+    ARGUMENT,    // an argument attached to a command
+    COMMAND,     // a control sequence with its arguments
+    ENVIRONMENT, // \begin{…} … \end{…}
+    BEGIN,       // \begin{name}
+    END,         // \end{name}
+    NAME_GROUP,  // {name} following \begin / \end
+    // `\if…\else…\or…\fi`, when the shape gate pairs it. The construct is a run
+    // of `CONDITIONAL_BRANCH` nodes followed by the closing `\fi` as the last
+    // child, mirroring `ENVIRONMENT > BEGIN … END`. The `\if` test's extent is
+    // not statically resolvable (`\ifnum\radius>5` scans ⟨number⟩⟨rel⟩⟨number⟩
+    // by TeX's own scanner), so the opener and its test ride the *first* branch
+    // rather than a head node of their own.
+    CONDITIONAL,
+    // One branch of a `CONDITIONAL`. The first holds the opener, its test, and
+    // the then-body; every later one *starts with* its `\else`/`\or` divider, so
+    // a consumer finds the boundaries positionally and never by command name.
+    CONDITIONAL_BRANCH,
     INLINE_MATH,  // $ … $   or   \( … \)
     DISPLAY_MATH, // $$ … $$  or   \[ … \]
     MATH,         // a math body (the atoms between the delimiters)

@@ -352,8 +352,11 @@ never match.
     attribute.
   - *URIs.* Decode LSP URIs to filesystem paths only through
     `uri_to_fs_path`/`path_to_uri` (`lsp.rs`), which strips the `/` before a Windows
-    drive letter and keeps the Unix root. Keep `uri_to_fs_path_handles_unix_and_windows`
-    green; tests and snapshots must not assume `/` vs `\`.
+    drive letter, keeps the Unix root, and spells separators natively (a URI-spelled
+    path is already a usable `Path` key, but the spelling leaks wherever a decoded
+    path is rendered back to text — forward search's `%f` beside an on-disk `%p`).
+    Keep `uri_to_fs_path_handles_unix_and_windows` green; tests and snapshots must
+    not assume `/` vs `\`.
 - **Generated `data/` artifacts** (in `crates/badness-parser/data/`). Several data files are generated from pinned
   upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check`/`:sync`
   targets: `cwl_signatures.json` (`cwl:check`/`:sync`),

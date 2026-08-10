@@ -6807,7 +6807,28 @@ fn uri_to_fs_path(uri: &Uri) -> Option<PathBuf> {
     // when a drive-letter component follows so `read_dir` sees a real path. On
     // Unix the leading `/` is the filesystem root and must stay.
     let path = strip_drive_letter_slash(&path);
-    Some(PathBuf::from(path))
+    Some(PathBuf::from(native_separators(path).as_ref()))
+}
+
+/// Rewrite a decoded URI path's `/` separators to the platform's.
+///
+/// A URI always spells separators `/`; a Windows filesystem path spells them
+/// `\`. `Path` compares and hashes by component, so the two forms are already
+/// interchangeable as *keys* — but the spelling leaks wherever a decoded path is
+/// rendered back to text. Forward search is where that bites: `%f` comes off the
+/// document URI while `%p` is built from a root discovered on disk, so a viewer
+/// received one of each. Normalize at the one decode point so they cannot
+/// disagree.
+///
+/// No-op off Windows, where `\` is an ordinary filename byte.
+#[cfg(windows)]
+fn native_separators(path: &str) -> std::borrow::Cow<'_, str> {
+    std::borrow::Cow::Owned(path.replace('/', "\\"))
+}
+
+#[cfg(not(windows))]
+fn native_separators(path: &str) -> std::borrow::Cow<'_, str> {
+    std::borrow::Cow::Borrowed(path)
 }
 
 /// Strip the leading slash of a Windows drive-letter path (`/C:/dir` → `C:/dir`),
@@ -7180,6 +7201,19 @@ mod tests {
         );
         // Non-file scheme (unsaved buffer) → no path.
         assert_eq!(uri_to_fs_path(&uri("untitled:Untitled-1")), None);
+    }
+
+    #[test]
+    fn uri_to_fs_path_spells_separators_natively() {
+        // `Path` compares by component, so the assertions above pass either way;
+        // this pins the *spelling*, which is what a viewer sees in `%f`.
+        let path = uri_to_fs_path(&uri("file:///C:/Users/me/main.tex")).expect("a path");
+        let expected = if cfg!(windows) {
+            "C:\\Users\\me\\main.tex"
+        } else {
+            "C:/Users/me/main.tex"
+        };
+        assert_eq!(path.display().to_string(), expected);
     }
 
     #[test]

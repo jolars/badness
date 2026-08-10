@@ -79,6 +79,12 @@ misconfiguration to document, not to paper over with word splitting.
 ## Paths
 
 **Decode LSP URIs only through `uri_to_fs_path`/`path_to_uri`** — they strip the
-`/` before a Windows drive letter and keep the Unix root. Keep
-`uri_to_fs_path_handles_unix_and_windows` green; tests and snapshots must not
-assume `/` vs `\`.
+`/` before a Windows drive letter, keep the Unix root, and spell separators the
+platform's way. Keep `uri_to_fs_path_handles_unix_and_windows` green; tests and
+snapshots must not assume `/` vs `\`.
+
+`Path` compares and hashes by component, so a URI-spelled path is already a
+usable key — the separator normalization is for the places a decoded path is
+rendered back to *text*. Forward search is the one that bites: `%f` comes off the
+document URI and `%p` off a root discovered on disk, so a viewer used to receive
+one spelling of each.

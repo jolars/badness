@@ -346,10 +346,17 @@ impl<'t> Parser<'t> {
             if t.kind != SyntaxKind::CONTROL_WORD {
                 continue;
             }
-            if let Some(name) = t.text.strip_prefix('\\')
-                && opener_scan.visit(name) == conditional::Word::Opens
-                && !expl_on
-            {
+            // `visit` is a *state machine* over the whole stream (the operand-slot
+            // countdown, the `\ifcsname` body), so it must run for every control
+            // word, whatever we then do with the verdict. Kept on its own statement
+            // rather than folded into the condition below: buried mid-`&&` behind a
+            // cheaper test, a later reordering would skip the call and silently
+            // desync the scan from the linter's.
+            let word = t
+                .text
+                .strip_prefix('\\')
+                .map(|name| opener_scan.visit(name));
+            if word == Some(conditional::Word::Opens) && !expl_on {
                 conditional_openers.insert(i);
             }
             if let Some(toggle) = expl_toggle(&t.text) {

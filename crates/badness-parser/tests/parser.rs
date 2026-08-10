@@ -4,7 +4,7 @@
 
 use badness_parser::parser::parse;
 use badness_parser::syntax::{SyntaxKind, SyntaxNode};
-use rowan::NodeOrToken;
+use rowan::{NodeOrToken, TextSize};
 
 /// Render a CST as an indented `KIND@range` tree, with token text, followed by
 /// any syntax errors. Stable and snapshot-friendly.
@@ -1175,6 +1175,46 @@ fn a_conditional_body_still_binds_a_leading_comment() {
     assert!(
         kinds.contains(&SyntaxKind::DOC_COMMENT),
         "leading comment run should still bind inside a branch: {kinds:?}"
+    );
+}
+
+#[test]
+fn a_conditional_whose_fi_hides_behind_math_demotes() {
+    // `ltboxes.dtx`'s shape, minimized: every `\fi` sits inside a `$…$` the
+    // conditional opened, so none is a closer the walk can reach. Counting one
+    // would promise a pairing the walk cannot honor and carry the construct off
+    // the end of its `macrocode` chunk. The gate refuses instead, and the whole
+    // run stays plain commands.
+    assert_eq!(conditionals(r"\if@pboxsw $\vcenter \fi\fi$"), []);
+    // The mirror: math *after* the closer is nobody's business, so the same
+    // opener with a reachable `\fi` still pairs.
+    assert_eq!(conditionals(r"\if@pboxsw a\fi $x$"), [(1, true)]);
+}
+
+#[test]
+fn conditional_walk_may_close_before_the_located_fi() {
+    // The gate's token scan counts `\ifB` as a nested opener and so picks the
+    // *second* `\fi`; the walk re-gates `\ifB`, demotes it (its own scan meets an
+    // `\end` it does not own), and closes at the *first*. The scan's index bounds
+    // the walk but does not predict it — so the pairing may undershoot, and the
+    // leftover `\fi` is a plain command rather than a second construct.
+    //
+    // Pinned because the one-directional guarantee is what
+    // `ast::Conditional::closer` being fallible rests on: the dangerous direction
+    // (the walk running *past* the located closer) is the one that must stay
+    // impossible.
+    let src = r"\ifA \begin{center} \ifB \end{center} \fi \fi";
+    assert_eq!(conditionals(src), [(1, true)]);
+    let parsed = parse(src);
+    let conditional = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::CONDITIONAL)
+        .expect("the outer conditional pairs");
+    // It closed at the first `\fi`, so the second is left outside the node.
+    assert!(
+        conditional.text_range().end() < TextSize::of(src),
+        "the construct should stop at the first `\\fi`, leaving the second stray"
     );
 }
 

@@ -1,0 +1,23 @@
+---
+source: crates/badness-parser/tests/parser.rs
+assertion_line: 1027
+expression: "tree(r\"\\ifnum1<2 b \\else c \\fi\")"
+---
+ROOT@0..23
+  PARAGRAPH@0..23
+    CONDITIONAL@0..23
+      CONDITIONAL_BRANCH@0..12
+        COMMAND@0..6
+          CONTROL_WORD@0..6 "\\ifnum"
+        WORD@6..9 "1<2"
+        WHITESPACE@9..10 " "
+        WORD@10..11 "b"
+        WHITESPACE@11..12 " "
+      CONDITIONAL_BRANCH@12..20
+        COMMAND@12..17
+          CONTROL_WORD@12..17 "\\else"
+        WHITESPACE@17..18 " "
+        WORD@18..19 "c"
+        WHITESPACE@19..20 " "
+      COMMAND@20..23
+        CONTROL_WORD@20..23 "\\fi"

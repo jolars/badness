@@ -994,6 +994,190 @@ fn unclosed_environment_outside_a_group_still_diagnoses() {
     assert!(parsed.errors[0].message.contains("unclosed environment"));
 }
 
+// --- conditionals pair only when their `\fi` is reachable --------------------
+
+/// The `CONDITIONAL` nodes in `input`, as `(branch count, has closer)` pairs in
+/// preorder. Also re-checks losslessness, as `tree` does.
+fn conditionals(input: &str) -> Vec<(usize, bool)> {
+    let parsed = parse(input);
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::CONDITIONAL)
+        .map(|n| {
+            let branches = n
+                .children()
+                .filter(|c| c.kind() == SyntaxKind::CONDITIONAL_BRANCH)
+                .count();
+            let closer = n
+                .last_child()
+                .is_some_and(|c| c.kind() == SyntaxKind::COMMAND);
+            (branches, closer)
+        })
+        .collect()
+}
+
+#[test]
+fn a_paired_conditional_builds_one_branch_per_divider() {
+    // The canonical shape: opener + test + then-body in the first branch, the
+    // `\else` opening the second, `\fi` the last child.
+    insta::assert_snapshot!(tree(r"\ifnum1<2 b \else c \fi"));
+}
+
+#[test]
+fn ifcase_or_branches_each_open_their_own() {
+    // `\or` is a divider like `\else` — excluding it would collapse an `\ifcase`
+    // body into a single branch.
+    assert_eq!(
+        conditionals(r"\ifcase#1\relax a\or b\or c\else d\fi"),
+        [(4, true)]
+    );
+}
+
+#[test]
+fn a_conditional_with_no_reachable_fi_is_a_plain_command() {
+    // `\fi` is routinely assembled elsewhere (`\def\stopit{\fi}`,
+    // `\expandafter\fi`). Running out of file demotes silently — unlike the
+    // environment gate, there is no diagnostic here to preserve.
+    assert_eq!(conditionals(r"\ifnum1<2 b"), []);
+    assert_eq!(parse(r"\ifnum1<2 b").errors, vec![]);
+}
+
+#[test]
+fn a_conditional_does_not_escape_its_enclosing_group() {
+    // The `}` closing a group opened before the `\if` always wins: braces are
+    // catcode structure, `\if`/`\fi` are only macros. `\def\stopit{\fi}` is the
+    // idiom this protects.
+    assert_eq!(conditionals(r"\def\x{\ifnum1<2 }\fi"), []);
+    assert_eq!(parse(r"\def\x{\ifnum1<2 }\fi").errors, vec![]);
+}
+
+#[test]
+fn a_conditional_inside_a_group_still_pairs_when_its_fi_is_reachable() {
+    // The gate's mirror direction: a self-contained conditional inside a group
+    // is untouched. A gate stricter than the parse would drop the node and
+    // refuse the whole file to the formatter.
+    assert_eq!(conditionals(r"{\ifnum1<2 a\else b\fi}"), [(2, true)]);
+}
+
+#[test]
+fn a_conditional_does_not_span_an_unowed_end() {
+    // Mirrors the `$`/`\[` anchor: an `\end` not owed to an intervening `\begin`
+    // ends the construct, so the `\if` is macro code.
+    assert_eq!(
+        conditionals("\\begin{center}\\ifnum1<2 a\\end{center}\\fi\n"),
+        []
+    );
+}
+
+#[test]
+fn a_conditional_may_contain_a_whole_environment() {
+    // An environment *owed* to a `\begin` inside the conditional nests normally.
+    assert_eq!(
+        conditionals(r"\ifnum1<2 \begin{center}a\end{center}\else b\fi"),
+        [(2, true)]
+    );
+}
+
+#[test]
+fn a_blank_line_ends_the_conditional() {
+    // Decision: a paragraph break anchors the gate exactly as it does for `$`,
+    // which keeps `CONDITIONAL` a within-paragraph construct — it can never
+    // straddle a `PARAGRAPH` boundary, so no paragraph nests inside one.
+    assert_eq!(conditionals("\\ifcmh\n\na\n\n\\else\n\nb\n\\fi\n"), []);
+}
+
+#[test]
+fn a_blank_line_inside_a_nested_group_does_not_anchor() {
+    // The break blocks only at the construct's own level.
+    assert_eq!(
+        conditionals("\\ifnum1<2 {a\n\nb}\\else c\\fi\n"),
+        [(2, true)]
+    );
+}
+
+#[test]
+fn newif_declares_a_flag_without_opening_a_conditional() {
+    // 574 corpus occurrences. The `\if@foo` after `\newif` is the flag being
+    // declared, not an opener; the *use* below it is the real conditional.
+    assert_eq!(
+        conditionals("\\newif\\if@foo\n\\if@foo a\\else b\\fi"),
+        [(2, true)]
+    );
+}
+
+#[test]
+fn ifx_operands_are_data_even_when_if_named() {
+    // `\ifx\ifpdf\iftrue` compares two `if*`-named tokens without running them,
+    // so exactly one conditional opens.
+    assert_eq!(conditionals(r"\ifx\ifpdf\iftrue x\fi"), [(1, true)]);
+}
+
+#[test]
+fn brace_argument_if_macros_open_nothing() {
+    // `\ifthenelse` and the etoolbox test family take `{true}{false}` and are
+    // never `\fi`-terminated.
+    assert_eq!(conditionals(r"\ifthenelse{\a}{b}{c}"), []);
+}
+
+#[test]
+fn a_brace_argument_if_macro_does_not_steal_an_enclosing_fi() {
+    // latexindent's `test-cases/ifelsefi/issue-250.tex`. Subtracting the
+    // `\ifthenelse` family is load-bearing rather than cosmetic: shape alone
+    // does not merely fail here, it *mis-pairs* — a trusted `\ifnumgreater`
+    // would take the `\ifluatex`'s `\fi` and unnest the whole file.
+    let src = "\\ifxetex\n\tfoo\n\\else\n\t\\ifluatex\n\t\t\\ifnumgreater{2}{1}{\n\t\t\tbar\n\t\t}{}\n\t\\else\n\t\\fi\n\\fi\n";
+    assert_eq!(conditionals(src), [(2, true), (2, true)]);
+}
+
+#[test]
+fn a_divider_takes_no_arguments() {
+    // Inside a conditional an `\else`/`\or`/`\fi` is a structural delimiter
+    // parsed like `\end`, so a following group is the next branch's first
+    // element rather than the divider's argument.
+    let parsed = parse(r"\ifx\a\b \else{foo}\fi");
+    let else_cmd = parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMMAND)
+        .find(|n| n.text().to_string().starts_with("\\else"))
+        .expect("an `\\else` command");
+    assert_eq!(
+        else_cmd.children().count(),
+        0,
+        "`\\else` attached {:?}",
+        else_cmd.text().to_string()
+    );
+}
+
+#[test]
+fn expl3_regions_grow_no_conditionals() {
+    // In-region layout is the formatter's, owned through the expl3 statement
+    // segmentation; a `CONDITIONAL` there would contend with it. The exclusion
+    // also keeps the `\else:`/`\fi:` spellings out of scope.
+    let src = "\\ExplSyntaxOn\n\\if_int_compare:w 1 < 2 \\else: b \\fi:\n\\ExplSyntaxOff\n";
+    assert_eq!(conditionals(src), []);
+}
+
+#[test]
+fn a_conditional_body_still_binds_a_leading_comment() {
+    // An own-line `%` run before a construct inside a branch binds into it as a
+    // `DOC_COMMENT`, exactly as it does at paragraph level.
+    let src = "\\ifnum1<2\n% doc\n\\foo\n\\fi\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    let kinds: Vec<SyntaxKind> = parsed.syntax().descendants().map(|n| n.kind()).collect();
+    assert!(
+        kinds.contains(&SyntaxKind::DOC_COMMENT),
+        "leading comment run should still bind inside a branch: {kinds:?}"
+    );
+}
+
 // --- nested command-abutting brackets in math (issue #55) --------------------
 
 #[test]

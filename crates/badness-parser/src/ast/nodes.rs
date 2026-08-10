@@ -67,6 +67,15 @@ ast_node!(
     /// A `\begin{…} … \end{…}` environment.
     Environment, ENVIRONMENT
 );
+ast_node!(
+    /// An `\if… … \else … \or … \fi` conditional the shape gate paired.
+    Conditional, CONDITIONAL
+);
+ast_node!(
+    /// One branch of a [`Conditional`]. The first holds the opener, its test, and
+    /// the then-body; every later one opens with its `\else`/`\or` divider.
+    ConditionalBranch, CONDITIONAL_BRANCH
+);
 
 impl Command {
     /// The leading `CONTROL_WORD` token, or `None` for a control symbol. The
@@ -335,5 +344,30 @@ impl Environment {
     /// The environment name, read from the `\begin` node.
     pub fn name(&self) -> Option<String> {
         self.begin()?.name()
+    }
+}
+
+impl Conditional {
+    /// The branches, in source order — at least one, since the grammar opens a
+    /// branch before the opener.
+    pub fn branches(&self) -> impl Iterator<Item = ConditionalBranch> {
+        children::<ConditionalBranch>(&self.syntax)
+    }
+
+    /// The closing `\fi`, read *positionally* as the last child node rather than
+    /// by matching the name: which control word closes a conditional is the
+    /// grammar's call, and re-deciding it here would be the same meaning check
+    /// twice (decision #10). `None` only if the gate's guarantee is ever broken,
+    /// which callers must tolerate rather than assume away.
+    pub fn closer(&self) -> Option<Command> {
+        self.syntax.last_child().and_then(Command::cast)
+    }
+}
+
+impl ConditionalBranch {
+    /// The leading `\if…`/`\else`/`\or` control word of this branch, if it opens
+    /// with one. Positional: the first child node, cast to a `COMMAND`.
+    pub fn head(&self) -> Option<Command> {
+        self.syntax.first_child().and_then(Command::cast)
     }
 }

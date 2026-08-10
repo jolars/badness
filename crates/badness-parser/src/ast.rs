@@ -15,7 +15,9 @@
 pub mod nodes;
 pub mod tokens;
 
-pub use nodes::{Begin, Command, End, Environment, Group, NameGroup, Optional};
+pub use nodes::{
+    Begin, Command, Conditional, ConditionalBranch, End, Environment, Group, NameGroup, Optional,
+};
 pub use tokens::ControlWord;
 
 use rowan::{NodeOrToken, TextRange};

@@ -16,7 +16,6 @@
 ./base/ltcmdhooks.dtx	idempotency
 ./base/ltcounts.dtx	content-change
 ./base/ltdefns.dtx	format-error
-./base/ltdirchk.dtx	content-change
 ./base/ltexpl.dtx	content-change
 ./base/ltfilehook.dtx	content-change
 ./base/ltfiles.dtx	content-change
@@ -26,7 +25,6 @@
 ./base/ltfssaxes.dtx	content-change
 ./base/ltfssdcl.dtx	idempotency
 ./base/ltfssini.dtx	content-change
-./base/ltfsstrc.dtx	content-change
 ./base/lthooks.dtx	content-change
 ./base/lthooks.dtx	idempotency
 ./base/ltluatex.dtx	content-change

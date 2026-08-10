@@ -385,8 +385,12 @@ impl<'t> Parser<'t> {
     /// classified from the name alone — `\else`/`\or`/`\fi` are never anything
     /// else — but never inside an expl3 region, where the openers are excluded
     /// too (see [`Self::conditional_openers`]).
+    ///
+    /// Total in `idx`: `Parser::pos` is one past the last token at EOF, and
+    /// [`Self::conditional`] asks about the cursor after its loop has run out of
+    /// input, so an out-of-range index is "no flow word here", not a bug.
     fn conditional_flow_at(&self, idx: usize) -> Option<conditional::FlowWord> {
-        let t = &self.tokens[idx];
+        let t = self.tokens.get(idx)?;
         if t.kind != SyntaxKind::CONTROL_WORD || self.in_expl_region(idx) {
             return None;
         }
@@ -964,13 +968,16 @@ impl<'t> Parser<'t> {
                     } else {
                         self.stray_end();
                     }
-                } else if self.conditional_openers.contains(&self.pos)
-                    && self.conditional_pairs(self.pos)
+                } else if let Some(closer) = self
+                    .conditional_openers
+                    .contains(&self.pos)
+                    .then(|| self.conditional_closer(self.pos))
+                    .flatten()
                 {
                     // Shape-gated like `\[` and `\begin`: an `\if` whose own
                     // `\fi` is not reachable is macro code — a plain command,
-                    // no diagnostic ([`Self::conditional_pairs`]).
-                    self.conditional();
+                    // no diagnostic ([`Self::conditional_closer`]).
+                    self.conditional(closer);
                 } else {
                     self.command();
                 }
@@ -2336,7 +2343,18 @@ impl<'t> Parser<'t> {
     /// that span a blank line demote and keep their pre-node layout. That keeps
     /// `CONDITIONAL` a within-paragraph construct: it can never straddle a
     /// `PARAGRAPH` boundary, so no paragraph nests inside one.
-    fn conditional_pairs(&self, open: usize) -> bool {
+    ///
+    /// The closer must be reachable at the opener's **own level of every nesting
+    /// the parse itself recognizes** — braces, environments, and math alike — not
+    /// just braces. A token scan that counts a `\fi` the parse will consume inside
+    /// some other construct promises a pairing the walk cannot honor, and
+    /// [`Self::conditional`] then runs past it looking for a closer that is gone:
+    /// `ltboxes.dtx`'s `\else\@pboxswtrue $\vcenter \fi\fi\fi … \if@pboxsw
+    /// \m@th$\fi` puts all three `\fi`s inside a `$…$`, and the construct ran over
+    /// 160 lines and every `macrocode` chunk in between. Hence the `envs == 0`
+    /// requirement on the closer and the math anchor: this returns the token index
+    /// of the `\fi` the walk will actually reach, and the walk is bounded by it.
+    fn conditional_closer(&self, open: usize) -> Option<usize> {
         let mut depth = 0usize;
         let mut envs = 0usize;
         let mut nested = 0usize;
@@ -2352,7 +2370,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
                     if newlines >= 2 && Self::paragraph_break_blocks(depth, envs) {
-                        return false;
+                        return None;
                     }
                     i += 1;
                     continue;
@@ -2360,6 +2378,18 @@ impl<'t> Parser<'t> {
                 SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {
                     i += 1;
                     continue;
+                }
+                // Math swallows whatever it spans, and this scan does not model
+                // the `$`/`\[`/`\(` shape gates that decide whether a delimiter
+                // opens any. Rather than re-derive them, refuse: a conditional
+                // whose closer sits behind a math delimiter stays a plain command.
+                // A conservative false negative, per the parser's standing
+                // preference for them.
+                SyntaxKind::DOLLAR if depth == 0 => return None,
+                SyntaxKind::CONTROL_SYMBOL
+                    if depth == 0 && matches!(t.text.as_str(), "\\[" | "\\(") =>
+                {
+                    return None;
                 }
                 SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
                 SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
@@ -2371,7 +2401,7 @@ impl<'t> Parser<'t> {
                         // the scan carries on (the `\begin` gate's `group_depth`
                         // guard, transcribed).
                         if self.group_depth > 0 {
-                            return false;
+                            return None;
                         }
                     } else {
                         depth -= 1;
@@ -2381,8 +2411,12 @@ impl<'t> Parser<'t> {
                     if self.conditional_openers.contains(&i) {
                         nested += 1;
                     } else if self.conditional_flow_at(i) == Some(conditional::FlowWord::Fi) {
+                        // `envs == 0` for the same reason as `depth == 0`: a `\fi`
+                        // inside an environment the conditional opened is consumed
+                        // by that environment's body, so it is not a closer the
+                        // walk can reach.
                         if nested == 0 {
-                            return true;
+                            return (envs == 0).then_some(i);
                         }
                         nested -= 1;
                     } else if !self.in_macro_code(i) {
@@ -2390,10 +2424,27 @@ impl<'t> Parser<'t> {
                         // are plain commands that need not pair, so neither
                         // anchors nor nests there (issues #45/#60).
                         if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
+                            // A `macrocode` chunk is a hard boundary in both
+                            // directions: docstrip is line-oriented, so the code
+                            // layer and the documentation layer around it are
+                            // different files as far as TeX is concerned. Nothing
+                            // is gained by pairing across one, and a `.dtx` doc
+                            // layer that does — `%<latexrelease>` guarded
+                            // `\if#1b\vbox \else…` blocks in `ltboxes.dtx` — runs
+                            // the construct over every chunk in between, stranding
+                            // the cursor past `macrocode_end` for every
+                            // chunk-bounded scan downstream. (The other direction
+                            // is already bounded: a conditional *inside* a chunk
+                            // scans only to `macrocode_end`.)
+                            if peek_begin_name(self.tokens, i)
+                                .is_some_and(|n| matches!(n.as_str(), "macrocode" | "macrocode*"))
+                            {
+                                return None;
+                            }
                             envs += 1;
                         } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
                             if envs == 0 {
-                                return false;
+                                return None;
                             }
                             envs -= 1;
                         }
@@ -2404,11 +2455,11 @@ impl<'t> Parser<'t> {
             newlines = 0;
             i += 1;
         }
-        false
+        None
     }
 
-    /// `\if… … \else … \or … \fi`, once [`Self::conditional_pairs`] has verified
-    /// the closer is reachable.
+    /// `\if… … \else … \or … \fi`, for the closer [`Self::conditional_closer`]
+    /// located at token index `closer`.
     ///
     /// The shape is a run of `CONDITIONAL_BRANCH` nodes closed by the `\fi` as
     /// the last child, mirroring `ENVIRONMENT > BEGIN … END`. The opener and its
@@ -2420,16 +2471,17 @@ impl<'t> Parser<'t> {
     ///
     /// Every later branch *starts with* its divider, so a consumer finds the
     /// boundaries positionally and never by matching the name `\else`.
-    fn conditional(&mut self) {
+    fn conditional(&mut self, closer: usize) {
         self.open(SyntaxKind::CONDITIONAL);
         self.open(SyntaxKind::CONDITIONAL_BRANCH);
         self.command(); // the opener, with its usual greedy attachment
         loop {
-            // Defensive: `conditional_pairs` guarantees a reachable `\fi`, so
-            // the loop always terminates on the `Fi` arm. Bailing at EOF too
-            // keeps "always make progress" true even if the gate and the parse
-            // ever disagree.
-            if self.at_end() {
+            // The walk is bounded by the closer the gate located, so a nested
+            // construct that consumes more than the token scan predicted can
+            // never carry the conditional past it. Without the bound an
+            // overrunning construct strands the cursor past `macrocode_end`, and
+            // every chunk-bounded scan downstream then slices backwards.
+            if self.pos >= closer || self.at_block_end(Block::Macrocode) {
                 break;
             }
             match self.conditional_flow_at(self.pos) {

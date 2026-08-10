@@ -15,7 +15,6 @@
 ./base/ltcmdhooks.dtx	trivia	content-change
 ./base/ltcounts.dtx	trivia	content-change
 ./base/ltdefns.dtx	format-error	format-error
-./base/ltdirchk.dtx	trivia	content-change
 ./base/ltexpl.dtx	trivia	content-change
 ./base/ltfilehook.dtx	trivia	content-change
 ./base/ltfiles.dtx	trivia	content-change
@@ -25,7 +24,6 @@
 ./base/ltfssaxes.dtx	trivia	content-change
 ./base/ltfssdcl.dtx	trivia	non-fixed-point
 ./base/ltfssini.dtx	trivia	content-change
-./base/ltfsstrc.dtx	trivia	content-change
 ./base/lthooks.dtx	trivia	content-change
 ./base/ltluatex.dtx	trivia	content-change
 ./base/ltmarks.dtx	trivia	non-fixed-point

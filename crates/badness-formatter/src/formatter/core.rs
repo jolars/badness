@@ -988,6 +988,12 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && !contains_doc_margin(node) => {
             return lower_environment(node, cx);
         }
+        // Same margin rule as the environment arm: a conditional spanning `.dtx`
+        // doc-margined lines is never re-laid, since moving a divider off its `%`
+        // margin is a meaning change. The generic stream keeps margins pinned.
+        SyntaxKind::CONDITIONAL if !contains_doc_margin(node) => {
+            return lower_conditional(node, cx);
+        }
         // Same margin rule as the environment/math/group/optional arms: a command
         // whose argument continues across `.dtx` doc-margined lines
         // (`% \title{^^A\n%   …}`) is never re-laid. Reflowing a managed argument
@@ -3987,6 +3993,183 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         Ir::concat([begin, Ir::indent(Ir::concat([lead, body])), trail, end])
     };
     Ir::concat([leading, env])
+}
+
+/// How the gap before a conditional divider was authored. The three cases differ
+/// in whether the formatter is *allowed* to put a line break there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DividerGap {
+    /// No whitespace at all (`\ifmmode y\else`). Breaking here would materialize a
+    /// space token TeX contributes to the horizontal list — a typeset change the
+    /// CST oracles cannot see, since whitespace is trivia to them and content to
+    /// TeX. So it is not a break opportunity.
+    Glued,
+    /// Whitespace or a lone newline. Free to render as either, so it is a break
+    /// opportunity.
+    Gap,
+    /// A `%` comment. The comment must end its line, so the break is forced — and
+    /// costs nothing, because the `%` already absorbs the line end.
+    Comment,
+}
+
+/// Split a `CONDITIONAL_BRANCH`'s elements from the trailing collapsible-trivia
+/// run that carries the gap to whatever follows it, classifying that gap.
+///
+/// All inter-segment trivia belongs to the *preceding* branch — the grammar's
+/// branch loop consumes it before it reaches the divider — so this is the only
+/// place a boundary gap can live.
+fn split_branch_gap(node: &SyntaxNode) -> (Vec<SyntaxElement>, DividerGap) {
+    let mut elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
+    let mut peeled = false;
+    while let Some(SyntaxElement::Token(t)) = elements.last() {
+        if !is_collapsible_trivia(t.kind()) {
+            break;
+        }
+        peeled = true;
+        elements.pop();
+    }
+    let gap = match elements.last() {
+        Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::COMMENT => DividerGap::Comment,
+        _ if peeled => DividerGap::Gap,
+        _ => DividerGap::Glued,
+    };
+    (elements, gap)
+}
+
+/// Lower an `\if… … \else … \or … \fi` conditional **all-or-nothing**: flat when
+/// the whole construct fits, else *every* divider opens a line.
+///
+/// The construct's extent is what makes this decidable, and it is why the node
+/// exists. A per-divider rule at this layer has no coherent form: fired only
+/// across a gap the author already wrote it *is* the lone-newline read; fired
+/// unconditionally it manufactures a space token at the ~22% of glued sites, which
+/// TeX contributes to the horizontal list; fired only where the author broke, it is
+/// lopsided — one divider broken and its sibling not, decided by where the author
+/// happened to glue.
+///
+/// Two things the node deliberately does **not** buy. There is no body indent and
+/// no head/body split: the `\if` *test*'s extent is not statically resolvable
+/// (`\ifnum\radius>5` scans ⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner), so the
+/// environment-shaped layout the corpus files are written in is out of reach even
+/// with the node. And a construct with **any glued divider** takes the byte-faithful
+/// path instead of the group: breaking one divider but not its glued sibling is the
+/// lopsided form, and breaking the glued one is the typeset change, so the only
+/// coherent option left is to relayout none of them. Those keep their authored
+/// line structure, which is a fixed point (a hard line re-reads as a newline, glue
+/// re-reads as glue) and never materializes a space.
+///
+/// The decision is offered to the printer as two whole candidates
+/// ([`Ir::conditional_group_all_lines`]) rather than as one [`Ir::group`] of
+/// `Ir::Line`s, and that is load-bearing. A group's break state is saturated from
+/// whatever forced breaks its subtree carries, and a branch *interior* carries one
+/// for every authored line the command-only-line rule
+/// ([`line_is_command_only`]) keeps — so a group would decide the dividers from
+/// the interior's authored newlines, which is precisely the predicate that must
+/// not decide them. The flat candidate is collapsed from *content* alone
+/// ([`collapse_conditional_elements`]), so its width — and therefore the choice
+/// between the two — is a function of non-trivia content and the config only.
+/// When no flat candidate exists (a `%` comment, a nested block), the broken form
+/// is unconditional, which is a content fact and fair to read.
+///
+/// Interiors are lowered exactly as they are anywhere else, so a conditional wrapping
+/// package code keeps that code's line structure instead of refilling it.
+fn lower_conditional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let generic = || Ir::concat(lower_element_stream(node.children_with_tokens(), cx));
+    let branches: Vec<SyntaxNode> = node
+        .children()
+        .filter(|c| c.kind() == SyntaxKind::CONDITIONAL_BRANCH)
+        .collect();
+    // The closer is the last child, positionally (`Conditional::closer`). The gate
+    // guarantees one; without it there is no construct to lay out all-or-nothing.
+    let Some(closer) = node
+        .last_child()
+        .filter(|c| c.kind() == SyntaxKind::COMMAND)
+    else {
+        return generic();
+    };
+
+    let split: Vec<(Vec<SyntaxElement>, DividerGap)> =
+        branches.iter().map(split_branch_gap).collect();
+    if split.iter().any(|(_, gap)| *gap == DividerGap::Glued) {
+        return generic();
+    }
+
+    let closer_ir = lower_node(&closer, cx);
+    let mut broken = Vec::with_capacity(split.len() * 2 + 1);
+    for (elements, _) in &split {
+        broken.push(Ir::concat(lower_element_stream(
+            elements.iter().cloned(),
+            cx,
+        )));
+        broken.push(Ir::hard_line());
+    }
+    broken.push(closer_ir.clone());
+    let broken = Ir::concat(broken);
+
+    let flat = collapse_conditional(&split, &closer_ir, cx);
+    match flat {
+        Some(flat) => Ir::conditional_group_all_lines([flat, broken]),
+        None => broken,
+    }
+}
+
+/// The one-line candidate for [`lower_conditional`]: every branch collapsed to a
+/// single line, dividers separated by one space.
+///
+/// `None` — no flat form exists, so the construct is unconditionally broken — when
+/// any branch holds a `%` comment (which must end its line) or force-break content
+/// (a nested environment, display math, `\\`). Both are *content* facts, so keying
+/// the layout on them is sound; an authored newline is not, and collapses to a
+/// space here exactly as it does in [`collapse_arg_group`].
+fn collapse_conditional(
+    split: &[(Vec<SyntaxElement>, DividerGap)],
+    closer: &Ir,
+    cx: LowerCtx<'_>,
+) -> Option<Ir> {
+    if closer.contains_forced_break() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for (elements, _) in split {
+        parts.extend(collapse_conditional_elements(elements, cx)?);
+        parts.push(Ir::verbatim(" "));
+    }
+    parts.push(closer.clone());
+    Some(Ir::concat(parts))
+}
+
+/// Collapse one branch's elements to a single line, or `None` if it cannot be
+/// collapsed. Mirrors [`collapse_arg_group`]'s body loop, without the delimiter
+/// handling a branch has no equivalent of.
+fn collapse_conditional_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<Ir>> {
+    let mut out = Vec::new();
+    let mut iter = elements.iter().cloned().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
+                if newlines >= 2 {
+                    return None; // a blank-line `\par` (the gate should preclude it)
+                }
+                out.push(if newlines == 1 {
+                    Ir::verbatim(" ")
+                } else {
+                    Ir::verbatim(trailing_ws)
+                });
+            }
+            // A `%` comment must terminate its line, so there is no flat form.
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
+            SyntaxElement::Token(t) => out.push(Ir::verbatim(t.text())),
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(&child, cx);
+                if ir.contains_forced_break() {
+                    return None; // nested block content: keep the broken form
+                }
+                out.push(ir);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Whether the environment is *margin-framed*: a `.dtx` documentation margin
@@ -7303,6 +7486,11 @@ fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize 
 /// group, math, a `\\`, a block, or an *inline* command like `\citep`/`\ref` — see
 /// [`command_is_inline`]) disqualifies it. A line with no command (e.g. an empty or
 /// comment-only line) is not a command line.
+///
+/// A `CONDITIONAL` reaches this as a single non-`COMMAND` element and so
+/// disqualifies its line, which is correct: [`lower_conditional`] owns where its
+/// dividers fall, and the divider commands never appear in a reflow stream of
+/// their own.
 fn line_is_command_only(elements: &[SyntaxElement], start: usize, cx: LowerCtx<'_>) -> bool {
     let mut saw_command = false;
     for element in &elements[start..] {

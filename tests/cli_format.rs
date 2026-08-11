@@ -8,6 +8,7 @@
 //! in a tempdir containing a `.git` entry so the config ancestor walk stops
 //! there and a developer's own `badness.toml` cannot leak in.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
@@ -22,16 +23,36 @@ fn repo_dir() -> TempDir {
     dir
 }
 
-fn format(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_badness"))
-        .arg("format")
+/// Run `badness format` with `input` on stdin (`None` closes it: `/dev/null` is
+/// not a terminal, so the interactive-input gate never fires and the run is the
+/// same whether or not `cargo test` was started from a terminal).
+fn format_stdin(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_badness"));
+    cmd.arg("format")
         .args(args)
         .current_dir(dir)
         .env_remove("BADNESS_CONFIG")
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("run badness")
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("run badness");
+    if let Some(input) = input {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+    }
+    child.wait_with_output().expect("wait for badness")
+}
+
+fn format(dir: &Path, args: &[&str]) -> Output {
+    format_stdin(dir, args, None)
 }
 
 #[test]
@@ -140,5 +161,80 @@ fn check_errors_go_to_stderr() {
             .unwrap()
             .contains("badness:"),
         "the error belongs on stderr"
+    );
+}
+
+/// The positional-input contract: `-` is the explicit stdin spelling, an
+/// implicit (piped) stdin still works, and neither can be mixed with paths.
+/// The gated case — no paths at an interactive terminal — is a usage error
+/// rather than a silent wait (issue #111); it needs a pty to reproduce, so the
+/// decision itself is unit-tested in `main.rs` (`resolve_inputs`).
+#[test]
+fn dash_formats_stdin_to_stdout() {
+    let dir = repo_dir();
+
+    let output = format_stdin(dir.path(), &["-"], Some(UNFORMATTED));
+
+    assert!(output.status.success(), "stdin should format cleanly");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "\\section{Hi}\nsome text more\n"
+    );
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+}
+
+#[test]
+fn piped_stdin_still_needs_no_dash() {
+    // The pre-`-` spelling stays valid: a pipe is not a terminal, so nothing a
+    // script or CI step does today changes behavior.
+    let dir = repo_dir();
+
+    let output = format_stdin(dir.path(), &[], Some(UNFORMATTED));
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "\\section{Hi}\nsome text more\n"
+    );
+}
+
+#[test]
+fn dash_cannot_be_mixed_with_paths() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), UNFORMATTED).unwrap();
+
+    let output = format_stdin(dir.path(), &["-", "doc.tex"], None);
+
+    // Clap's own usage-error exit code, so the message reads like any other
+    // argument mistake.
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("cannot be combined with other paths"),
+        "expected the conflict error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Usage: badness format"),
+        "the usage line should name the subcommand, got:\n{stderr}"
+    );
+    // The named file must be left alone.
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("doc.tex")).unwrap(),
+        UNFORMATTED
+    );
+}
+
+#[test]
+fn check_rejects_stdin() {
+    let dir = repo_dir();
+
+    let output = format_stdin(dir.path(), &["--check", "-"], Some(UNFORMATTED));
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("cannot read from stdin"),
+        "`--check` reports on files it leaves on disk"
     );
 }

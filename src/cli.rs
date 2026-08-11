@@ -115,13 +115,15 @@ pub struct Cli {
 pub enum Command {
     /// Format LaTeX source.
     ///
-    /// With paths, formats each file in place. With no paths, reads stdin and
-    /// writes the formatted result to stdout.
+    /// With paths, formats each file in place. Reads stdin (to stdout) when
+    /// given `-`, or when paths are omitted and stdin is not a terminal.
     Format {
-        /// Files to format. Omit to read from stdin.
+        /// Files or directories to format. Pass `-` for stdin, which is also
+        /// read when paths are omitted and stdin is not a terminal.
         paths: Vec<PathBuf>,
         /// Report which files would change without writing them. Exits non-zero
-        /// if any file is not already formatted.
+        /// if any file is not already formatted. Requires path arguments: there
+        /// is no file on disk to report on when reading stdin.
         #[arg(long)]
         check: bool,
         /// Name the stdin buffer so its language is dispatched by extension
@@ -156,10 +158,12 @@ pub enum Command {
     },
     /// Lint LaTeX source, reporting parse diagnostics.
     ///
-    /// With paths, lints each file. With no paths, reads stdin. Exits non-zero
-    /// if any diagnostics are reported.
+    /// With paths, lints each file. Reads stdin when given `-`, or when paths
+    /// are omitted and stdin is not a terminal. Exits non-zero if any
+    /// diagnostics are reported.
     Lint {
-        /// Files to lint. Omit to read from stdin.
+        /// Files or directories to lint. Pass `-` for stdin, which is also
+        /// read when paths are omitted and stdin is not a terminal.
         paths: Vec<PathBuf>,
         /// Apply safe autofixes in place, then report what remains. Requires
         /// path arguments; has no effect on stdin (there is nothing to write).
@@ -203,9 +207,11 @@ pub enum Command {
     ///
     /// A debugging aid: prints the lossless parse tree as an indented
     /// `KIND@range` listing, with token text, followed by any parse errors.
-    /// With a path, parses that file. With no path, reads stdin.
+    /// With a path, parses that file. Reads stdin when given `-`, or when the
+    /// path is omitted and stdin is not a terminal.
     Parse {
-        /// File to parse. Omit to read from stdin.
+        /// File to parse. Pass `-` for stdin, which is also read when the
+        /// path is omitted and stdin is not a terminal.
         path: Option<PathBuf>,
     },
     /// Run the language server over stdio.

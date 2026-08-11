@@ -71,7 +71,7 @@ language server automatically when you open a `.tex` file.
 ## Usage
 
 ```sh
-# Format a file in place (or stdin → stdout with no path)
+# Format a file in place (or `badness format -` for stdin → stdout)
 badness format paper.tex
 
 # Verify formatting without writing, showing diffs

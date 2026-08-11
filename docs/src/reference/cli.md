@@ -30,19 +30,19 @@ A formatter, linter, and language server for LaTeX
 
 Format LaTeX source.
 
-With paths, formats each file in place. With no paths, reads stdin and writes the formatted result to stdout.
+With paths, formats each file in place. Reads stdin (to stdout) when given `-`, or when paths are omitted and stdin is not a terminal.
 
 **Usage:** `badness format [OPTIONS] [PATHS]...`
 
 ### Arguments
 
 `<PATHS>...`
-:   Files to format. Omit to read from stdin
+:   Files or directories to format. Pass `-` for stdin, which is also read when paths are omitted and stdin is not a terminal
 
 ### Options
 
 `--check`
-:   Report which files would change without writing them. Exits non-zero if any file is not already formatted
+:   Report which files would change without writing them. Exits non-zero if any file is not already formatted. Requires path arguments: there is no file on disk to report on when reading stdin
 
 `--stdin-filepath <PATH>`
 :   Name the stdin buffer so its language is dispatched by extension (`.bib` → BibTeX, anything else → LaTeX). No file is read or written; only the extension is used. Ignored when paths are given
@@ -94,14 +94,14 @@ With paths, formats each file in place. With no paths, reads stdin and writes th
 
 Lint LaTeX source, reporting parse diagnostics.
 
-With paths, lints each file. With no paths, reads stdin. Exits non-zero if any diagnostics are reported.
+With paths, lints each file. Reads stdin when given `-`, or when paths are omitted and stdin is not a terminal. Exits non-zero if any diagnostics are reported.
 
 **Usage:** `badness lint [OPTIONS] [PATHS]...`
 
 ### Arguments
 
 `<PATHS>...`
-:   Files to lint. Omit to read from stdin
+:   Files or directories to lint. Pass `-` for stdin, which is also read when paths are omitted and stdin is not a terminal
 
 ### Options
 
@@ -144,14 +144,14 @@ With paths, lints each file. With no paths, reads stdin. Exits non-zero if any d
 
 Parse LaTeX source and print its concrete syntax tree (CST).
 
-A debugging aid: prints the lossless parse tree as an indented `KIND@range` listing, with token text, followed by any parse errors. With a path, parses that file. With no path, reads stdin.
+A debugging aid: prints the lossless parse tree as an indented `KIND@range` listing, with token text, followed by any parse errors. With a path, parses that file. Reads stdin when given `-`, or when the path is omitted and stdin is not a terminal.
 
 **Usage:** `badness parse [PATH]`
 
 ### Arguments
 
 `<PATH>`
-:   File to parse. Omit to read from stdin
+:   File to parse. Pass `-` for stdin, which is also read when the path is omitted and stdin is not a terminal
 
 ## `badness lsp`
 

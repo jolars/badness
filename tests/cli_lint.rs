@@ -125,3 +125,32 @@ fn default_output_keeps_findings_on_stderr() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("ellipsis"), "got: {stderr}");
 }
+
+/// `-` is the explicit stdin spelling here too, and `--fix` has nowhere to write
+/// it back (issue #111 added the spelling; the no-paths-at-a-terminal gate it
+/// pairs with is unit-tested in `main.rs`).
+#[test]
+fn dash_lints_stdin() {
+    let dir = repo_dir();
+
+    let output = lint(dir.path(), &["--output=json", "-"], Some(FIXABLE));
+
+    assert!(!output.status.success(), "findings should exit non-zero");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(value[0]["path"], "<stdin>");
+}
+
+#[test]
+fn fix_leaves_stdin_alone() {
+    let dir = repo_dir();
+
+    let output = lint(dir.path(), &["--fix", "--output=json", "-"], Some(FIXABLE));
+
+    // Nothing to write back to, so the finding is still reported, not silently
+    // fixed into stdout.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(value.as_array().expect("top-level array").len(), 1);
+    assert_eq!(value[0]["path"], "<stdin>");
+}

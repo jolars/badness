@@ -18,12 +18,17 @@ Pass several paths to format them all:
 badness format intro.tex methods.tex results.tex
 ```
 
-With no paths, badness reads from standard input and writes the formatted result
-to standard output—handy for piping or editor integrations:
+Pass `-` to read from standard input and write the formatted result to standard
+output—handy for piping or editor integrations:
 
 ```sh
-cat paper.tex | badness format
+cat paper.tex | badness format -
 ```
+
+A piped standard input is also read when you pass no paths at all, so the
+shorter `cat paper.tex | badness format` works too. At an interactive prompt,
+though, where there is nothing to pipe, `badness format` with no paths reports a
+usage error rather than silently waiting on the terminal.
 
 ## Checking Without Writing
 
@@ -64,10 +69,11 @@ snippets. It exits non-zero when there is at least one diagnostic:
 badness lint paper.tex
 ```
 
-Like `format`, it reads standard input when given no paths:
+Like `format`, it reads standard input when given `-` (or when piped with no
+paths):
 
 ```sh
-cat paper.tex | badness lint
+cat paper.tex | badness lint -
 ```
 
 ## Adjusting Layout

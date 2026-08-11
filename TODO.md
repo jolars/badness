@@ -860,6 +860,24 @@ not re-proposed.
 - [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
   component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
   helper when a third consumer appears.
+- [ ] **`subfiles`' `\subfix` wrapper opens the citation namespace.** The
+  package's path fixer is the idiomatic way a subfile names a shared resource
+  (`\addbibresource{\subfix{references.bib}}`), but a macro inside the group
+  makes `nth_group_text` return `None`, so the target is `BibTarget::Dynamic`
+  and the whole component goes open — silently disabling `undefined-citation`
+  project-wide for exactly the projects issue #112 was about. Conservative (a
+  loss of coverage, never a false positive), hence not urgent. Unwrapping it is
+  a *shape* fact, not meaning — `\subfix{p}` is transparent by construction, the
+  same class of static recognition as the `subfiles` class-option gate — so it
+  fits decision #8; the open part is where the unwrap belongs so `include.rs`,
+  `document_link`, and completion cannot drift on it.
+- [ ] **`project::package` does not collapse `.`/`..` in load targets.**
+  `include.rs`'s resolvers now normalize lexically (`resolve_against`), so
+  `\input{../shared}` and a `subfiles` parent resolve; `package.rs`'s `resolve`
+  still does not, so `\usepackage{../mypkg}` never matches a member and its
+  signatures stay out of scope. Benign (a missing local scope, not a wrong one)
+  and a separate subsystem, so it was left out of the #112 fix. Lift the helper
+  to `project.rs` when touching it.
 - [ ] **Central-bib fallback via the texmf index *(LW)*.** LaTeX Workshop
   resolves `\bibliography{refs}` through `kpsewhich` (plus a `bibDirs`
   setting) for users who keep one master `.bib` in their texmf tree. Extend

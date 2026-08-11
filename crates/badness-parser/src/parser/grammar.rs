@@ -17,9 +17,11 @@ use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
 use crate::parser::lexer::{
-    ExplToggle, Token, VerbCtx, expl_toggle, is_block_environment, is_math_environment,
+    ExplToggle, ParseCtx, Token, expl_toggle, is_block_environment, is_definition_keyword,
+    is_math_environment,
 };
 use crate::syntax::SyntaxKind;
+use smol_str::SmolStr;
 
 const BEGIN_CMD: &str = "\\begin";
 const END_CMD: &str = "\\end";
@@ -186,7 +188,7 @@ struct TriviaScan {
 }
 
 /// Parse a token stream into parser events and a list of syntax errors.
-pub(crate) fn parse(tokens: &[Token], ctx: &VerbCtx) -> (Vec<Event>, Vec<SyntaxError>) {
+pub(crate) fn parse(tokens: &[Token], ctx: &ParseCtx) -> (Vec<Event>, Vec<SyntaxError>) {
     let mut p = Parser::new(tokens, ctx);
     p.document();
     debug_assert_balanced(&p.events);
@@ -228,7 +230,7 @@ struct Parser<'t> {
     /// User-defined verbatim constructs, consulted to route a verbatim environment to
     /// its raw-body branch (its body is already one `VERBATIM_BODY` token from the
     /// lexer; the grammar must not try to parse it structurally).
-    ctx: &'t VerbCtx,
+    ctx: &'t ParseCtx,
     /// `starts[i]` is the byte offset of token `i`; `starts[len]` is the total
     /// length. Used to give syntax errors byte ranges.
     starts: Vec<usize>,
@@ -328,23 +330,80 @@ struct Parser<'t> {
     /// spellings out of scope. Recognition itself is shared with the linter's
     /// `ConditionalIndex` ([`conditional::OpenerScan`]) so the two cannot drift.
     conditional_openers: std::collections::HashSet<usize>,
+    /// Token indices of *environment-alias openers* — bare control words whose
+    /// definition body is exactly `\begin{X}` — mapped to the target environment
+    /// `X` (issue #109). Pre-scanned in [`Self::new`] for the same reason as
+    /// [`Self::conditional_openers`]: the definee filter is a running state over
+    /// the stream that the recursive walk cannot carry.
+    ///
+    /// That filter is load-bearing, not defensive. [`Self::command`] sets
+    /// `in_def_body` after a `\def`-family head only when the definee is a
+    /// `CONTROL_SYMBOL`, so in `\def\bea{\begin{eqnarray}}` the definee `\bea`
+    /// reaches [`Self::element`] as an ordinary sibling command at brace depth 0
+    /// with `in_macro_code` false. Unfiltered, the dispatch fires on it, the scan
+    /// finds `\def\eea`'s definee at the same depth, and the two *definition lines*
+    /// pair into an `ENVIRONMENT` — lossless and silent, but layout is destroyed.
+    /// The braced `\newcommand{\bea}{…}` form is covered by `in_def_body` instead.
+    /// Expl3 regions are excluded outright, as for conditionals.
+    alias_openers: std::collections::HashMap<usize, SmolStr>,
+    /// The closer mirror of [`Self::alias_openers`] (`\end{X}` bodies).
+    alias_closers: std::collections::HashMap<usize, SmolStr>,
+    /// Token index of the alias closer bounding the environment body currently
+    /// being parsed, if any. Saved and restored around the body in
+    /// [`Self::alias_environment`]. An alias environment has no `\end{…}` to stop
+    /// at, so this positional bound is what terminates it — read by
+    /// [`Self::at_block_end`], [`Self::trivia_run_is_separator`], and
+    /// [`Self::binding_run`].
+    alias_end: Option<usize>,
 }
 
 impl<'t> Parser<'t> {
-    fn new(tokens: &'t [Token], ctx: &'t VerbCtx) -> Self {
+    fn new(tokens: &'t [Token], ctx: &'t ParseCtx) -> Self {
         let mut starts = Vec::with_capacity(tokens.len() + 1);
         let mut off = 0;
         let mut expl_toggles = Vec::new();
         let mut conditional_openers = std::collections::HashSet::new();
+        let mut alias_openers = std::collections::HashMap::new();
+        let mut alias_closers = std::collections::HashMap::new();
+        let want_aliases = ctx.has_env_aliases();
         let mut opener_scan = conditional::OpenerScan::new();
         // `expl_on` mirrors `in_expl_region` exactly: the state is the one in
         // force *before* this token, so a toggle sits outside its own region.
         let mut expl_on = false;
+        // Whether the last non-trivia token was a definition keyword, so the very
+        // next control word is the *name being defined* rather than a call. See
+        // [`Self::alias_openers`] for why this filter is mandatory.
+        let mut after_def_keyword = false;
         for (i, t) in tokens.iter().enumerate() {
             starts.push(off);
             off += t.text.len();
             if t.kind != SyntaxKind::CONTROL_WORD {
+                // Trivia carries the definition-keyword state across (`\def  \bea`);
+                // anything else clears it.
+                if !matches!(
+                    t.kind,
+                    SyntaxKind::WHITESPACE
+                        | SyntaxKind::NEWLINE
+                        | SyntaxKind::COMMENT
+                        | SyntaxKind::DOC_MARGIN
+                        | SyntaxKind::GUARD
+                ) {
+                    after_def_keyword = false;
+                }
                 continue;
+            }
+            if want_aliases {
+                let name = (!after_def_keyword && !expl_on)
+                    .then(|| t.text.strip_prefix('\\'))
+                    .flatten();
+                if let Some(name) = name {
+                    if let Some(target) = ctx.begin_alias(name) {
+                        alias_openers.insert(i, SmolStr::new(target));
+                    } else if let Some(target) = ctx.end_alias(name) {
+                        alias_closers.insert(i, SmolStr::new(target));
+                    }
+                }
+                after_def_keyword = is_definition_keyword(&t.text);
             }
             // `visit` is a *state machine* over the whole stream (the operand-slot
             // countdown, the `\ifcsname` body), so it must run for every control
@@ -385,6 +444,9 @@ impl<'t> Parser<'t> {
             plain_braces: std::collections::HashSet::new(),
             expl_toggles,
             conditional_openers,
+            alias_openers,
+            alias_closers,
+            alias_end: None,
         }
     }
 
@@ -784,6 +846,14 @@ impl<'t> Parser<'t> {
         if s.next_kind != Some(SyntaxKind::CONTROL_WORD) {
             return None;
         }
+        // An alias closer terminates the body just as `\end` does, so it is not a
+        // construct a preceding comment run may bind to. Without this the run would
+        // classify as `COMMAND`, the body loop would open a `DOC_COMMENT` and then
+        // call `element` *at the closer* — consuming it inside the body, so the
+        // environment never closes.
+        if self.alias_end.is_some_and(|end| s.next >= end) {
+            return None;
+        }
         let kind = match self.tokens[s.next].text.as_str() {
             BEGIN_CMD => SyntaxKind::ENVIRONMENT,
             END_CMD => return None,
@@ -796,6 +866,26 @@ impl<'t> Parser<'t> {
 
     fn document(&mut self) {
         self.parse_block(Block::Document);
+    }
+
+    /// Whether the construct at token `idx` opens a *block* environment — one
+    /// [`parse_block`](Self::parse_block) leaves bare rather than wrapping in a
+    /// `PARAGRAPH`. Block-ness is read from the built-in signature DB
+    /// ([`is_block_environment`]), never from a name list here.
+    ///
+    /// Covers both spellings, so an alias formats like the environment it stands
+    /// for: `\bea … \eea` must not be wrapped in a `PARAGRAPH` when the identical
+    /// `\begin{eqnarray} … \end{eqnarray}` is not. The alias arm re-runs the shape
+    /// gate, since a demoted opener is a plain command and must keep its paragraph.
+    fn starts_block_env(&self, idx: usize) -> bool {
+        if self.tokens.get(idx).is_some_and(|t| t.text == BEGIN_CMD) {
+            return peek_begin_name(self.tokens, idx)
+                .as_deref()
+                .is_some_and(is_block_environment);
+        }
+        self.alias_openers
+            .get(&idx)
+            .is_some_and(|target| is_block_environment(target) && self.alias_closer(idx).is_some())
     }
 
     /// Parse a content region, grouping runs of content into `PARAGRAPH` nodes
@@ -855,10 +945,7 @@ impl<'t> Parser<'t> {
                         self.bump();
                     }
                     self.close();
-                    let starts_block_env = self.tokens[construct_pos].text == BEGIN_CMD
-                        && peek_begin_name(self.tokens, construct_pos)
-                            .as_deref()
-                            .is_some_and(is_block_environment);
+                    let starts_block_env = self.starts_block_env(construct_pos);
                     let construct_start = self.events.len();
                     self.element();
                     if let Event::Start(kind) = self.events[construct_start] {
@@ -872,10 +959,7 @@ impl<'t> Parser<'t> {
                 let is_nontrivia = !self.kind().is_some_and(Self::is_trivia);
                 // Peek block-env status *before* consuming (the name is only
                 // available while still on the `\begin`).
-                let starts_block_env = self.at_command(BEGIN_CMD)
-                    && peek_begin_name(self.tokens, self.pos)
-                        .as_deref()
-                        .is_some_and(is_block_environment);
+                let starts_block_env = self.starts_block_env(self.pos);
                 self.element();
                 if is_nontrivia {
                     nontrivia_count += 1;
@@ -895,9 +979,14 @@ impl<'t> Parser<'t> {
             || match block {
                 Block::Document => false,
                 Block::Environment => {
-                    self.at_command(END_CMD)
-                        && self.env_name_follows(self.pos)
-                        && !self.end_orphans_a_demoted_begin(self.pos)
+                    // An alias environment has no `\end{…}`: its body ends at the
+                    // closer the gate located. Checked first because
+                    // `math_environment_body` hardcodes `Block::Environment`, so
+                    // this one bound terminates both the math and the prose body.
+                    self.alias_end.is_some_and(|end| self.pos >= end)
+                        || (self.at_command(END_CMD)
+                            && self.env_name_follows(self.pos)
+                            && !self.end_orphans_a_demoted_begin(self.pos))
                 }
                 // `>=` (not `==`): defensive against an element overshooting the
                 // pre-scanned terminator, so the loop still stops.
@@ -923,8 +1012,9 @@ impl<'t> Parser<'t> {
             None => true,
             Some(SyntaxKind::CONTROL_WORD) => {
                 block == Block::Environment
-                    && self.tokens[s.next].text == END_CMD
-                    && self.env_name_follows(s.next)
+                    && ((self.tokens[s.next].text == END_CMD && self.env_name_follows(s.next))
+                        // The alias twin: the run reaches the located closer.
+                        || self.alias_end.is_some_and(|end| s.next >= end))
             }
             Some(_) => false,
         }
@@ -975,6 +1065,18 @@ impl<'t> Parser<'t> {
                     } else {
                         self.stray_end();
                     }
+                } else if let Some((target, closer)) = (!self.in_macro_code(self.pos))
+                    .then(|| {
+                        let target = self.alias_openers.get(&self.pos)?.clone();
+                        Some((target, self.alias_closer(self.pos)?))
+                    })
+                    .flatten()
+                {
+                    // A command whose definition body is exactly `\begin{X}`, whose
+                    // partner is reachable: pair the two into an `ENVIRONMENT` of
+                    // `X` (issue #109). Shape-gated like `\begin` and `\if`, and
+                    // like them it demotes silently when the gate refuses.
+                    self.alias_environment(&target, closer);
                 } else if let Some(closer) = self
                     .conditional_openers
                     .contains(&self.pos)
@@ -2485,6 +2587,151 @@ impl<'t> Parser<'t> {
         None
     }
 
+    /// The token index closing the environment-alias opener at `open`, or `None`
+    /// when it does not pair — in which case the opener stays a plain `COMMAND`
+    /// with **no diagnostic**, like a gated `$`/`\[`/`\begin`.
+    ///
+    /// This is a **positive** gate, transcribed from [`Self::conditional_closer`]
+    /// rather than from [`Self::environment_escapes_group`]. The `\begin` gate is a
+    /// *demotion* gate on a construct that pairs by default and carries an
+    /// unclosed-environment diagnostic worth preserving. An alias opener is a bare
+    /// control word with no `{name}` corroborating it and no diagnostic to keep, so
+    /// "pair unless refuted" would be far too optimistic: it must be refused unless
+    /// its closer is positively located, and the walk is then bounded by that index.
+    ///
+    /// Requirements carried over from the sibling gates:
+    ///
+    /// - **Brace level.** A `}` closing a group opened before the opener always
+    ///   wins — braces are catcode structure, an alias is only a macro (issue #71).
+    /// - **`envs == 0`.** A closer inside an environment the alias opened is
+    ///   consumed by that environment's body, so the walk cannot reach it.
+    /// - **Math refuses.** This scan does not model the `$`/`\[`/`\(` shape gates,
+    ///   so rather than re-derive them it declines behind one.
+    /// - **`macrocode` bounds it both ways**, as for conditionals.
+    ///
+    /// Unlike the conditional gate there is deliberately **no paragraph-break
+    /// anchor**: an alias for `itemize` legitimately spans blank lines, and the body
+    /// is parsed with [`Self::parse_block`], which builds `PARAGRAPH`s inside it.
+    /// Reading a blank line here would also key layout on a trivia predicate the
+    /// formatter does not preserve.
+    ///
+    /// Nesting counts *any* alias opener and *any* alias closer, then requires the
+    /// closer found at depth zero to name our own target. So `\bea \bce \ece \eea`
+    /// pairs while the crossing `\bea \bce \eea \ece` refuses outright, instead of
+    /// letting an inner walk run past the outer bound.
+    fn alias_closer(&self, open: usize) -> Option<usize> {
+        let target = self.alias_openers.get(&open)?;
+        let mut depth = 0usize;
+        let mut envs = 0usize;
+        let mut nested = 0usize;
+        let end = self
+            .macrocode_end
+            .unwrap_or(self.tokens.len())
+            .min(self.tokens.len());
+        let mut i = open + 1;
+        while i < end {
+            let t = &self.tokens[i];
+            match t.kind {
+                SyntaxKind::DOLLAR if depth == 0 => return None,
+                SyntaxKind::CONTROL_SYMBOL
+                    if depth == 0 && matches!(t.text.as_str(), "\\[" | "\\(") =>
+                {
+                    return None;
+                }
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
+                    if depth == 0 {
+                        if self.group_depth > 0 {
+                            return None;
+                        }
+                    } else {
+                        depth -= 1;
+                    }
+                }
+                SyntaxKind::CONTROL_WORD if depth == 0 && !self.in_macro_code(i) => {
+                    if self.alias_openers.contains_key(&i) {
+                        nested += 1;
+                    } else if let Some(closing) = self.alias_closers.get(&i) {
+                        if nested == 0 {
+                            // Ours only if it names the same environment and no
+                            // `\begin`-opened environment stands in the way.
+                            return (closing == target && envs == 0).then_some(i);
+                        }
+                        nested -= 1;
+                    } else if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
+                        // A `macrocode` frame is a hard boundary in both directions,
+                        // for the reason spelled out in `conditional_closer`.
+                        if peek_begin_name(self.tokens, i)
+                            .is_some_and(|n| matches!(n.as_str(), "macrocode" | "macrocode*"))
+                        {
+                            return None;
+                        }
+                        envs += 1;
+                    } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
+                        if envs == 0 {
+                            return None;
+                        }
+                        envs -= 1;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        // Running out of input does not pair: unlike `\begin`, there is no
+        // unclosed-environment diagnostic to preserve, so a lone opener is simply
+        // a macro call.
+        None
+    }
+
+    /// `\bea … \eea`: an environment opened and closed by bare control words, for
+    /// the closer [`Self::alias_closer`] located at token index `closer`.
+    ///
+    /// Emits the *same* `ENVIRONMENT > BEGIN … END` shape a spelled-out
+    /// `\begin{X} … \end{X}` does, so every consumer downstream — the formatter's
+    /// lowering, folding, the outline, [`crate::ast::Environment`] — works
+    /// unchanged. The only difference is that `BEGIN`/`END` hold a bare
+    /// `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, which is why
+    /// [`crate::ast::Begin::name`] falls back to the head control word.
+    ///
+    /// No arguments are attached to either delimiter: the alias head consumes none
+    /// (that is an admission rule of the scan, `semantic::define`), and attaching
+    /// them from the *target's* signature would be arity-directed grouping from
+    /// scanned data, which `AGENTS.md` decision #8 holds the line on.
+    fn alias_environment(&mut self, target: &str, closer: usize) {
+        self.open(SyntaxKind::ENVIRONMENT);
+        self.open(SyntaxKind::BEGIN);
+        self.bump(); // the opening control word
+        self.close();
+
+        let saved = self.alias_end.replace(closer);
+        self.open_envs.push(target.to_owned());
+        // Body routing reads the *target* name through the same curated-data-only
+        // predicates a spelled-out environment uses, so no behavior flag ever comes
+        // from the alias itself.
+        if self.ctx.is_verbatim_environment(target) {
+            self.verbatim_body(target);
+        } else if is_math_environment(target) {
+            self.math_environment_body();
+        } else {
+            self.parse_block(Block::Environment);
+        }
+        self.open_envs.pop();
+        self.alias_end = saved;
+
+        // The walk is bounded by `closer`, so it normally stops exactly there. It
+        // may stop earlier when a nested construct re-gates and closes first — the
+        // same one-directional guarantee `conditional_closer` documents — in which
+        // case the closer stays a plain command and this environment simply has no
+        // `END`, exactly as an unclosed `\begin` does.
+        if self.pos == closer {
+            self.open(SyntaxKind::END);
+            self.bump();
+            self.close();
+        }
+        self.close(); // ENVIRONMENT
+    }
+
     /// `\if… … \else … \or … \fi`, for the closer [`Self::conditional_closer`]
     /// located at token index `closer`.
     ///
@@ -2910,7 +3157,7 @@ mod tests {
     #[test]
     fn step_guard_trips_when_wedged() {
         let tokens = lex("x");
-        let ctx = VerbCtx::default();
+        let ctx = ParseCtx::default();
         let p = Parser::new(&tokens, &ctx);
         // Park one tick short of the ceiling with the cursor pinned, so no reset
         // fires on the next peeks.
@@ -2926,7 +3173,7 @@ mod tests {
     #[test]
     fn step_budget_resets_on_cursor_progress() {
         let tokens = lex("xx");
-        let ctx = VerbCtx::default();
+        let ctx = ParseCtx::default();
         let mut p = Parser::new(&tokens, &ctx);
         p.last_step_pos.set(p.pos);
         p.steps.set(PARSER_STEP_LIMIT - 1);

@@ -149,7 +149,14 @@ pub fn group_inner_source(group: &SyntaxNode) -> String {
 
 /// The environment name of a `BEGIN` or `END` node — the text of its `NAME_GROUP`
 /// child, braces dropped.
+///
+/// Mirrors [`Begin::name`] on the `BEGIN` side, including its fallback to the bare
+/// head control word for an environment-alias delimiter (issue #109). `END` nodes
+/// keep the `NAME_GROUP`-only reading, so an alias closer stays nameless.
 pub fn environment_name(begin_or_end: &SyntaxNode) -> Option<String> {
+    if begin_or_end.kind() == SyntaxKind::BEGIN {
+        return Begin::cast(begin_or_end.clone())?.name();
+    }
     child::<NameGroup>(begin_or_end).and_then(|g| g.text())
 }
 
@@ -352,5 +359,43 @@ mod tests {
             Some("equation")
         );
         assert_eq!(env.name().as_deref(), Some("equation"));
+    }
+
+    #[test]
+    fn begin_name_falls_back_to_the_head_control_word() {
+        // An environment-alias `BEGIN` (issue #109) is the bare control word with
+        // no `NAME_GROUP`, so the name is read from there instead. Positional and
+        // meaning-free: `Signatures::environment` is what maps it onto behavior.
+        let src = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n\\bea a \\eea\n";
+        let begin = node(src, SyntaxKind::BEGIN);
+        assert_eq!(environment_name(&begin).as_deref(), Some("bea"));
+        assert_eq!(
+            Begin::cast(begin.clone()).unwrap().name().as_deref(),
+            Some("bea")
+        );
+        // The range stays `None`: that is the contract making every name-rewriting
+        // consumer (rename, change-environment, the obsolete-environment fix)
+        // decline cleanly rather than emit a half-edit.
+        assert!(environment_name_range(&begin).is_none());
+        assert!(Begin::cast(begin).unwrap().name_range().is_none());
+    }
+
+    #[test]
+    fn alias_end_stays_nameless() {
+        // Only the `BEGIN` side falls back; an alias closer keeps the
+        // `NAME_GROUP`-only reading.
+        let src = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n\\bea a \\eea\n";
+        let end = node(src, SyntaxKind::END);
+        assert!(environment_name(&end).is_none());
+    }
+
+    #[test]
+    fn a_real_begin_reads_its_name_group() {
+        // The fallback is guarded on the head not being `\begin`, so a spelled-out
+        // environment is unaffected and a malformed `\begin` still reports `None`
+        // rather than claiming to be named "begin".
+        let begin = node("\\begin{center}x\\end{center}", SyntaxKind::BEGIN);
+        assert_eq!(environment_name(&begin).as_deref(), Some("center"));
+        assert!(environment_name_range(&begin).is_some());
     }
 }

@@ -2209,3 +2209,60 @@ fn detect_reads_the_first_line_break() {
     assert_eq!(LineEnding::detect("no break at all"), LineEnding::Lf);
     assert_eq!(LineEnding::detect("\nleading"), LineEnding::Lf);
 }
+
+// --- environment aliases (issue #109) ---------------------------------------
+
+/// The issue-#109 shape, with the definitions the alias is inferred from.
+const ALIAS_DOC: &str = concat!(
+    "\\newcommand{\\bea}{\\begin{eqnarray}}\n",
+    "\\newcommand{\\eea}{\\end{eqnarray}}\n",
+    "\\bea a&=&b \\\\ &=&c \\eea\n"
+);
+
+#[test]
+fn env_alias_formats_like_the_spelled_out_environment() {
+    // The whole point of the feature: `\bea … \eea` must lay out exactly as
+    // `\begin{eqnarray} … \end{eqnarray}` does, delimiters aside.
+    let aliased = format(ALIAS_DOC).expect("formats");
+    let spelled = format("\\begin{eqnarray} a&=&b \\\\ &=&c \\end{eqnarray}\n").expect("formats");
+    let body = |s: &str| {
+        s.lines()
+            .filter(|l| !l.starts_with("\\newcommand") && !l.trim().is_empty())
+            .skip(1)
+            .take_while(|l| !l.starts_with("\\eea") && !l.starts_with("\\end{"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(body(&aliased), body(&spelled));
+    assert!(body(&aliased).contains("a & = & b"), "math spacing applies");
+}
+
+#[test]
+fn env_alias_survives_formatting() {
+    // The pass-1/pass-2 fixed point. The detector reads the CST rather than the
+    // body's source text precisely so a reformat cannot change what is detected;
+    // if it could, the second `format` would see no alias and undo the layout.
+    let once = format(ALIAS_DOC).expect("formats");
+    let twice = format(&once).expect("formats");
+    assert_eq!(
+        once, twice,
+        "alias detection must be stable across a reformat"
+    );
+    // And a re-spaced definition body still detects.
+    let respaced = format("\\newcommand{\\bea}{ \\begin{eqnarray} }\n\\newcommand{\\eea}{\\end{eqnarray}}\n\\bea a&=&b \\eea\n")
+        .expect("formats");
+    assert!(
+        respaced.contains("a & = & b"),
+        "trivia in the body must not matter"
+    );
+}
+
+#[test]
+fn env_alias_resolves_with_no_external_signatures() {
+    // `format` passes an empty external `SignatureDb`, which is the dprint/wasm
+    // plugin's path. The alias must resolve from the document's own scan alone,
+    // or the plugin would become a second sanctioned divergence from `badness
+    // format` (AGENTS.md allows exactly one).
+    let out = format(ALIAS_DOC).expect("formats");
+    assert!(out.contains("a & = & b"));
+}

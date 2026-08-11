@@ -1502,3 +1502,201 @@ fn environments_pair_again_after_expl_syntax_off() {
         "\\ExplSyntaxOn \\foo:n \\ExplSyntaxOff\n\\begin{itemize}\n\\item x\n\\end{itemize}\n"
     ));
 }
+
+// --- environment aliases (issue #109) ---------------------------------------
+
+/// The issue-#109 shape: a `\begin{X}`/`\end{X}` pair defined with `\newcommand`.
+const ALIAS_DEFS: &str =
+    "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n";
+
+/// How many `ENVIRONMENT` nodes `input` produces, and whether it parsed clean.
+fn environments(input: &str) -> (usize, bool) {
+    let parsed = parse(input);
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    let count = parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .count();
+    (count, parsed.errors.is_empty())
+}
+
+#[test]
+fn command_alias_pairs_as_an_environment() {
+    // `\bea … \eea` becomes the same `ENVIRONMENT > BEGIN … END` shape a
+    // spelled-out `\begin{eqnarray} … \end{eqnarray}` does, so every downstream
+    // consumer works unchanged.
+    insta::assert_snapshot!(tree(&format!("{ALIAS_DEFS}\\bea a&=&b \\eea\n")));
+}
+
+#[test]
+fn command_alias_body_routes_into_math() {
+    // The target's curated `math` flag decides the body, exactly as for the
+    // spelled-out environment: scripts become `SCRIPTED`, operators split.
+    let parsed = parse(&format!("{ALIAS_DEFS}\\bea x^2 \\eea\n"));
+    let root = parsed.syntax();
+    assert!(
+        root.descendants().any(|n| n.kind() == SyntaxKind::MATH),
+        "an eqnarray alias body must be math"
+    );
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::SCRIPTED));
+}
+
+#[test]
+fn def_alias_definee_is_not_an_opener() {
+    // The regression that motivates the definition-keyword filter. `command()`
+    // sets `in_def_body` after a `\def` head only when the definee is a
+    // CONTROL_SYMBOL, so in `\def\bea{…}` the definee reaches `element` as an
+    // ordinary sibling command at brace depth 0. Unfiltered, the dispatch fires
+    // on it, the scan finds `\def\eea`'s definee at the same depth, and the two
+    // *definition lines* pair into an ENVIRONMENT — lossless and silent, but
+    // layout is destroyed.
+    let defs = "\\def\\bea{\\begin{eqnarray}}\n\\def\\eea{\\end{eqnarray}}\n";
+    assert_eq!(environments(defs), (0, true));
+    // The genuine use still pairs — exactly one environment, not three.
+    assert_eq!(environments(&format!("{defs}\\bea a \\eea\n")), (1, true));
+}
+
+#[test]
+fn command_alias_without_a_closer_stays_a_command() {
+    // Positive gate: no reachable closer, no pairing — and, like every other
+    // gated construct, no diagnostic (a `\fi`-style closer assembled elsewhere
+    // is routine macro code, not an error).
+    assert_eq!(environments(&format!("{ALIAS_DEFS}\\bea a\n")), (0, true));
+}
+
+#[test]
+fn orphan_alias_closer_stays_a_command() {
+    // Only openers dispatch; a tail with no opener is just a macro call.
+    assert_eq!(environments(&format!("{ALIAS_DEFS}a \\eea\n")), (0, true));
+}
+
+#[test]
+fn command_alias_escaping_a_brace_group_demotes() {
+    // An environment can never outlive the brace group its opener sits in:
+    // braces are catcode structure, an alias is only a macro (issue #71's rule,
+    // transcribed). Silent, as there.
+    assert_eq!(
+        environments(&format!("{ALIAS_DEFS}\\foo{{\\bea a}} \\eea\n")),
+        (0, true)
+    );
+}
+
+#[test]
+fn command_alias_crossing_an_environment_demotes() {
+    // A closer inside an environment the alias opened is consumed by that
+    // environment's body, so the walk can never reach it (`envs == 0`).
+    let src = format!("{ALIAS_DEFS}\\bea \\begin{{itemize}} \\eea \\end{{itemize}}\n");
+    let (envs, _) = environments(&src);
+    assert_eq!(envs, 1, "only the itemize pairs; the alias demotes");
+}
+
+#[test]
+fn command_alias_behind_math_demotes() {
+    // The scan does not model the `$`/`\[`/`\(` shape gates, so rather than
+    // re-derive them it declines behind one — a conservative false negative.
+    assert_eq!(
+        environments(&format!("{ALIAS_DEFS}$x$ \\bea a \\eea\n")),
+        (1, true),
+        "math before the opener is fine"
+    );
+    assert_eq!(
+        environments(&format!("{ALIAS_DEFS}\\bea $x$ a \\eea\n")),
+        (0, true),
+        "a closer behind a math delimiter is refused"
+    );
+}
+
+#[test]
+fn command_aliases_nest() {
+    let defs = "\\newcommand{\\bc}{\\begin{center}}\n\\newcommand{\\ec}{\\end{center}}\n";
+    assert_eq!(
+        environments(&format!("{defs}\\bc \\bc x \\ec \\ec\n")),
+        (2, true)
+    );
+}
+
+#[test]
+fn crossing_alias_pairs_refuse() {
+    // `\bea \bc \eea \ec` crosses. Refusing outright is what keeps an inner
+    // walk from running past the outer bound.
+    let defs = format!(
+        "{ALIAS_DEFS}\\newcommand{{\\bc}}{{\\begin{{center}}}}\n\\newcommand{{\\ec}}{{\\end{{center}}}}\n"
+    );
+    assert_eq!(
+        environments(&format!("{defs}\\bea \\bc a \\eea \\ec\n")),
+        (0, true)
+    );
+}
+
+#[test]
+fn lone_alias_environment_is_not_wrapped_in_a_paragraph() {
+    // A block environment stands bare; the aliased spelling must format like the
+    // spelled-out one, so it has to reach the same decision.
+    let defs = "\\newcommand{\\bc}{\\begin{center}}\n\\newcommand{\\ec}{\\end{center}}\n";
+    let parsed = parse(&format!("{defs}\n\\bc x \\ec\n"));
+    let env = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .expect("the alias pairs");
+    assert_ne!(
+        env.parent().map(|p| p.kind()),
+        Some(SyntaxKind::PARAGRAPH),
+        "a lone block environment is left bare"
+    );
+}
+
+#[test]
+fn comment_before_an_alias_closer_does_not_bind_into_the_body() {
+    // `binding_run` classifies the next construct after an own-line `%` run. An
+    // alias closer terminates the body just as `\end` does, so it is not
+    // bindable — otherwise the loop opens a DOC_COMMENT and then consumes the
+    // closer *inside* the body, and the environment never closes.
+    let src = format!("{ALIAS_DEFS}\\bea\n  x = y\n  % note\n\\eea\n");
+    assert_eq!(environments(&src), (1, true));
+    let parsed = parse(&src);
+    let env = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .expect("the alias pairs");
+    assert!(
+        env.children().any(|c| c.kind() == SyntaxKind::END),
+        "the environment must still be closed"
+    );
+}
+
+#[test]
+fn alias_body_spans_a_blank_line() {
+    // Deliberately no paragraph-break anchor in the gate: unlike a conditional,
+    // an alias environment is *supposed* to straddle PARAGRAPH boundaries.
+    let defs = "\\newcommand{\\bc}{\\begin{center}}\n\\newcommand{\\ec}{\\end{center}}\n";
+    assert_eq!(
+        environments(&format!("{defs}\\bc a\n\nb \\ec\n")),
+        (1, true)
+    );
+}
+
+#[test]
+fn alias_inside_math_stays_a_command() {
+    // `math_atom` is deliberately not extended in v1 — it calls `environment()`
+    // ungated, so an ungated alias opener there would be strictly worse. Pins the
+    // accepted false negative.
+    let defs = "\\newcommand{\\bm}{\\begin{matrix}}\n\\newcommand{\\em}{\\end{matrix}}\n";
+    assert_eq!(environments(&format!("{defs}$\\bm a \\em$\n")), (0, true));
+}
+
+#[test]
+fn uncurated_and_verbatim_alias_targets_never_pair() {
+    // Admission rules from the scan, observed through the parser.
+    let unknown = "\\newcommand{\\bq}{\\begin{notreal}}\n\\newcommand{\\eq}{\\end{notreal}}\n";
+    assert_eq!(environments(&format!("{unknown}\\bq a \\eq\n")), (0, true));
+    // `\newcommand{\bv}{\begin{verbatim}}` does not work in TeX at all.
+    let verb = "\\newcommand{\\bv}{\\begin{verbatim}}\n\\newcommand{\\ev}{\\end{verbatim}}\n";
+    assert_eq!(environments(&format!("{verb}\\bv a \\ev\n")), (0, true));
+}

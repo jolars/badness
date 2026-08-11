@@ -32,10 +32,10 @@ use crate::ast::{
     group_command_name, group_inner_source, nth_group, nth_group_inner, nth_group_text,
 };
 use crate::semantic::signature::{
-    ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb,
+    ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, builtin,
 };
 use crate::semantic::xparse;
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::{SyntaxKind, SyntaxNode, is_collapsible_trivia};
 use rowan::{NodeOrToken, TextRange, TextSize};
 use smol_str::SmolStr;
 
@@ -54,6 +54,11 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
     // collision must not let one shadow the other during chain resolution). The
     // begin-code's *called* helpers are resolved against the command `bodies` map.
     let mut env_bodies: HashMap<SmolStr, DefBody> = HashMap::new();
+    // Environment-alias candidates: a zero-arity definition whose body is exactly
+    // `\begin{X}` or `\end{X}`. Collected raw during the walk (last definition
+    // wins, like `db`) and filtered by [`apply_env_aliases`] afterwards, since
+    // admitting one requires seeing the *other* half of the pair.
+    let mut alias_candidates: HashMap<SmolStr, EnvAliasCandidate> = HashMap::new();
 
     for command in root
         .descendants()
@@ -63,10 +68,14 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
             continue;
         };
         match DefKind::of(&name) {
-            Some(DefKind::Command) => scan_newcommand(&command, &mut db, &mut bodies),
-            Some(DefKind::Def) => scan_def(&command, &mut db, &mut bodies),
+            Some(DefKind::Command) => {
+                scan_newcommand(&command, &mut db, &mut bodies, &mut alias_candidates)
+            }
+            Some(DefKind::Def) => scan_def(&command, &mut db, &mut bodies, &mut alias_candidates),
             Some(DefKind::Environment) => scan_newenvironment(&command, &mut db, &mut env_bodies),
-            Some(DefKind::XparseCommand) => scan_xparse_command(&command, &mut db, &mut bodies),
+            Some(DefKind::XparseCommand) => {
+                scan_xparse_command(&command, &mut db, &mut bodies, &mut alias_candidates)
+            }
             Some(DefKind::XparseEnvironment) => {
                 scan_xparse_environment(&command, &mut db, &mut env_bodies)
             }
@@ -79,7 +88,146 @@ pub fn scan_definitions(root: &SyntaxNode) -> SignatureDb {
 
     apply_verbatim_flags(&mut db, &bodies);
     apply_verbatim_env_flags(&mut db, &env_bodies, &bodies);
+    apply_env_aliases(&mut db, &alias_candidates);
     db
+}
+
+/// Which delimiter of an environment a definition body stands in for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AliasSide {
+    Begin,
+    End,
+}
+
+/// One unfiltered environment-alias candidate: the side its body spells and the
+/// environment it names. Admission is decided later by [`apply_env_aliases`],
+/// which needs the whole file's candidates to check that both halves exist.
+#[derive(Debug, Clone)]
+struct EnvAliasCandidate {
+    side: AliasSide,
+    target: SmolStr,
+}
+
+/// Read a definition's replacement `body` group as an environment delimiter: the
+/// body must be *exactly* `\begin{X}` or `\end{X}` and nothing else.
+///
+/// Reads the **CST**, not `group_inner_source`: the formatter may re-space inside
+/// the body, and `{\begin{eqnarray}}` and `{ \begin{eqnarray} }` must detect
+/// identically or the alias table would not survive a reformat (the pass-1/pass-2
+/// fixed point). Whitespace, newlines, and comments are skipped for the same
+/// reason; anything else present makes this not a delimiter definition.
+///
+/// Inside a definition body `\begin` is a plain `COMMAND` (the grammar sets
+/// `in_def_body`), so this never has to look through an `ENVIRONMENT` node.
+fn env_alias_body(body: &SyntaxNode) -> Option<EnvAliasCandidate> {
+    let mut sole: Option<SyntaxNode> = None;
+    for child in body.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(t) => match t.kind() {
+                // The group's own delimiters, plus the trivia a reformat may move.
+                SyntaxKind::L_BRACE | SyntaxKind::R_BRACE | SyntaxKind::COMMENT => {}
+                k if is_collapsible_trivia(k) => {}
+                _ => return None,
+            },
+            // A second node means the body does more than open the environment.
+            NodeOrToken::Node(n) => {
+                if sole.replace(n).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    let cmd = sole?;
+    if cmd.kind() != SyntaxKind::COMMAND {
+        return None;
+    }
+    // Exactly one attached child, the name group — so `\begin{tabular}{cc}` (two
+    // groups) is not a bare delimiter and does not read as one.
+    if cmd.children().count() != 1 {
+        return None;
+    }
+    let side = match command_name(&cmd)?.as_str() {
+        "begin" => AliasSide::Begin,
+        "end" => AliasSide::End,
+        _ => return None,
+    };
+    let target = nth_group_text(&cmd, 0)?;
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    Some(EnvAliasCandidate {
+        side,
+        target: SmolStr::new(target),
+    })
+}
+
+/// Record an alias candidate for a zero-arity definition. Non-zero arity is
+/// rejected here: an alias head consumes no arguments (the grammar never calls
+/// `attach_arguments` on one), so a parameterized delimiter would silently drop
+/// its arguments into the body.
+fn record_env_alias(
+    candidates: &mut HashMap<SmolStr, EnvAliasCandidate>,
+    name: &str,
+    arity: usize,
+    body: Option<&SyntaxNode>,
+) {
+    // A later definition of the same name wins, mirroring `db`; but it must also
+    // be able to *retract* an earlier alias, or `\renewcommand{\bea}{\textbf}`
+    // would leave the stale entry standing.
+    candidates.remove(name);
+    if arity != 0 {
+        return;
+    }
+    if let Some(candidate) = body.and_then(env_alias_body) {
+        candidates.insert(SmolStr::new(name), candidate);
+    }
+}
+
+/// Promote the alias candidates that survive every admission rule into `db`.
+///
+/// The rules are narrow on purpose — an alias makes the *parser* pair two bare
+/// control words into an `ENVIRONMENT`, and a wrong pairing rewrites layout:
+///
+/// - **The target must be a curated built-in environment.** An alias declares a
+///   *spelling*, never a *semantic*; every behavior flag still comes from curated
+///   data, exactly as `is_math_environment` requires (AGENTS.md decision #1).
+/// - **The target must not be verbatim.** `\newcommand{\bv}{\begin{verbatim}}`
+///   genuinely does not work in TeX — `verbatim` others catcodes, and the body is
+///   already tokenized by the time the macro expands — so pairing it would model a
+///   construct that does not exist.
+/// - **The target must take no arguments.** The alias head consumes none, so an
+///   `array` alias would drop its column spec into the body and the formatter
+///   would grid it with no alignments.
+/// - **Both halves must be defined in the file.** A lone opener can never pair
+///   anyway (no closer to locate), so recording it is pure risk and pure cost —
+///   it would make every such file pay a second parse for nothing.
+fn apply_env_aliases(db: &mut SignatureDb, candidates: &HashMap<SmolStr, EnvAliasCandidate>) {
+    let admissible = |target: &str| {
+        builtin()
+            .environment(target)
+            .is_some_and(|sig| !sig.verbatim_body && sig.args.is_empty())
+    };
+    let has_side = |side: AliasSide, target: &str| {
+        candidates
+            .values()
+            .any(|c| c.side == side && c.target == target)
+    };
+    for (name, candidate) in candidates {
+        let target = candidate.target.as_str();
+        if !admissible(target) {
+            continue;
+        }
+        match candidate.side {
+            AliasSide::Begin if has_side(AliasSide::End, target) => {
+                db.insert_env_begin_alias(name.clone(), candidate.target.clone());
+            }
+            AliasSide::End if has_side(AliasSide::Begin, target) => {
+                db.insert_env_end_alias(name.clone(), candidate.target.clone());
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Which namespace a scanned definition site names. Commands and environments live
@@ -429,6 +577,7 @@ fn scan_newcommand(
     command: &SyntaxNode,
     db: &mut SignatureDb,
     bodies: &mut HashMap<SmolStr, DefBody>,
+    aliases: &mut HashMap<SmolStr, EnvAliasCandidate>,
 ) {
     let Some(def) = resolve_command_def(command) else {
         return;
@@ -436,11 +585,9 @@ fn scan_newcommand(
     let (arity, first_optional) = newcommand_arity(&def.host);
     // The replacement body is the group right after the name: index `first_arg_group`
     // on the host (group 1 for the braced form, group 0 for the unbraced sibling).
-    record_body(
-        bodies,
-        &def.name,
-        nth_group(&def.host, def.first_arg_group).as_ref(),
-    );
+    let body = nth_group(&def.host, def.first_arg_group);
+    record_body(bodies, &def.name, body.as_ref());
+    record_env_alias(aliases, &def.name, arity, body.as_ref());
     // Trust gate: a `\secdef`/`\@startsection`-style body reads as arity 0 but really
     // consumes a title, so don't let it downgrade a curated built-in (keep the overlay
     // falling through to the built-in). See [`keeps_builtin_over_arity0`].
@@ -470,7 +617,12 @@ fn scan_newcommand(
 /// [`def_params_and_body`] — not from a `[n]` optional. We record the body for the same
 /// catcode-signal/helper-chain analysis as `\newcommand`, which is what lets a `\def`
 /// helper participate in chain resolution ([`reaches_signal`]).
-fn scan_def(command: &SyntaxNode, db: &mut SignatureDb, bodies: &mut HashMap<SmolStr, DefBody>) {
+fn scan_def(
+    command: &SyntaxNode,
+    db: &mut SignatureDb,
+    bodies: &mut HashMap<SmolStr, DefBody>,
+    aliases: &mut HashMap<SmolStr, EnvAliasCandidate>,
+) {
     let Some(name_node) = adjacent_sibling_command(command) else {
         return;
     };
@@ -479,6 +631,7 @@ fn scan_def(command: &SyntaxNode, db: &mut SignatureDb, bodies: &mut HashMap<Smo
     };
     let (arity, body) = def_params_and_body(&name_node);
     record_body(bodies, &name, body.as_ref());
+    record_env_alias(aliases, &name, arity, body.as_ref());
     // Trust gate: same as `scan_newcommand` — a delegating `\def\section{\secdef …}`
     // must not downgrade a curated built-in. See [`keeps_builtin_over_arity0`].
     if bodies
@@ -617,6 +770,7 @@ fn scan_xparse_command(
     command: &SyntaxNode,
     db: &mut SignatureDb,
     bodies: &mut HashMap<SmolStr, DefBody>,
+    aliases: &mut HashMap<SmolStr, EnvAliasCandidate>,
 ) {
     let Some(def) = resolve_command_def(command) else {
         return;
@@ -625,15 +779,14 @@ fn scan_xparse_command(
         return;
     };
     // The body follows the spec group, so it sits one index further along.
-    record_body(
-        bodies,
-        &def.name,
-        nth_group(&def.host, def.first_arg_group + 1).as_ref(),
-    );
+    let body = nth_group(&def.host, def.first_arg_group + 1);
+    record_body(bodies, &def.name, body.as_ref());
+    let args = xparse::parse_spec(&group_inner_source(&spec));
+    record_env_alias(aliases, &def.name, args.len(), body.as_ref());
     db.insert_command(
         def.name,
         CommandSig {
-            args: xparse::parse_spec(&group_inner_source(&spec)).into(),
+            args: args.into(),
             sectioning: None,
             verbatim: false,
             verbatim_delimited: false,
@@ -1308,5 +1461,159 @@ mod tests {
     fn def_site_none_for_malformed() {
         assert!(sites_of("\\newcommand\n").is_empty());
         assert!(sites_of("\\newenvironment{}{a}{b}\n").is_empty());
+    }
+
+    // --- environment aliases ------------------------------------------------
+
+    /// A `\begin{X}`/`\end{X}` pair defined with `\newcommand`, the issue-#109 shape.
+    const EQNARRAY_PAIR: &str =
+        "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n";
+
+    #[test]
+    fn newcommand_env_alias_pair_is_recorded() {
+        let db = db_of(EQNARRAY_PAIR);
+        assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
+        // The opener side only: the closer is not an environment opener.
+        assert_eq!(db.env_begin_alias("eea"), None);
+        assert_eq!(db.env_end_alias("bea"), None);
+    }
+
+    #[test]
+    fn def_env_alias_pair_is_recorded() {
+        let db = db_of("\\def\\bea{\\begin{eqnarray}}\n\\def\\eea{\\end{eqnarray}}\n");
+        assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
+    }
+
+    #[test]
+    fn xparse_env_alias_pair_is_recorded() {
+        let db = db_of(
+            "\\NewDocumentCommand{\\bea}{}{\\begin{eqnarray}}\n\
+             \\NewDocumentCommand{\\eea}{}{\\end{eqnarray}}\n",
+        );
+        assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
+    }
+
+    #[test]
+    fn env_alias_body_tolerates_trivia() {
+        // The detector reads the CST, so a reformat that re-spaces the body (or an
+        // authored comment) must not change what is detected. This is what keeps
+        // the alias table stable across `fmt`.
+        let db = db_of(
+            "\\newcommand{\\bea}{ \\begin{eqnarray} }\n\\newcommand{\\eea}{% why\n\\end{eqnarray}}\n",
+        );
+        assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
+    }
+
+    #[test]
+    fn env_alias_needs_both_halves() {
+        let db = db_of("\\newcommand{\\bea}{\\begin{eqnarray}}\n");
+        assert_eq!(db.env_begin_alias("bea"), None);
+    }
+
+    #[test]
+    fn env_alias_rejects_uncurated_target() {
+        let db = db_of(
+            "\\newcommand{\\bmy}{\\begin{notacuratedenv}}\n\
+             \\newcommand{\\emy}{\\end{notacuratedenv}}\n",
+        );
+        assert_eq!(db.env_begin_alias("bmy"), None);
+        assert_eq!(db.env_end_alias("emy"), None);
+    }
+
+    #[test]
+    fn env_alias_rejects_verbatim_target() {
+        // `\newcommand{\bv}{\begin{verbatim}}` does not work in TeX at all: the
+        // body is tokenized before the macro expands, so the catcode change never
+        // applies. Pairing it would model a construct that does not exist.
+        let db =
+            db_of("\\newcommand{\\bv}{\\begin{verbatim}}\n\\newcommand{\\ev}{\\end{verbatim}}\n");
+        assert_eq!(db.env_begin_alias("bv"), None);
+    }
+
+    #[test]
+    fn env_alias_rejects_argument_taking_target() {
+        // The alias head consumes no arguments, so `tabular`'s column spec would
+        // land in the body and the grid would render with no alignments.
+        let db =
+            db_of("\\newcommand{\\bt}{\\begin{tabular}}\n\\newcommand{\\et}{\\end{tabular}}\n");
+        assert_eq!(db.env_begin_alias("bt"), None);
+    }
+
+    #[test]
+    fn env_alias_rejects_parameterized_definition() {
+        let db = db_of(
+            "\\newcommand{\\bt}[1]{\\begin{tabular}{#1}}\n\\newcommand{\\et}{\\end{tabular}}\n",
+        );
+        assert_eq!(db.env_begin_alias("bt"), None);
+    }
+
+    #[test]
+    fn env_alias_rejects_body_with_extra_content() {
+        let db = db_of(
+            "\\newcommand{\\bea}{\\begin{eqnarray}\\label{x}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n",
+        );
+        assert_eq!(db.env_begin_alias("bea"), None);
+    }
+
+    #[test]
+    fn redefinition_retracts_an_earlier_env_alias() {
+        // Last definition wins, and that has to include *losing* alias-ness —
+        // otherwise a stale entry would keep pairing a command that no longer opens
+        // anything.
+        let db = db_of(
+            "\\newcommand{\\bea}{\\begin{eqnarray}}\n\
+             \\newcommand{\\eea}{\\end{eqnarray}}\n\
+             \\renewcommand{\\bea}{\\textbf}\n",
+        );
+        assert_eq!(db.env_begin_alias("bea"), None);
+    }
+
+    #[test]
+    fn env_alias_does_not_pollute_the_environment_namespace() {
+        // The alias is a command, not an environment: `\begin{bea}` must not be
+        // offered by completion, and `SignatureDb::environment` must not resolve it.
+        let db = db_of(EQNARRAY_PAIR);
+        assert!(db.environment("bea").is_none());
+        assert!(!db.environment_names().any(|n| n == "bea"));
+    }
+
+    #[test]
+    fn signatures_resolves_an_env_alias_to_the_curated_target() {
+        use crate::semantic::signature::Signatures;
+        let db = db_of(EQNARRAY_PAIR);
+        let sigs = Signatures::new(&db);
+        let sig = sigs.environment("bea").expect("alias resolves");
+        let target = builtin().environment("eqnarray").expect("curated target");
+        assert_eq!(sig, target);
+        assert!(sig.math && sig.align);
+    }
+
+    #[test]
+    fn a_real_environment_wins_over_an_alias_of_the_same_name() {
+        // The alias arm resolves last precisely so this holds.
+        use crate::semantic::signature::Signatures;
+        let db = db_of(
+            "\\newcommand{\\bea}{\\begin{eqnarray}}\n\
+             \\newcommand{\\eea}{\\end{eqnarray}}\n\
+             \\newenvironment{bea}{x}{y}\n",
+        );
+        let sigs = Signatures::new(&db);
+        let sig = sigs.environment("bea").expect("real environment resolves");
+        assert!(
+            !sig.math,
+            "the scanned \\newenvironment must win over the alias"
+        );
+    }
+
+    #[test]
+    fn merge_from_carries_env_aliases() {
+        let mut target = SignatureDb::default();
+        target.merge_from(&db_of(EQNARRAY_PAIR));
+        assert_eq!(target.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(target.env_end_alias("eea"), Some("eqnarray"));
     }
 }

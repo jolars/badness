@@ -315,6 +315,26 @@ pub struct SignatureDb {
     command_origins: HashMap<SmolStr, SmolStr>,
     /// The environment mirror of [`command_origins`](Self::command_origins).
     environment_origins: HashMap<SmolStr, SmolStr>,
+    /// File-local *environment aliases*, opener side: a command name (without the
+    /// leading `\`) whose definition body is exactly `\begin{X}`, mapped to the
+    /// target environment `X`. Populated only by the per-file definition scan
+    /// ([`super::define`]), which admits an alias solely when `X` is a curated
+    /// built-in environment that is non-verbatim and takes no arguments, and when
+    /// both halves of the pair are defined in the same file.
+    ///
+    /// A *side map*, deliberately not an [`EnvironmentSig`] cloned under the alias
+    /// name: the alias is a command, not an environment, so it must not appear in
+    /// [`environment_names`](Self::environment_names) (that would offer
+    /// `\begin{bea}` to completion), must not let a literal `\begin{bea}` acquire
+    /// the target's behavior, and must not mask a real `\newenvironment{bea}`.
+    /// [`Signatures::environment`] resolves it *last*, after the real tiers, so a
+    /// genuine environment of the same name always wins.
+    env_begin_aliases: HashMap<SmolStr, SmolStr>,
+    /// The closer mirror of [`env_begin_aliases`](Self::env_begin_aliases): a
+    /// command whose body is exactly `\end{X}`. Kept separate rather than tagged
+    /// with a side, so the parser's opener and closer indices cannot be confused
+    /// and [`Signatures::environment`] can consult the opener side alone.
+    env_end_aliases: HashMap<SmolStr, SmolStr>,
 }
 
 impl SignatureDb {
@@ -340,6 +360,43 @@ impl SignatureDb {
     /// [`command_names`]: Self::command_names
     pub fn environment_names(&self) -> impl Iterator<Item = &str> {
         self.environments.keys().map(SmolStr::as_str)
+    }
+
+    /// The environment `name` opens, if the per-file scan recorded it as an
+    /// environment alias ([`env_begin_aliases`](Self::env_begin_aliases)). The name
+    /// carries no leading `\`.
+    pub fn env_begin_alias(&self, name: &str) -> Option<&str> {
+        self.env_begin_aliases.get(name).map(SmolStr::as_str)
+    }
+
+    /// The closer mirror of [`env_begin_alias`](Self::env_begin_alias).
+    pub fn env_end_alias(&self, name: &str) -> Option<&str> {
+        self.env_end_aliases.get(name).map(SmolStr::as_str)
+    }
+
+    /// Every recorded opener alias, as `(alias, target)` pairs in arbitrary order.
+    /// Backs the parser's projection of the map into its parse context.
+    pub fn env_begin_aliases(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.env_begin_aliases
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// The closer mirror of [`env_begin_aliases`](Self::env_begin_aliases).
+    pub fn env_end_aliases(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.env_end_aliases
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// Record an opener alias, replacing any existing entry for `name`.
+    pub fn insert_env_begin_alias(&mut self, name: impl Into<SmolStr>, target: impl Into<SmolStr>) {
+        self.env_begin_aliases.insert(name.into(), target.into());
+    }
+
+    /// Record a closer alias, replacing any existing entry for `name`.
+    pub fn insert_env_end_alias(&mut self, name: impl Into<SmolStr>, target: impl Into<SmolStr>) {
+        self.env_end_aliases.insert(name.into(), target.into());
     }
 
     /// The package (file stem) whose merge supplied the current signature of
@@ -407,6 +464,12 @@ impl SignatureDb {
             }
             self.environments.insert(name.clone(), sig.clone());
         }
+        for (name, target) in &other.env_begin_aliases {
+            self.env_begin_aliases.insert(name.clone(), target.clone());
+        }
+        for (name, target) in &other.env_end_aliases {
+            self.env_end_aliases.insert(name.clone(), target.clone());
+        }
     }
 
     /// Like [`merge_from`](Self::merge_from), additionally recording `origin`
@@ -425,6 +488,16 @@ impl SignatureDb {
             self.environment_origins
                 .insert(name.clone(), SmolStr::from(origin));
             self.environments.insert(name.clone(), sig.clone());
+        }
+        // Aliases carry no origin: they are not a signature namespace, so there is
+        // nothing for hover to attribute. A package-defined alias is inert for the
+        // parser (pairing is same-file-pure, decision #7) and therefore never
+        // queried — carried only to keep the two merge paths symmetric.
+        for (name, target) in &other.env_begin_aliases {
+            self.env_begin_aliases.insert(name.clone(), target.clone());
+        }
+        for (name, target) in &other.env_end_aliases {
+            self.env_end_aliases.insert(name.clone(), target.clone());
         }
     }
 }
@@ -460,8 +533,17 @@ impl<'a> Signatures<'a> {
             .or_else(|| cwl().command(name))
     }
 
-    /// The signature of environment `name`: scanned, then built-in, then CWL. See
-    /// [`command`] for why the CWL tier is safe to consult here.
+    /// The signature of environment `name`: scanned, then built-in, then CWL, then
+    /// — last — the file-local *environment alias* map. See [`command`] for why the
+    /// CWL tier is safe to consult here.
+    ///
+    /// The alias arm is what makes a `\bea`-opened `ENVIRONMENT` (whose `BEGIN`
+    /// carries no `NAME_GROUP`, so its name is the head control word) resolve to the
+    /// target's curated behavior. It resolves against [`builtin`] only, for the same
+    /// reason the parser's `is_math_environment` does: an alias declares a
+    /// *spelling*, never a *semantic*, so every behavior flag still comes from
+    /// curated data. Consulting it **last** is load-bearing — a real
+    /// `\newenvironment{bea}` in the same file must win over an alias of that name.
     ///
     /// [`command`]: Self::command
     pub fn environment(&self, name: &str) -> Option<&'a EnvironmentSig> {
@@ -469,6 +551,11 @@ impl<'a> Signatures<'a> {
             .environment(name)
             .or_else(|| builtin().environment(name))
             .or_else(|| cwl().environment(name))
+            .or_else(|| {
+                self.user
+                    .env_begin_alias(name)
+                    .and_then(|target| builtin().environment(target))
+            })
     }
 }
 
@@ -926,6 +1013,9 @@ fn parse(json: &str) -> serde_json::Result<SignatureDb> {
             .collect(),
         command_origins: HashMap::new(),
         environment_origins: HashMap::new(),
+        // Aliases are a per-file scan product only; the curated JSON never carries any.
+        env_begin_aliases: HashMap::new(),
+        env_end_aliases: HashMap::new(),
     })
 }
 

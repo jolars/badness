@@ -1,0 +1,54 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(&format!(\"{ALIAS_DEFS}\\\\bea a&=&b \\\\eea\\n\"))"
+---
+ROOT@0..86
+  PARAGRAPH@0..85
+    COMMAND@0..35
+      CONTROL_WORD@0..11 "\\newcommand"
+      GROUP@11..17
+        L_BRACE@11..12 "{"
+        COMMAND@12..16
+          CONTROL_WORD@12..16 "\\bea"
+        R_BRACE@16..17 "}"
+      GROUP@17..35
+        L_BRACE@17..18 "{"
+        COMMAND@18..34
+          CONTROL_WORD@18..24 "\\begin"
+          GROUP@24..34
+            L_BRACE@24..25 "{"
+            WORD@25..33 "eqnarray"
+            R_BRACE@33..34 "}"
+        R_BRACE@34..35 "}"
+    NEWLINE@35..36 "\n"
+    COMMAND@36..69
+      CONTROL_WORD@36..47 "\\newcommand"
+      GROUP@47..53
+        L_BRACE@47..48 "{"
+        COMMAND@48..52
+          CONTROL_WORD@48..52 "\\eea"
+        R_BRACE@52..53 "}"
+      GROUP@53..69
+        L_BRACE@53..54 "{"
+        COMMAND@54..68
+          CONTROL_WORD@54..58 "\\end"
+          GROUP@58..68
+            L_BRACE@58..59 "{"
+            WORD@59..67 "eqnarray"
+            R_BRACE@67..68 "}"
+        R_BRACE@68..69 "}"
+    NEWLINE@69..70 "\n"
+    ENVIRONMENT@70..85
+      BEGIN@70..74
+        CONTROL_WORD@70..74 "\\bea"
+      MATH@74..81
+        WHITESPACE@74..75 " "
+        WORD@75..76 "a"
+        AMPERSAND@76..77 "&"
+        WORD@77..78 "="
+        AMPERSAND@78..79 "&"
+        WORD@79..80 "b"
+        WHITESPACE@80..81 " "
+      END@81..85
+        CONTROL_WORD@81..85 "\\eea"
+  NEWLINE@85..86 "\n"

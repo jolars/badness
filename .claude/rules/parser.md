@@ -20,8 +20,10 @@ Narrative overview: `docs/src/development/architecture.md` § *The parser*.
   feature needs a losslessness assertion.
 - **The tree is a pure function of the text.** Attachment and grouping read the
   input plus compiled-in data only — never config, package scopes, or scanned
-  definitions (beyond the two-pass verbatim scan). Consulting the signature
-  database during grouping would invalidate every parse on every signature edit.
+  definitions (beyond the two-pass *self-definition* scan: user verbatim commands
+  and environment aliases, both read from the file's own definitions). Consulting
+  the signature database during grouping would invalidate every parse on every
+  signature edit.
 - **Meaning never enters the syntactic layer.** Static lexical facts only.
 - **Errors never abort the parse.** Recovery anchors: `\end{…}`, `\begin`, blank
   line, `}`, `$`, `&`, `\\`. Always make progress; never loop.
@@ -76,6 +78,16 @@ Prefer false negatives; when in doubt a construct stays generic.
   than fails. Demotes silently. One forward scan per live opener; every ordinary
   anchor cuts it short, so real corpora are unaffected — see `TODO.md` for the
   pathological shape.
+- **Environment aliases pair behind a *positive* gate** (#109). A command whose
+  body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
+  be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
+  halves must be defined in the same file. The opener index **must exclude the
+  name being defined** — `\def\bea{…}` leaves the definee at brace depth 0 with
+  `in_def_body` unset, so unfiltered the two definition lines pair with each
+  other. Gate is modelled on `conditional_closer` (locate the closer, bound the
+  walk by it, EOF does not pair), **not** on the `\begin` demotion gate, and has
+  no paragraph anchor. Demotes silently. Not extended to `math_atom` in v1.
+
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.
 - **`.bib` `%` comment-ness is the grammar's call, never the lexer's.** The

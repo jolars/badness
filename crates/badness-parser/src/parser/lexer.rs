@@ -93,13 +93,22 @@ impl From<LatexFlavor> for LexConfig {
     }
 }
 
-/// Per-parse lexer context carrying *user-defined* verbatim constructs — those a
-/// document declares with catcode manipulation (`\@makeother\$`, …), found by scanning
-/// definition bodies ([`crate::semantic::define`]). The lexer consults it (alongside
-/// the built-in DB) to capture a verbatim *command*'s final argument as one `VERB`
-/// token, and a verbatim *environment*'s body as one `VERBATIM_BODY` token. Empty for
-/// the first parse pass; populated for the second when the document defines any (see
-/// `parser::core`).
+/// Per-parse context carrying the facts the parser can only learn by first
+/// scanning the file's own definitions ([`crate::semantic::define`]) — the
+/// sanctioned second pass described in `parser::core`. Empty for the first pass;
+/// populated for the second when the document defines any. Both the lexer and the
+/// grammar read it, so the two can never disagree about what a name is.
+///
+/// It carries two families of fact, each read from static definition surface only
+/// (no macro meaning, per `AGENTS.md` Core decision #1):
+///
+/// 1. *User-defined verbatim constructs* — those a document declares with catcode
+///    manipulation (`\@makeother\$`, …). The lexer consults these (alongside the
+///    built-in DB) to capture a verbatim *command*'s final argument as one `VERB`
+///    token, and a verbatim *environment*'s body as one `VERBATIM_BODY` token.
+/// 2. *Environment aliases* — a command whose definition body is exactly
+///    `\begin{X}`/`\end{X}`, so `\bea … \eea` pairs as an `ENVIRONMENT` of `X`
+///    (issue #109). The grammar consults these; the lexer does not.
 ///
 /// A command entry maps a name (no leading `\`) to its *leading*, non-verbatim
 /// argument shape, the verbatim argument itself being implicit — matching the built-in
@@ -114,17 +123,36 @@ impl From<LatexFlavor> for LexConfig {
 /// the built-in `VERB` (follow-up to issue #53). We read only static definition facts (a
 /// visible `\newcommand`/`\def` with no catcode signal), never macro meaning.
 #[derive(Debug, Default, Clone)]
-pub struct VerbCtx {
+pub struct ParseCtx {
     commands: HashMap<SmolStr, Vec<ArgSpec>>,
     environments: HashMap<SmolStr, Vec<ArgSpec>>,
     suppressed: HashSet<SmolStr>,
+    /// Environment-alias openers: command name (no leading `\`) → target
+    /// environment. See [`crate::semantic::signature::SignatureDb::env_begin_alias`]
+    /// for the admission rules that decide what lands here.
+    begin_aliases: HashMap<SmolStr, SmolStr>,
+    /// The closer mirror of [`begin_aliases`](Self::begin_aliases).
+    end_aliases: HashMap<SmolStr, SmolStr>,
 }
 
-impl VerbCtx {
-    /// Whether the context names no user verbatim constructs *and* no suppressions (the
-    /// common case — the second parse pass is skipped entirely).
+/// The former name of [`ParseCtx`], kept so the published crate's API does not
+/// break. It carries environment aliases as well as verbatim facts now.
+pub type VerbCtx = ParseCtx;
+
+impl ParseCtx {
+    /// Whether the context names nothing at all — no user verbatim constructs, no
+    /// suppressions, and no environment aliases — so the second parse pass can be
+    /// skipped entirely (the common case).
+    ///
+    /// Every map must be accounted for here: a file that defines an alias but no
+    /// verbatim construct would otherwise never reach pass 2, and its aliases would
+    /// silently do nothing.
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && self.environments.is_empty() && self.suppressed.is_empty()
+        self.commands.is_empty()
+            && self.environments.is_empty()
+            && self.suppressed.is_empty()
+            && self.begin_aliases.is_empty()
+            && self.end_aliases.is_empty()
     }
 
     /// Record that `name` is a verbatim-argument command with the given `leading`
@@ -177,6 +205,32 @@ impl VerbCtx {
                 .environment(name)
                 .is_some_and(|env| env.verbatim_body)
     }
+
+    /// Record that command `name` (no leading `\`) opens environment `target`.
+    pub(crate) fn insert_begin_alias(&mut self, name: SmolStr, target: SmolStr) {
+        self.begin_aliases.insert(name, target);
+    }
+
+    /// Record that command `name` closes environment `target`.
+    pub(crate) fn insert_end_alias(&mut self, name: SmolStr, target: SmolStr) {
+        self.end_aliases.insert(name, target);
+    }
+
+    /// The environment `name` opens, if it is a known alias opener.
+    pub(crate) fn begin_alias(&self, name: &str) -> Option<&str> {
+        self.begin_aliases.get(name).map(SmolStr::as_str)
+    }
+
+    /// The environment `name` closes, if it is a known alias closer.
+    pub(crate) fn end_alias(&self, name: &str) -> Option<&str> {
+        self.end_aliases.get(name).map(SmolStr::as_str)
+    }
+
+    /// Whether any environment alias is recorded — the cheap guard the grammar
+    /// checks before building its per-token opener/closer index.
+    pub(crate) fn has_env_aliases(&self) -> bool {
+        !self.begin_aliases.is_empty()
+    }
 }
 
 /// Is `name` a block/display environment — one whose lone occurrence the parser
@@ -210,7 +264,7 @@ pub(crate) fn is_math_environment(name: &str) -> bool {
 /// Covers the LaTeX2e and xparse families the definition scanner recognizes plus the
 /// primitive `\def` family; `\let` is included since it too binds a following name.
 /// Reads only the static keyword, no macro meaning.
-fn is_definition_keyword(text: &str) -> bool {
+pub(crate) fn is_definition_keyword(text: &str) -> bool {
     matches!(
         text,
         "\\newcommand"

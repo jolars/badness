@@ -7,7 +7,7 @@
 
 use rowan::{NodeOrToken, TextRange, TextSize};
 
-use super::{AstNode, AstToken, child, children};
+use super::{AstNode, AstToken, child, child_token, children};
 use crate::ast::tokens::ControlWord;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -296,6 +296,19 @@ impl NameGroup {
     }
 }
 
+/// The environment an alias-delimiter node names: its bare `CONTROL_WORD` with the
+/// leading `\` stripped, when that word is not `keyword` (the spelled-out
+/// `\begin`/`\end`, whose name lives in a `NAME_GROUP` instead).
+fn alias_delimiter_name(node: &SyntaxNode, keyword: &str) -> Option<String> {
+    let head = child_token::<ControlWord>(node)?;
+    let text = head.syntax().text();
+    (text != keyword)
+        .then(|| text.strip_prefix('\\'))
+        .flatten()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
 impl Begin {
     /// The `{name}` group following `\begin`.
     pub fn name_group(&self) -> Option<NameGroup> {
@@ -303,8 +316,22 @@ impl Begin {
     }
 
     /// The environment name (braces dropped), or `None` for a malformed `\begin`.
+    ///
+    /// A `BEGIN` opened by an *environment alias* (`\bea`, issue #109) carries no
+    /// `NAME_GROUP` at all — the whole node is the bare control word — so the name
+    /// falls back to that word with its `\` stripped. Positional and meaning-free,
+    /// per decision #10: it reads the name from wherever the tree puts it and looks
+    /// nothing up. `Signatures::environment` is what maps `bea` on to the target's
+    /// curated behavior.
+    ///
+    /// The fallback is guarded on the head *not* being `\begin`, so the malformed
+    /// `\begin`-without-a-name path (which builds a `BEGIN` with no `NAME_GROUP`)
+    /// keeps reporting `None` rather than suddenly claiming to be named `begin`.
     pub fn name(&self) -> Option<String> {
-        self.name_group()?.text()
+        match self.name_group() {
+            Some(group) => group.text(),
+            None => alias_delimiter_name(&self.syntax, "\\begin"),
+        }
     }
 
     /// The byte range of the environment name inside the `NAME_GROUP`.

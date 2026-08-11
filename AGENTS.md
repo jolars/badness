@@ -146,6 +146,26 @@ provenance.
      genuine typo still reports. Detail in
      `docs/src/development/architecture.md` (§ *Sanctioned lexer modes*).
 
+   - **Environment aliases are inferred from the file's own definitions, never
+     configured.** A command whose replacement body is exactly `\begin{X}` (or
+     `\end{X}`) stands in for that delimiter, so `\bea … \eea` pairs as an
+     `ENVIRONMENT` of `X` (issue #109). Discovery rides the *existing* second
+     parse pass (`parser::core::parse_ctx`), so the tree stays a pure function of
+     that file's text — no config, no directive, no cross-file input, and an alias
+     defined in a sibling `.sty` deliberately does not pair. Admission is narrow
+     because a wrong pairing rewrites layout: the target must be a **curated
+     built-in** environment (an alias declares a *spelling*, never a *semantic*),
+     **non-verbatim** (`\newcommand{\bv}{\begin{verbatim}}` does not work in TeX),
+     and **argument-free** on both sides (attaching from the target's signature
+     would be arity-directed grouping from scanned data, decision #8); **both
+     halves** must be defined in the file. Two things carry the risk: the opener
+     index must exclude the *name being defined* (`\def\bea{…}` leaves the definee
+     at brace depth 0 with `in_def_body` unset, so unfiltered the two definition
+     lines pair with each other), and the gate is **positive** — modelled on
+     `conditional_closer`, not on the `\begin` gate — with no paragraph anchor,
+     since an `itemize` alias body legitimately spans blank lines. Detail in
+     `docs/src/development/architecture.md` (§ *Environment aliases*).
+
    - **Conditionals pair behind a shape gate, and the gate must mirror the walk.**
      `\if…\else…\or…\fi` becomes a `CONDITIONAL` of `CONDITIONAL_BRANCH`es (the
      `\fi` last, positionally) only when the closer is reachable; otherwise the
@@ -222,8 +242,10 @@ provenance.
    static lexical facts.** Greedy attachment (texlab-style) is the only total strategy
    where the text carries no arity protocol; arity is refined by the semantic layer,
    never consulted during attachment—grouping from mutable signature data (config,
-   package scopes, scanned definitions beyond the two-pass verbatim scan) would make
-   the tree a function of inputs other than the text (decision #7). Sanctioned
+   package scopes, scanned definitions beyond the two-pass *self-definition* scan)
+   would make the tree a function of inputs other than the text (decision #7). That
+   scan covers user verbatim commands and environment aliases; both read only the
+   file's own definitions, so the tree stays a pure function of that file's text. Sanctioned
    deviations read static facts only: **`[…]` attachment is shape-gated**—a bracket is
    an argument only when it reads as one, from static shape facts, never meaning—and
    the **expl3 argspec suffix** (the one dialect whose arity rides in the token

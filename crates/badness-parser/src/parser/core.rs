@@ -4,11 +4,13 @@
 //! descent, which emits events + errors) → [`build_tree`] (the green tree).
 //! Syntax errors ride a side channel and never abort the parse.
 
+use std::collections::HashMap;
+
 use rowan::GreenNode;
 use smol_str::SmolStr;
 
 use crate::parser::grammar;
-use crate::parser::lexer::{LatexFlavor, LexConfig, VerbCtx, lex_with};
+use crate::parser::lexer::{LatexFlavor, LexConfig, ParseCtx, lex_with};
 use crate::parser::tree_builder::build_tree;
 use crate::semantic::define::scan_definitions;
 use crate::semantic::signature::builtin;
@@ -63,35 +65,43 @@ pub fn parse(input: &str) -> Parse {
 /// [`Document`](LatexFlavor::Document) wrapper.
 pub fn parse_with_flavor(input: &str, config: impl Into<LexConfig>) -> Parse {
     let config = config.into();
-    let pass1 = parse_with(input, &VerbCtx::default(), config);
-    let ctx = verbatim_ctx(&pass1.syntax());
+    let pass1 = parse_with(input, &ParseCtx::default(), config);
+    let ctx = parse_ctx(&pass1.syntax());
     if ctx.is_empty() {
         return pass1;
     }
     parse_with(input, &ctx, config)
 }
 
-/// Run the lex → grammar → tree-build pipeline once with a fixed verbatim context.
-fn parse_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Parse {
+/// Run the lex → grammar → tree-build pipeline once with a fixed scan context.
+fn parse_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Parse {
     let tokens = lex_with(input, ctx, config);
     let (events, errors) = grammar::parse(&tokens, ctx);
     let green = build_tree(&tokens, &events);
     Parse { green, errors }
 }
 
-/// Scan `root` for user definitions and collect the catcode-verbatim commands and
-/// environments into a lexer [`VerbCtx`]. Each scanned signature's verbatim flag is
-/// already resolved (`scan_definitions`); a command's `args` hold its leading,
-/// non-verbatim arguments and an environment's `args` its (all leading) arguments —
-/// the exact shapes the lexer needs.
+/// Scan `root` for user definitions and collect the facts pass 2 needs into a
+/// [`ParseCtx`]. Each scanned signature's verbatim flag is already resolved
+/// (`scan_definitions`); a command's `args` hold its leading, non-verbatim
+/// arguments and an environment's `args` its (all leading) arguments — the exact
+/// shapes the lexer needs.
 ///
 /// The inverse case also feeds the context: a command the file redefines *non-verbatim*
 /// whose name collides with a built-in braced-verbatim command (`\code`, `\url`, …) is
 /// recorded as *suppressed*, so the local definition shadows the built-in and pass 2
 /// lexes `\code{…}` as an ordinary group (follow-up to issue #53).
-fn verbatim_ctx(root: &SyntaxNode) -> VerbCtx {
+///
+/// Environment aliases (issue #109) are projected the same way, but only when the
+/// alias is *called* somewhere: a `.sty` that defines `\bea`/`\eea` for its users
+/// and never uses them must not pay a second parse for nothing. The occurrence
+/// count is a sound one-sided filter — a definition always contributes at least one
+/// `COMMAND` node, so a called alias always has two or more, and the worst a
+/// `\renewcommand` can do is admit an unused alias (one wasted pass, never a missed
+/// pairing).
+fn parse_ctx(root: &SyntaxNode) -> ParseCtx {
     let db = scan_definitions(root);
-    let mut ctx = VerbCtx::default();
+    let mut ctx = ParseCtx::default();
     for name in db.command_names() {
         match db.command(name) {
             Some(sig) if sig.verbatim => ctx.insert(SmolStr::new(name), sig.args.to_vec()),
@@ -108,7 +118,41 @@ fn verbatim_ctx(root: &SyntaxNode) -> VerbCtx {
             ctx.insert_environment(SmolStr::new(name), sig.args.to_vec());
         }
     }
+    // Gated on there being any alias at all: this is an extra tree walk, and the
+    // overwhelmingly common case is a file with no aliases, which must not pay for
+    // the feature.
+    if db.env_begin_aliases().next().is_some() {
+        let called = command_call_counts(root);
+        let is_called = |name: &str| called.get(name).is_some_and(|n| *n >= 2);
+        for (name, target) in db.env_begin_aliases() {
+            if is_called(name) {
+                ctx.insert_begin_alias(SmolStr::new(name), SmolStr::new(target));
+            }
+        }
+        for (name, target) in db.env_end_aliases() {
+            if is_called(name) {
+                ctx.insert_end_alias(SmolStr::new(name), SmolStr::new(target));
+            }
+        }
+    }
     ctx
+}
+
+/// How many `COMMAND` nodes name each control word in `root`. Used only for the
+/// alias "is it called anywhere" filter above, so it counts occurrences rather
+/// than distinguishing definitions from calls — see [`parse_ctx`] for why that
+/// one-sided approximation is sound.
+fn command_call_counts(root: &SyntaxNode) -> HashMap<SmolStr, usize> {
+    let mut counts: HashMap<SmolStr, usize> = HashMap::new();
+    for node in root
+        .descendants()
+        .filter(|n| n.kind() == crate::syntax::SyntaxKind::COMMAND)
+    {
+        if let Some(name) = crate::ast::command_name(&node) {
+            *counts.entry(SmolStr::new(name)).or_default() += 1;
+        }
+    }
+    counts
 }
 
 /// Parse `input` and render the CST back to source. By the losslessness

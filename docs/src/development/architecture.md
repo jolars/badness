@@ -227,16 +227,67 @@ stays generic. The catalog:
   open math.
 - **Signatures.** `\newcommand` and xparse signatures are extracted into the
   semantic database, never executed.
+- **Environment aliases.** A command whose replacement body is exactly
+  `\begin{X}` (or `\end{X}`) stands in for that delimiter, so `\bea … \eea`
+  pairs as an `ENVIRONMENT` of `X`. See below.
 
-Three shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
+Four shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
 matching closer is reachable before an unbalanced `}`, a paragraph break, or
 EOF, because macro code passes the delimiters around as data at least as often
 as prose uses them. Environment pairing is gated on brace structure rather than
 a command set: an environment can never outlive the brace group its `\begin`
 opened in, since braces are catcode structure while `\begin` and `\end` are only
-macros. And a conditional pairs only when its `\fi` is reachable, as below. All
-three degrade to a plain token with no diagnostic, because parser diagnostics
-gate the formatter and so must be high precision.
+macros. A conditional pairs only when its `\fi` is reachable, as below. And an
+environment alias pairs only when its closer is positively located. All four
+degrade to a plain token with no diagnostic, because parser diagnostics gate the
+formatter and so must be high precision.
+
+### Environment aliases
+
+`\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`
+makes `\bea … \eea` a spelling of `\begin{eqnarray} … \end{eqnarray}`, and
+badness learns it by scanning the file's own definitions (issue #109). This is
+the *second pass* that already exists for user-defined verbatim commands, so the
+tree stays a pure function of that file's text: no config, no directive, no
+cross-file input. An alias defined in a sibling `.sty` deliberately does **not**
+pair — package scope reaches the formatter, never the parse.
+
+Admission is narrow, because a wrong pairing rewrites layout. The target must be
+a **curated built-in** environment, so an alias declares a *spelling* and never
+a *semantic* — every behavior flag still comes from curated data, exactly as
+`is_math_environment` requires. It must be **non-verbatim**, since
+`\newcommand{\bv}{\begin{verbatim}}` does not work in TeX at all (the body is
+tokenized before the macro expands). It must take **no arguments**, and so must
+the alias, since the head consumes none and attaching them from the target's
+signature would be arity-directed grouping from scanned data. And **both
+halves** must be defined in the file, since a lone opener can never pair anyway.
+
+Two details carry most of the risk. First, the opener index must exclude the
+*name being defined*: `command()` sets `in_def_body` after a `\def` head only
+when the definee is a control symbol, so in `\def\bea{\begin{eqnarray}}` the
+definee reaches the dispatch as an ordinary command at brace depth 0 — and
+unfiltered, the two *definition lines* pair with each other. The braced
+`\newcommand{\bea}{…}` form is covered by `in_def_body` instead. Second, the
+gate is **positive**, modelled on the conditional's `alias_closer` rather than
+on the `\begin` gate: an alias opener has no `{name}` corroborating it and no
+unclosed-environment diagnostic worth preserving, so it must be refused unless
+its closer is located, and the walk is then bounded by that index. Unlike the
+conditional gate there is deliberately no paragraph-break anchor — an `itemize`
+alias legitimately spans blank lines, and reading one would key layout on a
+trivia predicate the formatter does not preserve.
+
+The node is the ordinary `ENVIRONMENT > BEGIN … END`, with the delimiters
+holding a bare `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, so every
+consumer downstream works unchanged. `ast::Begin::name` falls back to that
+control word, and `Signatures::environment` resolves it — last, after the real
+tiers, so a genuine `\newenvironment{bea}` still wins. `name_range()` stays
+`None`, which is what makes the name-rewriting consumers (rename,
+change-environment, the `obsolete-environment` fix) decline cleanly rather than
+emit a half-edit.
+
+Accepted false negatives: `\let` chains, aliases used inside math (`math_atom`
+pairs environments ungated, so an alias arm there would be strictly worse), and
+argument-taking aliases.
 
 ### The conditional gate
 

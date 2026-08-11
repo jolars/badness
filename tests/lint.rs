@@ -617,6 +617,66 @@ fn undefined_ref_fires_in_a_closed_rooted_document() {
 }
 
 #[test]
+fn a_subfile_shares_its_parents_label_namespace() {
+    // Issue #112. A `subfiles` subfile is a full document of its own — its own
+    // `\documentclass`, its own `\begin{document}` — so it is a *closed, rooted*
+    // namespace and both gates pass. Without the class-option edge it and the
+    // main document never meet, and all three cross-file label lints misfire:
+    // the subfile's `\ref` reads as undefined, and the parent's `\label` as
+    // unreferenced. Note the main document does not `\subfile` the chapter here;
+    // the class option is carrying the whole connection.
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\usepackage{subfiles}\n\\begin{document}\n\
+             \\section{Main}\\label{sec:main}\n\\end{document}\n",
+        ),
+        (
+            "chapter.tex",
+            "\\documentclass[main.tex]{subfiles}\n\\begin{document}\n\
+             See~\\ref{sec:main}.\n\\end{document}\n",
+        ),
+    ]);
+    assert!(
+        findings.is_empty(),
+        "expected clean subfiles project, got: {findings:?}"
+    );
+}
+
+#[test]
+fn a_subfile_whose_parent_is_out_of_view_is_silent() {
+    // The declared parent is not an analyzed member, so the namespace is open
+    // and neither gate may fire — the label really might live in that file. This
+    // is also what makes linting a single subfile on its own quiet.
+    let findings = lint_project(&[(
+        "chapter.tex",
+        "\\documentclass[../main.tex]{subfiles}\n\\begin{document}\n\
+         See~\\ref{sec:main}.\\label{sec:here}\n\\end{document}\n",
+    )]);
+    assert!(findings.is_empty(), "expected silence, got: {findings:?}");
+}
+
+#[test]
+fn a_resolved_subfiles_namespace_still_reports_a_real_typo() {
+    // The merge must not degenerate into blanket suppression: with the parent in
+    // view the namespace is closed again, so a genuinely dangling `\ref` fires.
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\section{Main}\\label{sec:main}\\ref{sec:main}\n\\end{document}\n",
+        ),
+        (
+            "chapter.tex",
+            "\\documentclass[main.tex]{subfiles}\n\\begin{document}\n\
+             See~\\ref{sec:mian}.\n\\end{document}\n",
+        ),
+    ]);
+    assert_eq!(rules_only(&findings), vec!["undefined-ref"]);
+    assert!(findings[0].2.contains("sec:mian"));
+}
+
+#[test]
 fn undefined_ref_is_silent_for_a_bare_fragment() {
     // No `\documentclass`: the label may live in an unanalyzed main document, so
     // the ref is not flagged.

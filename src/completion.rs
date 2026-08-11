@@ -82,7 +82,7 @@ pub enum CompletionContext {
 pub enum FileArgKind {
     /// `\includegraphics` — raster/vector image assets.
     Graphics,
-    /// `\input` / `\include` / `\subfile` — `.tex` source files.
+    /// `\input` / `\include` / `\subfile` / `\subfileinclude` — `.tex` source files.
     TexSource,
     /// `\bibliography` / `\addbibresource` — `.bib` databases.
     Bib,
@@ -350,7 +350,7 @@ fn package_arg(name: &str) -> Option<FileArgKind> {
 fn file_arg(name: &str) -> Option<(FileArgKind, usize)> {
     Some(match name {
         "includegraphics" => (FileArgKind::Graphics, 0),
-        "input" | "include" | "subfile" => (FileArgKind::TexSource, 0),
+        "input" | "include" | "subfile" | "subfileinclude" => (FileArgKind::TexSource, 0),
         "import" | "subimport" => (FileArgKind::TexSource, 1),
         "bibliography" | "addbibresource" => (FileArgKind::Bib, 0),
         _ => return None,

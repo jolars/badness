@@ -114,12 +114,23 @@ impl IncludeGraph {
             edges.insert(file.path.clone(), outgoing);
         }
 
+        // The document tree, for reachability and cycle detection. A subfile's
+        // `\documentclass[parent]{subfiles}` edge is deliberately excluded: it
+        // points *up*, at the preamble the subfile borrows, so pairing it with
+        // the parent's own `\subfile{…}` would read as an inclusion cycle when
+        // it is in fact the package's normal arrangement. Namespace membership
+        // (`outgoing`/`included_by`, both undirected) still sees it — merging
+        // the two files is the whole point of the edge.
         let adj: HashMap<PathBuf, Vec<PathBuf>> = edges
             .iter()
             .map(|(from, outgoing)| {
                 (
                     from.clone(),
-                    outgoing.iter().map(|e| e.to.clone()).collect(),
+                    outgoing
+                        .iter()
+                        .filter(|e| e.kind != IncludeKind::SubFilesParent)
+                        .map(|e| e.to.clone())
+                        .collect(),
                 )
             })
             .collect();
@@ -661,6 +672,32 @@ mod tests {
         let files = vec![facts("/p/a.tex", &[(IncludeKind::Input, "/p/a.tex")])];
         let g = IncludeGraph::build(&files, None);
         assert_eq!(g.cycles(), &[vec![PathBuf::from("/p/a.tex")]]);
+    }
+
+    #[test]
+    fn a_subfiles_pair_is_one_namespace_but_not_a_cycle() {
+        // The normal `subfiles` arrangement: the main document `\subfile`s the
+        // chapter, and the chapter names the main document as its parent.
+        let files = vec![
+            facts(
+                "/p/chap.tex",
+                &[(IncludeKind::SubFilesParent, "/p/main.tex")],
+            ),
+            facts("/p/main.tex", &[(IncludeKind::SubFile, "/p/chap.tex")]),
+        ];
+        let g = IncludeGraph::build(&files, None);
+        // Both directions resolve, so the namespace union-find merges the two...
+        assert_eq!(
+            g.included_by(Path::new("/p/main.tex")),
+            &[PathBuf::from("/p/chap.tex")]
+        );
+        assert_eq!(
+            g.included_by(Path::new("/p/chap.tex")),
+            &[PathBuf::from("/p/main.tex")]
+        );
+        // ...but the up-edge is not part of the document tree, so this is not a
+        // cycle a future inclusion-cycle lint should ever flag.
+        assert!(g.cycles().is_empty(), "got cycles: {:?}", g.cycles());
     }
 
     #[test]

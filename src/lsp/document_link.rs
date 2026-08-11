@@ -6,12 +6,15 @@
 //! deliberately leaves out — every command whose literal argument names a file on
 //! disk:
 //!
-//! - **Includes** — `\input`/`\include`/`\subfile` (`{file}`, default `.tex`) and
-//!   `\import`/`\subimport` (`{dir}{file}`, joined; the `{file}` argument is the
-//!   link).
+//! - **Includes** — `\input`/`\include`/`\subfile`/`\subfileinclude` (`{file}`,
+//!   default `.tex`) and `\import`/`\subimport` (`{dir}{file}`, joined; the
+//!   `{file}` argument is the link).
 //! - **Packages/classes** — `\usepackage`/`\RequirePackage` (`.sty`,
 //!   comma-list) and `\documentclass`/`\LoadClass`/`\LoadClassWithOptions`
-//!   (`.cls`), each with a `.dtx` literate-source fallback.
+//!   (`.cls`), each with a `.dtx` literate-source fallback. A `subfiles` class
+//!   declaration links *twice*: the class name, plus the parent document named
+//!   in its `[…]` option (`\documentclass[../main.tex]{subfiles}`), which is the
+//!   same argument [`crate::project::include`] turns into a graph edge.
 //! - **Bibliography** — `\bibliography` (`.bib`, comma-list) and
 //!   `\addbibresource` (`.bib`).
 //! - **Graphics** — `\includegraphics`, whose extension is guessed against the
@@ -36,6 +39,7 @@ use rowan::{TextRange, TextSize};
 
 use crate::ast::{command_name, nth_group_inner, nth_group_text};
 use crate::completion::FileArgKind;
+use crate::project::include::subfiles_parent_arg;
 use crate::project::package::dtx_source_of;
 use crate::project::texmf::TexmfIndex;
 use crate::syntax::{SyntaxKind, SyntaxNode};
@@ -73,12 +77,39 @@ pub(crate) fn document_links(
         let Some(name) = command_name(&command) else {
             continue;
         };
+        if name == "documentclass" {
+            collect_subfiles_parent(&command, base_dir, texmf, &mut links);
+        }
         let Some(class) = classify(&name) else {
             continue;
         };
         collect_command(&command, class, base_dir, texmf, &mut links);
     }
     links
+}
+
+/// Push the parent-document link of a `subfiles` class declaration, if any.
+///
+/// `\documentclass` is the one command here that names two files, and the
+/// one-[`LinkClass`]-per-name dispatch cannot express that — hence the separate
+/// pass. The gate and the span both come from
+/// [`subfiles_parent_arg`], the same helper the include-graph edge extractor
+/// uses, so a path that is clickable is exactly a path that is an edge.
+fn collect_subfiles_parent(
+    command: &SyntaxNode,
+    base_dir: Option<&Path>,
+    texmf: &TexmfIndex,
+    out: &mut Vec<LinkTarget>,
+) {
+    let Some(arg) = subfiles_parent_arg(command) else {
+        return;
+    };
+    if let Some(target) = resolve_existing(&arg.text, &["tex"], false, base_dir, texmf) {
+        out.push(LinkTarget {
+            range: arg.range,
+            target,
+        });
+    }
 }
 
 /// How a recognized command's argument(s) name a file.
@@ -107,7 +138,7 @@ enum LinkClass {
 /// `completion::file_arg`.
 fn classify(name: &str) -> Option<LinkClass> {
     Some(match name {
-        "input" | "include" | "subfile" => LinkClass::Single {
+        "input" | "include" | "subfile" | "subfileinclude" => LinkClass::Single {
             group: 0,
             ext: "tex",
             dtx: false,
@@ -354,6 +385,41 @@ mod tests {
         let got = links(src, dir.path());
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].target, dir.path().join("myclass.dtx"));
+    }
+
+    #[test]
+    fn subfiles_class_option_links_the_parent_document() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.tex"), "").unwrap();
+
+        let src = "\\documentclass[main.tex]{subfiles}\n";
+        let got = links(src, dir.path());
+        // The class itself has no local `subfiles.cls`, so the parent is the
+        // only link.
+        assert_eq!(got.len(), 1);
+        assert_eq!(underlined(src, &got[0]), "main.tex");
+        assert_eq!(got[0].target, dir.path().join("main.tex"));
+    }
+
+    #[test]
+    fn ordinary_class_options_are_never_links() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file named after an option would be the trap the class-name gate exists
+        // to avoid.
+        std::fs::write(dir.path().join("a4paper.tex"), "").unwrap();
+
+        let got = links("\\documentclass[a4paper]{article}\n", dir.path());
+        assert!(got.is_empty(), "got links: {got:?}");
+    }
+
+    #[test]
+    fn subfileinclude_links_like_subfile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("one.tex"), "").unwrap();
+
+        let got = links("\\subfileinclude{one}\n", dir.path());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].target, dir.path().join("one.tex"));
     }
 
     #[test]

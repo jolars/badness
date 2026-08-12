@@ -995,14 +995,13 @@ sources below are missing.
 
       **Measured, and it corrects the attribution above.** Gate scan work is
       now exactly linear (5 ticks per opener: 2500/5000/10000 at n =
-      500/1000/2000). Parse-side wall clock on the escaping shape (`{`, N
-      `\begin{itemize}`, one `}`) at 2000/4000/8000 went 36/114/407ms →
-      19/20/34ms, quadratic to flat. But `format --check` on the same files
-      only went 79/196/512ms → 46/133/462ms, because **a second quadratic
-      lives downstream in the formatter**: `lint` (lex, parse, lint) is
-      linear at 19/20/34ms while `format --check` is 42/135/455ms on the
-      identical input. The 69/230/984ms figures in the C2 preamble are
-      end-to-end and so were never the gate's alone. New item below.
+      500/1000/2000). Timing `parser::parse` alone on the escaping shape
+      (`{`, N `\begin{itemize}`, one `}`) at 1000/2000/4000: **6.6/25.1/99.3ms
+      → 0.7/1.2/3.5ms**, quadratic to linear, ~28x at n = 4000. The
+      69/230/984ms figures in the C2 preamble are `format --check` end to end
+      and were never the gate's alone; nor is `badness lint` a stand-in for
+      the parser, since it runs every linter rule. Measure `parse` directly
+      when judging a parser change. New item below for the rest.
     - [ ] **C2.3 — `delim_math_closes`, then `dollar_closes`.** Both count
       environments at *any* brace depth, unlike the conditional and `\begin`
       gates: a driver knob, an explicit divergence. `dollar` is the
@@ -1054,16 +1053,21 @@ sources below are missing.
     stepping stone to the map; C2.0 keeps that order by *extracting* the
     driver from C1's working batch rather than authoring a
     lowest-common-denominator scan.
-- [ ] **The formatter is superlinear in a group's child count** (found while
-  measuring C2.2, and it is the *other* half of every "quadratic gate" number
-  recorded above). On `{`, N `\begin{itemize}`, `}` — one brace group with N
-  demoted commands in it — `badness lint` (lex, parse, lint) is flat at
-  19/20/34ms for N = 2000/4000/8000 while `badness format --check` on the same
-  files is 42/135/455ms, growing ~3.4x per doubling. The parser is no longer
-  implicated, so it is lowering or printing. Profile it (`task bench:profile`
-  takes `BADNESS_BENCH_DOC`) before guessing; the shape is degenerate, but a
-  real `.sty` with a few thousand siblings in one group is not far off, and the
-  gate work this roadmap has been shaving is now the smaller term.
+- [ ] **The formatter *and the linter* are superlinear where the parser is
+  now linear** (found while measuring C2.2/C2.3, and it is the larger half of
+  every "quadratic gate" number this roadmap has been quoting). Two shapes,
+  with `parse` timed directly against the CLI on the same input:
+  - `{`, N `\begin{itemize}`, `}` at N = 4000: `parse` 3.5ms,
+    `format --check` 133ms.
+  - N `\[` with one `\]` at EOF at N = 4000: `parse` **0.4ms**, `lint`
+    **287ms** (93ms at N = 2000, so ~3.1x per doubling).
+
+  The parser is no longer implicated in either. The second one is the louder
+  finding: a linter rule is quadratic on math-delimiter-heavy input. Profile
+  before guessing (`task bench:profile` takes `BADNESS_BENCH_DOC`). The shapes
+  are degenerate, but the gate work this roadmap has been shaving is now the
+  smaller term by two orders of magnitude, which is worth knowing before
+  spending more on C2.
 - [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
   Everything today is curated corpus + snapshots; nothing exercises
   `PARSER_STEP_LIMIT` or the recovery paths with arbitrary bytes, and

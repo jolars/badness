@@ -123,9 +123,10 @@ Prefer false negatives; when in doubt a construct stays generic.
   a later `\fi` must still be consumed by the refuted entry's slot
   (`a_refuted_nested_opener_still_consumes_a_fi`). The batch is a **shared
   driver** (`Parser::gate_batch`), not this gate's own machinery: it owns the
-  bookkeeping every gate repeats and takes a `GatePolicy` per gate. Add a hook
-  when a migrating gate needs one (container-stack C2); never average two gates'
-  policies into the loop.
+  bookkeeping every gate repeats and takes a `GatePolicy` per gate. All eight
+  gates run on it (container-stack C2 is complete); never average two gates'
+  policies into the loop — where two read the same token differently, add a
+  named axis with its reason, and say whether it was *chosen* or *preserved*.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
@@ -161,7 +162,11 @@ Prefer false negatives; when in doubt a construct stays generic.
   `environment_escapes_group` (every `\begin{…}` carries a `}` in its own name
   group, so the index sits near EOF; batched in C2.2). Scan work is metered
   (`Parser::scan_work`) and pinned linear by the tests in `grammar.rs` — extend
-  them when touching a gate.
+  them when touching a gate. Two shapes stay quadratic **by design** and say so
+  in their tests rather than pretending otherwise: a `${` per line (the brace
+  depth ratchets upward, so no later opener sits at the seed's level) and a
+  `macrocode` chunk of `\cmd[` openers whose only `]` is past the frame (that
+  gate is single-entry by policy).
 
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.
@@ -179,7 +184,28 @@ Prefer false negatives; when in doubt a construct stays generic.
   the starred-variant fold.
 - **A bracket attaches only when it reads as an argument.** In math: directly
   abutting with its `]` reachable before the math ends, net of intervening
-  claims. In text: mirroring the `$` gate.
+  claims. In text: mirroring the `$` gate. All three run on the batch driver
+  (container-stack C2.5) as `TextBracketGate`/`MathBracketGate`/
+  `MacrocodeBracketGate`. The `]`-claim countdown of #55 **is** the driver's
+  nested-opener stack once an opener is a command-abutting `[` — no new nesting
+  model — and both of the family's anchors are depth-**blind**
+  (`EnvAnchor::Refutes`, `ParagraphAnchor::AnyDepth`) because `optional` bails
+  wherever the cursor stands. A `$` in math reads the enclosing math's *flavor*
+  (`dollar_anchor`, the one runtime policy): inside `\[…\]` it opens a
+  **transparent** region where the entries' own brackets stop counting; inside
+  `$…$` it is that math's closer and refuses (#99). Flavor is walk state, so it
+  rides `WalkKey`.
+- **Three bracket divergences are preserved, not chosen** — flipping one is its
+  own commit with its own test. The in-math gate's environment anchor ignores
+  `in_macro_code` and its braces ignore `plain_braces`; both only ever *decline*
+  to attach, and the second is arguably the faithful reading, since `optional`
+  bails at any `R_BRACE` without consulting `plain_braces` (so its two siblings
+  are the loose ones: an attached optional holding a chunk-plain `}` still
+  reports "unclosed `[`"). The `macrocode` gate skips only whitespace in its
+  paragraph run, so a guard line **breaks** it where every other gate floats it
+  — the `saw_blank_line_outside_guards` reading of #71, corpus-reachable and
+  load-bearing (`rotating.dtx`'s `\ProvidesPackage` date optional spans three
+  guard lines in one chunk; `a_guard_line_does_not_part_a_macrocode_optional`).
 - **Arity-directed expl3 attachment is a recorded candidate, deliberately
   unimplemented.** Do not implement without answering the three open questions
   in `TODO.md` (mixed-shape CST, false-positive blast radius moving into the

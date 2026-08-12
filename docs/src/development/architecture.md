@@ -297,6 +297,48 @@ math like `$\left#2\right#4$` lives (issue #95). On the driver that is two
 predicates in a policy; as a hand-written scan it was a comment nothing
 enforced.
 
+The **bracket family** closes the migration: three gates (`TextBracketGate`,
+`MathBracketGate`, `MacrocodeBracketGate`) asking whether a `[`'s `]` is
+reachable before the token that would make the `optional` walk bail, in text, in
+math, and inside a `macrocode` chunk. Their nesting turned out to need no new
+model. A per-opener bracket scan counts the `]`s *owed* to the command-abutting
+`[`s it passes — such a `[` is itself argument-shaped and will claim the next
+`]` when parsed, so that `]` cannot also satisfy the outer one (issue #55) — and
+that claim countdown **is** the driver's nested-opener stack once an opener is
+defined as a command-abutting `[`, since closer matching is LIFO either way.
+
+What is new is that both of the family's anchors are depth-**blind**: a
+`\begin`/`\end` refuses rather than counts (an optional never legitimately spans
+an environment, so either half means a runaway `[`), and it and the paragraph
+break fire at any brace depth. Both follow from the walk they guard: `optional`
+bails wherever the cursor stands, and a gate stricter *or* looser than its parse
+is a bug.
+
+Two things are the in-math gate's own. A `$` there is read from the enclosing
+math's *flavor*, which is walk state and so rides the batch's memo key: inside
+`\[…\]` a `$` opens a genuine nested inline region, so a balanced `$…$` in the
+bracket is **transparent** — the entries' own openers and closers stop counting
+until the matching `$`, and everything else reads on — while inside `$…$` TeX
+cannot nest one, so the first `$` at the bracket's own level is that math's
+closer and refuses. And the gate is stricter than the `optional` bail in two
+preserved respects: its `\begin`/`\end` anchor carries no `in_macro_code`
+filter, and a chunk-unmatched brace is group structure to it rather than a plain
+token. Both only ever decline to attach. The second is arguably the *faithful*
+reading — `optional` itself bails at any `R_BRACE` without consulting
+`plain_braces`, so its two siblings, which do consult it, are the loose ones —
+but unifying either way moves verdicts and is its own commit.
+
+The `macrocode` gate diverges once more, and the corpora care: it skips only
+whitespace in its paragraph run, so a docstrip guard line **breaks** the run
+where every other gate floats it. That is the `saw_blank_line_outside_guards`
+reading (docstrip *deletes* a guard-only line, so it does not part what
+surrounds it, issue #71), and `rotating.dtx` depends on it — the date optional
+of its `\ProvidesPackage` runs over three guard lines inside one chunk, and
+floating them would read the newlines around a guard-only line as a blank line
+and drop the argument. It is also the one bracket gate the batch cannot make
+linear: single-entry by policy, so a chunk of `\cmd[` openers whose only `]`
+sits past the frame still scans to the frame per opener.
+
 ### Environment aliases
 
 `\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`
@@ -457,7 +499,11 @@ The batch is not the conditional gate's own machinery. It is a **driver**
 metering, and the walk-state memo — while each gate supplies a `GatePolicy`
 naming its own bound, its openers and closers, and whether a blank line anchors
 it. The divergences between gates are deliberate, so they stay visible as policy
-methods rather than being averaged into the loop.
+methods rather than being averaged into the loop. With the bracket family
+migrated the driver serves all eight gates, and the policy surface is what the
+migration bought: every place two gates read the same token differently is a
+named axis with a documented reason, where before it was eight hand
+transcriptions in which a fix to one copy did not propagate (issue #95).
 
 Two anchors differ from the environment gate on purpose. Running out of file
 demotes here, where the environment gate keeps the node so it can still report

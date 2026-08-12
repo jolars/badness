@@ -1370,6 +1370,100 @@ fn math_bracket_with_own_closer_still_attaches_past_interval() {
     );
 }
 
+// --- the batched bracket family (container stack C2.5) -----------------------
+
+/// Whether each `[` in `src`, in source order, attaches as an `OPTIONAL`.
+fn bracket_attachments(src: &str) -> Vec<bool> {
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src, "losslessness");
+    parsed
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| t.kind() == SyntaxKind::L_BRACKET)
+        .map(|t| t.parent().is_some_and(|p| p.kind() == SyntaxKind::OPTIONAL))
+        .collect()
+}
+
+#[test]
+fn nested_bracket_claims_settle_innermost_first() {
+    // The claim countdown of issue #55, seen from the batch that now computes
+    // it: one scan settles every command-abutting `[` in the frame, and closer
+    // matching is LIFO, so the lone `]` belongs to the innermost opener and the
+    // two around it stay ordinary tokens. The pre-batch code asked each opener
+    // in turn and had to arrive at the same three verdicts.
+    assert_eq!(
+        bracket_attachments("\\a[x\n\\b[y\n\\c[z\n]\n"),
+        [false, false, true]
+    );
+}
+
+#[test]
+fn a_bracket_refuses_an_anchor_inside_a_group() {
+    // Both the environment anchor and the paragraph break are depth-*blind* for
+    // this family (`ParagraphAnchor::AnyDepth`, `ANCHORS_AT_ANY_DEPTH`), because
+    // the `optional` walk they guard is: it bails wherever the cursor stands, so
+    // a gate that read either only at the bracket's own brace level would attach
+    // an optional the walk then reports unclosed.
+    assert_eq!(
+        bracket_attachments("\\cmd[{\\begin{center}a\\end{center}} x]"),
+        [false]
+    );
+    assert_eq!(bracket_attachments("\\cmd[{ x\n\ny} ]\n"), [false]);
+}
+
+#[test]
+fn a_math_bracket_anchors_on_an_environment_inside_macro_code() {
+    // In a definition body `\begin`/`\end` are plain commands (issues #45/#60),
+    // so the text-mode gate ignores them and the bracket attaches.
+    assert_eq!(
+        bracket_attachments(r"\newcommand{\x}{\cmd[a \begin{center} b]}"),
+        [true]
+    );
+    // The same body inside math refuses: the in-math gate's environment anchor
+    // carries no `in_macro_code` filter (`ENV_ANCHOR_IN_MACRO_CODE`), so it is
+    // stricter there than the `optional` bail it mirrors. Preserved from the
+    // pre-batch scan, in the direction that only ever declines to attach.
+    assert_eq!(
+        bracket_attachments(r"\newcommand{\x}{$\cmd[a \begin{center} b]$}"),
+        [false]
+    );
+}
+
+#[test]
+fn a_guard_line_does_not_part_a_macrocode_optional() {
+    // `rotating.dtx`: `\ProvidesPackage`'s date optional runs over several
+    // docstrip guard lines inside one `macrocode` chunk. Docstrip *deletes* a
+    // guard-only line when it strips the file, so it does not part what
+    // surrounds it (issue #71) — and this gate is the one that reads it that
+    // way, skipping only whitespace in its paragraph run
+    // (`DOC_TRIVIA_FLOATS`). Floating the guard like every other gate does
+    // would make the two newlines around it a blank line and drop the argument.
+    let src = concat!(
+        "%    \\begin{macrocode}\n",
+        "\\ProvidesPackage{rot}%\n",
+        "    [2026 v1\n",
+        "%<*dtx>\n",
+        "  more%\n",
+        "%</dtx>\n",
+        "        ]\n",
+        "%    \\end{macrocode}\n",
+    );
+    assert_eq!(bracket_attachments(src), [true]);
+    // A real blank line in the same place still refuses, so the run is read,
+    // not ignored.
+    let src = concat!(
+        "%    \\begin{macrocode}\n",
+        "\\ProvidesPackage{rot}%\n",
+        "    [2026 v1\n",
+        "\n",
+        "  more%\n",
+        "        ]\n",
+        "%    \\end{macrocode}\n",
+    );
+    assert_eq!(bracket_attachments(src), [false]);
+}
+
 // --- block-vs-inline paragraph wrapping --------------------------------------
 
 /// The kinds of the root's direct child *nodes* (trivia tokens are skipped, as

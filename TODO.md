@@ -915,9 +915,10 @@ sources below are missing.
     openers-with-one-`\fi`-at-EOF shape, which defeats the C0 bound, is now
     one linear pass (~34ms for 8000 openers end-to-end), pinned by
     `conditional_batch_keeps_shared_frame_openers_linear`.
-  - [ ] **C2 — migrate the remaining gates onto one batch driver**, easiest
-    policy first: alias, then `environment_escapes_group`, then the math and
-    bracket family. This item's original wording ("each migration deletes one
+  - [x] **C2 — migrate the remaining gates onto one batch driver** (done in
+    five stages, C2.1–C2.5; all eight gates now run on `Parser::gate_batch`),
+    easiest policy first: alias, then `environment_escapes_group`, then the
+    math and bracket family. This item's original wording ("each migration deletes one
     transcribed scan and its copy of the bookkeeping") belongs to the
     `new()`-time map C1 abandoned. Every remaining gate reads walk state as
     well — `in_def_body`, `group_depth`, `plain_braces`, `macrocode_end`, and
@@ -1147,22 +1148,76 @@ sources below are missing.
       `live` pointing past `pending` (the interleaved closer arm pops its entry
       first, and the corpus pass caught the panic at once), and the reference
       copy must not tick `scan_work` or it hides the linearity the pin measures.
-    - [ ] **C2.5 — the bracket family** (`bracket_closes_in_text`,
-      `bracket_closes_before_math_end`,
-      `bracket_closes_before_macrocode_end`). The `abuts_command` claim
-      countdown *is* the driver's nested-opener stack once an "opener" is
-      defined as a command-abutting `[`. Two things to settle first:
-      `bracket_closes_before_math_end` must carry `math_dollar.last()` in its
-      memo key, and it is the only bracket gate that does **not** filter
-      `plain_braces` on `L_BRACE`/`R_BRACE` — decide whether that is
-      deliberate or a latent macrocode bug before preserving it into the
-      driver.
+    - [x] **C2.5 — the bracket family** (done). The `abuts_command` claim
+      countdown *was* the driver's nested-opener stack, exactly as predicted —
+      an opener is a `[` whose previous token is a control word or symbol
+      (the running flag, which every other kind cleared, is that test one token
+      back), and closer matching is LIFO either way, so the family needed **no
+      new nesting model**. Both pre-questions settled:
 
-      The driver change these three were to share — asking
-      `opens_at`/`closes_at` for any token at the entries' own level rather
-      than only for a `CONTROL_WORD` — **landed in C2.3**, which needed it for
-      its own `DOLLAR` and `CONTROL_SYMBOL` closers. An `R_BRACKET` closer is
-      already served.
+      - **The memo key carries the flavor.** `WalkKey` gained
+        `enclosing_math_is_dollar`; nothing else in the key moves when it does,
+        since entering a `$` inside `\[…\]` changes no brace, group, or frame
+        state.
+      - **The missing `plain_braces` filter is not a latent macrocode bug — it
+        is arguably the *faithful* reading.** `Parser::optional` bails at any
+        `R_BRACE` without consulting `plain_braces`, so the in-math gate mirrors
+        the walk and its two siblings are the loose ones: an optional they let
+        attach over a chunk-plain `}` still reports "unclosed `[`" and blocks
+        the file for the formatter. It is also one-directional (a chunk-unmatched
+        `}` can only occur at chunk brace depth 0, so the scan meets it at its
+        own depth 0 and refuses, while a chunk-unmatched `{` only adds depth), so
+        the unfiltered reading refuses a bracket the filtered one attaches and
+        never the reverse. Preserved as `PLAIN_BRACES_ARE_TOKENS`; unifying is
+        its own commit, and the pre-existing gate/walk looseness above is the
+        thing to fix first.
+
+      What the family did need is **two anchors read depth-blind**
+      (`EnvAnchor::Refutes`, `ParagraphAnchor::AnyDepth`), because `optional`'s
+      own bail is depth-blind: it bails wherever the cursor stands, so a gate
+      reading either at the bracket's own brace level would attach an optional
+      the walk then reports unclosed. `ENVS_AT_ANY_DEPTH` widened to
+      `ANCHORS_AT_ANY_DEPTH` (the `\]`/`\)` arm joins the `\begin`/`\end` one),
+      verdict-preserving for all five earlier gates, since the two that set it
+      read math as content anyway. `DollarAnchor` is the driver's first
+      **runtime** policy — a `$` in `\[…\]` opens a *transparent* region where
+      the entries' own brackets stop counting, and inside `$…$` it refuses — and
+      it has to be a method because the flavor is walk state.
+
+      Two more preserved divergences, both named and both discriminated by the
+      torture pair:
+
+      - **`ENV_ANCHOR_IN_MACRO_CODE`** — the in-math gate's `\begin`/`\end`
+        anchor carries no `in_macro_code` filter, so it is *stricter* than the
+        `optional` bail it mirrors. Only ever declines to attach
+        (`a_math_bracket_anchors_on_an_environment_inside_macro_code` pins it
+        beside its text-mode twin, where the same body attaches).
+      - **`DOC_TRIVIA_FLOATS`** — the `macrocode` gate skips only `WHITESPACE`
+        in its paragraph run, so a docstrip guard line **breaks** the run where
+        every other gate floats it. This one is **corpus-reachable and
+        load-bearing**, the only knob of the whole C2 stack that is: flipping it
+        panicked the shadow reference on `rotating.dtx` and `rotex.tex`, whose
+        `\ProvidesPackage` date optional runs over three guard lines inside one
+        chunk. It is also the `saw_blank_line_outside_guards` reading (#71:
+        docstrip *deletes* a guard-only line, so it does not part what surrounds
+        it) — which means the *other* seven gates are the ones diverging from
+        the considered model, and unifying should move toward this gate, not
+        away. Recorded as its own item below.
+
+      **Measured** (`parse` alone via `bench:micro`, N openers with one closer
+      at EOF, 1000/2000/4000). Text (`\cmd[x` per line, one `]`):
+      **3.2/12.4/50.5 ms → 0.29/0.56/1.16 ms**, ~44x at n = 4000. In math (the
+      same run inside one `$…$`): **1.8/9.4/28.9 ms → 0.39/0.59/1.19 ms**, ~24x.
+      Both pinned by `bracket_batch_keeps_shared_frame_openers_linear`. The
+      `macrocode` gate is single-entry by policy (its scan ran no countdown), so
+      a chunk of `\cmd[` openers whose only `]` sits past the frame stays
+      quadratic; recorded in the test rather than pinned, like the `${` ratchet.
+      `bench:micro` flat on all four real documents.
+
+      Shadow differential green: the suite, a per-file debug-assertions pass over
+      all 6277 corpus files, and a `.tex`/`.dtx` torture pair discriminating all
+      six of the family's policy knobs (the `.dtx` half carries the three that
+      need a chunk). Baselines, `parse-compat`, `bib-parse-compat` unchanged.
 
     **Migration technique**, per stage: keep the old per-opener scan as a
     `#[cfg(debug_assertions)]` reference and assert `batch(open) ==
@@ -1189,6 +1244,30 @@ sources below are missing.
     bookkeeping, where a fix to one copy does not propagate (#95). One driver
     with named per-gate policies is the end-state. Revisit only if a gate's
     policy genuinely cannot be stated without averaging it against another's.
+
+  **What the finished driver left on the table** (both surfaced by C2.5, both
+  their own commit with their own test — C2 migrated verdicts unchanged):
+
+  - [ ] **A docstrip guard line parts a construct for seven of the eight
+    gates.** Only `MacrocodeBracketGate` reads the `saw_blank_line_outside_guards`
+    model (#71: docstrip *deletes* a guard-only line, so it does not part what
+    surrounds it); the driver's own trivia arm floats a `GUARD` like a margin,
+    so for every other gate the two newlines around `%<*dtx>` read as a blank
+    line. The bracket gate's reading is the considered one and is
+    corpus-load-bearing (`rotating.dtx`, `rotex.tex`), so unification should
+    move the driver *to* it — i.e. drop `DOC_TRIVIA_FLOATS` in favor of the
+    guard-breaking run everywhere, and re-baseline whatever that moves. Expect
+    it to *keep* constructs that are demoted today, so the risk is over-pairing,
+    not under-.
+  - [ ] **`optional` bails at a chunk-plain `}` its own gates skip.** Two of the
+    three bracket gates filter `plain_braces`; `Parser::optional` does not
+    consult it at all, so an optional they let attach over a chunk-unmatched `}`
+    is then reported "unclosed `[`" — a diagnostic that blocks the whole file
+    for the formatter, from a brace the macrocode model says is an ordinary
+    token. A gate must mirror the parse it guards, so the fix is in `optional`
+    (skip a `plain_brace` `}` as `element` already does), not in the gates; the
+    in-math gate's unfiltered reading then becomes the odd one out and
+    `PLAIN_BRACES_ARE_TOKENS` can go. Pre-existing, not introduced by C2.5.
 - [ ] **The formatter *and the linter* are superlinear where the parser is
   now linear** (found while measuring C2.2/C2.3, and it is the larger half of
   every "quadratic gate" number this roadmap has been quoting). Two shapes,

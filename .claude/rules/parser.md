@@ -75,9 +75,10 @@ Prefer false negatives; when in doubt a construct stays generic.
   formatter owns layout there; linter: `\def` bodies withheld entirely, since a
   carried `\let` must not arm the operand countdown). Subtracting the
   brace-argument `if*` family is load-bearing, since shape alone mis-pairs rather
-  than fails. Demotes silently. One forward scan per live opener; every ordinary
-  anchor cuts it short, so real corpora are unaffected — see `TODO.md` for the
-  pathological shape.
+  than fails. Demotes silently. One forward scan per live opener, bounded by the
+  last `\fi`-flavored word in the file; every ordinary anchor cuts it short, so
+  real corpora are unaffected — the residual shape (openers whose lone `\fi`
+  sits at EOF) is the container-stack roadmap's C1 in `TODO.md`.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
@@ -96,6 +97,17 @@ Prefer false negatives; when in doubt a construct stays generic.
   delimiter; the name-keyed `Signatures::environment` never reads it. A literal
   `\begin{bea}` beside an alias `\bea` is an unrelated environment and inherits
   nothing — that is why aliases are a side map, not a cloned `EnvironmentSig`.
+- **Every shape gate is bounded by its last-closer index** (the
+  `last_alias_closer` treatment, container-stack C0). A gate can only succeed at
+  one closer token shape, so truncating its scan at the last occurrence in the
+  file is verdict-preserving — past it only refusals remain — and a file with
+  none refuses without scanning. Recording may over-approximate, never
+  under-approximate. The exceptions are recorded in `TODO.md` (container stack):
+  `dollar_closes` (its closer is its opener's own token kind, so the bound is
+  vacuous) and, in practice, `environment_escapes_group` (every `\begin{…}`
+  carries a `}` in its own name group). Scan work is metered
+  (`Parser::scan_work`) and pinned linear by the tests in `grammar.rs` — extend
+  them when touching a gate.
 
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.

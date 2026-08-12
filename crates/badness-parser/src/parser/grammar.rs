@@ -357,6 +357,37 @@ struct Parser<'t> {
     /// index in that map, so this bounds its forward scan — which is what keeps
     /// a file of openers that never pair linear instead of quadratic.
     last_alias_closer: Option<usize>,
+    /// The `last_alias_closer` treatment, generalized (`TODO.md`, container
+    /// stack C0): each shape gate succeeds only at one closer token shape, so
+    /// truncating its scan at the last occurrence of that shape is
+    /// verdict-preserving — past it, every path is a refusal, whether by anchor
+    /// or by running out of range — and a file with none refuses without
+    /// scanning at all. Recording may *over*-approximate (a `\fi` inside an
+    /// expl3 region, a `\right` inside a brace group): a bound only needs to be
+    /// at or past the last index that could ever succeed.
+    ///
+    /// This one is the last `]`, bounding [`Self::bracket_closes_in_text`] and
+    /// [`Self::bracket_closes_before_math_end`].
+    last_r_bracket: Option<usize>,
+    /// Last `\]` — bounds [`Self::delim_math_closes`] for a `\[` opener.
+    last_display_math_closer: Option<usize>,
+    /// Last `\)` — bounds [`Self::delim_math_closes`] for a `\(` opener.
+    last_inline_math_closer: Option<usize>,
+    /// Last `\right` — bounds [`Self::left_right_closes`].
+    last_right: Option<usize>,
+    /// Last `}` — bounds [`Self::environment_escapes_group`], whose only `true`
+    /// is a `}` at depth 0. Rarely effective (every `\begin{…}` opener carries a
+    /// `}` in its own name group, so this index usually sits near EOF), but
+    /// sound and free; the gate's residual quadratic shape is recorded in
+    /// `TODO.md` (container stack, C2).
+    last_r_brace: Option<usize>,
+    /// Last `\fi`-flavored flow word — bounds [`Self::conditional_closer`].
+    last_fi: Option<usize>,
+    /// Tokens visited by the shape-gate scans, summed over the whole parse. A
+    /// measurement hook for the linearity regression tests in this file's
+    /// `mod tests` — never a budget (`TODO.md` rejects scan budgets as
+    /// hard-coded special cases). `Cell` because the gates take `&self`.
+    scan_work: std::cell::Cell<usize>,
     /// One-entry memo for [`Self::alias_closer`], as `(opener, group_depth,
     /// verdict)`. Both [`Self::starts_block_env`] and the [`Self::element`]
     /// dispatch ask about the same opener at the same cursor position, and the
@@ -390,9 +421,41 @@ impl<'t> Parser<'t> {
         // keyword rather than calls — a countdown, since `\let\a\b` binds two. See
         // [`Self::alias_openers`] for why this filter is mandatory.
         let mut def_name_slots = 0u8;
+        let mut last_r_bracket = None;
+        let mut last_display_math_closer = None;
+        let mut last_inline_math_closer = None;
+        let mut last_right = None;
+        let mut last_r_brace = None;
+        let mut last_fi = None;
         for (i, t) in tokens.iter().enumerate() {
             starts.push(off);
             off += t.text.len();
+            // Last-closer indices for the gate bounds ([`Self::last_r_bracket`]),
+            // recorded before the control-word early-out below so the
+            // non-control-word shapes are seen. `\fi` recognition deliberately
+            // skips the expl3-region filter [`Self::conditional_flow_at`]
+            // applies: an upper bound only needs to be at or past the last
+            // viable index, and keeping the recording filter-free means it can
+            // never drift *below* the gate's recognition.
+            match t.kind {
+                SyntaxKind::R_BRACKET => last_r_bracket = Some(i),
+                SyntaxKind::R_BRACE => last_r_brace = Some(i),
+                SyntaxKind::CONTROL_SYMBOL => match t.text.as_str() {
+                    "\\]" => last_display_math_closer = Some(i),
+                    "\\)" => last_inline_math_closer = Some(i),
+                    _ => {}
+                },
+                SyntaxKind::CONTROL_WORD => {
+                    if t.text.as_str() == RIGHT_CMD {
+                        last_right = Some(i);
+                    } else if t.text.strip_prefix('\\').and_then(conditional::flow_word)
+                        == Some(conditional::FlowWord::Fi)
+                    {
+                        last_fi = Some(i);
+                    }
+                }
+                _ => {}
+            }
             if t.kind != SyntaxKind::CONTROL_WORD {
                 // Trivia carries the definition-keyword state across (`\def  \bea`);
                 // anything else clears it.
@@ -468,6 +531,13 @@ impl<'t> Parser<'t> {
             expl_toggles,
             conditional_openers,
             last_alias_closer: alias_closers.keys().copied().max(),
+            last_r_bracket,
+            last_display_math_closer,
+            last_inline_math_closer,
+            last_right,
+            last_r_brace,
+            last_fi,
+            scan_work: std::cell::Cell::new(0),
             alias_openers,
             alias_closers,
             alias_closer_memo: std::cell::Cell::new(None),
@@ -1480,6 +1550,11 @@ impl<'t> Parser<'t> {
     /// over several lines still attaches on the second pass. Keeps a code
     /// bracket (`\@tempcnta[` with no `]` in the chunk) an ordinary token
     /// instead of an optional that would swallow the frame.
+    /// One tick per token a shape-gate scan visits, into [`Self::scan_work`].
+    fn tick_scan(&self) {
+        self.scan_work.set(self.scan_work.get() + 1);
+    }
+
     fn bracket_closes_before_macrocode_end(&self, open: usize) -> bool {
         let Some(end) = self.macrocode_end else {
             return true;
@@ -1490,6 +1565,7 @@ impl<'t> Parser<'t> {
             .iter()
             .enumerate()
         {
+            self.tick_scan();
             let idx = open + 1 + off;
             match t.kind {
                 SyntaxKind::NEWLINE => {
@@ -1549,12 +1625,20 @@ impl<'t> Parser<'t> {
     ///   it. Does not consume.
     fn bracket_closes_before_math_end(&self, open: usize) -> bool {
         let enclosing_is_dollar = self.math_dollar.last().copied().unwrap_or(false);
+        // Every `true` is at an `R_BRACKET`, so the scan is bounded by the last
+        // one in the file ([`Self::last_r_bracket`]); with none past the opener
+        // it refuses outright. Without the bound, a math body of `\cmd[` atoms
+        // with no `]` anywhere scanned each one to its math's end — quadratic.
+        let Some(last) = self.last_r_bracket.filter(|&last| last > open) else {
+            return false;
+        };
         let mut depth = 0usize;
         let mut brackets = 0usize;
         let mut in_inline = false;
         let mut newlines = 0;
         let mut abuts_command = false;
-        for (off, t) in self.tokens[open + 1..].iter().enumerate() {
+        for (off, t) in self.tokens[open + 1..=last].iter().enumerate() {
+            self.tick_scan();
             let idx = open + 1 + off;
             let prev_abuts_command = abuts_command;
             abuts_command = false;
@@ -1622,11 +1706,20 @@ impl<'t> Parser<'t> {
     /// stays an ordinary token with **no diagnostic**: in code the shape is
     /// routine, so it is not statically an error. Does not consume.
     fn bracket_closes_in_text(&self, open: usize) -> bool {
+        // Bounded by the last `]` in the file ([`Self::last_r_bracket`]), the
+        // `last_alias_closer` treatment: past it only refusals remain, and with
+        // none past the opener the gate refuses without scanning. Without the
+        // bound, a file of `\cmd[` lines with no `]` and no blank line scanned
+        // each opener to EOF — quadratic (`TODO.md`, container stack C0).
+        let Some(last) = self.last_r_bracket.filter(|&last| last > open) else {
+            return false;
+        };
         let mut depth = 0usize;
         let mut brackets = 0usize;
         let mut newlines = 0;
         let mut abuts_command = false;
-        for (off, t) in self.tokens[open + 1..].iter().enumerate() {
+        for (off, t) in self.tokens[open + 1..=last].iter().enumerate() {
+            self.tick_scan();
             let idx = open + 1 + off;
             let prev_abuts_command = abuts_command;
             abuts_command = false;
@@ -1701,6 +1794,12 @@ impl<'t> Parser<'t> {
     /// `\begin`/`\end` are plain commands (issue #45), so neither anchors nor
     /// nests there. Does not consume.
     fn dollar_closes(&self, open: usize, display: bool) -> bool {
+        // The one gate with no last-closer bound: its closer (`DOLLAR`) is its
+        // opener's own token kind, so the last one in a file of openers is just
+        // the final opener — the bound would be vacuous. The residual
+        // adversarial shape (a `${` per line: depth ratchets upward, so the
+        // level-gated paragraph anchor never fires and no depth-0 `$` ever
+        // appears) is recorded in `TODO.md` (container stack, C2).
         let mut depth = 0usize;
         let mut envs = 0usize;
         let mut newlines = 0;
@@ -1711,6 +1810,7 @@ impl<'t> Parser<'t> {
             .min(self.tokens.len());
         let mut i = start;
         while i < end {
+            self.tick_scan();
             let t = &self.tokens[i];
             match t.kind {
                 SyntaxKind::NEWLINE => {
@@ -1771,15 +1871,30 @@ impl<'t> Parser<'t> {
     /// paragraph break blocks only at the math body's own level
     /// ([`Self::paragraph_break_blocks`]).
     fn delim_math_closes(&self, open: usize, closer: &str) -> bool {
+        // Bounded by the last occurrence of *this* closer in the file (the
+        // `last_alias_closer` treatment): every `true` is at one, so past it
+        // only refusals remain, and a file with none refuses without scanning.
+        // Without the bound, a non-`.dtx` file of `\[` openers with no closer
+        // and no blank line scanned each one to EOF — quadratic (`TODO.md`,
+        // container stack C0).
+        let last = match closer {
+            "\\]" => self.last_display_math_closer,
+            _ => self.last_inline_math_closer,
+        };
+        let Some(last) = last else {
+            return false;
+        };
         let mut depth = 0usize;
         let mut envs = 0usize;
         let mut newlines = 0;
         let end = self
             .macrocode_end
             .unwrap_or(self.tokens.len())
-            .min(self.tokens.len());
+            .min(self.tokens.len())
+            .min(last + 1);
         let mut i = open + 1;
         while i < end {
+            self.tick_scan();
             let t = &self.tokens[i];
             match t.kind {
                 SyntaxKind::NEWLINE => {
@@ -1845,12 +1960,25 @@ impl<'t> Parser<'t> {
         }
         let mut stack: Vec<Ctx> = Vec::new();
         let mut newlines = 0;
+        // Bounded by the last `\right` in the file ([`Self::last_right`], the
+        // `last_alias_closer` treatment): every `true` is at one, so past it
+        // only refusals remain, and a file with none refuses without scanning.
+        // The recording ignores brace nesting (a `\right` inside a `{…}` group
+        // is invisible to this scan), which only ever places the bound *past*
+        // the last viable closer. Without it, a math body of `\left` openers
+        // with no `\right` kept the stack non-empty — so the blank-line anchor
+        // never fired — and scanned each opener to the math's end: quadratic.
+        let Some(last) = self.last_right else {
+            return false;
+        };
         let end = self
             .macrocode_end
             .unwrap_or(self.tokens.len())
-            .min(self.tokens.len());
+            .min(self.tokens.len())
+            .min(last + 1);
         let mut i = open + 1;
         while i < end {
+            self.tick_scan();
             let t = &self.tokens[i];
             // A brace group parses as [`Self::math_group`]: only its own braces
             // steer nesting; every other token inside it is ordinary content
@@ -2409,14 +2537,24 @@ impl<'t> Parser<'t> {
         if self.doc_margin_exempt(open) {
             return false;
         }
+        // The only `true` is a `}` at depth 0, so the last `}` in the file
+        // bounds the scan ([`Self::last_r_brace`]) — sound, but rarely
+        // effective, since a `\begin{…}` opener's own name group carries a `}`
+        // and pushes the index toward EOF. The gate's residual quadratic shape
+        // is recorded in `TODO.md` (container stack, C2).
+        let Some(last) = self.last_r_brace else {
+            return false;
+        };
         let mut depth = 0usize;
         let mut envs = 0usize;
         let end = self
             .macrocode_end
             .unwrap_or(self.tokens.len())
-            .min(self.tokens.len());
+            .min(self.tokens.len())
+            .min(last + 1);
         let mut i = open + 1;
         while i < end {
+            self.tick_scan();
             let t = &self.tokens[i];
             match t.kind {
                 // The `{name}` group of this very `\begin` nests and unnests
@@ -2503,14 +2641,21 @@ impl<'t> Parser<'t> {
     /// and why nothing downstream may assume the two indices agree
     /// (`conditional_walk_may_close_before_the_located_fi`, `tests/parser.rs`).
     ///
-    /// **Cost.** One forward scan per live opener, so O(n·openers) worst case. Every
-    /// ordinary anchor cuts it short, which is why real conditional-heavy packages
-    /// show no measurable change (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`
-    /// all within noise of the pre-node parser). The shape that does not cut short is
-    /// thousands of *top-level* openers with no blank line, no unbalanced brace, and
-    /// no reachable `\fi`: 8000 such lines cost ~2s against ~0.07s. No real corpus
-    /// file hits it; see `TODO.md` for the linear rewrite if one ever does.
+    /// **Cost.** One forward scan per live opener, bounded by the last
+    /// `\fi`-flavored flow word in the file ([`Self::last_fi`], the
+    /// `last_alias_closer` treatment): every `Some` is at one, so past it only
+    /// refusals remain, and a file with none refuses without scanning — which
+    /// is what keeps the measured pathological shape (thousands of *top-level*
+    /// openers with no blank line, no unbalanced brace, and no `\fi` at all;
+    /// 8000 such lines cost ~2s against ~0.07s unbounded) linear. Every
+    /// ordinary anchor still cuts a scan short, which is why real
+    /// conditional-heavy packages show no measurable change (`biblatex.sty`,
+    /// `latexrelease.sty`, `memoir.cls` all within noise of the pre-node
+    /// parser). The residual shape — those same openers with one `\fi` at EOF —
+    /// stays O(n·openers); see `TODO.md` (container stack, C1) for the batched
+    /// rewrite.
     fn conditional_closer(&self, open: usize) -> Option<usize> {
+        let last_fi = self.last_fi?;
         let mut depth = 0usize;
         let mut envs = 0usize;
         let mut nested = 0usize;
@@ -2518,9 +2663,11 @@ impl<'t> Parser<'t> {
         let end = self
             .macrocode_end
             .unwrap_or(self.tokens.len())
-            .min(self.tokens.len());
+            .min(self.tokens.len())
+            .min(last_fi + 1);
         let mut i = open + 1;
         while i < end {
+            self.tick_scan();
             let t = &self.tokens[i];
             match t.kind {
                 SyntaxKind::NEWLINE => {
@@ -2679,6 +2826,7 @@ impl<'t> Parser<'t> {
             .min(self.last_alias_closer? + 1);
         let mut i = open + 1;
         while i < end {
+            self.tick_scan();
             let t = &self.tokens[i];
             match t.kind {
                 SyntaxKind::DOLLAR if depth == 0 => return None,
@@ -3230,5 +3378,60 @@ mod tests {
         p.pos += 1;
         p.step();
         assert_eq!(p.steps.get(), 1, "progress should reset the peek budget");
+    }
+
+    /// Drive a full parse and return how many tokens the shape-gate scans
+    /// visited ([`Parser::scan_work`]).
+    fn scan_work(input: &str) -> usize {
+        let tokens = lex(input);
+        let ctx = ParseCtx::default();
+        let mut p = Parser::new(&tokens, &ctx);
+        p.document();
+        p.scan_work.get()
+    }
+
+    /// Doubling the input must not blow the gate-scan work up quadratically:
+    /// `3·work(N)` leaves room for per-parse constants while a quadratic gate
+    /// (ratio 4 per doubling) still fails loudly. The slack constant absorbs
+    /// shapes whose bounded work is near zero.
+    #[track_caller]
+    fn assert_scan_work_linear(small: &str, doubled: &str) {
+        let (w1, w2) = (scan_work(small), scan_work(doubled));
+        assert!(
+            w2 < 3 * w1 + 64,
+            "gate-scan work grew superlinearly: {w1} -> {w2}"
+        );
+    }
+
+    /// The adversarial no-closer shapes (`TODO.md`, container stack C0): a file
+    /// of openers whose gate can never succeed must refuse via its absent
+    /// last-closer bound instead of scanning forward per opener.
+    #[test]
+    fn gate_scans_stay_linear_without_closers() {
+        // `conditional_closer`: `\if`-prefixed openers, no `\fi` anywhere.
+        let shape = "\\ifabc x\n";
+        assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
+        // `bracket_closes_in_text`: command-abutting `[`s, no `]` anywhere.
+        let shape = "\\cmd[x\n";
+        assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
+        // `delim_math_closes`: display-math openers, no `\]` anywhere.
+        let shape = "\\[ x\n";
+        assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
+    }
+
+    /// The in-math no-closer shapes: the enclosing math's own gate passes (its
+    /// closer is reachable), and every opener inside it must still refuse
+    /// without a per-opener scan to the math's end.
+    #[test]
+    fn math_gate_scans_stay_linear_without_closers() {
+        // `bracket_closes_before_math_end`: `\cmd[` atoms in dollar math, no
+        // `]` anywhere.
+        let body = |n: usize| format!("$ {}$", "\\cmd[x ".repeat(n));
+        assert_scan_work_linear(&body(200), &body(400));
+        // `left_right_closes`: `\left` openers in display math, no `\right`
+        // anywhere — the pair stack stays non-empty, so the blank-line anchor
+        // alone never cuts the scan.
+        let body = |n: usize| format!("\\[\n{}\\]\n", "\\left( x\n".repeat(n));
+        assert_scan_work_linear(&body(200), &body(400));
     }
 }

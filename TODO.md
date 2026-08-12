@@ -865,13 +865,27 @@ sources below are missing.
   Stages, each gated on the corpus failing-file sets not growing (compare
   sets, not counts):
 
-  - [ ] **C0 — bound the two unbounded gates now**, independent of the map.
-    `delim_math_closes` and `bracket_closes_in_text` have no analogue of the
-    alias gate's bound: a file of `\[` or `\cmd[` openers with no blank line
-    and no closer scans each opener to EOF. Precompute the last-closer
-    positions in the existing `new()` pre-scan (two `usize` fields, the
-    `last_alias_closer` treatment). Cheap, closes the remaining adversarial
-    quadratic shapes today, and survives every later stage.
+  - [x] **C0 — bound every gate by its last-closer index** (done; widened
+    from the two named gates once the survey found a *ninth* scan and a
+    third unbounded one, `bracket_closes_before_math_end`). A gate succeeds
+    only at one closer token shape, so truncating its scan at the last
+    occurrence in the file is verdict-preserving — past it only refusals
+    remain — and a file with none refuses without scanning. Six fields in
+    the `new()` pre-scan, the `last_alias_closer` treatment:
+    `last_r_bracket` (shared by `bracket_closes_in_text` and
+    `bracket_closes_before_math_end`), `last_display_math_closer` and
+    `last_inline_math_closer` (`delim_math_closes`), `last_right`
+    (`left_right_closes`), `last_r_brace` (`environment_escapes_group`),
+    and `last_fi` (`conditional_closer` — this one alone collapses the
+    8000-opener case to ~25ms end-to-end). Scan work is metered
+    (`Parser::scan_work`) and pinned linear by unit tests in `grammar.rs`.
+    Residual superlinear shapes, deferred to the stages below:
+    conditionals whose lone `\fi` sits at EOF (C1's case);
+    `dollar_closes`, where the closer is the opener's own token kind so
+    the bound is vacuous (`${` per line ratchets depth upward and no
+    anchor ever fires); and `environment_escapes_group` in practice,
+    since every `\begin{…}` carries a `}` in its own name group, pushing
+    the bound to EOF.
   - [ ] **C1 — conditionals first.** The gate with the measured pathological
     case and the cleanest policy (its level tracking is already explicit:
     brace, environment, math, macrocode). Build the closer map in the

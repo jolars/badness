@@ -159,11 +159,16 @@ provenance.
      and **argument-free** on both sides (attaching from the target's signature
      would be arity-directed grouping from scanned data, decision #8); **both
      halves** must be defined in the file. Two things carry the risk: the opener
-     index must exclude the *name being defined* (`\def\bea{…}` leaves the definee
-     at brace depth 0 with `in_def_body` unset, so unfiltered the two definition
-     lines pair with each other), and the gate is **positive** — modelled on
-     `conditional_closer`, not on the `\begin` gate — with no paragraph anchor,
-     since an `itemize` alias body legitimately spans blank lines. Detail in
+     index must exclude every *name being bound*, as a slot countdown rather than
+     a one-word test (`\def\bea{…}` leaves the definee at brace depth 0 with
+     `in_def_body` unset, so unfiltered the two definition lines pair with each
+     other; `\let\oldbea\bea` binds *two* names, and left live the source operand
+     pairs with the next stray closer and swallows the prose between), and the
+     gate is **positive** — modelled on `conditional_closer`, not on the `\begin`
+     gate — with no paragraph anchor, since an `itemize` alias body legitimately
+     spans blank lines. Behavior then resolves **from the node, never the name**
+     (`Signatures::environment_at` vs `::environment`), so a literal `\begin{bea}`
+     beside an alias `\bea` stays an unrelated environment. Detail in
      `docs/src/development/architecture.md` (§ *Environment aliases*).
 
    - **Conditionals pair behind a shape gate, and the gate must mirror the walk.**

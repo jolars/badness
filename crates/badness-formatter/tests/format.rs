@@ -2258,6 +2258,29 @@ fn env_alias_survives_formatting() {
 }
 
 #[test]
+fn a_literal_begin_does_not_inherit_the_alias_target() {
+    // An alias names a *command*. A literal `\begin{bi}` in a file that also
+    // defines `\bi` as an alias for `itemize` is an unrelated environment that
+    // happens to spell the same word, so it must lay out like any environment the
+    // signature DB cannot name — one paragraph, `\item`s left where they are.
+    let defs = "\\newcommand{\\bi}{\\begin{itemize}}\n\\newcommand{\\ei}{\\end{itemize}}\n";
+    let literal = format(&format!(
+        "{defs}\\begin{{bi}}\n\\item aaa\n\\item bbb\n\\end{{bi}}\n"
+    ))
+    .expect("formats");
+    assert!(
+        literal.contains("\\item aaa \\item bbb"),
+        "a literal `\\begin{{bi}}` must not pick up itemize's list layout, got:\n{literal}"
+    );
+    // While the alias delimiters themselves still do.
+    let aliased = format(&format!("{defs}\\bi\n\\item aaa\n\\item bbb\n\\ei\n")).expect("formats");
+    assert!(
+        aliased.contains("  \\item aaa\n  \\item bbb"),
+        "the alias itself still lays out as itemize, got:\n{aliased}"
+    );
+}
+
+#[test]
 fn env_alias_resolves_with_no_external_signatures() {
     // `format` passes an empty external `SignatureDb`, which is the dprint/wasm
     // plugin's path. The alias must resolve from the document's own scan alone,

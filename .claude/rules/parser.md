@@ -81,12 +81,20 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
-  halves must be defined in the same file. The opener index **must exclude the
-  name being defined** — `\def\bea{…}` leaves the definee at brace depth 0 with
+  halves must be defined in the same file. The opener index **must exclude every
+  name being bound**, as a slot countdown (`definition_name_slots`) and not a
+  one-word test — `\def\bea{…}` leaves the definee at brace depth 0 with
   `in_def_body` unset, so unfiltered the two definition lines pair with each
-  other. Gate is modelled on `conditional_closer` (locate the closer, bound the
-  walk by it, EOF does not pair), **not** on the `\begin` demotion gate, and has
-  no paragraph anchor. Demotes silently. Not extended to `math_atom` in v1.
+  other, and `\let\oldbea\bea` leaves the *source* operand live to pair with the
+  next stray closer. Gate is modelled on `conditional_closer` (locate the closer,
+  bound the walk by it, EOF does not pair), **not** on the `\begin` demotion
+  gate, and has no paragraph anchor. Demotes silently. Not extended to
+  `math_atom` in v1.
+- **Alias behavior resolves from the node, never the name.**
+  `Signatures::environment_at` reads the alias map only for a `Begin::is_alias`
+  delimiter; the name-keyed `Signatures::environment` never reads it. A literal
+  `\begin{bea}` beside an alias `\bea` is an unrelated environment and inherits
+  nothing — that is why aliases are a side map, not a cloned `EnvironmentSig`.
 
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.

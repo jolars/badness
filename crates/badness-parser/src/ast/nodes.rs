@@ -334,6 +334,19 @@ impl Begin {
         }
     }
 
+    /// Whether this `BEGIN` is an *environment-alias* delimiter — a bare control
+    /// word standing in for `\begin{X}` — rather than a spelled-out `\begin{X}`.
+    ///
+    /// Purely structural (no `NAME_GROUP`, head is not `\begin`), like every other
+    /// accessor here. It exists because [`name`](Self::name) makes the two shapes
+    /// indistinguishable by name, and the alias table describes the *command*, not
+    /// the name: a literal `\begin{bea}` written in a file that also defines `\bea`
+    /// as an alias is a different, unrelated environment and must not inherit the
+    /// target's behavior. `Signatures::environment_at` is the consumer.
+    pub fn is_alias(&self) -> bool {
+        self.name_group().is_none() && alias_delimiter_name(&self.syntax, "\\begin").is_some()
+    }
+
     /// The byte range of the environment name inside the `NAME_GROUP`.
     pub fn name_range(&self) -> Option<TextRange> {
         self.name_group()?.range()

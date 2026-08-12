@@ -34,6 +34,17 @@
 
 \bc \bc nested \ec \ec
 
+% `\let` binds two names, so neither operand is a call. The `\bc` here must not
+% open anything, or it would pair with the stray `\ec` below and swallow the
+% paragraph in between.
+\let\oldbc\bc
+prose that belongs to nobody
+\ec
+
+% A literal `\begin{bc}` is an ordinary environment that happens to spell the
+% alias's name; it pairs on its own terms and inherits nothing from `center`.
+\begin{bc} x \end{bc}
+
 % Gated shapes: none of these pair, and none of them diagnose.
 \foo{\bea stranded}
 \eea

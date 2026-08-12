@@ -38,6 +38,8 @@ use std::sync::LazyLock;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
+use crate::syntax::{SyntaxKind, SyntaxNode};
+
 /// Which bracket delimits an argument. TeX has no other real argument grouping at
 /// the surface level the formatter cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,10 +327,12 @@ pub struct SignatureDb {
     /// A *side map*, deliberately not an [`EnvironmentSig`] cloned under the alias
     /// name: the alias is a command, not an environment, so it must not appear in
     /// [`environment_names`](Self::environment_names) (that would offer
-    /// `\begin{bea}` to completion), must not let a literal `\begin{bea}` acquire
-    /// the target's behavior, and must not mask a real `\newenvironment{bea}`.
-    /// [`Signatures::environment`] resolves it *last*, after the real tiers, so a
-    /// genuine environment of the same name always wins.
+    /// `\begin{bea}` to completion) and must not mask a real
+    /// `\newenvironment{bea}`. Nor may a *literal* `\begin{bea}` acquire the
+    /// target's behavior — which is why the only lookup that consults this map is
+    /// [`Signatures::environment_at`], keyed on the node so it can tell an alias
+    /// delimiter from a spelled-out environment that happens to share the name.
+    /// The plain name-keyed [`Signatures::environment`] never reads it.
     env_begin_aliases: HashMap<SmolStr, SmolStr>,
     /// The closer mirror of [`env_begin_aliases`](Self::env_begin_aliases): a
     /// command whose body is exactly `\end{X}`. Kept separate rather than tagged
@@ -490,9 +494,10 @@ impl SignatureDb {
             self.environments.insert(name.clone(), sig.clone());
         }
         // Aliases carry no origin: they are not a signature namespace, so there is
-        // nothing for hover to attribute. A package-defined alias is inert for the
-        // parser (pairing is same-file-pure, decision #7) and therefore never
-        // queried — carried only to keep the two merge paths symmetric.
+        // nothing for hover to attribute. A package-defined alias is inert (pairing
+        // is same-file-pure, decision #7, so no node in *this* file is one of its
+        // delimiters, and `Signatures::environment_at` only reads the map for a
+        // node that is) — carried only to keep the two merge paths symmetric.
         for (name, target) in &other.env_begin_aliases {
             self.env_begin_aliases.insert(name.clone(), target.clone());
         }
@@ -533,17 +538,13 @@ impl<'a> Signatures<'a> {
             .or_else(|| cwl().command(name))
     }
 
-    /// The signature of environment `name`: scanned, then built-in, then CWL, then
-    /// — last — the file-local *environment alias* map. See [`command`] for why the
-    /// CWL tier is safe to consult here.
+    /// The signature of environment `name`: scanned, then built-in, then CWL. See
+    /// [`command`] for why the CWL tier is safe to consult here.
     ///
-    /// The alias arm is what makes a `\bea`-opened `ENVIRONMENT` (whose `BEGIN`
-    /// carries no `NAME_GROUP`, so its name is the head control word) resolve to the
-    /// target's curated behavior. It resolves against [`builtin`] only, for the same
-    /// reason the parser's `is_math_environment` does: an alias declares a
-    /// *spelling*, never a *semantic*, so every behavior flag still comes from
-    /// curated data. Consulting it **last** is load-bearing — a real
-    /// `\newenvironment{bea}` in the same file must win over an alias of that name.
+    /// Environment *aliases* are deliberately **not** consulted: an alias names a
+    /// command, and a name alone cannot tell a `\bea`-opened delimiter from a
+    /// literal `\begin{bea}` that happens to spell the same word. Resolve those
+    /// through [`environment_at`](Self::environment_at), which has the node.
     ///
     /// [`command`]: Self::command
     pub fn environment(&self, name: &str) -> Option<&'a EnvironmentSig> {
@@ -551,11 +552,37 @@ impl<'a> Signatures<'a> {
             .environment(name)
             .or_else(|| builtin().environment(name))
             .or_else(|| cwl().environment(name))
-            .or_else(|| {
-                self.user
-                    .env_begin_alias(name)
-                    .and_then(|target| builtin().environment(target))
-            })
+    }
+
+    /// The signature governing `node` — an `ENVIRONMENT` or its `BEGIN` — which is
+    /// [`environment`](Self::environment) except that an *environment-alias*
+    /// delimiter resolves through the alias map instead.
+    ///
+    /// This is the node-keyed lookup every layout decision wants, because an alias
+    /// `BEGIN` (a bare control word, [`Begin::is_alias`]) and a literal `\begin{X}`
+    /// are indistinguishable once reduced to a name. Only the former inherits the
+    /// target's behavior; a literal `\begin{bea}` in a file that also defines `\bea`
+    /// as an alias is an unrelated environment of that name and stays unknown.
+    ///
+    /// The alias arm resolves against [`builtin`] only, for the same reason the
+    /// parser's `is_math_environment` does: an alias declares a *spelling*, never a
+    /// *semantic*, so every behavior flag still comes from curated data.
+    ///
+    /// [`Begin::is_alias`]: crate::ast::Begin::is_alias
+    pub fn environment_at(&self, node: &SyntaxNode) -> Option<&'a EnvironmentSig> {
+        use crate::ast::{AstNode, Begin, child};
+        let begin = match node.kind() {
+            SyntaxKind::BEGIN => Begin::cast(node.clone())?,
+            _ => child::<Begin>(node)?,
+        };
+        let name = begin.name()?;
+        if begin.is_alias() {
+            return self
+                .user
+                .env_begin_alias(&name)
+                .and_then(|target| builtin().environment(target));
+        }
+        self.environment(&name)
     }
 }
 

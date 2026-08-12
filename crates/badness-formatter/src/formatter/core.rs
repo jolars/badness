@@ -53,7 +53,7 @@ use std::iter::Peekable;
 use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
-use crate::ast::{AstNode, Environment, Group, command_name, environment_name};
+use crate::ast::{AstNode, Environment, Group, command_name};
 use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
@@ -4492,9 +4492,8 @@ fn lower_node_dropping_leading_comment(node: &SyntaxNode, cx: LowerCtx<'_>) -> I
 /// [`crate::semantic::signature::EnvironmentSig::no_indent`]). The canonical case
 /// is `document`, whose body conventionally sits flush against the margin.
 fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    Environment::cast(node.clone())
-        .and_then(|e| e.name())
-        .and_then(|name| cx.signatures.environment(&name))
+    cx.signatures
+        .environment_at(node)
         .is_some_and(|sig| sig.no_indent)
 }
 
@@ -4519,7 +4518,7 @@ fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// `tikzpicture`, `lstlisting` — reaches the keyval-aware optional layout. Every
 /// other content kind lowers exactly as the generic path would.
 fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let sig = environment_name(begin).and_then(|name| cx.signatures.environment(&name));
+    let sig = cx.signatures.environment_at(begin);
     let arity = sig.as_ref().map(|sig| sig.args.len()).unwrap_or(0);
     // A header carrying a `%` comment is left to the generic path: gluing
     // across it would let it swallow the next line. A `.dtx` doc margin or
@@ -4584,9 +4583,8 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// formatter lays out one per line with a hanging indent (see
 /// [`lower_list_environment`]).
 fn is_list_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    Environment::cast(node.clone())
-        .and_then(|e| e.name())
-        .and_then(|name| cx.signatures.environment(&name))
+    cx.signatures
+        .environment_at(node)
         .is_some_and(|sig| sig.list)
 }
 
@@ -4913,9 +4911,8 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> ListItem {
 /// `align` — an `align`/matrix-family environment whose `&` columns the formatter
 /// lays out into a grid (see [`lower_aligned_environment`]).
 fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    Environment::cast(node.clone())
-        .and_then(|e| e.name())
-        .and_then(|name| cx.signatures.environment(&name))
+    cx.signatures
+        .environment_at(node)
         .is_some_and(|sig| sig.align)
 }
 
@@ -4945,9 +4942,8 @@ fn body_has_top_level_ampersand(node: &SyntaxNode) -> bool {
 /// in a `MATH` node (it entered math mode); [`lower_math_environment`] lays it out
 /// with the math-aware paths.
 fn is_math_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    Environment::cast(node.clone())
-        .and_then(|e| e.name())
-        .and_then(|name| cx.signatures.environment(&name))
+    cx.signatures
+        .environment_at(node)
         .is_some_and(|sig| sig.math)
 }
 
@@ -5741,10 +5737,9 @@ fn rule_overattaches_cell(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// `nth_group_text`, which would bail on the nested `{…}` of a `p{3cm}` column.
 fn column_alignments(env: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<ColAlign>> {
     let begin = Environment::cast(env.clone())?.begin()?;
-    let name = begin.name()?;
     if !cx
         .signatures
-        .environment(&name)
+        .environment_at(begin.syntax())
         .is_some_and(|sig| sig.align)
     {
         return None;

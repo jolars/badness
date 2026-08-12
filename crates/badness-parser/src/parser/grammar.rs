@@ -17,7 +17,7 @@ use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
 use crate::parser::lexer::{
-    ExplToggle, ParseCtx, Token, expl_toggle, is_block_environment, is_definition_keyword,
+    ExplToggle, ParseCtx, Token, definition_name_slots, expl_toggle, is_block_environment,
     is_math_environment,
 };
 use crate::syntax::SyntaxKind;
@@ -336,15 +336,19 @@ struct Parser<'t> {
     /// [`Self::conditional_openers`]: the definee filter is a running state over
     /// the stream that the recursive walk cannot carry.
     ///
-    /// That filter is load-bearing, not defensive. [`Self::command`] sets
-    /// `in_def_body` after a `\def`-family head only when the definee is a
+    /// That filter is load-bearing, not defensive, and it counts *slots* rather
+    /// than testing a single word ([`definition_name_slots`]). [`Self::command`]
+    /// sets `in_def_body` after a `\def`-family head only when the definee is a
     /// `CONTROL_SYMBOL`, so in `\def\bea{\begin{eqnarray}}` the definee `\bea`
     /// reaches [`Self::element`] as an ordinary sibling command at brace depth 0
     /// with `in_macro_code` false. Unfiltered, the dispatch fires on it, the scan
     /// finds `\def\eea`'s definee at the same depth, and the two *definition lines*
     /// pair into an `ENVIRONMENT` — lossless and silent, but layout is destroyed.
-    /// The braced `\newcommand{\bea}{…}` form is covered by `in_def_body` instead.
-    /// Expl3 regions are excluded outright, as for conditionals.
+    /// `\let\oldbea\bea` is the same failure one slot over: the *source* operand
+    /// is a mention, not a call, and left live it pairs with a later `\eea` and
+    /// swallows the prose in between. The braced `\newcommand{\bea}{…}` form is
+    /// covered by `in_def_body` instead. Expl3 regions are excluded outright, as
+    /// for conditionals.
     alias_openers: std::collections::HashMap<usize, SmolStr>,
     /// The closer mirror of [`Self::alias_openers`] (`\end{X}` bodies).
     alias_closers: std::collections::HashMap<usize, SmolStr>,
@@ -370,10 +374,10 @@ impl<'t> Parser<'t> {
         // `expl_on` mirrors `in_expl_region` exactly: the state is the one in
         // force *before* this token, so a toggle sits outside its own region.
         let mut expl_on = false;
-        // Whether the last non-trivia token was a definition keyword, so the very
-        // next control word is the *name being defined* rather than a call. See
+        // How many upcoming control words are *names being bound* by a definition
+        // keyword rather than calls — a countdown, since `\let\a\b` binds two. See
         // [`Self::alias_openers`] for why this filter is mandatory.
-        let mut after_def_keyword = false;
+        let mut def_name_slots = 0u8;
         for (i, t) in tokens.iter().enumerate() {
             starts.push(off);
             off += t.text.len();
@@ -388,12 +392,12 @@ impl<'t> Parser<'t> {
                         | SyntaxKind::DOC_MARGIN
                         | SyntaxKind::GUARD
                 ) {
-                    after_def_keyword = false;
+                    def_name_slots = 0;
                 }
                 continue;
             }
             if want_aliases {
-                let name = (!after_def_keyword && !expl_on)
+                let name = (def_name_slots == 0 && !expl_on)
                     .then(|| t.text.strip_prefix('\\'))
                     .flatten();
                 if let Some(name) = name {
@@ -403,7 +407,14 @@ impl<'t> Parser<'t> {
                         alias_closers.insert(i, SmolStr::new(target));
                     }
                 }
-                after_def_keyword = is_definition_keyword(&t.text);
+                // Consuming a slot short-circuits, so a keyword sitting *in* one
+                // (`\let\a\def`) is the operand it looks like and does not arm a
+                // fresh countdown — `conditional::OpenerScan::visit` resolves the
+                // same collision the same way.
+                def_name_slots = match def_name_slots {
+                    0 => definition_name_slots(&t.text),
+                    n => n - 1,
+                };
             }
             // `visit` is a *state machine* over the whole stream (the operand-slot
             // countdown, the `\ifcsname` body), so it must run for every control

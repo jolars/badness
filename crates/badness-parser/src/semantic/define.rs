@@ -1581,31 +1581,65 @@ mod tests {
         assert!(!db.environment_names().any(|n| n == "bea"));
     }
 
+    /// The `ENVIRONMENT` node in `src`, for the node-keyed signature lookup.
+    fn environment_node(src: &str) -> SyntaxNode {
+        SyntaxNode::new_root(parse(src).green)
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+            .expect("an environment")
+    }
+
     #[test]
     fn signatures_resolves_an_env_alias_to_the_curated_target() {
         use crate::semantic::signature::Signatures;
-        let db = db_of(EQNARRAY_PAIR);
+        let src = format!("{EQNARRAY_PAIR}\\bea a \\eea\n");
+        let db = db_of(&src);
         let sigs = Signatures::new(&db);
-        let sig = sigs.environment("bea").expect("alias resolves");
+        let sig = sigs
+            .environment_at(&environment_node(&src))
+            .expect("alias resolves");
         let target = builtin().environment("eqnarray").expect("curated target");
         assert_eq!(sig, target);
         assert!(sig.math && sig.align);
+        // The *name*-keyed lookup deliberately does not: `bea` names a command.
+        assert!(sigs.environment("bea").is_none());
+    }
+
+    #[test]
+    fn a_literal_begin_does_not_inherit_the_alias_target() {
+        // `\begin{bea}` is an environment that happens to spell the alias's name.
+        // It is not the alias, so it must not pick up `eqnarray`'s behavior — the
+        // reason the lookup is keyed on the node and not on the name.
+        use crate::semantic::signature::Signatures;
+        let src = format!("{EQNARRAY_PAIR}\\begin{{bea}} a \\end{{bea}}\n");
+        let db = db_of(&src);
+        let sigs = Signatures::new(&db);
+        assert!(sigs.environment_at(&environment_node(&src)).is_none());
     }
 
     #[test]
     fn a_real_environment_wins_over_an_alias_of_the_same_name() {
-        // The alias arm resolves last precisely so this holds.
+        // A `\newenvironment{bea}` and an alias `\bea` are different constructs
+        // that collide by name; each node resolves to its own.
         use crate::semantic::signature::Signatures;
-        let db = db_of(
-            "\\newcommand{\\bea}{\\begin{eqnarray}}\n\
+        let defs = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\
              \\newcommand{\\eea}{\\end{eqnarray}}\n\
-             \\newenvironment{bea}{x}{y}\n",
-        );
+             \\newenvironment{bea}{x}{y}\n";
+        let db = db_of(&format!("{defs}\\begin{{bea}} a \\end{{bea}}\n"));
         let sigs = Signatures::new(&db);
-        let sig = sigs.environment("bea").expect("real environment resolves");
+        let sig = sigs
+            .environment_at(&environment_node(&format!(
+                "{defs}\\begin{{bea}} a \\end{{bea}}\n"
+            )))
+            .expect("real environment resolves");
         assert!(
             !sig.math,
-            "the scanned \\newenvironment must win over the alias"
+            "the scanned \\newenvironment must win for a literal `\\begin{{bea}}`"
+        );
+        assert!(
+            sigs.environment_at(&environment_node(&format!("{defs}\\bea a \\eea\n")))
+                .is_some_and(|sig| sig.math),
+            "while the alias delimiters still resolve to eqnarray"
         );
     }
 

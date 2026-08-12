@@ -283,6 +283,25 @@ pub(crate) fn is_definition_keyword(text: &str) -> bool {
     )
 }
 
+/// How many immediately-following control words `text` (a `CONTROL_WORD`, leading
+/// `\` included) claims as *names* rather than calls — `0` when it is not a
+/// definition keyword at all.
+///
+/// `\let` claims **two**: the definee and the meaning it is given, so
+/// `\let\oldbea\bea` mentions `\bea` without calling it. A bare "the next word is
+/// a definee" boolean would let that source operand read as a live call, which for
+/// the environment-alias index means a `\let` operand can pair with a later closer
+/// and wrap the text between them in an environment nobody wrote. Mirrors the
+/// `("let", 2)` entry in [`crate::parser::conditional`]'s operand table, which
+/// subtracts the same slots for the same reason.
+pub(crate) fn definition_name_slots(text: &str) -> u8 {
+    match text {
+        "\\let" => 2,
+        _ if is_definition_keyword(text) => 1,
+        _ => 0,
+    }
+}
+
 /// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
 /// that opens a numeric context, where a following number is conventionally
 /// written in backtick char-constant notation (`` \char`$ ``, `` \catcode`\%=12 ``,

@@ -1700,3 +1700,45 @@ fn uncurated_and_verbatim_alias_targets_never_pair() {
     let verb = "\\newcommand{\\bv}{\\begin{verbatim}}\n\\newcommand{\\ev}{\\end{verbatim}}\n";
     assert_eq!(environments(&format!("{verb}\\bv a \\ev\n")), (0, true));
 }
+
+#[test]
+fn a_let_source_operand_is_not_an_opener() {
+    // `\let` binds *two* names: the definee and the meaning it is given. Both are
+    // mentions, not calls, so the definee filter counts slots rather than testing
+    // the single word after the keyword. With only one slot skipped, the `\bc` in
+    // `\let\oldbc\bc` reads as a live opener, pairs with the next stray `\ec`, and
+    // wraps the prose in between in an environment nobody wrote — lossless and
+    // silent, but layout is destroyed.
+    let defs = "\\newcommand{\\bc}{\\begin{center}}\n\\newcommand{\\ec}{\\end{center}}\n";
+    assert_eq!(
+        environments(&format!(
+            "{defs}\\bc x \\ec\n\\let\\oldbc\\bc\nprose\n\\ec\n"
+        )),
+        (1, true),
+        "only the genuine pair; the `\\let` operand opens nothing"
+    );
+    // The closer side mirrors it, and a `\let`ted definition keyword is the
+    // operand it looks like rather than a fresh countdown (`\let\a\def`).
+    assert_eq!(
+        environments(&format!("{defs}\\bc x \\let\\olde\\ec\ny\n\\ec\n")),
+        (1, true)
+    );
+    assert_eq!(
+        environments(&format!("{defs}\\let\\a\\def\\bc x \\ec\n")),
+        (0, true),
+        "a keyword consumed as an operand does not re-arm, but its slot still ran"
+    );
+}
+
+#[test]
+fn a_literal_begin_of_an_alias_name_is_an_ordinary_environment() {
+    // `\begin{bc}` is a `bc` environment that happens to spell the alias's name.
+    // The parser pairs it on its own terms (a real `\begin`/`\end`), and it must
+    // not become a `center` — the signature side of that is
+    // `Signatures::environment_at`, keyed on the node rather than the name.
+    let defs = "\\newcommand{\\bc}{\\begin{center}}\n\\newcommand{\\ec}{\\end{center}}\n";
+    assert_eq!(
+        environments(&format!("{defs}\\begin{{bc}} x \\end{{bc}}\n")),
+        (1, true)
+    );
+}

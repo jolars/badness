@@ -262,28 +262,42 @@ the alias, since the head consumes none and attaching them from the target's
 signature would be arity-directed grouping from scanned data. And **both
 halves** must be defined in the file, since a lone opener can never pair anyway.
 
-Two details carry most of the risk. First, the opener index must exclude the
-*name being defined*: `command()` sets `in_def_body` after a `\def` head only
-when the definee is a control symbol, so in `\def\bea{\begin{eqnarray}}` the
-definee reaches the dispatch as an ordinary command at brace depth 0 — and
-unfiltered, the two *definition lines* pair with each other. The braced
-`\newcommand{\bea}{…}` form is covered by `in_def_body` instead. Second, the
-gate is **positive**, modelled on the conditional's `alias_closer` rather than
-on the `\begin` gate: an alias opener has no `{name}` corroborating it and no
-unclosed-environment diagnostic worth preserving, so it must be refused unless
-its closer is located, and the walk is then bounded by that index. Unlike the
-conditional gate there is deliberately no paragraph-break anchor — an `itemize`
-alias legitimately spans blank lines, and reading one would key layout on a
-trivia predicate the formatter does not preserve.
+Two details carry most of the risk. First, the opener index must exclude every
+*name being bound*, which is a **slot countdown** and not a test of the single
+word after the keyword (`lexer::definition_name_slots`). `command()` sets
+`in_def_body` after a `\def` head only when the definee is a control symbol, so
+in `\def\bea{\begin{eqnarray}}` the definee reaches the dispatch as an ordinary
+command at brace depth 0 — and unfiltered, the two *definition lines* pair with
+each other. `\let\oldbea\bea` is the same failure one slot over: `\let` binds
+two names, and left live the *source* operand pairs with the next stray `\eea`
+and swallows the prose between them. (The conditional recognizer subtracts the
+same `("let", 2)` slots for the same reason.) The braced `\newcommand{\bea}{…}`
+form is covered by `in_def_body` instead. Second, the gate is **positive**,
+modelled on `conditional_closer` rather than on the `\begin` gate: an alias
+opener has no `{name}` corroborating it and no unclosed-environment diagnostic
+worth preserving, so it must be refused unless its closer is located, and the
+walk is then bounded by that index. Unlike the conditional gate there is
+deliberately no paragraph-break anchor — an `itemize` alias legitimately spans
+blank lines, and reading one would key layout on a trivia predicate the
+formatter does not preserve.
 
 The node is the ordinary `ENVIRONMENT > BEGIN … END`, with the delimiters
 holding a bare `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, so every
 consumer downstream works unchanged. `ast::Begin::name` falls back to that
-control word, and `Signatures::environment` resolves it — last, after the real
-tiers, so a genuine `\newenvironment{bea}` still wins. `name_range()` stays
-`None`, which is what makes the name-rewriting consumers (rename,
-change-environment, the `obsolete-environment` fix) decline cleanly rather than
-emit a half-edit.
+control word. `name_range()` stays `None`, which is what makes the
+name-rewriting consumers (rename, change-environment, the `obsolete-environment`
+fix) decline cleanly rather than emit a half-edit.
+
+Behavior is resolved **from the node, never from the name**:
+`Signatures::environment_at` reads the alias map only for a delimiter
+`Begin::is_alias` recognizes, and the plain name-keyed `Signatures::environment`
+never reads it at all. The distinction is the whole point of keeping aliases in
+a side map rather than cloning an `EnvironmentSig` under the alias name — a
+literal `\begin{bea}` written in a file that also defines `\bea` is an unrelated
+environment that happens to spell the same word, and it must stay unknown rather
+than inherit `eqnarray`'s math and alignment. By the same token a
+`\newenvironment{bea}` and an alias `\bea` coexist, each node resolving to its
+own.
 
 Accepted false negatives: `\let` chains, aliases used inside math (`math_atom`
 pairs environments ungated, so an alias arm there would be strictly worse), and

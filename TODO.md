@@ -721,19 +721,72 @@ sources below are missing.
     line is a comment, not a docstrip guard, so the extracted file changes — a
     meaning change, not a cosmetic one. Every `.dtx` in the list is this shape.
     Likely the same margin/guard column-0 pinning the reflow already backstops.
-- [ ] **The conditional gate is O(n·openers) in the worst case.**
-  `Parser::conditional_closer` runs one forward token scan per live opener. Every
-  ordinary anchor cuts it short — an unbalanced `}`, an unowed `\end`, a blank
-  line, a math delimiter, the `macrocode` chunk end — which is why the
-  conditional-heaviest packages in TeXLive (`biblatex.sty`, `latexrelease.sty`,
-  `memoir.cls`, `chemstr.sty`) measure within noise of the pre-node parser. The
-  shape that cuts nothing short is thousands of *top-level* openers with no blank
-  line, no unbalanced brace, and no reachable `\fi`: 8000 such lines cost ~2.2s
-  against ~0.07s, growing 4x per doubling. No corpus file is anywhere near it, so
-  this is recorded rather than fixed — a scan budget would be a hard-coded special
-  case, and the honest fix is to compute every opener's closer in one backward
-  sweep with an explicit stack (the counters — brace depth, environments, math,
-  `macrocode` — make that a rewrite, not a patch).
+- [ ] **Replace the per-opener gate scans with a precomputed closer map
+  (container stack; multi-session).** Every shape gate today runs one forward
+  token scan per live opener, each a hand transcription of the same
+  bookkeeping — brace depth with `plain_braces`, `\begin`/`\end` counting,
+  blank-line runs, the macrocode bound — eight copies in `grammar.rs`, growing
+  by one per gate, and a fix to one copy does not propagate (the issue-#95
+  `\left`-in-macro-code fix lives in its copy alone). The worst case is
+  O(n·openers). For the conditional gate: every ordinary anchor cuts the scan
+  short — an unbalanced `}`, an unowed `\end`, a blank line, a math delimiter,
+  the `macrocode` chunk end — which is why the conditional-heaviest packages
+  in TeXLive (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`, `chemstr.sty`)
+  measure within noise of the pre-node parser; but 8000 *top-level* openers
+  with no anchor in reach cost ~2.2s against ~0.07s, growing 4x per doubling.
+  No corpus file is anywhere near it, and a scan budget would be a hard-coded
+  special case. The honest fix is one pass over the token stream maintaining
+  explicit stacks of open containers (braces, environments, math,
+  conditionals, aliases, macrocode frames), computing for each opener index
+  the closer it can reach; the walk then consults the map instead of
+  scanning.
+
+  Two constraints make this a rewrite, not a refactor:
+
+  - **The walk stays authoritative; the map is an upper bound.** The gates'
+    existing one-directional contract carries over unchanged: the map must
+    never promise a closer past the one the recursive walk reaches, but the
+    walk may still close *earlier* — it re-gates nested openers and demotes
+    during the walk, and the demoted-name set is walk state, not token
+    state. `Conditional::closer` stays fallible; no consumer may treat the
+    map as ground truth, and no walk simplification may lean on it.
+  - **Anchor policies stay per-kind and explicit.** The gates deliberately
+    diverge (the alias gate has no paragraph anchor; `\left` counts inside
+    macro code; the `$` gate's blank-line anchor applies only between
+    top-level atoms of the math body; bracket claims resolve left to right).
+    The unified pass owns the *bookkeeping*, never averages the *policies* —
+    each policy must be restated stack-relative and verified byte-equivalent
+    against the gate corpora. The math family's top-level-atom anchor is the
+    hardest restatement; budget for it.
+
+  Stages, each gated on the corpus failing-file sets not growing (compare
+  sets, not counts):
+
+  - [ ] **C0 — bound the two unbounded gates now**, independent of the map.
+    `delim_math_closes` and `bracket_closes_in_text` have no analogue of the
+    alias gate's bound: a file of `\[` or `\cmd[` openers with no blank line
+    and no closer scans each opener to EOF. Precompute the last-closer
+    positions in the existing `new()` pre-scan (two `usize` fields, the
+    `last_alias_closer` treatment). Cheap, closes the remaining adversarial
+    quadratic shapes today, and survives every later stage.
+  - [ ] **C1 — conditionals first.** The gate with the measured pathological
+    case and the cleanest policy (its level tracking is already explicit:
+    brace, environment, math, macrocode). Build the closer map in the
+    existing pre-scan pass; opener recognition stays in
+    `parser::conditional`, shared with the linter's `ConditionalIndex`.
+  - [ ] **C2 — migrate the remaining gates one at a time**, easiest policy
+    first: alias, then `environment_escapes_group`, the math and bracket
+    family last. Each migration deletes one transcribed scan and its copy of
+    the bookkeeping.
+  - [ ] **C3 — decide whether to finish.** If the math-gate restatement
+    proves too entangled, stopping with conditionals and aliases on the map
+    and the math/bracket gates on a shared scan skeleton (one struct owning
+    bound computation, brace/env/blank-line bookkeeping, and the
+    macrocode-frame refusal, with per-gate closures keeping the deliberate
+    divergences explicit) is a respectable end-state — the skeleton and the
+    map are two depths of the same consolidation, chosen per gate. Do **not**
+    build the skeleton first as a stepping stone to the map; it is the
+    fallback, not the foundation.
 - [ ] **No orphan guard on formatter fixtures.** A directory under
   `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
   `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`

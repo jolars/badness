@@ -1388,6 +1388,17 @@ fn dollar_display_without_closer_gates_each_dollar() {
 }
 
 #[test]
+fn demoted_display_dollar_regates_its_second_dollar_as_inline() {
+    // `$$ a $`: no `$$` closer, so the display opener is demoted and its
+    // *second* `$` re-enters the gate — where it does pair, as inline math.
+    // The two queries land on the same token index under the same walk state
+    // but ask different questions (`display: true` then `false`), which is why
+    // the `$` gate runs unmemoized (container stack C2.3): a batch slot keyed
+    // on the walk state alone would answer the second from the first.
+    insta::assert_snapshot!(tree("$$ a $"));
+}
+
+#[test]
 fn dollar_math_still_pairs_across_groups_and_environments() {
     // The gate must not regress legit math: a closer past balanced `{…}`
     // nesting and a balanced `\begin…\end` still opens math.

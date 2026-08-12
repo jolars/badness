@@ -66,6 +66,21 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **`$`, `\[`, `\(` open math only when a closer is reachable** before an
   unbalanced `}`, an unowed `\end`, a paragraph break, chunk end, or EOF. The
   paragraph-break anchor applies only between top-level atoms of the math body.
+  Both run on the shared batch driver (container-stack C2.3) as `DollarGate` and
+  `DelimMathGate`, **single-entry**: they open no nested entry, so a batch
+  settles its seed alone — a delimiter that pairs swallows every opener up to
+  its closer, so there is no same-frame neighbor to settle. Four policies invert
+  against the pairing gates: a `}` refuses whether or not a group encloses the
+  opener (`StrayBrace::RefutesAlways`, mirroring `dollar_math`/`delim_math`,
+  which bail at any unbalanced `}`), a foreign math delimiter is content rather
+  than an anchor, environments count at *any* brace depth, and the closer needs
+  no environment balance. They also read a `macrocode` frame as an ordinary
+  environment rather than a hard boundary — preserved from the pre-batch scans,
+  not chosen; nothing in the corpora depends on it. The `$` gate is
+  **unmemoized**: a demoted `$$` re-enters on its second `$` with
+  `display: false`, a different question about the same index under the same
+  walk state, which a walk-state-keyed slot would answer from the first verdict
+  (`demoted_display_dollar_regates_its_second_dollar_as_inline`).
 - **`\if…\else…\or…\fi` pairs only when the `\fi` is reachable at the opener's
   own brace, environment, *and* math level**; a `macrocode` frame bounds it both
   ways, and the walk is bounded by the located closer index. A gate that counts a
@@ -120,11 +135,12 @@ Prefer false negatives; when in doubt a construct stays generic.
   none refuses without scanning. Recording may over-approximate, never
   under-approximate. A bound helps only a file with *no* closer, so a single
   reachable closer at EOF defeats it for every gate — which is what the batch
-  driver, not the bound, is for. The gates where the bound is useless even
-  without that: `dollar_closes` (its closer is its opener's own token kind, so
-  the bound is vacuous) and `environment_escapes_group` (every `\begin{…}`
-  carries a `}` in its own name group, so the index sits near EOF; batched in
-  C2.2). Scan work is metered
+  driver, not the bound, is for. **Every** gate names one, since the driver
+  takes it as `GatePolicy::last_closer` and refuses without scanning when it is
+  absent — including the two where it rarely bites: `dollar_closes` (its closer
+  is its opener's own token kind, so a file of openers ends at one) and
+  `environment_escapes_group` (every `\begin{…}` carries a `}` in its own name
+  group, so the index sits near EOF; batched in C2.2). Scan work is metered
   (`Parser::scan_work`) and pinned linear by the tests in `grammar.rs` — extend
   them when touching a gate.
 

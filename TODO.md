@@ -1026,22 +1026,63 @@ sources below are missing.
       more expensive on the same inputs anyway (item below), and that is where
       speed work belongs.
 
-    - [ ] **C2.3 — `delim_math_closes`, then `dollar_closes`.** Both count
-      environments at *any* brace depth, unlike the conditional and `\begin`
-      gates, and neither requires an environment balance at the closer — two
-      driver knobs, both explicit divergences. Their stray-`}` refusal is
-      unconditional where the positive gates' is `group_depth`-gated, so
-      `StrayBrace` grows a third variant. Neither treats a foreign math
-      delimiter as an anchor (`MATH_REFUTES = false`, as `EnvGate` already
-      sets). `dollar` adds two wrinkles: its closer is its own opener's token
-      kind, and a display `$$` opener starts the scan two tokens along — pass
-      the seed as `open + 1` from the caller rather than adding a hook, and
-      give `DollarGate` a `display` field for the "next token is `$`" test.
-      Run both **single-entry** (`opens_at` always false): their openers do
-      not nest — the first depth-0 closer answers every live opener at once —
-      so there is no LIFO to model and no closer-scope hook to add. `dollar`
-      also wants a `last_dollar` bound recorded in `new()` to keep the
-      `last_closer` contract honest.
+    - [x] **C2.3 — `delim_math_closes`, then `dollar_closes`** (done).
+      `DelimMathGate` and `DollarGate` are both **single-entry** as planned
+      (`opens_at` always false), and the plan's knobs all landed:
+      `ENVS_AT_ANY_DEPTH`, `CLOSER_NEEDS_ENV_BALANCE`, `MATH_REFUTES = false`,
+      and `StrayBrace`'s third variant — renamed as a trio
+      (`RefutesInGroup`/`ClosesInGroup`/`RefutesAlways`) so the `group_depth`
+      condition is in the name rather than in the driver. The display seed is
+      passed as `open + 1` from the caller, no hook. `last_dollar` is recorded.
+
+      Three things the plan did not have:
+
+      - **The `_`-arm widening had to come with C2.3, not C2.5.** These gates
+        close on a `DOLLAR` and a `CONTROL_SYMBOL`, so the driver had to ask
+        `opens_at`/`closes_at` for any token at the entries' own level before
+        either could run at all. Done, and it costs the narrow gates nothing
+        measurable (`bench:micro` parse-only within run-to-run noise on all
+        three documents). C2.5 inherits it.
+      - **A `macrocode` frame is not an anchor for these two.** The pre-batch
+        scans counted `\begin{macrocode}` as an ordinary environment where
+        every pairing gate treats the frame as a hard boundary — an
+        unanticipated divergence, kept as `MACROCODE_FRAME_ANCHORS` because
+        C2 migrates verdicts unchanged. Flipping it on is invisible to the
+        suite and to all four corpora but does change a `.dtx` doc-layer `\[`
+        that spans a chunk; if it should be unified, that is its own commit
+        with its own test, not a silent rider on a structural migration.
+      - **The `$` gate runs unmemoized** (`Parser::gate_verdict`). A memo slot
+        keyed on the walk state is not merely idle for a single-entry gate, it
+        is wrong: a demoted `$$` re-enters `element` on its *second* `$`, which
+        is the very index the display query seeded, under an unchanged walk
+        state, asking `display: false`. `$$ a $` is the shape — first `$`
+        plain, second opening inline math — pinned by
+        `demoted_display_dollar_regates_its_second_dollar_as_inline`.
+
+      Shadow differential green: the suite, a per-file pass over all 6277
+      corpus files with `-C debug-assertions`, and a torture `.tex`/`.dtx`
+      (closers inside groups, stray braces at both group depths, paragraph
+      breaks at and below the body's own level, issue #70's environment-nested
+      break, environments open at the closer, unowed `\end`, foreign
+      delimiters, lone `$` inside `$$`, macro-code data, definition bodies,
+      doc-layer openers scanning into a chunk, an opener inside one). The
+      harness bites: flipping `MACROCODE_FRAME_ANCHORS` for the experiment
+      above panicked on the torture `.dtx` at once.
+
+      **A process finding for C2.4/C2.5:** `task gate-corpora:check` does
+      **not** surface a panic — the per-file exit code is swallowed by the
+      distillation pipeline, and the flipped-knob build passed all eight
+      baselines while panicking on a four-line `.dtx`. Run the debug-assertions
+      binary file-by-file (`xargs -P8 -I{}`) as the shadow pass; the baseline
+      ratchet is a verdict check, not a panic check.
+
+      Linearity as measured (`parse` inside `bench:micro`, 1000/2000/4000
+      openers): `\[`-with-`\]`-at-EOF **178/340/681 µs**, exactly linear, and
+      pinned by `math_batch_stays_linear_with_one_closer_at_eof` for both
+      delim flavors and both `$` shapes. The `${` ratchet shape is unchanged
+      (38.6 → 35.9 ms end to end at n = 4000, the new bound if anything
+      helping), and stays quadratic by design — the test says so rather than
+      pinning a shape the gate cannot fix.
     - [ ] **C2.4 — `left_right_closes`.** A third environment-counting mode: a
       brace group is opaque, skipped wholesale. Also the one gate whose
       opener/closer recognition deliberately ignores `in_macro_code` (issue
@@ -1058,12 +1099,11 @@ sources below are missing.
       deliberate or a latent macrocode bug before preserving it into the
       driver.
 
-      One driver change these three share, and it is a *simplification*: ask
-      `opens_at`/`closes_at` for any non-trivia token at the entries' own
-      level instead of only for a `CONTROL_WORD`, since these gates' closers
-      are `DOLLAR`, `CONTROL_SYMBOL`, and `R_BRACKET`. The existing three
-      policies already test the token kind inside their own predicates, so
-      widening costs them nothing.
+      The driver change these three were to share — asking
+      `opens_at`/`closes_at` for any token at the entries' own level rather
+      than only for a `CONTROL_WORD` — **landed in C2.3**, which needed it for
+      its own `DOLLAR` and `CONTROL_SYMBOL` closers. An `R_BRACKET` closer is
+      already served.
 
     **Migration technique**, per stage: keep the old per-opener scan as a
     `#[cfg(debug_assertions)]` reference and assert `batch(open) ==

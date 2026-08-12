@@ -255,6 +255,22 @@ per-opener pre-checks — the enclosing `group_depth`, and the `.dtx` doc-margin
 exemption — are walk state rather than scan state, so they are applied per query
 and never stored in a batch.
 
+The two **math** gates (`DollarGate`, `DelimMathGate`) run on the same driver,
+and for the uniformity rather than for speed: they are *single-entry*, opening
+no nested entry, so a batch settles its seed and nothing else. That is not a
+limitation but the shape of the problem — a delimiter whose closer is reachable
+swallows every opener up to it, so there is never a same-frame neighbor left to
+settle. Four policies invert with them. A `}` refuses unconditionally, where the
+pairing gates refuse only when a group actually encloses the opener, because the
+parse they guard bails at any unbalanced `}`. A foreign math delimiter is
+ordinary content — for the `$` gate it *is* the closer. Environments count at
+every brace depth, since a math body descends into a group and keeps parsing
+environments there. And the closer needs no environment balance, since a
+delimiter ends the body wherever it sits. The `$` gate is also the one gate that
+runs *unmemoized*: a demoted `$$` re-enters on its second `$`, asking a
+different question about the same token index under the same walk state, which a
+slot keyed on the walk state alone would answer from the first query's verdict.
+
 ### Environment aliases
 
 `\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`

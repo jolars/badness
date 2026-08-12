@@ -65,6 +65,73 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `semantic::expl3`'s statement segmentation, and a node there would contend
     with it.
 
+- [ ] **Lexer state-machine cleanup (audit follow-up; token stream
+  unchanged).** The mode catalog is sound; the state handling is accreted.
+  The whole machine is 16 mutable locals inside the 411-line `lex_with`, 11
+  of them booleans, and the four one-shot `pending_*` flags are hand-cleared
+  at seven sites with *inconsistent subsets* — `pending_char_constant` is
+  carried silently across several early-`continue` branches, probably
+  unreachable but undocumented either way. One coherent refactor: a `Lexer`
+  struct over the locals (`lex_with` becomes a short loop over `try_*`
+  methods); `Option<Pending>` replacing the four flags (the arming command
+  sets are mutually exclusive, so one slot is faithful, and the seven reset
+  sites collapse to `pending = None`, resolving the carry-through asymmetry
+  by construction); `Option<MacrocodeSave>` folding `in_macrocode` +
+  `saved_at_letter` + `saved_expl_syntax` so the save/restore pairing is
+  type-enforced. Deduplicate while there: the `\begin`/`{`/name/`}`
+  four-token push appears three times verbatim, the `\begin{name}` probe
+  twice, inline-whitespace skipping five times, and every control word's
+  letter run is scanned twice (`lex_verbatim_command`, then `lex_control`).
+  Riders: fix the misattached doc block at `lexer.rs:310–329` (two essays,
+  both attached to `is_literal_token_command`, leaving
+  `is_char_constant_command` undocumented); retire the `VerbCtx` spelling in
+  internal signatures (keep the public alias); kill the per-environment
+  `format!("\\end{…}")`; name the curated `ltxdoc`-family class list. The
+  losslessness corpus makes the whole change cheap to verify.
+
+- [ ] **Grammar hygiene (audit follow-up; independent of the closer-map plan
+  under *Performance & hardening*).**
+  - Delete the shadow counters: `group_depth` is always `group_opens.len()`,
+    `math_depth` always `math_dollar.len()` — both mutated in lockstep at
+    every site, a desync waiting for the first construct that pushes one and
+    forgets the other.
+  - Deduplicate the DOC_COMMENT precede-splice (`parse_block` vs
+    `conditional`, two near-verbatim ~20-line copies; drift breaks comment
+    binding in one context only). Longer-term, promote the `precede` idiom
+    into the event layer as rust-analyzer's `Marker` does, retiring the four
+    manual `events.remove`/`insert` sites.
+  - Split `Parser::new`'s fused pre-scan into a testable `PreScan` struct —
+    four scans, three pieces of interleaved running state (`def_name_slots`,
+    `expl_on`, `opener_scan`), currently testable only through full parses.
+    Also where the closer map will land, so it fronts that work.
+  - `debug_assert!(!self.at_end())` at the top of `math_atom`: its `None` arm
+    consumes nothing and relies on every caller guarding EOF first (all five
+    today do); a forgotten guard loops to `PARSER_STEP_LIMIT`. Convert the
+    unchecked caller contract into a tripwire.
+  - Small helpers: `at_env_end` (the `at_command(END_CMD) &&
+    env_name_follows` pair appears ~10 times verbatim), a named blank-line
+    constant (`newlines >= 2` restated nine times), reuse `is_trivia` at its
+    three inline restatements, and an allocation-free `peek_end_name` (it
+    builds a `String` per call inside forward scans).
+  - Start carving `grammar.rs` (3,234 lines) into modules: trivia machinery
+    and the curated fact predicates first, the math/`\left…\right`
+    sublanguage as a candidate second. Fix the stale module doc at
+    `src/parser.rs:6` while there — it claims `build_tree` re-attaches
+    trivia; that logic moved to the grammar (`binding_run`) and the doc was
+    never updated.
+
+- [ ] **Comment consolidation (consolidate, never purge).** Comment density
+  in the parser crate is 30–39% per file and overwhelmingly the house-style
+  constraint-and-provenance kind — keep that. The cuttable part is
+  *restatement*: the lexer states the short-verb semantics in four places
+  and the macrocode-frame rules twice; call sites restate 25-line helper
+  docs. Cut each fact to one canonical location (the helper's doc) with
+  one-line call-site pointers — roughly a third of the comment mass, zero
+  information loss. The per-gate re-explanations of the shared scan skeleton
+  die with the closer-map work. `catcode_signal` (under *Semantic layer &
+  signatures*) is the cautionary tale for why this matters: the real hazard
+  at this density is a comment asserting something the code stopped doing.
+
 ## Formatter
 
 - [x] ~~**`]` is deleted inside prose-reflowable command arguments.**~~ **Fixed.**
@@ -588,6 +655,42 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   inferred. Check `\url`, `\path`, and `\lstinline` in the same pass.
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
   decision)*
+- [ ] **`catcode_signal` does not meet its own bar** (`semantic/define.rs`).
+  It requires `body.contains("\\catcode") && body.contains("12")` with no
+  adjacency, so a body carrying `\catcode…=\active` and an unrelated `12pt`
+  matches — while the comment claims the two-token requirement is what keeps
+  it strict. The failure direction is the bad one: a false positive here
+  suppresses real diagnostics, exactly what the verbatim scan is documented
+  to avoid. Require the `12` in assignment position after `\catcode` (or at
+  least within a bounded window); add the `12pt` counterexample as a test.
+- [ ] **Make `EnvironmentSig::reflow`/`block` computed, not stored.** Both
+  are derivations of other fields, and mutation sites must hand-sync them —
+  `define.rs` writes `sig.reflow = false` manually after setting
+  `verbatim_body` at two sites, and a forgotten sync is silent. Computed
+  methods remove the field, the hand-sync, and the derivation duplicated
+  across the const fns and `From<RawEnvironment>`.
+- [ ] **`is_cite_command` accepts any `\cite*`-prefixed name**
+  (`semantic/builder.rs`): `\citebox` or `\citecolor` gets its argument
+  recorded as citation keys — an open-ended false-positive surface, unlike
+  the neighboring closed-table predicates, and nothing documents the choice.
+  Either write down why open-prefix recall is intended or close the set.
+- [ ] **Semantic-layer hygiene (audit follow-up).**
+  - `ast::command_name` (and `ControlWord::name`, `nth_group_text`) return
+    `SmolStr`/`&str` instead of `String` — called per command node in every
+    tree walk and in expl3's segmentation hot loops; the cheapest real
+    allocation win the audit found.
+  - Split the completion word-list tiers (package/class names, colors, tikz
+    libraries, CTAN metadata, `arg_enums`) out of `signature.rs` into their
+    own module — they have nothing to do with signatures, and the file drops
+    to ~1,100 lines.
+  - Collapse `merge_from`/`merge_from_package` into one origin-parametrized
+    helper; table-ize `builder::build`'s four identical key-family arms (the
+    layer's only 100+-line function); extract expl3's `is_recognized_head`
+    predicate (spelled three ways today); consider per-index flags for
+    `StatementMap`'s four parallel `Vec<bool>` so illegal states are
+    unrepresentable; hash-map `builder::resolve` (currently O(refs ×
+    labels)); move `define.rs`'s private `is_trivia` mirror into `syntax`
+    beside `is_collapsible_trivia`.
 
 ## Language server
 
@@ -787,6 +890,19 @@ sources below are missing.
     map are two depths of the same consolidation, chosen per gate. Do **not**
     build the skeleton first as a stepping stone to the map; it is the
     fallback, not the foundation.
+- [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
+  Everything today is curated corpus + snapshots; nothing exercises
+  `PARSER_STEP_LIMIT` or the recovery paths with arbitrary bytes, and
+  `reconstruct(text) == text` over random input is a perfect fuzz target
+  (`proptest` or `cargo-fuzz`). While in the tests: split `tests/parser.rs`
+  (1,744 lines, 157 tests) by area — math, verbatim, comments, conditionals,
+  aliases.
+- [ ] **`build.rs` renders positional same-typed bool lists** in the
+  generated constructor calls (`command(&[…], None, false, false, false)`;
+  nine positional args for environments), so a swapped `verbatim`/`rule`
+  compiles silently. Named-struct constructors, or `/*verbatim*/`-style
+  inline comments in the rendered source, make the generated code
+  self-checking.
 - [ ] **No orphan guard on formatter fixtures.** A directory under
   `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
   `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`
@@ -949,6 +1065,26 @@ not re-proposed.
   that must stash a *stable node identity* in a salsa query (resolving a
   completion/hover target to a specific node across edits) has no primitive for
   it, and byte-ranges alone do not survive edits.
+- [ ] **Collapse the four near-identical token walks in `ast/nodes.rs`**
+  (`Group::inner_text`/`inner`, `NameGroup::text`/`range`): all four walk
+  `children_with_tokens`, skip the delimiters, bail on nested nodes, and
+  accumulate text and/or a range. The drift risk is demonstrated, not
+  hypothetical — the issue-#104 `HASH` rejection made it into two of the
+  four. One shared helper.
+- [ ] **Mark the free-function AST shims `#[deprecated]`** (or file the
+  removal issue) once the formatter/linter call sites migrate — two parallel
+  APIs for the same reads with no forcing function is a standing invitation
+  for new code to pick the wrong one.
+- [ ] **Share the cross-language boilerplate that is past due**: one
+  `SyntaxError` for `parser::core` and `bib::core` (two identical structs
+  today, a type-level fork consumers handle twice), an `impl_rowan_lang!`
+  macro for the duplicated `Language`/transmute boilerplate (leaves one
+  audited `unsafe` instead of two), and a compile-time `ROOT`-is-last
+  assertion making the "do not add variants after `ROOT`" comment
+  mechanical. Leave the rest of the bib parallel alone — it is disciplined,
+  self-labeled duplication with the unification path recorded in place, and
+  genericizing events/tree_builder/`Parser` at n=2 would be a premature
+  abstraction.
 
 ## Open decisions to revisit
 

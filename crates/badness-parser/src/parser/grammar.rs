@@ -464,9 +464,11 @@ trait GatePolicy {
     const NESTING: Nesting = Nesting::Counted;
 
     /// Whether this gate's openers are themselves `\begin`s, so the driver must
-    /// count one in `envs` *before* pushing its entry. An entry's `envs_at_push`
-    /// then excludes its own environment — which its per-opener scan, starting
-    /// one token past the `\begin`, never saw either.
+    /// count one in `envs` *before* pushing its entry. The entry's own
+    /// environment is therefore *in* its `envs_at_push`, which is what makes the
+    /// relative count `envs - envs_at_push` start at zero — matching its
+    /// per-opener scan, which starts one token past the `\begin` and never saw
+    /// that environment either.
     const OPENER_IS_ENV_BEGIN: bool = false;
 
     /// Whether the `\begin`/`\end` and math-*delimiter* anchors apply at any
@@ -914,6 +916,15 @@ impl GatePolicy for TextBracketGate {
 ///   not plain tokens ([`GatePolicy::PLAIN_BRACES_ARE_TOKENS`]). Both make it
 ///   stricter than the [`Parser::optional`] bail it mirrors, in the direction
 ///   that only ever declines to attach.
+///
+/// This is also the one gate whose `macrocode` bound is not the C0 argument.
+/// Every other gate's pre-batch scan already stopped at [`Parser::macrocode_end`];
+/// this one ran to EOF, so the driver's frame bound is new to it, and "past the
+/// last closer only refusals remain" is not why it is verdict-preserving. The
+/// reason is the bullet above: the `\begin`/`\end` anchor here carries no
+/// `in_macro_code` filter, and the token at `macrocode_end` is the frame's own
+/// `\end{macrocode}`, which the anchor refuses at — so the pre-batch scan
+/// stopped at exactly the index the bound now stops before.
 struct MathBracketGate {
     /// Whether the innermost enclosing math is `$…$`/`$$…$$`
     /// ([`Parser::math_dollar`]).
@@ -1165,9 +1176,9 @@ struct Parser<'t> {
     /// settled by the batch; anything else re-batches from the queried opener.
     /// One slot is all the reuse there is: [`Self::element`] queries each
     /// opener once, in ascending order, under a stable state between
-    /// re-batches. `RefCell` because the gate is `&self` (the
-    /// [`Self::alias_closer_memo`] pattern, with a map where that memo keeps
-    /// one verdict).
+    /// re-batches. `RefCell` because the gate is `&self` — the pattern the
+    /// alias gate's pre-batch memo used, with a map of settled openers where
+    /// that one kept a single verdict.
     conditional_batch: std::cell::RefCell<Option<GateBatch>>,
     /// Tokens visited by the shape-gate scans, summed over the whole parse. A
     /// measurement hook for the linearity regression tests in this file's

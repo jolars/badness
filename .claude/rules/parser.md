@@ -123,7 +123,7 @@ Prefer false negatives; when in doubt a construct stays generic.
   a later `\fi` must still be consumed by the refuted entry's slot
   (`a_refuted_nested_opener_still_consumes_a_fi`). The batch is a **shared
   driver** (`Parser::gate_batch`), not this gate's own machinery: it owns the
-  bookkeeping every gate repeats and takes a `GatePolicy` per gate. All eight
+  bookkeeping every gate repeats and takes a `GatePolicy` per gate. All nine
   gates run on it (container-stack C2 is complete); never average two gates'
   policies into the loop — where two read the same token differently, add a
   named axis with its reason, and say whether it was *chosen* or *preserved*.

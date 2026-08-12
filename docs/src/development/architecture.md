@@ -500,9 +500,9 @@ metering, and the walk-state memo — while each gate supplies a `GatePolicy`
 naming its own bound, its openers and closers, and whether a blank line anchors
 it. The divergences between gates are deliberate, so they stay visible as policy
 methods rather than being averaged into the loop. With the bracket family
-migrated the driver serves all eight gates, and the policy surface is what the
+migrated the driver serves all nine gates, and the policy surface is what the
 migration bought: every place two gates read the same token differently is a
-named axis with a documented reason, where before it was eight hand
+named axis with a documented reason, where before it was nine hand
 transcriptions in which a fix to one copy did not propagate (issue #95).
 
 Two anchors differ from the environment gate on purpose. Running out of file

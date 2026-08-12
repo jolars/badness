@@ -1184,7 +1184,7 @@ fn a_refuted_nested_opener_still_consumes_a_fi() {
     // unowed `\end{center}` demotes `\ifdim`, but `\ifdim`'s slot still
     // consumes the lone `\fi`, so the outer `\ifnum` runs out of closers and
     // demotes too. The batched scan must settle a refuted entry *without*
-    // removing it from the pending stack (`conditional_closers_from`);
+    // removing it from the pending stack (`Parser::gate_batch`);
     // popping it would hand the `\fi` to `\ifnum` — a `CONDITIONAL` the
     // per-opener scan never built. (The two-`\fi` sibling of this shape is
     // `conditional_walk_may_close_before_the_located_fi`.)

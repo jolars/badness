@@ -916,7 +916,7 @@ sources below are missing.
     one linear pass (~34ms for 8000 openers end-to-end), pinned by
     `conditional_batch_keeps_shared_frame_openers_linear`.
   - [x] **C2 — migrate the remaining gates onto one batch driver** (done in
-    five stages, C2.1–C2.5; all eight gates now run on `Parser::gate_batch`),
+    five stages, C2.1–C2.5; all nine gates now run on `Parser::gate_batch`),
     easiest policy first: alias, then `environment_escapes_group`, then the
     math and bracket family. This item's original wording ("each migration deletes one
     transcribed scan and its copy of the bookkeeping") belongs to the

@@ -124,13 +124,18 @@ fn parse_ctx(root: &SyntaxNode) -> ParseCtx {
     if db.env_begin_aliases().next().is_some() {
         let called = command_call_counts(root);
         let is_called = |name: &str| called.get(name).is_some_and(|n| *n >= 2);
+        let mut live_targets: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (name, target) in db.env_begin_aliases() {
             if is_called(name) {
                 ctx.insert_begin_alias(SmolStr::new(name), SmolStr::new(target));
+                live_targets.insert(target);
             }
         }
         for (name, target) in db.env_end_aliases() {
-            if is_called(name) {
+            // A closer whose target has no live opener can never pair, and left in
+            // it would keep `ParseCtx::is_empty` false all on its own — buying the
+            // file a second parse that has no alias work to do.
+            if is_called(name) && live_targets.contains(target) {
                 ctx.insert_end_alias(SmolStr::new(name), SmolStr::new(target));
             }
         }

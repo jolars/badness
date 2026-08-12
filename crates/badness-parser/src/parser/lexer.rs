@@ -228,8 +228,13 @@ impl ParseCtx {
 
     /// Whether any environment alias is recorded — the cheap guard the grammar
     /// checks before building its per-token opener/closer index.
+    ///
+    /// Both maps are read, so this can never disagree with
+    /// [`is_empty`](Self::is_empty) about whether the second pass has alias work
+    /// to do. `parser::core::parse_ctx` additionally drops a closer whose target
+    /// has no live opener, so in practice the maps are non-empty together.
     pub(crate) fn has_env_aliases(&self) -> bool {
-        !self.begin_aliases.is_empty()
+        !self.begin_aliases.is_empty() || !self.end_aliases.is_empty()
     }
 }
 

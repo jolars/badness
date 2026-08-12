@@ -88,8 +88,9 @@ Prefer false negatives; when in doubt a construct stays generic.
   other, and `\let\oldbea\bea` leaves the *source* operand live to pair with the
   next stray closer. Gate is modelled on `conditional_closer` (locate the closer,
   bound the walk by it, EOF does not pair), **not** on the `\begin` demotion
-  gate, and has no paragraph anchor. Demotes silently. Not extended to
-  `math_atom` in v1.
+  gate, and has no paragraph anchor. Demotes silently. Bound the walk by the last
+  closer in the file and memoize the verdict — the caller asks twice, and openers
+  that never pair are otherwise quadratic. Not extended to `math_atom` in v1.
 - **Alias behavior resolves from the node, never the name.**
   `Signatures::environment_at` reads the alias map only for a `Begin::is_alias`
   delimiter; the name-keyed `Signatures::environment` never reads it. A literal

@@ -281,6 +281,16 @@ deliberately no paragraph-break anchor — an `itemize` alias legitimately spans
 blank lines, and reading one would key layout on a trivia predicate the
 formatter does not preserve.
 
+The scan is bounded twice over, because it is otherwise quadratic in a shape
+real packages have: a `.sty` that defines `\bc`/`\ec` for its users and calls
+`\bc` from macro bodies has openers that never pair, and each walks to EOF.
+Every `Some` verdict names an index in the closer index, so the walk stops at
+the *last* closer in the file (none at all, and the gate refuses outright), and
+the verdict is memoized for the one opener the caller asks about twice —
+`starts_block_env` peeks before `element` dispatches. The adversarial residue —
+thousands of openers with a single closer at EOF — stays quadratic, the same
+recorded shape the conditional gate has.
+
 The node is the ordinary `ENVIRONMENT > BEGIN … END`, with the delimiters
 holding a bare `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, so every
 consumer downstream works unchanged. `ast::Begin::name` falls back to that

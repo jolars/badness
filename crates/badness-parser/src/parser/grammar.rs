@@ -352,6 +352,18 @@ struct Parser<'t> {
     alias_openers: std::collections::HashMap<usize, SmolStr>,
     /// The closer mirror of [`Self::alias_openers`] (`\end{X}` bodies).
     alias_closers: std::collections::HashMap<usize, SmolStr>,
+    /// The largest index in [`Self::alias_closers`], or `None` when the file has
+    /// no alias closer at all. [`Self::alias_closer`] can only ever return an
+    /// index in that map, so this bounds its forward scan — which is what keeps
+    /// a file of openers that never pair linear instead of quadratic.
+    last_alias_closer: Option<usize>,
+    /// One-entry memo for [`Self::alias_closer`], as `(opener, group_depth,
+    /// verdict)`. Both [`Self::starts_block_env`] and the [`Self::element`]
+    /// dispatch ask about the same opener at the same cursor position, and the
+    /// walk is the expensive part, so without this every opener pays for it twice.
+    /// Keyed on `group_depth` as well because the verdict reads it; the parser
+    /// never revisits a token index, so one entry is all the reuse there is.
+    alias_closer_memo: std::cell::Cell<Option<(usize, usize, Option<usize>)>>,
     /// Token index of the alias closer bounding the environment body currently
     /// being parsed, if any. Saved and restored around the body in
     /// [`Self::alias_environment`]. An alias environment has no `\end{…}` to stop
@@ -455,8 +467,10 @@ impl<'t> Parser<'t> {
             plain_braces: std::collections::HashSet::new(),
             expl_toggles,
             conditional_openers,
+            last_alias_closer: alias_closers.keys().copied().max(),
             alias_openers,
             alias_closers,
+            alias_closer_memo: std::cell::Cell::new(None),
             alias_end: None,
         }
     }
@@ -486,8 +500,10 @@ impl<'t> Parser<'t> {
     }
 
     /// True when token `idx` lies on a `.dtx` doc-margin line (a `DOC_MARGIN`
-    /// opens its physical line). Walks back to the preceding `NEWLINE`; doc
-    /// lines are short, and the check runs only at `\begin`/`\end` tokens.
+    /// opens its physical line). Walks back to the preceding `NEWLINE`; doc lines
+    /// are short, and [`Self::in_macro_code`] only reaches this once a token is
+    /// already known to sit in an expl3 region, so it stays rare however often
+    /// that predicate is asked.
     fn on_doc_margin_line(&self, idx: usize) -> bool {
         self.tokens[..idx]
             .iter()
@@ -2630,15 +2646,37 @@ impl<'t> Parser<'t> {
     /// closer found at depth zero to name our own target. So `\bea \bce \ece \eea`
     /// pairs while the crossing `\bea \bce \eea \ece` refuses outright, instead of
     /// letting an inner walk run past the outer bound.
+    ///
+    /// Memoized, since the caller asks twice — see [`Self::alias_closer_memo`].
     fn alias_closer(&self, open: usize) -> Option<usize> {
+        if let Some((memo_open, memo_depth, verdict)) = self.alias_closer_memo.get()
+            && memo_open == open
+            && memo_depth == self.group_depth
+        {
+            return verdict;
+        }
+        let verdict = self.alias_closer_uncached(open);
+        self.alias_closer_memo
+            .set(Some((open, self.group_depth, verdict)));
+        verdict
+    }
+
+    /// [`Self::alias_closer`]'s walk, behind that method's memo.
+    fn alias_closer_uncached(&self, open: usize) -> Option<usize> {
         let target = self.alias_openers.get(&open)?;
         let mut depth = 0usize;
         let mut envs = 0usize;
         let mut nested = 0usize;
+        // Every `Some` return names an index in `alias_closers`, so the walk can
+        // stop at the last one in the file: past it only `None` paths remain, and
+        // running off the end is `None` too. Without the bound, a file of openers
+        // that never pair (`\bc` per line, no `\ec` anywhere) walks each one to
+        // EOF — quadratic, and measurably so on a `.sty` of a few thousand lines.
         let end = self
             .macrocode_end
             .unwrap_or(self.tokens.len())
-            .min(self.tokens.len());
+            .min(self.tokens.len())
+            .min(self.last_alias_closer? + 1);
         let mut i = open + 1;
         while i < end {
             let t = &self.tokens[i];

@@ -315,6 +315,45 @@ impl GatePolicy for ConditionalGate {
     }
 }
 
+/// [`Parser::alias_closer`]'s policy: environment-alias openers pairing with a
+/// closer alias for the *same* target environment (issue #109).
+///
+/// Two divergences from [`ConditionalGate`], both deliberate:
+///
+/// - **No paragraph anchor.** An alias for `itemize` legitimately spans blank
+///   lines, and the body is parsed with [`Parser::parse_block`], which builds
+///   `PARAGRAPH`s inside it. Reading a blank line here would also key layout on
+///   a trivia predicate the formatter does not preserve.
+/// - **Names must match** ([`GatePolicy::pairs`]). Nesting counts *any* alias
+///   opener and *any* alias closer, so `\bea \bce \ece \eea` pairs while the
+///   crossing `\bea \bce \eea \ece` refuses outright instead of letting an
+///   inner walk run past the outer bound.
+///
+/// Both halves are recognized only outside macro code, where `\begin`/`\end`
+/// are plain commands that need not pair (issues #45/#60) — the same filter the
+/// driver applies to its own `\begin`/`\end` counting.
+struct AliasGate;
+
+impl GatePolicy for AliasGate {
+    const PARAGRAPH_ANCHOR: bool = false;
+
+    fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
+        p.last_alias_closer
+    }
+
+    fn opens_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        p.alias_openers.contains_key(&i) && !p.in_macro_code(i)
+    }
+
+    fn closes_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        p.alias_closers.contains_key(&i) && !p.in_macro_code(i)
+    }
+
+    fn pairs(&self, p: &Parser<'_>, opener: usize, closer: usize) -> bool {
+        p.alias_closers.get(&closer) == p.alias_openers.get(&opener)
+    }
+}
+
 struct Parser<'t> {
     tokens: &'t [Token],
     /// User-defined verbatim constructs, consulted to route a verbatim environment to
@@ -491,13 +530,12 @@ struct Parser<'t> {
     /// `mod tests` — never a budget (`TODO.md` rejects scan budgets as
     /// hard-coded special cases). `Cell` because the gates take `&self`.
     scan_work: std::cell::Cell<usize>,
-    /// One-entry memo for [`Self::alias_closer`], as `(opener, group_depth,
-    /// verdict)`. Both [`Self::starts_block_env`] and the [`Self::element`]
-    /// dispatch ask about the same opener at the same cursor position, and the
-    /// walk is the expensive part, so without this every opener pays for it twice.
-    /// Keyed on `group_depth` as well because the verdict reads it; the parser
-    /// never revisits a token index, so one entry is all the reuse there is.
-    alias_closer_memo: std::cell::Cell<Option<(usize, usize, Option<usize>)>>,
+    /// The [`AliasGate`] twin of [`Self::conditional_batch`]. Both
+    /// [`Self::starts_block_env`] and the [`Self::element`] dispatch ask about
+    /// the same opener at the same cursor position, so even before the batch
+    /// settled its neighbors this slot was load-bearing: without it every
+    /// opener paid for its walk twice.
+    alias_batch: std::cell::RefCell<Option<GateBatch>>,
     /// Token index of the alias closer bounding the environment body currently
     /// being parsed, if any. Saved and restored around the body in
     /// [`Self::alias_environment`]. An alias environment has no `\end{…}` to stop
@@ -645,7 +683,7 @@ impl<'t> Parser<'t> {
             scan_work: std::cell::Cell::new(0),
             alias_openers,
             alias_closers,
-            alias_closer_memo: std::cell::Cell::new(None),
+            alias_batch: std::cell::RefCell::new(None),
             alias_end: None,
         }
     }
@@ -3025,112 +3063,29 @@ impl<'t> Parser<'t> {
     /// "pair unless refuted" would be far too optimistic: it must be refused unless
     /// its closer is positively located, and the walk is then bounded by that index.
     ///
-    /// Requirements carried over from the sibling gates:
+    /// Requirements the driver ([`Self::gate_batch`]) carries for it, shared
+    /// with the sibling gates:
     ///
     /// - **Brace level.** A `}` closing a group opened before the opener always
     ///   wins — braces are catcode structure, an alias is only a macro (issue #71).
     /// - **`envs == 0`.** A closer inside an environment the alias opened is
     ///   consumed by that environment's body, so the walk cannot reach it.
-    /// - **Math refuses.** This scan does not model the `$`/`\[`/`\(` shape gates,
+    /// - **Math refuses.** The scan does not model the `$`/`\[`/`\(` shape gates,
     ///   so rather than re-derive them it declines behind one.
     /// - **`macrocode` bounds it both ways**, as for conditionals.
     ///
-    /// Unlike the conditional gate there is deliberately **no paragraph-break
-    /// anchor**: an alias for `itemize` legitimately spans blank lines, and the body
-    /// is parsed with [`Self::parse_block`], which builds `PARAGRAPH`s inside it.
-    /// Reading a blank line here would also key layout on a trivia predicate the
-    /// formatter does not preserve.
+    /// What is this gate's own is in [`AliasGate`]: no paragraph anchor, and a
+    /// closer that must name the opener's target.
     ///
-    /// Nesting counts *any* alias opener and *any* alias closer, then requires the
-    /// closer found at depth zero to name our own target. So `\bea \bce \ece \eea`
-    /// pairs while the crossing `\bea \bce \eea \ece` refuses outright, instead of
-    /// letting an inner walk run past the outer bound.
-    ///
-    /// Memoized, since the caller asks twice — see [`Self::alias_closer_memo`].
+    /// Batched and memoized like the conditional gate — and here the memo was
+    /// load-bearing before the batch existed, since the caller asks twice
+    /// ([`Self::alias_batch`]).
     fn alias_closer(&self, open: usize) -> Option<usize> {
-        if let Some((memo_open, memo_depth, verdict)) = self.alias_closer_memo.get()
-            && memo_open == open
-            && memo_depth == self.group_depth
-        {
-            return verdict;
-        }
-        let verdict = self.alias_closer_uncached(open);
-        self.alias_closer_memo
-            .set(Some((open, self.group_depth, verdict)));
-        verdict
-    }
-
-    /// [`Self::alias_closer`]'s walk, behind that method's memo.
-    fn alias_closer_uncached(&self, open: usize) -> Option<usize> {
-        let target = self.alias_openers.get(&open)?;
-        let mut depth = 0usize;
-        let mut envs = 0usize;
-        let mut nested = 0usize;
-        // Every `Some` return names an index in `alias_closers`, so the walk can
-        // stop at the last one in the file: past it only `None` paths remain, and
-        // running off the end is `None` too. Without the bound, a file of openers
-        // that never pair (`\bc` per line, no `\ec` anywhere) walks each one to
-        // EOF — quadratic, and measurably so on a `.sty` of a few thousand lines.
-        let end = self
-            .macrocode_end
-            .unwrap_or(self.tokens.len())
-            .min(self.tokens.len())
-            .min(self.last_alias_closer? + 1);
-        let mut i = open + 1;
-        while i < end {
-            self.tick_scan();
-            let t = &self.tokens[i];
-            match t.kind {
-                SyntaxKind::DOLLAR if depth == 0 => return None,
-                SyntaxKind::CONTROL_SYMBOL
-                    if depth == 0 && matches!(t.text.as_str(), "\\[" | "\\(") =>
-                {
-                    return None;
-                }
-                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
-                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
-                    if depth == 0 {
-                        if self.group_depth > 0 {
-                            return None;
-                        }
-                    } else {
-                        depth -= 1;
-                    }
-                }
-                SyntaxKind::CONTROL_WORD if depth == 0 && !self.in_macro_code(i) => {
-                    if self.alias_openers.contains_key(&i) {
-                        nested += 1;
-                    } else if let Some(closing) = self.alias_closers.get(&i) {
-                        if nested == 0 {
-                            // Ours only if it names the same environment and no
-                            // `\begin`-opened environment stands in the way.
-                            return (closing == target && envs == 0).then_some(i);
-                        }
-                        nested -= 1;
-                    } else if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
-                        // A `macrocode` frame is a hard boundary in both directions,
-                        // for the reason spelled out in `conditional_closer`.
-                        if peek_begin_name(self.tokens, i)
-                            .is_some_and(|n| matches!(n.as_str(), "macrocode" | "macrocode*"))
-                        {
-                            return None;
-                        }
-                        envs += 1;
-                    } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
-                        if envs == 0 {
-                            return None;
-                        }
-                        envs -= 1;
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        // Running out of input does not pair: unlike `\begin`, there is no
-        // unclosed-environment diagnostic to preserve, so a lone opener is simply
-        // a macro call.
-        None
+        // Total in `open`: [`Self::starts_block_env`] asks about any index, and
+        // the driver would otherwise seed an entry for a token that opens
+        // nothing.
+        self.alias_openers.get(&open)?;
+        self.gated_closer(open, &AliasGate, &self.alias_batch)
     }
 
     /// `\bea … \eea`: an environment opened and closed by bare control words, for
@@ -3681,6 +3636,29 @@ mod tests {
     fn conditional_batch_keeps_shared_frame_openers_linear() {
         let body = |n: usize| format!("{}\\fi\n", "\\ifabc x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
+    }
+
+    /// The alias twin of `conditional_batch_keeps_shared_frame_openers_linear`
+    /// (`TODO.md`, container stack C2.1): a run of same-frame alias openers
+    /// whose lone closer sits at EOF spans the whole file, so the C0
+    /// last-closer bound cuts nothing and only the batch keeps it linear.
+    #[test]
+    fn alias_batch_keeps_shared_frame_openers_linear() {
+        let scan_work = |input: &str| {
+            let tokens = lex(input);
+            let mut ctx = ParseCtx::default();
+            ctx.insert_begin_alias(SmolStr::new("bc"), SmolStr::new("center"));
+            ctx.insert_end_alias(SmolStr::new("ec"), SmolStr::new("center"));
+            let mut p = Parser::new(&tokens, &ctx);
+            p.document();
+            p.scan_work.get()
+        };
+        let body = |n: usize| format!("{}\\ec\n", "\\bc x\n".repeat(n));
+        let (w1, w2) = (scan_work(&body(200)), scan_work(&body(400)));
+        assert!(
+            w2 < 3 * w1 + 64,
+            "gate-scan work grew superlinearly: {w1} -> {w2}"
+        );
     }
 
     /// The in-math no-closer shapes: the enclosing math's own gate passes (its

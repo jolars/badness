@@ -287,9 +287,16 @@ real packages have: a `.sty` that defines `\bc`/`\ec` for its users and calls
 Every `Some` verdict names an index in the closer index, so the walk stops at
 the *last* closer in the file (none at all, and the gate refuses outright), and
 the verdict is memoized for the one opener the caller asks about twice —
-`starts_block_env` peeks before `element` dispatches. The adversarial residue —
-thousands of openers with a single closer at EOF — stays quadratic, the same
-recorded shape the conditional gate has.
+`starts_block_env` peeks before `element` dispatches.
+
+The gate runs on the shared batch driver (`AliasGate`), the conditional gate's
+second client, so the residual adversarial shape — thousands of openers with a
+single closer at EOF, where the last-closer bound spans the whole file and cuts
+nothing — is one linear pass rather than a scan per opener. Its two policy
+divergences from the conditional gate are the missing paragraph anchor above and
+the name match on the closer: nesting counts *any* alias opener and *any* alias
+closer, so `\bea \bce \ece \eea` pairs while the crossing `\bea \bce \eea \ece`
+refuses outright instead of letting an inner walk run past the outer bound.
 
 The node is the ordinary `ENVIRONMENT > BEGIN … END`, with the delimiters
 holding a bare `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, so every

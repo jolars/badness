@@ -956,11 +956,21 @@ sources below are missing.
       parse-compat report are unchanged, and `bench:micro` is flat within
       run-to-run noise (parse-only spread on the small documents is ±30%
       between runs either way).
-    - [ ] **C2.1 — alias.** Conditional's policy minus the paragraph anchor,
-      plus the named-closer test (`closing == target`); retires
-      `alias_closer_memo` into the shared memo. Low value, low risk: its job
-      is to shape the abstraction with a second client before the expensive
-      ones arrive.
+    - [x] **C2.1 — alias** (done). `AliasGate` is conditional's policy minus
+      the paragraph anchor, plus the named-closer test — the first client of
+      the defaulted `pairs` hook, which needed no driver change. The
+      `alias_closer_memo` slot became `alias_batch`, and its key widened from
+      `(opener, group_depth)` to the shared `WalkKey`, which also closes a
+      latent staleness hole: the old key omitted `in_def_body` even though the
+      scan reads it through `in_macro_code`. The shadow differential ran green
+      over the suite, all four corpora (release + `-C debug-assertions`), and
+      a torture file covering nesting, crossing, group escape, math, an
+      environment in the way, a closer inside one, mismatched names, a
+      definition body, and a paragraph-spanning body; then the reference came
+      out, since it ticks `scan_work` and so hides the very linearity the pin
+      measures. Adversarial shape (N openers, one closer at EOF) at
+      1000/2000/4000: 15/59/192ms before, 9/18/46ms after, pinned by
+      `alias_batch_keeps_shared_frame_openers_linear`.
     - [ ] **C2.2 — `environment_escapes_group`.** The biggest measured win,
       and the polarity inverts: it is a *demotion* gate, so an entry still
       live at the end settles `false` (pairs), which is what preserves the

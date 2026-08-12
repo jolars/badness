@@ -253,6 +253,21 @@ struct GateBatch {
     verdicts: std::collections::HashMap<usize, Option<usize>>,
 }
 
+/// What a `}` closing a group opened *before* a gate's entries means to that
+/// gate. The token event is the same for every gate — braces are catcode
+/// structure while the gated delimiters are only macros, so the `}` always wins
+/// — but the *verdict* it implies is opposite either side of the positive
+/// gate/demotion gate line, which is why it is policy and not bookkeeping.
+#[derive(PartialEq, Eq)]
+enum StrayBrace {
+    /// It refutes every live entry: a conditional or an alias cannot pair
+    /// across it, so the opener stays a plain command.
+    Refutes,
+    /// It *is* the closer: [`Parser::environment_escapes_group`] asks whether
+    /// the `\begin` escapes its group, and this brace is the escape.
+    Closes,
+}
+
 /// The per-gate half of [`Parser::gate_batch`]: how far this gate's scan can
 /// reach, which tokens open and close its construct, and whether a blank line
 /// anchors it.
@@ -274,6 +289,26 @@ trait GatePolicy {
     /// conditionals, which mirror a parse that stops at a `\par`; false for
     /// aliases, whose body legitimately spans blank lines.
     const PARAGRAPH_ANCHOR: bool;
+
+    /// What a `}` closing a group opened *before* the entries means. Defaults
+    /// to the *positive* gates' reading; see [`StrayBrace`].
+    const STRAY_BRACE: StrayBrace = StrayBrace::Refutes;
+
+    /// Whether a math delimiter at the entries' own level refutes them.
+    ///
+    /// True for the positive gates: the scan does not model the `$`/`\[`/`\(`
+    /// shape gates, and declining to pair behind one is the conservative
+    /// direction for a construct that only pairs when positively located. A
+    /// *demotion* gate inverts that — refusing there would keep a construct the
+    /// scan cannot vouch for — so `EnvGate` sets this false and reads math as
+    /// ordinary content, exactly as its pre-batch scan did.
+    const MATH_REFUTES: bool = true;
+
+    /// Whether this gate's openers are themselves `\begin`s, so the driver must
+    /// count one in `envs` *before* pushing its entry. An entry's `envs_at_push`
+    /// then excludes its own environment — which its per-opener scan, starting
+    /// one token past the `\begin`, never saw either.
+    const OPENER_IS_ENV_BEGIN: bool = false;
 
     /// The last index in the file that could ever settle an entry with a
     /// closer — the C0 bound. `None` refuses the whole gate without scanning.
@@ -351,6 +386,50 @@ impl GatePolicy for AliasGate {
 
     fn pairs(&self, p: &Parser<'_>, opener: usize, closer: usize) -> bool {
         p.alias_closers.get(&closer) == p.alias_openers.get(&opener)
+    }
+}
+
+/// [`Parser::environment_escapes_group`]'s policy, and the driver's first
+/// *demotion* gate: it asks whether a `\begin` is cut short by the closing brace
+/// of a group it sits inside, so a located "closer" is the escaping `}` and the
+/// verdict reads inverted — `Some` demotes the environment, `None` keeps it.
+///
+/// Three divergences from the positive gates, all following from that
+/// inversion:
+///
+/// - **The stray `}` closes rather than refutes** ([`StrayBrace::Closes`]).
+///   Same token event, opposite verdict.
+/// - **Math does not refuse** ([`GatePolicy::MATH_REFUTES`]). For a positive
+///   gate, declining behind a math delimiter is the conservative direction; for
+///   this one it would *keep* an environment the scan cannot vouch for. The
+///   pre-batch scan had no math anchor, and this preserves that.
+/// - **Openers are `\begin`s** ([`GatePolicy::OPENER_IS_ENV_BEGIN`]), so the
+///   driver counts one in `envs` before pushing its entry.
+///
+/// `\end` is deliberately *not* a closer here: it is the level anchor the
+/// driver already applies (an `\end` not owed to an intervening `\begin` means
+/// this environment ends before any group boundary, so it does not escape),
+/// which leaves the mismatch recovery in [`Parser::finish_environment`]
+/// untouched. Running out of file is likewise not an escape — that is what
+/// keeps the unclosed-environment diagnostic firing on a forgotten `\end`.
+struct EnvGate;
+
+impl GatePolicy for EnvGate {
+    const PARAGRAPH_ANCHOR: bool = false;
+    const STRAY_BRACE: StrayBrace = StrayBrace::Closes;
+    const MATH_REFUTES: bool = false;
+    const OPENER_IS_ENV_BEGIN: bool = true;
+
+    fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
+        p.last_r_brace
+    }
+
+    fn opens_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        p.tokens[i].text == BEGIN_CMD && p.env_name_follows(i) && !p.in_macro_code(i)
+    }
+
+    fn closes_at(&self, _p: &Parser<'_>, _i: usize) -> bool {
+        false
     }
 }
 
@@ -530,6 +609,11 @@ struct Parser<'t> {
     /// `mod tests` — never a budget (`TODO.md` rejects scan budgets as
     /// hard-coded special cases). `Cell` because the gates take `&self`.
     scan_work: std::cell::Cell<usize>,
+    /// The [`EnvGate`] twin of [`Self::conditional_batch`]. Its verdicts are
+    /// the *scan's* alone: [`Self::environment_escapes_group`]'s per-opener
+    /// pre-checks (`group_depth`, the `.dtx` doc-margin exemption) are applied
+    /// at query time, so a batch entry never carries them.
+    env_batch: std::cell::RefCell<Option<GateBatch>>,
     /// The [`AliasGate`] twin of [`Self::conditional_batch`]. Both
     /// [`Self::starts_block_env`] and the [`Self::element`] dispatch ask about
     /// the same opener at the same cursor position, so even before the batch
@@ -684,6 +768,7 @@ impl<'t> Parser<'t> {
             alias_openers,
             alias_closers,
             alias_batch: std::cell::RefCell::new(None),
+            env_batch: std::cell::RefCell::new(None),
             alias_end: None,
         }
     }
@@ -2680,50 +2765,19 @@ impl<'t> Parser<'t> {
         if self.doc_margin_exempt(open) {
             return false;
         }
-        // The only `true` is a `}` at depth 0, so the last `}` in the file
-        // bounds the scan ([`Self::last_r_brace`]) — sound, but rarely
-        // effective, since a `\begin{…}` opener's own name group carries a `}`
-        // and pushes the index toward EOF. The gate's residual quadratic shape
-        // is recorded in `TODO.md` (container stack, C2).
-        let Some(last) = self.last_r_brace else {
-            return false;
-        };
-        let mut depth = 0usize;
-        let mut envs = 0usize;
-        let end = self
-            .macrocode_end
-            .unwrap_or(self.tokens.len())
-            .min(self.tokens.len())
-            .min(last + 1);
-        let mut i = open + 1;
-        while i < end {
-            self.tick_scan();
-            let t = &self.tokens[i];
-            match t.kind {
-                // The `{name}` group of this very `\begin` nests and unnests
-                // here, so the scan resumes at the environment's own level.
-                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
-                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
-                    if depth == 0 {
-                        return true;
-                    }
-                    depth -= 1;
-                }
-                SyntaxKind::CONTROL_WORD if depth == 0 && !self.in_macro_code(i) => {
-                    if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
-                        envs += 1;
-                    } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
-                        if envs == 0 {
-                            return false;
-                        }
-                        envs -= 1;
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        false
+        // Both checks above are per-opener walk state, so they stay outside the
+        // batch: a `\begin` they reject never consults it, and the batch stores
+        // only what the *scan* decided.
+        //
+        // The `{name}` group of the `\begin` itself nests and unnests inside the
+        // scan, so it resumes at the environment's own level. The only escape is
+        // a `}` at that level, so the last `}` in the file bounds the scan
+        // ([`Self::last_r_brace`]) — sound, but rarely effective, since a
+        // `\begin{…}` opener's own name group carries one and pushes the index
+        // toward EOF. That is why this gate needed the batch
+        // ([`EnvGate`], `TODO.md` container stack C2.2): the bound alone left it
+        // quadratic in the number of openers.
+        self.gated_closer(open, &EnvGate, &self.env_batch).is_some()
     }
 
     /// The conditional twin of [`Self::delim_math_closes`]: whether the live
@@ -2952,13 +3006,16 @@ impl<'t> Parser<'t> {
                 }
                 // Math swallows whatever it spans, and this scan does not model
                 // the `$`/`\[`/`\(` shape gates that decide whether a delimiter
-                // opens any. Rather than re-derive them, refuse: a construct
-                // whose closer sits behind a math delimiter stays a plain command.
-                // A conservative false negative, per the parser's standing
-                // preference for them.
-                SyntaxKind::DOLLAR if depth == 0 => break,
+                // opens any. Rather than re-derive them, the positive gates
+                // refuse: a construct whose closer sits behind a math delimiter
+                // stays a plain command. A conservative false negative, per the
+                // parser's standing preference for them — and the direction a
+                // demotion gate reverses ([`GatePolicy::MATH_REFUTES`]).
+                SyntaxKind::DOLLAR if depth == 0 && P::MATH_REFUTES => break,
                 SyntaxKind::CONTROL_SYMBOL
-                    if depth == 0 && matches!(t.text.as_str(), "\\[" | "\\(") =>
+                    if depth == 0
+                        && P::MATH_REFUTES
+                        && matches!(t.text.as_str(), "\\[" | "\\(") =>
                 {
                     break;
                 }
@@ -2967,12 +3024,24 @@ impl<'t> Parser<'t> {
                     if depth == 0 {
                         // A `}` closing a group opened before the opener always
                         // wins: braces are catcode structure while the gated
-                        // delimiters are only macros. At the outer level there is no such
-                        // group, so a stray `}` is somebody else's business and
-                        // the scan carries on (the `\begin` gate's `group_depth`
-                        // guard, transcribed).
+                        // delimiters are only macros. At the outer level there
+                        // is no such group, so a stray `}` is somebody else's
+                        // business and the scan carries on. What the brace
+                        // *means* is the gate's own call ([`StrayBrace`]).
                         if self.group_depth > 0 {
-                            break;
+                            match P::STRAY_BRACE {
+                                StrayBrace::Refutes => break,
+                                StrayBrace::Closes => {
+                                    // Every live entry escapes at the same
+                                    // brace: `depth` is common to the whole
+                                    // frame, so each one's own scan would reach
+                                    // this `}` at its own depth 0 too.
+                                    for &idx in &live {
+                                        verdicts.insert(pending[idx].opener, Some(i));
+                                    }
+                                    return verdicts;
+                                }
+                            }
                         }
                     } else {
                         depth -= 1;
@@ -2980,6 +3049,13 @@ impl<'t> Parser<'t> {
                 }
                 SyntaxKind::CONTROL_WORD if depth == 0 => {
                     if policy.opens_at(self, i) {
+                        // A gate whose openers are `\begin`s counts this one
+                        // before pushing, so the entry's own environment is not
+                        // in its `envs_at_push` — its per-opener scan starts one
+                        // token past the `\begin` and never saw it either.
+                        if P::OPENER_IS_ENV_BEGIN {
+                            envs += 1;
+                        }
                         live.push(pending.len());
                         pending.push(Entry {
                             opener: i,
@@ -3659,6 +3735,16 @@ mod tests {
             w2 < 3 * w1 + 64,
             "gate-scan work grew superlinearly: {w1} -> {w2}"
         );
+    }
+
+    /// The `\begin` gate's own shape (`TODO.md`, container stack C2.2): openers
+    /// inside a group with no `}` of their own. Its C0 bound is the last `}` in
+    /// the file, which every `\begin{…}` name group pushes toward EOF, so the
+    /// bound cuts nothing here and only the batch keeps it linear.
+    #[test]
+    fn env_batch_keeps_shared_frame_openers_linear() {
+        let body = |n: usize| format!("{{\n{}", "\\begin{itemize}\n".repeat(n));
+        assert_scan_work_linear(&body(200), &body(400));
     }
 
     /// The in-math no-closer shapes: the enclosing math's own gate passes (its

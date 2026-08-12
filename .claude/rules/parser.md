@@ -56,7 +56,13 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **Environment pairing is gated on brace structure**, not a command set: an
   environment cannot outlive the brace group its `\begin` opened in (#71,
   generalizing #45/#55). `.dtx` doc-margin lines are exempt from stranded
-  braces; a demoted `\begin` demotes its orphaned `\end` in step.
+  braces; a demoted `\begin` demotes its orphaned `\end` in step. Batched as
+  `EnvGate` (container-stack C2.2), the driver's first **demotion** gate, so its
+  verdict reads inverted (`Some` = escapes = demote) and two policies flip with
+  it: a stray `}` *closes* rather than refutes, and math is not an anchor —
+  refusing there would keep an environment the scan cannot vouch for. The
+  `group_depth` and doc-margin pre-checks are per-opener walk state and stay
+  outside the batch.
 - **`$`, `\[`, `\(` open math only when a closer is reachable** before an
   unbalanced `}`, an unowed `\end`, a paragraph break, chunk end, or EOF. The
   paragraph-break anchor applies only between top-level atoms of the math body.
@@ -112,10 +118,13 @@ Prefer false negatives; when in doubt a construct stays generic.
   one closer token shape, so truncating its scan at the last occurrence in the
   file is verdict-preserving — past it only refusals remain — and a file with
   none refuses without scanning. Recording may over-approximate, never
-  under-approximate. The exceptions are recorded in `TODO.md` (container stack):
-  `dollar_closes` (its closer is its opener's own token kind, so the bound is
-  vacuous) and, in practice, `environment_escapes_group` (every `\begin{…}`
-  carries a `}` in its own name group). Scan work is metered
+  under-approximate. A bound helps only a file with *no* closer, so a single
+  reachable closer at EOF defeats it for every gate — which is what the batch
+  driver, not the bound, is for. The gates where the bound is useless even
+  without that: `dollar_closes` (its closer is its opener's own token kind, so
+  the bound is vacuous) and `environment_escapes_group` (every `\begin{…}`
+  carries a `}` in its own name group, so the index sits near EOF; batched in
+  C2.2). Scan work is metered
   (`Parser::scan_work`) and pinned linear by the tests in `grammar.rs` — extend
   them when touching a gate.
 

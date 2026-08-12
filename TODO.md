@@ -971,13 +971,38 @@ sources below are missing.
       measures. Adversarial shape (N openers, one closer at EOF) at
       1000/2000/4000: 15/59/192ms before, 9/18/46ms after, pinned by
       `alias_batch_keeps_shared_frame_openers_linear`.
-    - [ ] **C2.2 — `environment_escapes_group`.** The biggest measured win,
-      and the polarity inverts: it is a *demotion* gate, so an entry still
-      live at the end settles `false` (pairs), which is what preserves the
-      unclosed-environment diagnostic. The per-opener pre-checks
-      (`group_depth == 0`, `doc_margin_exempt`) stay outside the batch — they
-      short-circuit before any scan and read per-opener walk state.
-      `end_orphans_a_demoted_begin` is untouched.
+    - [x] **C2.2 — `environment_escapes_group`** (done). `EnvGate` is the
+      driver's first *demotion* gate, and three policies invert with it, each
+      a new hook: a stray `}` **closes** instead of refuting
+      (`StrayBrace::Closes` — same token event, opposite verdict), math is
+      **not** an anchor (`MATH_REFUTES = false`; for a positive gate refusing
+      behind a math delimiter is the conservative direction, here it would
+      *keep* an environment the scan cannot vouch for, and the pre-batch scan
+      had no math anchor), and the openers are themselves `\begin`s
+      (`OPENER_IS_ENV_BEGIN`, so the driver counts one in `envs` before
+      pushing its entry — an entry's `envs_at_push` must exclude its own
+      environment, which its per-opener scan never saw). `\end` stays the
+      level anchor rather than a closer, and running out of file still keeps
+      the environment, so `finish_environment`'s unclosed-environment
+      diagnostic and `end_orphans_a_demoted_begin` are untouched. The
+      `group_depth == 0` and `doc_margin_exempt` pre-checks stay outside the
+      batch: they are per-opener walk state, so they are applied per query and
+      a rejected opener never consults the batch at all. Shadow differential
+      green over the suite, all four corpora, and a torture file (escape past
+      inline and display math, nested `\begin`s where the outer escapes and
+      the inner pairs, two openers on one brace, a `macrocode` opener, nested
+      groups).
+
+      **Measured, and it corrects the attribution above.** Gate scan work is
+      now exactly linear (5 ticks per opener: 2500/5000/10000 at n =
+      500/1000/2000). Parse-side wall clock on the escaping shape (`{`, N
+      `\begin{itemize}`, one `}`) at 2000/4000/8000 went 36/114/407ms →
+      19/20/34ms, quadratic to flat. But `format --check` on the same files
+      only went 79/196/512ms → 46/133/462ms, because **a second quadratic
+      lives downstream in the formatter**: `lint` (lex, parse, lint) is
+      linear at 19/20/34ms while `format --check` is 42/135/455ms on the
+      identical input. The 69/230/984ms figures in the C2 preamble are
+      end-to-end and so were never the gate's alone. New item below.
     - [ ] **C2.3 — `delim_math_closes`, then `dollar_closes`.** Both count
       environments at *any* brace depth, unlike the conditional and `\begin`
       gates: a driver knob, an explicit divergence. `dollar` is the
@@ -1029,6 +1054,16 @@ sources below are missing.
     stepping stone to the map; C2.0 keeps that order by *extracting* the
     driver from C1's working batch rather than authoring a
     lowest-common-denominator scan.
+- [ ] **The formatter is superlinear in a group's child count** (found while
+  measuring C2.2, and it is the *other* half of every "quadratic gate" number
+  recorded above). On `{`, N `\begin{itemize}`, `}` — one brace group with N
+  demoted commands in it — `badness lint` (lex, parse, lint) is flat at
+  19/20/34ms for N = 2000/4000/8000 while `badness format --check` on the same
+  files is 42/135/455ms, growing ~3.4x per doubling. The parser is no longer
+  implicated, so it is lowering or printing. Profile it (`task bench:profile`
+  takes `BADNESS_BENCH_DOC`) before guessing; the shape is degenerate, but a
+  real `.sty` with a few thousand siblings in one group is not far off, and the
+  gate work this roadmap has been shaving is now the smaller term.
 - [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
   Everything today is curated corpus + snapshots; nothing exercises
   `PARSER_STEP_LIMIT` or the recovery paths with arbitrary bytes, and

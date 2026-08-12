@@ -242,6 +242,19 @@ environment alias pairs only when its closer is positively located. All four
 degrade to a plain token with no diagnostic, because parser diagnostics gate the
 formatter and so must be high precision.
 
+The `\begin` gate runs on the shared batch driver as `EnvGate`, and it is the
+first *demotion* gate there, so its policy reads inverted: the located "closer"
+is the escaping `}`, `Some` demotes the environment and `None` keeps it, and
+running out of file is not an escape — that is what keeps the
+unclosed-environment diagnostic firing on a forgotten `\end`. Two consequences
+follow. A stray `}` closes rather than refutes, the same token event the
+positive gates read as a refusal. And a math delimiter is not an anchor at all:
+for a positive gate, declining behind one is the conservative direction, while
+here it would *keep* an environment the scan cannot vouch for. The gate's two
+per-opener pre-checks — the enclosing `group_depth`, and the `.dtx` doc-margin
+exemption — are walk state rather than scan state, so they are applied per query
+and never stored in a batch.
+
 ### Environment aliases
 
 `\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`

@@ -81,7 +81,11 @@ Prefer false negatives; when in doubt a construct stays generic.
   The batch's load-bearing rule: a refuted entry is **settled, never removed** —
   the per-opener model counts nested openers by name and never un-counts one, so
   a later `\fi` must still be consumed by the refuted entry's slot
-  (`a_refuted_nested_opener_still_consumes_a_fi`).
+  (`a_refuted_nested_opener_still_consumes_a_fi`). The batch is a **shared
+  driver** (`Parser::gate_batch`), not this gate's own machinery: it owns the
+  bookkeeping every gate repeats and takes a `GatePolicy` per gate. Add a hook
+  when a migrating gate needs one (container-stack C2); never average two gates'
+  policies into the loop.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both

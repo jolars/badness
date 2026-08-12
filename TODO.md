@@ -934,28 +934,28 @@ sources below are missing.
     on its own shape, and alias needs both halves defined in the same file, so
     those two are migrated for uniformity rather than for speed.
 
-    - [ ] **C2.0 — extract the batch driver; re-express conditionals on it.**
-      Lift `conditional_closers_from`'s engine into a reusable scan owning
+    - [x] **C2.0 — extract the batch driver; re-express conditionals on it**
+      (done). `conditional_closers_from` became `Parser::gate_batch`, owning
       only the *bookkeeping*: the bound (`macrocode_end` ∧ `tokens.len()` ∧
       last closer + 1), trivia skip, newline runs, brace depth under
       `plain_braces`, environment counting with the `macrocode`-frame break in
       both directions, the `group_depth > 0` stray-`}` rule, the
-      `pending`/`live` stack with `envs_at_push`, settled-never-popped,
-      `tick_scan` metering, and the walk-state memo. Per-gate policy stays an
-      explicit struct of named hooks (`is_opener`, `closer_at`,
-      `paragraph_anchors`, `env_counting`, `on_math`, `eof_verdict`), each
-      keeping the doc comment it carries today: the driver owns the
-      bookkeeping and never averages the policies. No behavior change; the
-      existing conditional tests pin it. This is not the C3 skeleton built
-      first — the driver is *extracted from C1's working batch*, so the map
-      stays the foundation and C3 becomes a subtraction rather than a
-      construction. Two fixes belong in the extraction: give `plain_braces` a
-      version counter bumped in `macrocode_body` so the memo key is a fact
-      instead of the current "pinned by the frame" argument, and hoist
-      **settled-never-popped** into the driver, since every remaining gate has
-      the same never-un-counted nested-opener countdown (`nested` for alias,
-      `brackets` for the bracket pair, the `Ctx::Left` stack for `\left`) and
-      every new policy must answer for it explicitly.
+      `pending`/`live` stack with `envs_at_push`, settled-never-popped, and
+      `tick_scan` metering. `gated_closer` is the memoized front and holds the
+      C0 early-out; `WalkKey` is the memo key, with `plain_braces` now riding a
+      version counter bumped in `macrocode_body` so the key is a fact rather
+      than the old "pinned by the frame" argument. Per-gate policy is the
+      `GatePolicy` trait — `PARAGRAPH_ANCHOR`, `last_closer`, `opens_at`,
+      `closes_at`, and a defaulted `pairs` — with `ConditionalGate` its first
+      client; hooks arrive with the client that needs them, so the trait says
+      only what a real gate has asked for. The driver never averages the
+      policies. Not the C3 skeleton built first: it is *extracted from C1's
+      working batch*, so the map stays the foundation and C3 becomes a
+      subtraction. Verdict-preserving, as the acceptance gate below demands —
+      the suite, all eight gate-corpora baselines, and the texlab
+      parse-compat report are unchanged, and `bench:micro` is flat within
+      run-to-run noise (parse-only spread on the small documents is ±30%
+      between runs either way).
     - [ ] **C2.1 — alias.** Conditional's policy minus the paragraph anchor,
       plus the named-closer test (`closing == target`); retires
       `alias_closer_memo` into the shared memo. Low value, low risk: its job

@@ -387,6 +387,16 @@ demoted it. Every ordinary anchor still cuts a scan short, so conditional-heavy
 real packages (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`) measure the
 same as they did before the node existed.
 
+The batch is not the conditional gate's own machinery. It is a **driver**
+(`Parser::gate_batch`) that the other shape gates migrate onto one at a time
+(`TODO.md`, container stack C2): the driver owns the bookkeeping they all share
+— the bound, brace depth under `plain_braces`, environment counting, the
+`macrocode` frame, the entry stack with its settled-never-removed rule, the scan
+metering, and the walk-state memo — while each gate supplies a `GatePolicy`
+naming its own bound, its openers and closers, and whether a blank line anchors
+it. The divergences between gates are deliberate, so they stay visible as policy
+methods rather than being averaged into the loop.
+
 Two anchors differ from the environment gate on purpose. Running out of file
 demotes here, where the environment gate keeps the node so it can still report
 an unclosed environment; a conditional has no diagnostic to preserve. And there

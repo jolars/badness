@@ -1026,6 +1026,12 @@ sources below are missing.
       more expensive on the same inputs anyway (item below), and that is where
       speed work belongs.
 
+      *(Amended by C2.4, which was never measured here: the two gates above are
+      single-entry, so a batch has nothing to settle beyond its seed, but
+      `left_right_closes` nests densely and did go quadratic to linear, ~36x at
+      n = 4000. "The perf case for what remains is void" holds for the shapes
+      measured, not for the stages.)*
+
     - [x] **C2.3 — `delim_math_closes`, then `dollar_closes`** (done).
       `DelimMathGate` and `DollarGate` are both **single-entry** as planned
       (`opens_at` always false), and the plan's knobs all landed:
@@ -1083,11 +1089,64 @@ sources below are missing.
       (38.6 → 35.9 ms end to end at n = 4000, the new bound if anything
       helping), and stays quadratic by design — the test says so rather than
       pinning a shape the gate cannot fix.
-    - [ ] **C2.4 — `left_right_closes`.** A third environment-counting mode: a
-      brace group is opaque, skipped wholesale. Also the one gate whose
-      opener/closer recognition deliberately ignores `in_macro_code` (issue
-      \#95) — the fix that lives in exactly one copy today, and the concrete
-      payoff of consolidating.
+    - [x] **C2.4 — `left_right_closes`** (done). The `in_macro_code` blind spot
+      (issue \#95) is now two policy predicates (`opens_at`/`closes_at`) beside
+      the driver's own `\begin`/`\end` filter, which is the consolidation this
+      item promised. The predicted "third environment-counting mode" was **not**
+      one: a brace group is already opaque in the driver, since every arm but
+      the brace arms is gated on `depth == 0` and `ENVS_AT_ANY_DEPTH` is false.
+      What the gate actually diverges on is *nesting shape*, and it is worth
+      more than the brace point:
+
+      - **`Nesting::Interleaved`, the driver's second nesting model.** Every
+        other gate counts nested openers and environments as two independent
+        tallies, because that is all its per-opener scan knew. This one's scan
+        is a single LIFO stack of `{`, `\begin`, and `\left` frames — a pair
+        closes by count wherever it sits — and the two halves of that read
+        differently. A frame **mismatch** (an `\end` or a `\right` meeting a
+        frame of the wrong kind) refuses *every* live entry, since the innermost
+        frame is the same one for all of them; the **absence** of frames that
+        the blank-line anchor tests is seen only by the innermost entry, so a
+        nested pair *shields* the ones around it and the anchor settles one
+        entry, not a level. Both are pinned
+        (`an_end_inside_a_nested_left_refuses_the_whole_scan`,
+        `a_nested_left_shields_the_outer_pair_from_a_paragraph_break`).
+      - **`MathAnchor`, replacing `MATH_REFUTES`.** The old boolean could not
+        say what this gate needs: it anchors on `$`/`\]`/`\)`, the *closing*
+        side, where the pairing gates anchor on `$`/`\[`/`\(`. Which side
+        follows from where the construct lives — a conditional lives in text and
+        is defeated by math starting, a `\left` lives inside math and is
+        defeated by that math ending, and those are exactly `left_right`'s own
+        recovery anchors. `None`/`Opening`/`Closing`, one arm each.
+      - **A gate/walk looseness surfaced, not introduced.** In the shielded
+        shape the gate says the outer pair closes while `left_right` bails at
+        the paragraph break and reports it unclosed. It predates the migration
+        (the per-opener scan's `stack.is_empty()` behaved identically) and C2
+        migrates verdicts unchanged, so it is preserved and pinned rather than
+        fixed. Reachable only inside a math *environment*, since the `$`/`\[`
+        gates refuse a blank line themselves. Fixing it is its own commit
+        against the "a shape gate must mirror the parse it guards" rule.
+
+      **Measured** (`parse` alone via `bench:micro`, N `\left(` in one `$…$`
+      with a single `\right)` at the end, 1000/2000/4000): **3.9/14.6/57.0ms →
+      0.39/1.0/1.6ms**, quadratic to linear, ~36x at n = 4000. Unlike C2.3's
+      single-entry gates this one had real work to save: a `\left` the walk
+      demotes is retried as a plain command and every `\left` after it is asked
+      in turn, so a run of them re-scanned per opener. Pinned by
+      `left_right_batch_keeps_shared_frame_openers_linear`. `bench:micro` on the
+      four real documents is flat within run-to-run noise.
+
+      Shadow differential green: the suite, a per-file debug-assertions pass
+      over all 6277 corpus files, and a `.tex`/`.dtx` torture pair. The torture
+      files discriminate all four of the gate's policy knobs — flipping
+      `MATH_ANCHOR`, `NESTING`, `MACROCODE_FRAME_ANCHORS`, or `STRAY_BRACE`
+      panics on them — which is the bar a torture file should meet; the
+      stray-brace shape needed a `\left` inside a math *environment*, since a
+      stray `}` demotes an enclosing `$` before the gate is ever asked. Two
+      process notes: the driver's `break` paths must not leave an index in
+      `live` pointing past `pending` (the interleaved closer arm pops its entry
+      first, and the corpus pass caught the panic at once), and the reference
+      copy must not tick `scan_work` or it hides the linearity the pin measures.
     - [ ] **C2.5 — the bracket family** (`bracket_closes_in_text`,
       `bracket_closes_before_math_end`,
       `bracket_closes_before_macrocode_end`). The `abuts_command` claim

@@ -215,6 +215,83 @@ fn left_right_pairs_inside_macro_code() {
 }
 
 #[test]
+fn left_right_pairs_across_a_math_opener() {
+    // The gate's math anchor is the *closing* side (`MathAnchor::Closing`): a
+    // `\left` already sits inside a math body, so what ends it is the delimiter
+    // that ends that body. A `\[` in the way is ordinary content — it opens no
+    // math here (`delim_math_closes` refuses it: no `\]` in reach) — so the pair
+    // still closes at its `\right`.
+    let src = r"$\left( \[ x \right)$";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "a math *opener* in the way must not refuse the pair"
+    );
+}
+
+#[test]
+fn left_right_refuses_across_a_math_closer() {
+    // The mirror: `\]` ends the display the `\left` lives in, so the `\right`
+    // beyond it is unreachable and the `\left` stays an ordinary command — the
+    // same anchor `left_right`'s own walk stops at, with no diagnostic.
+    let src = "\\[ \\left( x \\]\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        !tree(src).contains("LEFT_RIGHT"),
+        "a `\\left` whose `\\right` sits past the math's end must not pair"
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "a gated `\\left` draws no diagnostic: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn an_end_inside_a_nested_left_refuses_the_whole_scan() {
+    // `\left`/`\right` frames and environment frames share one stack
+    // (`Nesting::Interleaved`), so an `\end` that finds a `\left` frame innermost
+    // is a mismatch — and the same mismatch every *outer* `\left` sees, since
+    // that frame is innermost for them too. Both openers demote; neither may pair
+    // with the `\right]`/`\right)` beyond the `\end`.
+    let src = r"$\left( \begin{matrix} a \left[ \end{matrix} \right] \right)$";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        !tree(src).contains("LEFT_RIGHT"),
+        "an `\\end` reached inside a nested `\\left` must refuse every open pair"
+    );
+}
+
+#[test]
+fn a_nested_left_shields_the_outer_pair_from_a_paragraph_break() {
+    // The other half of the interleaved model, and its one asymmetry: a *mismatch*
+    // is shared, but an *absence* of frames is not. The blank-line anchor asks
+    // whether the frame stack is empty, which is true only for the innermost
+    // `\left`, so the inner one demotes and the outer keeps scanning to its
+    // `\right)`.
+    //
+    // The gate is looser than the walk here — `left_right` bails at the paragraph
+    // break itself and reports the outer `\left` unclosed. Pre-existing, and
+    // preserved verbatim by the batch migration (`TODO.md`, container stack
+    // C2.4); the shape is only reachable inside a math *environment*, since the
+    // `$`/`\[` gates refuse a blank line themselves.
+    let src = "\\begin{equation}\n  \\left( \\left[ y\n\n  \\right] \\right)\n\\end{equation}\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "the outer pair is shielded from the break by the inner `\\left`"
+    );
+}
+
+#[test]
 fn left_right_pairs_inside_tikzcd_cell() {
     // `tikzcd` (tikz-cd commutative diagrams) typesets its cells in math mode, so
     // a `\left…\right` in a cell pairs into a `LEFT_RIGHT`. Same regression class

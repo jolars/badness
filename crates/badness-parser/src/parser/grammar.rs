@@ -278,8 +278,73 @@ enum StrayBrace {
     /// [`Parser::dollar_math`] and [`Parser::delim_math`], which bail at *any*
     /// unbalanced `}` — for them the brace is a recovery anchor of the parse
     /// itself, not merely a group boundary — and a gate must mirror the parse
-    /// it guards.
+    /// it guards. [`LeftRightGate`] joins them: [`Parser::left_right`] bails at
+    /// any unbalanced `}` too.
     RefutesAlways,
+}
+
+/// Which math delimiters anchor a gate's scan at the entries' own level.
+///
+/// Which side anchors follows from where the gated construct *lives*. A
+/// conditional or an alias lives in text, so what defeats it is math
+/// **starting**: the scan does not model the `$`/`\[`/`\(` shape gates, and a
+/// closer behind a delimiter that opens math may well be swallowed by it. A
+/// `\left…\right` pair already lives *inside* math, so what defeats it is the
+/// enclosing math **ending** — exactly [`Parser::left_right`]'s own recovery
+/// anchors. A `$` is both, and anchors either way.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MathAnchor {
+    /// Nothing anchors: a foreign delimiter is ordinary content. The demotion
+    /// gate reads it this way because refusing there would *keep* a construct
+    /// the scan cannot vouch for, and for the math gates the delimiter is the
+    /// closer itself.
+    None,
+    /// `$`, `\[`, `\(` — math starting.
+    Opening,
+    /// `$`, `\]`, `\)` — math ending.
+    Closing,
+}
+
+impl MathAnchor {
+    /// Whether the control symbol `text` anchors under this policy. `$` is
+    /// handled by the driver's own [`SyntaxKind::DOLLAR`] arm, since it is both
+    /// an opener and a closer.
+    fn anchors(self, text: &str) -> bool {
+        match self {
+            MathAnchor::None => false,
+            MathAnchor::Opening => matches!(text, "\\[" | "\\("),
+            MathAnchor::Closing => matches!(text, "\\]" | "\\)"),
+        }
+    }
+}
+
+/// How a gate's nested entries relate to the `\begin`-opened environments
+/// between them — the shape of the model its per-opener scan used, which the
+/// batch must reproduce exactly.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nesting {
+    /// Two independent counters. A nested opener is counted *by name* and never
+    /// un-counted, environments are counted separately, and an anchor settles
+    /// every entry standing at its own environment level. This is what the
+    /// pairing gates' per-opener scans did: they never modelled the order in
+    /// which a nested opener and an environment were opened, only how many of
+    /// each stood between an entry and the token at hand.
+    Counted,
+    /// One LIFO stack, entries and environments interleaved.
+    /// [`Parser::left_right_closes`] tracks its nesting this way because
+    /// [`Parser::left_right`] does: a pair is closed by *count* wherever it
+    /// sits, so its scan pushes a frame per `\left`, per `\begin`, and per `{`
+    /// alike, and any frame **mismatch** — an `\end` or a `\right` reaching a
+    /// frame of the wrong kind — refuses outright.
+    ///
+    /// Two consequences the driver must honor, both following from *whose*
+    /// frame is innermost. A mismatch is seen by every outer entry too, since
+    /// the innermost frame is common to all of them, so it refutes the whole
+    /// scan rather than one level of it. An *absence* of frames, on the other
+    /// hand — the blank-line anchor's `stack.is_empty()` — is seen only by the
+    /// entry that owns the innermost frame, so a nested entry **shields** the
+    /// entries below it from a paragraph break.
+    Interleaved,
 }
 
 /// The per-gate half of [`Parser::gate_batch`]: how far this gate's scan can
@@ -308,15 +373,17 @@ trait GatePolicy {
     /// *positive* gates' reading; see [`StrayBrace`].
     const STRAY_BRACE: StrayBrace = StrayBrace::RefutesInGroup;
 
-    /// Whether a math delimiter at the entries' own level refutes them.
+    /// Which math delimiters at the entries' own level refute them, if any.
     ///
-    /// True for the positive gates: the scan does not model the `$`/`\[`/`\(`
-    /// shape gates, and declining to pair behind one is the conservative
-    /// direction for a construct that only pairs when positively located. A
-    /// *demotion* gate inverts that — refusing there would keep a construct the
-    /// scan cannot vouch for — so `EnvGate` sets this false and reads math as
-    /// ordinary content, exactly as its pre-batch scan did.
-    const MATH_REFUTES: bool = true;
+    /// Defaults to the text-dwelling positive gates' reading — math *starting*
+    /// refutes, the conservative direction for a construct that only pairs when
+    /// positively located. See [`MathAnchor`] for the other two.
+    const MATH_ANCHOR: MathAnchor = MathAnchor::Opening;
+
+    /// How this gate's nested entries interleave with the environments between
+    /// them. See [`Nesting`]; the pairing and math gates all count, only
+    /// [`LeftRightGate`] stacks.
+    const NESTING: Nesting = Nesting::Counted;
 
     /// Whether this gate's openers are themselves `\begin`s, so the driver must
     /// count one in `envs` *before* pushing its entry. An entry's `envs_at_push`
@@ -447,7 +514,7 @@ impl GatePolicy for AliasGate {
 ///
 /// - **The stray `}` closes rather than refutes** ([`StrayBrace::ClosesInGroup`]).
 ///   Same token event, opposite verdict.
-/// - **Math does not refuse** ([`GatePolicy::MATH_REFUTES`]). For a positive
+/// - **Math does not refuse** ([`MathAnchor::None`]). For a positive
 ///   gate, declining behind a math delimiter is the conservative direction; for
 ///   this one it would *keep* an environment the scan cannot vouch for. The
 ///   pre-batch scan had no math anchor, and this preserves that.
@@ -465,7 +532,7 @@ struct EnvGate;
 impl GatePolicy for EnvGate {
     const PARAGRAPH_ANCHOR: bool = false;
     const STRAY_BRACE: StrayBrace = StrayBrace::ClosesInGroup;
-    const MATH_REFUTES: bool = false;
+    const MATH_ANCHOR: MathAnchor = MathAnchor::None;
     const OPENER_IS_ENV_BEGIN: bool = true;
 
     fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
@@ -499,7 +566,7 @@ impl GatePolicy for EnvGate {
 ///
 /// - **A `}` refutes unconditionally** ([`StrayBrace::RefutesAlways`]): the
 ///   guarded parses bail at any unbalanced `}`, group behind it or not.
-/// - **Math is not an anchor** ([`GatePolicy::MATH_REFUTES`]) — a foreign
+/// - **Math is not an anchor** ([`MathAnchor::None`]) — a foreign
 ///   delimiter is ordinary content here, and for [`DollarGate`] the delimiter
 ///   *is* the closer.
 /// - **Environments count at any depth** ([`GatePolicy::ENVS_AT_ANY_DEPTH`]).
@@ -521,7 +588,7 @@ struct DelimMathGate {
 impl GatePolicy for DelimMathGate {
     const PARAGRAPH_ANCHOR: bool = true;
     const STRAY_BRACE: StrayBrace = StrayBrace::RefutesAlways;
-    const MATH_REFUTES: bool = false;
+    const MATH_ANCHOR: MathAnchor = MathAnchor::None;
     const ENVS_AT_ANY_DEPTH: bool = true;
     const CLOSER_NEEDS_ENV_BALANCE: bool = false;
     const MACROCODE_FRAME_ANCHORS: bool = false;
@@ -564,7 +631,7 @@ struct DollarGate {
 impl GatePolicy for DollarGate {
     const PARAGRAPH_ANCHOR: bool = true;
     const STRAY_BRACE: StrayBrace = StrayBrace::RefutesAlways;
-    const MATH_REFUTES: bool = false;
+    const MATH_ANCHOR: MathAnchor = MathAnchor::None;
     const ENVS_AT_ANY_DEPTH: bool = true;
     const CLOSER_NEEDS_ENV_BALANCE: bool = false;
     const MACROCODE_FRAME_ANCHORS: bool = false;
@@ -584,6 +651,67 @@ impl GatePolicy for DollarGate {
     fn closes_at(&self, p: &Parser<'_>, i: usize) -> bool {
         p.tokens[i].kind == SyntaxKind::DOLLAR
             && (!self.display || p.tokens.get(i + 1).map(|t| t.kind) == Some(SyntaxKind::DOLLAR))
+    }
+}
+
+/// [`Parser::left_right_closes`]'s policy: a `\left` paired with the `\right`
+/// that [`Parser::left_right`] would reach. The gate that lives *inside* math,
+/// and the only one whose entries stack rather than count
+/// ([`Nesting::Interleaved`]) — `\left`/`\right` pair by count wherever they
+/// sit, so its scan reads one frame stack of `{`, `\begin`, and `\left` alike,
+/// and any mismatch refuses.
+///
+/// The other three divergences follow from the same two facts:
+///
+/// - **Math *ending* anchors** ([`MathAnchor::Closing`]). A `\left` sits inside
+///   a math body already, so `$`, `\]`, `\)` are the tokens that end it —
+///   [`Parser::left_right`]'s own recovery anchors — while a `\[` in the way is
+///   ordinary content.
+/// - **A `}` refutes unconditionally** ([`StrayBrace::RefutesAlways`]), for the
+///   same reason as the math gates: the parse it guards bails at any unbalanced
+///   `}`, group behind it or not.
+/// - **A `macrocode` frame is not an anchor**
+///   ([`GatePolicy::MACROCODE_FRAME_ANCHORS`]), preserved from the pre-batch
+///   scan, which counted `\begin{macrocode}` as an ordinary environment — the
+///   reading the math gates keep too.
+///
+/// And the one thing this migration exists to consolidate: **`\left`/`\right`
+/// recognition ignores `in_macro_code` on purpose** where the driver's own
+/// `\begin`/`\end` counting does not. They are catcode-neutral math structure
+/// that pairs by count no matter what, and [`Parser::left_right`] consumes them
+/// unconditionally, so a definition body or a `macrocode` chunk — exactly where
+/// package math like `$\left#2\right#4$` (delarray.dtx) or `$\left(…\right)$`
+/// (ltmath.dtx's `\bordermatrix`) lives — must still be scanned for them.
+/// Gating them out left the `\right` invisible, so the pair never opened and the
+/// closer reported a spurious "`\right` without matching `\left`" that blocked
+/// the whole file for the formatter (issue #95). As a policy that is two
+/// predicates; as a hand-written scan it was a comment nothing enforced.
+struct LeftRightGate;
+
+impl GatePolicy for LeftRightGate {
+    const PARAGRAPH_ANCHOR: bool = true;
+    const STRAY_BRACE: StrayBrace = StrayBrace::RefutesAlways;
+    const MATH_ANCHOR: MathAnchor = MathAnchor::Closing;
+    const NESTING: Nesting = Nesting::Interleaved;
+    const MACROCODE_FRAME_ANCHORS: bool = false;
+
+    /// The last `\right` in the file. The recording ignores brace nesting, which
+    /// only ever places the bound *past* the last viable closer. Without it a
+    /// math body of `\left` openers with no `\right` kept the frame stack
+    /// non-empty — so the blank-line anchor never fired — and scanned each opener
+    /// to the math's end.
+    fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
+        p.last_right
+    }
+
+    fn opens_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        let t = &p.tokens[i];
+        t.kind == SyntaxKind::CONTROL_WORD && t.text.as_str() == LEFT_CMD
+    }
+
+    fn closes_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        let t = &p.tokens[i];
+        t.kind == SyntaxKind::CONTROL_WORD && t.text.as_str() == RIGHT_CMD
     }
 }
 
@@ -781,6 +909,11 @@ struct Parser<'t> {
     /// settled its neighbors this slot was load-bearing: without it every
     /// opener paid for its walk twice.
     alias_batch: std::cell::RefCell<Option<GateBatch>>,
+    /// The [`LeftRightGate`] twin of [`Self::conditional_batch`]. Its openers
+    /// nest densely — a `\left` whose `\right` the walk cannot reach is retried
+    /// as a plain command and every `\left` after it asked in turn — so the
+    /// batch is what keeps a run of them from being quadratic.
+    left_right_batch: std::cell::RefCell<Option<GateBatch>>,
     /// Token index of the alias closer bounding the environment body currently
     /// being parsed, if any. Saved and restored around the body in
     /// [`Self::alias_environment`]. An alias environment has no `\end{…}` to stop
@@ -933,6 +1066,7 @@ impl<'t> Parser<'t> {
             alias_closers,
             alias_batch: std::cell::RefCell::new(None),
             env_batch: std::cell::RefCell::new(None),
+            left_right_batch: std::cell::RefCell::new(None),
             alias_end: None,
         }
     }
@@ -2221,109 +2355,13 @@ impl<'t> Parser<'t> {
     /// not owed to an intervening `\begin`, a paragraph break, EOF — with `\right`
     /// and the anchors counting only at the `\left`'s own brace/env/pair level.
     /// Does not consume.
+    ///
+    /// Runs on the shared batch driver as [`LeftRightGate`] (`TODO.md`,
+    /// container stack C2.4), which is where those anchors and the deliberate
+    /// `in_macro_code` blind spot now live as policy.
     fn left_right_closes(&self, open: usize) -> bool {
-        #[derive(PartialEq)]
-        enum Ctx {
-            Brace,
-            Env,
-            Left,
-        }
-        let mut stack: Vec<Ctx> = Vec::new();
-        let mut newlines = 0;
-        // Bounded by the last `\right` in the file ([`Self::last_right`], the
-        // `last_alias_closer` treatment): every `true` is at one, so past it
-        // only refusals remain, and a file with none refuses without scanning.
-        // The recording ignores brace nesting (a `\right` inside a `{…}` group
-        // is invisible to this scan), which only ever places the bound *past*
-        // the last viable closer. Without it, a math body of `\left` openers
-        // with no `\right` kept the stack non-empty — so the blank-line anchor
-        // never fired — and scanned each opener to the math's end: quadratic.
-        let Some(last) = self.last_right else {
-            return false;
-        };
-        let end = self
-            .macrocode_end
-            .unwrap_or(self.tokens.len())
-            .min(self.tokens.len())
-            .min(last + 1);
-        let mut i = open + 1;
-        while i < end {
-            self.tick_scan();
-            let t = &self.tokens[i];
-            // A brace group parses as [`Self::math_group`]: only its own braces
-            // steer nesting; every other token inside it is ordinary content
-            // (a stray `\right`/`\end` there is not our closer).
-            if stack.last() == Some(&Ctx::Brace) {
-                match t.kind {
-                    SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => {
-                        stack.push(Ctx::Brace)
-                    }
-                    SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
-                        stack.pop();
-                    }
-                    _ => {}
-                }
-                i += 1;
-                continue;
-            }
-            match t.kind {
-                SyntaxKind::NEWLINE => {
-                    newlines += 1;
-                    // A paragraph break ends the body only at its own level
-                    // (mirrors [`Self::left_right`]); inside a nested env/pair it
-                    // is ordinary trivia.
-                    if newlines >= 2 && stack.is_empty() {
-                        return false;
-                    }
-                    i += 1;
-                    continue;
-                }
-                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => {
-                    i += 1;
-                    continue;
-                }
-                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => stack.push(Ctx::Brace),
-                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => return false,
-                SyntaxKind::DOLLAR => return false,
-                SyntaxKind::CONTROL_SYMBOL if matches!(t.text.as_str(), "\\]" | "\\)") => {
-                    return false;
-                }
-                // `\left`/`\right` are catcode-neutral math structure that pair by
-                // *count* no matter what — [`Self::left_right`] consumes them
-                // unconditionally — so they must be counted even inside macro code.
-                // A `.dtx` `macrocode` chunk (which sets `in_def_body`) or a `\def`
-                // body is exactly where package math like `$\left#2\right#4$`
-                // (delarray.dtx) or `$\left(…\right)$` (ltmath.dtx's `\bordermatrix`)
-                // lives; gating these on `!in_macro_code` left the `\right`
-                // invisible to the scan, so the pair never opened and the closer
-                // reported a spurious "`\right` without matching `\left`" that
-                // blocked the whole file for the formatter (issue #95).
-                SyntaxKind::CONTROL_WORD if t.text.as_str() == LEFT_CMD => stack.push(Ctx::Left),
-                SyntaxKind::CONTROL_WORD if t.text.as_str() == RIGHT_CMD => match stack.last() {
-                    None => return true,
-                    Some(Ctx::Left) => {
-                        stack.pop();
-                    }
-                    _ => return false,
-                },
-                // `\begin`/`\end` are plain, non-pairing commands in macro code, so
-                // they stay gated (`AGENTS.md` decision #1).
-                SyntaxKind::CONTROL_WORD if !self.in_macro_code(i) => match t.text.as_str() {
-                    BEGIN_CMD if self.env_name_follows(i) => stack.push(Ctx::Env),
-                    END_CMD if self.env_name_follows(i) => match stack.last() {
-                        Some(Ctx::Env) => {
-                            stack.pop();
-                        }
-                        _ => return false,
-                    },
-                    _ => {}
-                },
-                _ => {}
-            }
-            newlines = 0;
-            i += 1;
-        }
-        false
+        self.gated_closer(open, &LeftRightGate, &self.left_right_batch)
+            .is_some()
     }
 
     /// Inline `$ … $` or display `$$ … $$` math. The body's atoms are wrapped in
@@ -3026,6 +3064,31 @@ impl<'t> Parser<'t> {
                 live.pop();
             }
         }
+        /// The [`Nesting::Interleaved`] twin of [`settle_level`]: settle the one
+        /// entry that owns the innermost frame, and only when no environment
+        /// stands inside it. The entries below are shielded by that frame and
+        /// keep scanning — a settled entry keeps its frame, so a later closer
+        /// still consumes it.
+        fn settle_innermost(
+            pending: &mut [Entry],
+            live: &mut Vec<usize>,
+            verdicts: &mut std::collections::HashMap<usize, Option<usize>>,
+            envs: usize,
+        ) {
+            let Some(entry) = pending.last_mut() else {
+                return;
+            };
+            if entry.settled || entry.envs_at_push != envs {
+                return;
+            }
+            entry.settled = true;
+            verdicts.insert(entry.opener, None);
+            // An unsettled top of `pending` is the topmost live entry: an entry
+            // leaves `live` only by being settled or by being popped from
+            // `pending` outright.
+            debug_assert_eq!(live.last().copied(), Some(pending.len() - 1));
+            live.pop();
+        }
         let mut verdicts = std::collections::HashMap::new();
         let mut pending = vec![Entry {
             opener: open,
@@ -3058,7 +3121,18 @@ impl<'t> Parser<'t> {
                     // \begin{tikzpicture}<blank line>… \]`, issue #70) lost its
                     // math node and reported its own `\]` as unmatched.
                     if P::PARAGRAPH_ANCHOR && newlines >= 2 && depth == 0 {
-                        settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                        // Under interleaved nesting the break is seen only by
+                        // the entry owning the innermost frame: every entry
+                        // below has that frame on its own stack, so its
+                        // `stack.is_empty()` test cannot fire ([`Nesting`]).
+                        match P::NESTING {
+                            Nesting::Counted => {
+                                settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                            }
+                            Nesting::Interleaved => {
+                                settle_innermost(&mut pending, &mut live, &mut verdicts, envs);
+                            }
+                        }
                         if live.is_empty() {
                             return verdicts;
                         }
@@ -3072,16 +3146,16 @@ impl<'t> Parser<'t> {
                 }
                 // Math swallows whatever it spans, and this scan does not model
                 // the `$`/`\[`/`\(` shape gates that decide whether a delimiter
-                // opens any. Rather than re-derive them, the positive gates
-                // refuse: a construct whose closer sits behind a math delimiter
-                // stays a plain command. A conservative false negative, per the
-                // parser's standing preference for them — and the direction a
-                // demotion gate reverses ([`GatePolicy::MATH_REFUTES`]).
-                SyntaxKind::DOLLAR if depth == 0 && P::MATH_REFUTES => break,
+                // opens any. Rather than re-derive them, a gate that lives in
+                // text refuses at math *starting*: a construct whose closer sits
+                // behind such a delimiter stays a plain command. A conservative
+                // false negative, per the parser's standing preference for them.
+                // The demotion gate reverses the direction and a gate that lives
+                // *inside* math reverses the side ([`MathAnchor`]). A `$` is both
+                // sides at once, so it anchors for either.
+                SyntaxKind::DOLLAR if depth == 0 && P::MATH_ANCHOR != MathAnchor::None => break,
                 SyntaxKind::CONTROL_SYMBOL
-                    if depth == 0
-                        && P::MATH_REFUTES
-                        && matches!(t.text.as_str(), "\\[" | "\\(") =>
+                    if depth == 0 && P::MATH_ANCHOR.anchors(t.text.as_str()) =>
                 {
                     break;
                 }
@@ -3137,6 +3211,21 @@ impl<'t> Parser<'t> {
                         let entry = pending
                             .pop()
                             .expect("a live entry remains, so pending is non-empty");
+                        // Under interleaved nesting the closer pops the
+                        // *innermost frame*, so an environment opened since this
+                        // entry is a frame mismatch — and one every outer entry
+                        // sees too, since this entry's frame is their innermost
+                        // one. It refuses the whole scan rather than one entry
+                        // ([`Nesting`]). This entry is out of `pending` already,
+                        // so it settles itself here and the trailing refusal
+                        // covers the rest.
+                        if P::NESTING == Nesting::Interleaved && envs != entry.envs_at_push {
+                            if !entry.settled {
+                                live.pop();
+                                verdicts.insert(entry.opener, None);
+                            }
+                            break;
+                        }
                         if !entry.settled {
                             live.pop();
                             // `envs == envs_at_push` for the same reason as
@@ -3184,9 +3273,25 @@ impl<'t> Parser<'t> {
                             }
                             envs += 1;
                         } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
-                            settle_level(&mut pending, &mut live, &mut verdicts, envs);
-                            if live.is_empty() {
-                                return verdicts;
+                            match P::NESTING {
+                                // The `\end` must find an environment innermost.
+                                // It does not when the entry on top of `pending`
+                                // was pushed at the current `envs`: that entry's
+                                // frame is in the way, for it and for every entry
+                                // below it alike, so the mismatch refuses the
+                                // whole scan. A settled entry still holds its
+                                // frame ([`Nesting`]).
+                                Nesting::Interleaved => {
+                                    if pending.last().is_some_and(|e| e.envs_at_push == envs) {
+                                        break;
+                                    }
+                                }
+                                Nesting::Counted => {
+                                    settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                                    if live.is_empty() {
+                                        return verdicts;
+                                    }
+                                }
                             }
                             // A survivor has `envs_at_push < envs`, so the
                             // decrement cannot underflow.
@@ -3823,6 +3928,17 @@ mod tests {
     #[test]
     fn env_batch_keeps_shared_frame_openers_linear() {
         let body = |n: usize| format!("{{\n{}", "\\begin{itemize}\n".repeat(n));
+        assert_scan_work_linear(&body(200), &body(400));
+    }
+
+    /// The `\left` gate's own one-closer-at-EOF shape (`TODO.md`, container
+    /// stack C2.4): a run of same-frame openers inside one math body, closed by
+    /// a single `\right` at the end. The C0 bound spans the whole run, and every
+    /// opener but the last is demoted and re-queried as the walk passes it, so
+    /// only the batch — one scan settling all of them — keeps it linear.
+    #[test]
+    fn left_right_batch_keeps_shared_frame_openers_linear() {
+        let body = |n: usize| format!("$ {}\\right)$\n", "\\left( x ".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 

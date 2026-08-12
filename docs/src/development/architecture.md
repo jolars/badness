@@ -271,6 +271,32 @@ runs *unmemoized*: a demoted `$$` re-enters on its second `$`, asking a
 different question about the same token index under the same walk state, which a
 slot keyed on the walk state alone would answer from the first query's verdict.
 
+The `\left…\right` gate (`LeftRightGate`) is the last to join, and the only one
+whose entries **stack** rather than count. Every other gate models its nesting
+as two independent counters — how many nested openers and how many environments
+stand between an entry and the token at hand — because that is all its
+per-opener scan ever knew. A `\left` pairs by count wherever it sits, so its
+scan reads one LIFO stack of `{`, `\begin`, and `\left` frames alike, and the
+difference is visible: a frame **mismatch** (an `\end` or a `\right` that
+reaches a frame of the wrong kind) is seen by every outer `\left` too, since the
+innermost frame is common to all of them, so it refuses the whole scan rather
+than one level of it — while the *absence* of frames that the blank-line anchor
+tests is seen only by the innermost `\left`, so a nested pair **shields** the
+ones around it from a paragraph break. Both readings are `Nesting::Interleaved`
+in the driver.
+
+Its math anchor inverts too. A conditional lives in text, so what defeats it is
+math *starting*; a `\left` already lives inside a math body, so what defeats it
+is that body *ending* — `$`, `\]`, `\)`, exactly the recovery anchors of the
+`left_right` walk it guards, while a `\[` in the way is ordinary content. And it
+is the gate whose opener and closer recognition **ignores `in_macro_code` on
+purpose** where the driver's own `\begin`/`\end` counting does not:
+`\left`/`\right` are catcode-neutral math structure that pairs by count no
+matter what, and a `\def` body or a `macrocode` chunk is exactly where package
+math like `$\left#2\right#4$` lives (issue #95). On the driver that is two
+predicates in a policy; as a hand-written scan it was a comment nothing
+enforced.
+
 ### Environment aliases
 
 `\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`

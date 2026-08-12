@@ -81,6 +81,25 @@ Prefer false negatives; when in doubt a construct stays generic.
   `display: false`, a different question about the same index under the same
   walk state, which a walk-state-keyed slot would answer from the first verdict
   (`demoted_display_dollar_regates_its_second_dollar_as_inline`).
+- **`\left` opens a pair only when its `\right` is reachable**; otherwise it is a
+  plain command with no diagnostic (#77), a likely typo being linter territory.
+  Runs on the driver as `LeftRightGate` (container-stack C2.4), the only gate
+  whose entries **stack** instead of counting (`Nesting::Interleaved`): a pair
+  closes by count wherever it sits, so `{`, `\begin`, and `\left` share one LIFO
+  stack, and the two halves of that read differently. A frame **mismatch** (an
+  `\end` or a `\right` meeting a frame of the wrong kind) refuses the whole scan,
+  since the innermost frame is common to every outer entry
+  (`an_end_inside_a_nested_left_refuses_the_whole_scan`); the *absence* of frames
+  the blank-line anchor tests is seen only by the innermost entry, so a nested
+  pair **shields** the ones around it
+  (`a_nested_left_shields_the_outer_pair_from_a_paragraph_break` — where the gate
+  is looser than the walk, which bails at the break; pre-existing, preserved by
+  the migration). Its math anchor is the *closing* side (`MathAnchor::Closing`):
+  a `\left` lives inside math already, so `$`/`\]`/`\)` end it while a `\[` is
+  content. **Opener and closer recognition ignores `in_macro_code` on purpose**
+  where the driver's `\begin`/`\end` counting does not — the pair is
+  catcode-neutral and a `\def` body or `macrocode` chunk is exactly where
+  `$\left#2\right#4$` lives (#95). Do not "fix" that asymmetry.
 - **`\if…\else…\or…\fi` pairs only when the `\fi` is reachable at the opener's
   own brace, environment, *and* math level**; a `macrocode` frame bounds it both
   ways, and the walk is bounded by the located closer index. A gate that counts a

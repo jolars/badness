@@ -825,11 +825,11 @@ sources below are missing.
     meaning change, not a cosmetic one. Every `.dtx` in the list is this shape.
     Likely the same margin/guard column-0 pinning the reflow already backstops.
 - [~] **Replace the per-opener gate scans with a precomputed closer map
-  (container stack; multi-session).** *Closed at C3 with three of the six
-  gates migrated — conditionals, aliases, and the `\begin` brace-escape gate
-  all run the shared batch driver; the math and bracket gates keep their own
-  scans, on measurement rather than on difficulty (C2.3–C2.5, C3).* Every
-  shape gate today runs one forward
+  (container stack; multi-session).** *Three of six gates migrated so far —
+  conditionals, aliases, and the `\begin` brace-escape gate run the shared
+  batch driver; the math and bracket family is C2.3–C2.5, to be finished for
+  **uniformity**, since measurement has since voided the perf case for those
+  three (see C2.3).* Every shape gate today runs one forward
   token scan per live opener, each a hand transcription of the same
   bookkeeping — brace depth with `plain_braces`, `\begin`/`\end` counting,
   blank-line runs, the macrocode bound — eight copies in `grammar.rs`, growing
@@ -1006,40 +1006,64 @@ sources below are missing.
       and were never the gate's alone; nor is `badness lint` a stand-in for
       the parser, since it runs every linter rule. Measure `parse` directly
       when judging a parser change. New item below for the rest.
-    - [ ] **C2.3–C2.5 — the math and bracket family: parked, deliberately**
-      (decision taken after C2.2, and it is C3's decision arriving early).
-      Measuring `parse` directly voided the perf premise for the whole
-      family:
-      - `delim_math_closes` — N `\[` with one `\]` at EOF, at 1000/2000/4000:
-        **0.1/0.2/0.4ms**. Already linear; a batch has nothing to fix.
-      - `dollar_closes` — the `${`-per-line shape C0 recorded: 3.8/13.9/53.8ms,
-        quadratic, and **a batch provably cannot help it**. After the first
-        `${` the brace depth ratchets upward and never returns to 0, so no
-        later opener sits at depth 0 in the seed's scan: the batch settles its
-        seed alone and every opener re-batches. That shape wants the *map* (a
-        per-frame "next `$` at the same brace depth"), the design C1 abandoned
-        as un-precomputable from walk state.
+      **The perf case for what remains is void — finish it for uniformity.**
+      Measuring `parse` directly (1000/2000/4000 openers) after C2.2:
+      - `delim_math_closes`, N `\[` with one `\]` at EOF: **0.1/0.2/0.4ms**.
+        Already linear; a batch has nothing to fix there.
+      - `dollar_closes`, the `${`-per-line shape C0 recorded:
+        **3.8/13.9/53.8ms**, quadratic — and **a batch cannot help it**. After
+        the first `${` the brace depth ratchets upward and never returns to 0,
+        so no later opener sits at depth 0 in the seed's scan: the batch
+        settles its seed alone and every opener re-batches. Killing that shape
+        needs the *map* (a per-frame "next `$` at the same brace depth"), the
+        design C1 abandoned as un-precomputable from walk state — so do not
+        repeat C0's claim that batching reaches it.
 
-      What was left was consolidation at the price of roughly three more
-      policy knobs (an unconditional `StrayBrace::Refutes`, environments
-      counted at any brace depth, no env balance required at the closer),
-      taking the driver to six — a policy interpreter, on gates with no
-      measured problem. Against that, the same measurement found the linter
-      and formatter two orders of magnitude more expensive on the identical
-      inputs (item below), so the effort goes there.
+      So C2.3–C2.5 are a **structural** change, deliberately: one driver, one
+      copy of the bookkeeping, every gate's divergence stated as a named
+      policy instead of a hand-transcribed scan. Judge them on the code, not
+      on a benchmark; the linter and formatter are two orders of magnitude
+      more expensive on the same inputs anyway (item below), and that is where
+      speed work belongs.
 
-      **If this is picked back up**, the notes that were already worked out:
-      `left_right_closes` needs a third environment-counting mode (a brace
-      group is opaque, skipped wholesale) and is the one gate whose
+    - [ ] **C2.3 — `delim_math_closes`, then `dollar_closes`.** Both count
+      environments at *any* brace depth, unlike the conditional and `\begin`
+      gates, and neither requires an environment balance at the closer — two
+      driver knobs, both explicit divergences. Their stray-`}` refusal is
+      unconditional where the positive gates' is `group_depth`-gated, so
+      `StrayBrace` grows a third variant. Neither treats a foreign math
+      delimiter as an anchor (`MATH_REFUTES = false`, as `EnvGate` already
+      sets). `dollar` adds two wrinkles: its closer is its own opener's token
+      kind, and a display `$$` opener starts the scan two tokens along — pass
+      the seed as `open + 1` from the caller rather than adding a hook, and
+      give `DollarGate` a `display` field for the "next token is `$`" test.
+      Run both **single-entry** (`opens_at` always false): their openers do
+      not nest — the first depth-0 closer answers every live opener at once —
+      so there is no LIFO to model and no closer-scope hook to add. `dollar`
+      also wants a `last_dollar` bound recorded in `new()` to keep the
+      `last_closer` contract honest.
+    - [ ] **C2.4 — `left_right_closes`.** A third environment-counting mode: a
+      brace group is opaque, skipped wholesale. Also the one gate whose
       opener/closer recognition deliberately ignores `in_macro_code` (issue
-      \#95) — the fix that still lives in exactly one copy, and the standing
-      argument for consolidating some day. In the bracket family, the
-      `abuts_command` claim countdown *is* the driver's nested-opener stack
-      once an "opener" is a command-abutting `[`;
-      `bracket_closes_before_math_end` would need `math_dollar.last()` in its
-      key, and it is the only bracket gate that does **not** filter
-      `plain_braces` on `L_BRACE`/`R_BRACE` — worth deciding whether that is
-      deliberate or a latent macrocode bug regardless of this item.
+      \#95) — the fix that lives in exactly one copy today, and the concrete
+      payoff of consolidating.
+    - [ ] **C2.5 — the bracket family** (`bracket_closes_in_text`,
+      `bracket_closes_before_math_end`,
+      `bracket_closes_before_macrocode_end`). The `abuts_command` claim
+      countdown *is* the driver's nested-opener stack once an "opener" is
+      defined as a command-abutting `[`. Two things to settle first:
+      `bracket_closes_before_math_end` must carry `math_dollar.last()` in its
+      memo key, and it is the only bracket gate that does **not** filter
+      `plain_braces` on `L_BRACE`/`R_BRACE` — decide whether that is
+      deliberate or a latent macrocode bug before preserving it into the
+      driver.
+
+      One driver change these three share, and it is a *simplification*: ask
+      `opens_at`/`closes_at` for any non-trivia token at the entries' own
+      level instead of only for a `CONTROL_WORD`, since these gates' closers
+      are `DOLLAR`, `CONTROL_SYMBOL`, and `R_BRACKET`. The existing three
+      policies already test the token kind inside their own predicates, so
+      widening costs them nothing.
 
     **Migration technique**, per stage: keep the old per-opener scan as a
     `#[cfg(debug_assertions)]` reference and assert `batch(open) ==
@@ -1057,16 +1081,15 @@ sources below are missing.
     scan-work test per gate, on the shapes measured above; and `task
     bench:micro` flat on real documents, so a memo miss never costs the common
     case.
-  - [x] **C3 — decide whether to finish** (decided: stop at three gates).
-    Conditionals, aliases, and the `\begin` brace-escape gate are batched on
-    the shared driver; the math and bracket gates keep their explicit scans,
-    for the reasons in C2.3–C2.5 above. The end-state the item allowed for —
-    part of the family on the map, part on its own scans, chosen per gate —
-    is the one we took, and it was chosen on measurement rather than on the
-    entanglement the item anticipated: the math gates are not too hard to
-    restate, they simply have nothing left to gain. The consolidation
-    argument (one copy of the bookkeeping, so a fix propagates) survives this
-    decision and is the reason to revisit if a drift bug like #95 recurs.
+  - [x] **C3 — decide whether to finish** (decided: **finish it**). The
+    fallback this stage exists to authorize — part of the family on the map,
+    part on its own scans — is *not* taken. The measurement that closed the
+    perf case (C2.3) did not make the math gates hard to restate; it only made
+    them unrewarding to benchmark, and the item's original complaint was never
+    really about speed: it was eight hand transcriptions of one piece of
+    bookkeeping, where a fix to one copy does not propagate (#95). One driver
+    with named per-gate policies is the end-state. Revisit only if a gate's
+    policy genuinely cannot be stated without averaging it against another's.
 - [ ] **The formatter *and the linter* are superlinear where the parser is
   now linear** (found while measuring C2.2/C2.3, and it is the larger half of
   every "quadratic gate" number this roadmap has been quoting). Two shapes,

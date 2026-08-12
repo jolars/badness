@@ -885,7 +885,9 @@ sources below are missing.
     the bound is vacuous (`${` per line ratchets depth upward and no
     anchor ever fires); and `environment_escapes_group` in practice,
     since every `\begin{…}` carries a `}` in its own name group, pushing
-    the bound to EOF.
+    the bound to EOF. That list turned out to be too short: the bound only
+    helps a file with *no* closer, so a single reachable closer at EOF
+    defeats it for every gate (measured under C2).
   - [x] **C1 — conditionals first** (done, with the mechanism amended). Not
     a `new()`-time map after all: `conditional_closer` reads walk state —
     above all `in_def_body`, which is set during greedy argument attachment,
@@ -909,19 +911,114 @@ sources below are missing.
     openers-with-one-`\fi`-at-EOF shape, which defeats the C0 bound, is now
     one linear pass (~34ms for 8000 openers end-to-end), pinned by
     `conditional_batch_keeps_shared_frame_openers_linear`.
-  - [ ] **C2 — migrate the remaining gates one at a time**, easiest policy
-    first: alias, then `environment_escapes_group`, the math and bracket
-    family last. Each migration deletes one transcribed scan and its copy of
-    the bookkeeping.
-  - [ ] **C3 — decide whether to finish.** If the math-gate restatement
-    proves too entangled, stopping with conditionals and aliases on the map
-    and the math/bracket gates on a shared scan skeleton (one struct owning
-    bound computation, brace/env/blank-line bookkeeping, and the
-    macrocode-frame refusal, with per-gate closures keeping the deliberate
-    divergences explicit) is a respectable end-state — the skeleton and the
-    map are two depths of the same consolidation, chosen per gate. Do **not**
-    build the skeleton first as a stepping stone to the map; it is the
-    fallback, not the foundation.
+  - [ ] **C2 — migrate the remaining gates onto one batch driver**, easiest
+    policy first: alias, then `environment_escapes_group`, then the math and
+    bracket family. This item's original wording ("each migration deletes one
+    transcribed scan and its copy of the bookkeeping") belongs to the
+    `new()`-time map C1 abandoned. Every remaining gate reads walk state as
+    well — `in_def_body`, `group_depth`, `plain_braces`, `macrocode_end`, and
+    `math_dollar.last()` for `bracket_closes_before_math_end` — so each is a
+    *batch*, not a precomputation, and repeating C1 by hand six times would
+    leave nine copies of a scan **plus** seven copies of the batch machinery:
+    the transcription-drift disease this item exists to cure, made worse. So
+    the driver comes first, and each gate joins it.
+
+    The residuals are also wider than C0 recorded. C0 named `dollar_closes`
+    and `environment_escapes_group`, but its bound only helps a file with *no*
+    closer, so **one reachable closer at EOF defeats it for every gate**. N
+    openers, one closer, no anchors in reach, `format --check` end to end at
+    2000/4000/8000: `environment_escapes_group` (`{` then N `\begin{itemize}`)
+    69/230/984ms; `bracket_closes_in_text` (N `\cmd[`, one `]`) 31/102/271ms;
+    `left_right_closes` (N `\left(`, one `\right)`) 22/68/230ms;
+    `dollar_closes` (N `${`) 15/48/180ms. `delim_math_closes` measures linear
+    on its own shape, and alias needs both halves defined in the same file, so
+    those two are migrated for uniformity rather than for speed.
+
+    - [ ] **C2.0 — extract the batch driver; re-express conditionals on it.**
+      Lift `conditional_closers_from`'s engine into a reusable scan owning
+      only the *bookkeeping*: the bound (`macrocode_end` ∧ `tokens.len()` ∧
+      last closer + 1), trivia skip, newline runs, brace depth under
+      `plain_braces`, environment counting with the `macrocode`-frame break in
+      both directions, the `group_depth > 0` stray-`}` rule, the
+      `pending`/`live` stack with `envs_at_push`, settled-never-popped,
+      `tick_scan` metering, and the walk-state memo. Per-gate policy stays an
+      explicit struct of named hooks (`is_opener`, `closer_at`,
+      `paragraph_anchors`, `env_counting`, `on_math`, `eof_verdict`), each
+      keeping the doc comment it carries today: the driver owns the
+      bookkeeping and never averages the policies. No behavior change; the
+      existing conditional tests pin it. This is not the C3 skeleton built
+      first — the driver is *extracted from C1's working batch*, so the map
+      stays the foundation and C3 becomes a subtraction rather than a
+      construction. Two fixes belong in the extraction: give `plain_braces` a
+      version counter bumped in `macrocode_body` so the memo key is a fact
+      instead of the current "pinned by the frame" argument, and hoist
+      **settled-never-popped** into the driver, since every remaining gate has
+      the same never-un-counted nested-opener countdown (`nested` for alias,
+      `brackets` for the bracket pair, the `Ctx::Left` stack for `\left`) and
+      every new policy must answer for it explicitly.
+    - [ ] **C2.1 — alias.** Conditional's policy minus the paragraph anchor,
+      plus the named-closer test (`closing == target`); retires
+      `alias_closer_memo` into the shared memo. Low value, low risk: its job
+      is to shape the abstraction with a second client before the expensive
+      ones arrive.
+    - [ ] **C2.2 — `environment_escapes_group`.** The biggest measured win,
+      and the polarity inverts: it is a *demotion* gate, so an entry still
+      live at the end settles `false` (pairs), which is what preserves the
+      unclosed-environment diagnostic. The per-opener pre-checks
+      (`group_depth == 0`, `doc_margin_exempt`) stay outside the batch — they
+      short-circuit before any scan and read per-opener walk state.
+      `end_orphans_a_demoted_begin` is untouched.
+    - [ ] **C2.3 — `delim_math_closes`, then `dollar_closes`.** Both count
+      environments at *any* brace depth, unlike the conditional and `\begin`
+      gates: a driver knob, an explicit divergence. `dollar` is the
+      interesting one — its closer is its own opener's token kind, so entries
+      chain (each depth-0 `$` settles the previous entry and pushes itself)
+      and `display` becomes per-entry state. This is what finally kills the
+      `${`-per-line shape C0 recorded as unreachable by bounding.
+    - [ ] **C2.4 — `left_right_closes`.** A third environment-counting mode: a
+      brace group is opaque, skipped wholesale. Also the one gate whose
+      opener/closer recognition deliberately ignores `in_macro_code` (issue
+      \#95) — the fix that lives in exactly one copy today, and the concrete
+      payoff of consolidating.
+    - [ ] **C2.5 — the bracket family** (`bracket_closes_in_text`,
+      `bracket_closes_before_math_end`,
+      `bracket_closes_before_macrocode_end`). The `abuts_command` claim
+      countdown *is* the driver's nested-opener stack once an "opener" is
+      defined as a command-abutting `[`. Two things to settle first:
+      `bracket_closes_before_math_end` must carry `math_dollar.last()` in its
+      memo key, and it is the only bracket gate that does **not** filter
+      `plain_braces` on `L_BRACE`/`R_BRACE` — decide whether that is
+      deliberate or a latent macrocode bug before preserving it into the
+      driver.
+
+    **Migration technique**, per stage: keep the old per-opener scan as a
+    `#[cfg(debug_assertions)]` reference and assert `batch(open) ==
+    reference(open)` on every query for the life of the migration commit, run
+    the suite and a debug corpus pass, then delete the reference before
+    merging. C2's correctness claim is stronger than C1's one-directional
+    contract — verdicts must be *bit-identical* to the per-opener scan under
+    the same walk state — and this makes it mechanically checkable.
+
+    **Acceptance gate**, identical at every stage, one commit per stage:
+    `cargo test` plus snapshots; `task gate-corpora:check` (two-sided ratchet,
+    sets not counts); `task parse-compat` and `task bib-parse-compat`
+    **unchanged**, since a verdict-preserving migration must not move the
+    differential; a `<gate>_batch_stays_linear_with_one_closer_at_eof`
+    scan-work test per gate, on the shapes measured above; and `task
+    bench:micro` flat on real documents, so a memo miss never costs the common
+    case.
+  - [ ] **C3 — decide whether to finish.** Cheaper to decide once C2.0 has
+    landed: with the gates on one driver the question is whether any gate
+    stays on single-verdict runs, not whether to build a fallback. If the
+    math-gate restatement proves too entangled, stopping with conditionals and
+    aliases batched and the math/bracket gates running the same driver one
+    opener at a time — the bound, the brace/env/blank-line bookkeeping, and
+    the macrocode-frame refusal shared, the batch stack unused — is a
+    respectable end-state: the skeleton and the map are two depths of the same
+    consolidation, chosen per gate. Do **not** build the skeleton first as a
+    stepping stone to the map; C2.0 keeps that order by *extracting* the
+    driver from C1's working batch rather than authoring a
+    lowest-common-denominator scan.
 - [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
   Everything today is curated corpus + snapshots; nothing exercises
   `PARSER_STEP_LIMIT` or the recovery paths with arbitrary bytes, and

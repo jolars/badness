@@ -1102,6 +1102,56 @@ fn a_blank_line_inside_a_nested_group_does_not_anchor() {
 }
 
 #[test]
+fn a_refuted_nested_opener_still_consumes_a_fi() {
+    // The gate counts nested openers by name and never un-counts one: the
+    // unowed `\end{center}` demotes `\ifdim`, but `\ifdim`'s slot still
+    // consumes the lone `\fi`, so the outer `\ifnum` runs out of closers and
+    // demotes too. The batched scan must settle a refuted entry *without*
+    // removing it from the pending stack (`conditional_closers_from`);
+    // popping it would hand the `\fi` to `\ifnum` — a `CONDITIONAL` the
+    // per-opener scan never built. (The two-`\fi` sibling of this shape is
+    // `conditional_walk_may_close_before_the_located_fi`.)
+    assert_eq!(
+        conditionals(r"\ifnum1<2 \begin{center}\ifdim1pt<2pt \end{center}x\fi"),
+        []
+    );
+}
+
+#[test]
+fn a_blank_line_inside_a_nested_environment_demotes_only_the_inner_opener() {
+    // The paragraph break sits at the inner conditional's own level (inside
+    // `center`), so it refutes `\ifcmh` alone; the outer `\ifnum`, one
+    // environment up, pairs across it — the batched scan settles exactly the
+    // level-matching suffix of its live entries.
+    assert_eq!(
+        conditionals("\\ifnum1<2 \\begin{center}\\ifcmh a\n\nb\\fi\\end{center}\\fi\n"),
+        [(1, true)]
+    );
+}
+
+#[test]
+fn a_fi_inside_an_environment_the_conditional_opened_is_not_its_closer() {
+    // The `\fi` is consumed by the environment's body, so the walk cannot
+    // reach it: the closer must sit at the opener's own environment level.
+    assert_eq!(
+        conditionals(r"\ifnum1<2 \begin{center}x\fi\end{center}"),
+        []
+    );
+}
+
+#[test]
+fn a_macrocode_frame_refutes_every_pending_opener() {
+    // The chunk boundary is hard in both directions; the outer opener and the
+    // nested one it counted demote together, in one batch.
+    assert_eq!(
+        conditionals(
+            "\\ifnum1<2 \\ifdim1pt<2pt a\\begin{macrocode}\nb\\fi\\fi\n\\end{macrocode}\n"
+        ),
+        []
+    );
+}
+
+#[test]
 fn newif_declares_a_flag_without_opening_a_conditional() {
     // 574 corpus occurrences. The `\if@foo` after `\newif` is the flag being
     // declared, not an opener; the *use* below it is the real conditional.

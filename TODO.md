@@ -886,11 +886,29 @@ sources below are missing.
     anchor ever fires); and `environment_escapes_group` in practice,
     since every `\begin{…}` carries a `}` in its own name group, pushing
     the bound to EOF.
-  - [ ] **C1 — conditionals first.** The gate with the measured pathological
-    case and the cleanest policy (its level tracking is already explicit:
-    brace, environment, math, macrocode). Build the closer map in the
-    existing pre-scan pass; opener recognition stays in
-    `parser::conditional`, shared with the linter's `ConditionalIndex`.
+  - [x] **C1 — conditionals first** (done, with the mechanism amended). Not
+    a `new()`-time map after all: `conditional_closer` reads walk state —
+    above all `in_def_body`, which is set during greedy argument attachment,
+    so precomputing it in the pre-scan would mean re-implementing attachment
+    outside the walk, the very transcription-drift disease this item exists
+    to cure. Instead the gate is *batched*
+    (`Parser::conditional_closers_from`): one scan seeded at the queried
+    opener settles every same-frame opener it passes — nested openers are
+    counted only at brace depth 0, so they share the seed's frame exactly
+    and `\fi` matching is pure LIFO over a pending stack — memoized against
+    the walk state the scan read (`macrocode_end`, `in_def_body`,
+    `group_depth > 0`; `plain_braces` is pinned by the frame, everything
+    else is pre-scanned token state). One rule is load-bearing: a refuted
+    entry is **settled, never popped**, because the per-opener scan counts
+    nested openers by name and never un-counts one, so a later `\fi` must
+    still be consumed by the refuted entry's slot
+    (`a_refuted_nested_opener_still_consumes_a_fi` — popping instead hands
+    the `\fi` to the outer opener and builds a `CONDITIONAL` the per-opener
+    scan never did). Opener recognition stayed in `parser::conditional`,
+    shared with the linter's `ConditionalIndex`. The
+    openers-with-one-`\fi`-at-EOF shape, which defeats the C0 bound, is now
+    one linear pass (~34ms for 8000 openers end-to-end), pinned by
+    `conditional_batch_keeps_shared_frame_openers_linear`.
   - [ ] **C2 — migrate the remaining gates one at a time**, easiest policy
     first: alias, then `environment_escapes_group`, the math and bracket
     family last. Each migration deletes one transcribed scan and its copy of

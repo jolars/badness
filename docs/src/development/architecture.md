@@ -370,13 +370,22 @@ command. The tree is still well formed and still lossless, which is the bar; but
 it is why `ast::Conditional::closer` is fallible and why no consumer may assume
 the scan's index and the walk's agree.
 
-The cost is one forward scan per live opener. Every ordinary anchor cuts it
-short, so conditional-heavy real packages (`biblatex.sty`, `latexrelease.sty`,
-`memoir.cls`) measure the same as they did before the node existed. The shape
-that does not cut short is thousands of top-level openers with no blank line, no
-unbalanced brace, and no reachable `\fi`, which is quadratic; no corpus file
-hits it, and the linear rewrite is recorded in `TODO.md` against the day one
-does.
+The cost is one forward scan per *batch*, not per opener. The scan is bounded by
+the last `\fi`-flavored word in the file (a file with none refuses without
+scanning), and one scan settles every opener it passes in the seed's own brace
+frame: nested openers are only counted at brace depth zero, so they share the
+seed's frame exactly and `\fi` matching is pure LIFO over a pending stack. The
+batch is memoized against the walk state the scan read (`macrocode_end`,
+`in_def_body`, whether a group encloses), so a run of top-level openers costs
+one linear pass where it used to cost one scan each — the quadratic
+thousands-of-openers shape recorded here before the batch now measures in the
+tens of milliseconds. One rule in the batch is load-bearing: a refuted entry is
+settled, never removed, because the per-opener scan counts nested openers by
+name and never un-counts one — a later `\fi` must still be consumed by the
+refuted entry's slot, or the outer opener would pair where the per-opener scan
+demoted it. Every ordinary anchor still cuts a scan short, so conditional-heavy
+real packages (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`) measure the
+same as they did before the node existed.
 
 Two anchors differ from the environment gate on purpose. Running out of file
 demotes here, where the environment gate keeps the node so it can still report

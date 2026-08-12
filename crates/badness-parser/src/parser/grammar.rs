@@ -225,6 +225,23 @@ fn debug_assert_balanced(events: &[Event]) {
     );
 }
 
+/// One batched run of the conditional gate's scan
+/// ([`Parser::conditional_closers_from`]): the per-opener verdicts it
+/// harvested, valid under the walk state in `key`.
+struct ConditionalBatch {
+    /// The walk state the scan read: `(macrocode_end, in_def_body,
+    /// group_depth > 0)`. `plain_braces` needs no slot of its own — it is
+    /// saved and restored in lockstep with `macrocode_end` per chunk
+    /// ([`Parser::macrocode_body`]), so pinning the frame pins it; everything
+    /// else the scan reads is pre-scanned token state.
+    key: (Option<usize>, bool, bool),
+    /// Opener index → the verdict [`Parser::conditional_closer`] would have
+    /// computed for it under `key`, for every same-frame opener the scan
+    /// passed. Openers absent from the map sat behind a brace during the
+    /// batch and re-batch when queried.
+    verdicts: std::collections::HashMap<usize, Option<usize>>,
+}
+
 struct Parser<'t> {
     tokens: &'t [Token],
     /// User-defined verbatim constructs, consulted to route a verbatim environment to
@@ -383,6 +400,15 @@ struct Parser<'t> {
     last_r_brace: Option<usize>,
     /// Last `\fi`-flavored flow word — bounds [`Self::conditional_closer`].
     last_fi: Option<usize>,
+    /// The most recent [`Self::conditional_closers_from`] batch, memoized with
+    /// the walk state its scan read. A lookup hits only when that key matches
+    /// the walk's current state *and* the queried opener was settled by the
+    /// batch; anything else re-batches from the queried opener. One slot is
+    /// all the reuse there is: [`Self::element`] queries each opener once, in
+    /// ascending order, under a stable state between re-batches. `RefCell`
+    /// because the gate is `&self` (the [`Self::alias_closer_memo`] pattern,
+    /// with a map where that memo keeps one verdict).
+    conditional_batch: std::cell::RefCell<Option<ConditionalBatch>>,
     /// Tokens visited by the shape-gate scans, summed over the whole parse. A
     /// measurement hook for the linearity regression tests in this file's
     /// `mod tests` — never a budget (`TODO.md` rejects scan budgets as
@@ -537,6 +563,7 @@ impl<'t> Parser<'t> {
             last_right,
             last_r_brace,
             last_fi,
+            conditional_batch: std::cell::RefCell::new(None),
             scan_work: std::cell::Cell::new(0),
             alias_openers,
             alias_closers,
@@ -2641,30 +2668,114 @@ impl<'t> Parser<'t> {
     /// and why nothing downstream may assume the two indices agree
     /// (`conditional_walk_may_close_before_the_located_fi`, `tests/parser.rs`).
     ///
-    /// **Cost.** One forward scan per live opener, bounded by the last
-    /// `\fi`-flavored flow word in the file ([`Self::last_fi`], the
-    /// `last_alias_closer` treatment): every `Some` is at one, so past it only
-    /// refusals remain, and a file with none refuses without scanning — which
-    /// is what keeps the measured pathological shape (thousands of *top-level*
-    /// openers with no blank line, no unbalanced brace, and no `\fi` at all;
-    /// 8000 such lines cost ~2s against ~0.07s unbounded) linear. Every
-    /// ordinary anchor still cuts a scan short, which is why real
-    /// conditional-heavy packages show no measurable change (`biblatex.sty`,
-    /// `latexrelease.sty`, `memoir.cls` all within noise of the pre-node
-    /// parser). The residual shape — those same openers with one `\fi` at EOF —
-    /// stays O(n·openers); see `TODO.md` (container stack, C1) for the batched
-    /// rewrite.
+    /// **Cost.** Verdicts are computed in *batches* (`TODO.md`, container-stack
+    /// C1): one forward scan seeded at the queried opener settles every
+    /// same-frame opener it passes ([`Self::conditional_closers_from`]), and
+    /// the batch is memoized against the walk state it read
+    /// ([`Self::conditional_batch`]) — so a run of top-level openers costs one
+    /// O(n) pass where it used to cost one scan each. The scan stays bounded
+    /// by the last `\fi`-flavored word in the file ([`Self::last_fi`], C0), so
+    /// a file with none refuses without scanning at all. Openers the batch did
+    /// not settle (they sat behind a brace at batch time) and queries under a
+    /// changed walk state re-batch; every ordinary anchor still cuts a scan
+    /// short, which is why real conditional-heavy packages (`biblatex.sty`,
+    /// `latexrelease.sty`, `memoir.cls`) were within noise of the pre-node
+    /// parser even before the batch.
     fn conditional_closer(&self, open: usize) -> Option<usize> {
-        let last_fi = self.last_fi?;
+        self.last_fi?;
+        let key = (self.macrocode_end, self.in_def_body, self.group_depth > 0);
+        if let Some(batch) = self.conditional_batch.borrow().as_ref()
+            && batch.key == key
+            && let Some(&verdict) = batch.verdicts.get(&open)
+        {
+            return verdict;
+        }
+        let verdicts = self.conditional_closers_from(open);
+        let verdict = verdicts.get(&open).copied();
+        debug_assert!(verdict.is_some(), "the batch must settle its own seed");
+        *self.conditional_batch.borrow_mut() = Some(ConditionalBatch { key, verdicts });
+        verdict.flatten()
+    }
+
+    /// The batched walk behind [`Self::conditional_closer`]: one forward scan
+    /// seeded at `open` that also settles, as a by-product, every opener it
+    /// passes in the seed's own brace frame — the exact verdict each one's own
+    /// scan would have computed under the current walk state.
+    ///
+    /// The transform from the per-opener scan is possible because that scan
+    /// counts nested openers only at `depth == 0`: every opener this scan
+    /// passes shares the seed's brace frame exactly, so `depth` is common to
+    /// all of them, an entry's environment count relative to itself is
+    /// `envs - envs_at_push`, and its nested-opener count is the number of
+    /// stack entries above it — `\fi` matching is pure LIFO.
+    ///
+    /// The one non-obvious rule: a refuted entry is **settled, never
+    /// removed**. The per-opener scan counts nested openers *by name*
+    /// (`conditional_openers` membership) and never un-counts one, so a later
+    /// `\fi` must still be consumed by the refuted entry's slot. In
+    /// `\ifA \begin{center} \ifB \end{center} \fi \fi`, the unowed `\end`
+    /// refutes `\ifB` — but `\ifA`'s own scan still counts `\ifB` as nested
+    /// and pairs with the *second* `\fi`. Popping `\ifB` at the `\end` would
+    /// hand the first `\fi` to `\ifA`: a different verdict, a different tree.
+    /// A `\fi` that pops an already-settled entry records nothing.
+    ///
+    /// Per anchor, mirroring the pre-batch scan token for token:
+    /// - a `\fi` at depth 0 pops the top entry; if it was still live, its
+    ///   verdict is `Some` iff no `\begin`-opened environment stands in the
+    ///   way (`envs == envs_at_push`, the old `envs == 0` restated);
+    /// - a paragraph break or an unowed `\end` refutes exactly the live
+    ///   entries at their own level (`envs_at_push == envs`) — a contiguous
+    ///   top suffix of the live stack, whose `envs_at_push` values are
+    ///   non-decreasing and capped at `envs` by construction — and the `\end`
+    ///   then decrements `envs` for the survivors;
+    /// - math, an unbalanced `}` under an enclosing group, a `macrocode`
+    ///   frame, and the end bound refute everything still live.
+    ///
+    /// The scan ends as soon as no live entry remains.
+    fn conditional_closers_from(
+        &self,
+        open: usize,
+    ) -> std::collections::HashMap<usize, Option<usize>> {
+        struct Entry {
+            opener: usize,
+            envs_at_push: usize,
+            settled: bool,
+        }
+        /// Settle every live entry sitting at its own environment level: the
+        /// level anchor at hand refutes exactly those.
+        fn settle_level(
+            pending: &mut [Entry],
+            live: &mut Vec<usize>,
+            verdicts: &mut std::collections::HashMap<usize, Option<usize>>,
+            envs: usize,
+        ) {
+            while let Some(&idx) = live.last() {
+                let entry = &mut pending[idx];
+                if entry.envs_at_push != envs {
+                    break;
+                }
+                entry.settled = true;
+                verdicts.insert(entry.opener, None);
+                live.pop();
+            }
+        }
+        let mut verdicts = std::collections::HashMap::new();
+        let mut pending = vec![Entry {
+            opener: open,
+            envs_at_push: 0,
+            settled: false,
+        }];
+        // Indices into `pending` of the entries still awaiting a verdict,
+        // ascending.
+        let mut live = vec![0usize];
         let mut depth = 0usize;
         let mut envs = 0usize;
-        let mut nested = 0usize;
         let mut newlines = 0;
         let end = self
             .macrocode_end
             .unwrap_or(self.tokens.len())
             .min(self.tokens.len())
-            .min(last_fi + 1);
+            .min(self.last_fi.map_or(0, |last| last + 1));
         let mut i = open + 1;
         while i < end {
             self.tick_scan();
@@ -2672,8 +2783,14 @@ impl<'t> Parser<'t> {
             match t.kind {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
-                    if newlines >= 2 && Self::paragraph_break_blocks(depth, envs) {
-                        return None;
+                    // The old `paragraph_break_blocks(depth, envs)`, restated
+                    // per entry: the break blocks at an entry's own level,
+                    // `depth == 0 && envs == envs_at_push`.
+                    if newlines >= 2 && depth == 0 {
+                        settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                        if live.is_empty() {
+                            return verdicts;
+                        }
                     }
                     i += 1;
                     continue;
@@ -2688,11 +2805,11 @@ impl<'t> Parser<'t> {
                 // whose closer sits behind a math delimiter stays a plain command.
                 // A conservative false negative, per the parser's standing
                 // preference for them.
-                SyntaxKind::DOLLAR if depth == 0 => return None,
+                SyntaxKind::DOLLAR if depth == 0 => break,
                 SyntaxKind::CONTROL_SYMBOL
                     if depth == 0 && matches!(t.text.as_str(), "\\[" | "\\(") =>
                 {
-                    return None;
+                    break;
                 }
                 SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
                 SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
@@ -2704,7 +2821,7 @@ impl<'t> Parser<'t> {
                         // the scan carries on (the `\begin` gate's `group_depth`
                         // guard, transcribed).
                         if self.group_depth > 0 {
-                            return None;
+                            break;
                         }
                     } else {
                         depth -= 1;
@@ -2712,16 +2829,29 @@ impl<'t> Parser<'t> {
                 }
                 SyntaxKind::CONTROL_WORD if depth == 0 => {
                     if self.conditional_openers.contains(&i) {
-                        nested += 1;
+                        live.push(pending.len());
+                        pending.push(Entry {
+                            opener: i,
+                            envs_at_push: envs,
+                            settled: false,
+                        });
                     } else if self.conditional_flow_at(i) == Some(conditional::FlowWord::Fi) {
-                        // `envs == 0` for the same reason as `depth == 0`: a `\fi`
-                        // inside an environment the conditional opened is consumed
-                        // by that environment's body, so it is not a closer the
-                        // walk can reach.
-                        if nested == 0 {
-                            return (envs == 0).then_some(i);
+                        let entry = pending
+                            .pop()
+                            .expect("a live entry remains, so pending is non-empty");
+                        if !entry.settled {
+                            live.pop();
+                            // `envs == envs_at_push` for the same reason as
+                            // `depth == 0`: a `\fi` inside an environment the
+                            // conditional opened is consumed by that
+                            // environment's body, so it is not a closer the
+                            // walk can reach.
+                            verdicts
+                                .insert(entry.opener, (envs == entry.envs_at_push).then_some(i));
+                            if live.is_empty() {
+                                return verdicts;
+                            }
                         }
-                        nested -= 1;
                     } else if !self.in_macro_code(i) {
                         // In a definition body or an expl3 region `\begin`/`\end`
                         // are plain commands that need not pair, so neither
@@ -2742,13 +2872,16 @@ impl<'t> Parser<'t> {
                             if peek_begin_name(self.tokens, i)
                                 .is_some_and(|n| matches!(n.as_str(), "macrocode" | "macrocode*"))
                             {
-                                return None;
+                                break;
                             }
                             envs += 1;
                         } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
-                            if envs == 0 {
-                                return None;
+                            settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                            if live.is_empty() {
+                                return verdicts;
                             }
+                            // A survivor has `envs_at_push < envs`, so the
+                            // decrement cannot underflow.
                             envs -= 1;
                         }
                     }
@@ -2758,7 +2891,12 @@ impl<'t> Parser<'t> {
             newlines = 0;
             i += 1;
         }
-        None
+        // Global refusals — math, an unbalanced `}` under an enclosing group,
+        // a `macrocode` frame, the end bound: everything still live demotes.
+        for &idx in &live {
+            verdicts.insert(pending[idx].opener, None);
+        }
+        verdicts
     }
 
     /// The token index closing the environment-alias opener at `open`, or `None`
@@ -3417,6 +3555,16 @@ mod tests {
         // `delim_math_closes`: display-math openers, no `\]` anywhere.
         let shape = "\\[ x\n";
         assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
+    }
+
+    /// The batched conditional gate (`TODO.md`, container stack C1): a run of
+    /// same-frame openers whose lone `\fi` sits at EOF defeats the C0
+    /// last-closer bound (the bound spans the whole file), so only the batch —
+    /// one shared scan settling every opener it passes — keeps it linear.
+    #[test]
+    fn conditional_batch_keeps_shared_frame_openers_linear() {
+        let body = |n: usize| format!("{}\\fi\n", "\\ifabc x\n".repeat(n));
+        assert_scan_work_linear(&body(200), &body(400));
     }
 
     /// The in-math no-closer shapes: the enclosing math's own gate passes (its

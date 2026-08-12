@@ -75,10 +75,13 @@ Prefer false negatives; when in doubt a construct stays generic.
   formatter owns layout there; linter: `\def` bodies withheld entirely, since a
   carried `\let` must not arm the operand countdown). Subtracting the
   brace-argument `if*` family is load-bearing, since shape alone mis-pairs rather
-  than fails. Demotes silently. One forward scan per live opener, bounded by the
-  last `\fi`-flavored word in the file; every ordinary anchor cuts it short, so
-  real corpora are unaffected — the residual shape (openers whose lone `\fi`
-  sits at EOF) is the container-stack roadmap's C1 in `TODO.md`.
+  than fails. Demotes silently. Verdicts come in **batches** (container-stack
+  C1): one scan, bounded by the last `\fi`-flavored word in the file, settles
+  every same-frame opener it passes, memoized against the walk state it read.
+  The batch's load-bearing rule: a refuted entry is **settled, never removed** —
+  the per-opener model counts nested openers by name and never un-counts one, so
+  a later `\fi` must still be consumed by the refuted entry's slot
+  (`a_refuted_nested_opener_still_consumes_a_fi`).
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both

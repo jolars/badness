@@ -305,13 +305,18 @@ covered in `docs/src/development/architecture.md`.
   file-kind wrap default to paper over a layout bug; fix the gate. Detail in
   `docs/src/development/architecture.md`
   (§ *Reflow is safe by construction*).
-- **Trivia-invariant layout** *(being rolled out—see TODO.md)*: layout is a function of
+- **Trivia-invariant layout**: layout is a function of
   non-trivia content, config, and only those trivia predicates the formatter itself
   *preserves*. A predicate `P` is preserved when `P(fmt(x)) == P(x)`. Blank-line
   presence, comment presence and own-line-ness, and a column-0 `.dtx` margin/guard are
   preserved, so layout may read them. **Whether a gap is a lone newline or a space is
   not** — the formatter converts freely in both directions (`alpha\nbeta` → `alpha beta`)
-  — so layout must never key on it. Detail, the predicate classification, and the
+  — so layout must never key on it. **No Tier-1 read remains**: under `Reflow`,
+  opaque brace groups (`lower_opaque_group`) and optionals (`lower_optional`) are
+  width-driven, and the surviving `spans_multiple_lines` readers are Tier-2
+  residues behind the non-`Reflow` modes and the doc-margined corner. The `Gap`
+  boundary normalization that would *enforce* this is still open (TODO.md).
+  Detail, the predicate classification, and the
   widened-gap escape hatch for modes *defined* by authored breaks in
   `docs/src/development/architecture.md` (§ *Trivia-invariant layout*); the Tier 1
   vs. Tier 2 vocabulary is in `.claude/rules/formatter.md`.
@@ -410,13 +415,19 @@ never match.
   that reads one is a latent idempotency bug. Blank lines and comments are fair game.
   A rule that genuinely needs the unsafe predicate (`WrapMode::Stable`, `Sentence`,
   `Semantic`, `ReflowKind::Statement`, the expl3 fallback statement, the
-  command-only-line residue) is Tier 2: it must carry a written fixed-point argument
+  command-only-line residue, the delimited-group block residue on
+  `spans_multiple_lines`) is Tier 2: it must carry a written fixed-point argument
   showing every layout it can emit re-reads to itself, as `ReflowKind::Statement`'s
-  flush continuation, the expl3 fallback's greedy self-refilling lines, and the
-  command-only residue's preservation-only hardening (`line_is_command_only`) do. A fallback line's fill also *hugs*
+  flush continuation, the expl3 fallback's greedy self-refilling lines, the
+  command-only residue's preservation-only hardening (`line_is_command_only`), and
+  the delimited-group residue's block-re-reads-multi-line argument
+  (`spans_multiple_lines`) do. A fallback line's fill also *hugs*
   (`Ir::HugFill`): an atom that carries a forced break is measured by its first
   line, so where it lands never depends on forced-ness — which is why no arm of
-  the forced-break dispatch fires inside a fallback statement.
+  the forced-break dispatch fires inside a fallback statement. A Tier-2 rule must
+  also never mint a forced break an upstream `contains_forced_break` reader can
+  see on one pass but not the other — that is why the command-only residue is
+  off inside a prose argument body (`ReflowKind::ProseArg`).
 - Don't add intra-file incremental reparse, macro expansion, or catcode logic beyond
   decision #1 without recording the decision here and in the relevant
   `.claude/rules/` file.

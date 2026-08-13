@@ -110,12 +110,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   every TeX-identical newline<->space perturbation
   (`formatter::perturb::survey_trivia_invariance`). It is a **survey, not a
   gate**: strict is the end-state contract, so it still fails wherever the
-  formatter deliberately preserves an authored break — 275 of 286 latex3 files,
-  372 of 384 latex2e, 354 of 397 pgf, 3804 of 5209 latexindent (after the
-  `CommandSig::block` fix; it was 282/375/361/3851 before). It earns the
-  surface because it is the only *mechanical* route to a Tier-1 read (today:
-  Opaque-group layout non-determinism below; it is also what surfaced, and
-  still reports, the command-only-line residue, now sanctioned Tier 2):
+  formatter deliberately preserves an authored break — 274 of 286 latex3 files,
+  368 of 384 latex2e, 307 of 397 pgf, 3122 of 5209 latexindent (after the
+  opaque-group width-driven layout; it was 275/372/354/3804 after the
+  `CommandSig::block` fix, and 282/375/361/3851 before that). It earned the
+  surface as the only *mechanical* route to a Tier-1 read — it surfaced the
+  Opaque-group non-determinism (now retired) and the command-only-line
+  residue (sanctioned Tier 2), both of which it still reports where a
+  preserved break is the information read:
   a layout decision keyed on the lone-newline predicate is
   self-consistent on both spellings, so `--checks all` and the convergence
   oracle are blind to it by construction. The survey checks every variant
@@ -178,12 +180,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   prototypes already have the shape and would fold in: `DividerGap` (the
   conditional divider) and `KeyBreak` (the `[…]` split point). Tier-2 sites
   (`WrapMode::Stable`/`Sentence`/`Semantic`, `ReflowKind::Statement`, the expl3
-  fallback statement, the command-only-line residue above) take a *widened* gap
-  and keep their written fixed-point arguments.
-
-  Do this **after** the remaining Tier-1 entry (Opaque-group layout
-  non-determinism below), not before: what the widened gap has to carry is
-  precisely what that fix and the command-only residue leave behind.
+  fallback statement, the command-only-line residue above, the delimited-group
+  block residue on `spans_multiple_lines`) take a *widened* gap and keep their
+  written fixed-point arguments. The Tier-1 prerequisite (Opaque-group layout
+  non-determinism) is done, so this is unblocked; what the widened gap has to
+  carry is precisely what that fix and the command-only residue left behind.
 
 - [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
   one family.** `%`-terminated argument braces
@@ -203,27 +204,30 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   overall, so the likely resolution is tight `/` everywhere and no operator
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
 
-- [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
-  landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
-  `TokenList`/`Keyval`) the formatter dispatches whitespace and break policy on
-  (`DocumentBody` stays an environment-body concept via
-  `EnvironmentSig::no_indent`; add it when a command-arg case appears). What
-  remains is the non-determinism fix: `spans_multiple_lines` decides
-  block-vs-inline from incidental source newlines, sidestepped for the
-  `TokenList` and `Keyval` kinds but still governing every `Opaque` multi-line
-  *brace* group. Give `Opaque` groups a deterministic layout policy that does not
-  depend on incidental whitespace. *(A **Tier-1** violation of trivia-invariant
-  layout, `AGENTS.md` § *Invariants*: `spans_multiple_lines` reads the unsafe
-  lone-newline predicate in the default `Reflow`, not in a mode defined by
-  authored breaks. `--checks trivia-strict` is what surfaces it.)*
+- [x] **Opaque-group layout non-determinism (the last Tier-1 read) is retired.**
+  Under `Reflow` a brace group is width-driven (`lower_opaque_group`): flat when
+  it fits (byte-identical to the generic path except a lone-newline run renders
+  as one space), first-fit wrapped at its authored gaps otherwise, with only
+  preserved predicates (interior blank line, direct comment) and forced-break
+  content declining to the block form. `lower_optional`'s fallbacks are
+  deterministic in the mirror image (unconditional block on decline, no
+  single-line guard, trailing-separator padding restored). The surviving
+  `spans_multiple_lines` readers are the delimited-group Tier-2 residue behind
+  the non-`Reflow` modes and the doc-margined corner, with the fixed-point
+  argument written on the predicate. Three convergence rules came out of the
+  gate corpora: an *edge* blank erases (the block form trims edge blanks, so
+  declining would key on a predicate the emitter destroys), a non-single-space
+  edge glues verbatim (vanishing it hands pass 2 a different flat spelling),
+  and the command-only residue is off inside prose argument bodies
+  (`ReflowKind::ProseArg` — its hardened break leaked upward through
+  `contains_forced_break` readers). Detail in
+  `docs/src/development/architecture.md` (§ *Trivia-invariant layout*).
 
-  The `[…]` half is done **for the segmentable case only**: an optional argument
-  is now a group over its top-level entries
-  (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*).
-  But `lower_optional` still falls back to the `spans_multiple_lines` block form
-  when `segment_optional` declines (a blank line, a comment, a nested block), and
-  guards on the predicate again when the bracket has no split point — both
-  reachable under `Reflow`, so this is not confined to `Preserve` and friends.
+  Recorded follow-ups: extending the width-driven path to the other
+  `wraps_prose` modes (today `Stable`/`Sentence`/`Semantic` keep the Tier-2
+  block residue), and grid width enforcement (a joined cell may now push a
+  tabular row past the width — grids never enforced width, but the reachable
+  surface grew).
 
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one

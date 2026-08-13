@@ -43,8 +43,9 @@ predicates the formatter *preserves*.
   hands the lowering a newline count — so until it lands the discipline is
   manual. Don't add a read.
 - **Tier 2 sites** (`WrapMode::Stable`/`Sentence`/`Semantic`,
-  `ReflowKind::Statement`, the expl3 fallback statement, and the
-  command-only-line residue) read the unsafe predicate by definition and **must
+  `ReflowKind::Statement`, the expl3 fallback statement, the
+  command-only-line residue, and the delimited-group block residue on
+  `spans_multiple_lines`) read the unsafe predicate by definition and **must
   carry a written fixed-point argument** showing every layout they can emit
   re-reads to itself.
 - **The command-only-line residue is Tier 2, not Tier 1.** Curated block
@@ -55,10 +56,22 @@ predicates the formatter *preserves*.
   authored `\mymacro`-on-its-own-line into the fill, a policy change. Its
   fixed-point argument is written on the function: preservation-only — a kept
   break re-reads to itself in place, and a hardened width break coincides with
-  the first-fit fill's own (`reflow_command_stranded_by_width`).
-- **One Tier-1 site still reads it**, in the default `Reflow`: the `GROUP`
-  arm's `spans_multiple_lines` (and `lower_optional`'s fallbacks to the same).
-  Filed in `TODO.md`. Don't add a second.
+  the first-fit fill's own (`reflow_command_stranded_by_width`). It does
+  **not** fire inside a signature-proven prose argument body
+  (`ReflowKind::ProseArg`): there the hardening mints a forced break only
+  pass 2 can see, and the bit leaks upward through `contains_forced_break`
+  readers, flipping the enclosing group between its forms across passes.
+- **No Tier-1 site remains.** Under `Reflow`, opaque brace groups
+  (`lower_opaque_group`) and optionals (`lower_optional`) are width-driven:
+  flat is byte-identical to the generic path except a lone-newline run renders
+  as one space, break opportunities are exactly the perturbation-eligible gaps,
+  a glued junction never breaks, and only preserved predicates (interior blank
+  line, comment) or forced-break content decline to the block form. Edge
+  padding joins the vanish-when-broken protocol only when its flat spelling is
+  a single space — the one spelling a break reproduces. The surviving
+  `spans_multiple_lines` readers are the delimited-group residue behind the
+  non-`Reflow` modes and the doc-margined corner, Tier 2 with the fixed-point
+  argument written on the predicate. Don't add a Tier-1 read.
 - Count *decisions that differ*, not call sites. Several places branch on
   `newlines == 1` yet emit `" "` either way — normalizations, not decisions, and
   the oracle collapses a run to one character so it cannot see them. Nobody

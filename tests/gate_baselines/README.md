@@ -6,11 +6,12 @@ them. Run `task gate-corpora:check`.
 
 The strict trivia-invariance oracle deliberately has **no** baseline here.
 `fmt(perturbed) == fmt(original)` is the end-state contract, so it still fails
-wherever the formatter preserves an authored break — 282/286 latex3, 375/384
-latex2e, 361/397 pgf, 3851/5209 latexindent as of this record. A near-total set
-makes a useless ratchet; the number is here so the remaining Tier-1 entry in
-`TODO.md` has something to shrink. Survey it with
-`task gate-corpora:strict-survey`.
+wherever the formatter preserves an authored break — 274/286 latex3, 368/384
+latex2e, 307/397 pgf, 3122/5209 latexindent as of the opaque-group width-driven
+layout (it was 282/375/361/3851 at first record, and 275/372/354/3804 after the
+`CommandSig::block` fix). A near-total set makes a useless ratchet; the numbers
+are here so the Tier-2 preservation surface has something visible to shrink
+against. Survey it with `task gate-corpora:strict-survey`.
 
 The re-record log below is the provenance of these checked-in sets, so it is
 kept verbatim. Its `S0`–`S4` labels are the stages of the staged
@@ -137,6 +138,18 @@ below guessed at — the blank-line variants already parsed. Ground truth is bib
 values; classic `bibtex` 0.99d has no comment syntax and rejects all of these,
 and texlab models none either (recorded as a deliberate deviation in
 `bib_parse_compat_allowlist.toml`).
+
+**No re-record** was needed for the **opaque-group width-driven layout** (the
+retirement of the last Tier-1 `spans_multiple_lines` read): all eight sets are
+byte-unchanged — no additions, no resolutions. Getting there took three
+convergence rules the gate itself surfaced during development (an edge blank
+erases rather than declining, a non-single-space edge glues verbatim, and the
+command-only residue is off inside `ReflowKind::ProseArg` bodies — the
+latexindent `poly-switch-blank-line`/`mand-args` families and pgf's coil tables
+and `pgfmanual-en-tikz-transparency.tex` were the reproducers). Production
+layout moves broadly (multi-line brace groups rejoin or refill at width), but
+every trivia/`all` failure family recorded here is orthogonal to it. The
+strict-survey drop (top of this file) is the change's measurable win.
 
 Over the pinned gate corpora fetched by `task gate-corpora:fetch`
 (`scripts/fetch_gate_corpora.sh`):

@@ -677,9 +677,10 @@ lowering would consume a normalized inter-token gap with no `Newline` variant
 rather than raw trivia tokens, so a rule could not key on what it cannot see.
 Rules that legitimately preserve authored breaks — the modes *defined* by them
 (`WrapMode::Stable`, `Sentence`, `Semantic`, and `ReflowKind::Statement`), the
-expl3 fallback statement, and the command-only-line rule's residue — would take
-a widened gap, and each owes a written fixed-point argument showing that every
-layout it can emit re-reads to itself.
+expl3 fallback statement, the command-only-line rule's residue, and the
+delimited-group block residue on `spans_multiple_lines` — would take a widened
+gap, and each owes a written fixed-point argument showing that every layout it
+can emit re-reads to itself.
 
 The command-only-line residue is the newest of those, and the only one living
 inside the default `Reflow`. Curated block commands carry a positive
@@ -696,13 +697,42 @@ it hardens on the next pass — a width wrap that stranded a command alone on a
 printed line — coincides with the break the first-fit fill chose, which refills
 identically around a hard stop. The cost is by design: `--checks trivia-strict`
 still reports these shapes, because preserving the authored break *is* the
-information the rule reads.
+information the rule reads. One scope limit keeps the residue honest: it does
+not fire inside a signature-proven prose *argument* body
+(`ReflowKind::ProseArg`), where width alone owns the layout — preserving a
+command-only line there mints a forced break only pass 2 can see, and that bit
+leaks upward through every `contains_forced_break` reader, flipping the
+enclosing group between its inline and block forms across passes.
 
-That normalization is **not built yet** — the boundary still hands the lowering
-a newline count — so today the rule is upheld by review, and one Tier-1 layout
-decision still reads the unsafe predicate: the `Opaque`-group
-`spans_multiple_lines` choice (with `lower_optional`'s fallbacks to the same).
-It, and the gap normalization itself, are tracked in `TODO.md`.
+The last Tier-1 reader — the `Opaque`-group `spans_multiple_lines` choice, with
+`lower_optional`'s fallbacks to the same — is retired. Under `Reflow` a brace
+group is width-driven (`lower_opaque_group`): flat when it fits, byte-identical
+to the generic inline path except that a lone-newline run renders as one space,
+and first-fit wrapped at its authored gaps otherwise. Break opportunities are
+exactly the perturbation-eligible gaps, so strict invariance holds by
+construction; a glued junction never gains a break, and delimiter padding rides
+the flat rendering and vanishes broken — exchanged for the delimiter's own
+newline, never deleted, since an opaque argument's space tokens are typeset. An
+edge gap joins that vanish-when-broken protocol only when its flat spelling is a
+single space, the one spelling a break reproduces; any other spelling rides
+verbatim and never breaks. An *interior* blank line, a direct comment, a token
+embedding a newline, or a child carrying a forced break sends the group to the
+indented block form instead — preserved predicates and content only. An *edge*
+blank does not: the block form trims edge blanks away, so declining on one would
+key on a predicate the emitter destroys, and it erases to padding instead,
+matching the deletion the block form already performed. The optional-argument
+lowering makes the mirrored promise: a `segment_optional` decline takes the
+block form unconditionally, and a dropped trailing separator re-emits the
+authored whitespace it replaced. What remains of `spans_multiple_lines` is the
+delimited-group residue behind the non-`Reflow` modes and the doc-margined
+corner, sanctioned Tier 2 on the fixed-point argument written at the predicate:
+the block form always ends with a newline before its closer, so its output
+re-reads multi-line and re-blocks byte-stably, and the inline path emits no
+newline, so single-line re-reads single-line.
+
+The gap normalization is **not built yet** — the boundary still hands the
+lowering a newline count — so the no-new-reads rule is upheld by review; the
+normalization is tracked in `TODO.md`.
 
 The oracle is `formatter::perturb`, which generates TeX-identical trivia
 perturbations of each input. It has two forms. `check_trivia_convergence` is

@@ -15,7 +15,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   so attachment directed by `semantic::expl3::expl3_slots` would be exactly as
   text-pure as greed — and greedy is a systematically wrong guess there (every
   `N`/`V` slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
-  definee; the formatter's S4 peel-back exists only to undo this). Keys on token
+  definee; the formatter's peel-back of greedily over-attached arguments,
+  `semantic::expl3::segment_expl_statements`, exists only to undo this). Keys on token
   shape alone (colon-suffixed names only lex as one token in-region — no grammar
   region-awareness needed); `w`/`D`/colonless fall back to greed. Deliberately
   unimplemented until the migration questions have answers: the mixed-shape CST
@@ -104,301 +105,75 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
-  (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
-  `docs/src/development/architecture.md` (§ *Trivia-invariant layout*). Layout may read only trivia
-  predicates the formatter *preserves*; blank lines, comments, and column-0
-  margins/guards qualify, **a lone newline vs. a space does not**. Since `fmt(x)`
-  is by construction a trivia-perturbation of `x`, layout invariant under trivia
-  perturbation is idempotent *by proof* — which is the point: the current regime
-  defends idempotence one decision at a time, and the supply of decisions is
-  unbounded.
+- [x] **The strict trivia-invariance oracle has a CLI surface.** `badness debug
+  format --checks trivia-strict` runs `fmt(perturbed) == fmt(original)` over
+  every TeX-identical newline<->space perturbation
+  (`formatter::perturb::survey_trivia_invariance`). It is a **survey, not a
+  gate**: strict is the end-state contract, so it still fails wherever the
+  formatter deliberately preserves an authored break — 282 of 286 latex3 files,
+  375 of 384 latex2e, 361 of 397 pgf, 3851 of 5209 latexindent. It earns the
+  surface because it is the only *mechanical* route to the two Tier-1 entries
+  below (the command-only-line rule, and Opaque-group layout non-determinism):
+  a layout decision keyed on the lone-newline predicate is
+  self-consistent on both spellings, so `--checks all` and the convergence
+  oracle are blind to it by construction. The survey checks every variant
+  instead of returning on the first, so it can report a localized `flip@<byte>`
+  reproducer rather than one of the two whole-file bulk variants generated ahead
+  of them — 80% of reproducers localize, and without that preference the output
+  names no construct. Deliberately outside `--checks all` and outside the
+  `gate-corpora:check` ratchet (a near-total set is not a ratchet);
+  `task gate-corpora:strict-survey` prints the histogram. The grows-only
+  registry of shapes proven strictly invariant is
+  `STRICT_TRIVIA_INVARIANT_SHAPES` in `tests/format.rs` — an allowlist, not a
+  ratchet: it can prove the shapes on it stay invariant, never notice that a new
+  one became invariant.
 
-  Enforcement is to delete the information at the boundary — the lowering
-  consumes a normalized `Gap = Glued | Space | BlankLine | Comment | Guard |
-  Margin` with no `Newline` variant — plus a trivia-perturbation oracle. Tier-2
-  modes that are *defined* by authored breaks (`WrapMode::Stable`/`Sentence`/
-  `Semantic`, `ReflowKind::Statement`) keep a widened gap and owe a written
-  fixed-point argument, as `ReflowKind::Statement`'s flush continuation already
-  has.
+- [ ] **The command-only-line rule reads the lone-newline predicate (Tier 1).**
+  `\usepackage{a}\n\usepackage{b}` keeps the break; `\usepackage{a}
+  \usepackage{b}` glues the pair onto one line — the same bytes to the next
+  parse, so exactly the predicate trivia-invariant layout forbids reading
+  (`AGENTS.md` § *Invariants*). The read is `prev_is_command`/`next_is_command`
+  (`line_is_command_only`) in `reflow_elements`, live under `ReflowKind::Prose`
+  in the default `Reflow` — not a Tier-2 mode's sanctioned read.
 
-  **Stages, each gated on the corpus failing-file set not growing** (`badness
-  debug format --checks all --report .` over `latex3/latex3` @ `3d1d347`, plus
-  `latex3/latex2e` and `pgf-tikz/pgf`; compare *sets*, not counts):
+  **No byte-level gate can catch this**, which is why it went unfiled so long:
+  both spellings are self-consistent fixed points that round-trip losslessly, so
+  idempotence, `--checks all`, and the convergence oracle all pass.
+  `--checks trivia-strict` reports it directly, with a localized reproducer.
 
-  - [x] **S0 — the oracle, before any refactor.** (a) Run the corpus under
-    `assert_format_invariants` at several line widths (60/72/80/100/120): every
-    hybrid is a column-arithmetic accident, so widths multiply detection. (b) Add
-    the trivia-perturbation oracle itself. No production change; the deliverable
-    is the true failure inventory, which every later stage is gated against.
-    Expect the count to jump — that is the point.
+  The opening move is settled by precedent. `line_is_command_only` already
+  consults the semantic layer (`command_is_inline` -> `CommandSig::inline`), and
+  the sectioning half of this same family was fixed one level up: a sectioning
+  command became a **block-level statement**, its breaks read from
+  `CommandSig::sectioning` (`command_is_sectioning`) rather than from the
+  author's trivia, so headings stopped reaching the rule at all. Pinned by
+  `sectioning_starts_own_line` and `sectioning_blank_line_and_comment`. So the
+  fix shape here is **semantic-layer data work** — promote block-level-ness to a
+  positive signature property — not a formatter patch. Calibration: none of the
+  gate baselines moved when the sectioning half landed.
 
-    *Landed.* The oracle (`formatter::perturb`, `badness debug format --checks
-    trivia`, wired into the invariants sweep in `tests/format.rs`) gates on
-    **convergence** — every TeX-identical newline<->space perturbation must
-    format to a fixed point upholding the invariants — because the strict
-    `fmt(perturbed) == fmt(original)` form flags the conservative generic
-    path's deliberate authored-break preservation on essentially every file;
-    strict stays in the API (`check_trivia_invariance`) as the post-umbrella
-    end-state gate. Inventory recorded in `tests/gate_baselines/` (compare
-    sets, not counts): `--checks all` @ 80 exactly reproduces the pre-S0
-    baseline (latex3 16/288; latex2e 13/384; pgf 15/397), and `--checks
-    trivia` @ 80 yields latex3 151, latex2e 148, pgf 15 (pgf: format-errors
-    only — fully convergent). The trivia sets are dominated by a
-    **pre-existing reflow-on-`.dtx` content-violation family** (see the new
-    entry below), which masks later variants in the same files; the
-    non-fixed-point residue (latex3 4, latex2e 18) is predominantly expl3
-    package code — the S2–S4 target set — plus `latexrelease.sty` (#97
-    residue). The width sweep also surfaced ~20 width-dependent idempotency
-    files beyond the width-80 baseline (`SWEEP.md`).
+  Overlaps the prose-argument entry below, whose second clause ("gluing a prose
+  arg onto its command line when a source break separates them") is a proposal
+  about this very rule, and whose first clause is the same signature widening.
 
-  - [x] **S1 — one representation of "forced".** A `propagate_breaks` prepass
-    marking every group containing a hard break as `expand`, replacing the three
-    current representations (`Ir::Group{expand}`, `contains_forced_break`
-    recomputed per decision site, `lower_expl_group`'s hand-rolled branch).
-    Behavior-neutral. Makes the landed `group_expanded` fix fall out
-    automatically rather than being a special case.
+- [ ] **Normalize the lowering's trivia boundary to a `Gap` enum (the
+  enforcement).** Trivia-invariant layout is enforced today by discipline alone:
+  the boundary hands the lowering `(newlines: usize, trailing_ws)`
+  (`consume_trivia_run`/`consume_trivia_run_slice`, collapsed by
+  `classify_trivia`), so the unsafe predicate stays fully readable and nothing
+  but review stops the next decision from keying on it. The enforcement is to
+  delete the information at the boundary: a normalized
+  `Gap = Glued | Space | BlankLine | Comment | Guard | Margin` with **no
+  `Newline` variant** — a rule cannot key on what it cannot see. Two local
+  prototypes already have the shape and would fold in: `DividerGap` (the
+  conditional divider) and `KeyBreak` (the `[…]` split point). Tier-2 modes
+  (`WrapMode::Stable`/`Sentence`/`Semantic`, `ReflowKind::Statement`, the expl3
+  fallback statement) take a *widened* gap and keep their written fixed-point
+  arguments.
 
-    *Landed.* `Ir::propagate_breaks` — one bottom-up copy-on-write walk at the
-    lowering->printer seam — saturates every non-hug group's `expand` from its
-    content with `contains_forced_break` semantics (an `IfBreak` shields its
-    branches, a conditional group's flat-most candidate decides).
-    `lower_expl_group`'s forced form now differs from the soft form only in its
-    in-shape `HardLine` boundary, and `Ir::group_expanded` is deleted — the #97
-    mode pin falls out of the prepass. Hug groups are never marked (their inner
-    is forced by construction), and two measurements stop trusting the flag:
-    `flat_width` recurses (a comment-only-forced group still has a flat width)
-    and the hug-mode `fits` lets content decide. The latter is S1's one
-    deliberate, narrow flip — post-pass the flag cannot distinguish an
-    explicitly forced block from a soft group carrying hard breaks — so an
-    interior-comment-forced or sibling-coupled block detonating in a head-hug
-    prefix now hugs K&R-style (`\global\setbox9 \vtop{%`) instead of splitting
-    the head onto its own line. Gate: `--checks all` and `--checks trivia`
-    failing-file sets unchanged on all three corpora; a full byte-diff sweep
-    against the pre-S1 binary differs on 12 of 1068 files, all this hug family
-    (`xpackages` `.dtx`, `latex-lab-amsmath.dtx`, `latex-lab-firstaid.dtx`).
-
-  - [x] **S2 — `Mode::Flat` becomes an honest contract.** Define it as "the whole
-    subtree, laid out flat, is verified to fit". Then fix the two producers that
-    claim it without checking — `pick_candidate` selects on *first-line* fit
-    (`printer.rs`), `Cmd::PreferredFill` pushes atoms flat unconditionally — by
-    returning `Mode::Break` (the *choice of candidate* is the decision; children
-    then decide for themselves). **Only then** make `Ir::Group` honor an incoming
-    `Mode::Flat` instead of recomputing. The three must land together: mode
-    propagation alone measured 1 -> 9 idempotency failures precisely because the
-    two producers lie. Expect substantial golden churn; hand-derive each.
-
-    *Landed.* The three landed together plus two more liars the honest
-    contract flushed out in corpus tracing. `Ir::Group` and both conditional
-    arms honor an incoming `Flat` (a nested conditional resolves to its
-    flat-most candidate, matching every measurement predicate); `expand` stays
-    first, so a saturated forced group never pins. `pick_candidate` announces
-    `Break`; `Cmd::PreferredFill` atoms inherit the fill's mode. Flushed out
-    in-flight: (1) the `Group` arm measured from the raw `w.col`, dropping the
-    pending indent after a newline — the same wrong-column acceptance the
-    `AllLines` arm had already fixed for itself; pre-S2 the nested
-    re-decisions papered over it, post-pin it printed as overflow, so both
-    `Group` measurements and `pick_candidate` now start from `current_col()`.
-    (2) `step_fill`'s last-atom flat claim ignored the trailing content the
-    lowering glues after a statement fill, so it is now rest-aware like
-    `group_fits` — which finally takes the folded continuation hang
-    (`\prop_get:cnN {…}{…}\l__tag_…`). (3) The hug's prefix-only `fits`
-    cannot claim full `Flat` for content past the first forced break
-    (`\@@_if_key_value:VTF {T}{F}` pinned `F` into a 125-column line), so a
-    hug now dispatches `Mode::FlatPrefix`: trivia renders flat (the head
-    stays glued) but groups re-decide — `group_hug` survives S2, settling
-    that uncertainty. No golden churn at all (the fixture set never reached
-    the divergence corners); the corpus churn is 54 files, overflowing lines
-    strictly reduced (18 files fewer, 0 more). Gate: sets unchanged except
-    `latexrelease.sty` leaving both latex3 sets (the #97 residue below —
-    resolved by S2 alone, without waiting for S3); baselines re-recorded,
-    `SWEEP.md` refreshed (five width-dependent files fully converged; one
-    shared `\str_if_eq:` fragment now flips at width 60 via the known
-    `SplitAtNewlines` Tier-2 family, S4's target).
-
-  - [x] **S3 — collapse the fit predicates.** With mode propagated, a group inside
-    a flat parent is never *asked* whether it fits, so the rest-awareness
-    disagreement dissolves rather than needing a patch (S2 already resolved
-    the `latexrelease.sty` entry below this way). Delete what is now dead of
-    `flat_width` / `first_line_fits` / `all_lines_fit` / `fits` / `group_fits`,
-    and make the survivors share one traversal so they cannot drift again — the
-    `rest_fits` drift (a later `Group` measured in its real mode, a later
-    `ConditionalGroup` measured flat-most) was exactly that failure.
-
-    *Landed, behavior-neutral.* Two shared walkers replace the five bodies:
-    `flat_end` with a `FlatMeasure` policy (`Footprint`/`Fits`/`HugPrefix`)
-    is the one flat simulation behind `flat_width`, the hug fit, and
-    `group_fits`'s flat phase; `line_fits` with a `CommentFit` policy
-    (`Fails`/`SharesLine`, the one deliberate context difference) is the one
-    first-emitted-newline measurement behind `first_line_fits` and
-    `rest_fits`, which shrink to seeds. `fits` and `atom_is_unfittable` are
-    deleted; `all_lines_fit` and `print_flat` share the `wide()` probe. The
-    `rest_fits` drift is gone by construction: a later conditional group is
-    picked via `pick_candidate` (was flat-most), a later hug group measured
-    with its hug flags (was plain), a later `Break`-mode preferred fill by
-    its first atom (was whole-flat). Gate: all six failing-file sets
-    byte-identical to `tests/gate_baselines`, and full byte-diff sweeps at
-    widths 60/80/120 differ on 0 of 1069 files — S2 had already removed
-    every reachable disagreement, so no baselines were re-recorded.
-
-  - [x] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Landed
-    as `semantic::expl3::expl3_slots` (per-slot arity from the argspec suffix:
-    `N V` one token, `n c v o x e f` a brace group, trailing `T F` branches,
-    `p` parameter text shape-scanned to the first explicit `{` — TeX's own
-    static rule, so the `Npn` family is fully structural; `w`/`D`/unknown
-    letters fall back) plus `semantic::expl3::segment_expl_statements`
-    (pure-shape segmentation with
-    peel-back of greedily over-attached arguments) and the `core.rs` rewiring
-    (`Statements::Structural`, boundary-map commits, region toggles as
-    zero-arity units). The formatter owns one-call-per-line; a width wrap
-    re-derives the same unit on every pass. The fallback (underivable heads,
-    plus a unit's same-line trailing junk) is the Tier-2 residue and carries
-    its fixed-point argument in `semantic::expl3`: greedy self-refilling
-    lines (plain `Ir::Fill`, not sticky), no break before a recognized head
-    mid-line, junk-glued statements all-hard. Gate: `--checks all` sets
-    byte-identical to baseline at width 80 for all three corpora; both
-    width-60 SWEEP symptoms (`xtemplate-2023-10-10.sty`, `lttemplates.dtx`)
-    cleared; the strict trivia-invariance oracle holds for recognized-only
-    streams (first Tier-1 shapes to pass it). Trivia sets: 4 entries
-    resolved (`xtemplate` ×2 — the motivating case — `pdfmanagement.sty`,
-    `tagpdf-base.sty`), 4 added from a *different*, pre-existing family
-    (mode/rest printer coupling; follow-up below).
-
-  **The "subsumes three entries" claim, corrected:** S4 resolved the expl3
-  instances. *Opaque-group layout non-determinism* (`spans_multiple_lines`)
-  still governs non-expl3 `Opaque` groups and stays open below; *Residual
-  K&R <-> Allman flip* was resolved by S2; *Hanging continuation indent* got
-  its "node that owns the whole statement" for expl3 (the call unit) — TikZ
-  paths remain out of scope as that entry says.
-
-  **In-flight uncertainties, settled:** greedy `{}`-attachment covers leading
-  all-group specs entirely (`\str_if_eq:nnTF {a}{b}{T}{F}` is one node);
-  `N`/`V`/`p` specs are exactly the peel-back cases, common enough (every
-  `\tl_set:Nn`, every `Npn` definition) that S4 pays for itself. Every Tier-2
-  mode now carries a written fixed-point argument (the expl3 fallback's is in
-  `semantic::expl3`).
-
-  **S4 follow-ups:**
-
-  - [x] ~~*Out-of-region prefix flips an in-region group's inline/block
-    form.*~~ **Misattributed; the real cause was the forced-break dispatch
-    firing inside a fallback statement.** The out-of-region prefix symptom no
-    longer reproduces at all (`word {g} \ExplSyntaxOn …` and
-    `\somecmd {g} \ExplSyntaxOn …` give identical output) — that half went
-    with the grouped-sibling-walk fix, along with the `xparse-2020-10-01.sty`
-    ×2 entries. The two remaining entries (`lipsum.sty`, `expl3.sty`) were
-    neither a printer mode/rest coupling nor mega-line-only: both are plain
-    **idempotency** failures at the *default* wrap mode, and both are
-    `lower_expl_code`'s node dispatch branching on the lowered child's
-    `contains_forced_break()`. Inside a fallback statement that predicate is
-    newline-keyed — a width wrap inside the child's body prints newlines the
-    reparse re-segments into several fallback statements, so a soft group
-    flips forced on pass 2. Every arm of the dispatch reacts by *committing
-    the line*, which is exactly the hard sibling gap a `StickyFill` produces
-    on its own (a forced atom's `flat_width` is `None`, so
-    `step_fill`'s `remainder_broken` fires unconditionally) — hence structural
-    and `Ignore` streams agree, and a fallback line's plain greedy fill does
-    not. Fixed by gating the **hanging brace group** off that dispatch when
-    `in_fallback`; the group still breaks (its `flat_width` is `None`), only
-    the *sibling* gap is left to the fill. Gate: 5 `non-fixed-point` entries
-    resolved (`lipsum.sty`, `expl3.sty`, `tagpdf-mc-code-generic.sty`,
-    `tagpdf-mc-code-lua.sty`, `luamml.sty`), no additions in any of the six
-    baseline files, latex3 and pgf byte-unchanged. Production output moved in
-    19 files, every diff the same shape: a sibling stranded on its own line
-    after a multi-line group (`,`, `{#1}`, `\fi:`) re-glues onto the closing
-    `}`. Pinned by `expl_fallback_forced_group_sibling` /
-    `expl_fallback_forced_group_glue` and
-    `a_multi_line_group_node_does_not_end_a_fallback_line`.
-
-  - [x] ~~*Forced-break dispatch residue: the other three sub-arms.*~~ **Done:
-    the head-hug moved into the fill.** A fallback (or junk-glued) line now
-    commits as an `Ir::HugFill` — a greedy fill whose atoms, when they carry a
-    forced break and so have no flat width, are measured by their *first line*
-    (`FlatMeasure::HugPrefix`, `Ir::group_hug`'s own claim) and print
-    `Mode::FlatPrefix`. That is the pass-invariant head-hug the entry asked
-    for: a soft atom's prefix *is* its flat width, so the soft→forced flip
-    across passes cannot move it. With it, **no** arm of the dispatch reads
-    `contains_forced_break()` on a fallback line. Two supporting details: the
-    fill's rest-awareness is not applied to a hug claim (like `group_hug`'s it
-    never covered the rest of the line, and a statement that ends one atom
-    earlier next pass must place that atom identically — `xo-place.dtx`), and
-    every *early* line commit builds its head with the same fill kind
-    `commit_line` would (`line_fill`), or the trailing-command arm's plain
-    `Ir::Fill` head breaks the atoms that hugged mid-line. Gate: **17
-    `non-fixed-point` entries resolved** (latex3 10, latex2e 7 — the two this
-    entry predicted plus fifteen the reflow-default flip exposed), **no
-    additions** in any of the six sets, pgf byte-unchanged. Production moved in
-    19 files and every hunk is a *join*: the pairs the entry worried about stay
-    joined (`\vbox to \Gin@req@height{%`, `\hbox_set_to_wd:Nnn
-    \l_shipout_box \l_shipout_box_wd_dim`) and 14 files' authored abutments
-    (`}\@ehc`, `}.`, `}{`) re-glue. Pinned by `expl_fallback_hug_head`,
-    `expl_fallback_abutting_sibling`, `dtx_expl3_fallback_head_fill` and the
-    `hug_fill_*` printer units.
-
-  - [x] ~~*In-region `BracketPolicy` audit*.~~ **Verified stable.** Only
-    `Greedy` and `Forbid` are reachable in-region — `Tight` rides the curated
-    math `\begin`, demoted to a plain command by the issue-#60 carve-out
-    (`in_macro_code`) — and every gate and closer-reachability scan treats a
-    space and a lone newline identically, so the only perturbation attachment
-    could see is a created/removed *flush* junction before a `[`, which no
-    layout path produces (the R3 respace skips `OPTIONAL`, the fill breaks at
-    authored gaps only, a math command is one verbatim atom). The issue-#55
-    second-order scan flip needs a bare flush `[` with a reachable closer,
-    which cannot exist (flush + reachable ⇒ attached). Detail in
-    `.claude/rules/formatter.md` (§ *expl3*); pinned by
-    the `expl_bracket_attachment` fixture and `bracket_attachment_stability`.
-
-  - [x] ~~*Sibling-attached branch explosion*~~ **Done: the slot mapping now
-    escapes the scan.** `consume_unit` already resolved these branches (that is
-    why the call is one unit), it just discarded which slot took what —
-    `Group | Branch => take_group()`. It now records each `Branch`'s range in an
-    `Expl3Unit`, and `expl3_unit` exposes the scan for one head so the formatter
-    can ask without a `StatementMap` (the layout runs inside a command's attached
-    arguments too). `lower_expl_conditional_unit` splits the unit at the first
-    branch — the owning sibling's leading children finish the head line, the rest
-    are the branch list — and requires the tail's groups to be *exactly* the
-    recorded branches, which rejects both an over-attached trailing group and a
-    group that merely contains a branch deeper down. So all four shapes now
-    explode alike: branches on the head (`\tl_if_empty:nTF`), peeled off one
-    sibling (`\seq_if_in:NnTF \l_seq {item}`), split across two
-    (`\prop_get:NnNTF \p {k} \l`), and at the stream level once a `WORD` relation
-    breaks attachment (`\int_compare:nNnTF {a} = {1}`). Gate: all six
-    `gate-corpora` baselines byte-identical, and the corpus-wide two-pass
-    non-idempotent set is the same 16 files before and after. Production moved in
-    58 files / 300 hunks (latex3 25, latex2e 33, pgf 0), every one a branch list
-    moving to +2 — these calls were *collapsed onto one line* before, so the
-    formatter was undoing the house style on correctly authored code. Pinned by
-    `expl_conditional_sibling_branches` and the now-registered
-    `expl_relation_slot_statement` (committed in `4a3d92b`, in no fixture table
-    until now, so it had never run).
-
-    Two deliberate remainders. The **trailing (mid-line) arm** stays
-    head-attached-only: mid-statement the conditional is not the head of its own
-    unit, the segmentation already decided it is an argument being passed as a
-    token, and re-scanning it as a head claimed the *outer* call's arguments as
-    branches — a misread at all eight latex2e/latex3 sites it reached
-    (`\@@_patch_check:NNnn \cs_if_exist:NTF #1 { undef }`, `\exp_not:N \…:nTF`).
-    Pinned by `expl_conditional_sibling_trailing`. And `lower_node`'s node-keyed
-    all-or-nothing arm keeps needing head-attached branches by construction: it
-    has no sibling stream to resolve a unit from.
-
-- [x] **The sectioning line break reads the lone-newline predicate (Tier-1
-  violation, no oracle catches it).** `\subsection{X}\nprose` kept the break;
-  `\subsection{X} prose` glued the prose onto the head line — the same bytes to
-  the next parse, so exactly the predicate the trivia-invariant-layout invariant
-  forbids reading. No gate fired: the perturbation oracle only reports a
-  *content* change or a non-fixed-point, and both spellings were self-consistent
-  fixed points. Fixed by making a sectioning command a block-level statement — a
-  break before it and after it, read from the signature DB's
-  `CommandSig::sectioning` (`command_is_sectioning`) rather than the source
-  trivia, so headings no longer reach `line_is_command_only` at all. Pinned by
-  `sectioning_starts_own_line` and `sectioning_blank_line_and_comment`. **The
-  rest of the family is still open:** the strict oracle
-  (`fmt(perturbed) == fmt(original)`, already written in `perturb.rs` and
-  currently failing wherever an authored break is deliberately preserved) is the
-  only mechanical route to it — the corpus surfaces this class by eye only, and
-  the four gate baselines did not move when this one landed.
-  Surfaced by the `latexindent` corpus (`oneSentencePerLine/`).
+  Do this **after** the two Tier-1 entries (the command-only-line rule above and
+  Opaque-group layout non-determinism below), not before: what the widened gap
+  has to carry is precisely what those two fixes leave behind.
 
 - [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
   one family.** `%`-terminated argument braces
@@ -427,12 +202,18 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   block-vs-inline from incidental source newlines, sidestepped for the
   `TokenList` and `Keyval` kinds but still governing every `Opaque` multi-line
   *brace* group. Give `Opaque` groups a deterministic layout policy that does not
-  depend on incidental whitespace. *(An instance of the trivia-invariant-layout
-  violation above — `spans_multiple_lines` reads the unsafe lone-newline
-  predicate. Fix it under that umbrella, Tier 1, not on its own.)* The `[…]` half
-  of this is done: an optional argument is now a group over its top-level entries
-  (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*), so `lower_optional` reads the
-  predicate only under `WrapMode::Preserve` and friends, which are defined by it.
+  depend on incidental whitespace. *(A **Tier-1** violation of trivia-invariant
+  layout, `AGENTS.md` § *Invariants*: `spans_multiple_lines` reads the unsafe
+  lone-newline predicate in the default `Reflow`, not in a mode defined by
+  authored breaks. `--checks trivia-strict` is what surfaces it.)*
+
+  The `[…]` half is done **for the segmentable case only**: an optional argument
+  is now a group over its top-level entries
+  (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*).
+  But `lower_optional` still falls back to the `spans_multiple_lines` block form
+  when `segment_optional` declines (a blank line, a comment, a nested block), and
+  guards on the predicate again when the bracket has no split point — both
+  reachable under `Reflow`, so this is not confined to `Preserve` and friends.
 
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
@@ -524,10 +305,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   (`;`/`at`/`()` carry no special catcode in plain TeX), so grouping them is
   package-specific grammar, out of scope for the generic parser (decisions #1, #2;
   non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
-  corpus, and AGENTS.md amendment), not a formatter patch. *(The general form of
-  "needs a node that owns the whole statement" is S4 of the trivia-invariant-layout
-  entry above, which delivers it for expl3 from argspec arity. TikZ paths stay out
-  of scope — no static signal — so this entry survives S4 for `.tex` bodies.)*
+  corpus, and AGENTS.md amendment), not a formatter patch. *(expl3 already has
+  the node this asks for: the call unit `semantic::expl3::expl3_slots` derives
+  from the argspec arity owns a whole statement, so layout there needs no source
+  newlines. TikZ paths have no such static signal, which is why this entry
+  survives for `.tex` bodies.)*
 
 ## Linter
 

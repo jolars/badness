@@ -37,16 +37,28 @@ predicates the formatter *preserves*.
   converts freely in both directions, so any rule keying on it is a latent
   idempotency bug — this is the root cause of the whole K&R/Allman family
   (#71, #94, #96, #97).
-- **Keep `Gap` free of a `Newline` variant.** Deleting the information at the
-  boundary is the enforcement; a rule cannot key on what it cannot see.
+- **The planned enforcement is a normalized `Gap` with no `Newline` variant**
+  (filed in `TODO.md`): deleting the information at the boundary means a rule
+  cannot key on what it cannot see. It does not exist yet — the boundary still
+  hands the lowering a newline count — so until it lands the discipline is
+  manual. Don't add a read.
 - **Tier 2 modes** (`WrapMode::Stable`/`Sentence`/`Semantic`,
   `ReflowKind::Statement`, the expl3 fallback statement) read the unsafe
   predicate by definition and **must carry a written fixed-point argument**
   showing every layout they can emit re-reads to itself.
-- Four sites still read it; three are Tier 2, the fourth
-  (`spans_multiple_lines`) is residue filed in `TODO.md`. Don't add a fifth.
+- **Two Tier-1 sites still read it**, both live in the default `Reflow`: the
+  `GROUP` arm's `spans_multiple_lines` (and `lower_optional`'s fallbacks to the
+  same) and the command-only-line rule (`line_is_command_only`). Both are filed
+  in `TODO.md`. Don't add a third.
+- Count *decisions that differ*, not call sites. Several places branch on
+  `newlines == 1` yet emit `" "` either way — normalizations, not decisions, and
+  the oracle collapses a run to one character so it cannot see them. Nobody
+  should "fix" those.
 - The convergence oracle (`formatter::perturb`, `badness debug format --checks
-  trivia`) gates today; strict invariance is the end state.
+  trivia`) gates today. Strict invariance is the end state, and already has a
+  surveying surface (`--checks trivia-strict`) — the only mechanical way to find
+  a Tier-1 read, since both spellings are self-consistent fixed points that
+  every other check passes.
 
 ## The printer
 

@@ -672,20 +672,28 @@ supply of decisions is unbounded. The whole K&R-versus-Allman family of bugs is
 that one pattern, where a soft width break becomes a hard statement boundary on
 the reparse and the layout flips with it.
 
-Enforcement is to delete the information at the boundary. The lowering consumes
-a normalized inter-token gap with no `Newline` variant rather than raw trivia
-tokens, so a rule cannot key on what it cannot see. Modes that are *defined* by
-reading authored breaks (`WrapMode::Stable`, `Sentence`, `Semantic`, and
-`ReflowKind::Statement`) take a widened gap, and each owes a written fixed-point
-argument showing that every layout it can emit re-reads to itself. The rollout
-is not finished: a handful of sites still read the unsafe predicate, tracked in
-`TODO.md`.
+The intended enforcement is to delete the information at the boundary: the
+lowering would consume a normalized inter-token gap with no `Newline` variant
+rather than raw trivia tokens, so a rule could not key on what it cannot see.
+Modes that are *defined* by reading authored breaks (`WrapMode::Stable`,
+`Sentence`, `Semantic`, and `ReflowKind::Statement`) would take a widened gap,
+and each owes a written fixed-point argument showing that every layout it can
+emit re-reads to itself. That normalization is **not built yet** — the boundary
+still hands the lowering a newline count — so today the rule is upheld by
+review, and two layout decisions still read the unsafe predicate. Both, and the
+gap normalization itself, are tracked in `TODO.md`.
 
 The oracle is `formatter::perturb`, which generates TeX-identical trivia
-perturbations of each input and requires every variant to format to a fixed
-point that parses cleanly, round-trips losslessly, and carries the same
-non-trivia content. That is strictly stronger than idempotence, which only ever
-exercises the single trivia configuration `fmt` itself produces.
+perturbations of each input. It has two forms. `check_trivia_convergence` is
+what gates: every variant must format to a fixed point that parses cleanly,
+round-trips losslessly, and carries the same non-trivia content — strictly
+stronger than idempotence, which only ever exercises the single trivia
+configuration `fmt` itself produces. `check_trivia_invariance` is the strict
+end-state contract, `fmt(perturbed) == fmt(original)`; it cannot gate a corpus
+until the unsafe predicate is unreadable, but it is the only mechanical way to
+*find* a decision that reads it, since such a decision is self-consistent on
+both spellings and so invisible to convergence and idempotence alike. Its
+surveying form is `badness debug format --checks trivia-strict`.
 
 ### Paragraph line breaks
 

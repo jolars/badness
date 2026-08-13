@@ -1,4 +1,7 @@
-# Width-dependent failures (S4 sweep)
+# Width-dependent failures
+
+(As with `README.md`, the `S2`/`S4` labels below name stages of the retired
+staged trivia-invariant-layout plan — read them as dates; see `git log`.)
 
 Files whose failure status varies across the sweep widths 60/72/80/100/120 —
 each is a column-arithmetic hybrid candidate. Files failing at every width are

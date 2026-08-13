@@ -212,7 +212,8 @@ mod tests {
 
 // --- Statement segmentation -------------------------------------------------
 //
-// Structural statement segmentation for expl3 code — the S4 mechanism.
+// Structural statement segmentation for expl3 code — the mechanism that
+// retired the newline-keyed `Statements::SplitAtNewlines` boundary.
 //
 // [`segment_expl_statements`] walks a stream of in-region sibling elements (a
 // paragraph run or a brace-group body) and decides, for every gap between

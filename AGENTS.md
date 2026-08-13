@@ -311,16 +311,17 @@ covered in `docs/src/development/architecture.md`.
   presence, comment presence and own-line-ness, and a column-0 `.dtx` margin/guard are
   preserved, so layout may read them. **Whether a gap is a lone newline or a space is
   not** — the formatter converts freely in both directions (`alpha\nbeta` → `alpha beta`)
-  — so layout must never key on it. Detail, the classification table, and the two-tier
-  escape hatch in `docs/src/development/architecture.md`
-  (§ *Trivia-invariant layout*).
+  — so layout must never key on it. Detail, the predicate classification, and the
+  widened-gap escape hatch for modes *defined* by authored breaks in
+  `docs/src/development/architecture.md` (§ *Trivia-invariant layout*); the Tier 1
+  vs. Tier 2 vocabulary is in `.claude/rules/formatter.md`.
 
   This subsumes idempotence: `fmt(x)` is by construction a trivia-perturbation of `x`
   (the whitespace-only invariant), so a layout invariant under trivia perturbation is
   idempotent *by proof*, not by corpus luck. Every bug in the K&R↔Allman family (issues
   \#71, \#94, \#96, \#97) is one decision keyed on the unsafe predicate.
 
-  S4 made expl3 statement boundaries **structural**: a call unit is the head plus the
+  expl3 statement boundaries are **structural**: a call unit is the head plus the
   arguments its argspec arity consumes (`semantic::expl3::expl3_slots`, decision #2's
   "semantic layer assigns arity"; segmentation in
   `semantic::expl3::segment_expl_statements`), so the formatter owns

@@ -1,8 +1,22 @@
-# Trivia-invariant-layout gate baselines (S0)
+# Trivia-invariant-layout gate baselines
 
-The failure inventory the S1–S4 stages of the trivia-invariant-layout plan
-(TODO.md) are gated against: **compare sets, not counts** — a stage may shrink
-these sets but must not grow them.
+The failure inventory every change to the layout engine is gated against:
+**compare sets, not counts** — a change may shrink these sets but must not grow
+them. Run `task gate-corpora:check`.
+
+The strict trivia-invariance oracle deliberately has **no** baseline here.
+`fmt(perturbed) == fmt(original)` is the end-state contract, so it still fails
+wherever the formatter preserves an authored break — 282/286 latex3, 375/384
+latex2e, 361/397 pgf, 3851/5209 latexindent as of this record. A near-total set
+makes a useless ratchet; the number is here so the two Tier-1 entries in
+`TODO.md` have something to shrink. Survey it with
+`task gate-corpora:strict-survey`.
+
+The re-record log below is the provenance of these checked-in sets, so it is
+kept verbatim. Its `S0`–`S4` labels are the stages of the staged
+trivia-invariant-layout plan that drove the recordings; that plan has been
+retired from `TODO.md` now its stages are all delivered, so read the labels as
+dates — the detail is in `git log`.
 
 Recorded at badness commit `268c5d8` (S0); re-recorded after S2, which removed
 `latexrelease.sty` from both latex3 sets (15 `all`, 150 `trivia`) and refreshed
@@ -54,7 +68,7 @@ inventory has seen:
 - **31 `non-fixed-point` additions** — latex3 2 → 19, latex2e 11 → 23. Every one
   is in a file that was already recorded: the trivia check stops at the first
   failing variant, so removing a file's `content-change` failure exposes the
-  non-convergence behind it. TODO.md's S0 note predicted exactly this.
+  non-convergence behind it. The original inventory note predicted exactly this.
 - **16 `idempotency` additions to the `all` sets** (latex3 15 → 16, latex2e 13 →
   28). All `.dtx` plus `array-2024-06-01.sty`, and all already recorded in the
   `trivia` sets: these are pre-existing layout non-convergence that the old
@@ -234,10 +248,13 @@ reported the bug clean at first record — the non-trivia-content oracle lived
 only in the trivia path and in `assert_format_invariants` — which is why closing
 that hole was done first, so the bug failed a gate before it was fixed.
 
-A separate finding the oracles do *not* flag: the sectioning-command line break
-reads the forbidden lone-newline predicate. `\subsection{X}\nprose` keeps the
-break while `\subsection{X} prose` glues, which is the Tier-1 violation
-`AGENTS.md` forbids outright.
+A class of finding these two gates cannot flag at all: a layout decision that
+*reads* the forbidden lone-newline predicate but is self-consistent on both
+spellings. The sectioning-command line break was one (`\subsection{X}\nprose`
+kept the break while `\subsection{X} prose` glued) and has since been fixed; the
+command-only-line rule is the same shape and is still open (`TODO.md`). Neither
+gate moved when the sectioning half landed, which is what
+`--checks trivia-strict` exists to cover.
 
 ## Classification (third column of `.trivia.txt`)
 
@@ -259,10 +276,10 @@ break while `\subsection{X} prose` glues, which is the Tier-1 violation
      variant), so fixing them will both shrink these sets and potentially
      surface currently-hidden non-fixed-points.
 - `non-fixed-point` — a perturbed variant formats to a non-fixed-point: the
-  idempotency-hybrid family the umbrella exists to fix (latex3 2, latex2e 11;
-  predominantly expl3 package code — xparse, xtemplate, tagpdf, pdfmanagement,
-  luamml — the S2–S4 target set). `latexrelease.sty` was the known issue-#97
-  residue (rest-aware fill disagreement); S2 resolved it.
+  idempotency-hybrid family trivia-invariant layout exists to fix (latex3 2,
+  latex2e 11; predominantly expl3 package code — xparse, xtemplate, tagpdf,
+  pdfmanagement, luamml). `latexrelease.sty` was the known issue-#97 residue
+  (rest-aware fill disagreement), resolved by the honest-`Mode::Flat` work.
 
 The generator's meaning-safety was spot-checked: 1 `dropped_unsafe` variant in
 \~157k eligible gaps over 120 latex2e files.

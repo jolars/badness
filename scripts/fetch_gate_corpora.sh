@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# Fetch the trivia-invariant-layout gate corpora (TODO.md, S0) into `corpora/`
-# at the repository root, pinned to exact commits so every stage's gate run
+# Fetch the trivia-invariant-layout gate corpora into `corpora/` at the
+# repository root, pinned to exact commits so every gate run
 # (`badness debug format --checks all|trivia --report .`) is reproducible.
 # The directory is gitignored; re-running is a fast no-op when a corpus is
 # already checked out at its pin.
 #
-# The latex3/latex3 pin is the SHA the S1-S4 stage gates in TODO.md are
-# measured against; the other two were recorded at the S0 baseline run.
+# The pins are the SHAs the recorded sets in tests/gate_baselines are measured
+# against — never bump one without re-recording, or the two-sided ratchet in
+# check_gate_baselines.sh compares against a different corpus.
 #
 # `latexindent` is the odd one out: not package source but latexindent.pl's own
 # test suite, ~5.3k small hand-written files of deliberately adversarial LaTeX

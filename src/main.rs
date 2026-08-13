@@ -1456,20 +1456,27 @@ fn run_check(
 
 /// Line-diff `original` against `formatted`.
 ///
-/// **Histogram, not the default Myers.** Myers is `O((N+M)*D)`, and `D` is the
+/// **Patience, not the default Myers.** Myers is `O((N+M)*D)`, and `D` is the
 /// whole file whenever the formatter relays a document rather than touching a
 /// few lines: `phd_dissertation.tex` reflows 27 482 lines into 14 364 with 13.6%
 /// line overlap, which cost 2.0 s of a 2.2 s `--check` run. `similar`'s disjoint
-/// fast path cannot rescue that (it runs before prefix trimming and bails as
-/// soon as the two texts share a first line). Histogram anchors on low-frequency
-/// lines instead of searching for a minimal edit script, which upstream
-/// recommends for exactly this "noisy/repetitive input" shape. It is
-/// deterministic - no wall-clock deadline - and measured linear on both the
-/// reflow-heavy document (2204 ms -> 267 ms, same 82 hunks) and the anchor-free
-/// worst case (N nested `\begin{itemize}`, linear to N = 32 000).
+/// fast path cannot rescue that — it runs before prefix trimming and bails as
+/// soon as the two texts share a first line, which a preamble always does.
+/// Patience anchors on lines unique to both sides instead of searching for a
+/// minimal edit script, and is deterministic (no wall-clock deadline).
+///
+/// **Chosen for its worst case, not its best.** `Algorithm::Histogram` is 3.6x
+/// faster than Patience here (229 ms vs 816 ms on that document) and was the
+/// first choice, but it collapses on highly self-similar input: fatou measured
+/// it at 2147 ms against Patience's 167 ms on a file of near-identical small
+/// functions, growing ~4x per doubling. A formatter's `--check` runs over
+/// whatever is in the tree, generated code included, so the algorithm that is
+/// *never worse than Myers* wins over the one that is usually much better.
+/// Keep this in step with fatou's `formatter::check::line_diff` and the other
+/// siblings; the shape of the input decides, and it is not this repo's alone.
 fn diff_lines<'a>(original: &'a str, formatted: &'a str) -> TextDiff<'a, 'a, str> {
     TextDiff::configure()
-        .algorithm(Algorithm::Histogram)
+        .algorithm(Algorithm::Patience)
         .diff_lines(original, formatted)
 }
 

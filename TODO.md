@@ -1147,8 +1147,14 @@ sources below are missing.
      `11a4558`; fatou and panache still carry it.
   2. **The `--check` diff** ran Myers, `O((N+M)*D)`, and `D` is the whole file
      whenever the formatter relays a document. Switched to
-     `Algorithm::Histogram`, plus one buffered writer instead of a `print!` per
-     line.
+     `Algorithm::Patience`, plus one buffered writer instead of a `print!` per
+     line. `Histogram` came first and is 3.6x faster still on this repo's
+     documents (229 ms vs 816 ms on `phd`), but porting the fix to fatou found
+     it collapsing on highly self-similar input — 2147 ms against Patience's
+     167 ms, growing ~4x per doubling. `--check` runs over whatever is in the
+     tree, so the algorithm that is never worse than Myers beat the one that is
+     usually much better. **Keep this in step across the siblings**; the input
+     shape decides it, and no one repo's corpus settles the question.
   3. **`Parser::on_doc_margin_line`** walked back to the previous `NEWLINE` for
      every `\begin`/`\end` via `doc_margin_exempt`, so a one-line document was
      O(N x line length). Answered from a `PreScan` index instead.
@@ -1160,7 +1166,7 @@ sources below are missing.
   | | before | after |
   |---|---|---|
   | `phd` `lint` | 661 ms | **114 ms** (concise: 111 ms) |
-  | `phd` `format --check` | 2204 ms | **219 ms** (`-q`: 169 ms) |
+  | `phd` `format --check` | 2204 ms | **824 ms** (`-q`: 169 ms) |
   | `masters` `format --check` | 42.5 ms | **22.6 ms** |
   | N=4000 `\[` `lint` | 224 ms | 15 ms |
   | `{{{x}}}` nested 4000 | 555 ms | 136 ms |

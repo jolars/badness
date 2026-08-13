@@ -1658,8 +1658,8 @@ fn reflow_elements_checked(
     // positive signature property can know — plus block commands glued to
     // adjacent content. That residue reads the lone-newline predicate as
     // sanctioned Tier 2: preservation-only, with the fixed-point argument
-    // written on [`line_is_command_only`]. The planned `Gap` normalization
-    // (TODO.md) will carry it as a widened gap.
+    // written on [`line_is_command_only`]. It reaches the count through
+    // [`consume_widened_gap_slice`], the widened boundary (see [`WideGap`]).
     let mut line_all_commands = true;
     let mut line_has_content = false;
     // Whether the current physical source line rides a `% ` documentation margin.
@@ -1695,7 +1695,7 @@ fn reflow_elements_checked(
         match &elements[idx] {
             // Whitespace / newline run: a physical-line and atom boundary.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                let newlines = consume_trivia_run_slice(&elements, &mut idx);
+                let newlines = consume_widened_gap_slice(&elements, &mut idx);
                 if newlines >= 2 {
                     // A blank line ends the line and promotes the next separator.
                     b.end_line();
@@ -2429,7 +2429,7 @@ fn lower_expl_code(
             // for the boundary itself (trivia-invariant layout).
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let run_start = idx;
-                let newlines = consume_trivia_run_slice(&elements, &mut idx);
+                let newlines = consume_widened_gap_slice(&elements, &mut idx);
                 let boundary = map
                     .as_ref()
                     .is_some_and(|m| run_start > 0 && m.boundary_after(run_start - 1));
@@ -3866,8 +3866,7 @@ fn lower_element_stream(
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
-                out.push(classify_trivia(newlines, trailing_ws));
+                out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
             }
             // The floated leading `%` of a reflowable `.dtx` doc paragraph (one that
             // follows a `%` blank line): drop it and the inline whitespace after it,
@@ -3913,11 +3912,14 @@ fn lower_prose_stream(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCt
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            // Tier 2, shared with [`classify_trivia`]: `Preserve` promises the
+            // authored line structure survives, so this boundary reads the newline
+            // count and reproduces it. Preservation-only, hence its own fixed point.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                let (newlines, _ws) = consume_trivia_run(&token, &mut iter);
-                out.push(match newlines {
+                out.push(match consume_gap_widened(&token, &mut iter).newlines {
                     0 => Ir::verbatim(" "),
-                    _ => classify_trivia(newlines, String::new()),
+                    1 => Ir::hard_line(),
+                    _ => Ir::empty_line(),
                 });
             }
             SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
@@ -4066,37 +4068,24 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::concat([leading, env])
 }
 
-/// How the gap before a conditional divider was authored. Only [`Self::Glued`] is
-/// discriminated by the layout — it is the one case that is *not* a break
-/// opportunity. The other two are distinguished so that a comment-terminated
-/// boundary never lands in `Glued`: the `%` itself is not collapsible trivia, so
-/// nothing is peeled behind it, and without its own case a branch ending
-/// `… % note` would read as glued and send the whole construct down the
-/// byte-faithful path.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DividerGap {
-    /// No whitespace at all (`\ifmmode y\else`). Breaking here would materialize a
-    /// space token TeX contributes to the horizontal list — a typeset change the
-    /// CST oracles cannot see, since whitespace is trivia to them and content to
-    /// TeX. So it is not a break opportunity.
-    Glued,
-    /// Whitespace or a lone newline. Free to render as either, so it is a break
-    /// opportunity.
-    Gap,
-    /// A `%` comment. The comment must end its line, so the break is forced — and
-    /// costs nothing, because the `%` already absorbs the line end. Laid out
-    /// exactly like [`Self::Gap`]; the flat candidate is separately refused by
-    /// [`collapse_conditional_elements`], which sees the same `%`.
-    Comment,
-}
-
 /// Split a `CONDITIONAL_BRANCH`'s elements from the trailing collapsible-trivia
-/// run that carries the gap to whatever follows it, classifying that gap.
+/// run that carries the gap to whatever follows it, classifying that gap as a
+/// [`Gap`].
 ///
 /// All inter-segment trivia belongs to the *preceding* branch — the grammar's
 /// branch loop consumes it before it reaches the divider — so this is the only
 /// place a boundary gap can live.
-fn split_branch_gap(node: &SyntaxNode) -> (Vec<SyntaxElement>, DividerGap) {
+///
+/// Only [`Gap::Glued`] is discriminated by the layout: it is the one case that is
+/// not a break opportunity. [`Gap::Comment`] is distinguished purely so that a
+/// comment-terminated boundary never lands in `Glued` — the `%` itself is not
+/// collapsible trivia, so nothing is peeled behind it, and without its own variant
+/// a branch ending `… % note` would read as glued and send the whole construct
+/// down the byte-faithful path. It lays out exactly like [`Gap::Space`]; the flat
+/// candidate is separately refused by [`collapse_conditional_elements`], which sees
+/// the same `%`. Whether the peeled run held a newline is, as everywhere,
+/// invisible here.
+fn split_branch_gap(node: &SyntaxNode) -> (Vec<SyntaxElement>, Gap) {
     let mut elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
     let mut peeled = false;
     while let Some(SyntaxElement::Token(t)) = elements.last() {
@@ -4107,9 +4096,9 @@ fn split_branch_gap(node: &SyntaxNode) -> (Vec<SyntaxElement>, DividerGap) {
         elements.pop();
     }
     let gap = match elements.last() {
-        Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::COMMENT => DividerGap::Comment,
-        _ if peeled => DividerGap::Gap,
-        _ => DividerGap::Glued,
+        Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::COMMENT => Gap::Comment,
+        _ if peeled => Gap::space(),
+        _ => Gap::Glued,
     };
     (elements, gap)
 }
@@ -4268,9 +4257,8 @@ fn lower_conditional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return generic();
     };
 
-    let split: Vec<(Vec<SyntaxElement>, DividerGap)> =
-        branches.iter().map(split_branch_gap).collect();
-    if split.iter().any(|(_, gap)| *gap == DividerGap::Glued) {
+    let split: Vec<(Vec<SyntaxElement>, Gap)> = branches.iter().map(split_branch_gap).collect();
+    if split.iter().any(|(_, gap)| matches!(gap, Gap::Glued)) {
         return generic();
     }
 
@@ -4312,7 +4300,7 @@ fn lower_conditional(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// the layout on them is sound; an authored newline is not, and collapses to a
 /// space here exactly as it does in [`collapse_arg_group`].
 fn collapse_conditional(
-    split: &[(Vec<SyntaxElement>, DividerGap)],
+    split: &[(Vec<SyntaxElement>, Gap)],
     closer: &Ir,
     cx: LowerCtx<'_>,
 ) -> Option<Ir> {
@@ -4337,15 +4325,11 @@ fn collapse_conditional_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) -
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
-                if newlines >= 2 {
+                let gap = consume_gap(&t, &mut iter);
+                if gap == Gap::Blank {
                     return None; // a blank-line `\par` (the gate should preclude it)
                 }
-                out.push(if newlines == 1 {
-                    Ir::verbatim(" ")
-                } else {
-                    Ir::verbatim(trailing_ws)
-                });
+                out.push(Ir::verbatim(gap.flat()));
             }
             // A `%` comment must terminate its line, so there is no flat form.
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
@@ -6142,16 +6126,13 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 close = Ir::verbatim(t.text());
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
-                let flat = if newlines >= 1 {
-                    " ".to_string()
-                } else {
-                    trailing_ws
-                };
+                let gap = consume_gap(&t, &mut iter);
+                let blank = gap == Gap::Blank;
+                let flat = gap.flat().to_string();
                 if atoms.is_empty() && atom.is_empty() {
                     lead = Some(flat);
                 } else {
-                    pending = Some((flat, newlines >= 2));
+                    pending = Some((flat, blank));
                 }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return block(),
@@ -6214,29 +6195,6 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
     parts.push(close);
     Ir::group(Ir::concat(parts))
-}
-
-/// How a split point inside an `[…]` body renders in each mode.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum KeyBreak {
-    /// The author already wrote whitespace after the comma. Flat is a space,
-    /// broken a newline — the whitespace ↔ newline exchange that is TeX-identical
-    /// anywhere, so this split needs no permission.
-    Gap,
-    /// The comma was glued to the next key (`xmin=-5,xmax=5`). Flat renders
-    /// *nothing*, so a fitting bracket stays byte-identical to the source and only
-    /// the broken form materializes a space token TeX will see. Emitted solely for
-    /// a [`ContentKind::Keyval`] argument, whose processor discards that space.
-    Glued,
-}
-
-impl KeyBreak {
-    fn separator(self) -> Ir {
-        match self {
-            KeyBreak::Gap => Ir::line(),
-            KeyBreak::Glued => Ir::soft_line(),
-        }
-    }
 }
 
 /// Lower a [`SyntaxKind::OPTIONAL`] argument group, or `None` to leave it on the
@@ -6357,7 +6315,7 @@ fn peel_padding(parts: &mut Vec<Ir>, edge: Edge) -> Ir {
 }
 
 /// An `[…]` body cut into its top-level entries: the delimiters, the entry IR with
-/// [`KeyBreak`] separators already interleaved, and how many separators there are.
+/// [`Gap::separator`] split points already interleaved, and how many there are.
 struct OptionalSegments {
     open: Ir,
     parts: Vec<Ir>,
@@ -6405,20 +6363,19 @@ fn segment_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option
                 parts.push(Ir::verbatim(t.text()));
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
-                if newlines >= 2 {
+                let gap = consume_gap(&t, &mut iter);
+                if gap == Gap::Blank {
                     return None; // a blank-line `\par`: keep the block form
                 }
                 if open_entry && depth == 0 {
-                    parts.push(KeyBreak::Gap.separator());
+                    parts.push(gap.separator());
                     splits += 1;
                     entry_open = false;
-                } else if newlines == 1 {
-                    // A lone newline collapses to a single space; pure inline
-                    // whitespace stays verbatim, matching the generic lowering.
-                    parts.push(Ir::verbatim(" "));
                 } else {
-                    parts.push(Ir::verbatim(trailing_ws));
+                    // Not a split point: the gap rides at its flat spelling, which
+                    // collapses a lone newline to a single space and keeps pure
+                    // inline whitespace verbatim, matching the generic lowering.
+                    parts.push(Ir::verbatim(gap.flat()));
                 }
                 open_entry = false;
             }
@@ -6494,7 +6451,7 @@ fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bo
             continue; // an empty entry: let the comma ride on the next piece
         }
         if pushed > 0 {
-            parts.push(KeyBreak::Glued.separator());
+            parts.push(Gap::Glued.separator());
             splits += 1;
         }
         parts.push(Ir::verbatim(piece));
@@ -6504,7 +6461,7 @@ fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bo
     }
     if start < text.len() {
         if pushed > 0 {
-            parts.push(KeyBreak::Glued.separator());
+            parts.push(Gap::Glued.separator());
             splits += 1;
         }
         parts.push(Ir::verbatim(&text[start..]));
@@ -6779,8 +6736,7 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             }
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                let (newlines, trailing_ws) = consume_trivia_run(&token, &mut iter);
-                out.push(classify_trivia(newlines, trailing_ws));
+                out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
             }
             SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
         }
@@ -6886,17 +6842,14 @@ fn collapse_arg_group(
                 close_ir = Ir::verbatim(t.text());
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
-                if newlines >= 2 {
+                let gap = consume_gap(&t, &mut iter);
+                if gap == Gap::Blank {
                     return None; // a blank-line `\par`: keep the block form
                 }
-                // A lone newline collapses to a single space; pure inline whitespace
-                // stays verbatim, matching the one-line generic lowering.
-                body.push(if newlines == 1 {
-                    Ir::verbatim(" ")
-                } else {
-                    Ir::verbatim(trailing_ws)
-                });
+                // The gap's flat spelling: a lone newline collapses to a single
+                // space, pure inline whitespace stays verbatim, matching the
+                // one-line generic lowering.
+                body.push(Ir::verbatim(gap.flat()));
             }
             // A `%` comment must terminate its line, so the group cannot collapse.
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
@@ -7371,7 +7324,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
     while let Some(el) = iter.next() {
         match el {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                consume_trivia_run(&t, &mut iter);
+                consume_gap(&t, &mut iter);
                 if !pieces.is_empty() {
                     pending_space = true;
                 }
@@ -7575,11 +7528,14 @@ fn lower_math_seq(
     let mut iter = elements.peekable();
     while let Some(el) = iter.next() {
         match el {
+            // Tier 2 under `preserve_newlines` ([`MathWrap::Preserve`]) only: that
+            // mode's contract is the author's line structure, and reproducing a
+            // break as a break is preservation-only, hence its own fixed point.
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                let (newlines, _) = consume_trivia_run(&t, &mut iter);
+                let gap = consume_gap_widened(&t, &mut iter);
                 if started {
                     pending_space = true;
-                    pending_newline = preserve_newlines && newlines > 0;
+                    pending_newline = preserve_newlines && gap.newlines > 0;
                 }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
@@ -7844,15 +7800,145 @@ fn has_verbatim_body(node: &SyntaxNode) -> bool {
         .any(|t| t.kind() == SyntaxKind::VERBATIM_BODY)
 }
 
-/// Consume the maximal run of collapsible trivia beginning at `first`, returning
-/// the number of newlines it spans and the whitespace following the *last*
-/// newline (the run's preserved leading indentation; whitespace before a newline
-/// is trailing whitespace and is dropped). For a run with no newline the whole
-/// run is whitespace and is returned as `trailing_ws`.
-fn consume_trivia_run(
+/// A **normalized** trivia boundary: everything the layout is allowed to know
+/// about the gap between two neighbouring elements.
+///
+/// What this type cannot say is the point of it. There is deliberately no
+/// `Newline` variant — inline whitespace and a lone newline both arrive as
+/// [`Self::Space`] — because the formatter converts freely between those two
+/// spellings in *both* directions (`alpha\nbeta` → `alpha beta`, and a width wrap
+/// back again). A layout decision keyed on which one the author wrote is
+/// therefore a latent idempotency bug, and it is the root cause of the whole
+/// K&R/Allman family (issues #71, #94, #96, #97). Discipline caught those one at
+/// a time; deleting the information at the boundary is the enforcement, because a
+/// rule cannot key on what it cannot see.
+///
+/// Glued-ness, blank-line presence, and comment presence *are* predicates the
+/// formatter preserves (`P(fmt(x)) == P(x)`), so they keep their own variants and
+/// layout may read them freely.
+///
+/// A Tier-2 site — one whose contract *is* the authored line structure — reads
+/// the newline count through [`WideGap`] instead, and owes the written
+/// fixed-point argument that goes with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Gap {
+    /// No trivia at all: the neighbours abut (`\ifmmode y\else`,
+    /// `xmin=-5,xmax=5`). Breaking here would materialize a space token TeX
+    /// contributes to the horizontal list — a typeset change the CST oracles
+    /// cannot see, since whitespace is trivia to them and content to TeX — so it
+    /// is a break opportunity only where a processor is proven to discard that
+    /// space (see [`ContentKind::Keyval`]).
+    Glued,
+    /// Collapsible trivia carrying no blank line: inline whitespace, a lone
+    /// newline, or any mix of the two. A break opportunity, and the one variant
+    /// that must never be split back into its two spellings.
+    ///
+    /// `flat` is what a one-line rendering writes here, from [`Gap::flat`].
+    Space { flat: String },
+    /// Two or more newlines: an authored `\par`.
+    Blank,
+    /// The boundary ends at a `%` comment. The comment must terminate its line, so
+    /// a break here is forced — and costs nothing, because the `%` already absorbs
+    /// the line end.
+    Comment,
+}
+
+impl Gap {
+    /// A gap whose flat spelling is a single space: what every gap the layout is
+    /// free to break renders as when it does not.
+    fn space() -> Gap {
+        Gap::Space {
+            flat: " ".to_string(),
+        }
+    }
+
+    /// Normalize a consumed trivia run. A run holding *any* newline flattens to one
+    /// space — the only spelling a break reproduces — and its leading indentation is
+    /// dropped, since the printer owns indentation and recreates it.
+    fn from_run(newlines: usize, trailing_ws: String) -> Gap {
+        match newlines {
+            0 => Gap::Space { flat: trailing_ws },
+            1 => Gap::space(),
+            _ => Gap::Blank,
+        }
+    }
+
+    /// What a *flat* rendering writes at this boundary: nothing where the author
+    /// glued, the authored whitespace verbatim for a newline-free run, and a single
+    /// space wherever the run carried a newline (blank line included).
+    ///
+    /// So a lone newline and a single authored space are indistinguishable here —
+    /// that is the whole point — while a wider run (`\pgfpoint@oncoil{0    }`) still
+    /// rides verbatim. That is not a leak of the unsafe predicate: every reader of
+    /// `flat` emits it unchanged, so "the run was wider than one space" is a
+    /// predicate they all preserve.
+    fn flat(&self) -> &str {
+        match self {
+            Gap::Space { flat } => flat,
+            Gap::Blank => " ",
+            Gap::Glued | Gap::Comment => "",
+        }
+    }
+
+    /// How a split point at this boundary renders in each mode: an [`Ir::Line`] (a
+    /// space flat, a newline broken) wherever the author already wrote whitespace —
+    /// the whitespace ↔ newline exchange that is TeX-identical anywhere, so it needs
+    /// no permission — and an [`Ir::SoftLine`] (*nothing* flat) where they glued, so
+    /// a fitting line stays byte-identical to the source and only the broken form
+    /// materializes a space token.
+    fn separator(&self) -> Ir {
+        match self {
+            Gap::Glued => Ir::soft_line(),
+            _ => Ir::line(),
+        }
+    }
+}
+
+/// A [`Gap`] with the **unsafe** predicate — how many newlines the run spanned —
+/// still readable.
+///
+/// Handed only to the Tier-2 sites whose contract *is* the authored line
+/// structure: the byte-faithful stream ([`classify_trivia`]), the preserve-shaped
+/// wrap modes, [`ReflowKind::Statement`], the expl3 fallback statement, and the
+/// command-only-line residue. Each owes a written fixed-point argument showing
+/// every layout it can emit re-reads to itself; preservation-only rules have the
+/// easy one (a hard line prints a newline, which re-reads as a newline, and is
+/// kept again in place). Everything else takes [`Self::narrow`].
+struct WideGap {
+    gap: Gap,
+    /// **Tier 2.** Reading this is reading the predicate the formatter does not
+    /// preserve. Do not add a read without the fixed-point argument.
+    newlines: usize,
+}
+
+impl WideGap {
+    fn narrow(self) -> Gap {
+        self.gap
+    }
+}
+
+/// Consume the maximal run of collapsible trivia beginning at `first` and
+/// normalize it to a [`Gap`] — the boundary every width-driven lowering takes,
+/// and the reason none of them *can* key on a lone newline.
+fn consume_gap(
     first: &SyntaxToken,
     iter: &mut Peekable<impl Iterator<Item = SyntaxElement>>,
-) -> (usize, String) {
+) -> Gap {
+    consume_gap_widened(first, iter).narrow()
+}
+
+/// The Tier-2 form of [`consume_gap`]: the same run, with the newline count left
+/// readable. See [`WideGap`] for who may call this and what they owe.
+///
+/// The run's newline count is taken over the whole run; the whitespace following
+/// the *last* newline is the run's leading indentation, which the printer owns, and
+/// whitespace *before* a newline is trailing whitespace — both are dropped by
+/// [`Gap::from_run`]. For a run with no newline the whole run is the gap's flat
+/// spelling.
+fn consume_gap_widened(
+    first: &SyntaxToken,
+    iter: &mut Peekable<impl Iterator<Item = SyntaxElement>>,
+) -> WideGap {
     let mut newlines = 0;
     let mut trailing_ws = String::new();
     absorb(first, &mut newlines, &mut trailing_ws);
@@ -7867,16 +7953,23 @@ fn consume_trivia_run(
         };
         absorb(&token, &mut newlines, &mut trailing_ws);
     }
-    (newlines, trailing_ws)
+    WideGap {
+        gap: Gap::from_run(newlines, trailing_ws),
+        newlines,
+    }
 }
 
 /// Consume the maximal run of collapsible trivia in `elements` beginning at
 /// `*i`, advancing `*i` past it and returning the number of newlines it spans.
-/// The index-based analogue of [`consume_trivia_run`], used by
-/// [`reflow_elements`], which needs to look ahead past the run (the peekable
-/// iterator form cannot). The dropped indentation/`trailing_ws` is irrelevant to
-/// reflow, which re-derives spacing from the fill.
-fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize {
+/// The index-based analogue of [`consume_gap_widened`], used by the two reflow
+/// drivers, which need to look ahead past the run (the peekable iterator form
+/// cannot).
+///
+/// **Tier 2**, like everything else that reads a newline count: both callers are
+/// line-structure-preserving sites carrying their own fixed-point arguments (see
+/// [`WideGap`]). Neither needs the flat spelling — a reflow re-derives spacing
+/// from the fill — so this returns the count bare rather than a [`WideGap`].
+fn consume_widened_gap_slice(elements: &[SyntaxElement], i: &mut usize) -> usize {
     let mut newlines = 0;
     while let Some(SyntaxElement::Token(tok)) = elements.get(*i) {
         if !is_collapsible_trivia(tok.kind()) {
@@ -7922,7 +8015,7 @@ fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize 
 /// deliberately not claimed — preserving the authored break *is* the rule — so
 /// `--checks trivia-strict` still reports these shapes
 /// (`trivia_strict_check_fires_where_an_authored_break_is_preserved`), and the
-/// planned `Gap` normalization (TODO.md) carries this read as its widened gap.
+/// [`Gap`] normalization carries this read as a [`WideGap`].
 /// Retiring the rule outright would glue every authored `\mymacro`-on-its-own-line
 /// into the fill — a policy change, not a fix.
 ///
@@ -7980,10 +8073,20 @@ fn absorb(tok: &SyntaxToken, newlines: &mut usize, trailing_ws: &mut String) {
 /// (a genuine inter-word space) kept verbatim; one newline → a [`Ir::hard_line`];
 /// two or more → a single [`Ir::empty_line`] (one blank line). Whitespace that
 /// followed the last newline is *indentation*, which the printer owns and
-/// recreates, so it is dropped here — keeping it would double-indent on reformat.
-fn classify_trivia(newlines: usize, trailing_ws: String) -> Ir {
-    match newlines {
-        0 => Ir::verbatim(trailing_ws),
+/// recreates, so it is dropped by [`Gap::from_run`] — keeping it would
+/// double-indent on reformat.
+///
+/// This is the byte-faithful stream's boundary, and the reason it takes a
+/// [`WideGap`]: reproducing the author's line structure is its entire contract, so
+/// it reads the newline count by definition. **Tier 2**, with the trivial
+/// fixed-point argument — the rule is preservation-only and its own output is its
+/// own input: a `hard_line` prints one newline, which re-reads as one newline and
+/// classifies to a `hard_line` again; an `empty_line` prints a blank line, which
+/// re-reads as two; and the verbatim whitespace re-reads as itself. Nothing here
+/// ever *converts* between the two spellings, which is what a Tier-1 read would do.
+fn classify_trivia(gap: WideGap) -> Ir {
+    match gap.newlines {
+        0 => Ir::verbatim(gap.gap.flat()),
         1 => Ir::hard_line(),
         _ => Ir::empty_line(),
     }
@@ -8256,5 +8359,84 @@ mod expl3_region_tests {
                 (second_body, second_frame),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+    use crate::parser::parse;
+
+    /// The [`Gap`] the boundary reads from the first collapsible-trivia run in
+    /// `input`, taken through the same `consume_gap` every width-driven lowering
+    /// uses. `descendants` is preorder, so the outermost node holding a trivia run
+    /// answers first.
+    fn first_gap(input: &str) -> Gap {
+        let parsed = parse(input);
+        assert!(parsed.errors.is_empty(), "test input should parse cleanly");
+        for node in parsed.syntax().descendants() {
+            let mut iter = node.children_with_tokens().peekable();
+            while let Some(element) = iter.next() {
+                let SyntaxElement::Token(token) = element else {
+                    continue;
+                };
+                if is_collapsible_trivia(token.kind()) {
+                    return consume_gap(&token, &mut iter);
+                }
+            }
+        }
+        panic!("no trivia run in {input:?}");
+    }
+
+    /// The property the whole normalization exists for: the two spellings the
+    /// formatter converts between are one value at the boundary, so no rule taking
+    /// a narrow [`Gap`] can tell them apart. This is the mechanical guard the
+    /// K&R/Allman family (issues #71, #94, #96, #97) never had — each of those was
+    /// one decision keying on exactly this difference.
+    #[test]
+    fn a_lone_newline_and_a_space_are_the_same_gap() {
+        assert_eq!(first_gap("\\foo{a b}"), first_gap("\\foo{a\nb}"));
+        assert_eq!(first_gap("\\foo{a\nb}"), Gap::space());
+        // Indentation after the newline is the printer's to recreate, so it is
+        // dropped rather than becoming part of the gap.
+        assert_eq!(first_gap("\\foo{a\n    b}"), Gap::space());
+        assert_eq!(first_gap("\\foo{a \n b}"), Gap::space());
+    }
+
+    /// Blank-line presence *is* preserved, so it keeps its own variant — and
+    /// flattens to a single space, the only spelling a one-line rendering can
+    /// write.
+    #[test]
+    fn a_blank_line_stays_visible() {
+        assert_eq!(first_gap("\\foo{a\n\nb}"), Gap::Blank);
+        assert_eq!(first_gap("\\foo{a\n\n\nb}"), Gap::Blank);
+        assert_eq!(Gap::Blank.flat(), " ");
+    }
+
+    /// A run wider than one space rides verbatim wherever `flat` is read, so
+    /// distinguishing it is not a read of the unsafe predicate — every reader
+    /// preserves it. It is still not confusable with a break.
+    #[test]
+    fn a_wide_run_rides_verbatim() {
+        assert_eq!(
+            first_gap("\\foo{a    b}"),
+            Gap::Space {
+                flat: "    ".to_string()
+            }
+        );
+        assert_ne!(first_gap("\\foo{a    b}"), first_gap("\\foo{a\nb}"));
+    }
+
+    /// The split-point rendering the folded-in `DividerGap`/`KeyBreak` prototypes
+    /// agreed on: a glued junction renders as *nothing* flat, so a fitting line
+    /// stays byte-identical to the source and only the broken form materializes a
+    /// space token TeX would typeset.
+    #[test]
+    fn a_glued_junction_separates_without_a_flat_space() {
+        assert!(matches!(Gap::Glued.separator(), Ir::SoftLine));
+        assert_eq!(Gap::Glued.flat(), "");
+        assert!(matches!(Gap::space().separator(), Ir::Line));
+        assert!(matches!(Gap::Blank.separator(), Ir::Line));
+        assert!(matches!(Gap::Comment.separator(), Ir::Line));
     }
 }

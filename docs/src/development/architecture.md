@@ -730,9 +730,33 @@ the block form always ends with a newline before its closer, so its output
 re-reads multi-line and re-blocks byte-stably, and the inline path emits no
 newline, so single-line re-reads single-line.
 
-The gap normalization is **not built yet** — the boundary still hands the
-lowering a newline count — so the no-new-reads rule is upheld by review; the
-normalization is tracked in `TODO.md`.
+The rule is enforced at the boundary rather than by review. Every trivia run the
+lowering consumes arrives as a normalized `Gap`
+(`Glued | Space { flat } | Blank | Comment`) with **no `Newline` variant**:
+inline whitespace and a lone newline are one variant, because a rule cannot key
+on what it cannot see. `Gap::flat` is what a one-line rendering writes there — a
+single space wherever the run held a newline, blank line included, since that is
+the only spelling a break reproduces, and otherwise the authored whitespace
+verbatim. So a lone newline and a single authored space are indistinguishable,
+while a wider run (`\pgfpoint@oncoil{0    }`) still rides verbatim; that is not
+a leak, because every reader of `flat` emits it unchanged and so preserves it.
+`Gap::separator` is the split-point rendering the two former prototypes agreed
+on — an `Ir::Line` at a gap, an `Ir::SoftLine` at a glued junction — and both
+(the conditional divider's `DividerGap`, the `[…]` split point's `KeyBreak`) are
+folded into the one vocabulary.
+
+The Tier-2 sites take a `WideGap`, which carries the newline count alongside the
+normalized gap: the byte-faithful stream (`classify_trivia`), the
+preserve-shaped modes (`lower_prose_stream`, `MathWrap::Preserve`), and the two
+reflow drivers (`ReflowKind::Statement`, the expl3 fallback statement, the
+command-only-line residue, which reach it through `consume_widened_gap_slice`).
+Their names are the warning, and each still owes the written fixed-point
+argument; the preservation-only ones have the easy version — a hard line prints
+a newline, which re-reads as a newline and is emitted as a hard line again, and
+nothing there ever *converts* between the two spellings, which is what a Tier-1
+read would do. Everything width-driven takes `consume_gap` and the narrow `Gap`,
+so it is not merely disciplined out of the unsafe predicate but structurally
+unable to reach it.
 
 The oracle is `formatter::perturb`, which generates TeX-identical trivia
 perturbations of each input. It has two forms. `check_trivia_convergence` is

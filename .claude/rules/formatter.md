@@ -37,17 +37,24 @@ predicates the formatter *preserves*.
   converts freely in both directions, so any rule keying on it is a latent
   idempotency bug — this is the root cause of the whole K&R/Allman family
   (#71, #94, #96, #97).
-- **The planned enforcement is a normalized `Gap` with no `Newline` variant**
-  (filed in `TODO.md`): deleting the information at the boundary means a rule
-  cannot key on what it cannot see. It does not exist yet — the boundary still
-  hands the lowering a newline count — so until it lands the discipline is
-  manual. Don't add a read.
+- **The boundary enforces this.** A consumed trivia run arrives as a normalized
+  `Gap` (`Glued | Space { flat } | Blank | Comment`) with **no `Newline`
+  variant** — inline whitespace and a lone newline are one variant, so a rule
+  cannot key on what it cannot see. `Gap::flat` is the one-line spelling (a
+  single space wherever the run held a newline, else the authored whitespace);
+  `Gap::separator` is the split point (`Ir::Line` at a gap, `Ir::SoftLine` where
+  the author glued). Take `consume_gap`; reach for `consume_gap_widened` /
+  `consume_widened_gap_slice` only as a Tier-2 site, and write the fixed-point
+  argument when you do.
 - **Tier 2 sites** (`WrapMode::Stable`/`Sentence`/`Semantic`,
   `ReflowKind::Statement`, the expl3 fallback statement, the
-  command-only-line residue, and the delimited-group block residue on
-  `spans_multiple_lines`) read the unsafe predicate by definition and **must
-  carry a written fixed-point argument** showing every layout they can emit
-  re-reads to itself.
+  command-only-line residue, the delimited-group block residue on
+  `spans_multiple_lines`, and the preservation-only boundaries —
+  `classify_trivia`, `lower_prose_stream`, `MathWrap::Preserve`) read the unsafe
+  predicate by definition and **must carry a written fixed-point argument**
+  showing every layout they can emit re-reads to itself. The preservation-only
+  ones have the easy version: their output is their own input, and they never
+  convert between the two spellings.
 - **The command-only-line residue is Tier 2, not Tier 1.** Curated block
   commands are intercepted upstream via `CommandSig::block` and never reach it,
   so `line_is_command_only` decides only for un-signatured and

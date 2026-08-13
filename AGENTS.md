@@ -314,8 +314,13 @@ covered in `docs/src/development/architecture.md`.
   — so layout must never key on it. **No Tier-1 read remains**: under `Reflow`,
   opaque brace groups (`lower_opaque_group`) and optionals (`lower_optional`) are
   width-driven, and the surviving `spans_multiple_lines` readers are Tier-2
-  residues behind the non-`Reflow` modes and the doc-margined corner. The `Gap`
-  boundary normalization that would *enforce* this is still open (TODO.md).
+  residues behind the non-`Reflow` modes and the doc-margined corner. The rule is
+  **enforced at the boundary**, not by review: a consumed trivia run arrives as a
+  normalized `Gap` (`Glued | Space { flat } | Blank | Comment`) with no `Newline`
+  variant, so a width-driven lowering cannot key on what it cannot see. The
+  Tier-2 sites — the byte-faithful stream, the preserve-shaped modes, and the two
+  reflow drivers — take a `WideGap` that still carries the count and keep their
+  written fixed-point arguments.
   Detail, the predicate classification, and the
   widened-gap escape hatch for modes *defined* by authored breaks in
   `docs/src/development/architecture.md` (§ *Trivia-invariant layout*); the Tier 1

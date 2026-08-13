@@ -160,31 +160,42 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   corner; the re-aimed
   `trivia_strict_check_fires_where_an_authored_break_is_preserved` pins that
   only `--checks trivia-strict` sees the preservation (both spellings are
-  self-consistent fixed points). This residue is the read the `Gap` entry
-  below hands a widened gap.
+  self-consistent fixed points). This residue is one of the reads the `Gap`
+  entry below hands a widened gap.
 
   Still overlaps the prose-argument entry below, whose second clause ("gluing
   a prose arg onto its command line when a source break separates them") is a
   proposal to *narrow* this residue further — a policy decision, taken
   deliberately, not a Tier fix.
 
-- [ ] **Normalize the lowering's trivia boundary to a `Gap` enum (the
-  enforcement).** Trivia-invariant layout is enforced today by discipline alone:
-  the boundary hands the lowering `(newlines: usize, trailing_ws)`
-  (`consume_trivia_run`/`consume_trivia_run_slice`, collapsed by
-  `classify_trivia`), so the unsafe predicate stays fully readable and nothing
-  but review stops the next decision from keying on it. The enforcement is to
-  delete the information at the boundary: a normalized
-  `Gap = Glued | Space | BlankLine | Comment | Guard | Margin` with **no
-  `Newline` variant** — a rule cannot key on what it cannot see. Two local
-  prototypes already have the shape and would fold in: `DividerGap` (the
-  conditional divider) and `KeyBreak` (the `[…]` split point). Tier-2 sites
-  (`WrapMode::Stable`/`Sentence`/`Semantic`, `ReflowKind::Statement`, the expl3
-  fallback statement, the command-only-line residue above, the delimited-group
-  block residue on `spans_multiple_lines`) take a *widened* gap and keep their
-  written fixed-point arguments. The Tier-1 prerequisite (Opaque-group layout
-  non-determinism) is done, so this is unblocked; what the widened gap has to
-  carry is precisely what that fix and the command-only residue left behind.
+- [x] **The lowering's trivia boundary is normalized to a `Gap` enum (the
+  enforcement).** Trivia-invariant layout used to be enforced by discipline
+  alone: the boundary handed the lowering `(newlines: usize, trailing_ws)`, so
+  the unsafe predicate stayed fully readable and nothing but review stopped the
+  next decision from keying on it. The information is now deleted at the
+  boundary. `consume_gap` returns a normalized
+  `Gap = Glued | Space { flat } | Blank | Comment` with **no `Newline` variant**
+  — inline whitespace and a lone newline are one variant, so a width-driven rule
+  cannot key on what it cannot see. `Gap::flat` is the one-line spelling (a
+  single space wherever the run held a newline, blank line included, since that
+  is the only spelling a break reproduces; otherwise the authored whitespace,
+  which every reader emits unchanged and so preserves). `Gap::separator` is the
+  split point, and both local prototypes folded in: `DividerGap` (the
+  conditional divider) and `KeyBreak` (the `[…]` split point) are gone, replaced
+  by `Gap::Glued`/`Gap::Comment` and `Gap::separator`'s `Ir::SoftLine`/`Ir::Line`.
+
+  The Tier-2 sites take `WideGap` (or `consume_widened_gap_slice`), which still
+  carries the count, and keep their written fixed-point arguments: the
+  byte-faithful stream (`classify_trivia`), the preserve-shaped modes
+  (`lower_prose_stream`, `MathWrap::Preserve`), `ReflowKind::Statement`, the
+  expl3 fallback statement, and the command-only-line residue above. Those
+  boundaries are preservation-only — their output is their own input, and none
+  of them ever *converts* between the two spellings, which is what a Tier-1 read
+  would do. `Guard`/`Margin` were speculative in the original filing and are not
+  variants: a `DOC_MARGIN`/`GUARD` is a non-collapsible token the lowering
+  handles as content (`lower_loose_token`'s `Ir::column_zero`), never a gap.
+  Behaviour-identical by construction, and the two-sided gate ratchet over
+  latex3/latex2e/pgf/latexindent confirms it (every baseline unchanged).
 
 - [ ] **The block form's closer break lacks the `open_glued` mirror.**
   `lower_bracketed` guards the *open* side — no break after a glued `{`, because

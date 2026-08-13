@@ -58,8 +58,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     do. That keeps `CONDITIONAL` a within-paragraph construct — it can never
     straddle a `PARAGRAPH` boundary, so no paragraph nests inside one. Those
     keep their pre-node layout, and with it the two-fixed-point bug.
+
   - **Math-mode conditionals.** `math_atom` carries its own copy of the
     environment gate; conditionals are text-mode only for now.
+
   - **expl3 in-region conditionals** (`\if_int_compare:w … \else: … \fi:`, 14.5%
     of corpus openers) are skipped: the formatter owns in-region layout through
     `semantic::expl3`'s statement segmentation, and a node there would contend
@@ -91,28 +93,34 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 - [ ] **Grammar hygiene (audit follow-up; independent of the closer-map plan
   under *Performance & hardening*).**
+
   - Delete the shadow counters: `group_depth` is always `group_opens.len()`,
     `math_depth` always `math_dollar.len()` — both mutated in lockstep at
     every site, a desync waiting for the first construct that pushes one and
     forgets the other.
+
   - Deduplicate the DOC_COMMENT precede-splice (`parse_block` vs
     `conditional`, two near-verbatim ~20-line copies; drift breaks comment
     binding in one context only). Longer-term, promote the `precede` idiom
     into the event layer as rust-analyzer's `Marker` does, retiring the four
     manual `events.remove`/`insert` sites.
+
   - Split `Parser::new`'s fused pre-scan into a testable `PreScan` struct —
     four scans, three pieces of interleaved running state (`def_name_slots`,
     `expl_on`, `opener_scan`), currently testable only through full parses.
     Also where the closer map will land, so it fronts that work.
+
   - `debug_assert!(!self.at_end())` at the top of `math_atom`: its `None` arm
     consumes nothing and relies on every caller guarding EOF first (all five
     today do); a forgotten guard loops to `PARSER_STEP_LIMIT`. Convert the
     unchecked caller contract into a tripwire.
+
   - Small helpers: `at_env_end` (the `at_command(END_CMD) &&
     env_name_follows` pair appears ~10 times verbatim), a named blank-line
     constant (`newlines >= 2` restated nine times), reuse `is_trivia` at its
     three inline restatements, and an allocation-free `peek_end_name` (it
     builds a `String` per call inside forward scans).
+
   - Start carving `grammar.rs` (3,234 lines) into modules: trivia machinery
     and the curated fact predicates first, the math/`\left…\right`
     sublanguage as a candidate second. Fix the stale module doc at
@@ -810,20 +818,24 @@ sources below are missing.
   benchmark page `docs/src/reference/benchmarks.md`). In-process parse/format micro-bench +
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
+
 - [ ] **95 corpus files change their `%` comments** (`comment-change` in the gate
   baselines). Surfaced by the comment oracle added alongside the conditional node —
   the `content-change` check compares `nontrivia_content`, and a comment is trivia
   to the CST, so this whole class was invisible. All 95 predate the conditional
   work (verified file by file against `main`; that change fixes 12 of them and
   regresses none). Two shapes so far:
+
   - **Adjacent comments merge.** `%\n% just backwards compatibility…` comes out as
     `% % just backwards compatibility…`, the empty comment's `%` swallowed onto the
     next line (`pgfrcs.code.tex`, `latexrelease.sty`). Byte-identical meaning to
     TeX, but the formatter still rewrote a protected region.
+
   - **`.dtx` guards re-lex as comments.** A `%<+debug>` that no longer opens its
     line is a comment, not a docstrip guard, so the extracted file changes — a
     meaning change, not a cosmetic one. Every `.dtx` in the list is this shape.
     Likely the same margin/guard column-0 pinning the reflow already backstops.
+
 - [~] **Replace the per-opener gate scans with a precomputed closer map
   (container stack; multi-session).** *Three of six gates migrated so far —
   conditionals, aliases, and the `\begin` brace-escape gate run the shared
@@ -892,6 +904,7 @@ sources below are missing.
     the bound to EOF. That list turned out to be too short: the bound only
     helps a file with *no* closer, so a single reachable closer at EOF
     defeats it for every gate (measured under C2).
+
   - [x] **C1 — conditionals first** (done, with the mechanism amended). Not
     a `new()`-time map after all: `conditional_closer` reads walk state —
     above all `in_def_body`, which is set during greedy argument attachment,
@@ -915,6 +928,7 @@ sources below are missing.
     openers-with-one-`\fi`-at-EOF shape, which defeats the C0 bound, is now
     one linear pass (~34ms for 8000 openers end-to-end), pinned by
     `conditional_batch_keeps_shared_frame_openers_linear`.
+
   - [x] **C2 — migrate the remaining gates onto one batch driver** (done in
     five stages, C2.1–C2.5; all nine gates now run on `Parser::gate_batch`),
     easiest policy first: alias, then `environment_escapes_group`, then the
@@ -961,6 +975,7 @@ sources below are missing.
       parse-compat report are unchanged, and `bench:micro` is flat within
       run-to-run noise (parse-only spread on the small documents is ±30%
       between runs either way).
+
     - [x] **C2.1 — alias** (done). `AliasGate` is conditional's policy minus
       the paragraph anchor, plus the named-closer test — the first client of
       the defaulted `pairs` hook, which needed no driver change. The
@@ -976,6 +991,7 @@ sources below are missing.
       measures. Adversarial shape (N openers, one closer at EOF) at
       1000/2000/4000: 15/59/192ms before, 9/18/46ms after, pinned by
       `alias_batch_keeps_shared_frame_openers_linear`.
+
     - [x] **C2.2 — `environment_escapes_group`** (done). `EnvGate` is the
       driver's first *demotion* gate, and three policies invert with it, each
       a new hook: a stray `}` **closes** instead of refuting
@@ -1090,6 +1106,7 @@ sources below are missing.
       (38.6 → 35.9 ms end to end at n = 4000, the new bound if anything
       helping), and stays quadratic by design — the test says so rather than
       pinning a shape the gate cannot fix.
+
     - [x] **C2.4 — `left_right_closes`** (done). The `in_macro_code` blind spot
       (issue \#95) is now two policy predicates (`opens_at`/`closes_at`) beside
       the driver's own `\begin`/`\end` filter, which is the consolidation this
@@ -1112,6 +1129,7 @@ sources below are missing.
         entry, not a level. Both are pinned
         (`an_end_inside_a_nested_left_refuses_the_whole_scan`,
         `a_nested_left_shields_the_outer_pair_from_a_paragraph_break`).
+
       - **`MathAnchor`, replacing `MATH_REFUTES`.** The old boolean could not
         say what this gate needs: it anchors on `$`/`\]`/`\)`, the *closing*
         side, where the pairing gates anchor on `$`/`\[`/`\(`. Which side
@@ -1119,6 +1137,7 @@ sources below are missing.
         is defeated by math starting, a `\left` lives inside math and is
         defeated by that math ending, and those are exactly `left_right`'s own
         recovery anchors. `None`/`Opening`/`Closing`, one arm each.
+
       - **A gate/walk looseness surfaced, not introduced.** In the shielded
         shape the gate says the outer pair closes while `left_right` bails at
         the paragraph break and reports it unclosed. It predates the migration
@@ -1159,6 +1178,7 @@ sources below are missing.
         `enclosing_math_is_dollar`; nothing else in the key moves when it does,
         since entering a `$` inside `\[…\]` changes no brace, group, or frame
         state.
+
       - **The missing `plain_braces` filter is not a latent macrocode bug — it
         is arguably the *faithful* reading.** `Parser::optional` bails at any
         `R_BRACE` without consulting `plain_braces`, so the in-math gate mirrors
@@ -1192,6 +1212,7 @@ sources below are missing.
         `optional` bail it mirrors. Only ever declines to attach
         (`a_math_bracket_anchors_on_an_environment_inside_macro_code` pins it
         beside its text-mode twin, where the same body attaches).
+
       - **`DOC_TRIVIA_FLOATS`** — the `macrocode` gate skips only `WHITESPACE`
         in its paragraph run, so a docstrip guard line **breaks** the run where
         every other gate floats it. This one is **corpus-reachable and
@@ -1235,6 +1256,7 @@ sources below are missing.
     scan-work test per gate, on the shapes measured above; and `task
     bench:micro` flat on real documents, so a memo miss never costs the common
     case.
+
   - [x] **C3 — decide whether to finish** (decided: **finish it**). The
     fallback this stage exists to authorize — part of the family on the map,
     part on its own scans — is *not* taken. The measurement that closed the
@@ -1259,6 +1281,7 @@ sources below are missing.
     guard-breaking run everywhere, and re-baseline whatever that moves. Expect
     it to *keep* constructs that are demoted today, so the risk is over-pairing,
     not under-.
+
   - [ ] **`optional` bails at a chunk-plain `}` its own gates skip.** Two of the
     three bracket gates filter `plain_braces`; `Parser::optional` does not
     consult it at all, so an optional they let attach over a chunk-unmatched `}`
@@ -1268,12 +1291,15 @@ sources below are missing.
     (skip a `plain_brace` `}` as `element` already does), not in the gates; the
     in-math gate's unfiltered reading then becomes the odd one out and
     `PLAIN_BRACES_ARE_TOKENS` can go. Pre-existing, not introduced by C2.5.
+
 - [ ] **The formatter *and the linter* are superlinear where the parser is
   now linear** (found while measuring C2.2/C2.3, and it is the larger half of
   every "quadratic gate" number this roadmap has been quoting). Two shapes,
   with `parse` timed directly against the CLI on the same input:
+
   - `{`, N `\begin{itemize}`, `}` at N = 4000: `parse` 3.5ms,
     `format --check` 133ms.
+
   - N `\[` with one `\]` at EOF at N = 4000: `parse` **0.4ms**, `lint`
     **287ms** (93ms at N = 2000, so ~3.1x per doubling).
 
@@ -1283,6 +1309,7 @@ sources below are missing.
   are degenerate, but the gate work this roadmap has been shaving is now the
   smaller term by two orders of magnitude, which is worth knowing before
   spending more on C2.
+
 - [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
   Everything today is curated corpus + snapshots; nothing exercises
   `PARSER_STEP_LIMIT` or the recovery paths with arbitrary bytes, and
@@ -1290,12 +1317,14 @@ sources below are missing.
   (`proptest` or `cargo-fuzz`). While in the tests: split `tests/parser.rs`
   (1,744 lines, 157 tests) by area — math, verbatim, comments, conditionals,
   aliases.
+
 - [ ] **`build.rs` renders positional same-typed bool lists** in the
   generated constructor calls (`command(&[…], None, false, false, false)`;
   nine positional args for environments), so a swapped `verbatim`/`rule`
   compiles silently. Named-struct constructors, or `/*verbatim*/`-style
   inline comments in the rendered source, make the generated code
   self-checking.
+
 - [ ] **No orphan guard on formatter fixtures.** A directory under
   `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
   `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`
@@ -1303,6 +1332,7 @@ sources below are missing.
   each table is one looping test, a slug is not a test name, so filtering cannot
   detect it either. Add a test that walks the fixture dir and asserts every slug
   is registered exactly once (and every registered slug exists on disk).
+
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
   ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read
   primarily as a coverage map — which constructs occur and in what shapes.
@@ -1316,7 +1346,9 @@ sources below are missing.
   `CONDITIONAL` node under *Parser* and eight fixtures — do not re-derive a
   formatter-only rule for it, the survey already showed every such rule is
   trivia-reading, typeset-unsafe, or lopsided.
+
 - [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
+
 - [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
   crate + the docs playground page (`docs/src/playground.md`), formatter-only;
   linting in the playground would first need the linter core extracted from the
@@ -1339,6 +1371,7 @@ not re-proposed.
   and so takes a file and a line, never a coordinate. Servers publish per-process
   advertisements rather than sharing texlab's single fixed socket, which a second
   editor window silently steals.
+
 - [ ] *(Design decision)* **Native `.synctex.gz` reader.** Would let forward
   search drive viewers with *no* SyncTeX support at all by resolving a page
   number (qpdfview, a browser), and report an honest `Failure` when a line
@@ -1371,12 +1404,14 @@ not re-proposed.
   content and the value is emitted byte-exact. That hazard predated this work (it
   was already reachable through the `namedGroupingBracesBrackets` family) and no
   CST oracle can see it. See `architecture.md` § *`%` comments in `.bib`*.
+
 - [ ] `% badness-ignore` in `.bib`. Now that a `%` comment exists inside an entry,
   the LaTeX-side directive carrier could work here too; today only the
   `@comment{badness-ignore …}` entry form does (`bib/linter/suppression.rs`). The
   two would need one directive grammar and a decision about what an in-entry
   comment attaches to (the field below it, presumably, matching the formatter's
   forward bind).
+
 - [ ] **`task bib-error-compat`: biber as a `.bib` *error* oracle.** The gap the
   `%`-comment bug exposed — `bib-parse-compat` cannot see over-strictness at all,
   because texlab's bib parser has no error channel (the skill says so outright),
@@ -1409,19 +1444,24 @@ not re-proposed.
   in-process dev-dependency like `texlab-parser` (and Text::BibTeX is not
   separately installed — biber bundles it). Same bucket as `task typeset:check`:
   needs a local install, runs on demand, never in CI.
+
 - [ ] Cross-file `undefined-string`: a `@string` defined in one `.bib` and used
   in another resolves only once a project-level `@string` union exists (today
   single-file-sound, same caveat as `unused-string`).
+
 - [ ] `unused-entry`: a `.bib` entry never targeted by any `\cite`-family
   command, project-aware behind the same closed+rooted namespace gate as
   `unreferenced-label`/`undefined-ref` (the bib linter has `unused-string` but no
   `unused-entry`). Report-only. texlab: `UnusedEntry`.
+
 - [ ] Bib document-symbol outline completeness: `src/bib/outline.rs` surfaces
   regular entries only; consider `@string`/`@preamble`/`@comment` blocks (and a
   richer `SymbolKind`/detail).
+
 - [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
   component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
   helper when a third consumer appears.
+
 - [ ] **`subfiles`' `\subfix` wrapper opens the citation namespace.** The
   package's path fixer is the idiomatic way a subfile names a shared resource
   (`\addbibresource{\subfix{references.bib}}`), but a macro inside the group
@@ -1433,6 +1473,7 @@ not re-proposed.
   same class of static recognition as the `subfiles` class-option gate — so it
   fits decision #8; the open part is where the unwrap belongs so `include.rs`,
   `document_link`, and completion cannot drift on it.
+
 - [ ] **`project::package` does not collapse `.`/`..` in load targets.**
   `include.rs`'s resolvers now normalize lexically (`resolve_against`), so
   `\input{../shared}` and a `subfiles` parent resolve; `package.rs`'s `resolve`
@@ -1440,6 +1481,7 @@ not re-proposed.
   signatures stay out of scope. Benign (a missing local scope, not a wrong one)
   and a separate subsystem, so it was left out of the #112 fix. Lift the helper
   to `project.rs` when touching it.
+
 - [ ] **Central-bib fallback via the texmf index *(LW)*.** LaTeX Workshop
   resolves `\bibliography{refs}` through `kpsewhich` (plus a `bibDirs`
   setting) for users who keep one master `.bib` in their texmf tree. Extend
@@ -1458,16 +1500,19 @@ not re-proposed.
   that must stash a *stable node identity* in a salsa query (resolving a
   completion/hover target to a specific node across edits) has no primitive for
   it, and byte-ranges alone do not survive edits.
+
 - [ ] **Collapse the four near-identical token walks in `ast/nodes.rs`**
   (`Group::inner_text`/`inner`, `NameGroup::text`/`range`): all four walk
   `children_with_tokens`, skip the delimiters, bail on nested nodes, and
   accumulate text and/or a range. The drift risk is demonstrated, not
   hypothetical — the issue-#104 `HASH` rejection made it into two of the
   four. One shared helper.
+
 - [ ] **Mark the free-function AST shims `#[deprecated]`** (or file the
   removal issue) once the formatter/linter call sites migrate — two parallel
   APIs for the same reads with no forcing function is a standing invitation
   for new code to pick the wrong one.
+
 - [ ] **Share the cross-language boilerplate that is past due**: one
   `SyntaxError` for `parser::core` and `bib::core` (two identical structs
   today, a type-level fork consumers handle twice), an `impl_rowan_lang!`
@@ -1482,9 +1527,12 @@ not re-proposed.
 ## Open decisions to revisit
 
 - [ ] How much of `\newcommand`/`xparse` to model. *(Semantics)*
+
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
+
 - [ ] `.dtx` two-layer model: a preprocessor that splits doc/code layers, or a
   single lexer mode with margin-aware tokens? *(Package infrastructure)*
+
 - [ ] Math preview on hover: skip (LaTeX Workshop covers it), render in the
   VS Code extension, or a server-side Rust renderer? *(Language server; see
   `### Hover`)*

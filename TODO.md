@@ -531,6 +531,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+### Issues
+
 - [ ] **Config knob for user-declared ref/cite command families (grew out of
   issue #104).** The #104 example still draws `unreferenced-label` on every
   label referenced only through a custom wrapper (`\eqrefs{thm:eq1,thm:eq4}`
@@ -603,6 +605,37 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   There is no clean static signal distinguishing these from a document that
   genuinely forgot `\makeatletter`, so this is a known limitation rather than a
   fixable gap; noted for completeness.
+
+### Rules
+
+Follow-ups from `label-before-caption` (floats only, shipped). All three are
+scope limits recorded at implementation time, not regressions.
+
+- [ ] **Extend `label-before-caption` to list items.** `\label` before `\item`
+  is the same `\@currentlabel` bug: in `\begin{enumerate}\label{i:a}\item
+  A\end{enumerate}` the label captures the enclosing counter, so `\ref{i:a}`
+  prints a number unrelated to the item. Left out of the initial rule because
+  the shapes are more varied than a float's — a label may legitimately sit
+  between two `\item`s and belong to the earlier one, and `description`/
+  `enumitem` custom labels widen the surface — so the statement-level gate that
+  makes the float case safe has to be re-derived before it can fire here.
+
+- [ ] **`label-before-caption` is silent outside floats.** `\captionof` in a
+  `minipage` fails the same way (`\begin{minipage}{\textwidth}\label{mp}
+  \captionof{figure}{C}\end{minipage}`), but `minipage` is not an
+  `OutlineKind::Float`, so the rule never looks. Widening the container set
+  means deciding which environments may host a `\captionof` without inventing
+  findings on ordinary layout environments; the float set is curated signature
+  data precisely so this stays a data question.
+
+- [ ] **`label-before-caption` misses the nested-subfigure case.** The detection
+  cutoff is the first counter-stepping command at *any* depth, so a `subfigure`'s
+  own `\caption` silences a later statement-level `\label` in the outer float —
+  which really does capture the sub-counter. Deliberate: the liberal cutoff is
+  what keeps `\subcaptionbox` and the `\caption{Text\label{x}}` idiom from
+  producing false positives. Recovering the miss needs a per-scope stepper model
+  that knows *which* counter each caption stepped, so it is a modeling change
+  rather than a gate tweak.
 
 ## Semantic layer & signatures
 

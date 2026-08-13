@@ -261,6 +261,45 @@ struct GateBatch {
     verdicts: std::collections::HashMap<usize, Option<usize>>,
 }
 
+/// Where a batch deposits the verdicts it settles ([`Parser::gate_batch`]).
+///
+/// The driver has one loop and one set of `insert` calls; what varies is who
+/// keeps the results. A memoized gate keeps all of them, since the whole point
+/// is answering the openers ahead of the seed from one scan. A **single-entry**
+/// gate ([`Parser::gate_verdict`]) opens no nested entry, so the seed is the
+/// only opener its batch can ever settle — and building a `HashMap` to hold one
+/// verdict costs an allocation per `$` and `\[` in the document.
+///
+/// Discarding the non-seed verdicts is safe for *any* gate, not just a
+/// single-entry one: the driver's decisions never read back what it inserted.
+/// It is only worth doing where there is nothing else to keep.
+trait VerdictSink {
+    fn insert(&mut self, opener: usize, verdict: Option<usize>);
+}
+
+impl VerdictSink for std::collections::HashMap<usize, Option<usize>> {
+    fn insert(&mut self, opener: usize, verdict: Option<usize>) {
+        std::collections::HashMap::insert(self, opener, verdict);
+    }
+}
+
+/// The allocation-free [`VerdictSink`] for a single-entry gate: one slot for
+/// the seed, and everything else dropped on the floor.
+struct SeedVerdict {
+    seed: usize,
+    /// `None` until the batch settles the seed; the driver guarantees it does
+    /// (`debug_assert` in [`Parser::gate_verdict`]).
+    verdict: Option<Option<usize>>,
+}
+
+impl VerdictSink for SeedVerdict {
+    fn insert(&mut self, opener: usize, verdict: Option<usize>) {
+        if opener == self.seed {
+            self.verdict = Some(verdict);
+        }
+    }
+}
+
 /// What a `}` at a gate's own brace level means to that gate. The scan reached
 /// it without having opened the group, so the brace closes a group opened
 /// *before* the entries — or no group at all, when the walk itself is at the
@@ -1183,7 +1222,11 @@ struct Parser<'t> {
     /// Tokens visited by the shape-gate scans, summed over the whole parse. A
     /// measurement hook for the linearity regression tests in this file's
     /// `mod tests` — never a budget (`TODO.md` rejects scan budgets as
-    /// hard-coded special cases). `Cell` because the gates take `&self`.
+    /// hard-coded special cases). `Cell` because the gates take `&self`, and
+    /// `cfg(test)` because the counter is pure measurement: ticking it once per
+    /// scanned token is a real cost in the driver's hottest loop, paid for
+    /// nothing in a release build.
+    #[cfg(test)]
     scan_work: std::cell::Cell<usize>,
     /// The [`EnvGate`] twin of [`Self::conditional_batch`]. Its verdicts are
     /// the *scan's* alone: [`Self::environment_escapes_group`]'s per-opener
@@ -1356,6 +1399,7 @@ impl<'t> Parser<'t> {
             last_fi,
             last_dollar,
             conditional_batch: std::cell::RefCell::new(None),
+            #[cfg(test)]
             scan_work: std::cell::Cell::new(0),
             alias_openers,
             alias_closers,
@@ -2366,9 +2410,16 @@ impl<'t> Parser<'t> {
     }
 
     /// One tick per token a shape-gate scan visits, into [`Self::scan_work`].
+    /// Compiled away outside `cfg(test)`: the linearity regression tests are
+    /// the only reader, and [`Self::gate_batch`]'s loop is hot enough that an
+    /// unconditional counter shows up in the parse benchmarks.
+    #[cfg(test)]
     fn tick_scan(&self) {
         self.scan_work.set(self.scan_work.get() + 1);
     }
+
+    #[cfg(not(test))]
+    fn tick_scan(&self) {}
 
     /// True if the `[` at token index `open` is closed by a `]` before the
     /// current macrocode chunk's frame terminator. Depth-tracks only the braces
@@ -3156,9 +3207,13 @@ impl<'t> Parser<'t> {
     /// settled this opener, and otherwise re-batch from `open` and keep the
     /// result.
     ///
-    /// One slot per gate is all the reuse there is: the walk queries each
-    /// opener once, in ascending order, under a state that is stable between
-    /// re-batches.
+    /// One slot per gate is all the reuse there is *for verdicts*: the walk
+    /// queries each opener once, in ascending order, under a state that is
+    /// stable between re-batches. The slot's **storage** is reused further
+    /// than that — a miss takes the stale map, clears it, and refills it, so a
+    /// gate allocates about once per parse instead of once per re-batch. A
+    /// cleared `HashMap` keeps its capacity, and the batches of one gate over
+    /// one file are all much of a size.
     fn gated_closer<P: GatePolicy>(
         &self,
         open: usize,
@@ -3175,7 +3230,17 @@ impl<'t> Parser<'t> {
         {
             return verdict;
         }
-        let verdicts = self.gate_batch(open, policy);
+        // Recycle the superseded batch's map: its verdicts are stale (the key
+        // missed, or it did not settle this opener), but its allocation is not.
+        let mut verdicts =
+            memo.borrow_mut()
+                .take()
+                .map_or_else(std::collections::HashMap::new, |stale| {
+                    let mut map = stale.verdicts;
+                    map.clear();
+                    map
+                });
+        self.gate_batch(open, policy, &mut verdicts);
         let verdict = verdicts.get(&open).copied();
         debug_assert!(verdict.is_some(), "the batch must settle its own seed");
         *memo.borrow_mut() = Some(GateBatch { key, verdicts });
@@ -3191,19 +3256,29 @@ impl<'t> Parser<'t> {
     /// [`Self::element`] as a fresh opener: same token index, same walk state,
     /// but `display: false` — a *different question*, which a slot keyed on the
     /// walk state alone would answer from the display verdict.
+    ///
+    /// With nothing to memoize and nothing but the seed to settle, the batch
+    /// collects into a [`SeedVerdict`] rather than a map: these are the gates
+    /// the walk queries most (`$` and `\[` are everywhere), and a per-query
+    /// allocation for a single verdict is the whole cost of asking.
     fn gate_verdict<P: GatePolicy>(&self, open: usize, policy: &P) -> Option<usize> {
         // The C0 bound as an early-out, as in [`Self::gated_closer`].
         policy.last_closer(self)?;
-        let verdicts = self.gate_batch(open, policy);
-        let verdict = verdicts.get(&open).copied();
-        debug_assert!(verdict.is_some(), "the batch must settle its own seed");
-        verdict.flatten()
+        let mut sink = SeedVerdict {
+            seed: open,
+            verdict: None,
+        };
+        self.gate_batch(open, policy, &mut sink);
+        debug_assert!(sink.verdict.is_some(), "the batch must settle its own seed");
+        sink.verdict.flatten()
     }
 
     /// The batched walk behind every shape gate: one forward scan seeded at
     /// `open` that also settles, as a by-product, every opener it passes in
     /// the seed's own brace frame — the exact verdict each one's own scan
-    /// would have computed under the current walk state.
+    /// would have computed under the current walk state. Settled verdicts go
+    /// to `verdicts`, whose two implementations decide how many are kept
+    /// ([`VerdictSink`]); the scan itself never reads them back.
     ///
     /// The transform from a per-opener scan is possible because such a scan
     /// counts nested openers only at `depth == 0`: every opener this scan
@@ -3241,11 +3316,7 @@ impl<'t> Parser<'t> {
     ///   the end bound refute everything still live.
     ///
     /// The scan ends as soon as no live entry remains.
-    fn gate_batch<P: GatePolicy>(
-        &self,
-        open: usize,
-        policy: &P,
-    ) -> std::collections::HashMap<usize, Option<usize>> {
+    fn gate_batch<P: GatePolicy, S: VerdictSink>(&self, open: usize, policy: &P, verdicts: &mut S) {
         struct Entry {
             opener: usize,
             envs_at_push: usize,
@@ -3253,10 +3324,10 @@ impl<'t> Parser<'t> {
         }
         /// Settle every live entry sitting at its own environment level: the
         /// level anchor at hand refutes exactly those.
-        fn settle_level(
+        fn settle_level<S: VerdictSink>(
             pending: &mut [Entry],
             live: &mut Vec<usize>,
-            verdicts: &mut std::collections::HashMap<usize, Option<usize>>,
+            verdicts: &mut S,
             envs: usize,
         ) {
             while let Some(&idx) = live.last() {
@@ -3274,10 +3345,10 @@ impl<'t> Parser<'t> {
         /// stands inside it. The entries below are shielded by that frame and
         /// keep scanning — a settled entry keeps its frame, so a later closer
         /// still consumes it.
-        fn settle_innermost(
+        fn settle_innermost<S: VerdictSink>(
             pending: &mut [Entry],
             live: &mut Vec<usize>,
-            verdicts: &mut std::collections::HashMap<usize, Option<usize>>,
+            verdicts: &mut S,
             envs: usize,
         ) {
             let Some(entry) = pending.last_mut() else {
@@ -3294,7 +3365,6 @@ impl<'t> Parser<'t> {
             debug_assert_eq!(live.last().copied(), Some(pending.len() - 1));
             live.pop();
         }
-        let mut verdicts = std::collections::HashMap::new();
         let mut pending = vec![Entry {
             opener: open,
             envs_at_push: 0,
@@ -3348,14 +3418,14 @@ impl<'t> Parser<'t> {
                         // `stack.is_empty()` test cannot fire ([`Nesting`]).
                         match P::NESTING {
                             Nesting::Counted => {
-                                settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                                settle_level(&mut pending, &mut live, verdicts, envs);
                             }
                             Nesting::Interleaved => {
-                                settle_innermost(&mut pending, &mut live, &mut verdicts, envs);
+                                settle_innermost(&mut pending, &mut live, verdicts, envs);
                             }
                         }
                         if live.is_empty() {
-                            return verdicts;
+                            return;
                         }
                     }
                     i += 1;
@@ -3420,7 +3490,7 @@ impl<'t> Parser<'t> {
                                 for &idx in &live {
                                     verdicts.insert(pending[idx].opener, Some(i));
                                 }
-                                return verdicts;
+                                return;
                             }
                             StrayBrace::RefutesAlways => break,
                             _ => {}
@@ -3482,7 +3552,7 @@ impl<'t> Parser<'t> {
                             let paired = balanced && policy.pairs(self, entry.opener, i);
                             verdicts.insert(entry.opener, paired.then_some(i));
                             if live.is_empty() {
-                                return verdicts;
+                                return;
                             }
                         }
                     } else if t.kind == SyntaxKind::CONTROL_WORD
@@ -3541,9 +3611,9 @@ impl<'t> Parser<'t> {
                                     }
                                 }
                                 Nesting::Counted => {
-                                    settle_level(&mut pending, &mut live, &mut verdicts, envs);
+                                    settle_level(&mut pending, &mut live, verdicts, envs);
                                     if live.is_empty() {
-                                        return verdicts;
+                                        return;
                                     }
                                 }
                             }
@@ -3562,7 +3632,6 @@ impl<'t> Parser<'t> {
         for &idx in &live {
             verdicts.insert(pending[idx].opener, None);
         }
-        verdicts
     }
 
     /// The token index closing the environment-alias opener at `open`, or `None`

@@ -15,6 +15,8 @@
 
 mod prescan;
 
+use std::borrow::Cow;
+
 use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
@@ -1390,7 +1392,8 @@ impl<'t> Parser<'t> {
             return false;
         }
         peek_end_name(self.tokens, idx).is_some_and(|name| {
-            self.demoted_envs.contains(&name) && !self.open_envs.contains(&name)
+            self.demoted_envs.contains(name.as_ref())
+                && !self.open_envs.iter().any(|open| open == name.as_ref())
         })
     }
 
@@ -1975,7 +1978,7 @@ impl<'t> Parser<'t> {
                     // plain command, no diagnostic (issue #71).
                     if self.environment_escapes_group(self.pos) {
                         if let Some(name) = peek_end_name(self.tokens, self.pos) {
-                            self.demoted_envs.insert(name);
+                            self.demoted_envs.insert(name.into_owned());
                         }
                         self.command();
                     } else {
@@ -3522,7 +3525,7 @@ impl<'t> Parser<'t> {
                             // out ([`GatePolicy::MACROCODE_FRAME_ANCHORS`]).
                             if P::MACROCODE_FRAME_ANCHORS
                                 && peek_begin_name(self.tokens, i).is_some_and(|n| {
-                                    matches!(n.as_str(), "macrocode" | "macrocode*")
+                                    matches!(n.as_ref(), "macrocode" | "macrocode*")
                                 })
                             {
                                 break;
@@ -3880,7 +3883,7 @@ impl<'t> Parser<'t> {
             // The cursor is at a `\end` (the only non-EOF stop condition).
             Some(_) => {
                 let end_name = peek_end_name(self.tokens, self.pos);
-                if name.is_none() || *name == end_name {
+                if name.is_none() || name.as_deref() == end_name.as_deref() {
                     // Matching \end: consume it as our END.
                     self.open(SyntaxKind::END);
                     self.bump(); // \end
@@ -4036,12 +4039,18 @@ fn split_math_word(text: &str) -> Option<Vec<(usize, usize)>> {
 /// Read the environment name from a `\begin{…}` at `begin_pos` without consuming.
 /// Identical in shape to [`peek_end_name`] (skip the control word and trivia, then
 /// read the `{name}` group); named separately for call-site clarity.
-fn peek_begin_name(tokens: &[Token], begin_pos: usize) -> Option<String> {
+fn peek_begin_name(tokens: &[Token], begin_pos: usize) -> Option<Cow<'_, str>> {
     peek_end_name(tokens, begin_pos)
 }
 
 /// Read the environment name from a `\end{…}` at `end_pos` without consuming.
-fn peek_end_name(tokens: &[Token], end_pos: usize) -> Option<String> {
+///
+/// Borrows the token's own text for the single-token name every ordinary
+/// environment has, and only allocates for one spelled across several tokens
+/// (`\end{align *}`, a name holding a digit or a `-`). Three of the callers are
+/// forward scans that ask once per token and only ever compare the result, so
+/// the common case must not allocate.
+fn peek_end_name(tokens: &[Token], end_pos: usize) -> Option<Cow<'_, str>> {
     let mut i = end_pos + 1; // past the \end control word
     while tokens.get(i).is_some_and(|t| Parser::is_trivia(t.kind)) {
         i += 1;
@@ -4050,15 +4059,21 @@ fn peek_end_name(tokens: &[Token], end_pos: usize) -> Option<String> {
         return None;
     }
     i += 1;
-    let mut name = String::new();
-    while let Some(t) = tokens.get(i) {
-        if t.kind == SyntaxKind::R_BRACE {
-            break;
-        }
-        name.push_str(&t.text);
+    let start = i;
+    while tokens.get(i).is_some_and(|t| t.kind != SyntaxKind::R_BRACE) {
         i += 1;
     }
-    Some(name.trim().to_owned())
+    Some(match &tokens[start..i] {
+        [] => Cow::Borrowed(""),
+        [t] => Cow::Borrowed(t.text.trim()),
+        many => {
+            let mut name = String::new();
+            for t in many {
+                name.push_str(&t.text);
+            }
+            Cow::Owned(name.trim().to_owned())
+        }
+    })
 }
 
 #[cfg(test)]

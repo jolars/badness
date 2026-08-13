@@ -1,0 +1,21 @@
+\documentclass{article}
+\newcommand{\pad}[1]{<#1>}
+\newcommand{\optpad}[2][def]{<#1|#2>}
+\begin{document}
+\section{S}
+
+Empty-group padding survives: a\pad{ } b and a\pad{
+} b and a\pad{} c.
+
+Trailing optional padding survives: x \optpad[a, ]{m} y and x \optpad[a,
+]{m} y.
+
+Incidental group newlines erase to spaces: alpha {one
+two} beta and {one two} beta.
+
+A verb-adjacent gap erases safely: {a \verb|x y|
+b} tail.
+
+Rows keep their breaks when a group joins: \parbox{3cm}{one two \\ three
+four} done.
+\end{document}

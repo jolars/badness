@@ -356,6 +356,27 @@ const STRICT_TRIVIA_INVARIANT_SHAPES: &[(&str, &str)] = &[
         "command-block-lines",
         "\\usepackage{a}\n\\usepackage{b}\n\\title{Short Title}\nalpha\nbeta gamma\n",
     ),
+    (
+        // Opaque brace groups are width-driven (`lower_opaque_group`), so a
+        // gap inside a group carries no layout weight — the exact read that
+        // was the `GROUP` arm's `spans_multiple_lines` violation. The prose
+        // around the group keeps every line off the command-only residue.
+        "opaque-group-inline",
+        "alpha {a b} beta gamma\n",
+    ),
+    (
+        // The nested form: an inner group's gap is the inner fill's business
+        // and the outer group re-measures identically either way.
+        "opaque-group-nested",
+        "alpha {a {b c} d} beta\n",
+    ),
+    (
+        // A segmentable optional's gaps (including the entry gap after the
+        // comma) are width-driven; the parenthesised context keeps the bulk
+        // space-to-newline variant's lines off the command-only residue.
+        "optional-collapsed",
+        "alpha (\\baz[a, b] x) beta gamma\n",
+    ),
 ];
 
 /// Every registered shape must hold strict trivia invariance at **all** sweep
@@ -694,8 +715,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_list_comment_own_line", WrapMode::Reflow, 80),
     ("reflow_list_doc_comment_item", WrapMode::Reflow, 80),
     // Prose-argument reflow: a signature-marked prose argument reflows like a
-    // paragraph — joined when short, wrapped when long — while non-prose groups
-    // (`\newcommand` body, `\label`) are left exactly as authored. An `inline`-
+    // paragraph — joined when short, wrapped when long. An `inline`-
     // flagged prose command (`\footnote`, `\emph`, …) flattens into the surrounding
     // text so its body wraps as running prose with `{`/`}` glued to the adjacent
     // words; a block-level prose command (`\section`, `\caption`) block-breaks its
@@ -703,6 +723,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_prose_arg_wraps", WrapMode::Reflow, 40),
     ("reflow_prose_arg_joins_short", WrapMode::Reflow, 80),
     ("reflow_prose_arg_optional_omitted", WrapMode::Reflow, 30),
+    // Non-prose groups keep their *bytes* when they fit; width decides otherwise.
+    // The over-width `\newcommand` body wraps at its authored gaps (the opener
+    // stays glued — no break is invented at `{`), and the gapless `\label`
+    // argument has no break opportunity at all, so it overflows as authored.
     ("reflow_non_prose_preserved", WrapMode::Reflow, 40),
     // A multi-line brace-group body (a `\newcommand` definition body) is laid out as
     // code-like *statements*: an over-long line wraps to the width — breaking before
@@ -788,6 +812,55 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // identically — the decline reads content and preserved predicates, never
     // `spans_multiple_lines`.
     ("optional_block_decline_deterministic", WrapMode::Reflow, 80),
+    // Opaque brace groups under `Reflow` are width-driven (`lower_opaque_group`):
+    // block-vs-inline reads width, content, and preserved predicates, never the
+    // lone-newline predicate. An incidental newline erases to a space, so both
+    // spellings lower identically.
+    ("group_erases_incidental_newline", WrapMode::Reflow, 80),
+    // The three `\newcommand` bodies carry identical content and differ only in
+    // where the author broke the line — they must format identically, wrapping
+    // at the width with the opener hugged (no break is invented at a glued `{`)
+    // and continuations at one indent step.
+    ("group_expands_to_width", WrapMode::Reflow, 40),
+    // A *padded* group that exceeds the width detonates its delimiters (the
+    // padding vanishes broken — the delimiter's own newline supplies the space
+    // token); the single-line and multi-line spellings converge.
+    ("group_padded_expands_allman", WrapMode::Reflow, 30),
+    // The decline set: a blank line or a direct comment (both preserved
+    // predicates) keeps today's indented block form even under `Reflow`.
+    ("group_blank_line_keeps_block", WrapMode::Reflow, 80),
+    ("group_comment_keeps_block", WrapMode::Reflow, 80),
+    // An empty group's padding survives flat in both spellings (`{ }` ≡ `{\n}`):
+    // collapsing `{\n}` to `{}` would delete a space token TeX typesets.
+    ("group_empty_keeps_space", WrapMode::Reflow, 80),
+    // Group-altitude analogue of `reflow_command_stranded_by_width`: a width
+    // break inside the group's fill that strands a command alone on a printed
+    // line re-reads to the same layout on the next pass.
+    ("group_command_stranded_by_width", WrapMode::Reflow, 40),
+    // A `\\` inside a group is a soft atom: rows the author spread over source
+    // lines join when they fit (newline ↔ space, typeset-identical — the `\\`
+    // still breaks the typeset line), and a glued `\\` never gains a space.
+    ("group_linebreak_rows", WrapMode::Reflow, 80),
+    // A multi-line group in a tabular cell no longer carries a forced break, so
+    // the grid aligns instead of falling back to the preserved layout.
+    ("grid_cell_group_joins", WrapMode::Reflow, 80),
+    // A blank run at a group's *edge* erases to padding rather than declining:
+    // the block form trims an edge blank away, so declining on it would key on
+    // a predicate the emitter destroys (the latexindent
+    // `poly-switch-blank-line` non-fixed-point family).
+    ("group_edge_blank_erases", WrapMode::Reflow, 80),
+    // An edge gap joins the vanish-when-broken protocol only when its flat
+    // spelling is a single space; a multi-space edge (`{0    }`) rides verbatim
+    // and never breaks — vanishing it would hand pass 2 a `" "` gap where
+    // pass 1 measured four spaces (pgf's coil tables oscillated).
+    ("group_multispace_edge_glues", WrapMode::Reflow, 40),
+    // Inside a signature-proven prose argument body (`ReflowKind::ProseArg`)
+    // the command-only-line residue does not fire: width alone owns the
+    // layout, so an authored command-only line refills. Preserving it minted a
+    // forced break only pass 2 could see, and the bit leaked upward through
+    // `contains_forced_break` readers, flipping the enclosing group between
+    // its inline and block forms (pgf's `\emph{… \href{…} …}` header).
+    ("prose_arg_in_group_refills", WrapMode::Reflow, 80),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts. Braces are kept
     // verbatim (dropping redundant single-token script braces is a *content*

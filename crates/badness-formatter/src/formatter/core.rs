@@ -1026,8 +1026,23 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // content off its `%` margin — a meaning change (the line stops being a
         // comment at package-load time). Such a group falls through to the
         // generic stream, which keeps the authored margins verbatim.
-        SyntaxKind::GROUP if spans_multiple_lines(node) && !contains_doc_margin(node) => {
-            return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+        SyntaxKind::GROUP if !contains_doc_margin(node) => {
+            // Width-driven Opaque layout under the default mode: block-vs-inline
+            // is decided by width, content, and preserved predicates — never by
+            // whether the author happened to break the line. A group *opening
+            // on* a doc-margined line holds no margin token of its own, so it
+            // stays on the residue path below (a width break would land content
+            // off its margin — the same gate `lower_optional` carries).
+            if matches!(cx.wrap, WrapMode::Reflow) && !doc_margin_opens_line(node, cx) {
+                return lower_opaque_group(node, cx);
+            }
+            // Tier-2 residue (the non-`Reflow` modes and the margined-line
+            // corner): the pre-existing behaviour, byte for byte — block form
+            // when the author broke the line, the generic inline stream below
+            // otherwise. Fixed-point argument on [`spans_multiple_lines`].
+            if spans_multiple_lines(node) {
+                return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+            }
         }
         // Same margin rule as the group above: a `[…]` continuing across
         // doc-margined lines keeps its authored margins.
@@ -1292,6 +1307,18 @@ fn dtx_paragraph_reflows(node: &SyntaxNode) -> bool {
 enum ReflowKind {
     /// Running prose: a lone newline is a break opportunity the fill rejoins.
     Prose,
+    /// A signature-proven prose *argument* body ([`lower_prose_group`]): like
+    /// [`Self::Prose`], but the command-only-line preservation does not apply —
+    /// width alone owns the layout. Preserving a command-only line here turns a
+    /// width break of pass 1 into a *forced* break on pass 2, and that force
+    /// bit leaks upward through every `contains_forced_break` reader (the
+    /// opaque-group and optional declines, `collapse_arg_group`,
+    /// `finish_cell`), flipping the enclosing construct between its inline and
+    /// block forms across passes (pgf's `\emph{… \href{…} …}` table headers).
+    /// The residue's own fixed-point argument covers the *interior* refill,
+    /// not the propagated bit, so inside a width-owned argument the rule must
+    /// not fire at all.
+    ProseArg,
     /// Code-like statements (a `\newcommand` definition body): a lone newline ends
     /// the line, so each source line stays its own logical line; only width forces a
     /// wrap. Flush continuation keeps the wrap idempotent (a wrapped tail re-parses
@@ -1685,8 +1712,13 @@ fn reflow_elements_checked(
                     // of collapsing to a space. This is the residual rule for commands
                     // no positive signature property covers (see `line_all_commands`
                     // above); curated block commands never reach it.
-                    let prev_is_command = line_has_content && line_all_commands;
-                    let next_is_command = line_is_command_only(&elements, idx, cx);
+                    // The command-only residue is skipped under `ProseArg`: a
+                    // width-owned argument body must not mint forced breaks
+                    // pass 2 can see and pass 1 could not (see [`ReflowKind`]).
+                    let residue_applies = kind != ReflowKind::ProseArg;
+                    let prev_is_command = residue_applies && line_has_content && line_all_commands;
+                    let next_is_command =
+                        residue_applies && line_is_command_only(&elements, idx, cx);
                     if kind == ReflowKind::Statement
                         || cx.wrap == WrapMode::Semantic
                         || prev_is_command
@@ -5922,8 +5954,12 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
 /// `L_BRACE`/`R_BRACE`) or an optional-argument group `[…]`
 /// (`L_BRACKET`/`R_BRACKET`) — indenting its body one step, exactly like
 /// [`lower_environment`] but with token delimiters instead of `BEGIN`/`END`
-/// nodes. Only called for multi-line groups (see [`spans_multiple_lines`]);
-/// single-line groups stay inline on the generic path.
+/// nodes. Under the Tier-2 wrap modes it is called for multi-line groups only
+/// (see [`spans_multiple_lines`]); under [`WrapMode::Reflow`] it is the block
+/// form a group or optional falls back to when the width-driven paths
+/// ([`lower_opaque_group`], [`lower_optional`]) decline — a blank line, a
+/// comment, nested block content — where the node may also be single-line
+/// (`\baz[{c% x\nd}]`).
 ///
 /// Inside a group the parser emits body tokens directly (no `PARAGRAPH`
 /// wrapping), so the only `open` token is the first child and the only `close`
@@ -6020,6 +6056,159 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
             close_ir,
         ])
     }
+}
+
+/// Lower a brace [`SyntaxKind::GROUP`] under [`WrapMode::Reflow`]: a
+/// width-driven fill over its body, so block-vs-inline is decided by width,
+/// content, and preserved predicates — never by whether the author happened to
+/// break the line ([`spans_multiple_lines`], the unsafe lone-newline
+/// predicate; see the trivia-invariant-layout section of `formatter.md`).
+///
+/// The flat rendering is byte-identical to the generic inline path except that
+/// a lone-newline run renders as one space — the newline ↔ space exchange that
+/// is TeX-identical. Break opportunities are exactly the perturbation-eligible
+/// gaps ([`crate::formatter::perturb`]): a lone-newline run and a single-space
+/// gap, both of which render `" "` flat, so `fmt(perturbed) == fmt(original)`
+/// holds by construction. Any other gap spelling (`a␣␣b`, a tab) glues
+/// verbatim into its atom, and a glued junction never gains a break — breaking
+/// where the author glued would inject a space token TeX typesets (the same
+/// rationale as [`lower_bracketed`]'s `open_glued`). Edge padding rides the
+/// flat rendering and vanishes broken, where the delimiter's own newline
+/// supplies the space token; an empty body keeps its padding flat (`{ }` and
+/// `{\n}` both render `{ }` — deleting it would delete a space token).
+///
+/// A body the fill cannot own takes today's indented block form
+/// ([`lower_bracketed`]) instead, keyed on preserved predicates and content
+/// only: an *interior* blank line, a direct `%` comment (which must end its
+/// line; the glued `{%` case included), a token embedding a newline (a
+/// multi-line brace `\verb`), or a child whose IR carries a forced break —
+/// nested block content, itself decided by preserved predicates and content
+/// under this policy, so the read stays Tier-1-clean. A blank run at the
+/// body's *edge* does not decline: the block form trims it away
+/// ([`trim_leading_break`]/[`trim_trailing_break`]), so edge-blank presence is
+/// not a predicate the block form preserves — it erases to padding here,
+/// matching the deletion the block form already performed.
+///
+/// Known residuals, argued safe by catcode rather than by oracle: a
+/// multi-space run stays authored (`{a  b}` and `{a  \nb}` differ, but neither
+/// is an eligible perturbation and TeX collapses a catcode-10 run to one space
+/// token); a lone newline beside a `\verb` is erased though the oracle
+/// excludes VERB-adjacent gaps (a complete `VERB` token carries its
+/// delimiters); and an `\obeylines` body joins — unresolvable macro meaning is
+/// out of scope (decision #1), the stance paragraph reflow already takes.
+fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    /// Resolve the gap read but not yet committed: a `" "` flat gap is a break
+    /// opportunity (the fill's own separator renders it), anything else glues
+    /// verbatim into the atom in progress.
+    fn commit_gap(atoms: &mut Vec<Ir>, atom: &mut Vec<Ir>, pending: &mut Option<(String, bool)>) {
+        if let Some((gap, _)) = pending.take() {
+            if gap == " " {
+                if !atom.is_empty() {
+                    atoms.push(Ir::concat(std::mem::take(atom)));
+                }
+            } else {
+                atom.push(Ir::verbatim(gap));
+            }
+        }
+    }
+    let block = || lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+    let mut open = Ir::Nil;
+    let mut close = Ir::Nil;
+    let mut lead: Option<String> = None;
+    let mut atoms: Vec<Ir> = Vec::new();
+    let mut atom: Vec<Ir> = Vec::new();
+    // The flat spelling of the gap read but not yet committed, and whether it
+    // was a blank-line run. Only an *interior* blank line declines — the block
+    // form trims a blank at the body's edge away (`trim_leading_break` /
+    // `trim_trailing_break`), so declining on one would key on a predicate the
+    // emitter then destroys: pass 2 would see no blank and flatten (the
+    // latexindent `poly-switch-blank-line` family). An edge blank erases to
+    // padding, exactly the deletion the block form already performed.
+    let mut pending: Option<(String, bool)> = None;
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Token(t)
+                if t.kind() == SyntaxKind::L_BRACE && matches!(open, Ir::Nil) =>
+            {
+                open = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::R_BRACE => {
+                close = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
+                let (newlines, trailing_ws) = consume_trivia_run(&t, &mut iter);
+                let flat = if newlines >= 1 {
+                    " ".to_string()
+                } else {
+                    trailing_ws
+                };
+                if atoms.is_empty() && atom.is_empty() {
+                    lead = Some(flat);
+                } else {
+                    pending = Some((flat, newlines >= 2));
+                }
+            }
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return block(),
+            SyntaxElement::Token(t) if t.text().contains('\n') => return block(),
+            SyntaxElement::Token(t) => {
+                if matches!(pending, Some((_, true))) {
+                    return block(); // an interior blank line: preserved predicate
+                }
+                commit_gap(&mut atoms, &mut atom, &mut pending);
+                atom.push(lower_loose_token(&t));
+            }
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(&child, cx);
+                if ir.contains_forced_break() {
+                    return block(); // nested block content
+                }
+                if matches!(pending, Some((_, true))) {
+                    return block(); // an interior blank line: preserved predicate
+                }
+                commit_gap(&mut atoms, &mut atom, &mut pending);
+                atom.push(ir);
+            }
+        }
+    }
+    let trail: Option<String> = pending.take().map(|(gap, _)| gap);
+    if !atom.is_empty() {
+        atoms.push(Ir::concat(atom));
+    }
+    if atoms.is_empty() {
+        // `{}` / `{ }` / `{\n}`: nothing to lay out; the padding survives flat.
+        let lead = lead.map(Ir::verbatim).unwrap_or(Ir::Nil);
+        return Ir::concat([open, lead, close]);
+    }
+    // An edge gap joins the vanish-when-broken protocol only when its flat
+    // spelling is `" "` — the one spelling a break reproduces (the broken
+    // form's newline re-reads as a lone-newline gap, whose flat is `" "`), and
+    // the same criterion the interior break opportunities use. Any other
+    // spelling (`{0    }`) must ride verbatim and never break: vanishing it
+    // would hand pass 2 a `" "` gap where pass 1 measured four spaces, and the
+    // layout oscillates (pgf's `\pgfpoint@oncoil{0    }` coil tables).
+    let mut parts: Vec<Ir> = vec![open];
+    let mut inner: Vec<Ir> = Vec::new();
+    match lead.as_deref() {
+        None => {}
+        Some(" ") => {
+            inner.push(Ir::soft_line());
+            inner.push(Ir::if_break(Ir::verbatim(" "), Ir::Nil));
+        }
+        Some(other) => parts.push(Ir::verbatim(other)),
+    }
+    inner.push(Ir::fill(atoms));
+    parts.push(Ir::indent(Ir::concat(inner)));
+    match trail.as_deref() {
+        None => {}
+        Some(" ") => {
+            parts.push(Ir::if_break(Ir::verbatim(" "), Ir::Nil));
+            parts.push(Ir::soft_line());
+        }
+        Some(other) => parts.push(Ir::verbatim(other)),
+    }
+    parts.push(close);
+    Ir::group(Ir::concat(parts))
 }
 
 /// How a split point inside an `[…]` body renders in each mode.
@@ -6647,7 +6836,7 @@ fn lower_prose_group(
         }
     }
 
-    let body = reflow_elements(body_elements.into_iter(), cx, ReflowKind::Prose);
+    let body = reflow_elements(body_elements.into_iter(), cx, ReflowKind::ProseArg);
     if matches!(body, Ir::Nil) {
         Ir::concat([open_ir, close_ir])
     } else {
@@ -6720,10 +6909,6 @@ fn collapse_arg_group(
     Some(Ir::concat([open_ir, body, close_ir]))
 }
 
-/// True if `node` directly contains a `NEWLINE` token — i.e. the group itself
-/// spans multiple physical lines. Newlines inside a *nested* group/environment
-/// belong to that child node, not to `node`, so this attributes line-spanning to
-/// the group that physically owns the break — which keeps re-indentation stable.
 /// Lower inline `$…$`/`\(…\)` or display `$$…$$`/`\[…\]` math. The delimiter
 /// tokens are direct children of the math node and are emitted verbatim; the
 /// `MATH` child (the body) is formatted by [`lower_math_body`].
@@ -7562,6 +7747,28 @@ fn lower_script(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }))
 }
 
+/// True if `node` directly contains a `NEWLINE` token — **the unsafe
+/// lone-newline predicate** (trivia-invariant layout, `formatter.md`).
+///
+/// Its two surviving readers — the `GROUP` arm's non-[`WrapMode::Reflow`] /
+/// doc-margined branch in [`lower_node`] and [`lower_optional`]'s
+/// non-`wraps_prose` / doc-margined early return — decide block-vs-inline for
+/// a delimited group and are sanctioned **Tier 2**, on this fixed-point
+/// argument: the block form ([`lower_bracketed`]) always ends with a newline
+/// before its closing delimiter, so its output re-reads as multi-line and
+/// takes the block form again, byte-stably (its body renderers —
+/// [`ReflowKind::Statement`], the generic stream — carry their own fixed-point
+/// contracts); an empty multi-line body collapses to the bare delimiters,
+/// which re-read single-line and *stay* on the inline path; and the inline
+/// path emits no newline inside the group, so a single-line group re-reads
+/// single-line. Every layout either reader can emit re-reads to itself.
+///
+/// Both readers are reachable only under the Tier-2 wrap modes
+/// (`Preserve`/`Stable`/`Sentence`/`Semantic`, modes defined by authored
+/// breaks) or behind `doc_margin_opens_line` (a preserved column-0 predicate).
+/// Under the default `Reflow`, [`lower_opaque_group`] and [`lower_optional`]
+/// decide from width, content, and preserved predicates only and never
+/// consult this. **Don't add a reader in a Tier-1 position.**
 fn spans_multiple_lines(node: &SyntaxNode) -> bool {
     node.children_with_tokens()
         .filter_map(|e| e.into_token())

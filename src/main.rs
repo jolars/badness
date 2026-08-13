@@ -289,9 +289,23 @@ fn run_debug_echo_args(out: &Path, args: &[String]) -> ExitCode {
     if !args.is_empty() {
         body.push('\n');
     }
-    match std::fs::write(out, body) {
+    // Stage and rename rather than writing `out` in place. The test polling for
+    // this recording lives in *another process* (the viewer runs detached), and
+    // a plain `fs::write` leaves the file existing-and-empty between its
+    // truncate and its write. A reader landing in that window reads back a
+    // complete-looking recording of zero arguments, which is indistinguishable
+    // from a viewer launched with none — the flake behind an `assert_eq!` whose
+    // left side was `[]`. A rename within one directory is atomic, so the
+    // reader sees either no file at all or the entire recording.
+    let staging = out.with_file_name(format!(
+        "{}.{}.tmp",
+        out.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
+    match std::fs::write(&staging, body).and_then(|()| std::fs::rename(&staging, out)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
+            let _ = std::fs::remove_file(&staging);
             eprintln!("badness: failed to write {}: {err}", out.display());
             ExitCode::from(2)
         }

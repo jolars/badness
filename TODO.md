@@ -156,6 +156,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   Surfaced by the `latexindent` corpus (`oneSentencePerLine/pcc-program-review3*`);
   pinned by `reflow_bracket_in_prose_argument`; 3 `content-change` entries
   resolved, no additions.
+
 - [x] ~~**`--checks all` does not run the non-trivia-content oracle.**~~ **Fixed:
   `CheckKind::ContentChange`.** The comparison lived only in the trivia path and
   in `assert_format_invariants`, so the primary gate, the smoke-test workflow and
@@ -169,6 +170,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   family below, which the baseline README had already predicted was reachable
   without perturbation. It also falsifies that README's "production formatting
   corrupts nothing" — that held only because the gate could not look.
+
 - [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
   (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
   `docs/src/development/architecture.md` (§ *Trivia-invariant layout*). Layout may read only trivia
@@ -216,6 +218,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     package code — the S2–S4 target set — plus `latexrelease.sty` (#97
     residue). The width sweep also surfaced ~20 width-dependent idempotency
     files beyond the width-80 baseline (`SWEEP.md`).
+
   - [x] **S1 — one representation of "forced".** A `propagate_breaks` prepass
     marking every group containing a hard break as `expand`, replacing the three
     current representations (`Ir::Group{expand}`, `contains_forced_break`
@@ -241,6 +244,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     failing-file sets unchanged on all three corpora; a full byte-diff sweep
     against the pre-S1 binary differs on 12 of 1068 files, all this hug family
     (`xpackages` `.dtx`, `latex-lab-amsmath.dtx`, `latex-lab-firstaid.dtx`).
+
   - [x] **S2 — `Mode::Flat` becomes an honest contract.** Define it as "the whole
     subtree, laid out flat, is verified to fit". Then fix the two producers that
     claim it without checking — `pick_candidate` selects on *first-line* fit
@@ -278,6 +282,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `SWEEP.md` refreshed (five width-dependent files fully converged; one
     shared `\str_if_eq:` fragment now flips at width 60 via the known
     `SplitAtNewlines` Tier-2 family, S4's target).
+
   - [x] **S3 — collapse the fit predicates.** With mode propagated, a group inside
     a flat parent is never *asked* whether it fits, so the rest-awareness
     disagreement dissolves rather than needing a patch (S2 already resolved
@@ -302,6 +307,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     byte-identical to `tests/gate_baselines`, and full byte-diff sweeps at
     widths 60/80/120 differ on 0 of 1069 files — S2 had already removed
     every reachable disagreement, so no baselines were re-recorded.
+
   - [x] **S4 — Tier 1 for expl3: retire `Statements::SplitAtNewlines`.** Landed
     as `semantic::expl3::expl3_slots` (per-slot arity from the argspec suffix:
     `N V` one token, `n c v o x e f` a brace group, trailing `T F` branches,
@@ -340,6 +346,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `semantic::expl3`).
 
   **S4 follow-ups:**
+
   - [x] ~~*Out-of-region prefix flips an in-region group's inline/block
     form.*~~ **Misattributed; the real cause was the forced-break dispatch
     firing inside a fallback statement.** The out-of-region prefix symptom no
@@ -369,6 +376,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `}`. Pinned by `expl_fallback_forced_group_sibling` /
     `expl_fallback_forced_group_glue` and
     `a_multi_line_group_node_does_not_end_a_fallback_line`.
+
   - [x] ~~*Forced-break dispatch residue: the other three sub-arms.*~~ **Done:
     the head-hug moved into the fill.** A fallback (or junk-glued) line now
     commits as an `Ir::HugFill` — a greedy fill whose atoms, when they carry a
@@ -393,6 +401,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     (`}\@ehc`, `}.`, `}{`) re-glue. Pinned by `expl_fallback_hug_head`,
     `expl_fallback_abutting_sibling`, `dtx_expl3_fallback_head_fill` and the
     `hug_fill_*` printer units.
+
   - [x] ~~*In-region `BracketPolicy` audit*.~~ **Verified stable.** Only
     `Greedy` and `Forbid` are reachable in-region — `Tight` rides the curated
     math `\begin`, demoted to a plain command by the issue-#60 carve-out
@@ -405,6 +414,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     which cannot exist (flush + reachable ⇒ attached). Detail in
     `.claude/rules/formatter.md` (§ *expl3*); pinned by
     the `expl_bracket_attachment` fixture and `bracket_attachment_stability`.
+
   - [x] ~~*Sibling-attached branch explosion*~~ **Done: the slot mapping now
     escapes the scan.** `consume_unit` already resolved these branches (that is
     why the call is one unit), it just discarded which slot took what —
@@ -438,6 +448,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     Pinned by `expl_conditional_sibling_trailing`. And `lower_node`'s node-keyed
     all-or-nothing arm keeps needing head-attached branches by construction: it
     has no sibling stream to resolve a unit from.
+
 - [x] **The sectioning line break reads the lone-newline predicate (Tier-1
   violation, no oracle catches it).** `\subsection{X}\nprose` kept the break;
   `\subsection{X} prose` glued the prose onto the head line — the same bytes to
@@ -455,6 +466,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   only mechanical route to it — the corpus surfaces this class by eye only, and
   the four gate baselines did not move when this one landed.
   Surfaced by the `latexindent` corpus (`oneSentencePerLine/`).
+
 - [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
   one family.** `%`-terminated argument braces
   (`\includegraphics[…]%\n{%\n…%\n}`) — a comment ends every line inside an
@@ -462,6 +474,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   disagree across passes. All 12 `latexindent.all.txt` idempotency entries and 12
   of the 15 `content-change` entries are this one shape. Minimize before fixing;
   the files are large but the construct repeats.
+
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered
   through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
@@ -471,6 +484,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   tight (`1/2`, per Knuth), and script-size content is conventionally tight
   overall, so the likely resolution is tight `/` everywhere and no operator
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
+
 - [ ] **Opaque-group layout non-determinism.** The content-kind taxonomy has
   landed: `ArgSpec` now carries a `ContentKind` enum (`Opaque`/`Prose`/
   `TokenList`/`Keyval`) the formatter dispatches whitespace and break policy on
@@ -486,10 +500,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   of this is done: an optional argument is now a group over its top-level entries
   (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*), so `lower_optional` reads the
   predicate only under `WrapMode::Preserve` and friends, which are defined by it.
+
 - [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
   even when the key list exceeds the width; it never breaks *at commas* (one
   key per line) as a fallback. Needs the token-list content kind to break on
   its own separators rather than the paragraph fill.
+
 - [ ] **Formatter-owned trailing comma (parked; the last piece of issue #47).**
   A `[…]` is now a width-driven group over its top-level entries, and a
   `ContentKind::Keyval` argument may also break at a glued comma
@@ -507,8 +523,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   optionals. The Black/Ruff *magic trailing comma* (a trailing `,` in the
   **source** forcing one-key-per-line) stays declined too — content steering
   layout conflicts with the formatter-is-sole-authority tenet.
+
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them.
+
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value
   one step, which is what an author writes and what upstream overwhelmingly does
@@ -547,6 +565,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   (issue #101); the conditional fix removed the *worse* half of this shape (the
   branch list no longer splits across two indents), leaving only the
   continuation indent itself.
+
 - [ ] **Revisit tight braces for 2e-named commands inside expl3
   (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
   canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but
@@ -557,6 +576,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   code embedded in a region), chosen for determinism. Whether tightening — vs.
   preserving, or spacing — is the right default for a 2e command in an expl3
   region is an open call; the tightening can read as worse than the input.
+
 - [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
   blocked on structure).** A wrapped brace-body line ideally hangs its continuation
   one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather
@@ -611,10 +631,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   precedent of the equally package-specific Sweave (`Sinput`/`Soutput`/`Scode`)
   and `Code`/`CodeInput`/`CodeOutput` entries; its body now lexes to one opaque
   `VERBATIM_BODY` token, so the prose rules never see it.
+
   - [ ] *Follow-up (open):* a project-config knob for user-declared verbatim envs
     would generalize this to package-specific envs badness cannot name. Config
     does not currently flow into the signature DB or the lexer's `VerbCtx`, so
     this is a separable feature, not a data edit.
+
   - [ ] *Out of scope (catcode limitation):* the sibling `|…|` active-char
     shortverb (`\catcode`\|=13` + `\gdef|{…\verb|…}`) drives the same class of
     FP (`straight-quotes`, `unclosed-math-delimiter`, `sectioning-level-jump` on
@@ -633,6 +655,7 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   `(2-1,3)` is skipped) and `in_pgfmath_argument` (the `\addplot`/`\pgfmath…`
   expression argument, attached or detached past the numeric `\addplot3` variant),
   where a `-` between numbers is a pgfmath subtraction, not a typeset range.
+
   - [ ] *Follow-up (open):* prose FPs on index-pair/term names (`0-1 law`,
     `1-2 plane`, `1-1 function` — 22 of 25 findings) where the hyphen is
     intentional; these are `Unsafe`-gated so `--fix` withholds them, so they are
@@ -661,8 +684,10 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   exactly what that corpus's `verbatim/` directory exists to probe. Scope the
   claim like the `Keyval` one: curated, compile-verified per command, never
   inferred. Check `\url`, `\path`, and `\lstinline` in the same pass.
+
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
   decision)*
+
 - [ ] **`catcode_signal` does not meet its own bar** (`semantic/define.rs`).
   It requires `body.contains("\\catcode") && body.contains("12")` with no
   adjacency, so a body carrying `\catcode…=\active` and an unrelated `12pt`
@@ -671,26 +696,32 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   suppresses real diagnostics, exactly what the verbatim scan is documented
   to avoid. Require the `12` in assignment position after `\catcode` (or at
   least within a bounded window); add the `12pt` counterexample as a test.
+
 - [ ] **Make `EnvironmentSig::reflow`/`block` computed, not stored.** Both
   are derivations of other fields, and mutation sites must hand-sync them —
   `define.rs` writes `sig.reflow = false` manually after setting
   `verbatim_body` at two sites, and a forgotten sync is silent. Computed
   methods remove the field, the hand-sync, and the derivation duplicated
   across the const fns and `From<RawEnvironment>`.
+
 - [ ] **`is_cite_command` accepts any `\cite*`-prefixed name**
   (`semantic/builder.rs`): `\citebox` or `\citecolor` gets its argument
   recorded as citation keys — an open-ended false-positive surface, unlike
   the neighboring closed-table predicates, and nothing documents the choice.
   Either write down why open-prefix recall is intended or close the set.
+
 - [ ] **Semantic-layer hygiene (audit follow-up).**
+
   - `ast::command_name` (and `ControlWord::name`, `nth_group_text`) return
     `SmolStr`/`&str` instead of `String` — called per command node in every
     tree walk and in expl3's segmentation hot loops; the cheapest real
     allocation win the audit found.
+
   - Split the completion word-list tiers (package/class names, colors, tikz
     libraries, CTAN metadata, `arg_enums`) out of `signature.rs` into their
     own module — they have nothing to do with signatures, and the file drops
     to ~1,100 lines.
+
   - Collapse `merge_from`/`merge_from_package` into one origin-parametrized
     helper; table-ize `builder::build`'s four identical key-family arms (the
     layer's only 100+-line function); extract expl3's `is_recognized_head`
@@ -729,9 +760,11 @@ completion items (VS Code-only), and sub/superscript history completion
   `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
   `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
   follow-ups remain:
+
   - Deliberately *not* done: plumbing `wrap` (or other knobs) through
     `EditorSettings` itself. A discovered config's `wrap` flows via `FormatConfig`,
     so no new editor knob was needed; `EditorSettings` stays `line_width`/`indent_width`.
+
 - [ ] `workspace/diagnostic` (the workspace-wide pull)—deferred: it is a
   streaming/long-poll protocol (held-open request, per-uri result ids, partial
   results) that fits the one-shot id-bound read-job model poorly. Advertise
@@ -750,6 +783,7 @@ sources below are missing.
   model). Badness's signature DB is flat (curated + CWL + scanned); scoping
   completion to `\usepackage`-loaded packages needs package→command attribution.
   Open question, not a mechanical add.
+
 - [x] **Citation completion filterable by title/author *(LW)*.** LaTeX
   Workshop's `\cite{` completion matches on the entry's title and other fields,
   not just the key (`intellisense.citation.filterText`)—type a word from the
@@ -760,12 +794,14 @@ sources below are missing.
   first). Done: `cite_completion_items` returns the full namespace (no
   server-side key filter) with `filterText` = key + title + authors and
   `sortText` = key; `title`/`authors` cached on the bib semantic `Entry`.
+
 - [ ] **Command argument placeholder snippets *(LW)*, opt-in.** Environment
   completion already inserts snippet bodies with tab stops; commands could emit
   placeholders for required/optional arguments straight from the signature DB
   (`\frac{$1}{$2}`). Gate on the client's snippet capability and an editor
   setting—LaTeX Workshop's equivalent (`intellisense.argumentHint.enabled`) is
   off by default, since placeholder churn annoys as many users as it helps.
+
 - [ ] **Labels from keyval options *(LW)*.** LaTeX Workshop scans `label={…}`
   inside environment option blocks (`lstlisting`, beamer frames) and
   configurable custom label commands (`\linelabel`). Check whether the label
@@ -783,12 +819,14 @@ sources below are missing.
   rendering on our side, just a file reference: reuse the target resolution
   from `lsp/document_link.rs`; png/jpg/svg only, degrading to the resolved
   path for `.pdf`/`.eps`.
+
 - [x] **Documentation link in package hover *(LW)*.** LaTeX Workshop's
   `\usepackage` hover offers a "View documentation" link via `texdoc`. The
   package hover now pairs a texdoc documentation link
   (`https://texdoc.org/pkg/<name>`, keyed on the package name texdoc resolves,
   serving the documentation PDF) with the existing CTAN catalogue link (keyed
   on the `ctan` catalogue id).
+
 - [ ] *(Design decision)* **Math preview on hover *(LW)*.** LaTeX Workshop's
   most-loved language feature: hovering math renders it (MathJax,
   client-side); texlab lacks it too, so it is also a differentiator. Options:
@@ -806,6 +844,7 @@ sources below are missing.
   ships these as client-side commands; badness can host them editor-agnostically
   as code actions or `executeCommand`s alongside `changeEnvironment`
   (`lsp/code_action.rs`).
+
 - [ ] **Section promote/demote *(LW)*.** Recursively shift sectioning levels
   across a selection (`\section` ↔ `\subsection`); the sectioning hierarchy is
   already in the signature DB, so this is a mechanical rewrite.
@@ -869,6 +908,7 @@ sources below are missing.
     during the walk, and the demoted-name set is walk state, not token
     state. `Conditional::closer` stays fallible; no consumer may treat the
     map as ground truth, and no walk simplification may lean on it.
+
   - **Anchor policies stay per-kind and explicit.** The gates deliberately
     diverge (the alias gate has no paragraph anchor; `\left` counts inside
     macro code; the `$` gate's blank-line anchor applies only between

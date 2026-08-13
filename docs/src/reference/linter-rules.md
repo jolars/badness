@@ -767,6 +767,28 @@ warning: unclosed-math-delimiter
   |      ^^^^^ `\left` has no matching `\right`
 ```
 
+## `label-before-caption`
+
+Flag a `\label` placed before the `\caption` inside a float (`figure`, `table`, and their starred forms). `\label` records `\@currentlabel`, which inside a float is set by `\caption`; a label above the caption therefore captures whatever the last `\refstepcounter` left behind — usually the enclosing section number — so `\ref` silently prints a number unrelated to the float. LaTeX gives no warning. Scoped to statement-level labels, so the recommended `\caption{Text\label{x}}` idiom and a `\subcaptionbox{A\label{x}}{…}` subfigure label are never touched; any earlier caption or hand-rolled `\refstepcounter`/`\stepcounter` also silences it, and a float with no caption is left alone. The fix moves the label to just after the first statement-level `\caption`, and is Unsafe because it changes what `\ref` prints (by design) from an inferred intent.
+
+A `\label` above its `\caption` picks up the section counter, not the figure number:
+
+```tex
+\begin{figure}
+  \includegraphics{plot}
+  \label{fig:plot}
+  \caption{A plot.}
+\end{figure}
+```
+
+```text
+warning: label-before-caption
+ --> example.tex:3:3
+  |
+3 |   \label{fig:plot}
+  |   ^^^^^^^^^^^^^^^^ `\label` before `\caption` in this `figure` captures the enclosing counter, not the float number
+```
+
 ## Suppression
 
 To suppress a rule at a single site, use a comment directive:

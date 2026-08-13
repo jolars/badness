@@ -1060,3 +1060,39 @@ fn unclosed_math_delimiter_flags_prose_but_not_macro_code() {
             .any(|(r, _)| *r == "unclosed-math-delimiter")
     );
 }
+
+#[test]
+fn label_before_caption_is_reported_end_to_end() {
+    let src = "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n";
+    assert!(
+        lint(src)
+            .iter()
+            .any(|(r, s)| *r == "label-before-caption" && *s == Severity::Warning)
+    );
+}
+
+#[test]
+fn label_before_caption_fix_clears_the_finding() {
+    let src = "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n";
+    let fixed = fix_to_fixpoint(src);
+    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed, LatexFlavor::Document)
+        .into_iter()
+        .filter(|d| d.rule == "label-before-caption")
+        .collect();
+    assert!(
+        remaining.is_empty(),
+        "expected a clean re-lint, got: {remaining:?}\n{fixed}"
+    );
+}
+
+#[test]
+fn label_before_caption_fix_is_correct() {
+    for case in [
+        "\\begin{figure}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n",
+        "\\begin{table}\\label{t}\\caption{C}\\end{table}\n",
+        "\\begin{figure}\n  x \\label{a} y\n  \\caption{C}\n\\end{figure}\n",
+        "\\begin{figure}\n  \\caption{Cap}\n  \\label{fig:x}\n\\end{figure}\n",
+    ] {
+        assert_fix_is_correct(case);
+    }
+}

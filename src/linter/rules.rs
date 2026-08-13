@@ -28,6 +28,7 @@ pub mod duplicate_label;
 pub mod duplicate_package;
 pub mod ellipsis;
 pub mod hard_coded_reference;
+pub mod label_before_caption;
 pub mod makeat_macro;
 pub mod math_operator_name;
 pub mod mismatched_delimiter;
@@ -57,6 +58,7 @@ pub use duplicate_label::DuplicateLabel;
 pub use duplicate_package::DuplicatePackage;
 pub use ellipsis::Ellipsis;
 pub use hard_coded_reference::HardCodedReference;
+pub use label_before_caption::LabelBeforeCaption;
 pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
 pub use mismatched_delimiter::MismatchedDelimiter;
@@ -810,6 +812,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(UnknownOption),
         Box::new(RedundantScriptBraces),
         Box::new(UnclosedMathDelimiter),
+        Box::new(LabelBeforeCaption),
     ]
 }
 
@@ -896,6 +899,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "unknown-option",
     "redundant-script-braces",
     "unclosed-math-delimiter",
+    "label-before-caption",
 ];
 
 /// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).

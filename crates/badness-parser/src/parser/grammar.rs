@@ -313,7 +313,7 @@ impl VerdictSink for SeedVerdict {
 #[derive(PartialEq, Eq)]
 enum StrayBrace {
     /// Refutes every live entry, but only when the walk sits inside a group
-    /// (`group_depth > 0`): a conditional or an alias cannot pair across the
+    /// (the walk is inside a group): a conditional or an alias cannot pair across the
     /// `}` that ends the group its opener sits in, while at the outer level a
     /// stray `}` is somebody else's business and the scan carries on.
     RefutesInGroup,
@@ -1059,22 +1059,27 @@ struct Parser<'t> {
     /// The cursor position at the last [`Self::step`] tick; the budget resets
     /// whenever `pos` has advanced past it (i.e. real progress was made).
     last_step_pos: std::cell::Cell<usize>,
-    /// Depth of lexically enclosing math bodies (`$…$`, `\[…\]`, `\(…\)`, math
-    /// environments). Unlike the `math` routing flags threaded through the
-    /// grammar, this *persists* into the text-mode body of an unknown
-    /// environment nested inside math (`\[ … \begin{myaligned} … \]`): the
-    /// grammar can't verify such a body is math, but the enclosing delimiters
-    /// are a static lexical fact, and optional-argument attachment uses it to
-    /// treat a spaced `[` as content (see [`Self::attach_arguments`]).
-    math_depth: usize,
-    /// Per-level flavor of the enclosing math bodies tracked by `math_depth`:
+    /// One entry per lexically enclosing math body (`$…$`, `\[…\]`, `\(…\)`,
+    /// math environments), innermost last, holding that level's *flavor*:
     /// `true` for a `$…$`/`$$…$$` (dollar-delimited) level, `false` for
-    /// `\[…\]`/`\(…\)` and math environments. Pushed and popped in lockstep with
-    /// `math_depth`, so its last entry is the *innermost* enclosing math's
-    /// flavor. [`Self::bracket_closes_before_math_end`] reads it: inside dollar
-    /// math a `$` is the closer (a boundary), whereas inside `\[…\]` a `$` opens
-    /// a genuine nested inline region (`\inferrule*[right=$\Pi$-eq]`), so the two
-    /// must be scanned differently.
+    /// `\[…\]`/`\(…\)` and math environments.
+    ///
+    /// Its **depth** ([`Self::in_math`]) is read where the `math` routing flags
+    /// threaded through the grammar are not enough: it *persists* into the
+    /// text-mode body of an unknown environment nested inside math
+    /// (`\[ … \begin{myaligned} … \]`), where the grammar can't verify the body
+    /// is math but the enclosing delimiters are a static lexical fact, and
+    /// optional-argument attachment uses it to treat a spaced `[` as content
+    /// (see [`Self::attach_arguments`]).
+    ///
+    /// Its **last entry** ([`Self::enclosing_math_is_dollar`]) is read by
+    /// [`Self::bracket_closes_before_math_end`]: inside dollar math a `$` is the
+    /// closer (a boundary), whereas inside `\[…\]` a `$` opens a genuine nested
+    /// inline region (`\inferrule*[right=$\Pi$-eq]`), so the two must be scanned
+    /// differently.
+    ///
+    /// Not every `MATH` node pushes here: [`Self::left_right`] opens one without
+    /// a push, because a `\left…\right` always sits inside math already.
     math_dollar: Vec<bool>,
     /// True while parsing the attached arguments of a definition-body command
     /// ([`is_definition_body_command`], issues #45/#55). Those groups are
@@ -1085,12 +1090,6 @@ struct Parser<'t> {
     /// [`Self::attach_arguments`] in [`Self::command`], so it covers the whole
     /// definition subtree (nested groups included) and nothing after it.
     in_def_body: bool,
-    /// Number of brace groups currently open around the cursor
-    /// ([`Self::group`] / [`Self::math_group`]). A `\end` reached inside one
-    /// has its `\begin` outside it, so it is macro code rather than a stray
-    /// (`\StopEventually{\end{document}}`, issue #71) — the `\end`-side twin of
-    /// [`Self::environment_escapes_group`].
-    group_depth: usize,
     /// Environment names whose `\begin` the brace-group gate demoted to a plain
     /// command ([`Self::environment_escapes_group`]). Their `\end` is then an
     /// orphan by construction — the gate removed its partner, not the author — so
@@ -1102,9 +1101,16 @@ struct Parser<'t> {
     /// really does close something from one whose `\begin` was demoted.
     open_envs: Vec<String>,
     /// Token index of the `{` opening each currently-open brace group, innermost
-    /// last (the positional twin of [`Self::group_depth`]). Read by
-    /// [`Self::environment_escapes_group`] to tell a group the `.dtx`
-    /// *documentation* layer opened itself from one stranded by the code layer.
+    /// last ([`Self::group`] / [`Self::math_group`]).
+    ///
+    /// Its **depth** ([`Self::in_group`]) is the `\end`-side twin of
+    /// [`Self::environment_escapes_group`]: an `\end` reached inside a group has
+    /// its `\begin` outside it, so it is macro code rather than a stray
+    /// (`\StopEventually{\end{document}}`, issue #71).
+    ///
+    /// Its **last entry** is read by [`Self::doc_margin_exempt`] to tell a group
+    /// the `.dtx` *documentation* layer opened itself from one stranded by the
+    /// code layer.
     group_opens: Vec<usize>,
     /// Inside a `.dtx` `macrocode` body: the token index of the terminating
     /// frame `\end` (or `tokens.len()` when the frame is missing), pre-scanned
@@ -1230,7 +1236,7 @@ struct Parser<'t> {
     scan_work: std::cell::Cell<usize>,
     /// The [`EnvGate`] twin of [`Self::conditional_batch`]. Its verdicts are
     /// the *scan's* alone: [`Self::environment_escapes_group`]'s per-opener
-    /// pre-checks (`group_depth`, the `.dtx` doc-margin exemption) are applied
+    /// pre-checks (the group depth, the `.dtx` doc-margin exemption) are applied
     /// at query time, so a batch entry never carries them.
     env_batch: std::cell::RefCell<Option<GateBatch>>,
     /// The [`AliasGate`] twin of [`Self::conditional_batch`]. Both
@@ -1378,10 +1384,8 @@ impl<'t> Parser<'t> {
             steps: std::cell::Cell::new(0),
             last_step_pos: std::cell::Cell::new(0),
             errors: Vec::new(),
-            math_depth: 0,
             math_dollar: Vec::new(),
             in_def_body: false,
-            group_depth: 0,
             demoted_envs: std::collections::HashSet::new(),
             open_envs: Vec::new(),
             group_opens: Vec::new(),
@@ -1456,8 +1460,8 @@ impl<'t> Parser<'t> {
     ///
     /// The exemption exists for braces the *code* layer stranded — a
     /// `\iffalse{\fi` editor-balance hack, a `` \char`{ `` constant, a
-    /// catcode-swapped region — which hold `group_depth` above zero for the rest
-    /// of the file and would otherwise unnest the whole doc layer behind them. A
+    /// catcode-swapped region — which keep a group open for the rest of the
+    /// file and would otherwise unnest the whole doc layer behind them. A
     /// group the documentation layer opened itself is not stranded: it is right
     /// there on a doc line, so a `\begin`/`\end` inside it really is inside it
     /// and the gates apply as they do in code (theorem.dtx's
@@ -1501,9 +1505,15 @@ impl<'t> Parser<'t> {
 
     /// True when the cursor sits lexically inside a math body — including inside
     /// a text-mode block (unknown environment, `\text{…}`-style group) nested in
-    /// one. See the `math_depth` field.
+    /// one. See the [`Self::math_dollar`] field.
     fn in_math(&self) -> bool {
-        self.math_depth > 0
+        !self.math_dollar.is_empty()
+    }
+
+    /// True when at least one brace group is open around the cursor. See the
+    /// [`Self::group_opens`] field.
+    fn in_group(&self) -> bool {
+        !self.group_opens.is_empty()
     }
 
     // --- cursor primitives -------------------------------------------------
@@ -2022,7 +2032,7 @@ impl<'t> Parser<'t> {
                     // The mirror case: reached inside a group, this `\end`'s
                     // `\begin` is outside it, so it is macro code rather than
                     // stray (`\StopEventually{\end{document}}`, issue #71).
-                    if (self.group_depth > 0 && !self.doc_margin_exempt(self.pos))
+                    if (self.in_group() && !self.doc_margin_exempt(self.pos))
                         || self.end_orphans_a_demoted_begin(self.pos)
                     {
                         self.command();
@@ -2342,7 +2352,6 @@ impl<'t> Parser<'t> {
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
-        self.group_depth += 1;
         self.group_opens.push(self.pos - 1);
         loop {
             match self.kind() {
@@ -2357,7 +2366,6 @@ impl<'t> Parser<'t> {
                 _ => self.element(),
             }
         }
-        self.group_depth -= 1;
         self.group_opens.pop();
         self.close();
     }
@@ -2621,7 +2629,6 @@ impl<'t> Parser<'t> {
             self.bump(); // second $
         }
         self.open(SyntaxKind::MATH);
-        self.math_depth += 1;
         self.math_dollar.push(true);
         loop {
             match self.kind() {
@@ -2670,7 +2677,6 @@ impl<'t> Parser<'t> {
                 }
             }
         }
-        self.math_depth -= 1;
         self.math_dollar.pop();
         self.close(); // MATH
         if self.kind() == Some(SyntaxKind::DOLLAR) {
@@ -2690,7 +2696,6 @@ impl<'t> Parser<'t> {
         self.open(kind);
         self.bump(); // \[ or \(
         self.open(SyntaxKind::MATH);
-        self.math_depth += 1;
         self.math_dollar.push(false);
         loop {
             match self.kind() {
@@ -2728,7 +2733,6 @@ impl<'t> Parser<'t> {
                 }
             }
         }
-        self.math_depth -= 1;
         self.math_dollar.pop();
         self.close(); // MATH
         if self.kind() == Some(SyntaxKind::CONTROL_SYMBOL) && self.text() == closer {
@@ -2908,7 +2912,6 @@ impl<'t> Parser<'t> {
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
         self.bump(); // {
-        self.group_depth += 1;
         self.group_opens.push(self.pos - 1);
         loop {
             match self.kind() {
@@ -2923,7 +2926,6 @@ impl<'t> Parser<'t> {
                 _ => self.math_element(),
             }
         }
-        self.group_depth -= 1;
         self.group_opens.pop();
         self.close();
     }
@@ -3054,7 +3056,7 @@ impl<'t> Parser<'t> {
         // definitions across braces on purpose ([`Self::plain_braces`], only
         // populated once that chunk is entered). Without this guard the scan
         // reads those as its own boundary and unnests the whole doc layer.
-        if self.group_depth == 0 {
+        if !self.in_group() {
             return false;
         }
         // `.dtx` doc-margin lines are exempt, exactly as they are from the
@@ -3063,7 +3065,7 @@ impl<'t> Parser<'t> {
         // macrocode chunks between them. Those bodies routinely span code that
         // leaves a brace open on purpose — a `\iffalse}\fi` editor-balance
         // hack, a `` \char`} `` constant, a catcode-swapped region — which
-        // strands `group_depth` above zero for the rest of the file and would
+        // leaves a group open for the rest of the file and would
         // otherwise unnest the whole doc layer behind it. (A paragraph-break
         // bound cannot stand in here: a blank `.dtx` doc line is still a `%`
         // margin, so it never reads as a `\par`.)
@@ -3174,7 +3176,7 @@ impl<'t> Parser<'t> {
         WalkKey {
             macrocode_end: self.macrocode_end,
             in_def_body: self.in_def_body,
-            in_group: self.group_depth > 0,
+            in_group: self.in_group(),
             plain_braces: self.plain_braces_version,
             enclosing_math_is_dollar: self.enclosing_math_is_dollar(),
         }
@@ -3477,12 +3479,12 @@ impl<'t> Parser<'t> {
                         // A `}` closing a group opened before the opener always
                         // wins: braces are catcode structure while the gated
                         // delimiters are only macros. Whether one with *no* such
-                        // group behind it (`group_depth == 0`) means anything,
+                        // group behind it (the walk is at the outer level) means anything,
                         // and what it means at all, is the gate's own call
                         // ([`StrayBrace`]).
                         match P::STRAY_BRACE {
-                            StrayBrace::RefutesInGroup if self.group_depth > 0 => break,
-                            StrayBrace::ClosesInGroup if self.group_depth > 0 => {
+                            StrayBrace::RefutesInGroup if self.in_group() => break,
+                            StrayBrace::ClosesInGroup if self.in_group() => {
                                 // Every live entry escapes at the same brace:
                                 // `depth` is common to the whole frame, so each
                                 // one's own scan would reach this `}` at its own
@@ -3992,12 +3994,10 @@ impl<'t> Parser<'t> {
     /// into [`Self::math_scripted`], whose atom parser always consumes a token.
     fn math_environment_body(&mut self) {
         self.open(SyntaxKind::MATH);
-        self.math_depth += 1;
         self.math_dollar.push(false);
         while !self.at_block_end(Block::Environment) {
             self.math_element();
         }
-        self.math_depth -= 1;
         self.math_dollar.pop();
         self.close(); // MATH
     }

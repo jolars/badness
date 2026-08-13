@@ -5,7 +5,7 @@
 //! fetched at most once. JSON is a faithful serialization of the diagnostic
 //! model (byte offsets, no line/column resolution), so it needs no source.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -83,9 +83,14 @@ fn render_pretty(
             continue;
         };
         let origin = path.display().to_string();
+        let index = LineIndex::new(&source);
+        // Sources of *other* files, pulled in only by a cross-file secondary and
+        // kept for the rest of this file's diagnostics: `source_for` clones the
+        // whole text on every call, and a rule like `duplicate-label` reports the
+        // same partner file once per finding.
+        let mut cross_sources: HashMap<PathBuf, (String, LineIndex)> = HashMap::new();
         for d in &diags {
             let level = severity_level(d.severity);
-            let span = clamp_span(&source, d.start, d.end);
             // A secondary in *this* file rides the primary snippet as a context
             // annotation; one in another file needs that file's source loaded
             // (once each), kept alive in `extra` through the render call.
@@ -93,33 +98,119 @@ fn render_pretty(
                 .related
                 .iter()
                 .partition(|ri| ri.path.as_path() == path.as_path());
-            let extra: Vec<(String, String, &RelatedInfo)> = cross
+            for ri in &cross {
+                if !cross_sources.contains_key(&ri.path)
+                    && let Some(src) = source_for(&ri.path)
+                {
+                    let idx = LineIndex::new(&src);
+                    cross_sources.insert(ri.path.clone(), (src, idx));
+                }
+            }
+            let extra: Vec<(String, &str, Window, &RelatedInfo)> = cross
                 .iter()
                 .filter_map(|ri| {
-                    let src = source_for(&ri.path)?;
-                    Some((ri.path.display().to_string(), src, *ri))
+                    let (src, idx) = cross_sources.get(&ri.path)?;
+                    let win = Window::around(src, idx, [(ri.start, ri.end)]);
+                    Some((ri.path.display().to_string(), src.as_str(), win, *ri))
                 })
                 .collect();
 
-            let mut snippet = Snippet::source(&source)
+            // The window must cover the primary span *and* every same-file
+            // secondary, since they share one snippet.
+            let win = Window::around(
+                &source,
+                &index,
+                std::iter::once((d.start, d.end))
+                    .chain(same_file.iter().map(|ri| (ri.start, ri.end))),
+            );
+            let mut snippet = Snippet::source(win.slice(&source))
+                .line_start(win.line_start)
                 .path(&origin)
-                .annotation(AnnotationKind::Primary.span(span).label(&d.message));
+                .annotation(
+                    AnnotationKind::Primary
+                        .span(win.span(d.start, d.end))
+                        .label(&d.message),
+                );
             for ri in &same_file {
-                let s = clamp_span(&source, ri.start, ri.end);
-                snippet = snippet.annotation(AnnotationKind::Context.span(s).label(&ri.message));
+                snippet = snippet.annotation(
+                    AnnotationKind::Context
+                        .span(win.span(ri.start, ri.end))
+                        .label(&ri.message),
+                );
             }
             let mut group = level.primary_title(d.rule).element(snippet);
-            for (origin2, src2, ri) in &extra {
-                let s = clamp_span(src2, ri.start, ri.end);
-                let secondary = Snippet::source(src2)
+            for (origin2, src2, win2, ri) in &extra {
+                let secondary = Snippet::source(win2.slice(src2))
+                    .line_start(win2.line_start)
                     .path(origin2.as_str())
-                    .annotation(AnnotationKind::Context.span(s).label(ri.message.as_str()));
+                    .annotation(
+                        AnnotationKind::Context
+                            .span(win2.span(ri.start, ri.end))
+                            .label(ri.message.as_str()),
+                    );
                 group = group.element(secondary);
             }
             let _ = writeln!(out, "{}", renderer.render(&[group]));
         }
     }
     out
+}
+
+/// The slice of a source a single rendered snippet is built from: the lines its
+/// annotations touch, plus one line of padding each side.
+///
+/// Handing `annotate-snippets` the whole file rebuilds an O(file) source map on
+/// *every* `render()` call, so a file's worth of findings costs O(findings x
+/// file length). Slicing to the annotated lines and anchoring the gutter with
+/// `Snippet::line_start` makes each render O(window) instead. Output is
+/// unchanged: snippets fold by default, and folding retains only lines carrying
+/// an annotation, so the padding is never printed and the gutter width still
+/// comes from the absolute line numbers.
+struct Window {
+    /// Byte offset the slice starts at, and the base every span rebases against.
+    start: usize,
+    /// Byte offset the slice ends at.
+    end: usize,
+    /// 1-indexed absolute line number of the slice's first line.
+    line_start: usize,
+}
+
+impl Window {
+    /// The window covering every span in `spans` (which must be non-empty).
+    fn around(
+        source: &str,
+        index: &LineIndex,
+        spans: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Self {
+        let len = source.len();
+        let mut lo = len;
+        let mut hi = 0;
+        for (start, end) in spans {
+            lo = lo.min(start.min(len));
+            hi = hi.max(end.min(len));
+        }
+        let hi = hi.max(lo);
+        // 0-indexed lines, one line of padding each side; folding drops it.
+        let first = index.line_col(lo).line.saturating_sub(2);
+        let last = index.line_col(hi).line;
+        Self {
+            start: index.line_start(first),
+            end: index.line_start(last + 1),
+            line_start: first + 1,
+        }
+    }
+
+    fn slice<'a>(&self, source: &'a str) -> &'a str {
+        &source[self.start..self.end]
+    }
+
+    /// `start..end`, rebased into the slice and clamped to it —
+    /// `annotate-snippets` panics on an out-of-range or inverted span.
+    fn span(&self, start: usize, end: usize) -> std::ops::Range<usize> {
+        let start = start.clamp(self.start, self.end) - self.start;
+        let end = end.clamp(self.start, self.end) - self.start;
+        start..end.max(start)
+    }
 }
 
 fn render_concise(
@@ -155,15 +246,6 @@ fn concise_line(path: &Path, index: Option<&LineIndex>, d: &Diagnostic) -> Strin
         }
         None => format!("{}: {severity} [{}] {}", path.display(), d.rule, d.message),
     }
-}
-
-/// Keep the annotation span within the source bounds; `annotate-snippets`
-/// panics on out-of-range or inverted spans.
-fn clamp_span(source: &str, start: usize, end: usize) -> std::ops::Range<usize> {
-    let len = source.len();
-    let start = start.min(len);
-    let end = end.clamp(start, len);
-    start..end
 }
 
 fn severity_level(s: Severity) -> Level<'static> {
@@ -271,6 +353,64 @@ mod tests {
             rendered.contains("first definition of `a`"),
             "got: {rendered}"
         );
+    }
+
+    #[test]
+    fn pretty_window_keeps_absolute_line_numbers() {
+        // The snippet is sliced to the span's lines, so the gutter has to be
+        // anchored back to the file's own numbering — a window that forgot
+        // `line_start` would report line 1 here.
+        let source = "line one\nline two\nline three\nline four\n".to_owned();
+        let at = source.find("three").unwrap();
+        let diags = [diag(at, at + 5, "the third line")];
+        let rendered =
+            render_findings(&diags, OutputMode::Pretty, false, &|_| Some(source.clone()));
+        assert!(rendered.contains("x.tex:3:6"), "got: {rendered}");
+        assert!(rendered.contains("3 | line three"), "got: {rendered}");
+        // Folding drops the padding lines the window carries, so no neighbour
+        // leaks into the output.
+        assert!(!rendered.contains("line two"), "got: {rendered}");
+        assert!(!rendered.contains("line four"), "got: {rendered}");
+    }
+
+    #[test]
+    fn pretty_window_covers_a_distant_same_file_related() {
+        // Primary and secondary share one snippet, so the window must span both
+        // — a window sized to the primary alone would put the secondary's span
+        // out of range and `annotate-snippets` would panic.
+        let mut source = "\\label{a}\n".to_owned();
+        source.push_str(&"filler\n".repeat(50));
+        source.push_str("\\label{a}\n");
+        let second = source.rfind("\\label{a}").unwrap();
+        let mut d = diag(second, second + 9, "label `a` is defined more than once");
+        d.related.push(RelatedInfo {
+            path: PathBuf::from("x.tex"),
+            start: 0,
+            end: 9,
+            message: "first definition of `a`".to_owned(),
+        });
+        let rendered = render_findings(&[d], OutputMode::Pretty, false, &|_| Some(source.clone()));
+        assert!(rendered.contains("1 | \\label{a}"), "got: {rendered}");
+        assert!(rendered.contains("52 | \\label{a}"), "got: {rendered}");
+        assert!(
+            rendered.contains("first definition of `a`"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn pretty_output_is_invariant_to_trailing_file_size() {
+        // The property the window exists for: rendering a finding must not
+        // depend on how much source sits beyond it. Before the window this held
+        // by accident (the renderer read the whole file and folded it away) at
+        // O(file) cost per finding; now it holds by construction, and this
+        // pins it.
+        let short = "\\foo{bar\n".to_owned();
+        let long = format!("{short}{}", "padding line\n".repeat(2000));
+        let diags = [diag(4, 5, "unclosed group")];
+        let a = render_findings(&diags, OutputMode::Pretty, false, &|_| Some(short.clone()));
+        let b = render_findings(&diags, OutputMode::Pretty, false, &|_| Some(long.clone()));
+        assert_eq!(a, b);
     }
 
     #[test]

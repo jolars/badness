@@ -147,6 +147,16 @@ impl LineIndex {
         }
     }
 
+    /// Byte offset of the start of the 0-indexed `line`. A line past the end
+    /// clamps to the buffer end, so `line_start(n)..line_start(n + 1)` is always
+    /// a valid slice range covering line `n` *including* its terminator — which
+    /// is what distinguishes this from [`offset_at`](Self::offset_at), whose
+    /// `character` clamps to the line's content and so stops short of the
+    /// newline. The pretty diagnostic renderer slices a snippet window with it.
+    pub fn line_start(&self, line: usize) -> usize {
+        self.line_starts.get(line).copied().unwrap_or(self.len)
+    }
+
     /// Wide chars on `line`, or an empty slice for an ASCII-only line.
     fn wide_chars(&self, line: usize) -> &[WideChar] {
         self.line_wide_chars

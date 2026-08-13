@@ -1,0 +1,15 @@
+---
+source: crates/badness-parser/tests/parser.rs
+assertion_line: 1398
+expression: "tree(\"$$ a $\")"
+---
+ROOT@0..6
+  PARAGRAPH@0..6
+    DOLLAR@0..1 "$"
+    INLINE_MATH@1..6
+      DOLLAR@1..2 "$"
+      MATH@2..5
+        WHITESPACE@2..3 " "
+        WORD@3..4 "a"
+        WHITESPACE@4..5 " "
+      DOLLAR@5..6 "$"

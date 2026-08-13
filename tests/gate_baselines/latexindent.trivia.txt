@@ -7,7 +7,6 @@
 ./test-cases/alignment/issue-207-mod0.tex	format-error	format-error
 ./test-cases/alignment/issue-207-mod1.tex	format-error	format-error
 ./test-cases/alignment/issue-207.tex	format-error	format-error
-./test-cases/benchmarks/paperSS122018arxivv2-mod1.tex	trivia	non-fixed-point
 ./test-cases/benchmarks/sampleBEFORE-smaller.tex	format-error	format-error
 ./test-cases/broken/broken-mod1.tex	format-error	format-error
 ./test-cases/broken/broken-mod2.tex	format-error	format-error

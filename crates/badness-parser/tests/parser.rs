@@ -215,6 +215,83 @@ fn left_right_pairs_inside_macro_code() {
 }
 
 #[test]
+fn left_right_pairs_across_a_math_opener() {
+    // The gate's math anchor is the *closing* side (`MathAnchor::Closing`): a
+    // `\left` already sits inside a math body, so what ends it is the delimiter
+    // that ends that body. A `\[` in the way is ordinary content — it opens no
+    // math here (`delim_math_closes` refuses it: no `\]` in reach) — so the pair
+    // still closes at its `\right`.
+    let src = r"$\left( \[ x \right)$";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "a math *opener* in the way must not refuse the pair"
+    );
+}
+
+#[test]
+fn left_right_refuses_across_a_math_closer() {
+    // The mirror: `\]` ends the display the `\left` lives in, so the `\right`
+    // beyond it is unreachable and the `\left` stays an ordinary command — the
+    // same anchor `left_right`'s own walk stops at, with no diagnostic.
+    let src = "\\[ \\left( x \\]\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        !tree(src).contains("LEFT_RIGHT"),
+        "a `\\left` whose `\\right` sits past the math's end must not pair"
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "a gated `\\left` draws no diagnostic: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn an_end_inside_a_nested_left_refuses_the_whole_scan() {
+    // `\left`/`\right` frames and environment frames share one stack
+    // (`Nesting::Interleaved`), so an `\end` that finds a `\left` frame innermost
+    // is a mismatch — and the same mismatch every *outer* `\left` sees, since
+    // that frame is innermost for them too. Both openers demote; neither may pair
+    // with the `\right]`/`\right)` beyond the `\end`.
+    let src = r"$\left( \begin{matrix} a \left[ \end{matrix} \right] \right)$";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        !tree(src).contains("LEFT_RIGHT"),
+        "an `\\end` reached inside a nested `\\left` must refuse every open pair"
+    );
+}
+
+#[test]
+fn a_nested_left_shields_the_outer_pair_from_a_paragraph_break() {
+    // The other half of the interleaved model, and its one asymmetry: a *mismatch*
+    // is shared, but an *absence* of frames is not. The blank-line anchor asks
+    // whether the frame stack is empty, which is true only for the innermost
+    // `\left`, so the inner one demotes and the outer keeps scanning to its
+    // `\right)`.
+    //
+    // The gate is looser than the walk here — `left_right` bails at the paragraph
+    // break itself and reports the outer `\left` unclosed. Pre-existing, and
+    // preserved verbatim by the batch migration (`TODO.md`, container stack
+    // C2.4); the shape is only reachable inside a math *environment*, since the
+    // `$`/`\[` gates refuse a blank line themselves.
+    let src = "\\begin{equation}\n  \\left( \\left[ y\n\n  \\right] \\right)\n\\end{equation}\n";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src);
+    assert!(
+        tree(src).contains("LEFT_RIGHT"),
+        "the outer pair is shielded from the break by the inner `\\left`"
+    );
+}
+
+#[test]
 fn left_right_pairs_inside_tikzcd_cell() {
     // `tikzcd` (tikz-cd commutative diagrams) typesets its cells in math mode, so
     // a `\left…\right` in a cell pairs into a `LEFT_RIGHT`. Same regression class
@@ -1102,6 +1179,56 @@ fn a_blank_line_inside_a_nested_group_does_not_anchor() {
 }
 
 #[test]
+fn a_refuted_nested_opener_still_consumes_a_fi() {
+    // The gate counts nested openers by name and never un-counts one: the
+    // unowed `\end{center}` demotes `\ifdim`, but `\ifdim`'s slot still
+    // consumes the lone `\fi`, so the outer `\ifnum` runs out of closers and
+    // demotes too. The batched scan must settle a refuted entry *without*
+    // removing it from the pending stack (`Parser::gate_batch`);
+    // popping it would hand the `\fi` to `\ifnum` — a `CONDITIONAL` the
+    // per-opener scan never built. (The two-`\fi` sibling of this shape is
+    // `conditional_walk_may_close_before_the_located_fi`.)
+    assert_eq!(
+        conditionals(r"\ifnum1<2 \begin{center}\ifdim1pt<2pt \end{center}x\fi"),
+        []
+    );
+}
+
+#[test]
+fn a_blank_line_inside_a_nested_environment_demotes_only_the_inner_opener() {
+    // The paragraph break sits at the inner conditional's own level (inside
+    // `center`), so it refutes `\ifcmh` alone; the outer `\ifnum`, one
+    // environment up, pairs across it — the batched scan settles exactly the
+    // level-matching suffix of its live entries.
+    assert_eq!(
+        conditionals("\\ifnum1<2 \\begin{center}\\ifcmh a\n\nb\\fi\\end{center}\\fi\n"),
+        [(1, true)]
+    );
+}
+
+#[test]
+fn a_fi_inside_an_environment_the_conditional_opened_is_not_its_closer() {
+    // The `\fi` is consumed by the environment's body, so the walk cannot
+    // reach it: the closer must sit at the opener's own environment level.
+    assert_eq!(
+        conditionals(r"\ifnum1<2 \begin{center}x\fi\end{center}"),
+        []
+    );
+}
+
+#[test]
+fn a_macrocode_frame_refutes_every_pending_opener() {
+    // The chunk boundary is hard in both directions; the outer opener and the
+    // nested one it counted demote together, in one batch.
+    assert_eq!(
+        conditionals(
+            "\\ifnum1<2 \\ifdim1pt<2pt a\\begin{macrocode}\nb\\fi\\fi\n\\end{macrocode}\n"
+        ),
+        []
+    );
+}
+
+#[test]
 fn newif_declares_a_flag_without_opening_a_conditional() {
     // 574 corpus occurrences. The `\if@foo` after `\newif` is the flag being
     // declared, not an opener; the *use* below it is the real conditional.
@@ -1243,6 +1370,100 @@ fn math_bracket_with_own_closer_still_attaches_past_interval() {
     );
 }
 
+// --- the batched bracket family (container stack C2.5) -----------------------
+
+/// Whether each `[` in `src`, in source order, attaches as an `OPTIONAL`.
+fn bracket_attachments(src: &str) -> Vec<bool> {
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src, "losslessness");
+    parsed
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| t.kind() == SyntaxKind::L_BRACKET)
+        .map(|t| t.parent().is_some_and(|p| p.kind() == SyntaxKind::OPTIONAL))
+        .collect()
+}
+
+#[test]
+fn nested_bracket_claims_settle_innermost_first() {
+    // The claim countdown of issue #55, seen from the batch that now computes
+    // it: one scan settles every command-abutting `[` in the frame, and closer
+    // matching is LIFO, so the lone `]` belongs to the innermost opener and the
+    // two around it stay ordinary tokens. The pre-batch code asked each opener
+    // in turn and had to arrive at the same three verdicts.
+    assert_eq!(
+        bracket_attachments("\\a[x\n\\b[y\n\\c[z\n]\n"),
+        [false, false, true]
+    );
+}
+
+#[test]
+fn a_bracket_refuses_an_anchor_inside_a_group() {
+    // Both the environment anchor and the paragraph break are depth-*blind* for
+    // this family (`ParagraphAnchor::AnyDepth`, `ANCHORS_AT_ANY_DEPTH`), because
+    // the `optional` walk they guard is: it bails wherever the cursor stands, so
+    // a gate that read either only at the bracket's own brace level would attach
+    // an optional the walk then reports unclosed.
+    assert_eq!(
+        bracket_attachments("\\cmd[{\\begin{center}a\\end{center}} x]"),
+        [false]
+    );
+    assert_eq!(bracket_attachments("\\cmd[{ x\n\ny} ]\n"), [false]);
+}
+
+#[test]
+fn a_math_bracket_anchors_on_an_environment_inside_macro_code() {
+    // In a definition body `\begin`/`\end` are plain commands (issues #45/#60),
+    // so the text-mode gate ignores them and the bracket attaches.
+    assert_eq!(
+        bracket_attachments(r"\newcommand{\x}{\cmd[a \begin{center} b]}"),
+        [true]
+    );
+    // The same body inside math refuses: the in-math gate's environment anchor
+    // carries no `in_macro_code` filter (`ENV_ANCHOR_IN_MACRO_CODE`), so it is
+    // stricter there than the `optional` bail it mirrors. Preserved from the
+    // pre-batch scan, in the direction that only ever declines to attach.
+    assert_eq!(
+        bracket_attachments(r"\newcommand{\x}{$\cmd[a \begin{center} b]$}"),
+        [false]
+    );
+}
+
+#[test]
+fn a_guard_line_does_not_part_a_macrocode_optional() {
+    // `rotating.dtx`: `\ProvidesPackage`'s date optional runs over several
+    // docstrip guard lines inside one `macrocode` chunk. Docstrip *deletes* a
+    // guard-only line when it strips the file, so it does not part what
+    // surrounds it (issue #71) — and this gate is the one that reads it that
+    // way, skipping only whitespace in its paragraph run
+    // (`DOC_TRIVIA_FLOATS`). Floating the guard like every other gate does
+    // would make the two newlines around it a blank line and drop the argument.
+    let src = concat!(
+        "%    \\begin{macrocode}\n",
+        "\\ProvidesPackage{rot}%\n",
+        "    [2026 v1\n",
+        "%<*dtx>\n",
+        "  more%\n",
+        "%</dtx>\n",
+        "        ]\n",
+        "%    \\end{macrocode}\n",
+    );
+    assert_eq!(bracket_attachments(src), [true]);
+    // A real blank line in the same place still refuses, so the run is read,
+    // not ignored.
+    let src = concat!(
+        "%    \\begin{macrocode}\n",
+        "\\ProvidesPackage{rot}%\n",
+        "    [2026 v1\n",
+        "\n",
+        "  more%\n",
+        "        ]\n",
+        "%    \\end{macrocode}\n",
+    );
+    assert_eq!(bracket_attachments(src), [false]);
+}
+
 // --- block-vs-inline paragraph wrapping --------------------------------------
 
 /// The kinds of the root's direct child *nodes* (trivia tokens are skipped, as
@@ -1335,6 +1556,17 @@ fn dollar_display_without_closer_gates_each_dollar() {
     // `{ $$ }`: no `$$` closer is reachable, so the display opener is not
     // math; each `$` re-enters the gate independently and both stay plain.
     insta::assert_snapshot!(tree(r"{ $$ }"));
+}
+
+#[test]
+fn demoted_display_dollar_regates_its_second_dollar_as_inline() {
+    // `$$ a $`: no `$$` closer, so the display opener is demoted and its
+    // *second* `$` re-enters the gate — where it does pair, as inline math.
+    // The two queries land on the same token index under the same walk state
+    // but ask different questions (`display: true` then `false`), which is why
+    // the `$` gate runs unmemoized (container stack C2.3): a batch slot keyed
+    // on the walk state alone would answer the second from the first.
+    insta::assert_snapshot!(tree("$$ a $"));
 }
 
 #[test]

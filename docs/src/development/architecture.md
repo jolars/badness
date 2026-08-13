@@ -242,6 +242,103 @@ environment alias pairs only when its closer is positively located. All four
 degrade to a plain token with no diagnostic, because parser diagnostics gate the
 formatter and so must be high precision.
 
+The `\begin` gate runs on the shared batch driver as `EnvGate`, and it is the
+first *demotion* gate there, so its policy reads inverted: the located "closer"
+is the escaping `}`, `Some` demotes the environment and `None` keeps it, and
+running out of file is not an escape — that is what keeps the
+unclosed-environment diagnostic firing on a forgotten `\end`. Two consequences
+follow. A stray `}` closes rather than refutes, the same token event the
+positive gates read as a refusal. And a math delimiter is not an anchor at all:
+for a positive gate, declining behind one is the conservative direction, while
+here it would *keep* an environment the scan cannot vouch for. The gate's two
+per-opener pre-checks — the enclosing `group_depth`, and the `.dtx` doc-margin
+exemption — are walk state rather than scan state, so they are applied per query
+and never stored in a batch.
+
+The two **math** gates (`DollarGate`, `DelimMathGate`) run on the same driver,
+and for the uniformity rather than for speed: they are *single-entry*, opening
+no nested entry, so a batch settles its seed and nothing else. That is not a
+limitation but the shape of the problem — a delimiter whose closer is reachable
+swallows every opener up to it, so there is never a same-frame neighbor left to
+settle. Four policies invert with them. A `}` refuses unconditionally, where the
+pairing gates refuse only when a group actually encloses the opener, because the
+parse they guard bails at any unbalanced `}`. A foreign math delimiter is
+ordinary content — for the `$` gate it *is* the closer. Environments count at
+every brace depth, since a math body descends into a group and keeps parsing
+environments there. And the closer needs no environment balance, since a
+delimiter ends the body wherever it sits. The `$` gate is also the one gate that
+runs *unmemoized*: a demoted `$$` re-enters on its second `$`, asking a
+different question about the same token index under the same walk state, which a
+slot keyed on the walk state alone would answer from the first query's verdict.
+
+The `\left…\right` gate (`LeftRightGate`) is the last to join, and the only one
+whose entries **stack** rather than count. Every other gate models its nesting
+as two independent counters — how many nested openers and how many environments
+stand between an entry and the token at hand — because that is all its
+per-opener scan ever knew. A `\left` pairs by count wherever it sits, so its
+scan reads one LIFO stack of `{`, `\begin`, and `\left` frames alike, and the
+difference is visible: a frame **mismatch** (an `\end` or a `\right` that
+reaches a frame of the wrong kind) is seen by every outer `\left` too, since the
+innermost frame is common to all of them, so it refuses the whole scan rather
+than one level of it — while the *absence* of frames that the blank-line anchor
+tests is seen only by the innermost `\left`, so a nested pair **shields** the
+ones around it from a paragraph break. Both readings are `Nesting::Interleaved`
+in the driver.
+
+Its math anchor inverts too. A conditional lives in text, so what defeats it is
+math *starting*; a `\left` already lives inside a math body, so what defeats it
+is that body *ending* — `$`, `\]`, `\)`, exactly the recovery anchors of the
+`left_right` walk it guards, while a `\[` in the way is ordinary content. And it
+is the gate whose opener and closer recognition **ignores `in_macro_code` on
+purpose** where the driver's own `\begin`/`\end` counting does not:
+`\left`/`\right` are catcode-neutral math structure that pairs by count no
+matter what, and a `\def` body or a `macrocode` chunk is exactly where package
+math like `$\left#2\right#4$` lives (issue #95). On the driver that is two
+predicates in a policy; as a hand-written scan it was a comment nothing
+enforced.
+
+The **bracket family** closes the migration: three gates (`TextBracketGate`,
+`MathBracketGate`, `MacrocodeBracketGate`) asking whether a `[`'s `]` is
+reachable before the token that would make the `optional` walk bail, in text, in
+math, and inside a `macrocode` chunk. Their nesting turned out to need no new
+model. A per-opener bracket scan counts the `]`s *owed* to the command-abutting
+`[`s it passes — such a `[` is itself argument-shaped and will claim the next
+`]` when parsed, so that `]` cannot also satisfy the outer one (issue #55) — and
+that claim countdown **is** the driver's nested-opener stack once an opener is
+defined as a command-abutting `[`, since closer matching is LIFO either way.
+
+What is new is that both of the family's anchors are depth-**blind**: a
+`\begin`/`\end` refuses rather than counts (an optional never legitimately spans
+an environment, so either half means a runaway `[`), and it and the paragraph
+break fire at any brace depth. Both follow from the walk they guard: `optional`
+bails wherever the cursor stands, and a gate stricter *or* looser than its parse
+is a bug.
+
+Two things are the in-math gate's own. A `$` there is read from the enclosing
+math's *flavor*, which is walk state and so rides the batch's memo key: inside
+`\[…\]` a `$` opens a genuine nested inline region, so a balanced `$…$` in the
+bracket is **transparent** — the entries' own openers and closers stop counting
+until the matching `$`, and everything else reads on — while inside `$…$` TeX
+cannot nest one, so the first `$` at the bracket's own level is that math's
+closer and refuses. And the gate is stricter than the `optional` bail in two
+preserved respects: its `\begin`/`\end` anchor carries no `in_macro_code`
+filter, and a chunk-unmatched brace is group structure to it rather than a plain
+token. Both only ever decline to attach. The second is arguably the *faithful*
+reading — `optional` itself bails at any `R_BRACE` without consulting
+`plain_braces`, so its two siblings, which do consult it, are the loose ones —
+but unifying either way moves verdicts and is its own commit.
+
+The `macrocode` gate diverges once more, and the corpora care: it skips only
+whitespace in its paragraph run, so a docstrip guard line **breaks** the run
+where every other gate floats it. That is the `saw_blank_line_outside_guards`
+reading (docstrip *deletes* a guard-only line, so it does not part what
+surrounds it, issue #71), and `rotating.dtx` depends on it — the date optional
+of its `\ProvidesPackage` runs over three guard lines inside one chunk, and
+floating them would read the newlines around a guard-only line as a blank line
+and drop the argument. It is also the one bracket gate the batch cannot make
+linear: single-entry by policy, so a chunk of `\cmd[` openers whose only `]`
+sits past the frame still scans to the frame per opener.
+
 ### Environment aliases
 
 `\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`
@@ -287,9 +384,16 @@ real packages have: a `.sty` that defines `\bc`/`\ec` for its users and calls
 Every `Some` verdict names an index in the closer index, so the walk stops at
 the *last* closer in the file (none at all, and the gate refuses outright), and
 the verdict is memoized for the one opener the caller asks about twice —
-`starts_block_env` peeks before `element` dispatches. The adversarial residue —
-thousands of openers with a single closer at EOF — stays quadratic, the same
-recorded shape the conditional gate has.
+`starts_block_env` peeks before `element` dispatches.
+
+The gate runs on the shared batch driver (`AliasGate`), the conditional gate's
+second client, so the residual adversarial shape — thousands of openers with a
+single closer at EOF, where the last-closer bound spans the whole file and cuts
+nothing — is one linear pass rather than a scan per opener. Its two policy
+divergences from the conditional gate are the missing paragraph anchor above and
+the name match on the closer: nesting counts *any* alias opener and *any* alias
+closer, so `\bea \bce \ece \eea` pairs while the crossing `\bea \bce \eea \ece`
+refuses outright instead of letting an inner walk run past the outer bound.
 
 The node is the ordinary `ENVIRONMENT > BEGIN … END`, with the delimiters
 holding a bare `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, so every
@@ -370,13 +474,36 @@ command. The tree is still well formed and still lossless, which is the bar; but
 it is why `ast::Conditional::closer` is fallible and why no consumer may assume
 the scan's index and the walk's agree.
 
-The cost is one forward scan per live opener. Every ordinary anchor cuts it
-short, so conditional-heavy real packages (`biblatex.sty`, `latexrelease.sty`,
-`memoir.cls`) measure the same as they did before the node existed. The shape
-that does not cut short is thousands of top-level openers with no blank line, no
-unbalanced brace, and no reachable `\fi`, which is quadratic; no corpus file
-hits it, and the linear rewrite is recorded in `TODO.md` against the day one
-does.
+The cost is one forward scan per *batch*, not per opener. The scan is bounded by
+the last `\fi`-flavored word in the file (a file with none refuses without
+scanning), and one scan settles every opener it passes in the seed's own brace
+frame: nested openers are only counted at brace depth zero, so they share the
+seed's frame exactly and `\fi` matching is pure LIFO over a pending stack. The
+batch is memoized against the walk state the scan read (`macrocode_end`,
+`in_def_body`, whether a group encloses), so a run of top-level openers costs
+one linear pass where it used to cost one scan each — the quadratic
+thousands-of-openers shape recorded here before the batch now measures in the
+tens of milliseconds. One rule in the batch is load-bearing: a refuted entry is
+settled, never removed, because the per-opener scan counts nested openers by
+name and never un-counts one — a later `\fi` must still be consumed by the
+refuted entry's slot, or the outer opener would pair where the per-opener scan
+demoted it. Every ordinary anchor still cuts a scan short, so conditional-heavy
+real packages (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`) measure the
+same as they did before the node existed.
+
+The batch is not the conditional gate's own machinery. It is a **driver**
+(`Parser::gate_batch`) that the other shape gates migrate onto one at a time
+(`TODO.md`, container stack C2): the driver owns the bookkeeping they all share
+— the bound, brace depth under `plain_braces`, environment counting, the
+`macrocode` frame, the entry stack with its settled-never-removed rule, the scan
+metering, and the walk-state memo — while each gate supplies a `GatePolicy`
+naming its own bound, its openers and closers, and whether a blank line anchors
+it. The divergences between gates are deliberate, so they stay visible as policy
+methods rather than being averaged into the loop. With the bracket family
+migrated the driver serves all nine gates, and the policy surface is what the
+migration bought: every place two gates read the same token differently is a
+named axis with a documented reason, where before it was nine hand
+transcriptions in which a fix to one copy did not propagate (issue #95).
 
 Two anchors differ from the environment gate on purpose. Running out of file
 demotes here, where the environment gate keeps the node so it can still report

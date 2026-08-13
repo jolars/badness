@@ -56,10 +56,50 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **Environment pairing is gated on brace structure**, not a command set: an
   environment cannot outlive the brace group its `\begin` opened in (#71,
   generalizing #45/#55). `.dtx` doc-margin lines are exempt from stranded
-  braces; a demoted `\begin` demotes its orphaned `\end` in step.
+  braces; a demoted `\begin` demotes its orphaned `\end` in step. Batched as
+  `EnvGate` (container-stack C2.2), the driver's first **demotion** gate, so its
+  verdict reads inverted (`Some` = escapes = demote) and two policies flip with
+  it: a stray `}` *closes* rather than refutes, and math is not an anchor —
+  refusing there would keep an environment the scan cannot vouch for. The
+  `group_depth` and doc-margin pre-checks are per-opener walk state and stay
+  outside the batch.
 - **`$`, `\[`, `\(` open math only when a closer is reachable** before an
   unbalanced `}`, an unowed `\end`, a paragraph break, chunk end, or EOF. The
   paragraph-break anchor applies only between top-level atoms of the math body.
+  Both run on the shared batch driver (container-stack C2.3) as `DollarGate` and
+  `DelimMathGate`, **single-entry**: they open no nested entry, so a batch
+  settles its seed alone — a delimiter that pairs swallows every opener up to
+  its closer, so there is no same-frame neighbor to settle. Four policies invert
+  against the pairing gates: a `}` refuses whether or not a group encloses the
+  opener (`StrayBrace::RefutesAlways`, mirroring `dollar_math`/`delim_math`,
+  which bail at any unbalanced `}`), a foreign math delimiter is content rather
+  than an anchor, environments count at *any* brace depth, and the closer needs
+  no environment balance. They also read a `macrocode` frame as an ordinary
+  environment rather than a hard boundary — preserved from the pre-batch scans,
+  not chosen; nothing in the corpora depends on it. The `$` gate is
+  **unmemoized**: a demoted `$$` re-enters on its second `$` with
+  `display: false`, a different question about the same index under the same
+  walk state, which a walk-state-keyed slot would answer from the first verdict
+  (`demoted_display_dollar_regates_its_second_dollar_as_inline`).
+- **`\left` opens a pair only when its `\right` is reachable**; otherwise it is a
+  plain command with no diagnostic (#77), a likely typo being linter territory.
+  Runs on the driver as `LeftRightGate` (container-stack C2.4), the only gate
+  whose entries **stack** instead of counting (`Nesting::Interleaved`): a pair
+  closes by count wherever it sits, so `{`, `\begin`, and `\left` share one LIFO
+  stack, and the two halves of that read differently. A frame **mismatch** (an
+  `\end` or a `\right` meeting a frame of the wrong kind) refuses the whole scan,
+  since the innermost frame is common to every outer entry
+  (`an_end_inside_a_nested_left_refuses_the_whole_scan`); the *absence* of frames
+  the blank-line anchor tests is seen only by the innermost entry, so a nested
+  pair **shields** the ones around it
+  (`a_nested_left_shields_the_outer_pair_from_a_paragraph_break` — where the gate
+  is looser than the walk, which bails at the break; pre-existing, preserved by
+  the migration). Its math anchor is the *closing* side (`MathAnchor::Closing`):
+  a `\left` lives inside math already, so `$`/`\]`/`\)` end it while a `\[` is
+  content. **Opener and closer recognition ignores `in_macro_code` on purpose**
+  where the driver's `\begin`/`\end` counting does not — the pair is
+  catcode-neutral and a `\def` body or `macrocode` chunk is exactly where
+  `$\left#2\right#4$` lives (#95). Do not "fix" that asymmetry.
 - **`\if…\else…\or…\fi` pairs only when the `\fi` is reachable at the opener's
   own brace, environment, *and* math level**; a `macrocode` frame bounds it both
   ways, and the walk is bounded by the located closer index. A gate that counts a
@@ -75,9 +115,18 @@ Prefer false negatives; when in doubt a construct stays generic.
   formatter owns layout there; linter: `\def` bodies withheld entirely, since a
   carried `\let` must not arm the operand countdown). Subtracting the
   brace-argument `if*` family is load-bearing, since shape alone mis-pairs rather
-  than fails. Demotes silently. One forward scan per live opener; every ordinary
-  anchor cuts it short, so real corpora are unaffected — see `TODO.md` for the
-  pathological shape.
+  than fails. Demotes silently. Verdicts come in **batches** (container-stack
+  C1): one scan, bounded by the last `\fi`-flavored word in the file, settles
+  every same-frame opener it passes, memoized against the walk state it read.
+  The batch's load-bearing rule: a refuted entry is **settled, never removed** —
+  the per-opener model counts nested openers by name and never un-counts one, so
+  a later `\fi` must still be consumed by the refuted entry's slot
+  (`a_refuted_nested_opener_still_consumes_a_fi`). The batch is a **shared
+  driver** (`Parser::gate_batch`), not this gate's own machinery: it owns the
+  bookkeeping every gate repeats and takes a `GatePolicy` per gate. All nine
+  gates run on it (container-stack C2 is complete); never average two gates'
+  policies into the loop — where two read the same token differently, add a
+  named axis with its reason, and say whether it was *chosen* or *preserved*.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
@@ -90,12 +139,34 @@ Prefer false negatives; when in doubt a construct stays generic.
   bound the walk by it, EOF does not pair), **not** on the `\begin` demotion
   gate, and has no paragraph anchor. Demotes silently. Bound the walk by the last
   closer in the file and memoize the verdict — the caller asks twice, and openers
-  that never pair are otherwise quadratic. Not extended to `math_atom` in v1.
+  that never pair are otherwise quadratic. Runs on the shared batch driver as
+  `AliasGate` (container-stack C2.1); its only policy divergences from
+  `ConditionalGate` are the absent paragraph anchor and the closer's name match
+  (`GatePolicy::pairs`). Not extended to `math_atom` in v1.
 - **Alias behavior resolves from the node, never the name.**
   `Signatures::environment_at` reads the alias map only for a `Begin::is_alias`
   delimiter; the name-keyed `Signatures::environment` never reads it. A literal
   `\begin{bea}` beside an alias `\bea` is an unrelated environment and inherits
   nothing — that is why aliases are a side map, not a cloned `EnvironmentSig`.
+- **Every shape gate is bounded by its last-closer index** (the
+  `last_alias_closer` treatment, container-stack C0). A gate can only succeed at
+  one closer token shape, so truncating its scan at the last occurrence in the
+  file is verdict-preserving — past it only refusals remain — and a file with
+  none refuses without scanning. Recording may over-approximate, never
+  under-approximate. A bound helps only a file with *no* closer, so a single
+  reachable closer at EOF defeats it for every gate — which is what the batch
+  driver, not the bound, is for. **Every** gate names one, since the driver
+  takes it as `GatePolicy::last_closer` and refuses without scanning when it is
+  absent — including the two where it rarely bites: `dollar_closes` (its closer
+  is its opener's own token kind, so a file of openers ends at one) and
+  `environment_escapes_group` (every `\begin{…}` carries a `}` in its own name
+  group, so the index sits near EOF; batched in C2.2). Scan work is metered
+  (`Parser::scan_work`) and pinned linear by the tests in `grammar.rs` — extend
+  them when touching a gate. Two shapes stay quadratic **by design** and say so
+  in their tests rather than pretending otherwise: a `${` per line (the brace
+  depth ratchets upward, so no later opener sits at the seed's level) and a
+  `macrocode` chunk of `\cmd[` openers whose only `]` is past the frame (that
+  gate is single-entry by policy).
 
 - **`.dtx` frames are asymmetric about column 0**: a begin frame may be indented
   (`\MakePercentIgnore`), an end frame is column-0 strict.
@@ -113,7 +184,28 @@ Prefer false negatives; when in doubt a construct stays generic.
   the starred-variant fold.
 - **A bracket attaches only when it reads as an argument.** In math: directly
   abutting with its `]` reachable before the math ends, net of intervening
-  claims. In text: mirroring the `$` gate.
+  claims. In text: mirroring the `$` gate. All three run on the batch driver
+  (container-stack C2.5) as `TextBracketGate`/`MathBracketGate`/
+  `MacrocodeBracketGate`. The `]`-claim countdown of #55 **is** the driver's
+  nested-opener stack once an opener is a command-abutting `[` — no new nesting
+  model — and both of the family's anchors are depth-**blind**
+  (`EnvAnchor::Refutes`, `ParagraphAnchor::AnyDepth`) because `optional` bails
+  wherever the cursor stands. A `$` in math reads the enclosing math's *flavor*
+  (`dollar_anchor`, the one runtime policy): inside `\[…\]` it opens a
+  **transparent** region where the entries' own brackets stop counting; inside
+  `$…$` it is that math's closer and refuses (#99). Flavor is walk state, so it
+  rides `WalkKey`.
+- **Three bracket divergences are preserved, not chosen** — flipping one is its
+  own commit with its own test. The in-math gate's environment anchor ignores
+  `in_macro_code` and its braces ignore `plain_braces`; both only ever *decline*
+  to attach, and the second is arguably the faithful reading, since `optional`
+  bails at any `R_BRACE` without consulting `plain_braces` (so its two siblings
+  are the loose ones: an attached optional holding a chunk-plain `}` still
+  reports "unclosed `[`"). The `macrocode` gate skips only whitespace in its
+  paragraph run, so a guard line **breaks** it where every other gate floats it
+  — the `saw_blank_line_outside_guards` reading of #71, corpus-reachable and
+  load-bearing (`rotating.dtx`'s `\ProvidesPackage` date optional spans three
+  guard lines in one chunk; `a_guard_line_does_not_part_a_macrocode_optional`).
 - **Arity-directed expl3 attachment is a recorded candidate, deliberately
   unimplemented.** Do not implement without answering the three open questions
   in `TODO.md` (mixed-shape CST, false-positive blast radius moving into the

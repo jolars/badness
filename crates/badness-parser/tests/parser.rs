@@ -2,7 +2,7 @@
 //! targeted assertions on error-recovery behaviour. Every case also re-checks
 //! the losslessness invariant. Regenerate snapshots with `task snapshots`.
 
-use badness_parser::parser::parse;
+use badness_parser::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor};
 use badness_parser::syntax::{SyntaxKind, SyntaxNode};
 use rowan::{NodeOrToken, TextSize};
 
@@ -1374,7 +1374,25 @@ fn math_bracket_with_own_closer_still_attaches_past_interval() {
 
 /// Whether each `[` in `src`, in source order, attaches as an `OPTIONAL`.
 fn bracket_attachments(src: &str) -> Vec<bool> {
-    let parsed = parse(src);
+    bracket_attachments_with(src, LatexFlavor::Document.into())
+}
+
+/// [`bracket_attachments`] under the `.dtx` docstrip lexer mode, where a
+/// line-leading `%` is a `DOC_MARGIN`, a line-leading `%<…>` a `GUARD`, and a
+/// `macrocode` body lexes as ordinary code. Required by every case whose shape
+/// is one of those three — under the default config they are all just comments.
+fn bracket_attachments_dtx(src: &str) -> Vec<bool> {
+    bracket_attachments_with(
+        src,
+        LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        },
+    )
+}
+
+fn bracket_attachments_with(src: &str, config: LexConfig) -> Vec<bool> {
+    let parsed = parse_with_flavor(src, config);
     assert_eq!(parsed.syntax().to_string(), src, "losslessness");
     parsed
         .syntax()
@@ -1435,10 +1453,8 @@ fn a_guard_line_does_not_part_a_macrocode_optional() {
     // `rotating.dtx`: `\ProvidesPackage`'s date optional runs over several
     // docstrip guard lines inside one `macrocode` chunk. Docstrip *deletes* a
     // guard-only line when it strips the file, so it does not part what
-    // surrounds it (issue #71) — and this gate is the one that reads it that
-    // way, skipping only whitespace in its paragraph run
-    // (`DOC_TRIVIA_FLOATS`). Floating the guard like every other gate does
-    // would make the two newlines around it a blank line and drop the argument.
+    // surrounds it (issue #71): the guard breaks the newline run without being
+    // a newline, so the two newlines around it are not a blank line.
     let src = concat!(
         "%    \\begin{macrocode}\n",
         "\\ProvidesPackage{rot}%\n",
@@ -1449,7 +1465,7 @@ fn a_guard_line_does_not_part_a_macrocode_optional() {
         "        ]\n",
         "%    \\end{macrocode}\n",
     );
-    assert_eq!(bracket_attachments(src), [true]);
+    assert_eq!(bracket_attachments_dtx(src), [true]);
     // A real blank line in the same place still refuses, so the run is read,
     // not ignored.
     let src = concat!(
@@ -1461,7 +1477,54 @@ fn a_guard_line_does_not_part_a_macrocode_optional() {
         "        ]\n",
         "%    \\end{macrocode}\n",
     );
-    assert_eq!(bracket_attachments(src), [false]);
+    assert_eq!(bracket_attachments_dtx(src), [false]);
+}
+
+#[test]
+fn a_guard_line_parts_no_construct_for_the_text_bracket_gate_either() {
+    // The reading above is the driver's, not one gate's: a `GUARD` breaks the
+    // paragraph run for every gate that has one, so the same shape in a `.dtx`
+    // *documentation* line — where `TextBracketGate` decides, not
+    // `MacrocodeBracketGate` — keeps its optional too.
+    assert_eq!(
+        bracket_attachments_dtx("% \\cmd[a\n%<*dtx>\n% b]\n"),
+        [true]
+    );
+    // The two controls that say the run is read rather than ignored. A real
+    // blank line still parts it...
+    assert_eq!(bracket_attachments_dtx("% \\cmd[a\n\n% b]\n"), [false]);
+    // ...and so does a margin-only line, which *is* the blank line of the
+    // documentation layer: a `DOC_MARGIN` floats like whitespace, so its two
+    // surrounding newlines still count (`TriviaScan::saw_blank_line`).
+    assert_eq!(bracket_attachments_dtx("% \\cmd[a\n%\n% b]\n"), [false]);
+}
+
+#[test]
+fn a_guard_line_parts_no_math_either() {
+    // Same for a gate whose paragraph anchor fires at its own brace level
+    // rather than at any depth (`DollarGate`, `ParagraphAnchor::OwnLevel`):
+    // it settles entries where the bracket family breaks outright, so the two
+    // arms of the anchor are pinned separately.
+    assert!(has_dtx_math("% $x\n%<*dtx>\n% y$\n"));
+    assert!(!has_dtx_math("% $x\n\n% y$\n"));
+    assert!(!has_dtx_math("% $x\n%\n% y$\n"));
+}
+
+/// Whether `src`, parsed in `.dtx` mode, contains an `INLINE_MATH` node — the
+/// `$` shape gate's verdict.
+fn has_dtx_math(src: &str) -> bool {
+    let parsed = parse_with_flavor(
+        src,
+        LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        },
+    );
+    assert_eq!(parsed.syntax().to_string(), src, "losslessness");
+    parsed
+        .syntax()
+        .descendants()
+        .any(|n| n.kind() == SyntaxKind::INLINE_MATH)
 }
 
 // --- block-vs-inline paragraph wrapping --------------------------------------

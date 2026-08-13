@@ -335,10 +335,12 @@ enum Nesting {
 ///
 /// The driver owns the bookkeeping every gate shares — the bound, brace depth
 /// under [`Parser::plain_braces`], environment counting, the `macrocode`
-/// frame, the entry stack, the metering — and **never averages the
-/// policies**: where two gates diverge, the divergence is a method here,
-/// spelled out and documented, not a compromise inside the loop (`TODO.md`,
-/// container stack C2).
+/// frame, the entry stack, the metering, and the trivia model (a `.dtx` margin
+/// floats, a docstrip guard breaks the newline run without being one: the
+/// [`TriviaScan::saw_blank_line_outside_guards`] reading of issue #71) — and
+/// **never averages the policies**: where two gates diverge, the divergence is
+/// a method here, spelled out and documented, not a compromise inside the loop
+/// (`TODO.md`, container stack C2).
 ///
 /// Hooks arrive with the client that needs them, so the driver stays
 /// *extracted* from C1's working batch rather than authored to a lowest common
@@ -419,18 +421,6 @@ trait GatePolicy {
     /// refuses a bracket, the conservative direction (`TODO.md`, container stack
     /// C2.5).
     const ENV_ANCHOR_IN_MACRO_CODE: bool = false;
-
-    /// Whether a `.dtx` doc margin or docstrip guard is transparent to the
-    /// paragraph run, as it is to [`TriviaScan::saw_blank_line`].
-    ///
-    /// False for [`MacrocodeBracketGate`], whose pre-batch scan skipped
-    /// `WHITESPACE` alone, so a guard line between two newlines breaks the run
-    /// there. That is in fact the [`TriviaScan::saw_blank_line_outside_guards`]
-    /// reading — docstrip *deletes* a guard-only line, so it does not part what
-    /// surrounds it (issue #71) — which the other gates do not take. Preserved
-    /// on both sides rather than unified, since unifying moves verdicts either
-    /// way (`TODO.md`, container stack C2.5).
-    const DOC_TRIVIA_FLOATS: bool = true;
 
     /// Whether a closer only settles an entry when no `\begin`-opened
     /// environment stands in the way (`envs == envs_at_push`).
@@ -879,16 +869,16 @@ impl GatePolicy for MathBracketGate {
 
 /// [`Parser::bracket_closes_before_macrocode_end`]'s policy: inside a `macrocode`
 /// chunk a `[` is an argument only when its `]` closes *within* the chunk, whose
-/// frame is an absolute terminator. Two divergences from its two siblings, both
-/// preserved from its pre-batch scan:
+/// frame is an absolute terminator. One divergence from its two siblings,
+/// preserved from its pre-batch scan: **it is single-entry**
+/// ([`GatePolicy::opens_at`] always false), since the scan ran no claim
+/// countdown, so the first `]` at brace level settles the seed. That is also why
+/// it is the one bracket gate the batch cannot make linear — there is no
+/// neighbor to settle — and it runs unmemoized like the math gates.
 ///
-/// - **It is single-entry** ([`GatePolicy::opens_at`] always false): the scan
-///   ran no claim countdown, so the first `]` at brace level settles the seed.
-///   That is also why it is the one bracket gate the batch cannot make linear —
-///   there is no neighbor to settle — and it runs unmemoized like the math
-///   gates.
-/// - **A doc margin or guard breaks the paragraph run**
-///   ([`GatePolicy::DOC_TRIVIA_FLOATS`]), where every other gate floats it.
+/// Its guard-breaking paragraph run used to be a second divergence
+/// (`DOC_TRIVIA_FLOATS`); the driver now reads guards that way for every gate,
+/// this one's being the considered reading (issue #71).
 ///
 /// Its [`EnvAnchor`] can never fire: a chunk body sets `in_def_body`
 /// ([`Parser::macrocode_body`]), so `in_macro_code` holds at every index the
@@ -903,7 +893,6 @@ impl GatePolicy for MacrocodeBracketGate {
     const MATH_ANCHOR: MathAnchor = MathAnchor::None;
     const ANCHORS_AT_ANY_DEPTH: bool = true;
     const ENV_ANCHOR: EnvAnchor = EnvAnchor::Refutes;
-    const DOC_TRIVIA_FLOATS: bool = false;
 
     fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
         p.last_r_bracket
@@ -3077,11 +3066,22 @@ impl<'t> Parser<'t> {
                     i += 1;
                     continue;
                 }
-                SyntaxKind::WHITESPACE => {
+                // A `.dtx` doc margin floats like whitespace — it is one byte of
+                // layout, not content — so a margin-only line `%\n%\n` still reads
+                // as the blank line its two `NEWLINE`s make it.
+                SyntaxKind::WHITESPACE | SyntaxKind::DOC_MARGIN => {
                     i += 1;
                     continue;
                 }
-                SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD if P::DOC_TRIVIA_FLOATS => {
+                // A docstrip guard is content *on its line*, and a line docstrip
+                // deletes outright when it strips the file, so `%<*dtx>` between
+                // two lines does not part them (issue #71): it breaks the newline
+                // run without being a newline. That is
+                // [`TriviaScan::saw_blank_line_outside_guards`], the considered
+                // model, and every gate reads it — see the type-level note on
+                // [`GatePolicy`].
+                SyntaxKind::GUARD => {
+                    newlines = 0;
                     i += 1;
                     continue;
                 }

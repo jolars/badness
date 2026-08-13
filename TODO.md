@@ -1070,7 +1070,8 @@ sources below are missing.
         docstrip *deletes* a guard-only line, so it does not part what surrounds
         it) — which means the *other* seven gates are the ones diverging from
         the considered model, and unifying should move toward this gate, not
-        away. Recorded as its own item below.
+        away. Recorded as its own item below, and **since resolved that way**:
+        the knob is gone and the driver reads guards this gate's way.
 
       **Measured** (`parse` alone via `bench:micro`, N openers with one closer
       at EOF, 1000/2000/4000). Text (`\cmd[x` per line, one `]`):
@@ -1117,17 +1118,40 @@ sources below are missing.
   **What the finished driver left on the table** (both surfaced by C2.5, both
   their own commit with their own test — C2 migrated verdicts unchanged):
 
-  - [ ] **A docstrip guard line parts a construct for seven of the eight
-    gates.** Only `MacrocodeBracketGate` reads the `saw_blank_line_outside_guards`
-    model (#71: docstrip *deletes* a guard-only line, so it does not part what
-    surrounds it); the driver's own trivia arm floats a `GUARD` like a margin,
-    so for every other gate the two newlines around `%<*dtx>` read as a blank
-    line. The bracket gate's reading is the considered one and is
-    corpus-load-bearing (`rotating.dtx`, `rotex.tex`), so unification should
-    move the driver *to* it — i.e. drop `DOC_TRIVIA_FLOATS` in favor of the
-    guard-breaking run everywhere, and re-baseline whatever that moves. Expect
-    it to *keep* constructs that are demoted today, so the risk is over-pairing,
-    not under-.
+  - [x] **A docstrip guard line parted a construct for seven of the eight
+    gates** — fixed by moving the driver *to* `MacrocodeBracketGate`'s reading,
+    as the item predicted. `DOC_TRIVIA_FLOATS` is gone; the driver's trivia arm
+    now splits the two kinds it used to lump together, which is what the
+    `saw_blank_line_outside_guards` model always said: a `DOC_MARGIN` floats
+    like whitespace (a margin-only line is still the documentation layer's blank
+    line), a `GUARD` breaks the newline run without being a newline (#71:
+    docstrip *deletes* a guard-only line, so it does not part what surrounds
+    it). Note the old `false` arm was not quite that model either — it broke on
+    a margin too, harmlessly, since the only `DOC_MARGIN` a chunk-bounded scan
+    can reach is its own end frame's.
+
+    The predicted direction held — it *keeps* constructs demoted today — and it
+    paid on the first corpus that could see it. `trace.dtx`'s second
+    `% \iffalse … % \fi` header spans four guard lines, so the float refuted
+    `ConditionalGate`'s paragraph anchor, demoted the `\iffalse` to a plain
+    command, and let the formatter reflow the guards as prose — collapsing
+    `%<driver>` off column 0. That is a **non-trivia content change**, i.e. the
+    whitespace-only invariant, and `tests/gate_baselines/latex2e.{all,trivia}`
+    had it recorded as a known failure; both baselines are re-recorded without
+    it. No other corpus entry moved, in either direction, and `parse-compat` /
+    `bib-parse-compat` are byte-identical, as a verdict-*widening* fix on a
+    shape texlab has no model for should be.
+
+    The pre-existing test for the macrocode reading
+    (`a_guard_line_does_not_part_a_macrocode_optional`) turned out to be passing
+    for the wrong reason: `bracket_attachments` parsed with `dtx: false`, so its
+    `%<*dtx>` was an ordinary `COMMENT` (which breaks the run anyway) and its
+    `%    \begin{macrocode}` frame never opened a chunk — `TextBracketGate` was
+    answering. It now goes through a `dtx: true` helper, and two siblings pin
+    the unified reading on the other two paragraph-anchor shapes
+    (`ParagraphAnchor::AnyDepth` in a doc line, `OwnLevel` for the `$` gate),
+    each with a real-blank-line and a margin-only-line control so both halves of
+    the trivia split are discriminated.
 
   - [ ] **`optional` bails at a chunk-plain `}` its own gates skip.** Two of the
     three bracket gates filter `plain_braces`; `Parser::optional` does not

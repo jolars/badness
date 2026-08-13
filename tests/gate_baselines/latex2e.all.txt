@@ -140,8 +140,6 @@
 ./required/tools/somedefs.dtx	content-change
 ./required/tools/tabularx.dtx	comment-change
 ./required/tools/tabularx.dtx	idempotency
-./required/tools/trace.dtx	comment-change
-./required/tools/trace.dtx	content-change
 ./required/tools/varioref.dtx	comment-change
 ./required/tools/varioref.dtx	content-change
 ./required/tools/varioref.dtx	idempotency

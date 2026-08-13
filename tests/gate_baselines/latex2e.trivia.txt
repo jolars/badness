@@ -73,7 +73,6 @@
 ./required/tools/multicol.dtx	trivia	content-change
 ./required/tools/somedefs.dtx	trivia	content-change
 ./required/tools/tabularx.dtx	trivia	non-fixed-point
-./required/tools/trace.dtx	trivia	content-change
 ./required/tools/varioref.dtx	trivia	content-change
 ./required/tools/xspace.dtx	trivia	content-change
 ./texmf/tex/latex/l3kernel/expl3-code.tex	format-error	format-error

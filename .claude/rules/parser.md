@@ -195,17 +195,13 @@ Prefer false negatives; when in doubt a construct stays generic.
   **transparent** region where the entries' own brackets stop counting; inside
   `$…$` it is that math's closer and refuses (#99). Flavor is walk state, so it
   rides `WalkKey`.
-- **Three bracket divergences are preserved, not chosen** — flipping one is its
+- **Two bracket divergences are preserved, not chosen** — flipping one is its
   own commit with its own test. The in-math gate's environment anchor ignores
   `in_macro_code` and its braces ignore `plain_braces`; both only ever *decline*
   to attach, and the second is arguably the faithful reading, since `optional`
   bails at any `R_BRACE` without consulting `plain_braces` (so its two siblings
   are the loose ones: an attached optional holding a chunk-plain `}` still
-  reports "unclosed `[`"). The `macrocode` gate skips only whitespace in its
-  paragraph run, so a guard line **breaks** it where every other gate floats it
-  — the `saw_blank_line_outside_guards` reading of #71, corpus-reachable and
-  load-bearing (`rotating.dtx`'s `\ProvidesPackage` date optional spans three
-  guard lines in one chunk; `a_guard_line_does_not_part_a_macrocode_optional`).
+  reports "unclosed `[`").
 - **Arity-directed expl3 attachment is a recorded candidate, deliberately
   unimplemented.** Do not implement without answering the three open questions
   in `TODO.md` (mixed-shape CST, false-positive blast radius moving into the
@@ -214,6 +210,14 @@ Prefer false negatives; when in doubt a construct stays generic.
 ## Trivia
 
 - Comments bind forward, whitespace floats, a blank line breaks the bind.
+- **A docstrip guard breaks a shape gate's paragraph run; a `.dtx` doc margin
+  floats through it.** Docstrip deletes a guard-only line outright, so `%<*dtx>`
+  between two lines does not part them (#71): the guard breaks the newline run
+  without being a newline — `TriviaScan::saw_blank_line_outside_guards`. This is
+  the **driver's** model, shared by every gate, not a per-gate policy;
+  `MacrocodeBracketGate` was alone in it until the `DOC_TRIVIA_FLOATS` knob went
+  away. A margin-only line is still the documentation layer's blank line, so
+  margins keep floating.
 - Bind only the **maximal blank-line-free suffix**. Do not adopt
   rust-analyzer's peek past a blank line: it keys on `///` vs `//`, and `%` has
   no equivalent, so peeking glues license headers into doc comments.

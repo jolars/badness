@@ -328,16 +328,27 @@ reading — `optional` itself bails at any `R_BRACE` without consulting
 `plain_braces`, so its two siblings, which do consult it, are the loose ones —
 but unifying either way moves verdicts and is its own commit.
 
-The `macrocode` gate diverges once more, and the corpora care: it skips only
-whitespace in its paragraph run, so a docstrip guard line **breaks** the run
-where every other gate floats it. That is the `saw_blank_line_outside_guards`
-reading (docstrip *deletes* a guard-only line, so it does not part what
-surrounds it, issue #71), and `rotating.dtx` depends on it — the date optional
-of its `\ProvidesPackage` runs over three guard lines inside one chunk, and
-floating them would read the newlines around a guard-only line as a blank line
-and drop the argument. It is also the one bracket gate the batch cannot make
-linear: single-entry by policy, so a chunk of `\cmd[` openers whose only `]`
-sits past the frame still scans to the frame per opener.
+The `macrocode` gate keeps one divergence of its own: it is the one bracket gate
+the batch cannot make linear, single-entry by policy, so a chunk of `\cmd[`
+openers whose only `]` sits past the frame still scans to the frame per opener.
+
+Its *other* divergence became the driver's rule for every gate. A docstrip guard
+line **breaks** the paragraph run rather than floating through it: docstrip
+deletes a guard-only line outright when it strips the file, so `%<*dtx>` between
+two lines does not part them (issue #71) — the guard breaks the newline run
+without being a newline, which is exactly
+`TriviaScan::saw_blank_line_outside_guards`. A `.dtx` doc margin still floats,
+so a margin-only line is still the blank line of the documentation layer. Only
+the `macrocode` gate read guards that way at first, because only its pre-batch
+scan happened to skip whitespace alone; the other seven inherited the float from
+the driver's trivia arm and were the ones diverging from the considered model.
+`rotating.dtx` pinned the reading (the date optional of its `\ProvidesPackage`
+runs over three guard lines inside one chunk), and unifying paid immediately in
+the other direction: `trace.dtx`'s second `% \iffalse … % \fi` header spans four
+guard lines, so the float made its `\iffalse` a plain command and the formatter
+reflowed the guards into prose — collapsing `%<driver>` off column 0, a
+non-trivia content change the two-sided corpus ratchet had recorded as a known
+failure.
 
 ### Environment aliases
 

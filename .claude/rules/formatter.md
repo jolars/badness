@@ -48,8 +48,12 @@ predicates the formatter *preserves*.
   showing every layout they can emit re-reads to itself.
 - **Two Tier-1 sites still read it**, both live in the default `Reflow`: the
   `GROUP` arm's `spans_multiple_lines` (and `lower_optional`'s fallbacks to the
-  same) and the command-only-line rule (`line_is_command_only`). Both are filed
-  in `TODO.md`. Don't add a third.
+  same) and the command-only-line rule (`line_is_command_only`) — the latter now
+  only as a *residue*: curated block commands are intercepted upstream via
+  `CommandSig::block` and never reach it, so it decides only for un-signatured
+  and scanned-definition commands (block-ness undecidable without meaning) and
+  for block commands glued to adjacent content. Both are filed in `TODO.md`.
+  Don't add a third.
 - Count *decisions that differ*, not call sites. Several places branch on
   `newlines == 1` yet emit `" "` either way — normalizations, not decisions, and
   the oracle collapses a run to one character so it cannot see them. Nobody
@@ -91,12 +95,19 @@ predicates the formatter *preserves*.
   `lower_dtx_doc_paragraph` falls back to the byte-faithful preserve path.
 - A `.dtx` `macrocode` frame lead is matched literally by docstrip — commit it
   byte-exact, never normalized to the canonical `%`.
-- **A sectioning command is a block-level statement:** a break before it and
-  after it, from `CommandSig::sectioning` (`command_is_sectioning`), never from
-  the trivia the author wrote. Routing headings through the command-only-line
-  rule instead read the lone-newline predicate. A trailing `%` still rides the
-  heading's line (`prev_block_closes_line` lets the comment ride but not
-  content); blank lines around it are preserved, never synthesized.
+- **A curated block-level command is a block-level statement:** a break before
+  it and after it, from `CommandSig::sectioning` or `CommandSig::block`
+  (`command_is_sectioning`/`command_is_block`), never from the trivia the
+  author wrote. Routing these through the command-only-line rule instead read
+  the lone-newline predicate. A non-sectioning block command **glued** to
+  adjacent non-trivia keeps its authored adjacency and falls to the residual
+  rule — breaking there materializes a space token (`\ProcessOptions\relax`,
+  the glued-divider principle); a heading splits even glued, since its own
+  `\par` discards the materialized glue. Neither fires under
+  `ReflowKind::Statement`, whose Tier-2 contract is the authored line. A
+  trailing `%` still rides the statement's line (`prev_block_closes_line` lets
+  the comment ride but not content); blank lines around it are preserved,
+  never synthesized.
 - **A `CONDITIONAL` is all-or-nothing:** flat when the whole construct fits, else
   every divider opens a line. Offered as two whole candidates
   (`Ir::conditional_group_all_lines`), **never as one `Ir::group` of `Ir::Line`s**

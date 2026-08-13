@@ -680,8 +680,12 @@ Modes that are *defined* by reading authored breaks (`WrapMode::Stable`,
 and each owes a written fixed-point argument showing that every layout it can
 emit re-reads to itself. That normalization is **not built yet** — the boundary
 still hands the lowering a newline count — so today the rule is upheld by
-review, and two layout decisions still read the unsafe predicate. Both, and the
-gap normalization itself, are tracked in `TODO.md`.
+review, and two layout decisions still read the unsafe predicate (the
+command-only-line rule now only as a residue: curated block commands carry a
+positive `CommandSig::block` property and are laid out as block-level statements
+without consulting trivia, so the read decides only for un-signatured and
+scanned-definition commands). Both, and the gap normalization itself, are
+tracked in `TODO.md`.
 
 The oracle is `formatter::perturb`, which generates TeX-identical trivia
 perturbations of each input. It has two forms. `check_trivia_convergence` is

@@ -110,10 +110,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   every TeX-identical newline<->space perturbation
   (`formatter::perturb::survey_trivia_invariance`). It is a **survey, not a
   gate**: strict is the end-state contract, so it still fails wherever the
-  formatter deliberately preserves an authored break — 282 of 286 latex3 files,
-  375 of 384 latex2e, 361 of 397 pgf, 3851 of 5209 latexindent. It earns the
+  formatter deliberately preserves an authored break — 275 of 286 latex3 files,
+  372 of 384 latex2e, 354 of 397 pgf, 3804 of 5209 latexindent (after the
+  `CommandSig::block` fix; it was 282/375/361/3851 before). It earns the
   surface because it is the only *mechanical* route to the two Tier-1 entries
-  below (the command-only-line rule, and Opaque-group layout non-determinism):
+  below (the command-only-line rule's residue, and Opaque-group layout
+  non-determinism):
   a layout decision keyed on the lone-newline predicate is
   self-consistent on both spellings, so `--checks all` and the convergence
   oracle are blind to it by construction. The survey checks every variant
@@ -128,33 +130,36 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   ratchet: it can prove the shapes on it stay invariant, never notice that a new
   one became invariant.
 
-- [ ] **The command-only-line rule reads the lone-newline predicate (Tier 1).**
-  `\usepackage{a}\n\usepackage{b}` keeps the break; `\usepackage{a}
-  \usepackage{b}` glues the pair onto one line — the same bytes to the next
-  parse, so exactly the predicate trivia-invariant layout forbids reading
-  (`AGENTS.md` § *Invariants*). The read is `prev_is_command`/`next_is_command`
-  (`line_is_command_only`) in `reflow_elements`, live under `ReflowKind::Prose`
-  in the default `Reflow` — not a Tier-2 mode's sanctioned read.
+- [ ] **The command-only-line rule's residue still reads the lone-newline
+  predicate (Tier 1, narrowed).** The curated half is fixed: block-level-ness
+  is a positive signature property (`CommandSig::block`, curated-only like
+  `verbatimDelimited` — the CWL tier stays arity-only and scanned definitions
+  never infer it), and `reflow_elements`'s block-statement arm intercepts a
+  curated block command exactly like a sectioning one, so
+  `\usepackage{a}\n\usepackage{b}` and `\usepackage{a} \usepackage{b}` now lay
+  out identically. Pinned by `block_command_lines` /
+  `block_command_glued_stays` / `block_command_in_brace_body_stays` and the
+  `command-block-lines` strict shape; two scope gates keep it honest (no firing
+  under `ReflowKind::Statement`, whose Tier-2 contract is the authored line,
+  and a glued-adjacent block command keeps its authored adjacency, since
+  splitting there materializes a space token TeX typesets).
 
-  **No byte-level gate can catch this**, which is why it went unfiled so long:
-  both spellings are self-consistent fixed points that round-trip losslessly, so
-  idempotence, `--checks all`, and the convergence oracle all pass.
-  `--checks trivia-strict` reports it directly, with a localized reproducer.
-
-  The opening move is settled by precedent. `line_is_command_only` already
-  consults the semantic layer (`command_is_inline` -> `CommandSig::inline`), and
-  the sectioning half of this same family was fixed one level up: a sectioning
-  command became a **block-level statement**, its breaks read from
-  `CommandSig::sectioning` (`command_is_sectioning`) rather than from the
-  author's trivia, so headings stopped reaching the rule at all. Pinned by
-  `sectioning_starts_own_line` and `sectioning_blank_line_and_comment`. So the
-  fix shape here is **semantic-layer data work** — promote block-level-ness to a
-  positive signature property — not a formatter patch. Calibration: none of the
-  gate baselines moved when the sectioning half landed.
+  What still reads the predicate is the **residue**:
+  `prev_is_command`/`next_is_command` (`line_is_command_only`) for
+  un-signatured and scanned-definition commands — whose block-ness no positive
+  property can know without meaning — plus glued-adjacent block commands. Both
+  spellings remain self-consistent fixed points there, so only
+  `--checks trivia-strict` sees it (the re-aimed
+  `trivia_strict_check_fires_where_an_authored_break_is_preserved` pins the
+  residue firing). This residue is exactly what the `Gap` entry below must
+  carry as a widened gap with a written fixed-point argument; retiring it
+  outright would glue every authored `\mymacro`-on-its-own-line into the fill,
+  which is a policy change, not a fix.
 
   Overlaps the prose-argument entry below, whose second clause ("gluing a prose
   arg onto its command line when a source break separates them") is a proposal
-  about this very rule, and whose first clause is the same signature widening.
+  about this very rule's residue, and whose first clause is the same signature
+  widening (the block half of it landed with `CommandSig::block`).
 
 - [ ] **Normalize the lowering's trivia boundary to a `Gap` enum (the
   enforcement).** Trivia-invariant layout is enforced today by discipline alone:
@@ -239,7 +244,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   layout conflicts with the formatter-is-sole-authority tenet.
 
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
-  a prose arg onto its command line when a source break separates them.
+  a prose arg onto its command line when a source break separates them. (The
+  block half of the signature widening landed as `CommandSig::block`; the
+  gluing clause is now a proposal about the command-only-line rule's *residue*,
+  see the Tier-1 entry above.)
 
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value

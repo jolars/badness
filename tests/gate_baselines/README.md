@@ -252,9 +252,12 @@ A class of finding these two gates cannot flag at all: a layout decision that
 *reads* the forbidden lone-newline predicate but is self-consistent on both
 spellings. The sectioning-command line break was one (`\subsection{X}\nprose`
 kept the break while `\subsection{X} prose` glued) and has since been fixed; the
-command-only-line rule is the same shape and is still open (`TODO.md`). Neither
-gate moved when the sectioning half landed, which is what
-`--checks trivia-strict` exists to cover.
+command-only-line rule was the same shape and is now fixed for **curated block
+commands** (`CommandSig::block` intercepts them as block-level statements), with
+a residue re-filed in `TODO.md` for un-signatured and scanned-definition
+commands, whose block-ness only the authored break can carry. Neither gate moved
+when the sectioning half landed, which is what `--checks trivia-strict` exists
+to cover.
 
 ## Classification (third column of `.trivia.txt`)
 

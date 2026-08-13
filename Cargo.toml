@@ -1,8 +1,8 @@
 [workspace]
 members = [
-  "crates/badness-parser",
-  "crates/badness-formatter",
-  "crates/badness-wasm",
+    "crates/badness-parser",
+    "crates/badness-formatter",
+    "crates/badness-wasm",
 ]
 exclude = ["docs/doc-utils"]
 
@@ -26,10 +26,10 @@ authors.workspace = true
 include = ["/src/**/*", "/build.rs", "/README.md", "/LICENSE"]
 keywords = ["latex", "language-server", "formatter", "linter"]
 categories = [
-  "command-line-utilities",
-  "text-processing",
-  "parsing",
-  "parser-implementations",
+    "command-line-utilities",
+    "text-processing",
+    "parsing",
+    "parser-implementations",
 ]
 
 [lib]

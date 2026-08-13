@@ -9,7 +9,13 @@ repository.workspace = true
 homepage = "https://badness.dev/"
 documentation = "https://docs.rs/badness-parser"
 authors.workspace = true
-include = ["/src/**/*", "/build.rs", "/data/**/*", "/README.md", "/CHANGELOG.md"]
+include = [
+  "/src/**/*",
+  "/build.rs",
+  "/data/**/*",
+  "/README.md",
+  "/CHANGELOG.md",
+]
 keywords = ["latex", "bibtex", "parser", "cst"]
 categories = ["parsing", "parser-implementations", "text-processing"]
 

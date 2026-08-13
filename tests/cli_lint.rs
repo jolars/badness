@@ -154,3 +154,51 @@ fn fix_leaves_stdin_alone() {
     assert_eq!(value.as_array().expect("top-level array").len(), 1);
     assert_eq!(value[0]["path"], "<stdin>");
 }
+
+/// The pretty report is piped here (`Stdio::piped`), so `--color auto` must
+/// resolve to plain — the same contract `format --check` keeps for its diff.
+#[test]
+fn pretty_is_not_colored_when_redirected() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), FIXABLE).unwrap();
+
+    let output = lint(dir.path(), &["doc.tex"], None);
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        !stderr.contains('\x1b'),
+        "piped output should carry no escapes, got:\n{stderr:?}"
+    );
+}
+
+#[test]
+fn pretty_colors_on_demand() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), FIXABLE).unwrap();
+
+    let output = lint(dir.path(), &["--color", "always", "doc.tex"], None);
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains('\x1b'),
+        "`--color always` should style the snippet, got:\n{stderr:?}"
+    );
+}
+
+/// `--color always` is about the human-facing report; JSON is a data contract
+/// and stays plain no matter what.
+#[test]
+fn json_is_never_colored() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), FIXABLE).unwrap();
+
+    let output = lint(
+        dir.path(),
+        &["--color", "always", "--output=json", "doc.tex"],
+        None,
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    serde_json::from_str::<serde_json::Value>(&stdout).expect("stdout is JSON");
+    assert!(!stdout.contains('\x1b'), "got:\n{stdout:?}");
+}

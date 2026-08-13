@@ -76,6 +76,11 @@ paths):
 cat paper.tex | badness lint -
 ```
 
+The snippets go to stderr and are colorized when it is a terminal, under the
+same `--color always|never` and `NO_COLOR` rules as the `--check` diff. The
+`--output concise` and `--output json` forms are meant for other programs to
+read, so they stay plain whatever `--color` says.
+
 ## Adjusting Layout
 
 The formatter takes a few style options on the command line:

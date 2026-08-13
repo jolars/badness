@@ -30,13 +30,19 @@ pub enum OutputMode {
 /// Render `diagnostics` to a string. `source_for` supplies the source text of a
 /// file (used for snippets and line/column lookup); returning `None` falls back
 /// to a concise, location-only line for that file.
+///
+/// `use_color` bears on `Pretty` only: `Concise` is the compact one-liner that
+/// callers grep and cut, and `Json` is machine-readable, so neither ever carries
+/// ANSI (matching arity and fatou). The caller resolves it against the
+/// destination stream — for the CLI that is *stderr*, where the text modes go.
 pub fn render_findings(
     diagnostics: &[Diagnostic],
     mode: OutputMode,
+    use_color: bool,
     source_for: &dyn Fn(&Path) -> Option<String>,
 ) -> String {
     match mode {
-        OutputMode::Pretty => render_pretty(diagnostics, source_for),
+        OutputMode::Pretty => render_pretty(diagnostics, use_color, source_for),
         OutputMode::Concise => render_concise(diagnostics, source_for),
         OutputMode::Json => render_json(diagnostics),
     }
@@ -59,9 +65,14 @@ fn group_by_path(diagnostics: &[Diagnostic]) -> BTreeMap<&PathBuf, Vec<&Diagnost
 
 fn render_pretty(
     diagnostics: &[Diagnostic],
+    use_color: bool,
     source_for: &dyn Fn(&Path) -> Option<String>,
 ) -> String {
-    let renderer = Renderer::plain();
+    let renderer = if use_color {
+        Renderer::styled()
+    } else {
+        Renderer::plain()
+    };
     let mut out = String::new();
     for (path, diags) in group_by_path(diagnostics) {
         let Some(source) = source_for(path) else {
@@ -194,14 +205,16 @@ mod tests {
     fn concise_resolves_line_and_column() {
         let source = "\\foo\n\\bar{".to_owned();
         let diags = [diag(9, 10, "expected '}'")];
-        let rendered = render_findings(&diags, OutputMode::Concise, &|_| Some(source.clone()));
+        let rendered = render_findings(&diags, OutputMode::Concise, false, &|_| {
+            Some(source.clone())
+        });
         assert_eq!(rendered, "x.tex:2:5: error [parse] expected '}'\n");
     }
 
     #[test]
     fn concise_without_source_omits_location() {
         let diags = [diag(0, 1, "boom")];
-        let rendered = render_findings(&diags, OutputMode::Concise, &|_| None);
+        let rendered = render_findings(&diags, OutputMode::Concise, false, &|_| None);
         assert_eq!(rendered, "x.tex: error [parse] boom\n");
     }
 
@@ -209,9 +222,32 @@ mod tests {
     fn pretty_includes_message_and_origin() {
         let source = "\\foo{bar\n".to_owned();
         let diags = [diag(4, 5, "unclosed group")];
-        let rendered = render_findings(&diags, OutputMode::Pretty, &|_| Some(source.clone()));
+        let rendered =
+            render_findings(&diags, OutputMode::Pretty, false, &|_| Some(source.clone()));
         assert!(rendered.contains("unclosed group"), "got: {rendered}");
         assert!(rendered.contains("x.tex"), "got: {rendered}");
+    }
+
+    #[test]
+    fn pretty_styles_only_when_color_is_asked_for() {
+        let source = "\\foo{bar\n".to_owned();
+        let diags = [diag(4, 5, "unclosed group")];
+        let plain = render_findings(&diags, OutputMode::Pretty, false, &|_| Some(source.clone()));
+        let styled = render_findings(&diags, OutputMode::Pretty, true, &|_| Some(source.clone()));
+        assert!(!plain.contains('\x1b'), "got: {plain:?}");
+        assert!(styled.contains('\x1b'), "got: {styled:?}");
+    }
+
+    #[test]
+    fn concise_and_json_stay_plain_under_color() {
+        // Both are consumed by tools, not read in a terminal, so `use_color` is
+        // inert for them.
+        let source = "\\foo\n\\bar{".to_owned();
+        let diags = [diag(9, 10, "expected '}'")];
+        let concise = render_findings(&diags, OutputMode::Concise, true, &|_| Some(source.clone()));
+        assert_eq!(concise, "x.tex:2:5: error [parse] expected '}'\n");
+        let json = render_findings(&diags, OutputMode::Json, true, &|_| None);
+        assert!(!json.contains('\x1b'), "got: {json:?}");
     }
 
     #[test]
@@ -226,7 +262,7 @@ mod tests {
             end: 8,
             message: "first definition of `a`".to_owned(),
         });
-        let rendered = render_findings(&[d], OutputMode::Pretty, &|_| Some(source.clone()));
+        let rendered = render_findings(&[d], OutputMode::Pretty, false, &|_| Some(source.clone()));
         assert!(
             rendered.contains("defined more than once"),
             "got: {rendered}"
@@ -257,7 +293,7 @@ mod tests {
             message: "first definition of `x`".to_owned(),
         });
 
-        let rendered = render_findings(&[d], OutputMode::Json, &|_| None);
+        let rendered = render_findings(&[d], OutputMode::Json, false, &|_| None);
         let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         let diag = &value[0];
         assert_eq!(diag["rule"], "parse");
@@ -277,7 +313,7 @@ mod tests {
     #[test]
     fn json_omits_fix_when_none() {
         let d = diag(0, 1, "boom");
-        let rendered = render_findings(&[d], OutputMode::Json, &|_| None);
+        let rendered = render_findings(&[d], OutputMode::Json, false, &|_| None);
         let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert!(value[0].get("fix").is_none());
         assert_eq!(value[0]["related"], serde_json::json!([]));
@@ -285,7 +321,7 @@ mod tests {
 
     #[test]
     fn json_empty_input_is_empty_array() {
-        let rendered = render_findings(&[], OutputMode::Json, &|_| None);
+        let rendered = render_findings(&[], OutputMode::Json, false, &|_| None);
         assert_eq!(rendered, "[]");
     }
 
@@ -303,7 +339,7 @@ mod tests {
             end: 0,
             message: "other definition of `dup`".to_owned(),
         });
-        let rendered = render_findings(&[d], OutputMode::Pretty, &|p| match p.to_str() {
+        let rendered = render_findings(&[d], OutputMode::Pretty, false, &|p| match p.to_str() {
             Some("main.tex") => Some(main.clone()),
             Some("chap.tex") => Some(chap.clone()),
             _ => None,

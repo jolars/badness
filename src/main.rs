@@ -217,6 +217,7 @@ fn main() -> ExitCode {
                 &exclude_filter,
                 &rules,
                 lint_output_mode(output),
+                out.color,
             )
         }
         Command::Parse { path } => run_parse(path.as_slice()),
@@ -648,6 +649,7 @@ fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
 /// any diagnostics are reported or any file fails to read. With `fix`, safe
 /// autofixes (plus unsafe ones when `unsafe_fixes` is set) are applied in place
 /// first; the reporting pass below then shows whatever findings remain.
+#[allow(clippy::too_many_arguments)]
 fn run_lint(
     paths: &[PathBuf],
     fix: bool,
@@ -656,6 +658,7 @@ fn run_lint(
     exclude: &ExcludeFilter,
     rules: &RuleSelection,
     mode: OutputMode,
+    color: ColorChoice,
 ) -> ExitCode {
     let paths = match inputs_or_exit(paths, "lint", LINT_MISSING_INPUT) {
         Inputs::Stdin => None,
@@ -760,8 +763,8 @@ fn run_lint(
     if mode == OutputMode::Json {
         // JSON goes to stdout unconditionally (`[]` when clean) so consumers
         // always receive a valid document. It serializes byte offsets and
-        // needs no source lookup.
-        println!("{}", render_findings(&diagnostics, mode, &|_| None));
+        // needs no source lookup, and never carries color.
+        println!("{}", render_findings(&diagnostics, mode, false, &|_| None));
     } else if !diagnostics.is_empty() {
         // Index sources by path so the renderer's per-file source lookup is O(1),
         // not a linear scan of every source (quadratic over a large project).
@@ -770,7 +773,13 @@ fn run_lint(
             .map(|(p, text, _)| (p.as_path(), text.as_str()))
             .collect();
         let source_for = |path: &Path| source_index.get(path).map(|s| s.to_string());
-        eprint!("{}", render_findings(&diagnostics, mode, &source_for));
+        // The text modes print to stderr, so that is the stream `--color auto`
+        // has to test — a `2>log` run stays plain even with stdout on a tty.
+        let use_color = color_enabled(color, std::io::stderr().is_terminal());
+        eprint!(
+            "{}",
+            render_findings(&diagnostics, mode, use_color, &source_for)
+        );
     }
 
     if failed || !diagnostics.is_empty() {

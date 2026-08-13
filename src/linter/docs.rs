@@ -189,7 +189,9 @@ pub(crate) fn render_rule_section(
             .filter(|d| d.rule == id)
             .collect();
         let source = example.source.to_string();
-        let rendered = render_findings(&diagnostics, OutputMode::Pretty, &|path| {
+        // Plain: the rendered snippet is fenced into a Markdown page, where an
+        // ANSI escape would be literal text.
+        let rendered = render_findings(&diagnostics, OutputMode::Pretty, false, &|path| {
             (path == section.example_path).then(|| source.clone())
         });
         let _ = writeln!(out);

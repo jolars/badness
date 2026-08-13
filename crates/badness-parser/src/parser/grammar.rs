@@ -2774,8 +2774,18 @@ impl<'t> Parser<'t> {
 
     /// A single base atom: a `{…}` group (parsed in math mode), a command with
     /// its greedily-attached arguments, an environment, a `\\` line break, or one
-    /// ordinary token. Always consumes ≥1 token when the cursor is at content.
+    /// ordinary token. Always consumes at least one token.
+    ///
+    /// **Caller contract: the cursor must not be at EOF.** The `None` arm below
+    /// consumes nothing and emits nothing, so a caller that reaches it from a
+    /// loop spins until [`PARSER_STEP_LIMIT`] and panics far from the mistake.
+    /// Every loop that reaches here guards EOF already — the four math bodies
+    /// with an explicit `None` arm, `math_environment_body` through
+    /// [`Self::at_block_end`], and [`Self::math_script_arg`] through its own
+    /// missing-argument check — and this turns that unwritten contract into a
+    /// tripwire that fires at the offending call instead.
     fn math_atom(&mut self) {
+        debug_assert!(!self.at_end(), "math_atom at EOF: caller must guard first");
         match self.kind() {
             Some(SyntaxKind::L_BRACE) => self.math_group(),
             Some(SyntaxKind::CONTROL_WORD) => {
@@ -2807,6 +2817,8 @@ impl<'t> Parser<'t> {
             // bare control symbol, or a `^`/`_` with no base): one token, so the
             // loop always makes progress.
             Some(_) => self.bump(),
+            // Ruled out by the caller contract above; kept because release
+            // builds compile the assert away and the match must be total.
             None => {}
         }
     }

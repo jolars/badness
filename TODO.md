@@ -67,42 +67,28 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `semantic::expl3`'s statement segmentation, and a node there would contend
     with it.
 
-- [ ] **Grammar hygiene (audit follow-up; independent of the closer-map plan
-  under *Performance & hardening*).**
+- [ ] **Keep carving `grammar.rs`** (3,959 lines after the first cut, which
+  took `grammar/facts.rs` and `grammar/trivia.rs`; `grammar/prescan.rs` came
+  out with it). Two candidates remain, each its own commit:
 
-  - Delete the shadow counters: `group_depth` is always `group_opens.len()`,
-    `math_depth` always `math_dollar.len()` — both mutated in lockstep at
-    every site, a desync waiting for the first construct that pushes one and
-    forgets the other.
+  - The **math / `\left…\right` sublanguage** (`dollar_math` through
+    `stray_right`, plus `split_math_word`), ~460 lines and highly
+    self-contained. `math_environment_body` currently sits in the environment
+    section and is the one routine the split has to decide about.
 
-  - Deduplicate the DOC_COMMENT precede-splice (`parse_block` vs
-    `conditional`, two near-verbatim ~20-line copies; drift breaks comment
-    binding in one context only). Longer-term, promote the `precede` idiom
-    into the event layer as rust-analyzer's `Marker` does, retiring the four
-    manual `events.remove`/`insert` sites.
+  - The **gate machinery** (`WalkKey`, `GateBatch`, `VerdictSink`, the policy
+    vocabulary, `trait GatePolicy`, and the nine gate policies), ~805 lines.
+    Postdates the original audit note. It drags the `scan_work` linearity
+    tests along, so `.claude/rules/parser.md` ("pinned linear by the tests in
+    `grammar.rs`") needs a matching one-word update.
 
-  - Split `Parser::new`'s fused pre-scan into a testable `PreScan` struct —
-    four scans, three pieces of interleaved running state (`def_name_slots`,
-    `expl_on`, `opener_scan`), currently testable only through full parses.
-    Also where the closer map will land, so it fronts that work.
-
-  - `debug_assert!(!self.at_end())` at the top of `math_atom`: its `None` arm
-    consumes nothing and relies on every caller guarding EOF first (all five
-    today do); a forgotten guard loops to `PARSER_STEP_LIMIT`. Convert the
-    unchecked caller contract into a tripwire.
-
-  - Small helpers: `at_env_end` (the `at_command(END_CMD) &&
-    env_name_follows` pair appears ~10 times verbatim), a named blank-line
-    constant (`newlines >= 2` restated nine times), reuse `is_trivia` at its
-    three inline restatements, and an allocation-free `peek_end_name` (it
-    builds a `String` per call inside forward scans).
-
-  - Start carving `grammar.rs` (3,234 lines) into modules: trivia machinery
-    and the curated fact predicates first, the math/`\left…\right`
-    sublanguage as a candidate second. Fix the stale module doc at
-    `src/parser.rs:6` while there — it claims `build_tree` re-attaches
-    trivia; that logic moved to the grammar (`binding_run`) and the doc was
-    never updated.
+  The rest of the hygiene item is done: the shadow counters, the DOC_COMMENT
+  precede dedup (`precede`/`extend_back`/`doc_comment_bind`), the `PreScan`
+  extraction, the `math_atom` EOF tripwire, the environment-delimiter helpers,
+  `BLANK_LINE_NEWLINES`, the `is_trivia` reuse, the borrowing `peek_end_name`,
+  and the stale `parser.rs` module doc. Still open from that note: promoting
+  `precede` into the event layer as a real rust-analyzer `Marker` with a
+  `DropBomb`, which is a mechanical diff across every `open`/`close` site.
 
 - [ ] **Comment consolidation (consolidate, never purge).** Comment density
   in the parser crate is 30–39% per file and overwhelmingly the house-style

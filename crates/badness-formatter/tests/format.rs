@@ -218,7 +218,7 @@ fn format_invariants_units() {
     }
 }
 
-/// In-region `BracketPolicy` audit pins (TODO.md, S4) beyond the
+/// In-region `BracketPolicy` audit pins beyond the
 /// `expl_bracket_attachment` fixture: the abutting-sensitive gates. Inside an
 /// expl3 region `\begin`/`\end` are plain commands (the issue-#60 carve-out),
 /// so the curated math `\begin`'s `Tight` policy is unreachable in-region and a
@@ -258,11 +258,11 @@ fn bracket_attachment_stability() {
 }
 
 /// The widths the corpus invariants sweep runs at. Every layout hybrid is a
-/// column-arithmetic accident, so widths multiply detection (TODO.md, S0).
+/// column-arithmetic accident, so widths multiply detection.
 const SWEEP_WIDTHS: &[usize] = &[60, 72, 80, 100, 120];
 
 /// Corpus files known to violate an invariant at one or more sweep widths —
-/// the in-repo mirror of the S0 failure inventory. A registered file is
+/// the in-repo mirror of the corpus failure inventory. A registered file is
 /// asserted to *fail* somewhere in the sweep, so a fix in a later stage forces
 /// the entry's removal; an unregistered failure panics with the details. The
 /// third field is a substring every observed failure message must contain, so
@@ -311,6 +311,81 @@ fn sweep_corpus_file(name: &str, text: &str, config: LexConfig) {
             "unregistered invariant failure(s) in {name}:\n{}",
             failures.join("\n")
         ),
+    }
+}
+
+/// Shapes whose layout satisfies the **strict** trivia-invariance contract:
+/// `fmt(perturbed) == fmt(original)` for every TeX-identical
+/// newline<->space perturbation, i.e. layout that reads none of the unsafe
+/// predicate anywhere in the shape.
+///
+/// This is an **allowlist, not a ratchet** — unlike [`KNOWN_INVARIANT_FAILURES`],
+/// which asserts registered files still *fail* and so forces its own pruning,
+/// this list can only prove the shapes on it stay invariant. It cannot notice
+/// that some new shape became invariant. So it grows by hand: when a Tier-1
+/// site is retired, add the shapes it governed.
+///
+/// The convergence oracle in [`check_format_invariants`] cannot stand in for
+/// this. It accepts deliberate authored-break preservation by construction, so
+/// a layout decision keyed on the unsafe predicate is invisible to it — both
+/// spellings are self-consistent fixed points. `badness debug format --checks
+/// trivia-strict` is the surveying form of the same oracle.
+const STRICT_TRIVIA_INVARIANT_SHAPES: &[(&str, &str)] = &[
+    ("reflowed-prose", "alpha\nbeta gamma\n"),
+    (
+        // Every head has derivable arity, so segmentation is structural and a
+        // swap anywhere in the stream formats back to identical bytes — the
+        // exact gap that was the `SplitAtNewlines` violation.
+        "expl3-structural-statements",
+        "\\ExplSyntaxOn\n\\tl_new:N \\l_tmpa_tl\n\\tl_new:N \\l_tmpb_tl\n\\ExplSyntaxOff\n",
+    ),
+    (
+        // An `Npn` definition (single-token slot, shape-scanned parameter text,
+        // peeled body group) is one structural call unit, so the authored break
+        // before its body carries no layout weight.
+        "expl3-structural-definition",
+        "\\ExplSyntaxOn\n\\cs_new:Npn \\demo_foo:n #1\n  { \\demo_use:n {#1} }\n\
+         \\cs_new:Nn \\demo_bar:n { \\demo_use:n { x } }\n\\ExplSyntaxOff\n",
+    ),
+];
+
+/// Every registered shape must hold strict trivia invariance at **all** sweep
+/// widths, not just the default: a shape proven invariant at 80 columns is not
+/// proven at 60, since every hybrid is a column-arithmetic accident.
+#[test]
+fn strict_trivia_invariant_shapes_stay_invariant() {
+    for (name, input) in STRICT_TRIVIA_INVARIANT_SHAPES {
+        for &width in SWEEP_WIDTHS {
+            let style = FormatStyle {
+                line_width: width,
+                ..FormatStyle::default()
+            };
+            let result = perturb::check_trivia_invariance(
+                input,
+                LatexFlavor::Document,
+                perturb::DEFAULT_SINGLE_FLIP_SAMPLES,
+                |s| format_with_style(s, style).map_err(|e| e.to_string()),
+            );
+            match result {
+                Ok(report) => assert!(
+                    report.variants_checked > 0,
+                    "{name} at width {width}: no perturbation was generated, so the shape proves \
+                     nothing — give it an eligible newline<->space gap"
+                ),
+                Err(perturb::TriviaError::Original(msg)) => {
+                    panic!("{name} at width {width}: the original failed to format: {msg}")
+                }
+                Err(perturb::TriviaError::Violation(failure)) => panic!(
+                    "{name} at width {width}: variant `{}` formatted differently — a layout \
+                     decision reads the lone-newline predicate.\noriginal:\n{}\nperturbed \
+                     ({}):\n{}",
+                    failure.label,
+                    failure.formatted_original,
+                    failure.label,
+                    failure.formatted_perturbed
+                ),
+            }
+        }
     }
 }
 
@@ -947,7 +1022,7 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // never an opaque block, which would strand a blank line and split the
     // statement head (issue #61, l3bigint.dtx).
     ("expl_doc_comment_statement", "sty"),
-    // Structural statement boundaries (S4): a call unit is the head plus the
+    // Structural statement boundaries: a call unit is the head plus the
     // arguments its argspec arity consumes, so authored mid-call newlines join —
     // `\tl_set:Nn` gathers its two arguments across lines, and an `Npn`/`Nn`
     // definition (parameter text shape-scanned, over-attached body peeled back)
@@ -992,7 +1067,8 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // The single-statement true-branch is load-bearing: its block breaks only
     // from width — soft on pass 1, hard on the reparse — which is what exposed
     // the drift. A two-statement body would break unconditionally on both passes
-    // and never expose it, so do not "tidy" this body. (Since S4 the
+    // and never expose it, so do not "tidy" this body. (Under structural
+    // boundaries the
     // `\cs_set_protected:Npn \…aux:` head joins — the soft-trailing glue keeps
     // the definiendum on the head line and hangs the body.)
     ("expl_trailing_empty_branch", "sty"),
@@ -1017,7 +1093,7 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // blocks open and hands the inner body a flat mode; without it the shape is
     // already stable.
     //
-    // Since S4 the head joins: the soft-trailing glue keeps `\int_set:Nn
+    // Under structural boundaries the head joins: the soft-trailing glue keeps `\int_set:Nn
     // \l_@@_groups_int` on one line on *both* passes (the old head/definiendum
     // wart — the statement fill width-splitting the pair on pass 1 while the
     // reparse's forced body head-hugged them on pass 2 — was the last
@@ -1069,7 +1145,7 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // never had. Load-bearing: the `\@latex@error` body must genuinely wrap at
     // width 80, or the block never detonates and the shape is already stable.
     ("expl_fallback_abutting_sibling", "sty"),
-    // In-region `BracketPolicy` audit (TODO.md, S4): bracket re-attachment is
+    // In-region `BracketPolicy` audit: bracket re-attachment is
     // stable across passes because the formatter never creates or removes a
     // *flush* junction before a `[` — flush-ness before an attached bracket is
     // a preserved predicate, and space<->lone-newline conversion is invisible

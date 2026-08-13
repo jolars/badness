@@ -217,6 +217,100 @@ fn trivia_check_fires_on_a_known_hybrid() {
 }
 
 #[test]
+fn trivia_strict_check_fires_where_an_authored_break_is_preserved() {
+    let dir = TempDir::new().unwrap();
+    // Two top-level commands separated by an authored newline. The
+    // command-only-line rule keeps that break, but glues the pair when the same
+    // gap is a space — the same bytes to the next parse, so exactly the
+    // lone-newline predicate trivia-invariant layout forbids reading.
+    //
+    // Neither `all` nor `trivia` can see it: both spellings are self-consistent
+    // fixed points that round-trip losslessly, which is the whole reason the
+    // strict oracle earns a CLI surface.
+    std::fs::write(
+        dir.path().join("preserved.tex"),
+        "\\usepackage{a}\n\\usepackage{b}\nalpha\nbeta gamma\n",
+    )
+    .unwrap();
+
+    let output = badness(
+        dir.path(),
+        &[
+            "debug",
+            "format",
+            "--checks",
+            "trivia-strict",
+            "--report",
+            "preserved.tex",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let report = stdout(&output);
+    assert!(
+        report.contains("- Checks: `trivia-strict`"),
+        "report: {report}"
+    );
+    assert!(
+        report.contains("### 1. `preserved.tex` (trivia-strict)"),
+        "report: {report}"
+    );
+    // The reported reproducer must be a localized `flip@…` gap, not one of the
+    // two whole-file bulk variants that are generated first — a mega-line diff
+    // names no construct.
+    assert!(
+        report.contains("variants diverged, reported: flip@"),
+        "report: {report}"
+    );
+
+    // Neither other check sees it, and no `trivia-strict` label may leak into
+    // `all` — the smoke-test workflow classifies failures by grepping for its
+    // own three labels.
+    for checks in ["all", "trivia"] {
+        let output = badness(
+            dir.path(),
+            &[
+                "debug",
+                "format",
+                "--checks",
+                checks,
+                "--report",
+                "preserved.tex",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "checks={checks} stderr: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("trivia-strict"));
+    }
+}
+
+#[test]
+fn trivia_strict_check_counts_skipped_bib_files_separately() {
+    // Same LaTeX-CST-based skip as the convergence check: a `.bib` runs nothing
+    // and must be reported as skipped, never folded into the checked count.
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("ok.tex"), "alpha beta.\n").unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{key, title = {T}, year = {2020}}\n",
+    )
+    .unwrap();
+
+    let output = badness(
+        dir.path(),
+        &["debug", "format", "--checks", "trivia-strict", "."],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("All checks passed (checks: trivia-strict, files: 1, skipped: 1)"),
+        "stdout: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn dtx_doc_margin_frame_survives_reflow() {
     let dir = TempDir::new().unwrap();
     // A `.dtx` whose documentation prose sits either side of a margin-framed

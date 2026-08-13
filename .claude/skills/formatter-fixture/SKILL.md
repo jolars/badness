@@ -179,16 +179,25 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 198 existing fixture slugs, which cluster in reflow (32),
-math (30), expl3 (29), dtx (25), align (18), and tabular (10). Thin or absent,
-each with a large corpus directory behind it:
+Measured against the 237 existing fixture slugs. **Re-measure before trusting
+this list** — it went stale once already: `items` and brace groups were listed as
+thin at one and four fixtures, and were actually at 11 and 33 by the time someone
+read it. Count with `ls crates/badness-formatter/tests/fixtures/formatter/ |
+grep -icE '<pattern>'` first, and fix the entry if it is wrong.
 
-1. **`items`** (`\item` lists) — one `list_item_continuation_hang` fixture
-   against 157 corpus files; issue #82's hang rule deserves more shapes.
-2. **`filecontents`** — no coverage; the environment's body is protected, so
-   this is mostly a protected-region question.
-3. **`unnamed-braces` / `namedGroupingBracesBrackets`** — four `group_*`
-   fixtures; bare and named brace groups at statement level.
+Candidates not yet checked against a fresh count:
+
+1. **`environments`, `mand-args`, `opt-and-mand-args`** — large corpus
+   directories; verify against current slugs before picking.
+2. **`tokenChecks`, `specials`, `diacritics`** — small, unexamined families.
+
+Done: `filecontents` (`filecontents_protected_body`) — no defect found; it pins
+that a verbatim-body environment's `\begin` line never breaks under width
+pressure (it defines where the protected body starts, and `filecontents`'s
+optional is `Keyval`, which elsewhere licenses a comma split), plus that the
+`\end` marker's indentation is inside `VERBATIM_BODY` and so author-preserved.
+A construct whose behavior is already correct legitimately yields a lock-in
+fixture plus a recorded rule, not a new rule.
 
 Done: sectioning / `headings` (`sectioning_starts_own_line`,
 `sectioning_blank_line_and_comment`) — a sectioning command is a block-level

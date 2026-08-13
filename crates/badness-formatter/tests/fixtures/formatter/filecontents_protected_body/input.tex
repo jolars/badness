@@ -1,0 +1,17 @@
+\documentclass{article}
+\begin{filecontents}[force]{refs.bib}
+@misc{key,
+	title = "A   title",  
+}
+\end{filecontents}
+\begin{filecontents*}[force,noheader]{a/very/long/generated/path/to/the/bibliography.bib}
+	\begin{document}
+ odd   indent   
+\end{filecontents*} % kept
+\begin{document}
+\begin{center}
+\begin{filecontents}{nested.bib}
+z
+    \end{filecontents}
+\end{center}
+\end{document}

@@ -1225,9 +1225,15 @@ sources below are missing.
   latexindent's own outputs are a soft target only: usable as inspiration where
   our tenets underdetermine a construct, never a form to match case by case,
   since it is a config-driven indenter whose committed outputs are one settings
-  stack's answer to a different question. Measured gaps against the 198 existing
-  slugs: `items` (157 files, one fixture), `filecontents`, bare/named brace
-  groups. Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
+  stack's answer to a different question. Measured gaps against the 237 existing
+  slugs: `items` (157 files) and bare/named brace groups are no longer thin (11
+  and 33 slugs); re-measure before trusting any gap list here. `filecontents` is
+  done (`filecontents_protected_body`) — it was purely a protected-region
+  question, and the survey found no defect: the sharp edge it now pins is that a
+  verbatim-body environment's `\begin` line must never break under width
+  pressure, since it defines where the protected body starts and `filecontents`'s
+  optional is `Keyval` (which elsewhere licenses a comma split).
+  Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
   bug that lived there). `ifelsefi` (402 files) is done too, via the
   `CONDITIONAL` node under *Parser* and eight fixtures — do not re-derive a
   formatter-only rule for it, the survey already showed every such rule is

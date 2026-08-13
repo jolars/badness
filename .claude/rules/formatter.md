@@ -167,6 +167,26 @@ predicates the formatter *preserves*.
 - Comma splits belong here, not in the lexer: a comma is catcode 12 and
   indistinguishable from `=` or `5`, so splitting on it in the lexer would encode
   keyval-ness into lexing.
+- **Never break the `\begin` line of a verbatim-body environment**, however wide
+  it gets and whatever its optional's `ContentKind` licenses. That line *defines
+  where the protected body starts*, so a break moves the first body byte —
+  and for `filecontents`, those bytes are written to a file. `filecontents`'s
+  optional is `Keyval`, so this is the one place the comma-split rule above must
+  not reach; it falls out of `has_verbatim_body` routing the environment to the
+  verbatim arm, not from a width special case. Pinned by
+  `filecontents_protected_body`.
+
+## Protected regions
+
+- **The protected region extends through the `\end` marker's own indentation.**
+  `VERBATIM_BODY` spans from the newline after the `\begin` args to the newline
+  before `\end`, so that leading whitespace is *content*, not layout. Hence the
+  deliberate asymmetry in a nested verbatim-family environment: the `\begin` line
+  reindents with its parent, the body and the `\end` line stay byte-exact where
+  the author put them. This is not a bug to be "fixed" into symmetry — indenting
+  the `\end` would rewrite a protected token. Pinned by
+  `verbatim_in_environment`, `verbatim_argument_environment`, and
+  `filecontents_protected_body`.
 
 ## Tables
 

@@ -560,6 +560,15 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // An argument-taking verbatim environment: the `[options]` are kept verbatim on
     // the (indented) `\begin` line, while the opaque body is emitted byte-for-byte.
     ("verbatim_argument_environment", WrapMode::Preserve, 80),
+    // `filecontents` is the verbatim-body environment whose `\begin` line *defines
+    // where the body starts*, so that line may never be broken. Its optional is
+    // declared `ContentKind::Keyval`, which everywhere else licenses exploding a
+    // `[…]` at its commas under width pressure (`\includegraphics`); here the
+    // over-long `\begin{filecontents*}[force,noheader]{…}` must stay on one line,
+    // because a break would shift the first protected body byte written to the file.
+    // Also pins that the `\end` marker's own indentation is *inside* `VERBATIM_BODY`
+    // (hence author-preserved, not reindented with the `\begin`).
+    ("filecontents_protected_body", WrapMode::Reflow, 80),
     // Group / argument indentation.
     ("group_indents_body", WrapMode::Preserve, 80),
     ("optional_indents_body", WrapMode::Preserve, 80),

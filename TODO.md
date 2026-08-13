@@ -118,35 +118,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [x] ~~**`]` is deleted inside prose-reflowable command arguments.**~~ **Fixed.**
-  `\emph{a [b] c}` formatted to `\emph{a [b c}` at default settings — the
-  whitespace-only invariant (tenet 1) broken outright, with no width pressure and
-  no perturbation needed. Cause: `splice_prose_group` matched *any* closer
-  (`R_BRACE | R_BRACKET`) as the prose group's delimiter, so a `]` inside a brace
-  argument was pulled out of the body and then silently overwritten by the
-  group's real `}`. The `open` arm had always been guarded by `open.is_none()`;
-  the asymmetry was the whole bug. The close arm now takes the node's *own*
-  matching kind, passed in like [`lower_prose_group`] already did. Kind-matching
-  alone suffices — the formatter runs only on clean parses, where a `GROUP` holds
-  exactly one `R_BRACE` and the parser ends an `OPTIONAL` at its first `]`.
-  Surfaced by the `latexindent` corpus (`oneSentencePerLine/pcc-program-review3*`);
-  pinned by `reflow_bracket_in_prose_argument`; 3 `content-change` entries
-  resolved, no additions.
-
-- [x] ~~**`--checks all` does not run the non-trivia-content oracle.**~~ **Fixed:
-  `CheckKind::ContentChange`.** The comparison lived only in the trivia path and
-  in `assert_format_invariants`, so the primary gate, the smoke-test workflow and
-  every `*.all.txt` baseline were blind to content corruption that needs no
-  perturbation — `--checks all` called `\emph{a [b] c}` clean. `all` now compares
-  `nontrivia_content` across the first format pass (`.bib` skipped; the
-  comparison is LaTeX-CST-based). Landed *before* the fix above so the bug failed
-  a gate first. Re-record surfaced **92 pre-existing** `content-change` entries
-  (latex2e 69, latex3 11, latexindent 12) and **no new bugs**: the counts land
-  exactly on what the trivia sets already recorded, i.e. the `.dtx` doc-layer
-  family below, which the baseline README had already predicted was reachable
-  without perturbation. It also falsifies that README's "production formatting
-  corrupts nothing" — that held only because the gate could not look.
-
 - [ ] **Trivia-invariant layout: the umbrella fix for the idempotency bug family
   (multi-session).** Recorded as an invariant in `AGENTS.md` and detailed in
   `docs/src/development/architecture.md` (§ *Trivia-invariant layout*). Layout may read only trivia

@@ -3,12 +3,13 @@ name: formatter-fixture
 description: >-
   Grow badness's formatter fixture coverage one LaTeX construct at a time,
   seeded from the latexindent gate corpus. You surface representative inputs,
-  propose the canonical formatting under the tenets, the user edits or accepts
-  `expected.tex`, then you implement the rule and register the fixture. The
-  corpus is primarily a coverage map; latexindent's own outputs are a soft
-  target only — inspiration where the tenets underdetermine a construct, never
-  a form to match. Use for "take the next construct", "add a formatter fixture
-  for X", or "mine the latexindent corpus for X".
+  draft the canonical formatting under the tenets, check it against latexindent
+  as a reference implementation and account for every divergence, the user edits
+  or accepts `expected.tex`, then you implement the rule and register the
+  fixture. The corpus is a coverage map and latexindent itself is the taste
+  reference — never a byte-target, but every divergence from it gets a verdict.
+  Use for "take the next construct", "add a formatter fixture for X", or "mine
+  the latexindent corpus for X".
 ---
 
 Use this skill to add formatter coverage for a *construct*, not to fix a
@@ -23,41 +24,74 @@ hand-written files of deliberately adversarial LaTeX. Its primary job here is to
 answer **"which constructs occur in the wild, and in what nasty shapes"** — a
 coverage map that the expl3-heavy latex3/latex2e/pgf corpora do not provide.
 
-### latexindent's output is a soft target, never a hard one
+### Check against latexindent, and give every divergence a verdict
 
-Know what those files are first. The harness writes results in-tree and asserts
-`git diff` is clean, so every committed `*-mod1.tex` / `*-output.tex` is the
-output of **one specific YAML settings stack** — read the directory's
-`*-test-cases.sh` to see which (`-l=env-all-on,env-mod-lines9` and friends).
-latexindent is also an *indenter*: it fixes leading whitespace and largely
-preserves author line breaks, where badness reflows and owns layout outright.
-So its output is never a target to match, and a divergence from it is not by
-itself a defect.
+latexindent.pl is the closest thing LaTeX has to a reference implementation of
+"what formatted LaTeX should look like", and its test suite shows why: 711 of its
+files are named for the upstream issue that produced them, across 127 distinct
+issues, plus a handful named for the TeX StackExchange question behind them
+(`te-752552`). That is a decade of real users bringing real documents and pushing
+back on the answer. Treat it as **a reference you check against on every
+construct**, not as a rival to be discounted — its accumulated taste is real
+signal, and it has seen shapes you will not think to try.
 
-But it does encode a lot of accumulated community taste about what LaTeX
-*should* look like, and discarding that wholesale is throwing away real signal.
-**Consult it where the tenets underdetermine the answer** — a construct with no
-governing rule and no precedent among the existing fixtures — as inspiration for
-a canonical form you then justify on our own terms. Three guards keep that from
-sliding into reverse-engineering:
+Two things it is not. It is not a byte-target: *as invoked below* it indents —
+fixing leading whitespace, preserving the author's line breaks, and leaving
+intra-line spacing alone — where badness reflows and owns layout outright. (It
+*can* reflow, under `-m` with `modifyLineBreaks`/`textWrapOptions`; that is a
+configured mode, and the default is the one worth comparing against, for the
+reason below.) And it does not outrank the tenets. Neither of those makes it
+something to skip; they make it something to **account for**.
 
-- **Form your own proposal first**, then look. Looking first anchors you, and
-  the anchor is another tool's config default.
-- **Never consult it to settle a question the tenets already decide.** If a rule
-  or an existing fixture governs the construct, that is the answer; latexindent
-  agreeing or disagreeing changes nothing.
-- **Never cite it as the justification.** The fixture and commit must stand on
-  the rule. "latexindent does it this way" is not a reason; "this is what the
-  reflow rule yields, and it happens to match the convention latexindent
-  encodes" is.
+**Run it — do not read the committed outputs.** The harness writes results
+in-tree and asserts `git diff` is clean, so every committed `*-mod1.tex` /
+`*-output.tex` is one YAML settings stack's answer with `-m` (modify line breaks)
+on — read the directory's `*-test-cases.sh` to see which
+(`-l=env-all-on,env-mod-lines9` and friends). Those are answers to a *configured*
+question, not latexindent's own default judgment. Get that by running it yourself
+on a probe you hand-authored, at default settings:
 
-If you want to know what a construct *is*, read the input; if you want to know
-how badness lays it out, derive it from the tenets and use their output to
-sanity-check taste where the tenets are silent.
+```sh
+latexindent probe.tex      # formatted document on stdout
+latexindent - < probe.tex  # same, via stdin
+```
 
-**Hand-author fixture inputs; never copy corpus files.** latexindent is GPL-3.0
-and badness is MIT — the fetch-don't-vendor setup keeps `corpora/` out of the
-tree, and a copied fixture would undo that. The median corpus file is ~200
+It ships with TeX Live, so `texlive.enable` puts it in the dev shell already.
+**Do not pass `-s`** — that is silent mode and it suppresses the stdout you want.
+At default settings `modifyLineBreaks` is off, so latexindent will not add or
+remove a break: it answers "where does this belong, given the breaks the author
+wrote", which is exactly the question worth borrowing on.
+
+Every shape you check gets one of four verdicts, and you report them:
+
+- **Corroborates** — same layout. Cheap confidence, especially on a rule you
+  derived but could not fully pin from the tenets.
+- **Explained divergence** — traceable to a known model difference: we reflow and
+  it preserves, we own layout and it indents, we normalize intra-line whitespace
+  and it never does. Name the difference in one line and move on.
+- **No opinion** — the construct falls outside its model, so byte-identical
+  output is *not* agreement. Intra-line whitespace is the common case: a probe
+  that comes back unchanged because latexindent never touches that spelling tells
+  you nothing. Say "no opinion", never "agrees".
+- **Unexplained divergence** — neither model accounts for the difference. **This
+  is the item: stop and raise it with the user before landing the fixture.** The
+  usual cause is that our rule is wrong, or right but under-specified in a way
+  that happens to bite this shape. Resolving it may mean changing the proposal,
+  or recording why we diverge on purpose — but it is never left unremarked.
+
+Three habits keep the checking honest:
+
+- **Form your own proposal first, then check.** Looking first anchors you.
+- **The tenets outrank it.** Where a tenet and latexindent disagree, the tenet
+  wins — but that is an *explained divergence* to record, not a reason to have
+  skipped the check.
+- **Justify on the rule, not on the agreement.** "latexindent does it this way"
+  is evidence, not a reason; "this is what the reflow rule yields, and
+  latexindent independently lands on it" is how it goes in a commit message.
+
+**Hand-author fixture inputs and probes; never copy corpus files.** latexindent
+is GPL-3.0 and badness is MIT — the fetch-don't-vendor setup keeps `corpora/` out
+of the tree, and a copied fixture would undo that. The median corpus file is ~200
 bytes, so restating a construct minimally is cheap, and it doubles as a
 comprehension filter: if you cannot restate the shape, you have not understood
 it yet.
@@ -72,21 +106,26 @@ it yet.
    argument forms). Inspect the CST (`badness parse <file>`) and today's output
    (`badness --no-config format < file`) for each. Pipe via stdin — `format
    <file>` rewrites in place.
-3. **Propose `expected.tex`.** Author the canonical form you believe is right
-   under the tenets — deterministic, rule-based, input-independent — and explain
-   the reasoning. Keep the input minimal and hand-written. *Then*, if no rule or
-   existing fixture governs the construct, check latexindent's output for the
-   same shape as a taste check (soft target, see above); say so in the proposal
-   if it moved your answer, and say which settings stack produced what you
-   looked at. Hand it to the user.
-4. **The user edits or accepts.**
-5. **Push back when warranted.** If the choice is unprincipled, breaks a tenet
+3. **Draft the canonical form.** Author the layout you believe is right under the
+   tenets — deterministic, rule-based, input-independent — and write down the
+   reasoning. Keep the input minimal and hand-written. Do this *before* step 4.
+4. **Check against latexindent.** Run your probe through it at default settings
+   (see above) for each distinct shape, and give each one a verdict:
+   corroborates / explained divergence / no opinion / unexplained divergence. An
+   **unexplained divergence is a blocker** — work it out before proposing, and if
+   you cannot, put the question to the user as part of the proposal rather than
+   burying it.
+5. **Propose `expected.tex`** to the user: the form, the rule it rests on, and
+   the latexindent verdicts — including anything that moved your answer, and the
+   invocation you used.
+6. **The user edits or accepts.**
+7. **Push back when warranted.** If the choice is unprincipled, breaks a tenet
    (especially "layout is decided solely by the formatter's rules"), reads a
    forbidden trivia predicate, or conflicts with an existing fixture, name the
    conflict and the affected fixture and resolve it before writing code.
    Diverging from a prior decision is allowed but must be conscious.
-6. **Implement the rule**, then **register and lock** it (below).
-7. **Guardrails**, then **record the rule** (below), then commit.
+8. **Implement the rule**, then **register and lock** it (below).
+9. **Guardrails**, then **record the rule** (below), then commit.
 
 ## Registering a fixture — the trap
 
@@ -188,8 +227,9 @@ grep -icE '<pattern>'` first, and fix the entry if it is wrong.
 Candidates not yet checked against a fresh count:
 
 1. **`specials`, `diacritics`** — small, unexamined families. (`tokenChecks` is
-   off the list: its four files are latexindent's own internal placeholder
-   tokens leaking into document text, which says nothing about LaTeX.)
+   off the list on its content, not its quality: its four files probe
+   latexindent's own internal placeholder tokens colliding with document text,
+   an implementation concern badness does not share.)
 2. **`environments`, `mand-args`, `opt-and-mand-args`** — partly mined (see
    `begin_tail_is_body` under Done); 24 and 19 slugs already match `env`/`arg`,
    so verify against current slugs before picking.
@@ -197,13 +237,25 @@ Candidates not yet checked against a fresh count:
 Done: `begin_tail_is_body` — content the greedy parser attaches to `BEGIN` past
 the *declared* arity is body, not header, so it indents and reflows with the body
 instead of stranding at the `\begin` column. The header ends at the last element
-glued to it, which reads only `Gap::Glued`-versus-not. Two traps worth knowing
-before touching this area again: the tail must be **spliced into the leading
-paragraph's reflow** (concatenating ahead of it deletes an inter-word space,
-since a paragraph trims its own leading newline — no oracle sees this), and the
-A/B whitespace-collapse sweep that caught it is the only mechanical check for
-that class. It also surfaced a pre-existing glued-split bug in `reflow_elements`
-(recorded in TODO.md, not fixed here).
+glued to it, which reads only `Gap::Glued`-versus-not.
+
+This is the **worked example of the latexindent check** paying for itself. The
+tenets left a live choice between "non-glued tail goes to the body" and "glue the
+whole tail up onto the header"; running latexindent at default settings
+corroborated the first on three shapes (over-attached group → body level; a glued
+`{a}` kept on the header while a following `[b]` dropped to body — its split point
+is ours exactly; a header `%` keeping its comment and bodying the group after it),
+which settled the choice and pulled the comment case into scope. The fourth shape,
+all three groups on one line with multi-space runs, was **no opinion**: it came
+back byte-identical only because latexindent never touches intra-line whitespace,
+which is not agreement.
+
+Two traps worth knowing before touching this area again: the tail must be
+**spliced into the leading paragraph's reflow** (concatenating ahead of it deletes
+an inter-word space, since a paragraph trims its own leading newline — no oracle
+sees this), and the A/B whitespace-collapse sweep that caught it is the only
+mechanical check for that class. It also surfaced a pre-existing glued-split bug
+in `reflow_elements` (recorded in TODO.md, not fixed here).
 
 Done: `filecontents` (`filecontents_protected_body`) — no defect found; it pins
 that a verbatim-body environment's `\begin` line never breaks under width
@@ -239,7 +291,11 @@ session is the recorded blocker rather than a fixture.
 
 1. Construct landed, and the canonical rule in one sentence.
 2. Fixture slug(s) added and which table each was registered in.
-3. Gate: `cargo test --workspace` green; any `gate-corpora` baseline movement.
-4. Any parser/semantic blocker surfaced and where it was recorded (TODO.md
+3. **latexindent check:** the verdict per shape (corroborates / explained
+   divergence / no opinion / unexplained divergence), and what any unexplained
+   divergence turned out to be. Never omit this section — "did not check" is
+   itself the thing to report.
+4. Gate: `cargo test --workspace` green; any `gate-corpora` baseline movement.
+5. Any parser/semantic blocker surfaced and where it was recorded (TODO.md
    section). "None" if clean.
-5. Ranked next target.
+6. Ranked next target.

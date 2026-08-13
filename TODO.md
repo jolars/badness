@@ -1285,12 +1285,19 @@ sources below are missing.
   is registered exactly once (and every registered slug exists on disk).
 
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
-  ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read
-  primarily as a coverage map — which constructs occur and in what shapes.
-  latexindent's own outputs are a soft target only: usable as inspiration where
-  our tenets underdetermine a construct, never a form to match case by case,
-  since it is a config-driven indenter whose committed outputs are one settings
-  stack's answer to a different question. Measured gaps against the 239 existing
+  ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read as a
+  coverage map — which constructs occur and in what shapes — and **latexindent
+  itself is the taste reference we check each construct against**: 711 of its
+  test files are named for the upstream issue that produced them, across 127
+  distinct issues, so its answers carry a decade of real user pushback.
+  Never a byte-target: it is an indenter that preserves author breaks and
+  never touches intra-line spacing, where we reflow and own layout. But every
+  divergence gets a verdict (corroborates / explained / no opinion /
+  unexplained), and an *unexplained* one blocks the fixture until it is worked
+  out — that is where our rule is usually wrong. Run it at default settings
+  (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
+  `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
+  judgment. Measured gaps against the 239 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin (11
   and 33 slugs); re-measure before trusting any gap list here. `mand-args` /
   `opt-and-mand-args` / `environments` yielded `begin_tail_is_body` — content the

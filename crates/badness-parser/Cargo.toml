@@ -14,16 +14,16 @@ keywords = ["latex", "bibtex", "parser", "cst"]
 categories = ["parsing", "parser-implementations", "text-processing"]
 
 [dependencies]
-phf = "0.14"
+phf = "0.14.0"
 rowan = "0.16.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 smol_str = "0.3.2"
 
 [build-dependencies]
-phf_codegen = "0.14"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+phf_codegen = "0.14.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
 [dev-dependencies]
 insta = "1.47.2"

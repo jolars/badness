@@ -147,7 +147,7 @@ fn generate_cli_markdown() -> std::io::Result<()> {
         .title("Command-line reference")
         .footer(false)
         .table_of_contents(false);
-    let markdown = opts.render(&cmd);
+    let markdown = clapdown::render(&cmd, &opts);
 
     std::fs::write(docs_dir.join("cli.md"), &markdown)?;
 

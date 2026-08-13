@@ -1456,27 +1456,37 @@ fn run_check(
 
 /// Line-diff `original` against `formatted`.
 ///
-/// **Patience, not the default Myers.** Myers is `O((N+M)*D)`, and `D` is the
+/// **Histogram, not the default Myers.** Myers is `O((N+M)*D)`, and `D` is the
 /// whole file whenever the formatter relays a document rather than touching a
 /// few lines: `phd_dissertation.tex` reflows 27 482 lines into 14 364 with 13.6%
 /// line overlap, which cost 2.0 s of a 2.2 s `--check` run. `similar`'s disjoint
 /// fast path cannot rescue that — it runs before prefix trimming and bails as
 /// soon as the two texts share a first line, which a preamble always does.
-/// Patience anchors on lines unique to both sides instead of searching for a
-/// minimal edit script, and is deterministic (no wall-clock deadline).
+/// Histogram anchors on low-frequency lines instead of searching for a minimal
+/// edit script, and is deterministic (no wall-clock deadline).
 ///
-/// **Chosen for its worst case, not its best.** `Algorithm::Histogram` is 3.6x
-/// faster than Patience here (229 ms vs 816 ms on that document) and was the
-/// first choice, but it collapses on highly self-similar input: fatou measured
-/// it at 2147 ms against Patience's 167 ms on a file of near-identical small
-/// functions, growing ~4x per doubling. A formatter's `--check` runs over
-/// whatever is in the tree, generated code included, so the algorithm that is
-/// *never worse than Myers* wins over the one that is usually much better.
-/// Keep this in step with fatou's `formatter::check::line_diff` and the other
-/// siblings; the shape of the input decides, and it is not this repo's alone.
+/// **Measured over the pinned gate corpora, not a synthetic.** Summed diff cost
+/// across the 60 largest real files in `corpora/` plus `benches/documents/`:
+/// Myers 2418 ms, Patience 919 ms, Histogram **643 ms**. The gap is in the big
+/// documents — on the 36 192-line `paperSS122018arxivv2.tex` the diff costs
+/// Myers 7.1 s and Patience 2.8 s while Histogram is free; on
+/// `phd_dissertation.tex`, 2124 / 680 / 68 ms.
+///
+/// **Histogram's cliff is real but small here.** It can lose to Myers on
+/// self-similar input — `ltfssaxes.dtx` is 2 ms under Myers and 76 ms under
+/// Histogram — so its *worst* single file across that scan is 76 ms, against
+/// Patience's 657 ms and Myers' 2023 ms. It therefore wins on the worst case
+/// too, which Patience does not.
+///
+/// **The choice is per-language and must be re-measured, never ported.** The
+/// same three algorithms rank differently in each sibling: arity (R) wants
+/// Patience (206 ms vs Myers 897 ms vs Histogram 1947 ms), panache (Markdown)
+/// is best on plain Myers, and fatou (Julia) keeps Patience because *its*
+/// Histogram cliff costs seconds rather than milliseconds. Do not copy this
+/// line into another repo without running its own corpus.
 fn diff_lines<'a>(original: &'a str, formatted: &'a str) -> TextDiff<'a, 'a, str> {
     TextDiff::configure()
-        .algorithm(Algorithm::Patience)
+        .algorithm(Algorithm::Histogram)
         .diff_lines(original, formatted)
 }
 

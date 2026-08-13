@@ -1147,14 +1147,21 @@ sources below are missing.
      `11a4558`; fatou and panache still carry it.
   2. **The `--check` diff** ran Myers, `O((N+M)*D)`, and `D` is the whole file
      whenever the formatter relays a document. Switched to
-     `Algorithm::Patience`, plus one buffered writer instead of a `print!` per
-     line. `Histogram` came first and is 3.6x faster still on this repo's
-     documents (229 ms vs 816 ms on `phd`), but porting the fix to fatou found
-     it collapsing on highly self-similar input — 2147 ms against Patience's
-     167 ms, growing ~4x per doubling. `--check` runs over whatever is in the
-     tree, so the algorithm that is never worse than Myers beat the one that is
-     usually much better. **Keep this in step across the siblings**; the input
-     shape decides it, and no one repo's corpus settles the question.
+     `Algorithm::Histogram`, plus one buffered writer instead of a `print!` per
+     line. Chosen on the pinned gate corpora, not a synthetic: summed diff cost
+     over the 60 largest real files is Myers 2418 ms, Patience 919 ms,
+     Histogram 643 ms, and Histogram also wins the *worst single file*
+     (76 ms against Patience's 657 ms and Myers' 2023 ms).
+
+     **The algorithm is a per-language choice and must not be ported.** The
+     ranking inverts across the siblings — arity (R) wants Patience (206 ms vs
+     Myers 897 ms vs Histogram 1947 ms), panache (Markdown) is best on plain
+     Myers, and fatou (Julia) keeps Patience because its Histogram cliff costs
+     seconds rather than the milliseconds it costs here. This was learned the
+     expensive way: the fix was ported to fatou verbatim, measured 4.5x *worse*
+     there, and briefly took this repo to Patience on that evidence before a
+     real-corpus sweep put it back.
+
   3. **`Parser::on_doc_margin_line`** walked back to the previous `NEWLINE` for
      every `\begin`/`\end` via `doc_margin_exempt`, so a one-line document was
      O(N x line length). Answered from a `PreScan` index instead.
@@ -1166,7 +1173,7 @@ sources below are missing.
   | | before | after |
   |---|---|---|
   | `phd` `lint` | 661 ms | **114 ms** (concise: 111 ms) |
-  | `phd` `format --check` | 2204 ms | **824 ms** (`-q`: 169 ms) |
+  | `phd` `format --check` | 2204 ms | **219 ms** (`-q`: 169 ms) |
   | `masters` `format --check` | 42.5 ms | **22.6 ms** |
   | N=4000 `\[` `lint` | 224 ms | 15 ms |
   | `{{{x}}}` nested 4000 | 555 ms | 136 ms |

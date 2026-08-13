@@ -1117,23 +1117,71 @@ sources below are missing.
     in-math gate's unfiltered reading then becomes the odd one out and
     `PLAIN_BRACES_ARE_TOKENS` can go. Pre-existing, not introduced by C2.5.
 
-- [ ] **The formatter *and the linter* are superlinear where the parser is
-  now linear** (found while measuring C2.2/C2.3, and it is the larger half of
-  every "quadratic gate" number this roadmap has been quoting). Two shapes,
-  with `parse` timed directly against the CLI on the same input:
+- [x] **Four quadratics behind the "formatter and linter are superlinear"
+  entry — none of them where that entry said.** The original note read the two
+  degenerate shapes as "a linter rule is quadratic on math-delimiter-heavy
+  input" and "the parser is no longer implicated in either". All three
+  conclusions were wrong, and the costs were not degenerate-only: on
+  `phd_dissertation.tex` (730 KB, 27 482 lines) the CLI spent **6-10x the real
+  work** rendering its output.
 
-  - `{`, N `\begin{itemize}`, `}` at N = 4000: `parse` 3.5ms,
-    `format --check` 133ms.
+  What isolated each one — worth reusing, since none needed a profiler to find:
 
-  - N `\[` with one `\]` at EOF at N = 4000: `parse` **0.4ms**, `lint`
-    **287ms** (93ms at N = 2000, so ~3.1x per doubling).
+  - `lint --output concise`/`json` were flat-linear on the very input that made
+    `--output pretty` quadratic, so no rule, side index, or tree walk was
+    implicated. Holding findings fixed while growing the file (and vice versa)
+    showed the cost was the *product*, not findings squared.
+  - `format --stdin` was exactly linear on the itemize shape; only `--check`
+    without `-q` was not, so the layout engine was never involved.
+  - A large file with a *tiny* diff cost nothing extra, so diff cost tracked
+    edit distance rather than file size.
+  - `\begin` vs `\bezin` — same CST shape, one command name apart — separated a
+    `\begin`-path cost from everything else in the parse.
 
-  The parser is no longer implicated in either. The second one is the louder
-  finding: a linter rule is quadratic on math-delimiter-heavy input. Profile
-  before guessing (`task bench:profile` takes `BADNESS_BENCH_DOC`). The shapes
-  are degenerate, but the gate work this roadmap has been shaving is now the
-  smaller term by two orders of magnitude, which is worth knowing before
-  spending more on C2.
+  The four, and their fixes:
+
+  1. **Pretty diagnostic rendering** handed `annotate-snippets` the whole file
+     per finding, rebuilding an O(file) source map on every `render()`:
+     O(findings x file length). Windowed to the annotated lines
+     (`Snippet::line_start`), output byte-identical. Ported from arity
+     `11a4558`; fatou and panache still carry it.
+  2. **The `--check` diff** ran Myers, `O((N+M)*D)`, and `D` is the whole file
+     whenever the formatter relays a document. Switched to
+     `Algorithm::Histogram`, plus one buffered writer instead of a `print!` per
+     line.
+  3. **`Parser::on_doc_margin_line`** walked back to the previous `NEWLINE` for
+     every `\begin`/`\end` via `doc_margin_exempt`, so a one-line document was
+     O(N x line length). Answered from a `PreScan` index instead.
+  4. **`contains_doc_margin`** is a match guard on most of `lower_node`'s
+     relayout arms and walked each node's whole subtree, so nested groups
+     re-walked at every level — quadratic in nesting depth, for every file.
+     Gated on `cx.is_dtx`.
+
+  | | before | after |
+  |---|---|---|
+  | `phd` `lint` | 661 ms | **114 ms** (concise: 111 ms) |
+  | `phd` `format --check` | 2204 ms | **219 ms** (`-q`: 169 ms) |
+  | `masters` `format --check` | 42.5 ms | **22.6 ms** |
+  | N=4000 `\[` `lint` | 224 ms | 15 ms |
+  | `{{{x}}}` nested 4000 | 555 ms | 136 ms |
+
+  `tests/scaling.rs` (plus one case in `main.rs`, where `diff_lines` lives) now
+  guards the growth *rate* of all four, each verified to fail when its fix is
+  reverted. There was no performance test in the repo before this.
+
+- [ ] **`Ir::contains_forced_break` is a per-child subtree walk at lowering
+  time**, so nesting depth is still superlinear — 64% of the run on `{{{x}}}`
+  nested 4000 deep, the residue after the `contains_doc_margin` gate above.
+  `saturate` (`ir.rs`) already computes the identical bit bottom-up in one O(n)
+  pass, precisely so it is "computed on the way up, never by re-traversal", but
+  it runs once at the printer seam while lowering asks the question repeatedly
+  on partial sub-IR — which `core.rs` explicitly sanctions today. So this is a
+  documented decision to revisit, not a bug to patch: the bit changes as the IR
+  is rebuilt during lowering, so a memo has to be keyed on something that
+  cannot go stale. `Ir::contains_group` has the same shape. Deep brace nesting
+  is the only shape that reaches it (both bench documents are unaffected), so
+  it is not urgent. `tests/scaling.rs` tolerates the residue at a 3.4x bound;
+  tighten it to 3.0x when this lands.
 
 - [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
   Everything today is curated corpus + snapshots; nothing exercises

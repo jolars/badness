@@ -2,8 +2,13 @@
 //!
 //! The pipeline follows rust-analyzer: `lex` produces a flat token
 //! stream, the parser emits a flat list of [`events::Event`]s, and
-//! [`tree_builder::build_tree`] turns tokens + events into a rowan green tree,
-//! re-attaching trivia along the way.
+//! [`tree_builder::build_tree`] replays tokens + events into a rowan green
+//! tree.
+//!
+//! `build_tree` is a straight replay and makes no attachment decisions of its
+//! own — trivia is already placed by the time it runs. Comment binding is the
+//! grammar's (`grammar::trivia::binding_run`), which decides where a `%` run
+//! attaches while the walk still has the context to say.
 
 pub mod conditional;
 pub mod core;

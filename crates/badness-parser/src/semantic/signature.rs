@@ -143,6 +143,23 @@ pub struct CommandSig {
     /// (`\section`, `\caption`) leave this `false`. Only meaningful to the formatter;
     /// the parser ignores it.
     pub inline: bool,
+    /// `true` for *block-level* commands that conventionally own their physical
+    /// line (`\usepackage`, `\newcommand`, `\maketitle`, …): package/class
+    /// loading, preamble machinery, definitions, and document structure. Prose
+    /// reflow places such a command on its own line whatever trivia the author
+    /// wrote, instead of preserving the line only when the source happened to
+    /// break there (the lone-newline predicate trivia-invariant layout forbids).
+    /// Sectioning commands are block-level too, implied by [`Self::sectioning`]
+    /// at the formatter's query, so entries carrying `sectioning` do not also
+    /// set this. Curated-only, like [`Self::verbatim_delimited`]: never from
+    /// the CWL tier or scanned definitions — an unknown macro's block-ness is
+    /// undecidable without meaning, so those fall back to the formatter's
+    /// residual authored-break rule. `\caption` and `\label` are deliberately
+    /// excluded (a glued `\caption{…} \label{…}` pair must stay untouched), as
+    /// are `\item` (owned by list layout) and `\input` (its TeX-primitive bare
+    /// form `\input docstrip.tex` leaves the filename outside the node). Only
+    /// meaningful to the formatter; the parser ignores it.
+    pub block: bool,
 }
 
 /// How an environment appears in the document-symbol outline, if at all. A small
@@ -268,6 +285,9 @@ pub(crate) const fn command(
         verbatim_delimited: false,
         rule,
         inline,
+        // Curated-only facet, like the delimiter one: block-ness never comes
+        // from the codegen (CWL) tier.
+        block: false,
     }
 }
 
@@ -932,6 +952,8 @@ struct RawCommand {
     rule: bool,
     #[serde(default)]
     inline: bool,
+    #[serde(default)]
+    block: bool,
 }
 
 impl From<RawCommand> for CommandSig {
@@ -943,6 +965,7 @@ impl From<RawCommand> for CommandSig {
             verbatim_delimited: raw.verbatim_delimited,
             rule: raw.rule,
             inline: raw.inline,
+            block: raw.block,
         }
     }
 }
@@ -1133,6 +1156,40 @@ mod tests {
         // A sectioning command still carries its argument shape.
         assert_eq!(db.command("section").unwrap().args.len(), 2);
         assert!(db.command("textbf").unwrap().sectioning.is_none());
+    }
+
+    #[test]
+    fn block_commands_flagged() {
+        let db = builtin();
+        assert!(db.command("usepackage").unwrap().block);
+        assert!(db.command("newcommand").unwrap().block);
+        assert!(db.command("maketitle").unwrap().block);
+        assert!(db.command("title").unwrap().block);
+        // A block command still carries its argument shape (the curated tier
+        // masks CWL wholesale, so dropping the args here would lose them).
+        assert_eq!(db.command("usepackage").unwrap().args.len(), 2);
+        // Deliberate exclusions: a glued `\caption{…} \label{…}` pair must stay
+        // untouched, and inline commands are the opposite claim.
+        assert!(!db.command("caption").unwrap().block);
+        assert!(!db.command("label").unwrap().block);
+        assert!(!db.command("textbf").unwrap().block);
+        // Sectioning implies block at the formatter's query; the entries do not
+        // double-flag.
+        assert!(!db.command("section").unwrap().block);
+    }
+
+    #[test]
+    fn no_command_is_both_inline_and_block() {
+        // `inline` says a command flows into the fill; `block` says it owns its
+        // line. A curated entry claiming both would leave the formatter's
+        // dispatch order deciding, silently.
+        for name in builtin().command_names() {
+            let sig = builtin().command(name).unwrap();
+            assert!(
+                !(sig.inline && sig.block),
+                "`\\{name}` is flagged both inline and block"
+            );
+        }
     }
 
     #[test]
@@ -1383,7 +1440,7 @@ mod tests {
         let db = cwl();
         for sig in db.command_sigs() {
             assert!(sig.sectioning.is_none());
-            assert!(!sig.verbatim && !sig.rule && !sig.inline);
+            assert!(!sig.verbatim && !sig.rule && !sig.inline && !sig.block);
             // `Keyval` is the one content kind the tier may carry, and only on an
             // optional: `%keyvals` on a mandatory group is real but unconsumed, so
             // the converter drops it rather than record an unvalidated claim.
@@ -1432,7 +1489,7 @@ mod tests {
             panic!("expected at least one CWL-only command name");
         };
         let sig = sigs.command(name).expect("CWL-only name resolves");
-        assert!(sig.sectioning.is_none() && !sig.inline && !sig.verbatim);
+        assert!(sig.sectioning.is_none() && !sig.inline && !sig.verbatim && !sig.block);
     }
 
     /// A minimal one-command DB for the origin-merge tests.

@@ -189,6 +189,53 @@ mod tests {
     }
 
     #[test]
+    fn one_quickfix_repairs_a_whole_quotation() {
+        // A straight-quote pair is one finding carrying both edits, so the editor
+        // offers a single action -- with the caret on either quote -- that rewrites
+        // the quotation in one step, instead of one action per quote.
+        let src = "He said \"hi\" now\n";
+        for caret in [9, 11] {
+            let cursor = Range {
+                start: Position::new(0, caret),
+                end: Position::new(0, caret),
+            };
+            let actions = code_actions_for_range(
+                &findings(src),
+                src,
+                &uri(),
+                std::path::Path::new("x.tex"),
+                cursor,
+                PositionEncoding::Utf16,
+                true,
+                &no_resolve,
+            );
+            let quotes: Vec<_> = actions
+                .iter()
+                .filter_map(|a| match a {
+                    CodeActionOrCommand::CodeAction(a) if a.title.contains("straight quotes") => {
+                        Some(a)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(quotes.len(), 1, "caret {caret}: {actions:?}");
+            let edits = quotes[0]
+                .edit
+                .as_ref()
+                .and_then(|e| e.changes.as_ref())
+                .and_then(|c| c.get(&uri()))
+                .expect("a single-file edit");
+            assert_eq!(edits.len(), 2);
+            assert_eq!(edits[0].new_text, "``");
+            assert_eq!(edits[0].range.start, Position::new(0, 8));
+            assert_eq!(edits[1].new_text, "''");
+            assert_eq!(edits[1].range.start, Position::new(0, 11));
+            // Direction is inferred, so the fix stays unsafe and never preferred.
+            assert_eq!(quotes[0].is_preferred, Some(false));
+        }
+    }
+
+    #[test]
     fn empty_when_range_misses_the_finding() {
         let src = "ok\n{\\bf hi}\n";
         // A zero-width cursor on line 0 (the `ok` prose), nowhere near `\bf`.

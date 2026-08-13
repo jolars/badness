@@ -897,14 +897,16 @@ fn ellipsis_fix_is_correct() {
 }
 
 #[test]
-fn straight_quotes_flags_open_and_close() {
+fn straight_quotes_reports_a_quotation_once() {
+    // The pair is one finding carrying both edits, so a single editor code action
+    // repairs the quotation.
     let out = lint("He said \"hello\" today.\n");
     let hits: Vec<_> = out
         .iter()
         .filter(|(r, _)| *r == "straight-quotes")
         .collect();
-    assert_eq!(hits.len(), 2);
-    assert!(hits.iter().all(|(_, sev)| *sev == Severity::Warning));
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].1, Severity::Warning);
 }
 
 #[test]

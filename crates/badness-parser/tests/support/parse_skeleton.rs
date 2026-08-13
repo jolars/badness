@@ -18,8 +18,6 @@
 
 #![allow(dead_code)] // each test binary uses only part of this module.
 
-use rowan::{Language, NodeOrToken, SyntaxNode};
-
 /// One node in the common skeleton. A document projects to a `Vec<Atom>` forest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Atom {
@@ -53,30 +51,102 @@ pub enum Cat {
     Drop,
 }
 
-/// Per-language classification + name extraction. One impl per parser.
-pub trait Projector {
-    type Lang: Language;
-
-    fn cat(kind: <Self::Lang as Language>::Kind) -> Cat;
-    /// True for the `BEGIN` / `END` child nodes of an environment.
-    fn is_begin_or_end(kind: <Self::Lang as Language>::Kind) -> bool;
-    /// True for the token carrying a control-sequence name (e.g. `\section`).
-    fn is_command_token(kind: <Self::Lang as Language>::Kind) -> bool;
-    /// True for an ordinary word token (used to read an environment's name).
-    fn is_word_token(kind: <Self::Lang as Language>::Kind) -> bool;
-    /// True for a verbatim/protected token.
-    fn is_verbatim_token(kind: <Self::Lang as Language>::Kind) -> bool;
+/// One element of a tree walk: a node or a token.
+///
+/// Deliberately *not* `rowan::NodeOrToken`. See [`Tree`].
+pub enum Elem<P: Tree> {
+    Node(P::Node),
+    Token(P::Token),
 }
 
-type Node<P> = SyntaxNode<<P as Projector>::Lang>;
+/// Version-agnostic read access to a syntax tree.
+///
+/// badness and texlab pin *different* rowan releases, so `rowan::Language`,
+/// `SyntaxNode`, and `NodeOrToken` name genuinely different types on each side
+/// and no bound written over them can span both. That is not incidental: texlab
+/// is an upstream project on its own schedule, and a shared walk bounded by
+/// `rowan::Language` silently welds badness's rowan version to texlab's.
+///
+/// So this trait re-states the handful of operations the projection walk
+/// actually needs, in terms of each side's own exported type aliases. The walk
+/// below never mentions rowan, and the oracle keeps working whatever rowan
+/// either side is on.
+pub trait Tree: Sized {
+    type Kind: Copy + Eq;
+    type Node: Clone;
+    type Token: Clone;
+
+    fn node_kind(node: &Self::Node) -> Self::Kind;
+    fn token_kind(token: &Self::Token) -> Self::Kind;
+    fn token_text(token: &Self::Token) -> String;
+    /// Direct children, nodes and tokens interleaved, in source order.
+    fn children_with_tokens(node: &Self::Node) -> Vec<Elem<Self>>;
+    /// Every descendant token, in source order.
+    fn descendant_tokens(node: &Self::Node) -> Vec<Self::Token>;
+}
+
+/// Implement [`Tree`] over a rowan tree, naming it only through the `SyntaxKind`
+/// / `SyntaxNode` / `SyntaxToken` aliases its own crate exports. The body calls
+/// inherent rowan methods only, so one macro serves both rowan versions.
+macro_rules! impl_tree {
+    ($proj:ty, $kind:ty, $node:ty, $token:ty) => {
+        impl Tree for $proj {
+            type Kind = $kind;
+            type Node = $node;
+            type Token = $token;
+
+            fn node_kind(node: &Self::Node) -> Self::Kind {
+                node.kind()
+            }
+
+            fn token_kind(token: &Self::Token) -> Self::Kind {
+                token.kind()
+            }
+
+            fn token_text(token: &Self::Token) -> String {
+                token.text().to_string()
+            }
+
+            fn children_with_tokens(node: &Self::Node) -> Vec<Elem<Self>> {
+                node.children_with_tokens()
+                    .map(|e| match e.as_node() {
+                        Some(n) => Elem::Node(n.clone()),
+                        None => {
+                            Elem::Token(e.as_token().expect("element is a node or a token").clone())
+                        }
+                    })
+                    .collect()
+            }
+
+            fn descendant_tokens(node: &Self::Node) -> Vec<Self::Token> {
+                node.descendants_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .collect()
+            }
+        }
+    };
+}
+
+/// Per-language classification + name extraction. One impl per parser.
+pub trait Projector: Tree {
+    fn cat(kind: Self::Kind) -> Cat;
+    /// True for the `BEGIN` / `END` child nodes of an environment.
+    fn is_begin_or_end(kind: Self::Kind) -> bool;
+    /// True for the token carrying a control-sequence name (e.g. `\section`).
+    fn is_command_token(kind: Self::Kind) -> bool;
+    /// True for an ordinary word token (used to read an environment's name).
+    fn is_word_token(kind: Self::Kind) -> bool;
+    /// True for a verbatim/protected token.
+    fn is_verbatim_token(kind: Self::Kind) -> bool;
+}
 
 /// Project a whole document (a root node) into the skeleton forest.
-pub fn project<P: Projector>(root: &Node<P>) -> Vec<Atom> {
+pub fn project<P: Projector>(root: &P::Node) -> Vec<Atom> {
     project_node::<P>(root)
 }
 
-fn project_node<P: Projector>(node: &Node<P>) -> Vec<Atom> {
-    match P::cat(node.kind()) {
+fn project_node<P: Projector>(node: &P::Node) -> Vec<Atom> {
+    match P::cat(P::node_kind(node)) {
         // The command-name token is consumed for the head, so it must be skipped
         // when projecting children (otherwise it re-emits as a nested `Cmd` — see
         // `project_elem`, which now projects bare command tokens).
@@ -85,13 +155,13 @@ fn project_node<P: Projector>(node: &Node<P>) -> Vec<Atom> {
             project_command_args::<P>(node),
         )],
         Cat::Env => {
-            let body = node
-                .children_with_tokens()
+            let body = P::children_with_tokens(node)
+                .iter()
                 .filter(|e| match e {
-                    NodeOrToken::Node(n) => !P::is_begin_or_end(n.kind()),
-                    NodeOrToken::Token(_) => true,
+                    Elem::Node(n) => !P::is_begin_or_end(P::node_kind(n)),
+                    Elem::Token(_) => true,
                 })
-                .flat_map(|e| project_elem::<P>(&e))
+                .flat_map(|e| project_elem::<P>(e))
                 .collect();
             vec![Atom::Env(env_name::<P>(node), body)]
         }
@@ -103,66 +173,70 @@ fn project_node<P: Projector>(node: &Node<P>) -> Vec<Atom> {
     }
 }
 
-fn project_children<P: Projector>(node: &Node<P>) -> Vec<Atom> {
-    node.children_with_tokens()
-        .flat_map(|e| project_elem::<P>(&e))
+fn project_children<P: Projector>(node: &P::Node) -> Vec<Atom> {
+    P::children_with_tokens(node)
+        .iter()
+        .flat_map(|e| project_elem::<P>(e))
         .collect()
 }
 
 /// Like [`project_children`], but for a command node: the first command-name
 /// token is the node's own head (already captured by [`command_name`]), so it is
 /// skipped to avoid re-emitting it as a nested `Cmd`.
-fn project_command_args<P: Projector>(node: &Node<P>) -> Vec<Atom> {
+fn project_command_args<P: Projector>(node: &P::Node) -> Vec<Atom> {
     let mut skipped_name = false;
-    node.children_with_tokens()
+    P::children_with_tokens(node)
+        .iter()
         .flat_map(|e| {
             if !skipped_name
-                && let NodeOrToken::Token(t) = &e
-                && P::is_command_token(t.kind())
+                && let Elem::Token(t) = e
+                && P::is_command_token(P::token_kind(t))
             {
                 skipped_name = true;
                 return Vec::new();
             }
-            project_elem::<P>(&e)
+            project_elem::<P>(e)
         })
         .collect()
 }
 
-fn project_elem<P: Projector>(
-    elem: &NodeOrToken<Node<P>, rowan::SyntaxToken<P::Lang>>,
-) -> Vec<Atom> {
+fn project_elem<P: Projector>(elem: &Elem<P>) -> Vec<Atom> {
     match elem {
-        NodeOrToken::Node(n) => project_node::<P>(n),
-        NodeOrToken::Token(t) if P::is_verbatim_token(t.kind()) => vec![Atom::Verbatim],
+        Elem::Node(n) => project_node::<P>(n),
+        Elem::Token(t) if P::is_verbatim_token(P::token_kind(t)) => vec![Atom::Verbatim],
         // A bare command-name token with no enclosing command node. badness emits
         // control *symbols* (`\,`, `\{`, `\$`, `\\`) as floating `CONTROL_SYMBOL`
         // tokens rather than wrapping them in a `COMMAND` node (only control words
         // are wrapped); texlab renders the same constructs as `GENERIC_COMMAND`.
         // Projecting them to `Cmd` keeps the two skeletons symmetric so the gauge
         // measures real structural divergence, not this tokenization asymmetry.
-        NodeOrToken::Token(t) if P::is_command_token(t.kind()) => vec![Atom::Cmd(
-            t.text().trim_start_matches('\\').to_string(),
+        Elem::Token(t) if P::is_command_token(P::token_kind(t)) => vec![Atom::Cmd(
+            P::token_text(t).trim_start_matches('\\').to_string(),
             Vec::new(),
         )],
-        NodeOrToken::Token(_) => vec![],
+        Elem::Token(_) => vec![],
     }
 }
 
 /// The control-sequence name of a command node, with the leading `\` stripped.
-fn command_name<P: Projector>(node: &Node<P>) -> String {
-    node.children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .find(|t| P::is_command_token(t.kind()))
-        .map(|t| t.text().trim_start_matches('\\').to_string())
+fn command_name<P: Projector>(node: &P::Node) -> String {
+    P::children_with_tokens(node)
+        .iter()
+        .filter_map(|e| match e {
+            Elem::Token(t) => Some(t),
+            Elem::Node(_) => None,
+        })
+        .find(|t| P::is_command_token(P::token_kind(t)))
+        .map(|t| P::token_text(t).trim_start_matches('\\').to_string())
         .unwrap_or_default()
 }
 
 /// The environment name, read from the first word token inside its `BEGIN`.
-fn env_name<P: Projector>(node: &Node<P>) -> String {
-    node.descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .find(|t| P::is_word_token(t.kind()))
-        .map(|t| t.text().to_string())
+fn env_name<P: Projector>(node: &P::Node) -> String {
+    P::descendant_tokens(node)
+        .iter()
+        .find(|t| P::is_word_token(P::token_kind(t)))
+        .map(P::token_text)
         .unwrap_or_default()
 }
 
@@ -228,9 +302,14 @@ pub fn dice(a: &[String], b: &[String]) -> f64 {
 
 pub enum Badness {}
 
-impl Projector for Badness {
-    type Lang = badness_parser::syntax::BadnessLang;
+impl_tree!(
+    Badness,
+    badness_parser::syntax::SyntaxKind,
+    badness_parser::syntax::SyntaxNode,
+    badness_parser::syntax::SyntaxToken
+);
 
+impl Projector for Badness {
     fn cat(kind: badness_parser::syntax::SyntaxKind) -> Cat {
         use badness_parser::syntax::SyntaxKind::*;
         match kind {
@@ -276,9 +355,14 @@ pub fn project_badness(text: &str) -> Vec<Atom> {
 
 pub enum Texlab {}
 
-impl Projector for Texlab {
-    type Lang = texlab_syntax::latex::LatexLanguage;
+impl_tree!(
+    Texlab,
+    texlab_syntax::latex::SyntaxKind,
+    texlab_syntax::latex::SyntaxNode,
+    texlab_syntax::latex::SyntaxToken
+);
 
+impl Projector for Texlab {
     fn cat(kind: texlab_syntax::latex::SyntaxKind) -> Cat {
         use texlab_syntax::latex::SyntaxKind::*;
         match kind {

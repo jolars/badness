@@ -51,7 +51,7 @@ log = { version = "0.4.32", features = ["release_max_level_info"] }
 lsp-server = "0.10.0"
 lsp-types = "0.97.0"
 rayon = "1.10.0"
-rowan = "0.16.1"
+rowan = "0.17.0"
 salsa = "0.28.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

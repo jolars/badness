@@ -254,7 +254,7 @@ pub(crate) fn is_block_environment(name: &str) -> bool {
 /// mode, wrapping it in a `MATH` node exactly as `\[…\]` does (so scripts become
 /// `SCRIPTED`, operators split, and `\left…\right` pair)? Resolved against the
 /// built-in signature database ([`builtin`]) only, for the same reason as
-/// [`is_block_environment`] and [`VerbCtx::is_verbatim_environment`]: routing a body
+/// [`is_block_environment`] and [`ParseCtx::is_verbatim_environment`]: routing a body
 /// into math mode is a structural (lossless-preserving but shape-changing) decision,
 /// so it rests solely on curated data. The bulk CWL tier carries `math == false` for
 /// every entry, and a user/unknown environment stays in text mode — the
@@ -308,14 +308,6 @@ pub(crate) fn definition_name_slots(text: &str) -> u8 {
 }
 
 /// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
-/// that opens a numeric context, where a following number is conventionally
-/// written in backtick char-constant notation (`` \char`$ ``, `` \catcode`\%=12 ``,
-/// `` \number`\[ ``): after it, a backtick makes the next character *data*, never
-/// syntax. A closed curated set; reads only the static keyword, no macro meaning.
-/// The number-*producing* primitives (`\number`/`\the`/`\romannumeral`) and the
-/// numeric conditionals (`\ifnum`/`\ifodd`/`\ifdim`) are included alongside the
-/// codetables because their operand is just as routinely a backtick constant.
-/// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
 /// that grabs the *next token* without expanding it, so a following character
 /// keeps its literal shape. Only the short-verb capture reads this: an active
 /// `|` after `\string` is the token being printed, not a `\verb`-style opener
@@ -328,6 +320,14 @@ fn is_literal_token_command(text: &str) -> bool {
     )
 }
 
+/// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a TeX primitive
+/// that opens a numeric context, where a following number is conventionally
+/// written in backtick char-constant notation (`` \char`$ ``, `` \catcode`\%=12 ``,
+/// `` \number`\[ ``): after it, a backtick makes the next character *data*, never
+/// syntax. A closed curated set; reads only the static keyword, no macro meaning.
+/// The number-*producing* primitives (`\number`/`\the`/`\romannumeral`) and the
+/// numeric conditionals (`\ifnum`/`\ifodd`/`\ifdim`) are included alongside the
+/// codetables because their operand is just as routinely a backtick constant.
 fn is_char_constant_command(text: &str) -> bool {
     matches!(
         text,
@@ -402,7 +402,7 @@ fn dtx_has_expl_signal(input: &str) -> bool {
 /// parse pass; [`lex_with`] adds user-defined verbatim commands. Uses the
 /// [`Document`](LatexFlavor::Document) flavor (ordinary starting catcodes).
 pub fn lex(input: &str) -> Vec<Token> {
-    lex_with(input, &VerbCtx::default(), LexConfig::default())
+    lex_with(input, &ParseCtx::default(), LexConfig::default())
 }
 
 /// Lex `input` like [`lex`], additionally treating the user-defined verbatim
@@ -411,423 +411,577 @@ pub fn lex(input: &str) -> Vec<Token> {
 /// catcode-othering commands. `config` fixes the initial catcode regime (a
 /// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter) and
 /// whether to run the `.dtx` docstrip mode.
-pub fn lex_with(input: &str, ctx: &VerbCtx, config: LexConfig) -> Vec<Token> {
-    let mut out: Vec<Token> = Vec::new();
-    let mut pos = 0;
-    let mut at_letter = config.flavor.letter_mode_start(); // `\makeatletter` state
-    // `\ExplSyntaxOn` state: while true, `_` and `:` are catcode-11 letters, so
-    // expl3 names (`\seq_new:N`, `\__module_internal:nn`) lex as single control
-    // words. Toggled by `\ExplSyntaxOn`/`\ExplSyntaxOff` and turned on by the
-    // `\ProvidesExpl*` package/class/file declarations (a sanctioned static lexer
-    // mode, `AGENTS.md` decision #1). Independent of `at_letter`; the two compose.
-    let mut expl_syntax = false;
-    // `.dtx` docstrip mode: true at the start of a physical line (start of input
-    // or just after a `NEWLINE`), so a line-leading `%` can be recognized as a
-    // documentation margin. Any token — including whitespace — clears it, matching
-    // docstrip's rule that only a `%` in *column 0* is a margin.
-    let mut at_line_start = true;
-    // doc-package short-verb characters (`\MakeShortVerb{\|}`): while a char is
-    // enabled, `<c>…<c>` on one line captures as a single opaque `VERB` token,
-    // exactly like `\verb<c>…<c>`. A sanctioned static lexer mode (`AGENTS.md`
-    // decision #1): the toggles are the explicit `\MakeShortVerb`/
-    // `\DeleteShortVerb` calls (left-to-right, like `\makeatletter`), plus the
-    // curated doc classes that enable `|` themselves (`\documentclass{ltxdoc}`
-    // and friends, see [`doc_class_enables_bar`]). The `.dtx` documentation
-    // layer gets `|` from the start — dtx files are typeset under `ltxdoc`, and
-    // the driver holding the `\documentclass` may live in a separate file.
-    let mut short_verbs: Vec<char> = if config.dtx { vec!['|'] } else { Vec::new() };
-    // True while inside a `macrocode`/`macrocode*` environment body (between its
-    // frame lines). There, code lines carry no margin, a line-leading `%` is an
-    // ordinary code comment (not a margin), and `@` is a letter (`macrocode` runs
-    // under `\makeatletter`). The pre-macrocode `at_letter` is saved here and
-    // restored on exit.
-    let mut in_macrocode = false;
-    let mut saved_at_letter = at_letter;
-    // Implicit expl3: a toggle-less `.dtx` whose static signal (a `%<@@=mod>`
-    // module guard or a `\ProvidesExpl*` anywhere) marks its `macrocode` bodies as
-    // expl3 code. When set, `expl_syntax` is forced on inside every macrocode body
-    // (and restored on exit), mirroring the `at_letter` save/restore above. Only
-    // `.dtx` files have macrocode bodies, so this is gated on `config.dtx`.
-    let implicit_expl = config.dtx && dtx_has_expl_signal(input);
-    let mut saved_expl_syntax = expl_syntax;
-    // True while lexing the remainder of a `.dtx` documentation line (a line whose
-    // column-0 `%` was emitted as a `DOC_MARGIN` above). On such lines the ltxdoc/
-    // l3doc `\catcode`\^^A=14` convention applies, so a literal `^^A` reads as a
-    // comment to end of line. Cleared at every physical line boundary.
-    let mut in_doc_line = false;
-    // True when the previous meaningful token was `\left`/`\right`, so the next
-    // delimiter must be isolated as a single token (it carries across whitespace,
-    // which TeX skips before the delimiter).
-    let mut pending_delim = false;
-    // True while the next control word is the *name being defined* by a definition
-    // keyword (`\newcommand\foo…`, `\NewDocumentCommand{\foo}…`, `\def\foo…`), so it
-    // must not be lexed as a verbatim *call*: at a definition site the trailing
-    // `{…}` are the signature/body, not the command's argument. Persists across the
-    // intervening `{`/whitespace of the braced form and clears once the name is
-    // consumed. Without this, a command flagged verbatim in pass 1 would have its own
-    // definition's first group captured as a `VERB` in pass 2.
-    let mut pending_def = false;
-    // True right after a `\char`/`\catcode`-family primitive (across inline
-    // whitespace), where a backtick opens TeX's char-constant number notation:
-    // the character after the backtick is data (`` \char`$ ``, `` \char`} ``),
-    // never a math opener or group brace. The doc layer writes the notation in
-    // prose (issue #60), so without this the hidden `$`/`{` cascade into
-    // unclosed-math and unclosed-group diagnostics.
-    let mut pending_char_constant = false;
-    // True right after a primitive that consumes the *next token* unexpanded
-    // ([`is_literal_token_command`]), where a short-verb character is that
-    // token rather than a capture opener (`\string|`, lthooks.dtx, issue #71).
-    let mut pending_literal_token = false;
-    // Number of brace groups open at the cursor, counted over every token
-    // emitted so far (helpers push braces too, so `out` is the one place that
-    // sees them all). Read by the char-constant branch: inside a group TeX has
-    // already claimed a `{`/`}` as balanced-text structure, so a backtick there
-    // cannot hide it. Saturating, so an unbalanced file never underflows.
-    let mut brace_depth = 0usize;
-    let mut brace_counted = 0usize;
-    while pos < input.len() {
-        let rest = &input[pos..];
-        while brace_counted < out.len() {
-            match out[brace_counted].kind {
-                SyntaxKind::L_BRACE => brace_depth += 1,
-                SyntaxKind::R_BRACE => brace_depth = brace_depth.saturating_sub(1),
+pub fn lex_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Vec<Token> {
+    Lexer::new(input, ctx, config).run()
+}
+
+/// The lexer's one-shot lookahead mode: a state the token just lexed arms, which
+/// changes how the *next* one reads. The four arming command sets are mutually
+/// exclusive — `\left`/`\right`, the definition keywords, the char-constant
+/// primitives, and the literal-token primitives are disjoint — so a single slot
+/// holds them all faithfully, and a construct that consumes the awaited token
+/// clears the slot wholesale rather than a hand-picked subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    /// After `\left`/`\right`: the delimiter that follows is isolated as a single
+    /// token, so a word-character delimiter does not glue into the following run.
+    Delim,
+    /// After a definition keyword (`\newcommand\foo…`, `\NewDocumentCommand{\foo}…`,
+    /// `\def\foo…`): the next control word is the *name being defined*, so it must
+    /// not be lexed as a verbatim *call* — at a definition site the trailing `{…}`
+    /// are the signature/body, not the command's argument. Without this, a command
+    /// flagged verbatim in pass 1 would have its own definition's first group
+    /// captured as a `VERB` in pass 2.
+    Def,
+    /// After a `\char`/`\catcode`-family primitive, where a backtick opens TeX's
+    /// char-constant number notation: the character after the backtick is data
+    /// (`` \char`$ ``, `` \char`} ``), never a math opener or group brace. The doc
+    /// layer writes the notation in prose (issue #60), so without this the hidden
+    /// `$`/`{` cascade into unclosed-math and unclosed-group diagnostics.
+    CharConstant,
+    /// After a primitive that consumes the *next token* unexpanded
+    /// ([`is_literal_token_command`]), where a short-verb character is that token
+    /// rather than a capture opener (`\string|`, lthooks.dtx, issue #71).
+    LiteralToken,
+}
+
+/// The catcode state a `macrocode` chunk suspends. A body runs under
+/// `\makeatletter` (and, in an implicit-expl3 `.dtx`, under `\ExplSyntaxOn`), and
+/// its end frame restores what the documentation layer had. Held as one `Option`,
+/// so "inside a body" and "what to restore" are the same fact and cannot disagree.
+#[derive(Debug, Clone, Copy)]
+struct MacrocodeSave {
+    at_letter: bool,
+    expl_syntax: bool,
+}
+
+/// The lexer's state machine over one input. [`run`](Lexer::run) is a short loop
+/// over the `try_*` probes, each of which either consumes a whole construct
+/// (returning `true`) or declines; whatever no probe claims is lexed as one
+/// ordinary token by [`lex_token`](Lexer::lex_token).
+struct Lexer<'a> {
+    input: &'a str,
+    ctx: &'a ParseCtx,
+    config: LexConfig,
+    /// Implicit expl3: a toggle-less `.dtx` whose static signal (a `%<@@=mod>`
+    /// module guard or a `\ProvidesExpl*` anywhere) marks its `macrocode` bodies
+    /// as expl3 code. When set, `expl_syntax` is forced on inside every macrocode
+    /// body and restored on exit, alongside the `at_letter` save. Only `.dtx`
+    /// files have macrocode bodies, so this is gated on `config.dtx`.
+    implicit_expl: bool,
+    out: Vec<Token>,
+    pos: usize,
+    /// `\makeatletter` state: while true, `@` is a catcode-11 letter.
+    at_letter: bool,
+    /// `\ExplSyntaxOn` state: while true, `_` and `:` are catcode-11 letters, so
+    /// expl3 names (`\seq_new:N`, `\__module_internal:nn`) lex as single control
+    /// words. Toggled by `\ExplSyntaxOn`/`\ExplSyntaxOff` and turned on by the
+    /// `\ProvidesExpl*` package/class/file declarations (a sanctioned static lexer
+    /// mode, `AGENTS.md` decision #1). Independent of `at_letter`; the two compose.
+    expl_syntax: bool,
+    /// True at the start of a physical line (start of input or just after a
+    /// `NEWLINE`), so a line-leading `%` can be recognized as a `.dtx`
+    /// documentation margin. Any token — including whitespace — clears it,
+    /// matching docstrip's rule that only a `%` in *column 0* is a margin.
+    at_line_start: bool,
+    /// True while lexing the remainder of a `.dtx` documentation line (a line whose
+    /// column-0 `%` was emitted as a `DOC_MARGIN`). On such lines the ltxdoc/l3doc
+    /// `` \catcode`\^^A=14 `` convention applies, so a literal `^^A` reads as a
+    /// comment to end of line. Cleared at every physical line boundary.
+    in_doc_line: bool,
+    /// doc-package short-verb characters (`\MakeShortVerb{\|}`): while a char is
+    /// enabled, `<c>…<c>` on one line captures as a single opaque `VERB` token,
+    /// exactly like `\verb<c>…<c>`. A sanctioned static lexer mode (`AGENTS.md`
+    /// decision #1): the toggles are the explicit `\MakeShortVerb`/
+    /// `\DeleteShortVerb` calls (left-to-right, like `\makeatletter`), plus the
+    /// curated doc classes that enable `|` themselves ([`doc_class_enables_bar`]).
+    /// The `.dtx` documentation layer gets `|` from the start — dtx files are
+    /// typeset under `ltxdoc`, and the driver holding the `\documentclass` may
+    /// live in a separate file.
+    short_verbs: Vec<char>,
+    /// `Some` while inside a `macrocode`/`macrocode*` environment body (between its
+    /// frame lines), holding the catcode state to restore on exit. There, code
+    /// lines carry no margin, a line-leading `%` is an ordinary code comment (not a
+    /// margin), and `@` is a letter (`macrocode` runs under `\makeatletter`).
+    macrocode: Option<MacrocodeSave>,
+    /// The one-shot mode the previous token armed, if any.
+    pending: Option<Pending>,
+    /// Number of brace groups open at the cursor, counted over every token emitted
+    /// so far (the `try_*` probes push braces of their own, so `out` is the one
+    /// place that sees them all). Read by the char-constant probe: inside a group
+    /// TeX has already claimed a `{`/`}` as balanced-text structure, so a backtick
+    /// there cannot hide it. Saturating, so an unbalanced file never underflows.
+    brace_depth: usize,
+    /// How far into `out` [`sync_brace_depth`](Lexer::sync_brace_depth) has folded.
+    brace_counted: usize,
+}
+
+impl<'a> Lexer<'a> {
+    fn new(input: &'a str, ctx: &'a ParseCtx, config: LexConfig) -> Self {
+        Self {
+            input,
+            ctx,
+            config,
+            implicit_expl: config.dtx && dtx_has_expl_signal(input),
+            out: Vec::new(),
+            pos: 0,
+            at_letter: config.flavor.letter_mode_start(),
+            expl_syntax: false,
+            at_line_start: true,
+            in_doc_line: false,
+            short_verbs: if config.dtx { vec!['|'] } else { Vec::new() },
+            macrocode: None,
+            pending: None,
+            brace_depth: 0,
+            brace_counted: 0,
+        }
+    }
+
+    /// Lex the whole input. The probe order is load-bearing — an earlier probe
+    /// wins the bytes outright — so it mirrors the layering the modes assume: the
+    /// `.dtx` line-oriented trivia first (only they may claim column 0), then the
+    /// constructs that swallow a span whole (verbatim environments before verbatim
+    /// commands, since `\begin` is itself a command), then the one-shot modes.
+    fn run(mut self) -> Vec<Token> {
+        while self.pos < self.input.len() {
+            self.sync_brace_depth();
+            if self.try_macrocode_frame()
+                || self.try_guard()
+                || self.try_doc_margin()
+                || self.try_verbatim_environment()
+                || self.try_verbatim_arg_environment()
+            {
+                continue;
+            }
+            // The control word's letter run is scanned once here and handed to both
+            // the verbatim-command probe and the ordinary classification below,
+            // which otherwise ask the same question about the same bytes twice.
+            let word_len = control_word_len(self.rest(), self.at_letter, self.expl_syntax);
+            if self.try_verbatim_command(word_len)
+                || self.try_short_verb()
+                || self.try_char_constant()
+                || self.try_doc_comment()
+            {
+                continue;
+            }
+            self.lex_token(word_len);
+        }
+        self.out
+    }
+
+    /// The unlexed remainder of the input.
+    fn rest(&self) -> &'a str {
+        &self.input[self.pos..]
+    }
+
+    fn push(&mut self, kind: SyntaxKind, text: &str) {
+        self.out.push(Token {
+            kind,
+            text: SmolStr::new(text),
+        });
+    }
+
+    /// Consume `len` bytes of a construct a `try_*` probe claimed whole: the cursor
+    /// lands mid-line, and any armed one-shot mode is spent — the construct either
+    /// *was* the token the mode was waiting for or is an ordinary token that ends
+    /// the wait, and no mode outlives a construct it did not fire on.
+    fn consume(&mut self, len: usize) {
+        self.pos += len;
+        self.at_line_start = false;
+        self.pending = None;
+    }
+
+    /// Fold every token pushed since the last call into `brace_depth`.
+    fn sync_brace_depth(&mut self) {
+        while self.brace_counted < self.out.len() {
+            match self.out[self.brace_counted].kind {
+                SyntaxKind::L_BRACE => self.brace_depth += 1,
+                SyntaxKind::R_BRACE => self.brace_depth = self.brace_depth.saturating_sub(1),
                 _ => {}
             }
-            brace_counted += 1;
+            self.brace_counted += 1;
         }
+    }
 
-        // `.dtx` `macrocode` frame line. A `%␣*\begin{macrocode}` line opens a code
-        // region; its `%␣*\end{macrocode}` terminator closes it. Both lex as a
-        // margin + indent + `\begin`/`\end{macrocode}` so the ordinary environment
-        // grammar pairs them, but the *body* in between lexes as real code, under
-        // the package regime (`@` a letter) with no margin stripping. We look for a
-        // begin frame outside the body and the end frame inside it; anything else on
-        // a `%` line inside the body is an ordinary code comment.
-        if config.dtx
-            && at_line_start
-            && let Some(consumed) = lex_macrocode_frame(rest, !in_macrocode, &mut out)
-        {
-            if in_macrocode {
-                in_macrocode = false;
-                at_letter = saved_at_letter;
-                expl_syntax = saved_expl_syntax;
-            } else {
-                in_macrocode = true;
-                saved_at_letter = at_letter;
-                at_letter = true;
-                saved_expl_syntax = expl_syntax;
-                if implicit_expl {
-                    expl_syntax = true;
+    /// `.dtx` `macrocode` frame line. A `%␣*\begin{macrocode}` line opens a code
+    /// region; its `%␣*\end{macrocode}` terminator closes it. Both lex as a
+    /// margin + indent + `\begin`/`\end{macrocode}` so the ordinary environment
+    /// grammar pairs them, but the *body* in between lexes as real code, under the
+    /// package regime (`@` a letter) with no margin stripping. We look for a begin
+    /// frame outside the body and the end frame inside it; anything else on a `%`
+    /// line inside the body is an ordinary code comment.
+    fn try_macrocode_frame(&mut self) -> bool {
+        if !(self.config.dtx && self.at_line_start) {
+            return false;
+        }
+        let rest = self.rest();
+        let want_begin = self.macrocode.is_none();
+        let Some(consumed) = lex_macrocode_frame(rest, want_begin, &mut self.out) else {
+            return false;
+        };
+        match self.macrocode.take() {
+            Some(saved) => {
+                self.at_letter = saved.at_letter;
+                self.expl_syntax = saved.expl_syntax;
+            }
+            None => {
+                self.macrocode = Some(MacrocodeSave {
+                    at_letter: self.at_letter,
+                    expl_syntax: self.expl_syntax,
+                });
+                self.at_letter = true;
+                if self.implicit_expl {
+                    self.expl_syntax = true;
                 }
             }
-            pos += consumed;
-            at_line_start = false;
-            pending_delim = false;
-            pending_literal_token = false;
-            pending_def = false;
-            continue;
         }
+        self.consume(consumed);
+        true
+    }
 
-        // `.dtx` docstrip guard: a line-leading `%<…>` is a docstrip guard
-        // expression (`%<*tag>`/`%</tag>` block delimiters or an inline `%<tag>`
-        // prefix), not a comment. Emit the `%<…>` (through the closing `>`) as a
-        // single `GUARD` trivia leaf; code after an inline guard's `>` lexes
-        // normally. Guards nest on the docstrip axis, orthogonal to LaTeX nesting,
-        // so this is a flat floating leaf (no block node), like a margin. Recognized
-        // at line start only (column-0 rule) but in *any* layer — guards punctuate
-        // `macrocode` bodies too — so it is not gated on `in_macrocode`. A `%<` with
-        // no closing `>` before the line ends is not a guard; it falls through to an
-        // ordinary comment. Trivia, so `pending_delim`/`pending_def` carry across.
-        if config.dtx
-            && at_line_start
-            && rest.starts_with("%<")
-            && let Some(rel) = rest[2..].find(['>', '\n', '\r'])
-            && rest.as_bytes()[2 + rel] == b'>'
-        {
-            let len = 2 + rel + 1;
-            out.push(Token {
-                kind: SyntaxKind::GUARD,
-                text: SmolStr::new(&rest[..len]),
-            });
-            pos += len;
-            at_line_start = false;
-            continue;
+    /// `.dtx` docstrip guard: a line-leading `%<…>` is a docstrip guard expression
+    /// (`%<*tag>`/`%</tag>` block delimiters or an inline `%<tag>` prefix), not a
+    /// comment. Emit the `%<…>` (through the closing `>`) as a single `GUARD`
+    /// trivia leaf; code after an inline guard's `>` lexes normally. Guards nest on
+    /// the docstrip axis, orthogonal to LaTeX nesting, so this is a flat floating
+    /// leaf (no block node), like a margin. Recognized at line start only (column-0
+    /// rule) but in *any* layer — guards punctuate `macrocode` bodies too — so it
+    /// is not gated on being outside one. A `%<` with no closing `>` before the
+    /// line ends is not a guard; it falls through to an ordinary comment. Trivia,
+    /// so the [`Pending`] mode carries across.
+    fn try_guard(&mut self) -> bool {
+        let rest = self.rest();
+        if !(self.config.dtx && self.at_line_start && rest.starts_with("%<")) {
+            return false;
         }
+        let Some(rel) = rest[2..].find(['>', '\n', '\r']) else {
+            return false;
+        };
+        if rest.as_bytes()[2 + rel] != b'>' {
+            return false;
+        }
+        let len = 2 + rel + 1;
+        self.push(SyntaxKind::GUARD, &rest[..len]);
+        self.pos += len;
+        self.at_line_start = false;
+        true
+    }
 
-        // `.dtx` documentation margin: a line-leading `%` (but not a `%<…>` guard,
-        // which lexes as a `GUARD` above) is a documentation line's
-        // comment *margin*, not a comment. Emit it as a `DOC_MARGIN` trivia token —
-        // one byte, never the following space — so the rest of the line lexes (and
-        // parses) as ordinary LaTeX and the margin floats like whitespace. Only the
-        // line-leading `%` is a margin; a later `%` on the same line stays a
-        // `COMMENT`. Inside a `macrocode` body there is no margin (code lines own
-        // their `%`), so this is gated on `!in_macrocode`. The margin is trivia, so
-        // it carries `pending_delim`/`pending_def` across unchanged (like whitespace).
-        if config.dtx
-            && at_line_start
-            && !in_macrocode
+    /// `.dtx` documentation margin: a line-leading `%` (but not a `%<…>` guard,
+    /// which lexes as a `GUARD` above) is a documentation line's comment *margin*,
+    /// not a comment. Emit it as a `DOC_MARGIN` trivia token — one byte, never the
+    /// following space — so the rest of the line lexes (and parses) as ordinary
+    /// LaTeX and the margin floats like whitespace. Only the line-leading `%` is a
+    /// margin; a later `%` on the same line stays a `COMMENT`. Inside a `macrocode`
+    /// body there is no margin (code lines own their `%`). The margin is trivia, so
+    /// it carries the [`Pending`] mode across unchanged (like whitespace).
+    fn try_doc_margin(&mut self) -> bool {
+        let rest = self.rest();
+        if !(self.config.dtx
+            && self.at_line_start
+            && self.macrocode.is_none()
             && rest.starts_with('%')
-            && !rest.starts_with("%<")
+            && !rest.starts_with("%<"))
         {
-            out.push(Token {
-                kind: SyntaxKind::DOC_MARGIN,
-                text: SmolStr::new("%"),
-            });
-            pos += 1;
-            at_line_start = false;
-            in_doc_line = true;
-            continue;
+            return false;
         }
+        self.push(SyntaxKind::DOC_MARGIN, "%");
+        self.pos += 1;
+        self.at_line_start = false;
+        self.in_doc_line = true;
+        true
+    }
 
-        // Verbatim-like environment: emit `\begin{name}` then a raw body token.
-        if let Some(consumed) = lex_verbatim_environment(rest, ctx, &mut out) {
-            pos += consumed;
-            pending_delim = false;
-            pending_literal_token = false;
-            pending_def = false;
-            at_line_start = false;
-            continue;
+    /// Verbatim-like environment: emit `\begin{name}` then a raw body token.
+    fn try_verbatim_environment(&mut self) -> bool {
+        let (rest, ctx) = (self.rest(), self.ctx);
+        let Some(consumed) = lex_verbatim_environment(rest, ctx, &mut self.out) else {
+            return false;
+        };
+        self.consume(consumed);
+        true
+    }
+
+    /// l3doc `v`-type name argument in delimited form (`\begin{macro}+…+`): capture
+    /// the span as one opaque `VERB` token so its unbalanced braces stay data.
+    /// Gated off inside a `macrocode` body, where a `\begin` is plain macro code,
+    /// not an l3doc environment.
+    fn try_verbatim_arg_environment(&mut self) -> bool {
+        if self.macrocode.is_some() {
+            return false;
         }
+        let rest = self.rest();
+        let Some(consumed) = lex_verbatim_arg_environment(rest, &mut self.out) else {
+            return false;
+        };
+        self.consume(consumed);
+        true
+    }
 
-        // l3doc `v`-type name argument in delimited form (`\begin{macro}+…+`):
-        // capture the span as one opaque `VERB` token so its unbalanced braces
-        // stay data. Gated off inside a `macrocode` body, where a `\begin` is
-        // plain macro code, not an l3doc environment.
-        if !in_macrocode && let Some(consumed) = lex_verbatim_arg_environment(rest, &mut out) {
-            pos += consumed;
-            pending_delim = false;
-            pending_literal_token = false;
-            pending_def = false;
-            at_line_start = false;
-            continue;
+    /// Verbatim-argument command (`\url{…}`, `\code{…}`, `\lstinline|…|`, …): emit
+    /// the control word and any leading args, then a raw argument token.
+    /// `\verb`/`\verb*` are handled separately in [`lex_control`] (delimiter only),
+    /// so they fall through here. Suppressed at a definition site ([`Pending::Def`]),
+    /// where the following groups are the signature/body.
+    fn try_verbatim_command(&mut self, word_len: Option<usize>) -> bool {
+        if self.pending == Some(Pending::Def) {
+            return false;
         }
+        let (rest, ctx) = (self.rest(), self.ctx);
+        let Some(consumed) = lex_verbatim_command(rest, word_len, ctx, &mut self.out) else {
+            return false;
+        };
+        self.consume(consumed);
+        true
+    }
 
-        // Verbatim-argument command (`\url{…}`, `\code{…}`, `\lstinline|…|`, …):
-        // emit the control word and any leading args, then a raw argument token.
-        // `\verb`/`\verb*` are handled separately in `lex_control` (delimiter
-        // only), so they fall through here. Suppressed at a definition site
-        // (`pending_def`), where the following groups are the signature/body.
-        if !pending_def
-            && let Some(consumed) =
-                lex_verbatim_command(rest, at_letter, expl_syntax, ctx, &mut out)
+    /// Short-verb span (`|…|` under doc's `\MakeShortVerb{\|}`): capture the
+    /// delimited run as one opaque `VERB` token, same-line only (like `\verb`).
+    /// Gated off inside a `macrocode` body (a code layer, where `|` is an ordinary
+    /// catcode-12 character) and after `\left`/`\right` (whose next character is a
+    /// delimiter, `\left|x\right|`). With no closing delimiter on the line, decline:
+    /// the word-run truncation in [`lex_token`](Lexer::lex_token) still emits the
+    /// lone character as its own token. Also gated off after a primitive that takes
+    /// the next token unexpanded ([`Pending::LiteralToken`]): `\string|` prints the
+    /// bar, it does not open a capture that would run to the next `|` and swallow
+    /// the intervening braces (lthooks.dtx's
+    /// `\meta{first\texttt{\string|}last}\verb|):|`, issue #71).
+    fn try_short_verb(&mut self) -> bool {
+        if self.short_verbs.is_empty()
+            || self.macrocode.is_some()
+            || matches!(self.pending, Some(Pending::Delim | Pending::LiteralToken))
         {
-            pos += consumed;
-            pending_delim = false;
-            pending_literal_token = false;
-            at_line_start = false;
-            continue;
+            return false;
         }
-
-        // Short-verb span (`|…|` under doc's `\MakeShortVerb{\|}`): capture the
-        // delimited run as one opaque `VERB` token, same-line only (like `\verb`).
-        // Gated off inside a `macrocode` body (a code layer, where `|` is an
-        // ordinary catcode-12 character) and after `\left`/`\right` (whose next
-        // character is a delimiter, `\left|x\right|`). With no closing delimiter
-        // on the line, fall through: the word-run truncation below still emits
-        // the lone character as its own token. Also gated off after a primitive
-        // that takes the next token unexpanded ([`is_literal_token_command`]):
-        // `\string|` prints the bar, it does not open a capture that would run
-        // to the next `|` and swallow the intervening braces (lthooks.dtx's
-        // `\meta{first\texttt{\string|}last}\verb|):|`, issue #71).
-        if !short_verbs.is_empty()
-            && !in_macrocode
-            && !pending_delim
-            && !pending_literal_token
-            && let Some(c) = rest.chars().next()
-            && short_verbs.contains(&c)
-            && let Some(len) = delimited_len(rest)
+        let rest = self.rest();
+        if !rest
+            .chars()
+            .next()
+            .is_some_and(|c| self.short_verbs.contains(&c))
         {
-            out.push(Token {
-                kind: SyntaxKind::VERB,
-                text: SmolStr::new(&rest[..len]),
-            });
-            pos += len;
-            at_line_start = false;
-            pending_def = false;
-            continue;
+            return false;
         }
+        let Some(len) = delimited_len(rest) else {
+            return false;
+        };
+        self.push(SyntaxKind::VERB, &rest[..len]);
+        self.consume(len);
+        true
+    }
 
-        // TeX char-constant backtick notation: after a `\char`/`\catcode`-family
-        // primitive, a backtick makes the next character data (`` \char`$ ``,
-        // `` \char`} ``), so emit the backtick and that character as one plain
-        // `WORD` token — a `$`/`{` there must not open math or a group. The
-        // escaped single-character form (`` \number`\[ ``) is captured the same
-        // way, backtick plus the whole control symbol: a `\[`/`\]` there is the
-        // *character* `[`/`]`, not a math delimiter (encguide.tex's char-code
-        // table, issue #71).
-        //
-        // A *bare* `{`/`}` is the exception, and only at brace depth 0. Inside a
-        // group the brace has already been claimed as structure by whichever
-        // balanced-text scan opened it — a `\def` body or a macro argument, both
-        // of which count brace *tokens* long before `\char` ever runs — so the
-        // `}` in `` \def\v{\char`} `` (longtable.dtx) and the `` \ifnum`}=0\fi ``
-        // brace-balance idiom (longtable/amsmath) closes its group and is not
-        // data. At depth 0 there is no such scan and the constant reading stands
-        // (`a close-group character is written \char`} in running text`). The
-        // *escaped* form `` `\} `` is unaffected: a control symbol is never a
-        // group delimiter, so it stays data at any depth (issue #71).
-        if pending_char_constant
-            && let Some(after) = rest.strip_prefix('`')
-            && let Some(c) = after.chars().next()
-            && !matches!(c, '\n' | '\r')
-            && !(brace_depth > 0 && matches!(c, '{' | '}'))
-            && let Some(len) = if c == '\\' {
-                // `` `\X ``: backtick, backslash, and one escaped character; a
-                // bare `` `\ `` at line end has no character and falls through.
-                after[1..]
-                    .chars()
-                    .next()
-                    .filter(|e| !matches!(e, '\n' | '\r'))
-                    .map(|e| 2 + e.len_utf8())
-            } else {
-                Some(1 + c.len_utf8())
+    /// TeX char-constant backtick notation: after a `\char`/`\catcode`-family
+    /// primitive ([`Pending::CharConstant`]), a backtick makes the next character
+    /// data (`` \char`$ ``, `` \char`} ``), so emit the backtick and that character
+    /// as one plain `WORD` token — a `$`/`{` there must not open math or a group.
+    /// The escaped single-character form (`` \number`\[ ``) is captured the same
+    /// way, backtick plus the whole control symbol: a `\[`/`\]` there is the
+    /// *character* `[`/`]`, not a math delimiter (encguide.tex's char-code table,
+    /// issue #71).
+    ///
+    /// A *bare* `{`/`}` is the exception, and only at brace depth 0. Inside a group
+    /// the brace has already been claimed as structure by whichever balanced-text
+    /// scan opened it — a `\def` body or a macro argument, both of which count brace
+    /// *tokens* long before `\char` ever runs — so the `}` in `` \def\v{\char`} ``
+    /// (longtable.dtx) and the `` \ifnum`}=0\fi `` brace-balance idiom
+    /// (longtable/amsmath) closes its group and is not data. At depth 0 there is no
+    /// such scan and the constant reading stands (`a close-group character is
+    /// written \char`} in running text`). The *escaped* form `` `\} `` is
+    /// unaffected: a control symbol is never a group delimiter, so it stays data at
+    /// any depth (issue #71).
+    fn try_char_constant(&mut self) -> bool {
+        if self.pending != Some(Pending::CharConstant) {
+            return false;
+        }
+        let rest = self.rest();
+        let Some(after) = rest.strip_prefix('`') else {
+            return false;
+        };
+        let Some(c) = after.chars().next() else {
+            return false;
+        };
+        if matches!(c, '\n' | '\r') || (self.brace_depth > 0 && matches!(c, '{' | '}')) {
+            return false;
+        }
+        let len = if c == '\\' {
+            // `` `\X ``: backtick, backslash, and one escaped character; a bare
+            // `` `\ `` at line end has no character and falls through.
+            match after[1..]
+                .chars()
+                .next()
+                .filter(|e| !matches!(e, '\n' | '\r'))
+            {
+                Some(e) => 2 + e.len_utf8(),
+                None => return false,
             }
-        {
-            out.push(Token {
-                kind: SyntaxKind::WORD,
-                text: SmolStr::new(&rest[..len]),
-            });
-            pos += len;
-            at_line_start = false;
-            pending_char_constant = false;
-            pending_delim = false;
-            pending_literal_token = false;
-            pending_def = false;
-            continue;
-        }
+        } else {
+            1 + c.len_utf8()
+        };
+        self.push(SyntaxKind::WORD, &rest[..len]);
+        self.consume(len);
+        true
+    }
 
-        // `.dtx` `^^A` comment: ltxdoc/l3doc set `\catcode`\^^A=14`, and the doc
-        // layer leans on it for editor-balance hacks in prose (`^^A{` paired with
-        // a verb `|}|`, a commented-out `^^A\end{function}`), so on a doc-margin
-        // line the literal `^^A` sequence is a comment to end of line — a bounded
-        // static fact like the on-by-default `|` short verb (`AGENTS.md` decision
-        // #1). Scoped to doc lines only: inside a `macrocode` body `^^A` is live
-        // code (`\char_set_catcode:nn { `\^^A }` must not swallow its line), and
-        // unmargined driver lines keep ordinary lexing.
-        if in_doc_line && rest.starts_with("^^A") {
-            let len = run_len(rest, |c| c != '\n' && c != '\r');
-            out.push(Token {
-                kind: SyntaxKind::COMMENT,
-                text: SmolStr::new(&rest[..len]),
-            });
-            pos += len;
-            at_line_start = false;
-            pending_delim = false;
-            pending_literal_token = false;
-            pending_def = false;
-            continue;
+    /// `.dtx` `^^A` comment: ltxdoc/l3doc set `` \catcode`\^^A=14 ``, and the doc
+    /// layer leans on it for editor-balance hacks in prose (`^^A{` paired with a
+    /// verb `|}|`, a commented-out `^^A\end{function}`), so on a doc-margin line the
+    /// literal `^^A` sequence is a comment to end of line — a bounded static fact
+    /// like the on-by-default `|` short verb (`AGENTS.md` decision #1). Scoped to
+    /// doc lines only: inside a `macrocode` body `^^A` is live code
+    /// (``\char_set_catcode:nn { `\^^A }`` must not swallow its line), and
+    /// unmargined driver lines keep ordinary lexing.
+    fn try_doc_comment(&mut self) -> bool {
+        let rest = self.rest();
+        if !(self.in_doc_line && rest.starts_with("^^A")) {
+            return false;
         }
+        let len = run_len(rest, |c| c != '\n' && c != '\r');
+        self.push(SyntaxKind::COMMENT, &rest[..len]);
+        self.consume(len);
+        true
+    }
 
-        let (kind, mut len) = next_token(rest, at_letter, expl_syntax);
+    /// Lex the one ordinary token at the cursor: classify it, apply the truncations
+    /// an armed mode or an enabled short-verb character imposes, run whatever
+    /// catcode toggle its text carries, and advance. `word_len` is the pre-scanned
+    /// control-word length at the cursor ([`control_word_len`]).
+    fn lex_token(&mut self, word_len: Option<usize>) {
+        let rest = self.rest();
+        let (kind, mut len) = next_token(rest, word_len, self.expl_syntax);
         // A `\left`/`\right` delimiter that lexes as a word run: keep only its
         // first character so it does not glue into the following text.
-        if pending_delim && kind == SyntaxKind::WORD {
+        if self.pending == Some(Pending::Delim) && kind == SyntaxKind::WORD {
             len = rest.chars().next().expect("rest is non-empty").len_utf8();
         }
         // An enabled short-verb char never joins a word run: split it off so a
         // mid-word `x|y|` still opens a capture on the next iteration, and an
         // unclosed `|` stands alone rather than gluing into the following text.
         if kind == SyntaxKind::WORD
-            && !short_verbs.is_empty()
+            && !self.short_verbs.is_empty()
             && let Some((i, c)) = rest[..len]
                 .char_indices()
-                .find(|(_, c)| short_verbs.contains(c))
+                .find(|(_, c)| self.short_verbs.contains(c))
         {
             len = if i == 0 { c.len_utf8() } else { i };
         }
-        debug_assert!(len > 0, "lexer made no progress at byte {pos}");
+        debug_assert!(len > 0, "lexer made no progress at byte {}", self.pos);
         let text = &rest[..len];
         if kind == SyntaxKind::CONTROL_WORD {
-            match text {
-                "\\makeatletter" => at_letter = true,
-                "\\makeatother" => at_letter = false,
-                // doc's short-verb toggles: `\MakeShortVerb{\|}` (or the `*` and
-                // unbraced forms) enables the char, `\DeleteShortVerb{\|}`
-                // disables it. Read as static facts left-to-right; a definition
-                // site (`\def\MakeShortVerb{…`) never matches the `\c` argument
-                // shape, so it does not toggle.
-                "\\MakeShortVerb" => {
-                    if let Some(c) = short_verb_char(&rest[len..])
-                        && !short_verbs.contains(&c)
-                    {
-                        short_verbs.push(c);
-                    }
+            self.apply_toggles(text, &rest[len..]);
+        }
+        self.pending = next_pending(self.pending, kind, text);
+        self.push(kind, text);
+        // A new physical line begins right after a `NEWLINE` — or after any token
+        // that swallows its trailing line break, like the `\<newline>` control
+        // symbol (`… \LaTeX\` at end of line): the next byte is column 0 either
+        // way, so a `.dtx` margin there must still be recognized. Any other token
+        // (whitespace included) leaves the cursor mid-line.
+        self.at_line_start =
+            kind == SyntaxKind::NEWLINE || text.ends_with('\n') || text.ends_with('\r');
+        if self.at_line_start {
+            self.in_doc_line = false;
+        }
+        self.pos += len;
+    }
+
+    /// Apply the catcode / short-verb toggle a control word carries, if any.
+    /// `after` is the text following it, from which the toggles that take a
+    /// character or class argument read it.
+    fn apply_toggles(&mut self, text: &str, after: &str) {
+        match text {
+            "\\makeatletter" => self.at_letter = true,
+            "\\makeatother" => self.at_letter = false,
+            // doc's short-verb toggles: `\MakeShortVerb{\|}` (or the `*` and
+            // unbraced forms) enables the char, `\DeleteShortVerb{\|}` disables it.
+            // Read as static facts left-to-right; a definition site
+            // (`\def\MakeShortVerb{…`) never matches the `\c` argument shape, so it
+            // does not toggle.
+            "\\MakeShortVerb" => {
+                if let Some(c) = short_verb_char(after)
+                    && !self.short_verbs.contains(&c)
+                {
+                    self.short_verbs.push(c);
                 }
-                "\\DeleteShortVerb" => {
-                    if let Some(c) = short_verb_char(&rest[len..]) {
-                        short_verbs.retain(|&x| x != c);
-                    }
+            }
+            "\\DeleteShortVerb" => {
+                if let Some(c) = short_verb_char(after) {
+                    self.short_verbs.retain(|&x| x != c);
                 }
-                // The curated doc classes make `|` a short verb themselves
-                // (`ltxdoc` via `\MakeShortVerb`, and the `ltxguide`/`ltnews`
-                // internal equivalents), so loading one enables `|`.
-                "\\documentclass" | "\\LoadClass" => {
-                    if doc_class_enables_bar(&rest[len..]) && !short_verbs.contains(&'|') {
-                        short_verbs.push('|');
-                    }
+            }
+            // The curated doc classes make `|` a short verb themselves
+            // ([`BAR_SHORT_VERB_CLASSES`]), so loading one enables `|`.
+            "\\documentclass" | "\\LoadClass" => {
+                if doc_class_enables_bar(after) && !self.short_verbs.contains(&'|') {
+                    self.short_verbs.push('|');
                 }
-                // `\ExplSyntaxOn`/`Off`, and the `\ProvidesExpl*` declarations which
-                // open expl3 syntax for the rest of the file (they appear at the top
-                // of an expl3 package/class) so left-to-right they act as an On.
-                _ => {
-                    if let Some(toggle) = expl_toggle(text) {
-                        expl_syntax = matches!(toggle, ExplToggle::On);
-                    }
+            }
+            // `\ExplSyntaxOn`/`Off`, and the `\ProvidesExpl*` declarations which
+            // open expl3 syntax for the rest of the file (they appear at the top of
+            // an expl3 package/class) so left-to-right they act as an On.
+            _ => {
+                if let Some(toggle) = expl_toggle(text) {
+                    self.expl_syntax = matches!(toggle, ExplToggle::On);
                 }
             }
         }
-        pending_delim = match kind {
-            // Trivia is skipped before the delimiter, so the mode persists.
-            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => pending_delim,
-            SyntaxKind::CONTROL_WORD if text == "\\left" || text == "\\right" => true,
-            _ => false,
-        };
-        pending_literal_token = match kind {
-            // TeX skips spaces before the token it is about to grab.
-            SyntaxKind::WHITESPACE => pending_literal_token,
-            SyntaxKind::CONTROL_WORD if is_literal_token_command(text) => true,
-            _ => false,
-        };
-        pending_char_constant = match kind {
-            // TeX skips spaces before the number, so the notation may be spaced
-            // (`\char `$`); a line break conventionally ends the shape.
-            SyntaxKind::WHITESPACE => pending_char_constant,
-            SyntaxKind::CONTROL_WORD if is_char_constant_command(text) => true,
-            _ => false,
-        };
-        pending_def = match kind {
-            // A definition keyword arms the suppression for the name that follows.
-            SyntaxKind::CONTROL_WORD if is_definition_keyword(text) => true,
-            // The braced name form (`\newcommand{\foo}`) interposes a `{` and
-            // whitespace before the name; keep the suppression armed across them.
-            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::L_BRACE => pending_def,
-            // Any other token — in particular the defined name's own control word —
-            // consumes the suppression.
-            _ => false,
-        };
-        out.push(Token {
-            kind,
-            text: SmolStr::new(text),
-        });
-        // A new physical line begins right after a `NEWLINE` — or after any
-        // token that swallows its trailing line break, like the `\<newline>`
-        // control symbol (`… \LaTeX\` at end of line): the next byte is column
-        // 0 either way, so a `.dtx` margin there must still be recognized. Any
-        // other token (whitespace included) leaves the cursor mid-line.
-        at_line_start = kind == SyntaxKind::NEWLINE || text.ends_with('\n') || text.ends_with('\r');
-        if at_line_start {
-            in_doc_line = false;
-        }
-        pos += len;
     }
-    out
+}
+
+/// The one-shot mode in force after lexing a token of `kind`/`text`: newly armed
+/// by a command that takes one, carried across the trivia the awaited token may
+/// sit behind, and otherwise spent.
+///
+/// Each variant carries across exactly the trivia TeX skips before *its* token.
+/// Spaces always; a line break additionally for [`Pending::Delim`] (TeX scans for
+/// the delimiter across lines) and for [`Pending::Def`], whose braced form
+/// `\newcommand{\foo}` also interposes the `{`. A char constant and a
+/// literal-token grab conventionally stay on their line.
+fn next_pending(pending: Option<Pending>, kind: SyntaxKind, text: &str) -> Option<Pending> {
+    if kind == SyntaxKind::CONTROL_WORD {
+        // The four arming sets are disjoint, so the order of these tests is
+        // immaterial; any other control word — the defined name itself included —
+        // spends whatever was armed.
+        return if text == "\\left" || text == "\\right" {
+            Some(Pending::Delim)
+        } else if is_definition_keyword(text) {
+            Some(Pending::Def)
+        } else if is_char_constant_command(text) {
+            Some(Pending::CharConstant)
+        } else if is_literal_token_command(text) {
+            Some(Pending::LiteralToken)
+        } else {
+            None
+        };
+    }
+    match pending? {
+        p @ (Pending::Delim | Pending::Def)
+            if matches!(kind, SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE) =>
+        {
+            Some(p)
+        }
+        Pending::Def if kind == SyntaxKind::L_BRACE => Some(Pending::Def),
+        p @ (Pending::CharConstant | Pending::LiteralToken) if kind == SyntaxKind::WHITESPACE => {
+            Some(p)
+        }
+        _ => None,
+    }
+}
+
+/// Byte length of the control word at the start of `rest` — the backslash plus its
+/// maximal letter run — or `None` when `rest` does not start one (no backslash, or
+/// no letter behind it). Scanned once per cursor position and threaded to every
+/// consumer, since the letter run is the same bytes under the same catcode regime.
+fn control_word_len(rest: &str, at_letter: bool, expl_syntax: bool) -> Option<usize> {
+    let after = rest.strip_prefix('\\')?;
+    let letters = run_len(after, |c| is_letter(c, at_letter, expl_syntax));
+    (letters > 0).then_some(1 + letters)
 }
 
 /// Classify the token at the start of `rest` and return its `(kind, byte_len)`.
-fn next_token(rest: &str, at_letter: bool, expl_syntax: bool) -> (SyntaxKind, usize) {
+/// `word_len` is the pre-scanned [`control_word_len`] at `rest`.
+fn next_token(rest: &str, word_len: Option<usize>, expl_syntax: bool) -> (SyntaxKind, usize) {
     let c = rest.chars().next().expect("rest is non-empty");
     match c {
-        '\\' => lex_control(rest, at_letter, expl_syntax),
+        '\\' => lex_control(rest, word_len),
         '%' => (
             SyntaxKind::COMMENT,
             run_len(rest, |c| c != '\n' && c != '\r'),
@@ -864,14 +1018,13 @@ fn next_token(rest: &str, at_letter: bool, expl_syntax: bool) -> (SyntaxKind, us
     }
 }
 
-/// Lex a control sequence: `rest` is known to start with `\`.
-fn lex_control(rest: &str, at_letter: bool, expl_syntax: bool) -> (SyntaxKind, usize) {
-    match rest[1..].chars().next() {
-        // Control word: backslash + one or more letters (`@` too under
-        // `\makeatletter`; `_`/`:` too under `\ExplSyntaxOn`).
-        Some(d) if is_letter(d, at_letter, expl_syntax) => {
-            let letters = run_len(&rest[1..], |c| is_letter(c, at_letter, expl_syntax));
-            let word_len = 1 + letters;
+/// Lex a control sequence: `rest` is known to start with `\`, and `word_len` is
+/// its pre-scanned [`control_word_len`] — `Some` for a control word (backslash
+/// plus one or more letters, `@` too under `\makeatletter`, `_`/`:` too under
+/// `\ExplSyntaxOn`), `None` for a control symbol.
+fn lex_control(rest: &str, word_len: Option<usize>) -> (SyntaxKind, usize) {
+    match word_len {
+        Some(word_len) => {
             // `\verb` / `\verb*`: swallow the delimited argument as one token.
             if &rest[..word_len] == "\\verb"
                 && let Some(arg_len) = verb_len(&rest[word_len..])
@@ -880,10 +1033,12 @@ fn lex_control(rest: &str, at_letter: bool, expl_syntax: bool) -> (SyntaxKind, u
             }
             (SyntaxKind::CONTROL_WORD, word_len)
         }
-        // Control symbol: backslash + exactly one other character.
-        Some(d) => (SyntaxKind::CONTROL_SYMBOL, 1 + d.len_utf8()),
-        // A lone trailing backslash at end of input.
-        None => (SyntaxKind::CONTROL_SYMBOL, 1),
+        // Control symbol: backslash + exactly one other character — or a lone
+        // trailing backslash at end of input.
+        None => match rest[1..].chars().next() {
+            Some(d) => (SyntaxKind::CONTROL_SYMBOL, 1 + d.len_utf8()),
+            None => (SyntaxKind::CONTROL_SYMBOL, 1),
+        },
     }
 }
 
@@ -924,10 +1079,9 @@ fn delimited_len(after: &str) -> Option<usize> {
 /// the command's own definition site, `\def\MakeShortVerb{…`), so a non-call
 /// never toggles. Same-line only — the argument conventionally abuts the call.
 fn short_verb_char(after: &str) -> Option<char> {
-    let s = after.strip_prefix('*').unwrap_or(after);
-    let s = s.trim_start_matches([' ', '\t']);
+    let s = skip_inline_ws(after.strip_prefix('*').unwrap_or(after));
     let (body, braced) = match s.strip_prefix('{') {
-        Some(inner) => (inner.trim_start_matches([' ', '\t']), true),
+        Some(inner) => (skip_inline_ws(inner), true),
         None => (s, false),
     };
     let arg = body.strip_prefix('\\')?;
@@ -935,23 +1089,24 @@ fn short_verb_char(after: &str) -> Option<char> {
     if c == '\n' || c == '\r' {
         return None;
     }
-    if braced
-        && !arg[c.len_utf8()..]
-            .trim_start_matches([' ', '\t'])
-            .starts_with('}')
-    {
+    if braced && !skip_inline_ws(&arg[c.len_utf8()..]).starts_with('}') {
         return None;
     }
     Some(c)
 }
 
-/// Whether the `{name}` argument following `\documentclass`/`\LoadClass` names a
-/// curated documentation class that makes `|` a short verb (`ltxdoc` and `l3doc`
-/// call `\MakeShortVerb` on `\|`; `ltxguide` and `ltnews` define the equivalent
-/// active `|`). A leading `[options]` group is skipped; a trailing `[date]` is
-/// ignored.
+/// The documentation classes that make `|` a short verb themselves, so loading one
+/// enables the short-verb capture with no `\MakeShortVerb` in the file. `ltxdoc`
+/// and `l3doc` call `\MakeShortVerb` on `\|`; `ltxguide`, `ltnews`, and `amsldoc`
+/// define the equivalent active `|` (`\gdef|{\protect\activevert{}}`, amsldoc.cls).
+/// Curated and closed — a class outside it leaves `|` alone (issue #71).
+const BAR_SHORT_VERB_CLASSES: [&str; 5] = ["ltxdoc", "ltxguide", "ltnews", "l3doc", "amsldoc"];
+
+/// Whether the `{name}` argument following `\documentclass`/`\LoadClass` names one
+/// of [`BAR_SHORT_VERB_CLASSES`]. A leading `[options]` group is skipped; a
+/// trailing `[date]` is ignored.
 fn doc_class_enables_bar(after: &str) -> bool {
-    let mut s = after.trim_start_matches([' ', '\t']);
+    let mut s = skip_inline_ws(after);
     if let Some(rest) = s.strip_prefix('[') {
         match rest.find(']') {
             Some(i) => s = rest[i + 1..].trim_start_matches([' ', '\t', '\n', '\r']),
@@ -964,10 +1119,7 @@ fn doc_class_enables_bar(after: &str) -> bool {
     let Some(close) = rest.find('}') else {
         return false;
     };
-    matches!(
-        rest[..close].trim(),
-        "ltxdoc" | "ltxguide" | "ltnews" | "l3doc" | "amsldoc"
-    )
+    BAR_SHORT_VERB_CLASSES.contains(&rest[..close].trim())
 }
 
 /// If `rest` starts with `\begin{name}` for a verbatim-like `name`, emit the
@@ -980,10 +1132,8 @@ fn doc_class_enables_bar(after: &str) -> bool {
 /// text. The built-in signature ([`builtin`]) bounds how many leading groups count
 /// as arguments, so a body that legitimately starts with `[` (an option-free
 /// `lstlisting` whose first code line is `[1,2,3]`) is not mistaken for one.
-fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> Option<usize> {
-    let after_begin = rest.strip_prefix("\\begin{")?;
-    let close = after_begin.find('}')?;
-    let name = &after_begin[..close];
+fn lex_verbatim_environment(rest: &str, ctx: &ParseCtx, out: &mut Vec<Token>) -> Option<usize> {
+    let (name, prefix_len) = begin_name(rest)?;
     // A user-defined catcode-verbatim environment (from `ctx`) wins over the built-in
     // DB; either way we read only the static leading-argument shape, never macro
     // meaning. The verbatim args are all leading — the raw body follows them.
@@ -997,23 +1147,7 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
         }
     };
 
-    let prefix_len = "\\begin{".len() + name.len() + "}".len();
-    out.push(Token {
-        kind: SyntaxKind::CONTROL_WORD,
-        text: SmolStr::new("\\begin"),
-    });
-    out.push(Token {
-        kind: SyntaxKind::L_BRACE,
-        text: SmolStr::new("{"),
-    });
-    out.push(Token {
-        kind: SyntaxKind::WORD,
-        text: SmolStr::new(name),
-    });
-    out.push(Token {
-        kind: SyntaxKind::R_BRACE,
-        text: SmolStr::new("}"),
-    });
+    push_env_delimiter(out, "\\begin", name);
 
     // Locate the argument span, then tokenize it normally. It holds no nested
     // verbatim-begin, so the ordinary token loop is safe and lets the parser build
@@ -1023,8 +1157,7 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
     lex_into(&args_region[..args_len], out);
 
     let body_region = &args_region[args_len..];
-    let end_marker = format!("\\end{{{name}}}");
-    let body_len = body_region.find(&end_marker).unwrap_or(body_region.len());
+    let body_len = verbatim_body_len(body_region, name);
     if body_len > 0 {
         out.push(Token {
             kind: SyntaxKind::VERBATIM_BODY,
@@ -1032,6 +1165,30 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
         });
     }
     Some(prefix_len + args_len + body_len)
+}
+
+/// Byte offset within `body` of the `\end{name}` that terminates it, or `body`'s
+/// full length when the environment is never closed (the raw body then runs to end
+/// of input, which keeps the lex lossless either way).
+///
+/// Matched by scanning for the fixed `\end{` lead and comparing the name in place,
+/// rather than searching for a per-environment `\end{name}` string — the latter
+/// allocates once per verbatim environment in the file for a comparison the borrow
+/// already supports.
+fn verbatim_body_len(body: &str, name: &str) -> usize {
+    const LEAD: &str = "\\end{";
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(LEAD) {
+        let at = from + rel;
+        let after = &body[at + LEAD.len()..];
+        if let Some(tail) = after.strip_prefix(name)
+            && tail.starts_with('}')
+        {
+            return at;
+        }
+        from = at + LEAD.len();
+    }
+    body.len()
 }
 
 /// If `rest` starts with `\begin{name}` for an environment whose name argument is
@@ -1057,12 +1214,9 @@ fn lex_verbatim_environment(rest: &str, ctx: &VerbCtx, out: &mut Vec<Token>) -> 
 /// `VERB` or name group into the `BEGIN` node like any verbatim command argument
 /// (`attach_arguments`).
 fn lex_verbatim_arg_environment(rest: &str, out: &mut Vec<Token>) -> Option<usize> {
-    let after_begin = rest.strip_prefix("\\begin{")?;
-    let close = after_begin.find('}')?;
-    let name = &after_begin[..close];
+    let (name, prefix_len) = begin_name(rest)?;
     builtin().environment(name).filter(|e| e.verbatim_arg)?;
 
-    let prefix_len = "\\begin{".len() + name.len() + "}".len();
     // A leading `[…]` optional (the `O{}` slot, `\begin{macro}[EXP]+…+`) is
     // structured, not verbatim; it lexes normally below. Same-line, unnested.
     let region = &rest[prefix_len..];
@@ -1087,22 +1241,7 @@ fn lex_verbatim_arg_environment(rest: &str, out: &mut Vec<Token>) -> Option<usiz
         None
     };
 
-    out.push(Token {
-        kind: SyntaxKind::CONTROL_WORD,
-        text: SmolStr::new("\\begin"),
-    });
-    out.push(Token {
-        kind: SyntaxKind::L_BRACE,
-        text: SmolStr::new("{"),
-    });
-    out.push(Token {
-        kind: SyntaxKind::WORD,
-        text: SmolStr::new(name),
-    });
-    out.push(Token {
-        kind: SyntaxKind::R_BRACE,
-        text: SmolStr::new("}"),
-    });
+    push_env_delimiter(out, "\\begin", name);
     lex_into(&region[..args_len], out);
     let verb_len = match braced_content_len {
         // Braced form: `{` VERB(content) `}` — the braces stay real tokens so
@@ -1188,18 +1327,9 @@ fn braced_verb_content_len(content: &str) -> Option<usize> {
 /// inside the body `%` is a comment again, and doc.sty terminates on a delimited
 /// match against the literal `%    \end{macrocode}` line.
 fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Option<usize> {
-    let indent = if want_begin {
-        rest.bytes()
-            .take_while(|&b| b == b' ' || b == b'\t')
-            .count()
-    } else {
-        0
-    };
+    let indent = if want_begin { inline_ws_len(rest) } else { 0 };
     let after_pct = rest[indent..].strip_prefix('%')?;
-    let ws_len = after_pct
-        .bytes()
-        .take_while(|&b| b == b' ' || b == b'\t')
-        .count();
+    let ws_len = inline_ws_len(after_pct);
     let body = &after_pct[ws_len..];
     let (control, open) = if want_begin {
         ("\\begin", "\\begin{")
@@ -1216,11 +1346,7 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
     // on an end frame, an optional `%` comment tail (lexed as an ordinary
     // `COMMENT` by the main loop).
     let after_close = &after_open[close + 1..];
-    let trailing = after_close
-        .bytes()
-        .take_while(|&b| b == b' ' || b == b'\t')
-        .count();
-    let tail = &after_close[trailing..];
+    let tail = skip_inline_ws(after_close);
     let comment_tail = !want_begin && tail.starts_with('%');
     if !(tail.is_empty() || tail.starts_with('\n') || tail.starts_with('\r') || comment_tail) {
         return None;
@@ -1242,22 +1368,7 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
             text: SmolStr::new(&after_pct[..ws_len]),
         });
     }
-    out.push(Token {
-        kind: SyntaxKind::CONTROL_WORD,
-        text: SmolStr::new(control),
-    });
-    out.push(Token {
-        kind: SyntaxKind::L_BRACE,
-        text: SmolStr::new("{"),
-    });
-    out.push(Token {
-        kind: SyntaxKind::WORD,
-        text: SmolStr::new(name),
-    });
-    out.push(Token {
-        kind: SyntaxKind::R_BRACE,
-        text: SmolStr::new("}"),
-    });
+    push_env_delimiter(out, control, name);
     Some(indent + 1 + ws_len + control.len() + 1 + name.len() + 1)
 }
 
@@ -1281,21 +1392,17 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
 /// deliberately excluded — they are delimiter-only and handled in
 /// [`lex_control`]. Like the verbatim environment path, this reads only static
 /// signature data (decision #1).
+///
+/// `word_len` is the pre-scanned [`control_word_len`] at `rest`, so the command's
+/// letter run is not re-scanned here and again when the caller falls through to
+/// ordinary lexing.
 fn lex_verbatim_command(
     rest: &str,
-    at_letter: bool,
-    expl_syntax: bool,
-    ctx: &VerbCtx,
+    word_len: Option<usize>,
+    ctx: &ParseCtx,
     out: &mut Vec<Token>,
 ) -> Option<usize> {
-    if !rest.starts_with('\\') {
-        return None;
-    }
-    let letters = run_len(&rest[1..], |c| is_letter(c, at_letter, expl_syntax));
-    if letters == 0 {
-        return None;
-    }
-    let word_len = 1 + letters;
+    let word_len = word_len?;
     let name = &rest[1..word_len];
     // `\verb` keeps its dedicated delimiter-only path.
     if name == "verb" {
@@ -1322,13 +1429,9 @@ fn lex_verbatim_command(
     let after_word = &rest[word_len..];
     let args_len = scan_verbatim_args(after_word, leading);
 
-    // Skip inline whitespace (never a line break — an argument never crosses a
-    // newline) to reach the verbatim argument's opening delimiter.
+    // Skip inline whitespace to reach the verbatim argument's opening delimiter.
     let region = &after_word[args_len..];
-    let ws_len = region
-        .bytes()
-        .take_while(|&b| b == b' ' || b == b'\t')
-        .count();
+    let ws_len = inline_ws_len(region);
     let arg_region = &region[ws_len..];
     let arg_len = match arg_region.bytes().next() {
         Some(b'{') => balanced_group_len(arg_region, b'}')?,
@@ -1367,10 +1470,7 @@ fn scan_verbatim_args(region: &str, args: &[ArgSpec]) -> usize {
     let bytes = region.as_bytes();
     let mut pos = 0;
     for arg in args {
-        let mut probe = pos;
-        while matches!(bytes.get(probe), Some(b' ' | b'\t')) {
-            probe += 1;
-        }
+        let probe = pos + inline_ws_len(&region[pos..]);
         let (open, close) = match arg.kind {
             ArgKind::Bracket => (b'[', b']'),
             ArgKind::Brace => (b'{', b'}'),
@@ -1424,7 +1524,8 @@ fn balanced_group_len(s: &str, close: u8) -> Option<usize> {
 fn lex_into(region: &str, out: &mut Vec<Token>) {
     let mut pos = 0;
     while pos < region.len() {
-        let (kind, len) = next_token(&region[pos..], false, false);
+        let rest = &region[pos..];
+        let (kind, len) = next_token(rest, control_word_len(rest, false, false), false);
         debug_assert!(len > 0, "lexer made no progress in verbatim args");
         out.push(Token {
             kind,
@@ -1432,6 +1533,51 @@ fn lex_into(region: &str, out: &mut Vec<Token>) {
         });
         pos += len;
     }
+}
+
+/// The environment name of a `\begin{name}` at the start of `rest`, together with
+/// the byte length of the whole `\begin{name}` prefix. `None` when `rest` does not
+/// open one, or when the name group never closes.
+fn begin_name(rest: &str) -> Option<(&str, usize)> {
+    let after = rest.strip_prefix("\\begin{")?;
+    let close = after.find('}')?;
+    Some((&after[..close], "\\begin{".len() + close + 1))
+}
+
+/// Emit the four tokens of an environment delimiter — `\begin`/`\end`, `{`, the
+/// name, `}` — so the ordinary environment grammar sees the shape it expects even
+/// where the lexer claimed the surrounding line itself (a verbatim `\begin`, a
+/// `.dtx` `macrocode` frame).
+fn push_env_delimiter(out: &mut Vec<Token>, control: &str, name: &str) {
+    out.push(Token {
+        kind: SyntaxKind::CONTROL_WORD,
+        text: SmolStr::new(control),
+    });
+    out.push(Token {
+        kind: SyntaxKind::L_BRACE,
+        text: SmolStr::new("{"),
+    });
+    out.push(Token {
+        kind: SyntaxKind::WORD,
+        text: SmolStr::new(name),
+    });
+    out.push(Token {
+        kind: SyntaxKind::R_BRACE,
+        text: SmolStr::new("}"),
+    });
+}
+
+/// Number of leading bytes of `s` that are inline whitespace — spaces and tabs,
+/// never a line break. An argument never crosses a newline, and a `.dtx` frame
+/// line's indent is likewise same-line, so every scan in this module that steps
+/// over blanks means exactly this.
+fn inline_ws_len(s: &str) -> usize {
+    s.bytes().take_while(|&b| b == b' ' || b == b'\t').count()
+}
+
+/// `s` past its leading [`inline_ws_len`].
+fn skip_inline_ws(s: &str) -> &str {
+    &s[inline_ws_len(s)..]
 }
 
 /// Number of leading bytes of `s` whose chars all satisfy `pred`.
@@ -1484,6 +1630,93 @@ mod tests {
     fn assert_lossless(input: &str) {
         let joined: String = lex(input).iter().map(|t| t.text.as_str()).collect();
         assert_eq!(joined, input);
+    }
+
+    #[test]
+    fn the_pending_arming_sets_are_disjoint() {
+        // `Pending` is one slot, which is faithful only because no control word
+        // arms two modes. `next_pending` tests the four in a fixed order, so an
+        // overlap would silently make one set shadow the other rather than fail
+        // to compile. Every name currently in any set is checked here; a name
+        // added to a *second* set trips this.
+        for name in [
+            "\\left",
+            "\\right",
+            "\\newcommand",
+            "\\renewcommand",
+            "\\providecommand",
+            "\\DeclareRobustCommand",
+            "\\NewDocumentCommand",
+            "\\RenewDocumentCommand",
+            "\\ProvideDocumentCommand",
+            "\\DeclareDocumentCommand",
+            "\\def",
+            "\\edef",
+            "\\gdef",
+            "\\xdef",
+            "\\let",
+            "\\char",
+            "\\catcode",
+            "\\lccode",
+            "\\uccode",
+            "\\sfcode",
+            "\\mathcode",
+            "\\delcode",
+            "\\number",
+            "\\the",
+            "\\romannumeral",
+            "\\numexpr",
+            "\\dimexpr",
+            "\\ifnum",
+            "\\ifodd",
+            "\\ifdim",
+            "\\string",
+            "\\noexpand",
+            "\\meaning",
+            "\\expandafter",
+            "\\show",
+        ] {
+            let armed = [
+                name == "\\left" || name == "\\right",
+                is_definition_keyword(name),
+                is_char_constant_command(name),
+                is_literal_token_command(name),
+            ];
+            assert_eq!(
+                armed.iter().filter(|&&x| x).count(),
+                1,
+                "{name} arms {armed:?} — the `Pending` slot needs disjoint sets"
+            );
+        }
+    }
+
+    #[test]
+    fn a_claimed_construct_spends_the_armed_char_constant_mode() {
+        // Every construct a `try_*` probe claims whole clears the one-shot slot,
+        // so an armed mode never survives an unrelated capture. Directly after
+        // `\char` a backtick still opens the char constant…
+        let direct = lex("\\char `\\%");
+        assert!(
+            direct
+                .iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "`\\%")
+        );
+        // …but with a short-verb capture in between, the mode is spent and the
+        // backtick is ordinary text. (Before the four flags collapsed into one
+        // slot this branch cleared a hand-picked subset that left the
+        // char-constant mode armed indefinitely.)
+        let intervened = lex("\\MakeShortVerb{\\|} \\char |a| `\\%");
+        assert!(
+            intervened
+                .iter()
+                .any(|t| t.kind == SyntaxKind::VERB && t.text == "|a|")
+        );
+        assert!(
+            !intervened
+                .iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "`\\%")
+        );
+        assert_lossless("\\MakeShortVerb{\\|} \\char |a| `\\%");
     }
 
     #[test]
@@ -1688,7 +1921,7 @@ mod tests {
     fn lex_dtx(input: &str) -> Vec<Token> {
         lex_with(
             input,
-            &VerbCtx::default(),
+            &ParseCtx::default(),
             LexConfig {
                 flavor: LatexFlavor::Document,
                 dtx: true,
@@ -1792,7 +2025,7 @@ mod tests {
         // must not enable implicit expl (there are no macrocode bodies anyway).
         let toks = lex_with(
             "%<@@=mod>\n\\seq_new:N",
-            &VerbCtx::default(),
+            &ParseCtx::default(),
             LexConfig {
                 flavor: LatexFlavor::Package,
                 dtx: false,
@@ -1810,7 +2043,7 @@ mod tests {
         // explicit `\makeatletter`.
         let toks = lex_with(
             r"\foo@bar",
-            &VerbCtx::default(),
+            &ParseCtx::default(),
             LatexFlavor::Package.into(),
         );
         let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
@@ -1822,7 +2055,7 @@ mod tests {
         // Letter-mode starts on, but an explicit `\makeatother` still turns it off.
         let toks = lex_with(
             r"\foo@bar\makeatother\foo@bar",
-            &VerbCtx::default(),
+            &ParseCtx::default(),
             LatexFlavor::Package.into(),
         );
         let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
@@ -1848,7 +2081,7 @@ mod tests {
             flavor: LatexFlavor::Document,
             dtx: true,
         };
-        let toks = lex_with("% \\foo\nbar % tail\n", &VerbCtx::default(), dtx);
+        let toks = lex_with("% \\foo\nbar % tail\n", &ParseCtx::default(), dtx);
         let seen: Vec<_> = toks.iter().map(|t| (t.kind, t.text.as_str())).collect();
         assert_eq!(seen[0], (SyntaxKind::DOC_MARGIN, "%"));
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\foo")));
@@ -1880,7 +2113,7 @@ mod tests {
             dtx: true,
         };
         // `%<*tag>` / `%</tag>` block delimiters are single `GUARD` tokens.
-        let block = lex_with("%<*driver>\n%</driver>\n", &VerbCtx::default(), dtx);
+        let block = lex_with("%<*driver>\n%</driver>\n", &ParseCtx::default(), dtx);
         assert_eq!(block[0].kind, SyntaxKind::GUARD);
         assert_eq!(block[0].text, "%<*driver>");
         assert!(
@@ -1889,7 +2122,7 @@ mod tests {
                 .any(|t| t.kind == SyntaxKind::GUARD && t.text == "%</driver>")
         );
         // An inline `%<tag>` is a `GUARD` prefix; the rest of the line lexes as code.
-        let inline = lex_with("%<plain>\\RequirePackage{x}\n", &VerbCtx::default(), dtx);
+        let inline = lex_with("%<plain>\\RequirePackage{x}\n", &ParseCtx::default(), dtx);
         assert_eq!(inline[0].kind, SyntaxKind::GUARD);
         assert_eq!(inline[0].text, "%<plain>");
         assert!(
@@ -1898,11 +2131,11 @@ mod tests {
                 .any(|t| t.kind == SyntaxKind::CONTROL_WORD && t.text == "\\RequirePackage")
         );
         // A boolean tag expression stays one token (through the closing `>`).
-        let expr = lex_with("%<*package|driver>\n", &VerbCtx::default(), dtx);
+        let expr = lex_with("%<*package|driver>\n", &ParseCtx::default(), dtx);
         assert_eq!(expr[0].kind, SyntaxKind::GUARD);
         assert_eq!(expr[0].text, "%<*package|driver>");
         // A guard recognized only at column 0: a mid-line `%<…>` stays a comment.
-        let midline = lex_with("a %<x>\n", &VerbCtx::default(), dtx);
+        let midline = lex_with("a %<x>\n", &ParseCtx::default(), dtx);
         assert!(
             midline
                 .iter()
@@ -1910,7 +2143,7 @@ mod tests {
         );
         assert!(!midline.iter().any(|t| t.kind == SyntaxKind::GUARD));
         // A `%<` with no closing `>` before the line ends is not a guard.
-        let malformed = lex_with("%<unterminated\n", &VerbCtx::default(), dtx);
+        let malformed = lex_with("%<unterminated\n", &ParseCtx::default(), dtx);
         assert_eq!(malformed[0].kind, SyntaxKind::COMMENT);
         assert_eq!(malformed[0].text, "%<unterminated");
     }

@@ -67,30 +67,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     `semantic::expl3`'s statement segmentation, and a node there would contend
     with it.
 
-- [ ] **Lexer state-machine cleanup (audit follow-up; token stream
-  unchanged).** The mode catalog is sound; the state handling is accreted.
-  The whole machine is 16 mutable locals inside the 411-line `lex_with`, 11
-  of them booleans, and the four one-shot `pending_*` flags are hand-cleared
-  at seven sites with *inconsistent subsets* — `pending_char_constant` is
-  carried silently across several early-`continue` branches, probably
-  unreachable but undocumented either way. One coherent refactor: a `Lexer`
-  struct over the locals (`lex_with` becomes a short loop over `try_*`
-  methods); `Option<Pending>` replacing the four flags (the arming command
-  sets are mutually exclusive, so one slot is faithful, and the seven reset
-  sites collapse to `pending = None`, resolving the carry-through asymmetry
-  by construction); `Option<MacrocodeSave>` folding `in_macrocode` +
-  `saved_at_letter` + `saved_expl_syntax` so the save/restore pairing is
-  type-enforced. Deduplicate while there: the `\begin`/`{`/name/`}`
-  four-token push appears three times verbatim, the `\begin{name}` probe
-  twice, inline-whitespace skipping five times, and every control word's
-  letter run is scanned twice (`lex_verbatim_command`, then `lex_control`).
-  Riders: fix the misattached doc block at `lexer.rs:310–329` (two essays,
-  both attached to `is_literal_token_command`, leaving
-  `is_char_constant_command` undocumented); retire the `VerbCtx` spelling in
-  internal signatures (keep the public alias); kill the per-environment
-  `format!("\\end{…}")`; name the curated `ltxdoc`-family class list. The
-  losslessness corpus makes the whole change cheap to verify.
-
 - [ ] **Grammar hygiene (audit follow-up; independent of the closer-map plan
   under *Performance & hardening*).**
 

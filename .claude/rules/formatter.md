@@ -183,6 +183,23 @@ predicates the formatter *preserves*.
   verbatim arm, not from a width special case. Pinned by
   `filecontents_protected_body`.
 
+## Comments
+
+- **A `%` ends its line, so nothing the formatter emits may follow one there.**
+  Every lowering that owns a delimiter encodes this: `lower_bracketed` and
+  `lower_prose_group` put the closer on its own line, `collapse_arg_group` /
+  `segment_optional` / `lower_opaque_group` decline their flat form outright. The
+  cost of forgetting is a *deleted closing delimiter* (`\caption{x%}`), which the
+  whitespace-only oracle sees only as a comment that grew a `}`.
+- **A comment glued to an open delimiter rides that delimiter's line.** Moving it
+  down converts the newline the formatter writes after `{` into a real space
+  token inside the group — `\caption{%\n}` (empty) becomes `\caption{ }`. Glued
+  is the test, and the parser makes it a cheap one: leading whitespace is its own
+  trivia token, so a `COMMENT` first in the body means the author glued it.
+- The mirror on the other side is the *trailing* comment rule: it rides the line
+  it was authored on and is **never relocated**, because an own-line `%` rebinds
+  as the next construct's `DOC_COMMENT` on reparse (issue #38).
+
 ## Protected regions
 
 - **The protected region extends through the `\end` marker's own indentation.**

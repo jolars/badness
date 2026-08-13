@@ -766,6 +766,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // at default settings (whitespace-only invariant, tenet 1).
     ("reflow_bracket_in_prose_argument", WrapMode::Reflow, 80),
     ("reflow_caption_block", WrapMode::Reflow, 40),
+    // A `%` at either edge of a prose argument body: glued to the opener it rides
+    // the opener's line (relocating it would turn the synthesized newline after
+    // `{` into a real space token inside the group), and one the body *ends* with
+    // forces the group open so the closing brace takes its own line — flat, the
+    // soft group rendered `\caption{%}` and commented the brace out
+    // (`latexindent`'s `commands/figureValign-mod*`). Both bite only when the
+    // whole body reflows to one line; any second line already forces the group.
+    ("reflow_prose_arg_comment_edges", WrapMode::Reflow, 80),
     // A signature-marked collapsible token list (`\citep` and the cite family, via
     // the DB's `collapse` arg flag): a key list written across lines folds to one
     // line, and the `inline`-flagged command flows into the paragraph fill as an

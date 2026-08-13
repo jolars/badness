@@ -139,6 +139,19 @@ values; classic `bibtex` 0.99d has no comment syntax and rejects all of these,
 and texlab models none either (recorded as a deliberate deviation in
 `bib_parse_compat_allowlist.toml`).
 
+Re-recorded once more after **a prose argument's edge comments took
+`lower_bracketed`'s two guards** (`lower_prose_group`). The soft group a prose
+argument is wrapped in could render flat with a `%` inside it, so a body ending
+in a comment came out `\caption{x%}` — the closing brace *commented out*, a
+content deletion — and a comment glued to `{` was relocated to its own line,
+inserting a space token into the group. **The whole `commands/figureValign-mod*`
+family is gone**: `latexindent.all` 181 → 145 (12 files × `comment-change` +
+`content-change` + `idempotency`), `latexindent.trivia` 157 → 145 (12
+`content-change`), no additions, the other six sets byte-unchanged. Production
+output moved in 59 files across all four corpora and every hunk is one of the
+two shapes: a `{`-glued `%` re-joining its opener (a *join*: `\title{\n  %` →
+`\title{%`, the bulk of it), or a `{%}` splitting into `{%` / `}`.
+
 **No re-record** was needed for the **opaque-group width-driven layout** (the
 retirement of the last Tier-1 `spans_multiple_lines` read): all eight sets are
 byte-unchanged — no additions, no resolutions. Getting there took three
@@ -223,7 +236,7 @@ Variant:`reason (`.trivia.txt`) — the same distillation`check_gate_baselines.s
 
 190 `all` (178 `format-error`, 12 `idempotency`) and 161 `trivia` (145
 `format-error`, 15 `content-change`, 1 `non-fixed-point`) over 5329 files. (Now
-169 / 158 — see the re-record notes above.) Both gates run in seconds — 1.4s and
+145 / 145 — see the re-record notes above.) Both gates run in seconds — 1.4s and
 16s — because the files are small. Triaged into families, most of the
 `format-error` bulk is the corpus being adversarial on purpose rather than a gap
 on our side:
@@ -247,6 +260,9 @@ on our side:
   no `\begin{document}`). Corpus noise.
 - **12 `idempotency`, all `commands/figureValign-mod*`** — one family, not
   twelve: `%`-terminated argument braces (`\includegraphics[…]%\n{%\n…%\n}`).
+  **Now fixed** — the shape that actually bit was the *empty* one,
+  `\caption%\n{%\n}`, whose prose-argument group rendered flat as `\caption{%}`
+  and commented its own closing brace out. See the re-record note above.
 
 The 15 `content-change` entries were the severe class and reduced to **two**
 causes: the 12 `figureValign` files above, and the three
@@ -254,8 +270,8 @@ causes: the 12 `figureValign` files above, and the three
 content-deletion bug** — `\emph{a [b] c}` formatted to `\emph{a [b c}`, dropping
 the `]` at default settings in signature-known prose arguments (`\emph`,
 `\textbf`, `\footnote`; `\caption`, `\section`, unknown commands and bare groups
-were unaffected). **Both are now closed or reclassified**: the `]` deletion is
-fixed (see the re-record note above), and `figureValign` moved into
+were unaffected). **Both are now fixed**: the `]` deletion first (see the
+re-record notes above), then `figureValign`, which had meanwhile moved into
 `latexindent.all.txt` once that gate learned to see this class. `--checks all`
 reported the bug clean at first record — the non-trivia-content oracle lived
 only in the trivia path and in `assert_format_invariants` — which is why closing

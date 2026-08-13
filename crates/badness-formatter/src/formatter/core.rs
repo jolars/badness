@@ -6776,6 +6776,22 @@ fn match_arg_slot(args: &[ArgSpec], slot: &mut usize, is_bracket: bool) -> Optio
 /// [`Ir::group`] so it stays on one line when it fits (`\footnote{short}`) and
 /// breaks the delimiters onto their own lines, indenting and word-wrapping the body,
 /// when it does not. Empty bodies collapse to the bare delimiters.
+///
+/// A `%` comment at either edge of the body takes [`lower_bracketed`]'s two
+/// guards, for the same reasons — the soft group is the only thing that makes
+/// them look different here:
+///
+/// - A comment **glued to the open delimiter** rides the opener's line. Pushing
+///   it to its own indented line would turn the newline the formatter writes
+///   after `{` into a real space token inside the group, changing `\caption{%\n}`
+///   (empty — the `%` eats the source newline) into `\caption{ }`.
+/// - A comment the body **ends** with forces the group open, so the close
+///   delimiter takes its own line. Flat, the group renders `\caption{x%}` and the
+///   `%` comments the closing brace out — a content deletion, and one the
+///   whitespace-only oracle sees only as a comment growing a `}`.
+///
+/// Both bite exactly when the whole body reflows to a *single* line: any second
+/// line puts a hard separator between them, which already forces the group.
 fn lower_prose_group(
     node: &SyntaxNode,
     open: SyntaxKind,
@@ -6797,17 +6813,65 @@ fn lower_prose_group(
         }
     }
 
+    // The parser emits leading whitespace/newlines as their own trivia tokens, so
+    // the first body element is a `COMMENT` iff it was glued to the opener.
+    let has_leading_comment = body_elements
+        .first()
+        .and_then(SyntaxElement::as_token)
+        .is_some_and(|t| t.kind() == SyntaxKind::COMMENT);
+    let open_ir = if has_leading_comment {
+        let comment = body_elements.remove(0);
+        Ir::concat([open_ir, Ir::verbatim(comment.as_token().unwrap().text())])
+    } else {
+        open_ir
+    };
+    let has_trailing_comment = body_ends_with_comment(node, close);
+
     let body = reflow_elements(body_elements.into_iter(), cx, ReflowKind::ProseArg);
     if matches!(body, Ir::Nil) {
-        Ir::concat([open_ir, close_ir])
+        if has_leading_comment {
+            // `\caption{%\n}`: the comment already rode the open delimiter, so
+            // the close must still drop to its own line.
+            Ir::concat([open_ir, Ir::hard_line(), close_ir])
+        } else {
+            Ir::concat([open_ir, close_ir])
+        }
     } else {
+        let brk: fn() -> Ir = if has_leading_comment || has_trailing_comment {
+            Ir::hard_line
+        } else {
+            Ir::soft_line
+        };
         Ir::group(Ir::concat([
             open_ir,
-            Ir::indent(Ir::concat([Ir::soft_line(), body])),
-            Ir::soft_line(),
+            Ir::indent(Ir::concat([brk(), body])),
+            brk(),
             close_ir,
         ]))
     }
+}
+
+/// Whether the last content token of `node`'s body — the `close` delimiter and
+/// any trailing collapsible trivia skipped — is a `%` comment, i.e. whatever the
+/// body lowers to ends a line and nothing may follow it there.
+///
+/// Read at any depth, because a comment nested in the last child is still the
+/// last thing emitted *unless* that child's own lowering already put a break
+/// after it, which is exactly what the delimiter-bearing lowerings do
+/// (`\caption{\emph{a%\n}}` ends on `\emph`'s `}`, not on the comment).
+fn body_ends_with_comment(node: &SyntaxNode, close: SyntaxKind) -> bool {
+    let mut token = node.last_token();
+    while let Some(t) = token {
+        if !node.text_range().contains_range(t.text_range()) {
+            return false; // walked out of the group (an unclosed body)
+        }
+        match t.kind() {
+            SyntaxKind::COMMENT => return true,
+            k if k == close || is_collapsible_trivia(k) => token = t.prev_token(),
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Lower a signature-marked *collapsible* argument group (see [`ContentKind::TokenList`])

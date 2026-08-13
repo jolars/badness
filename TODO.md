@@ -217,13 +217,24 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   "output re-reads multi-line" clause must rest on the *lead* break or the body
   instead).
 
-- [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
-  one family.** `%`-terminated argument braces
-  (`\includegraphics[…]%\n{%\n…%\n}`) — a comment ends every line inside an
-  argument group, so the layout's comment handling and its argument grouping
-  disagree across passes. All 12 `latexindent.all.txt` idempotency entries and 12
-  of the 15 `content-change` entries are this one shape. Minimize before fixing;
-  the files are large but the construct repeats.
+- [x] **`commands/figureValign-mod*` is closed: a prose argument's edge comments
+  now take `lower_bracketed`'s two guards.** The family minimized to three lines,
+  `\caption%\n{%\n}`, and the `\includegraphics` braces in the filing were a red
+  herring — an opaque group declines its flat form on any `%` already. What
+  lacked the guards was `lower_prose_group`, the *soft* group a signature-proven
+  prose argument is wrapped in, which could render flat with a comment inside it:
+  a body ending in `%` came out `\caption{x%}`, commenting out its own closing
+  brace (a content deletion the whitespace-only oracle sees only as a comment
+  growing a `}`), and a `%` glued to `{` was pushed to its own line, converting
+  the synthesized newline into a space token inside the group. Both bite only
+  when the whole body reflows to *one* line — any second line already puts a hard
+  separator between the comment and the closer, which is why every longer
+  spelling of the same shape looked fine. Fixed by peeling a glued leading
+  comment onto the opener and forcing the group open when the body's last content
+  token is a comment (`body_ends_with_comment`). All 36 `latexindent.all` entries
+  and 12 `latexindent.trivia` entries gone, no additions in any set, the other six
+  byte-unchanged; production output moved in 59 files, all of it the glued-`%`
+  re-join. Pinned by `reflow_prose_arg_comment_edges`.
 
 - [ ] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). A braced script argument is lowered

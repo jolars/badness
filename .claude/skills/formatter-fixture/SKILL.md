@@ -179,7 +179,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 237 existing fixture slugs. **Re-measure before trusting
+Measured against the 239 existing fixture slugs. **Re-measure before trusting
 this list** — it went stale once already: `items` and brace groups were listed as
 thin at one and four fixtures, and were actually at 11 and 33 by the time someone
 read it. Count with `ls crates/badness-formatter/tests/fixtures/formatter/ |
@@ -187,9 +187,23 @@ grep -icE '<pattern>'` first, and fix the entry if it is wrong.
 
 Candidates not yet checked against a fresh count:
 
-1. **`environments`, `mand-args`, `opt-and-mand-args`** — large corpus
-   directories; verify against current slugs before picking.
-2. **`tokenChecks`, `specials`, `diacritics`** — small, unexamined families.
+1. **`specials`, `diacritics`** — small, unexamined families. (`tokenChecks` is
+   off the list: its four files are latexindent's own internal placeholder
+   tokens leaking into document text, which says nothing about LaTeX.)
+2. **`environments`, `mand-args`, `opt-and-mand-args`** — partly mined (see
+   `begin_tail_is_body` under Done); 24 and 19 slugs already match `env`/`arg`,
+   so verify against current slugs before picking.
+
+Done: `begin_tail_is_body` — content the greedy parser attaches to `BEGIN` past
+the *declared* arity is body, not header, so it indents and reflows with the body
+instead of stranding at the `\begin` column. The header ends at the last element
+glued to it, which reads only `Gap::Glued`-versus-not. Two traps worth knowing
+before touching this area again: the tail must be **spliced into the leading
+paragraph's reflow** (concatenating ahead of it deletes an inter-word space,
+since a paragraph trims its own leading newline — no oracle sees this), and the
+A/B whitespace-collapse sweep that caught it is the only mechanical check for
+that class. It also surfaced a pre-existing glued-split bug in `reflow_elements`
+(recorded in TODO.md, not fixed here).
 
 Done: `filecontents` (`filecontents_protected_body`) — no defect found; it pins
 that a verbatim-body environment's `\begin` line never breaks under width

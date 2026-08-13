@@ -518,6 +518,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         WrapMode::Reflow,
         80,
     ),
+    // The `\begin` header ends at the last element glued to it; content greedy
+    // attachment gave `BEGIN` past that is body, and indents and reflows with it
+    // rather than stranding at the `\begin` column. `\begin{frame}{Title}` keeps
+    // its undeclared argument on the header because the author glued it there —
+    // `Glued`-versus-not is the only trivia predicate read, so a lone newline
+    // never reaches the decision.
+    ("begin_tail_is_body", WrapMode::Reflow, 80),
     // A `%` run on its *own* line(s) immediately before a command or environment
     // binds *leading* into that construct (the parser's leading comment-bind) and
     // is rendered on its own line above `\section` / `\begin`, at the construct's
@@ -2139,7 +2146,8 @@ fn glued_brace_opener_keeps_first_body_token_on_its_line() {
 /// The `\begin` argument glue is driven by the scanned signature, not the name: the
 /// *same* `\begin{thm}\n{x}` glues only when the document defines `thm`'s arity.
 /// Without the definition `thm` is unknown to both the document and the built-in DB,
-/// so it stays on the generic path and the argument is pushed to its own line.
+/// so nothing claims `{x}` as an argument and it is body — indented with the body,
+/// not stranded at the `\begin` column.
 #[test]
 fn user_definition_drives_begin_argument_glue() {
     let style = FormatStyle {
@@ -2149,7 +2157,7 @@ fn user_definition_drives_begin_argument_glue() {
     let undefined = "\\begin{thm}\n{x}\nbody\n\\end{thm}\n";
     assert_eq!(
         format_with_style(undefined, style).expect("formats"),
-        "\\begin{thm}\n{x}\n  body\n\\end{thm}\n",
+        "\\begin{thm}\n  {x}\n  body\n\\end{thm}\n",
         "an undefined environment must not glue its argument"
     );
 

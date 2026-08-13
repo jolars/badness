@@ -133,6 +133,21 @@ predicates the formatter *preserves*.
   trailing `%` still rides the statement's line (`prev_block_closes_line` lets
   the comment ride but not content); blank lines around it are preserved,
   never synthesized.
+- **The `\begin` header ends at the last element glued to it.** Declared
+  arguments glue whatever the author wrote between them (`Signatures`
+  arity — `\begin{tabular}\n{cc}` joins); past that, the header continues only
+  while each boundary is `Gap::Glued`, and everything from the first gap is
+  *body* (`lower_begin` → `BeginParts::tail`, spliced by `lower_env_body`).
+  Attachment past the declared arity is an accident of greed (decision #8), not
+  an argument claim, so rendering it as one strands it at the `\begin` column
+  (`\begin{center}\n{\bfseries A}`) while gluing it up dresses body content as an
+  argument. Only `Glued`-versus-not is read, so a lone newline never reaches the
+  decision. **The tail must be spliced into the leading paragraph's reflow, not
+  concatenated ahead of it** — a paragraph trims its own leading newline, so
+  concatenation abuts the two with no separator and deletes a space TeX typesets.
+  A header `%` keeps the whole node byte-faithful when an arity is declared:
+  gluing the argument across it comments it out, and bodying it takes a
+  `tabular`'s colspec from the grid. Pinned by `begin_tail_is_body`.
 - **A `CONDITIONAL` is all-or-nothing:** flat when the whole construct fits, else
   every divider opens a line. Offered as two whole candidates
   (`Ir::conditional_group_all_lines`), **never as one `Ir::group` of `Ir::Line`s**

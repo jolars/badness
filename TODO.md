@@ -217,6 +217,25 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   "output re-reads multi-line" clause must rest on the *lead* break or the body
   instead).
 
+- [ ] **The paragraph reflow's forced-break rule splits glued sibling atoms.**
+  A third member of the glued-divider family, and the one that lives in
+  `reflow_elements` rather than in a delimiter lowering. Its block-statement arm
+  ends the line at any element whose IR carries a forced break, without asking
+  whether the *next* element is glued to it, so `{a%\n}{b%\n}` — two brace
+  groups the author abutted, each forced open by its own `%` — comes out
+  `{a%\n}\n{b%\n}`. The `%` eats the source newline, so TeX saw `{a}{b}` and now
+  sees `{a} {b}`: an interword space materialized at a junction with no gap,
+  exactly what the glued-divider principle forbids. Invisible to every oracle for
+  the usual reason — trivia to the CST checks, and the perturbation generator
+  cannot reach a junction that has no trivia to perturb. Pre-existing and
+  independent of who routes content into the paragraph; surfaced by the A/B space
+  sweep for `begin_tail_is_body`, which moved one corpus file
+  (`mand-args/env-third-mand-args-percent-after-body`) into the body where it
+  already applied. The fix is the same `close_glued` shape as the entry above —
+  suppress the line end when the following element abuts — and it wants a
+  `tests/typeset/` case pinning the space-token claim before it lands, since the
+  ratchet cannot see the difference either way.
+
 - [x] **`commands/figureValign-mod*` is closed: a prose argument's edge comments
   now take `lower_bracketed`'s two guards.** The family minimized to three lines,
   `\caption%\n{%\n}`, and the `\includegraphics` braces in the filing were a red
@@ -1271,9 +1290,14 @@ sources below are missing.
   latexindent's own outputs are a soft target only: usable as inspiration where
   our tenets underdetermine a construct, never a form to match case by case,
   since it is a config-driven indenter whose committed outputs are one settings
-  stack's answer to a different question. Measured gaps against the 237 existing
+  stack's answer to a different question. Measured gaps against the 239 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin (11
-  and 33 slugs); re-measure before trusting any gap list here. `filecontents` is
+  and 33 slugs); re-measure before trusting any gap list here. `mand-args` /
+  `opt-and-mand-args` / `environments` yielded `begin_tail_is_body` — content the
+  greedy parser attaches to `BEGIN` past the declared arity is body, not header —
+  which closed a Tier-1 lone-newline read *and* a column-0 indentation bug, and
+  surfaced the paragraph-reflow glued-split entry above; the rest of those three
+  families is still open. `filecontents` is
   done (`filecontents_protected_body`) — it was purely a protected-region
   question, and the survey found no defect: the sharp edge it now pins is that a
   verbatim-body environment's `\begin` line must never break under width

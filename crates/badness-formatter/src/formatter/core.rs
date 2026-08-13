@@ -3978,6 +3978,11 @@ struct EnvParts {
     body: Vec<SyntaxElement>,
     end: Ir,
     lifted: Option<SyntaxToken>,
+    /// How many of `body`'s leading elements came from [`lower_begin`]'s tail —
+    /// content the greedy parser attached to `BEGIN` past the end of the header.
+    /// They are *in* `body` so no consumer can drop them; the count is what lets
+    /// [`lower_env_body`] splice them into the body's first paragraph.
+    tail_len: usize,
 }
 
 fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
@@ -3985,12 +3990,20 @@ fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
     let mut begin = Ir::Nil;
     let mut end = Ir::Nil;
     let mut body: Vec<SyntaxElement> = Vec::new();
+    let mut tail_len = 0usize;
     let mut seen_begin = false;
     for element in node.children_with_tokens() {
         match &element {
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::BEGIN => {
                 seen_begin = true;
-                begin = lower_begin(child, cx);
+                // Content the greedy parser attached past the end of the header
+                // leads the body (see [`lower_begin`]). `body` is still empty here
+                // — everything before `BEGIN` is `leading` — so extending it now
+                // keeps the tail in source order ahead of the real body.
+                let parts = lower_begin(child, cx);
+                begin = parts.header;
+                tail_len = parts.tail.len();
+                body.extend(parts.tail);
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::END => {
                 end = lower_node(child, cx);
@@ -4009,6 +4022,7 @@ fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
         body,
         end,
         lifted,
+        tail_len,
     }
 }
 
@@ -4019,9 +4033,52 @@ fn is_lifted_comment(el: &SyntaxElement, lifted: Option<&SyntaxToken>) -> bool {
     lifted.is_some_and(|l| el.as_token() == Some(l))
 }
 
+/// Whether `node` (a `PARAGRAPH`) takes the plain prose reflow in [`lower_node`] —
+/// the one body path a spliced [`EnvParts::tail_len`] run can join. A `.dtx` doc
+/// paragraph re-synthesizes its own `% ` margin per line and an expl3-overlapping
+/// one segments into statements; neither admits foreign leading elements, so both
+/// keep the concatenated form. Mirrors `lower_node`'s `PARAGRAPH` arms — keep the
+/// two in step.
+fn paragraph_reflows_as_prose(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    cx.wraps_prose()
+        && !is_dtx_doc_paragraph(node)
+        && !(cx.any_expl3() && cx.overlaps_expl3(node.text_range()))
+}
+
 /// Lower [`EnvParts::body`] through the generic element stream, dropping the
 /// lifted `\begin`-line comment when one was taken.
-fn lower_env_body(body: Vec<SyntaxElement>, lifted: bool, cx: LowerCtx<'_>) -> Ir {
+///
+/// The leading `tail_len` elements are content greedy attachment gave to `BEGIN`
+/// past the end of its header (see [`lower_begin`]); where the body opens with a
+/// prose paragraph they are *spliced into its reflow* rather than concatenated
+/// ahead of it. That is what makes the relocation invisible to the layout: the
+/// source lays out identically whether or not the parser happened to pull the
+/// group into `BEGIN` — `\begin{center}\n{\bfseries A}\nmore` reflows onto one
+/// line, exactly as it does with a word ahead of the group to keep it in the
+/// paragraph.
+///
+/// Concatenating instead would abut the two with *no separator at all*: the
+/// paragraph's own leading newline lives inside the node and its reflow trims it,
+/// so `{\bfseries A}` and `more` would run together. That is a space TeX typesets,
+/// silently deleted — and invisible to every CST oracle, since whitespace is trivia
+/// to them and content to TeX.
+fn lower_env_body(body: Vec<SyntaxElement>, tail_len: usize, lifted: bool, cx: LowerCtx<'_>) -> Ir {
+    if tail_len > 0
+        && let Some(SyntaxElement::Node(para)) = body.get(tail_len)
+        && para.kind() == SyntaxKind::PARAGRAPH
+        && paragraph_reflows_as_prose(para, cx)
+    {
+        let spliced = reflow_elements(
+            body[..tail_len]
+                .iter()
+                .cloned()
+                .chain(para.children_with_tokens()),
+            cx,
+            ReflowKind::Prose,
+        );
+        let rest = lower_element_stream(body[tail_len + 1..].iter().cloned(), cx);
+        return Ir::concat(std::iter::once(spliced).chain(rest));
+    }
     if lifted {
         lower_body_dropping_leading_comment(body, cx)
     } else {
@@ -4036,8 +4093,9 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body,
         end,
         lifted,
+        tail_len,
     } = split_environment(node, cx);
-    let body = lower_env_body(body, lifted.is_some(), cx);
+    let body = lower_env_body(body, tail_len, lifted.is_some(), cx);
     // Trim the body's own edge breaks (the indenter re-supplies them), but if the
     // author left a blank line touching `\begin`/`\end`, preserve it as a single
     // blank line — LaTeX blank lines are deliberate visual spacing, so we keep one
@@ -4416,6 +4474,7 @@ fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         mut body,
         end,
         lifted,
+        tail_len,
     } = split_environment(node, cx);
 
     // Pull the `%␣␣␣␣` that frames `\end` onto the `\end` line; what remains is the
@@ -4425,7 +4484,7 @@ fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .map(|f| Ir::concat(lower_element_stream(f.into_iter(), cx)))
         .filter(|ir| !matches!(ir, Ir::Nil));
 
-    let body = lower_env_body(body, lifted.is_some(), cx);
+    let body = lower_env_body(body, tail_len, lifted.is_some(), cx);
     let (lead_blank, body) = peel_leading_break(body);
     let (trail_blank, body) = peel_trailing_break(body);
     let lead = if lead_blank {
@@ -4552,60 +4611,130 @@ fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.no_indent)
 }
 
-/// Lower a `\begin{name}` node, keeping the environment's *declared* argument
-/// groups on the `\begin` header line instead of letting a source line break push
-/// them onto their own (indented) line. For example `\begin{tabular}\n{cc}` renders
-/// as a single `\begin{tabular}{cc}` header.
+/// A `\begin{…}` header, split from the content the greedy parser attached past
+/// the end of that header. See [`lower_begin`].
+struct BeginParts {
+    header: Ir,
+    /// Elements [`split_environment`] prepends to the environment's body, so they
+    /// indent and reflow with it instead of riding the header line.
+    tail: Vec<SyntaxElement>,
+}
+
+/// Lower a `\begin{name}` node into the header line and the body content the
+/// greedy parser over-attached to it.
+///
+/// **The header ends at the last element glued to it.** Two rules decide where
+/// that is. The environment's *declared* argument groups are glued to
+/// `\begin{name}` whatever the author wrote between them, so `\begin{tabular}\n{cc}`
+/// renders as a single `\begin{tabular}{cc}` header. Past the declared arity — and
+/// from the `{name}` group onwards for an environment with no declared arguments —
+/// the header continues only while each boundary is [`Gap::Glued`]; at the first
+/// gap it stops, and everything from there is body.
 ///
 /// The arity comes from the [`Signatures`] overlay (`cx.signatures`): a document's
 /// own `\newenvironment{thm}[1]…` is honored just like a built-in `tabular`, with
-/// the scanned definition shadowing a built-in of the same name. The first `arity`
-/// argument groups are glued to `\begin{name}` (intervening breaks and inline
-/// whitespace dropped), and anything past the declared arity — which the greedy
-/// parser may have over-attached — lowers generically, preserving today's behavior.
-/// Environments neither the document nor the DB knows, or that take no arguments,
-/// also take the generic path, so nothing regresses. A `\begin` header carrying a
-/// comment is left to the generic path too: gluing across a `%` comment would let
-/// it swallow the next line.
+/// the scanned definition shadowing a built-in of the same name. Where an arity is
+/// declared it *overrides* the glue test, which is decision #2 doing its job: arity
+/// is a semantic fact, and it is why a newline-separated `{cc}` still joins
+/// `\begin{tabular}` while `\begin{frame}`'s undeclared `{Title}` stays on the
+/// header only because the author glued it there.
 ///
-/// Each glued group is also matched to its signature slot ([`match_arg_slot`],
+/// Attachment past the declared arity is an accident of greed (decision #8), not an
+/// argument claim, so it must not be *rendered* as one: leaving it in the header
+/// stranded it at the `\begin` column, one level short of the body it belongs to
+/// (`\begin{center}\n{\bfseries A heading}`). Gluing it up instead would dress body
+/// content as an argument, so body is the honest destination.
+///
+/// Trivia-invariant: only `Glued`-versus-not is read, which the normalized [`Gap`]
+/// boundary preserves — a lone newline, a space, and a blank line all fall in the
+/// same bucket, so the unsafe predicate never reaches this decision. It is a fixed
+/// point in both directions: a glued tail re-parses glued, and a tail sent to the
+/// body re-parses separated.
+///
+/// A `%` that trailed the header on its own source line stays on it (own-line-ness
+/// is a preserved predicate, and relocating a trailing comment rebinds it as the
+/// next construct's `DOC_COMMENT` under decision #9); one the author gave its own
+/// line travels to the body with the rest of the tail, which is where it already
+/// was. But a header comment *with* a declared arity keeps the whole node on the
+/// byte-faithful path, because both available moves are wrong there: gluing the
+/// argument across the `%` would comment it out, and sending it to the body would
+/// take a `tabular`'s colspec away from the grid. A `.dtx` doc margin or guard is
+/// likewise preserved wholesale — both must open their own line.
+///
+/// Each glued argument is also matched to its signature slot ([`match_arg_slot`],
 /// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] `[…]` — `axis`,
 /// `tikzpicture`, `lstlisting` — reaches the keyval-aware optional layout. Every
 /// other content kind lowers exactly as the generic path would.
-fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     let sig = cx.signatures.environment_at(begin);
     let arity = sig.as_ref().map(|sig| sig.args.len()).unwrap_or(0);
-    // A header carrying a `%` comment is left to the generic path: gluing
-    // across it would let it swallow the next line. A `.dtx` doc margin or
-    // guard likewise — both must open their own line, so a header whose
-    // arguments continue on margined lines is preserved, never glued.
-    let has_comment = begin
+    let mut has_comment = false;
+    let mut has_margin = false;
+    for token in begin
         .children_with_tokens()
         .filter_map(|element| element.into_token())
-        .any(|token| {
-            matches!(
-                token.kind(),
-                SyntaxKind::COMMENT | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD
-            )
-        });
-    if arity == 0 || has_comment {
-        return lower_node(begin, cx);
+    {
+        match token.kind() {
+            SyntaxKind::COMMENT => has_comment = true,
+            SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => has_margin = true,
+            _ => {}
+        }
+    }
+    if has_margin || (has_comment && arity > 0) {
+        return BeginParts {
+            header: lower_node(begin, cx),
+            tail: Vec::new(),
+        };
     }
 
     let args = sig.as_ref().map(|sig| &*sig.args).unwrap_or(&[]);
+    let elements: Vec<SyntaxElement> = begin.children_with_tokens().collect();
     let mut head: Vec<Ir> = Vec::new();
-    let mut tail: Vec<SyntaxElement> = Vec::new();
-    let mut args_seen = 0;
+    let mut args_seen = 0usize;
     let mut slot = 0usize;
-    let mut in_tail = false;
-    for element in begin.children_with_tokens() {
-        if in_tail {
-            tail.push(element);
-            continue;
-        }
-        match &element {
+    let mut i = 0usize;
+    while let Some(element) = elements.get(i) {
+        match element {
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                // Measure the run in place rather than consuming it: when it turns
+                // out to be the split point it must travel to the body, so that
+                // `leading_inline_comment` sees trivia — not a bare `%` — first and
+                // declines to lift an own-line comment back onto the header.
+                let (mut end, mut newlines, mut flat) = (i, 0usize, String::new());
+                while let Some(SyntaxElement::Token(token)) = elements.get(end) {
+                    if !is_collapsible_trivia(token.kind()) {
+                        break;
+                    }
+                    newlines += usize::from(token.kind() == SyntaxKind::NEWLINE);
+                    flat.push_str(token.text());
+                    end += 1;
+                }
+                // A declared argument is still outstanding: it glues to
+                // `\begin{name}`, so the run is dropped.
+                if args_seen < arity {
+                    i = end;
+                    continue;
+                }
+                // A `%` authored on the header line rides it.
+                let trails_comment = newlines == 0
+                    && matches!(
+                        elements.get(end),
+                        Some(SyntaxElement::Token(token)) if token.kind() == SyntaxKind::COMMENT
+                    );
+                if trails_comment {
+                    head.push(Ir::verbatim(flat));
+                    i = end;
+                    continue;
+                }
+                // Not glued: the header ends here and the rest is body.
+                return BeginParts {
+                    header: Ir::concat(head),
+                    tail: elements[i..].to_vec(),
+                };
+            }
             SyntaxElement::Node(child)
-                if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+                if args_seen < arity
+                    && matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
                 let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
                 let keyval = match_arg_slot(args, &mut slot, is_bracket)
@@ -4616,21 +4745,24 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                     lower_node(child, cx)
                 });
                 args_seen += 1;
-                if args_seen == arity {
-                    in_tail = true;
-                }
+                i += 1;
             }
-            // The `\begin` control word and the `{name}` group stay on the line.
-            SyntaxElement::Node(child) => head.push(lower_node(child, cx)),
-            // Drop header breaks/whitespace: the arguments glue to `\begin{name}`.
-            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
-            SyntaxElement::Token(token) => head.push(lower_loose_token(token)),
+            // The `\begin` control word, the `{name}` group, and anything the
+            // author glued past the declared arity stay on the header line.
+            SyntaxElement::Node(child) => {
+                head.push(lower_node(child, cx));
+                i += 1;
+            }
+            SyntaxElement::Token(token) => {
+                head.push(lower_loose_token(token));
+                i += 1;
+            }
         }
     }
-    if !tail.is_empty() {
-        head.extend(lower_element_stream(tail.into_iter(), cx));
+    BeginParts {
+        header: Ir::concat(head),
+        tail: Vec::new(),
     }
-    Ir::concat(head)
 }
 
 /// True if `node` (an `ENVIRONMENT`) names a list environment the signature DB
@@ -4689,6 +4821,9 @@ fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body,
         end,
         lifted,
+        // The `BEGIN` tail (see [`lower_begin`]) rides `body` as ordinary leading
+        // elements: this path flattens the body itself, so it needs no splice.
+        tail_len: _,
     } = split_environment(node, cx);
 
     let Some(body) = lower_list_body(&body, cx, lifted.as_ref()) else {
@@ -5071,6 +5206,9 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body,
         end,
         lifted,
+        // The `BEGIN` tail (see [`lower_begin`]) rides `body` as ordinary leading
+        // elements: this path flattens the body itself, so it needs no splice.
+        tail_len: _,
     } = split_environment(node, cx);
 
     let Some(items) = build_alignment_grid(&body, cx, false, lifted.as_ref()) else {
@@ -5116,6 +5254,9 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body: body_elements,
         end,
         lifted,
+        // The `BEGIN` tail (see [`lower_begin`]) rides `body` as ordinary leading
+        // elements: this path flattens the body itself, so it needs no splice.
+        tail_len: _,
     } = split_environment(node, cx);
 
     let Some(math_node) = body_elements

@@ -21,6 +21,7 @@ use badness::file_discovery::{
 };
 use badness::formatter::perturb::{
     ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence, nontrivia_content,
+    survey_trivia_invariance,
 };
 use badness::formatter::{
     ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
@@ -1647,10 +1648,10 @@ fn run_format_paths(
 // reports for `idempotency`/`losslessness`/`format-error` and extracts
 // `Approx. diff start line: N` from the report. Keep them stable, and keep the
 // `format-error` wording free of the substrings `idempot` and `lossless` so a
-// formatter refusal is never misclassified as an invariant regression. The
-// `trivia` check is deliberately excluded from `--checks all` (the workflow's
-// failure classes stay as they are), and its label must likewise stay free of
-// the other three substrings.
+// formatter refusal is never misclassified as an invariant regression. Both
+// trivia checks are deliberately excluded from `--checks all` (the workflow's
+// failure classes stay as they are), and their labels must likewise stay free
+// of the other three substrings.
 
 /// One invariant (or the failure to even run it) checked per file.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1660,6 +1661,7 @@ enum CheckKind {
     ContentChange,
     CommentChange,
     Trivia,
+    TriviaStrict,
     FormatError,
 }
 
@@ -1671,6 +1673,7 @@ impl CheckKind {
             CheckKind::ContentChange => "content-change",
             CheckKind::CommentChange => "comment-change",
             CheckKind::Trivia => "trivia",
+            CheckKind::TriviaStrict => "trivia-strict",
             CheckKind::FormatError => "format-error",
         }
     }
@@ -1701,7 +1704,7 @@ struct DebugFailure {
     kind: CheckKind,
     left: String,
     right: String,
-    /// Extra context shown after the label — the trivia check's offending
+    /// Extra context shown after the label — the trivia checks' offending
     /// variant. `None` for the other kinds.
     detail: Option<String>,
 }
@@ -1714,8 +1717,9 @@ struct DebugArtifacts {
     losslessness: Option<(String, String)>,
     /// `(input, once, twice)` when the idempotency check ran to completion.
     idempotency: Option<(String, String, String)>,
-    /// The perturbed input (the reproducer) when the trivia check failed; its
-    /// two formattings are the failure's `left`/`right`.
+    /// The perturbed input (the reproducer) when either trivia check failed;
+    /// its two formattings are the failure's `left`/`right`. Only one of the
+    /// two ever runs per invocation, so they share the slot.
     trivia_perturbed: Option<String>,
     failures: Vec<DebugFailure>,
 }
@@ -1727,6 +1731,7 @@ fn checks_label(checks: DebugChecksArg) -> &'static str {
         DebugChecksArg::Idempotency => "idempotency",
         DebugChecksArg::Losslessness => "losslessness",
         DebugChecksArg::Trivia => "trivia",
+        DebugChecksArg::TriviaStrict => "trivia-strict",
         DebugChecksArg::All => "all",
     }
 }
@@ -1806,8 +1811,8 @@ fn build_debug_report(
         "- Checks: `{}`\n- Files checked: {files_checked}\n",
         checks_label(checks)
     ));
-    // Only the trivia check skips files today (`.bib` runs nothing under it);
-    // parameterize the reason if a second skipping check ever appears.
+    // Only the two trivia checks skip files today, and for the same reason
+    // (`.bib` runs nothing under either); parameterize if that ever diverges.
     if files_skipped > 0 {
         out.push_str(&format!(
             "- Files skipped: {files_skipped} (`.bib` — the trivia oracle is LaTeX-CST-based)\n"
@@ -1884,8 +1889,10 @@ fn write_debug_artifacts(
         )?;
     }
 
+    // One filename for both trivia checks: only one of them runs per
+    // invocation, so the reproducer is never ambiguous.
     if let Some(perturbed) = artifacts.trivia_perturbed.as_ref()
-        && failed(CheckKind::Trivia)
+        && (failed(CheckKind::Trivia) || failed(CheckKind::TriviaStrict))
     {
         std::fs::write(
             dump_dir.join(format!("{stem}.trivia.perturbed-input.txt")),
@@ -2070,6 +2077,52 @@ fn run_debug_checks_for_file(
         }
     }
 
+    // The strict trivia-invariance oracle (opt-in): `fmt(perturbed) ==
+    // fmt(original)`. This is the end-state contract, so it still fails
+    // wherever the formatter deliberately preserves an authored break — it is
+    // a *survey*, not a gate, and exists because a layout decision that reads
+    // the lone-newline predicate is self-consistent on both spellings and so
+    // invisible to every other check here. Same wrap pin and `.bib` skip as the
+    // convergence check above, and the same `format-error` mapping when the
+    // original will not format.
+    if checks == DebugChecksArg::TriviaStrict && kind != FileKind::Bib {
+        let mut style = style;
+        style.wrap = WrapMode::Reflow;
+        let fmt = |input: &str| {
+            format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
+                .map_err(|e| e.to_string())
+        };
+        match survey_trivia_invariance(content, kind.lex_config(), DEFAULT_SINGLE_FLIP_SAMPLES, fmt)
+        {
+            Err(msg) => artifacts.failures.push(DebugFailure {
+                kind: CheckKind::FormatError,
+                left: msg,
+                right: String::new(),
+                detail: None,
+            }),
+            Ok(survey) => {
+                // Report the localized reproducer when there is one: the bulk
+                // variants come first and are whole-file mega-lines, which name
+                // no construct. The count rides in `detail` so a `--report` run
+                // over a corpus ranks itself.
+                if let Some(failure) = survey.best_reproducer() {
+                    artifacts.trivia_perturbed = Some(failure.perturbed_input.clone());
+                    artifacts.failures.push(DebugFailure {
+                        kind: CheckKind::TriviaStrict,
+                        left: failure.formatted_original.clone(),
+                        right: failure.formatted_perturbed.clone(),
+                        detail: Some(format!(
+                            "{}/{} variants diverged, reported: {}",
+                            survey.violations.len(),
+                            survey.variants_checked,
+                            failure.label
+                        )),
+                    });
+                }
+            }
+        }
+    }
+
     artifacts
 }
 
@@ -2143,10 +2196,14 @@ fn run_debug_format(
                 io_failed = true;
             }
             Ok(artifacts) => {
-                // A `.bib` file under `--checks trivia` runs nothing (the
+                // A `.bib` file under either trivia check runs nothing (the
                 // oracle is LaTeX-CST-based): count it as skipped, not
                 // checked, so the summary reports real oracle coverage.
-                if checks == DebugChecksArg::Trivia && kind == FileKind::Bib {
+                if matches!(
+                    checks,
+                    DebugChecksArg::Trivia | DebugChecksArg::TriviaStrict
+                ) && kind == FileKind::Bib
+                {
                     files_skipped += 1;
                 } else {
                     files_checked += 1;

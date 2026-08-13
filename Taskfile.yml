@@ -114,6 +114,12 @@ tasks:
       - cargo build --release
       - ./scripts/check_gate_baselines.sh
 
+  gate-corpora:strict-survey:
+    desc: "Survey strict trivia invariance over the pinned corpora and print a reproducer histogram (non-gating: strict is the end-state contract, so most files still fail)"
+    cmds:
+      - cargo build --release
+      - ./scripts/strict_trivia_survey.sh
+
   typeset:check:
     desc: Compile tests/typeset/*.tex before and after formatting and diff the typeset output (needs a TeX install; not run in CI)
     cmds:

@@ -27,11 +27,17 @@
 //! - **Strict invariance** ([`check_trivia_invariance`], the end-state gate):
 //!   `fmt(perturbed) == fmt(original)`. This is the full trivia-invariant
 //!   layout contract and holds only once layout no longer reads the unsafe
-//!   predicate at all (the Gap-enum endgame); until then it fails wherever the
-//!   formatter preserves an authored break, so it is not part of the S0 gate.
+//!   predicate at all (the `Gap`-enum endgame); until then it fails wherever
+//!   the formatter preserves an authored break, so it does not gate a corpus.
+//!   Its role today is the opposite one: it is the only *mechanical* way to
+//!   find a layout decision that reads the unsafe predicate, because such a
+//!   decision is self-consistent on both spellings and therefore invisible to
+//!   idempotence and to convergence alike. [`survey_trivia_invariance`] is the
+//!   surveying form behind `--checks trivia-strict`.
 //!
 //! This is a debug/test surface shared by `badness debug format --checks
-//! trivia` and the invariant tests; it carries no stability promise.
+//! trivia`/`--checks trivia-strict` and the invariant tests; it carries no
+//! stability promise.
 
 use rowan::TextRange;
 
@@ -68,6 +74,39 @@ pub struct TriviaPerturbations {
 pub struct TriviaReport {
     pub variants_checked: usize,
     pub dropped_unsafe: usize,
+}
+
+/// A complete strict-invariance run over one input: every variant checked, and
+/// every one that violated recorded rather than the first.
+///
+/// [`check_trivia_invariance`] returns on the first violation, which is the
+/// right shape for a gate but the wrong one for a survey: the two *bulk*
+/// variants are generated before the localized `flip@…` samples
+/// ([`trivia_perturbations`]), so on an input with several violations the early
+/// return almost always hands back `all-newlines-to-spaces` — a whole-file
+/// mega-line with no localization at all. Collecting lets the caller prefer a
+/// localized reproducer, which is the difference between a finding one can act
+/// on and a diff one cannot read.
+#[derive(Debug, Clone)]
+pub struct TriviaSurvey {
+    pub variants_checked: usize,
+    pub dropped_unsafe: usize,
+    /// Every variant whose formatting differed from the original's, in
+    /// generation order (bulk variants first, then `flip@…` samples).
+    pub violations: Vec<TriviaFailure>,
+}
+
+impl TriviaSurvey {
+    /// The violation best suited to triage: the first localized (`flip@…`)
+    /// one if any variant of that kind failed, else the first violation at all.
+    /// A localized reproducer names the offending gap by byte offset, so it
+    /// points at the construct instead of at the whole file.
+    pub fn best_reproducer(&self) -> Option<&TriviaFailure> {
+        self.violations
+            .iter()
+            .find(|failure| failure.label.starts_with("flip@"))
+            .or_else(|| self.violations.first())
+    }
 }
 
 /// A perturbation that formatted differently from the original — a layout
@@ -327,8 +366,9 @@ pub fn check_trivia_convergence(
 /// fmt(original)` for every verified perturbation of `input`. This is the
 /// end-state trivia-invariant layout contract — until the lowering no longer
 /// reads the lone-newline-vs-space predicate at all, it fails wherever the
-/// formatter deliberately preserves an authored break, so it is a
-/// post-umbrella gate, not part of the S0 inventory.
+/// formatter deliberately preserves an authored break, so it gates only the
+/// shapes proven invariant so far (the registry in `tests/format.rs`), never a
+/// corpus. [`survey_trivia_invariance`] is the form for surveying one.
 pub fn check_trivia_invariance(
     input: &str,
     config: impl Into<LexConfig>,
@@ -357,6 +397,46 @@ pub fn check_trivia_invariance(
         variants_checked,
         dropped_unsafe: perturbations.dropped_unsafe,
     })
+}
+
+/// Survey strict trivia-invariance over `input`: like
+/// [`check_trivia_invariance`], but checks *every* verified perturbation and
+/// collects the violations instead of returning on the first.
+///
+/// `Err` carries the formatter's message when the **original** refuses to
+/// format, mirroring [`TriviaError::Original`] — the oracle cannot run at all
+/// then. A per-variant refusal is not an error: the generator already verified
+/// the variant parses cleanly, so a refusal there is itself a divergence, and
+/// it is recorded as one via the `<format error: …>` sentinel.
+pub fn survey_trivia_invariance(
+    input: &str,
+    config: impl Into<LexConfig>,
+    single_flip_samples: usize,
+    fmt: impl Fn(&str) -> Result<String, String>,
+) -> Result<TriviaSurvey, String> {
+    let perturbations = trivia_perturbations(input, config, single_flip_samples);
+    let formatted_original = fmt(input)?;
+    let mut survey = TriviaSurvey {
+        variants_checked: 0,
+        dropped_unsafe: perturbations.dropped_unsafe,
+        violations: Vec::new(),
+    };
+    for variant in &perturbations.variants {
+        let formatted_perturbed = match fmt(&variant.text) {
+            Ok(text) => text,
+            Err(err) => format!("<format error: {err}>"),
+        };
+        survey.variants_checked += 1;
+        if formatted_perturbed != formatted_original {
+            survey.violations.push(TriviaFailure {
+                label: variant.label.clone(),
+                perturbed_input: variant.text.clone(),
+                formatted_original: formatted_original.clone(),
+                formatted_perturbed,
+            });
+        }
+    }
+    Ok(survey)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -686,7 +766,7 @@ mod tests {
     fn strict_oracle_accepts_structural_expl3_statements() {
         // Two expl3 statements plus the region toggles, every head with
         // derivable arity (the toggles are recognized zero-arity units). Under
-        // structural boundaries (S4) a lone newline↔space swap anywhere in the
+        // structural boundaries a lone newline↔space swap anywhere in the
         // stream must format back to the identical bytes — the exact gap that
         // was the `SplitAtNewlines` violation before. This is the first shape
         // for which the *strict* (end-state) oracle holds, not just the
@@ -702,7 +782,7 @@ mod tests {
 
     #[test]
     fn strict_oracle_accepts_structural_expl3_definition() {
-        // The S4 flagship: an `Npn` definition (single-token slot, shape-scanned
+        // The flagship shape: an `Npn` definition (single-token slot, shape-scanned
         // parameter text, peeled body group) is one structural call unit, so
         // swapping the authored break before its body for a space — or any other
         // lone-newline↔space perturbation — formats back byte-identically.
@@ -725,5 +805,59 @@ mod tests {
         })
         .expect("authored-break preservation converges");
         assert!(report.variants_checked > 0);
+    }
+
+    /// The same input the convergence oracle accepts: the command-only-line
+    /// rule keeps the authored break between two top-level commands, so strict
+    /// invariance fails on it. That makes it the fixture for the surveying
+    /// form.
+    const STRICT_VIOLATOR: &str = "\\usepackage{a}\n\\usepackage{b}\nalpha\nbeta gamma\n";
+
+    #[test]
+    fn survey_checks_every_variant_rather_than_stopping() {
+        let fmt = |s: &str| format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string());
+        assert!(
+            check_trivia_invariance(STRICT_VIOLATOR, LatexFlavor::Document, 8, fmt).is_err(),
+            "fixture must violate strict invariance"
+        );
+        let total = perturb(STRICT_VIOLATOR).variants.len();
+        let survey = survey_trivia_invariance(STRICT_VIOLATOR, LatexFlavor::Document, 8, fmt)
+            .expect("the original formats");
+        assert_eq!(survey.variants_checked, total);
+        assert!(!survey.violations.is_empty());
+    }
+
+    #[test]
+    fn survey_prefers_a_localized_reproducer() {
+        // Generation order puts the two whole-file bulk variants first, so the
+        // early-returning oracle hands back a mega-line. The survey must reach
+        // past them to a `flip@…` gap the reader can act on.
+        let survey = survey_trivia_invariance(STRICT_VIOLATOR, LatexFlavor::Document, 8, |s| {
+            format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string())
+        })
+        .expect("the original formats");
+        let best = survey.best_reproducer().expect("a violation was recorded");
+        assert!(
+            best.label.starts_with("flip@"),
+            "expected a localized reproducer, got {:?} (all: {:?})",
+            best.label,
+            survey
+                .violations
+                .iter()
+                .map(|v| &v.label)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn survey_reports_no_violations_on_an_invariant_shape() {
+        let survey =
+            survey_trivia_invariance("alpha\nbeta gamma\n", LatexFlavor::Document, 8, |s| {
+                format_with_style(s, FormatStyle::default()).map_err(|e| e.to_string())
+            })
+            .expect("the original formats");
+        assert!(survey.variants_checked > 0);
+        assert!(survey.violations.is_empty());
+        assert!(survey.best_reproducer().is_none());
     }
 }

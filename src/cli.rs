@@ -290,8 +290,8 @@ pub enum DebugCommand {
         /// config; the multi-width corpus sweep's knob).
         #[arg(long)]
         line_width: Option<usize>,
-        /// How to lay out line breaks inside a paragraph (the trivia check
-        /// ignores this and pins `reflow`).
+        /// How to lay out line breaks inside a paragraph (the trivia checks
+        /// ignore this and pin `reflow`).
         #[arg(long, value_enum)]
         wrap: Option<WrapArg>,
         /// Emit a Markdown report to stdout instead of log lines.
@@ -342,6 +342,14 @@ pub enum DebugChecksArg {
     /// Deliberately *not* part of `all` — the smoke-test workflow's failure
     /// classes stay as they are.
     Trivia,
-    /// Losslessness and idempotency (default). Does not include `trivia`.
+    /// Only the strict trivia-invariance oracle: `fmt(perturbed) ==
+    /// fmt(original)` for every perturbation. This is the *end-state*
+    /// contract, so it still fails wherever the formatter deliberately
+    /// preserves an authored break — it is a survey for finding layout
+    /// decisions that read the lone-newline predicate, not a gate. Same wrap
+    /// pin and `.bib` skip as `trivia`, and likewise not part of `all`.
+    TriviaStrict,
+    /// Losslessness and idempotency (default). Does not include either trivia
+    /// check.
     All,
 }

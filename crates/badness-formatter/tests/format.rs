@@ -774,6 +774,20 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // With no split point at all a `[…]` stays inline and overflows; a breakable
     // group would push `[!htb]`-shaped brackets onto three lines to no gain.
     ("optional_unsplittable_overflows", WrapMode::Reflow, 80),
+    // A dropped trailing separator (`[a, ]` / `[a,\n]`) stood for authored
+    // whitespace, and an optional is textual — the space token survives as
+    // trailing padding in both spellings, never deleted.
+    (
+        "optional_trailing_separator_keeps_padding",
+        WrapMode::Reflow,
+        80,
+    ),
+    // A bracket that declines segmentation (here: a nested group whose comment
+    // forces a break) takes the indented block form *unconditionally*, so the
+    // single-line and multi-line spellings of the same content format
+    // identically — the decline reads content and preserved predicates, never
+    // `spans_multiple_lines`.
+    ("optional_block_decline_deterministic", WrapMode::Reflow, 80),
     // Math formatting (Stage A): aggressive intra-math spacing — collapse runs,
     // trim just inside the delimiters, tight `^`/`_` scripts. Braces are kept
     // verbatim (dropping redundant single-token script braces is a *content*

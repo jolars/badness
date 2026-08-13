@@ -6066,20 +6066,14 @@ impl KeyBreak {
 /// default) can never gain a space that would be typeset.
 ///
 /// A body that is not safely segmentable — a blank line, a `%` comment, nested
-/// block content — falls back to the indented block form ([`lower_bracketed`]),
-/// exactly as before, and with no split point at all the bracket stays inline
-/// rather than uselessly detonating into `[\n!htb\n]`. Inert under
-/// [`WrapMode::Preserve`] and the other non-prose-wrapping modes, which keep the
-/// pre-existing block layout.
+/// block content — takes the indented block form ([`lower_bracketed`])
+/// unconditionally, so both spellings of the same content land on it (the
+/// choice reads content and preserved predicates, never a lone newline). With
+/// no split point at all the bracket collapses to one atom rather than
+/// uselessly detonating into `[\n!htb\n]`. Inert under [`WrapMode::Preserve`]
+/// and the other non-prose-wrapping modes, which keep the pre-existing block
+/// layout.
 fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<Ir> {
-    // The pre-existing block form is the fallback everywhere, and the *whole*
-    // behaviour under a mode that does not wrap prose. Gating it on
-    // `spans_multiple_lines` there preserves today's single-line handling (the
-    // generic inline path) byte for byte.
-    let block = || {
-        spans_multiple_lines(node)
-            .then(|| lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx))
-    };
     // A `[…]` continuing across `.dtx` doc-margined lines keeps its authored
     // margins: `lower_node` already gates on this, but the signature-aware callers
     // reach here directly, and relaying such a body would move content off its `%`.
@@ -6091,10 +6085,25 @@ fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<I
     // lowering was safe by accident (it only ever broke an already-multi-line
     // bracket); a width-driven group has to say so.
     if !cx.wraps_prose() || contains_doc_margin(node) || doc_margin_opens_line(node, cx) {
-        return block();
+        // Tier-2 residue: under a mode that does not wrap prose (or on a `.dtx`
+        // doc line) the pre-existing behaviour is kept byte for byte — block
+        // form when the author broke the line, generic inline path otherwise.
+        // Fixed-point argument on [`spans_multiple_lines`].
+        return spans_multiple_lines(node)
+            .then(|| lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx));
     }
     let Some(segments) = segment_optional(node, cx, keyval) else {
-        return block();
+        // Not safely segmentable: blank line, comment, or a child carrying a
+        // forced break. The first two put a NEWLINE directly in the node, but
+        // the third occurs in single-line spellings too (`\baz[{c\n\nd}]`), so
+        // the block form applies unconditionally — both spellings of the same
+        // content take it, keyed on content and preserved predicates alone.
+        return Some(lower_bracketed(
+            node,
+            SyntaxKind::L_BRACKET,
+            SyntaxKind::R_BRACKET,
+            cx,
+        ));
     };
     let OptionalSegments {
         open,
@@ -6102,12 +6111,6 @@ fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<I
         close,
         splits,
     } = segments;
-    // Interior padding (`\baz [ me ]`) is the author's, and a single-line bracket
-    // with nothing to break at must render byte-identically to the generic path —
-    // so hand those straight back to it rather than reproducing them here.
-    if splits == 0 && !spans_multiple_lines(node) {
-        return None;
-    }
     // Padding at the body's edges rides the flat rendering but must vanish when the
     // delimiters take their own lines, or the first key lands at indent + 1.
     let lead = peel_padding(&mut parts, Edge::Leading);
@@ -6249,10 +6252,18 @@ fn segment_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option
         }
     }
     // A trailing separator (`[a, b, ]`) would put the closing `]` two lines down.
-    // Drop it; the whitespace it stood for is trailing and is dropped anyway.
+    // Drop it — but an `Ir::Line` replaced authored whitespace above, and an
+    // optional is textual, so that space token must survive as trailing padding
+    // (`[a, ]` and `[a,\n]` both keep it); a glued-comma `Ir::SoftLine` stood
+    // for nothing and restores nothing.
+    let mut dropped_gap = false;
     while matches!(parts.last(), Some(Ir::Line | Ir::SoftLine)) {
+        dropped_gap |= matches!(parts.last(), Some(Ir::Line));
         parts.pop();
         splits = splits.saturating_sub(1);
+    }
+    if dropped_gap {
+        parts.push(Ir::verbatim(" "));
     }
     Some(OptionalSegments {
         open,

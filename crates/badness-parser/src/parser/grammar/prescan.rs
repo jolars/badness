@@ -21,6 +21,7 @@ use crate::syntax::SyntaxKind;
 pub(super) struct PreScan {
     pub(super) starts: Vec<usize>,
     pub(super) expl_toggles: Vec<(usize, bool)>,
+    pub(super) doc_margin_lines: Vec<(usize, usize)>,
     pub(super) conditional_openers: HashSet<usize>,
     pub(super) alias_openers: HashMap<usize, SmolStr>,
     pub(super) alias_closers: HashMap<usize, SmolStr>,
@@ -57,6 +58,12 @@ impl PreScan {
         let mut last_r_brace = None;
         let mut last_fi = None;
         let mut last_dollar = None;
+        // `.dtx` doc-margin lines, as `(first DOC_MARGIN on the line, the line's
+        // terminating NEWLINE)`. Only a line that carries a margin is recorded,
+        // so this stays empty — and allocation-free — for every non-`.dtx` file.
+        // See [`super::Parser::on_doc_margin_line`].
+        let mut doc_margin_lines: Vec<(usize, usize)> = Vec::new();
+        let mut line_margin: Option<usize> = None;
         for (i, t) in tokens.iter().enumerate() {
             starts.push(off);
             off += t.text.len();
@@ -69,6 +76,12 @@ impl PreScan {
             // recording filter-free means it can never drift *below* the gate's
             // recognition.
             match t.kind {
+                SyntaxKind::DOC_MARGIN => line_margin = line_margin.or(Some(i)),
+                SyntaxKind::NEWLINE => {
+                    if let Some(margin) = line_margin.take() {
+                        doc_margin_lines.push((margin, i));
+                    }
+                }
                 SyntaxKind::R_BRACKET => last_r_bracket = Some(i),
                 SyntaxKind::R_BRACE => last_r_brace = Some(i),
                 SyntaxKind::DOLLAR => last_dollar = Some(i),
@@ -135,9 +148,16 @@ impl PreScan {
             }
         }
         starts.push(off);
+        // A final line the file never terminated still runs to the end of the
+        // stream, so the backward scan this replaces would have reached its
+        // margin from any token on it.
+        if let Some(margin) = line_margin.take() {
+            doc_margin_lines.push((margin, tokens.len()));
+        }
         Self {
             starts,
             expl_toggles,
+            doc_margin_lines,
             conditional_openers,
             alias_openers,
             alias_closers,
@@ -186,6 +206,71 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    /// Pre-scan `src` in the `.dtx` lexer mode — the only one that emits
+    /// `DOC_MARGIN`.
+    fn scan_dtx(src: &str) -> (Vec<Token>, PreScan) {
+        let ctx = ParseCtx::default();
+        let cfg = LexConfig {
+            flavor: crate::parser::lexer::LatexFlavor::Package,
+            dtx: true,
+        };
+        let tokens = lex_with(src, &ctx, cfg);
+        let pre = PreScan::run(&tokens, &ctx);
+        (tokens, pre)
+    }
+
+    /// The predicate `doc_margin_lines` replaced: scan back from `idx` to the
+    /// previous `NEWLINE` looking for a `DOC_MARGIN`. Kept here as the reference
+    /// the memo is checked against.
+    fn walked_back(tokens: &[Token], idx: usize) -> bool {
+        tokens[..idx]
+            .iter()
+            .rev()
+            .take_while(|t| t.kind != SyntaxKind::NEWLINE)
+            .any(|t| t.kind == SyntaxKind::DOC_MARGIN)
+    }
+
+    fn memo_says(pre: &PreScan, idx: usize) -> bool {
+        let n = pre.doc_margin_lines.partition_point(|&(m, _)| m < idx);
+        n > 0 && pre.doc_margin_lines[n - 1].1 >= idx
+    }
+
+    #[test]
+    fn doc_margin_lines_answer_exactly_what_the_backward_scan_did() {
+        // Doc lines, a macrocode chunk whose code lines carry no margin, a
+        // margin-only line, and an unterminated final doc line — every shape the
+        // memo has to reproduce, checked at every token index.
+        let src = "% \\begin{macro}{\\foo}\n\
+                   %    \\begin{macrocode}\n\
+                   \\def\\foo{\\begin{list}}\n\
+                   %    \\end{macrocode}\n\
+                   %\n\
+                   plain line with no margin\n\
+                   % \\end{macro}";
+        let (tokens, pre) = scan_dtx(src);
+        assert!(
+            !pre.doc_margin_lines.is_empty(),
+            "the fixture must actually produce margins"
+        );
+        for idx in 0..=tokens.len() {
+            assert_eq!(
+                memo_says(&pre, idx),
+                walked_back(&tokens, idx),
+                "index {idx} (token {:?})",
+                tokens.get(idx).map(|t| (t.kind, t.text.as_str())),
+            );
+        }
+    }
+
+    #[test]
+    fn doc_margin_lines_is_empty_outside_dtx() {
+        // `DOC_MARGIN` is a `.dtx`-only token kind, so every other file pays
+        // nothing for the memo — no allocation, and the predicate short-circuits
+        // on the empty slice.
+        let (_, pre) = scan("% a comment\n\\begin{itemize}\n\\end{itemize}\n");
+        assert!(pre.doc_margin_lines.is_empty());
     }
 
     #[test]

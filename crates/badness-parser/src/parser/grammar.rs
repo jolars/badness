@@ -1017,6 +1017,12 @@ struct Parser<'t> {
     /// doc-layer markup between them (`\begin{macro}`, the frames) must keep
     /// pairing.
     expl_toggles: Vec<(usize, bool)>,
+    /// The `.dtx` doc-margin lines, as `(first DOC_MARGIN on the line, the line's
+    /// terminating NEWLINE)`, ascending and disjoint. Pre-scanned once so
+    /// [`Self::on_doc_margin_line`] is a binary search rather than a walk back to
+    /// the previous newline. **Empty for every non-`.dtx` file** — only that lexer
+    /// mode emits `DOC_MARGIN` — so the predicate costs nothing there.
+    doc_margin_lines: Vec<(usize, usize)>,
     /// Token indices of the `CONTROL_WORD`s that are *live* conditional openers:
     /// `\if`-prefixed, not one of the brace-argument `if*` macros, and not
     /// sitting in an operand slot (`\newif\if@foo`, `\let\ifpdf\iftrue`) or an
@@ -1165,6 +1171,7 @@ impl<'t> Parser<'t> {
             plain_braces: std::collections::HashSet::new(),
             plain_braces_version: 0,
             expl_toggles: pre.expl_toggles,
+            doc_margin_lines: pre.doc_margin_lines,
             conditional_openers: pre.conditional_openers,
             last_alias_closer: pre.alias_closers.keys().copied().max(),
             last_r_bracket: pre.last_r_bracket,
@@ -1213,16 +1220,23 @@ impl<'t> Parser<'t> {
     }
 
     /// True when token `idx` lies on a `.dtx` doc-margin line (a `DOC_MARGIN`
-    /// opens its physical line). Walks back to the preceding `NEWLINE`; doc lines
-    /// are short, and [`Self::in_macro_code`] only reaches this once a token is
-    /// already known to sit in an expl3 region, so it stays rare however often
-    /// that predicate is asked.
+    /// opens its physical line).
+    ///
+    /// Answered from the pre-scanned [`Self::doc_margin_lines`], the same posture
+    /// as [`Self::in_expl_region`]. This used to walk back to the preceding
+    /// `NEWLINE`, justified by doc lines being short and [`Self::in_macro_code`]
+    /// reaching it only for a token already inside an expl3 region — but
+    /// [`Self::doc_margin_exempt`] calls it *unconditionally*, and that runs from
+    /// [`Self::environment_escapes_group`] and its `\end` mirror for every
+    /// `\begin`/`\end` in the file. On a document written as one long line the
+    /// walk is `O(line length)` per opener, so the pair was `O(N x line length)`.
     fn on_doc_margin_line(&self, idx: usize) -> bool {
-        self.tokens[..idx]
-            .iter()
-            .rev()
-            .take_while(|t| t.kind != SyntaxKind::NEWLINE)
-            .any(|t| t.kind == SyntaxKind::DOC_MARGIN)
+        // The candidate is the last line whose margin opens strictly before
+        // `idx`; the lines are disjoint, so no earlier one can reach. It reaches
+        // when `idx` is still on it — at or before its terminating newline, which
+        // is where the backward scan would have stopped.
+        let n = self.doc_margin_lines.partition_point(|&(m, _)| m < idx);
+        n > 0 && self.doc_margin_lines[n - 1].1 >= idx
     }
 
     /// Whether token `idx` is covered by the `.dtx` doc-margin exemption from the

@@ -11,7 +11,7 @@
 //! from the [`badness::cli`] definitions by `build.rs` (via `clap_mangen` /
 //! `clap_complete` / `clapdown`).
 
-use std::io::{IsTerminal, Read, Write};
+use std::io::{BufWriter, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -51,7 +51,7 @@ use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
 use rayon::prelude::*;
 use rowan::{GreenNode, NodeOrToken};
-use similar::{ChangeTag, TextDiff};
+use similar::{Algorithm, ChangeTag, TextDiff};
 use smol_str::SmolStr;
 
 /// Lower the CLI [`WrapArg`] to the formatter's [`WrapMode`]. Kept as a free
@@ -1454,23 +1454,51 @@ fn run_check(
     }
 }
 
+/// Line-diff `original` against `formatted`.
+///
+/// **Histogram, not the default Myers.** Myers is `O((N+M)*D)`, and `D` is the
+/// whole file whenever the formatter relays a document rather than touching a
+/// few lines: `phd_dissertation.tex` reflows 27 482 lines into 14 364 with 13.6%
+/// line overlap, which cost 2.0 s of a 2.2 s `--check` run. `similar`'s disjoint
+/// fast path cannot rescue that (it runs before prefix trimming and bails as
+/// soon as the two texts share a first line). Histogram anchors on low-frequency
+/// lines instead of searching for a minimal edit script, which upstream
+/// recommends for exactly this "noisy/repetitive input" shape. It is
+/// deterministic - no wall-clock deadline - and measured linear on both the
+/// reflow-heavy document (2204 ms -> 267 ms, same 82 hunks) and the anchor-free
+/// worst case (N nested `\begin{itemize}`, linear to N = 32 000).
+fn diff_lines<'a>(original: &'a str, formatted: &'a str) -> TextDiff<'a, 'a, str> {
+    TextDiff::configure()
+        .algorithm(Algorithm::Histogram)
+        .diff_lines(original, formatted)
+}
+
 /// Print a unified-style, per-file diff of the formatting change (rustfmt-like:
 /// a `Diff in <path>:<line>:` header followed by context-grouped hunks), matching
 /// what arity and panache emit.
 fn print_diff(file: &ChangedFile, use_color: bool) {
+    let mut out = BufWriter::new(std::io::stdout().lock());
+    let _ = write_diff(&mut out, file, use_color);
+}
+
+/// The body of [`print_diff`], generic over the sink so it can be rendered to a
+/// buffer in tests. Writes through a single locked handle: stdout is a
+/// `LineWriter`, so a `println!` per line was a syscall per line - 37 761 of
+/// them on `phd_dissertation.tex`.
+fn write_diff<W: Write>(out: &mut W, file: &ChangedFile, use_color: bool) -> std::io::Result<()> {
     const RED: &str = "\x1b[31m";
     const GREEN: &str = "\x1b[32m";
     const RESET: &str = "\x1b[0m";
 
-    let diff = TextDiff::from_lines(&file.original, &file.formatted);
+    let diff = diff_lines(&file.original, &file.formatted);
     // Three lines of context around each changed region, so a single stray
     // space in a long file does not print the whole file.
     for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
         if idx > 0 {
-            println!("---");
+            writeln!(out, "---")?;
         }
         let start = group[0].old_range().start + 1;
-        println!("Diff in {}:{}:", file.path.display(), start);
+        writeln!(out, "Diff in {}:{}:", file.path.display(), start)?;
         for op in group {
             for change in diff.iter_changes(op) {
                 let (sign, color) = match change.tag() {
@@ -1484,16 +1512,17 @@ fn print_diff(file: &ChangedFile, use_color: bool) {
                 let newline = value.ends_with('\n');
                 let line = value.strip_suffix('\n').unwrap_or(value);
                 if use_color && !color.is_empty() {
-                    print!("{color}{sign}{line}{RESET}");
+                    write!(out, "{color}{sign}{line}{RESET}")?;
                 } else {
-                    print!("{sign}{line}");
+                    write!(out, "{sign}{line}")?;
                 }
                 if newline {
-                    println!();
+                    writeln!(out)?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// No paths: read stdin, format, write to stdout. The pipeline is chosen from
@@ -2274,6 +2303,62 @@ mod tests {
     fn color_choice_overrides_ignore_the_terminal() {
         assert!(color_enabled(ColorChoice::Always, false));
         assert!(!color_enabled(ColorChoice::Never, true));
+    }
+
+    /// The property that outlives any particular diff algorithm: the emitted
+    /// change stream must replay both sides exactly. Hunk boundaries are the
+    /// algorithm's business (Histogram groups differently from Myers), but
+    /// dropping or duplicating a line is a bug in any of them, and `--check`
+    /// is the only account a CI log gets of what would change.
+    fn assert_diff_reconstructs(original: &str, formatted: &str) {
+        let diff = diff_lines(original, formatted);
+        let (mut old, mut new) = (String::new(), String::new());
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Delete => old.push_str(change.value()),
+                ChangeTag::Insert => new.push_str(change.value()),
+                ChangeTag::Equal => {
+                    old.push_str(change.value());
+                    new.push_str(change.value());
+                }
+            }
+        }
+        assert_eq!(
+            old, original,
+            "delete+equal stream must replay the original"
+        );
+        assert_eq!(
+            new, formatted,
+            "insert+equal stream must replay the formatted text"
+        );
+    }
+
+    #[test]
+    fn diff_reconstructs_both_sides() {
+        assert_diff_reconstructs("a\nb\nc\n", "a\nB\nc\n");
+        // No trailing newline on either side.
+        assert_diff_reconstructs("a\nb", "a\nc");
+        assert_diff_reconstructs("", "x\n");
+        assert_diff_reconstructs("x\n", "");
+        // Reindent-everything: the shape that made Myers quadratic.
+        let flat: String = "\\begin{itemize}\n".repeat(400);
+        let indented: String = "  \\begin{itemize}\n".repeat(400);
+        assert_diff_reconstructs(&flat, &indented);
+        // Histogram's hard case: no anchor is unique on either side.
+        assert_diff_reconstructs(&"same\n".repeat(300), &"other\n".repeat(300));
+    }
+
+    #[test]
+    fn diff_renders_a_header_and_signed_lines() {
+        let file = ChangedFile {
+            path: PathBuf::from("doc.tex"),
+            original: "a\nb\nc\n".to_owned(),
+            formatted: "a\nB\nc\n".to_owned(),
+        };
+        let mut out = Vec::new();
+        write_diff(&mut out, &file, false).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        assert_eq!(rendered, "Diff in doc.tex:1:\n a\n-b\n+B\n c\n");
     }
 
     fn paths(entries: &[&str]) -> Vec<PathBuf> {

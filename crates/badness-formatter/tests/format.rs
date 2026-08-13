@@ -565,6 +565,15 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // block-statement rule below; the residual command-line rule covers the
     // same shape for un-signatured commands.)
     ("reflow_command_lines_preserved", WrapMode::Reflow, 80),
+    // The residual rule's fixed-point corner: no authored break exists (the
+    // input is one source line), but the width-80 fill strands the
+    // un-signatured `\zzconfigure{…}` atom alone on a printed line. The next
+    // pass re-reads that line as command-only and *hardens* the fill's breaks
+    // around it — layout-neutral because the greedy fill is first-fit, so
+    // refilling around a hardened break the fill itself chose reproduces the
+    // same lines (the written Tier-2 argument on `line_is_command_only`).
+    // Idempotence, asserted on every fixture, is what pins it.
+    ("reflow_command_stranded_by_width", WrapMode::Reflow, 80),
     // A sectioning command (`\part` … `\subparagraph`, per the signature DB's
     // `sectioning` level) is a block-level statement: a break before it and after it,
     // whatever trivia the author wrote. The old rule kept the break only when the
@@ -582,7 +591,8 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // break before it and after it, whatever trivia the author wrote —
     // `\usepackage{a} \usepackage{b}` and the newline spelling are the same
     // bytes to the next parse, so both must lay out alike (the command-only-line
-    // rule's Tier-1 lone-newline read, now bypassed for curated commands).
+    // rule's lone-newline read, bypassed for curated commands; the residue it
+    // still decides for is sanctioned Tier 2).
     ("block_command_lines", WrapMode::Reflow, 80),
     // Unlike a heading, a block command glued to adjacent non-trivia keeps its
     // authored adjacency (`\ProcessOptions\relax`, `prose\setcounter{…}`):

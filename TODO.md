@@ -113,9 +113,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   formatter deliberately preserves an authored break — 275 of 286 latex3 files,
   372 of 384 latex2e, 354 of 397 pgf, 3804 of 5209 latexindent (after the
   `CommandSig::block` fix; it was 282/375/361/3851 before). It earns the
-  surface because it is the only *mechanical* route to the two Tier-1 entries
-  below (the command-only-line rule's residue, and Opaque-group layout
-  non-determinism):
+  surface because it is the only *mechanical* route to a Tier-1 read (today:
+  Opaque-group layout non-determinism below; it is also what surfaced, and
+  still reports, the command-only-line residue, now sanctioned Tier 2):
   a layout decision keyed on the lone-newline predicate is
   self-consistent on both spellings, so `--checks all` and the convergence
   oracle are blind to it by construction. The survey checks every variant
@@ -130,36 +130,41 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   ratchet: it can prove the shapes on it stay invariant, never notice that a new
   one became invariant.
 
-- [ ] **The command-only-line rule's residue still reads the lone-newline
-  predicate (Tier 1, narrowed).** The curated half is fixed: block-level-ness
-  is a positive signature property (`CommandSig::block`, curated-only like
-  `verbatimDelimited` — the CWL tier stays arity-only and scanned definitions
-  never infer it), and `reflow_elements`'s block-statement arm intercepts a
-  curated block command exactly like a sectioning one, so
-  `\usepackage{a}\n\usepackage{b}` and `\usepackage{a} \usepackage{b}` now lay
-  out identically. Pinned by `block_command_lines` /
-  `block_command_glued_stays` / `block_command_in_brace_body_stays` and the
-  `command-block-lines` strict shape; two scope gates keep it honest (no firing
-  under `ReflowKind::Statement`, whose Tier-2 contract is the authored line,
-  and a glued-adjacent block command keeps its authored adjacency, since
-  splitting there materializes a space token TeX typesets).
+- [x] **The command-only-line rule is re-filed as a sanctioned Tier-2
+  residue.** The curated half: block-level-ness is a positive signature
+  property (`CommandSig::block`, curated-only like `verbatimDelimited` — the
+  CWL tier stays arity-only and scanned definitions never infer it), and
+  `reflow_elements`'s block-statement arm intercepts a curated block command
+  exactly like a sectioning one, so `\usepackage{a}\n\usepackage{b}` and
+  `\usepackage{a} \usepackage{b}` lay out identically. Pinned by
+  `block_command_lines` / `block_command_glued_stays` /
+  `block_command_in_brace_body_stays` and the `command-block-lines` strict
+  shape; two scope gates keep it honest (no firing under
+  `ReflowKind::Statement`, whose Tier-2 contract is the authored line, and a
+  glued-adjacent block command keeps its authored adjacency, since splitting
+  there materializes a space token TeX typesets).
 
-  What still reads the predicate is the **residue**:
-  `prev_is_command`/`next_is_command` (`line_is_command_only`) for
-  un-signatured and scanned-definition commands — whose block-ness no positive
-  property can know without meaning — plus glued-adjacent block commands. Both
-  spellings remain self-consistent fixed points there, so only
-  `--checks trivia-strict` sees it (the re-aimed
-  `trivia_strict_check_fires_where_an_authored_break_is_preserved` pins the
-  residue firing). This residue is exactly what the `Gap` entry below must
-  carry as a widened gap with a written fixed-point argument; retiring it
-  outright would glue every authored `\mymacro`-on-its-own-line into the fill,
-  which is a policy change, not a fix.
+  The **residue** — `prev_is_command`/`next_is_command`
+  (`line_is_command_only`) for un-signatured and scanned-definition commands,
+  whose block-ness no positive property can know without meaning, plus
+  glued-adjacent block commands — is Tier 2, not Tier 1: retiring it outright
+  would glue every authored `\mymacro`-on-its-own-line into the fill, a policy
+  change, not a fix. It now carries the written fixed-point argument the tier
+  demands (on `line_is_command_only`): the rule is preservation-only, so a
+  kept break re-reads to itself in place, and a width break the next pass
+  hardens — a fill that stranded a command alone on a printed line —
+  coincides with the first-fit fill's own break, which refills identically
+  around a hard stop. `reflow_command_stranded_by_width` pins the hardening
+  corner; the re-aimed
+  `trivia_strict_check_fires_where_an_authored_break_is_preserved` pins that
+  only `--checks trivia-strict` sees the preservation (both spellings are
+  self-consistent fixed points). This residue is the read the `Gap` entry
+  below hands a widened gap.
 
-  Overlaps the prose-argument entry below, whose second clause ("gluing a prose
-  arg onto its command line when a source break separates them") is a proposal
-  about this very rule's residue, and whose first clause is the same signature
-  widening (the block half of it landed with `CommandSig::block`).
+  Still overlaps the prose-argument entry below, whose second clause ("gluing
+  a prose arg onto its command line when a source break separates them") is a
+  proposal to *narrow* this residue further — a policy decision, taken
+  deliberately, not a Tier fix.
 
 - [ ] **Normalize the lowering's trivia boundary to a `Gap` enum (the
   enforcement).** Trivia-invariant layout is enforced today by discipline alone:
@@ -171,14 +176,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `Gap = Glued | Space | BlankLine | Comment | Guard | Margin` with **no
   `Newline` variant** — a rule cannot key on what it cannot see. Two local
   prototypes already have the shape and would fold in: `DividerGap` (the
-  conditional divider) and `KeyBreak` (the `[…]` split point). Tier-2 modes
+  conditional divider) and `KeyBreak` (the `[…]` split point). Tier-2 sites
   (`WrapMode::Stable`/`Sentence`/`Semantic`, `ReflowKind::Statement`, the expl3
-  fallback statement) take a *widened* gap and keep their written fixed-point
-  arguments.
+  fallback statement, the command-only-line residue above) take a *widened* gap
+  and keep their written fixed-point arguments.
 
-  Do this **after** the two Tier-1 entries (the command-only-line rule above and
-  Opaque-group layout non-determinism below), not before: what the widened gap
-  has to carry is precisely what those two fixes leave behind.
+  Do this **after** the remaining Tier-1 entry (Opaque-group layout
+  non-determinism below), not before: what the widened gap has to carry is
+  precisely what that fix and the command-only residue leave behind.
 
 - [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
   one family.** `%`-terminated argument braces
@@ -246,8 +251,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them. (The
   block half of the signature widening landed as `CommandSig::block`; the
-  gluing clause is now a proposal about the command-only-line rule's *residue*,
-  see the Tier-1 entry above.)
+  gluing clause is now a proposal to narrow the command-only-line rule's
+  *residue*, see the Tier-2 entry above.)
 
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value

@@ -221,9 +221,11 @@ fn trivia_strict_check_fires_where_an_authored_break_is_preserved() {
     let dir = TempDir::new().unwrap();
     // Two *un-signatured* top-level commands separated by an authored newline.
     // The residual command-only-line rule keeps that break, but glues the pair
-    // when the same gap is a space — the same bytes to the next parse, so
-    // exactly the lone-newline predicate trivia-invariant layout forbids
-    // reading. Curated block commands (`\usepackage`, …) no longer reach that
+    // when the same gap is a space — the same bytes to the next parse, so a
+    // read of the lone-newline predicate. The read is sanctioned Tier 2
+    // (preservation-only; the fixed-point argument is on
+    // `line_is_command_only`), but sanctioned or not only the strict survey can
+    // see it. Curated block commands (`\usepackage`, …) no longer reach that
     // rule — they are intercepted as block-level statements via
     // `CommandSig::block` — so the probe uses names no signature tier knows,
     // whose block-ness only the authored break can carry.

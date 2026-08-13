@@ -8,8 +8,8 @@ The strict trivia-invariance oracle deliberately has **no** baseline here.
 `fmt(perturbed) == fmt(original)` is the end-state contract, so it still fails
 wherever the formatter preserves an authored break — 282/286 latex3, 375/384
 latex2e, 361/397 pgf, 3851/5209 latexindent as of this record. A near-total set
-makes a useless ratchet; the number is here so the two Tier-1 entries in
-`TODO.md` have something to shrink. Survey it with
+makes a useless ratchet; the number is here so the remaining Tier-1 entry in
+`TODO.md` has something to shrink. Survey it with
 `task gate-corpora:strict-survey`.
 
 The re-record log below is the provenance of these checked-in sets, so it is

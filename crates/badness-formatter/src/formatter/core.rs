@@ -1627,8 +1627,10 @@ fn reflow_elements_checked(
     // block-statement arm below) and never depend on it, so what it decides for
     // is un-signatured and scanned-definition commands — whose block-ness no
     // positive signature property can know — plus block commands glued to
-    // adjacent content. That residue still reads the lone-newline predicate;
-    // the planned `Gap` normalization (TODO.md) is what will carry it.
+    // adjacent content. That residue reads the lone-newline predicate as
+    // sanctioned Tier 2: preservation-only, with the fixed-point argument
+    // written on [`line_is_command_only`]. The planned `Gap` normalization
+    // (TODO.md) will carry it as a widened gap.
     let mut line_all_commands = true;
     let mut line_has_content = false;
     // Whether the current physical source line rides a `% ` documentation margin.
@@ -7669,8 +7671,28 @@ fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize 
 /// block-statement arm and gets its own line regardless of this test, so the
 /// authored-break preservation decided here matters only for un-signatured and
 /// scanned-definition commands (block-ness undecidable without meaning) and for
-/// block commands glued to adjacent content. That read of the lone-newline
-/// predicate is the recorded Tier-1 residue (TODO.md).
+/// block commands glued to adjacent content.
+///
+/// That read of the lone-newline predicate is sanctioned **Tier 2**, on this
+/// fixed-point argument: the rule is preservation-only — its entire effect is to
+/// harden a gap that already holds a newline, never to write a break where none
+/// was or to move content across one. So a newline in the output is either (a) a
+/// break this rule kept, which re-reads as the same command-only line at the same
+/// gap (nothing moves non-trivia across a hard line end, so command-only-ness is
+/// itself preserved) and is kept again in place; or (b) a break the fill emitted,
+/// which the next pass may *harden* when the printed line it opened or closed
+/// happens to be command-only — a width wrap stranding an un-signatured command
+/// alone. Hardening a break the greedy fill already chose is layout-neutral:
+/// filling is first-fit, so the lines before the hardened break refill unchanged
+/// and the fill after it restarts from column 0 exactly as the soft break did
+/// (`reflow_command_stranded_by_width` pins this corner; the Tier-2 render modes'
+/// own contracts cover their breaks the same way). Strict trivia invariance is
+/// deliberately not claimed — preserving the authored break *is* the rule — so
+/// `--checks trivia-strict` still reports these shapes
+/// (`trivia_strict_check_fires_where_an_authored_break_is_preserved`), and the
+/// planned `Gap` normalization (TODO.md) carries this read as its widened gap.
+/// Retiring the rule outright would glue every authored `\mymacro`-on-its-own-line
+/// into the fill — a policy change, not a fix.
 ///
 /// A `CONDITIONAL` reaches this as a single non-`COMMAND` element and so
 /// disqualifies its line, which is correct: [`lower_conditional`] owns where its

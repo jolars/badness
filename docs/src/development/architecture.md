@@ -675,17 +675,34 @@ the reparse and the layout flips with it.
 The intended enforcement is to delete the information at the boundary: the
 lowering would consume a normalized inter-token gap with no `Newline` variant
 rather than raw trivia tokens, so a rule could not key on what it cannot see.
-Modes that are *defined* by reading authored breaks (`WrapMode::Stable`,
-`Sentence`, `Semantic`, and `ReflowKind::Statement`) would take a widened gap,
-and each owes a written fixed-point argument showing that every layout it can
-emit re-reads to itself. That normalization is **not built yet** — the boundary
-still hands the lowering a newline count — so today the rule is upheld by
-review, and two layout decisions still read the unsafe predicate (the
-command-only-line rule now only as a residue: curated block commands carry a
-positive `CommandSig::block` property and are laid out as block-level statements
-without consulting trivia, so the read decides only for un-signatured and
-scanned-definition commands). Both, and the gap normalization itself, are
-tracked in `TODO.md`.
+Rules that legitimately preserve authored breaks — the modes *defined* by them
+(`WrapMode::Stable`, `Sentence`, `Semantic`, and `ReflowKind::Statement`), the
+expl3 fallback statement, and the command-only-line rule's residue — would take
+a widened gap, and each owes a written fixed-point argument showing that every
+layout it can emit re-reads to itself.
+
+The command-only-line residue is the newest of those, and the only one living
+inside the default `Reflow`. Curated block commands carry a positive
+`CommandSig::block` property and are laid out as block-level statements without
+consulting trivia, so what the rule still decides is the authored break around a
+command whose block-ness no signature tier can know — an un-signatured or
+scanned-definition `\mymacro` on its own line — plus block commands glued to
+adjacent content. Retiring that would glue every such authored line into the
+paragraph fill: a policy change, not a fix. So the residue is sanctioned as Tier
+2 on the argument written at `line_is_command_only`: the rule is
+preservation-only, hardening gaps that already hold a newline and never writing
+or moving a break, so a kept break re-reads to itself in place, and a fill break
+it hardens on the next pass — a width wrap that stranded a command alone on a
+printed line — coincides with the break the first-fit fill chose, which refills
+identically around a hard stop. The cost is by design: `--checks trivia-strict`
+still reports these shapes, because preserving the authored break *is* the
+information the rule reads.
+
+That normalization is **not built yet** — the boundary still hands the lowering
+a newline count — so today the rule is upheld by review, and one Tier-1 layout
+decision still reads the unsafe predicate: the `Opaque`-group
+`spans_multiple_lines` choice (with `lower_optional`'s fallbacks to the same).
+It, and the gap normalization itself, are tracked in `TODO.md`.
 
 The oracle is `formatter::perturb`, which generates TeX-identical trivia
 perturbations of each input. It has two forms. `check_trivia_convergence` is

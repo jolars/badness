@@ -408,11 +408,12 @@ never match.
 - **Never key layout on a lone source newline** (trivia-invariant layout, above). A
   width wrap and an authored newline are the same bytes to the next parse, so any rule
   that reads one is a latent idempotency bug. Blank lines and comments are fair game.
-  A mode that genuinely needs the unsafe predicate (`WrapMode::Stable`, `Sentence`,
-  `Semantic`, `ReflowKind::Statement`, the expl3 fallback statement) is Tier 2: it
-  must carry a written fixed-point argument showing every layout it can emit re-reads
-  to itself, as `ReflowKind::Statement`'s flush continuation and the expl3 fallback's
-  greedy self-refilling lines do. A fallback line's fill also *hugs*
+  A rule that genuinely needs the unsafe predicate (`WrapMode::Stable`, `Sentence`,
+  `Semantic`, `ReflowKind::Statement`, the expl3 fallback statement, the
+  command-only-line residue) is Tier 2: it must carry a written fixed-point argument
+  showing every layout it can emit re-reads to itself, as `ReflowKind::Statement`'s
+  flush continuation, the expl3 fallback's greedy self-refilling lines, and the
+  command-only residue's preservation-only hardening (`line_is_command_only`) do. A fallback line's fill also *hugs*
   (`Ir::HugFill`): an atom that carries a forced break is measured by its first
   line, so where it lands never depends on forced-ness — which is why no arm of
   the forced-break dispatch fires inside a fallback statement.

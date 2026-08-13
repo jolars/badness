@@ -42,18 +42,23 @@ predicates the formatter *preserves*.
   cannot key on what it cannot see. It does not exist yet — the boundary still
   hands the lowering a newline count — so until it lands the discipline is
   manual. Don't add a read.
-- **Tier 2 modes** (`WrapMode::Stable`/`Sentence`/`Semantic`,
-  `ReflowKind::Statement`, the expl3 fallback statement) read the unsafe
-  predicate by definition and **must carry a written fixed-point argument**
-  showing every layout they can emit re-reads to itself.
-- **Two Tier-1 sites still read it**, both live in the default `Reflow`: the
-  `GROUP` arm's `spans_multiple_lines` (and `lower_optional`'s fallbacks to the
-  same) and the command-only-line rule (`line_is_command_only`) — the latter now
-  only as a *residue*: curated block commands are intercepted upstream via
-  `CommandSig::block` and never reach it, so it decides only for un-signatured
-  and scanned-definition commands (block-ness undecidable without meaning) and
-  for block commands glued to adjacent content. Both are filed in `TODO.md`.
-  Don't add a third.
+- **Tier 2 sites** (`WrapMode::Stable`/`Sentence`/`Semantic`,
+  `ReflowKind::Statement`, the expl3 fallback statement, and the
+  command-only-line residue) read the unsafe predicate by definition and **must
+  carry a written fixed-point argument** showing every layout they can emit
+  re-reads to itself.
+- **The command-only-line residue is Tier 2, not Tier 1.** Curated block
+  commands are intercepted upstream via `CommandSig::block` and never reach it,
+  so `line_is_command_only` decides only for un-signatured and
+  scanned-definition commands (block-ness undecidable without meaning) and for
+  block commands glued to adjacent content — and retiring that would glue every
+  authored `\mymacro`-on-its-own-line into the fill, a policy change. Its
+  fixed-point argument is written on the function: preservation-only — a kept
+  break re-reads to itself in place, and a hardened width break coincides with
+  the first-fit fill's own (`reflow_command_stranded_by_width`).
+- **One Tier-1 site still reads it**, in the default `Reflow`: the `GROUP`
+  arm's `spans_multiple_lines` (and `lower_optional`'s fallbacks to the same).
+  Filed in `TODO.md`. Don't add a second.
 - Count *decisions that differ*, not call sites. Several places branch on
   `newlines == 1` yet emit `" "` either way — normalizations, not decisions, and
   the oracle collapses a run to one character so it cannot see them. Nobody

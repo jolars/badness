@@ -706,7 +706,7 @@ impl GatePolicy for EnvGate {
     }
 
     fn opens_at(&self, p: &Parser<'_>, i: usize) -> bool {
-        p.tokens[i].text == BEGIN_CMD && p.env_name_follows(i) && !p.in_macro_code(i)
+        p.env_begin_at(i) && !p.in_macro_code(i)
     }
 
     fn closes_at(&self, _p: &Parser<'_>, _i: usize) -> bool {
@@ -1498,6 +1498,33 @@ impl<'t> Parser<'t> {
         true
     }
 
+    /// The cursor is on a `\begin` that reads as an environment delimiter
+    /// ([`Self::env_name_follows`]).
+    fn at_env_begin(&self) -> bool {
+        self.at_command(BEGIN_CMD) && self.env_name_follows(self.pos)
+    }
+
+    /// The `\end` twin of [`Self::at_env_begin`].
+    fn at_env_end(&self) -> bool {
+        self.at_command(END_CMD) && self.env_name_follows(self.pos)
+    }
+
+    /// [`Self::at_env_begin`] at an explicit index.
+    ///
+    /// Deliberately *not* routed through [`Self::at_command`]: that ticks the
+    /// stuck-loop budget ([`Self::step`]), which is a peek counter for the walk,
+    /// and this form is called once per token from inside the gate scans — where
+    /// a visit is progress, not a non-advancing peek. Indexes directly, as every
+    /// call site did before.
+    fn env_begin_at(&self, idx: usize) -> bool {
+        self.tokens[idx].text == BEGIN_CMD && self.env_name_follows(idx)
+    }
+
+    /// The `\end` twin of [`Self::env_begin_at`], with the same no-tick rule.
+    fn env_end_at(&self, idx: usize) -> bool {
+        self.tokens[idx].text == END_CMD && self.env_name_follows(idx)
+    }
+
     fn is_trivia(k: SyntaxKind) -> bool {
         matches!(
             k,
@@ -1891,9 +1918,7 @@ impl<'t> Parser<'t> {
                     // `math_environment_body` hardcodes `Block::Environment`, so
                     // this one bound terminates both the math and the prose body.
                     self.alias_end.is_some_and(|end| self.pos >= end)
-                        || (self.at_command(END_CMD)
-                            && self.env_name_follows(self.pos)
-                            && !self.end_orphans_a_demoted_begin(self.pos))
+                        || (self.at_env_end() && !self.end_orphans_a_demoted_begin(self.pos))
                 }
                 // `>=` (not `==`): defensive against an element overshooting the
                 // pre-scanned terminator, so the loop still stops.
@@ -1919,9 +1944,9 @@ impl<'t> Parser<'t> {
             None => true,
             Some(SyntaxKind::CONTROL_WORD) => {
                 block == Block::Environment
-                    && ((self.tokens[s.next].text == END_CMD && self.env_name_follows(s.next))
-                        // The alias twin: the run reaches the located closer.
-                        || self.alias_end.is_some_and(|end| s.next >= end))
+                    && (self.env_end_at(s.next)
+                            // The alias twin: the run reaches the located closer.
+                            || self.alias_end.is_some_and(|end| s.next >= end))
             }
             Some(_) => false,
         }
@@ -1942,10 +1967,7 @@ impl<'t> Parser<'t> {
                 // (issues #45/#60), so neither opens an environment nor is
                 // stray. A brace-less `\begin`/`\end` is likewise a plain
                 // command (`env_name_follows`).
-                if !self.in_macro_code(self.pos)
-                    && self.at_command(BEGIN_CMD)
-                    && self.env_name_follows(self.pos)
-                {
+                if !self.in_macro_code(self.pos) && self.at_env_begin() {
                     // Shape-gated like `\[`: an environment cannot outlive the
                     // brace group it opened in, so one whose `\end` is not
                     // reachable before that group closes is macro code — a
@@ -1958,10 +1980,7 @@ impl<'t> Parser<'t> {
                     } else {
                         self.environment();
                     }
-                } else if !self.in_macro_code(self.pos)
-                    && self.at_command(END_CMD)
-                    && self.env_name_follows(self.pos)
-                {
+                } else if !self.in_macro_code(self.pos) && self.at_env_end() {
                     // The mirror case: reached inside a group, this `\end`'s
                     // `\begin` is outside it, so it is macro code rather than
                     // stray (`\StopEventually{\end{document}}`, issue #71).
@@ -2328,8 +2347,7 @@ impl<'t> Parser<'t> {
                 // runaway `[` — nor does a brace-less one (issue #60).
                 Some(SyntaxKind::CONTROL_WORD)
                     if !self.in_macro_code(self.pos)
-                        && (self.at_command(BEGIN_CMD) || self.at_command(END_CMD))
-                        && self.env_name_follows(self.pos) =>
+                        && (self.at_env_begin() || self.at_env_end()) =>
                 {
                     self.error_at(opener, "unclosed `[`");
                     break;
@@ -2578,9 +2596,7 @@ impl<'t> Parser<'t> {
                     self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
-                Some(SyntaxKind::CONTROL_WORD)
-                    if self.at_command(END_CMD) && self.env_name_follows(self.pos) =>
-                {
+                Some(SyntaxKind::CONTROL_WORD) if self.at_env_end() => {
                     self.error_at(opener, format!("unclosed `{label}`"));
                     break;
                 }
@@ -2647,9 +2663,7 @@ impl<'t> Parser<'t> {
                     self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
-                Some(SyntaxKind::CONTROL_WORD)
-                    if self.at_command(END_CMD) && self.env_name_follows(self.pos) =>
-                {
+                Some(SyntaxKind::CONTROL_WORD) if self.at_env_end() => {
                     self.error_at(opener_span, format!("unclosed `{opener}`"));
                     break;
                 }
@@ -2791,15 +2805,9 @@ impl<'t> Parser<'t> {
             Some(SyntaxKind::CONTROL_WORD) => {
                 // Same definition-body/expl3-region and brace-less gates as
                 // [`Self::element`] (issues #45/#60).
-                if !self.in_macro_code(self.pos)
-                    && self.at_command(BEGIN_CMD)
-                    && self.env_name_follows(self.pos)
-                {
+                if !self.in_macro_code(self.pos) && self.at_env_begin() {
                     self.environment();
-                } else if !self.in_macro_code(self.pos)
-                    && self.at_command(END_CMD)
-                    && self.env_name_follows(self.pos)
-                {
+                } else if !self.in_macro_code(self.pos) && self.at_env_end() {
                     self.stray_end();
                 } else if self.at_command(LEFT_CMD) && self.left_right_closes(self.pos) {
                     self.left_right();
@@ -2836,9 +2844,7 @@ impl<'t> Parser<'t> {
         let missing = match self.kind() {
             None | Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => true,
             Some(SyntaxKind::CONTROL_SYMBOL) => matches!(self.text(), "\\]" | "\\)"),
-            Some(SyntaxKind::CONTROL_WORD) => {
-                self.at_command(END_CMD) && self.env_name_follows(self.pos)
-            }
+            Some(SyntaxKind::CONTROL_WORD) => self.at_env_end(),
             _ => false,
         };
         if missing {
@@ -2908,9 +2914,7 @@ impl<'t> Parser<'t> {
                     self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
-                Some(SyntaxKind::CONTROL_WORD)
-                    if self.at_command(END_CMD) && self.env_name_follows(self.pos) =>
-                {
+                Some(SyntaxKind::CONTROL_WORD) if self.at_env_end() => {
                     self.error_at(opener, "unclosed `\\left`");
                     break;
                 }
@@ -2944,9 +2948,7 @@ impl<'t> Parser<'t> {
             None | Some(SyntaxKind::R_BRACE | SyntaxKind::DOLLAR) => true,
             Some(SyntaxKind::CONTROL_SYMBOL) => matches!(self.text(), "\\]" | "\\)"),
             Some(SyntaxKind::CONTROL_WORD) => {
-                (self.at_command(END_CMD) && self.env_name_follows(self.pos))
-                    || self.at_command(LEFT_CMD)
-                    || self.at_command(RIGHT_CMD)
+                self.at_env_end() || self.at_command(LEFT_CMD) || self.at_command(RIGHT_CMD)
             }
             _ => false,
         };
@@ -3509,7 +3511,7 @@ impl<'t> Parser<'t> {
                         // anchors nor nests there (issues #45/#60) — bar the one
                         // gate whose pre-batch scan never carried the filter
                         // ([`GatePolicy::ENV_ANCHOR_IN_MACRO_CODE`]).
-                        if t.text.as_str() == BEGIN_CMD && self.env_name_follows(i) {
+                        if self.env_begin_at(i) {
                             // A `macrocode` chunk is a hard boundary in both
                             // directions: docstrip is line-oriented, so the code
                             // layer and the documentation layer around it are
@@ -3538,7 +3540,7 @@ impl<'t> Parser<'t> {
                                 break;
                             }
                             envs += 1;
-                        } else if t.text.as_str() == END_CMD && self.env_name_follows(i) {
+                        } else if self.env_end_at(i) {
                             if P::ENV_ANCHOR == EnvAnchor::Refutes {
                                 break;
                             }

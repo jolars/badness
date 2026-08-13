@@ -186,6 +186,26 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   non-determinism) is done, so this is unblocked; what the widened gap has to
   carry is precisely what that fix and the command-only residue left behind.
 
+- [ ] **The block form's closer break lacks the `open_glued` mirror.**
+  `lower_bracketed` guards the *open* side — no break after a glued `{`, because
+  the synthesized end-of-line reads as a space token TeX typesets — but emits an
+  unconditional hard line before the *close* delimiter, so an author-glued
+  `beta}` comes out `beta\n}`: a space token before the group closes (a trailing
+  interword space in horizontal mode, a trailing space in a `\def` replacement
+  text). Same on the bracket side for a textual optional's block form (`}]` →
+  `}\n]`, visible in `optional_block_decline_deterministic`). Invisible to every
+  oracle by construction: trivia to the CST checks, and the perturbation
+  generator never touches a glued junction because there is no gap there.
+  Surfaced reviewing `group_blank_line_keeps_block`. The fix is a `close_glued`
+  mirror (last body element not collapsible trivia ⇒ keep `}` glued to the last
+  body line), but it reshapes every multi-line block group corpus-wide — every
+  `…}`-glued definition body — so it needs its own baseline re-record, a
+  `tests/typeset/` case pinning the space-token claim, and a check that the
+  Tier-2 fixed-point argument on `spans_multiple_lines` still holds (a glued
+  closer's block form no longer ends with a newline before the closer, so the
+  "output re-reads multi-line" clause must rest on the *lead* break or the body
+  instead).
+
 - [ ] **`commands/figureValign-mod*`: 12 idempotency + `content-change` failures,
   one family.** `%`-terminated argument braces
   (`\includegraphics[…]%\n{%\n…%\n}`) — a comment ends every line inside an

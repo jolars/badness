@@ -929,7 +929,9 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // must keep its `%` margins verbatim, or the re-broken `\end{bmatrix}` drops
         // off column 0 and the block's closing `\]` is unparseable on pass 2.
         SyntaxKind::ENVIRONMENT
-            if !has_verbatim_body(node) && is_math_env(node, cx) && !contains_doc_margin(node) =>
+            if !has_verbatim_body(node)
+                && is_math_env(node, cx)
+                && !contains_doc_margin(node, cx) =>
         {
             return lower_math_environment(node, cx);
         }
@@ -939,7 +941,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && is_alignment_env(node, cx)
-                && !contains_doc_margin(node) =>
+                && !contains_doc_margin(node, cx) =>
         {
             return lower_aligned_environment(node, cx);
         }
@@ -953,7 +955,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && is_list_env(node, cx)
-                && (cx.wraps_prose() || !contains_doc_margin(node)) =>
+                && (cx.wraps_prose() || !contains_doc_margin(node, cx)) =>
         {
             return lower_list_environment(node, cx);
         }
@@ -970,7 +972,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // push it off column 0.
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
-                && !contains_doc_margin(node)
+                && !contains_doc_margin(node, cx)
                 && body_has_top_level_ampersand(node) =>
         {
             return lower_aligned_environment(node, cx);
@@ -985,13 +987,13 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // change (a column-0 line stops being a comment at package-load time) that
         // leaves the orphaned `\]` unparseable on pass 2. The generic stream keeps
         // the authored margins verbatim.
-        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && !contains_doc_margin(node) => {
+        SyntaxKind::ENVIRONMENT if !has_verbatim_body(node) && !contains_doc_margin(node, cx) => {
             return lower_environment(node, cx);
         }
         // Same margin rule as the environment arm: a conditional spanning `.dtx`
         // doc-margined lines is never re-laid, since moving a divider off its `%`
         // margin is a meaning change. The generic stream keeps margins pinned.
-        SyntaxKind::CONDITIONAL if !contains_doc_margin(node) => {
+        SyntaxKind::CONDITIONAL if !contains_doc_margin(node, cx) => {
             return lower_conditional(node, cx);
         }
         // Same margin rule as the environment/math/group/optional arms: a command
@@ -1004,7 +1006,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::COMMAND
             if cx.wraps_prose()
                 && command_has_managed_arg(node, cx)
-                && !contains_doc_margin(node) =>
+                && !contains_doc_margin(node, cx) =>
         {
             return lower_command(node, cx);
         }
@@ -1012,13 +1014,13 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // doc-margined lines is never re-laid: math relayout indents its body,
         // which would push a `%` margin off column 0 (a meaning change — only a
         // column-0 `%` is a margin). The generic stream keeps margins pinned.
-        SyntaxKind::INLINE_MATH if !contains_doc_margin(node) => {
+        SyntaxKind::INLINE_MATH if !contains_doc_margin(node, cx) => {
             return lower_math(node, cx);
         }
-        SyntaxKind::DISPLAY_MATH if !contains_doc_margin(node) => {
+        SyntaxKind::DISPLAY_MATH if !contains_doc_margin(node, cx) => {
             return lower_display_math(node, cx);
         }
-        SyntaxKind::MATH if !contains_doc_margin(node) => {
+        SyntaxKind::MATH if !contains_doc_margin(node, cx) => {
             return lower_math_body(node, cx);
         }
         // A `.dtx` doc-layer group continuing across margined lines
@@ -1026,7 +1028,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // content off its `%` margin — a meaning change (the line stops being a
         // comment at package-load time). Such a group falls through to the
         // generic stream, which keeps the authored margins verbatim.
-        SyntaxKind::GROUP if !contains_doc_margin(node) => {
+        SyntaxKind::GROUP if !contains_doc_margin(node, cx) => {
             // Width-driven Opaque layout under the default mode: block-vs-inline
             // is decided by width, content, and preserved predicates — never by
             // whether the author happened to break the line. A group *opening
@@ -1048,7 +1050,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // doc-margined lines keeps its authored margins.
         // No signature context on the generic path, so no keyval proof: only gaps
         // the author already wrote are break opportunities.
-        SyntaxKind::OPTIONAL if !contains_doc_margin(node) => {
+        SyntaxKind::OPTIONAL if !contains_doc_margin(node, cx) => {
             if let Some(ir) = lower_optional(node, cx, false) {
                 return ir;
             }
@@ -2065,12 +2067,15 @@ fn ride_after_block(ir: Ir, gap: bool) -> Ir {
 /// *generic*-prose-reflowed (see [`lower_expl_paragraph`]); a margined run may
 /// still reflow under the `% ` margin when [`dtx_run_reflows_safely`] holds.
 /// Always false outside the `.dtx` lexer config, where neither token kind exists.
-fn run_carries_doc_margin(run: &[SyntaxElement]) -> bool {
+fn run_carries_doc_margin(run: &[SyntaxElement], cx: LowerCtx<'_>) -> bool {
+    if !cx.is_dtx {
+        return false;
+    }
     run.iter().any(|element| match element {
         SyntaxElement::Token(t) => {
             matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD)
         }
-        SyntaxElement::Node(n) => contains_doc_margin(n),
+        SyntaxElement::Node(n) => contains_doc_margin(n, cx),
     })
 }
 
@@ -2227,7 +2232,7 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         let run = &elements[start..i];
         let ir = if in_region {
             lower_expl_code(run.iter().cloned(), cx, Statements::Structural)
-        } else if cx.wraps_prose() && !run_carries_doc_margin(run) {
+        } else if cx.wraps_prose() && !run_carries_doc_margin(run, cx) {
             reflow_elements(run.iter().cloned(), cx, ReflowKind::Prose)
         } else if cx.wraps_prose() && dtx_run_reflows_safely(run, cx) {
             // `.dtx` documentation prose between expl3 regions, riding `% `
@@ -6273,7 +6278,7 @@ fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<I
     // land unmargined — silently promoting documentation to live code. The old
     // lowering was safe by accident (it only ever broke an already-multi-line
     // bracket); a width-driven group has to say so.
-    if !cx.wraps_prose() || contains_doc_margin(node) || doc_margin_opens_line(node, cx) {
+    if !cx.wraps_prose() || contains_doc_margin(node, cx) || doc_margin_opens_line(node, cx) {
         // Tier-2 residue: under a mode that does not wrap prose (or on a `.dtx`
         // doc line) the pre-existing behaviour is kept byte for byte — block
         // form when the author broke the line, generic inline path otherwise.
@@ -7780,8 +7785,17 @@ fn spans_multiple_lines(node: &SyntaxNode) -> bool {
 /// tokens are line-oriented column-0 facts (a `%` or `%<…>` recognized at line
 /// start only), so any relayout that merges or re-indents their lines silently
 /// turns them into ordinary comments on the next parse. Always false outside
-/// the `.dtx` lexer mode (only it emits these kinds).
-fn contains_doc_margin(node: &SyntaxNode) -> bool {
+/// the `.dtx` lexer mode (only it emits these kinds), which is why `cx.is_dtx`
+/// short-circuits it — the same gate [`doc_margin_opens_line`] carries, and not
+/// merely an optimization at this size. This is a *match guard* on most of
+/// [`lower_node`]'s relayout arms, so it runs for every group, environment, and
+/// math node; the walk is `O(subtree)`, and a nested construct re-walks at each
+/// level. Ungated it was ~52% of the run on `{{{…}}}` nested 4000 deep, and made
+/// lowering quadratic in nesting depth for every file, `.dtx` or not.
+fn contains_doc_margin(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    if !cx.is_dtx {
+        return false;
+    }
     node.descendants_with_tokens()
         .filter_map(|e| e.into_token())
         .any(|t| matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD))

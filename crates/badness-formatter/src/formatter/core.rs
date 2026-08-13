@@ -1622,7 +1622,13 @@ fn reflow_elements_checked(
     // Whether the current *physical* source line so far consists solely of
     // command(s) (and inline whitespace). Such a line is kept on its own line
     // rather than reflowed into its neighbours (see the single-newline arm). Both
-    // reset at every physical-line boundary.
+    // reset at every physical-line boundary. This is the *residual* command-line
+    // rule: curated block-level commands are intercepted upstream (the
+    // block-statement arm below) and never depend on it, so what it decides for
+    // is un-signatured and scanned-definition commands — whose block-ness no
+    // positive signature property can know — plus block commands glued to
+    // adjacent content. That residue still reads the lone-newline predicate;
+    // the planned `Gap` normalization (TODO.md) is what will carry it.
     let mut line_all_commands = true;
     let mut line_has_content = false;
     // Whether the current physical source line rides a `% ` documentation margin.
@@ -1644,10 +1650,10 @@ fn reflow_elements_checked(
     let mut prev_was_block = false;
     let mut block_gap = false;
     // Set alongside `prev_was_block` when the committed block *closes* its line: a
-    // sectioning command, whose whole rule is that the line ends after it. A trailing
-    // `%` still rides (it must never be relocated), but content starts a fresh line
-    // instead of riding the way it does after an environment or a doc-commented
-    // `\input`.
+    // sectioning or curated block command, whose whole rule is that the line ends
+    // after it. A trailing `%` still rides (it must never be relocated), but content
+    // starts a fresh line instead of riding the way it does after an environment or
+    // a doc-commented `\input`.
     let mut prev_block_closes_line = false;
 
     let mut idx = 0;
@@ -1674,7 +1680,9 @@ fn reflow_elements_checked(
                     // it is normally just an atom boundary the run rejoins, except a
                     // line that is *only* command(s) — on either side of the break — is
                     // kept on its own line: end the line so the break survives instead
-                    // of collapsing to a space.
+                    // of collapsing to a space. This is the residual rule for commands
+                    // no positive signature property covers (see `line_all_commands`
+                    // above); curated block commands never reach it.
                     let prev_is_command = line_has_content && line_all_commands;
                     let next_is_command = line_is_command_only(&elements, idx, cx);
                     if kind == ReflowKind::Statement
@@ -1821,15 +1829,29 @@ fn reflow_elements_checked(
             }
             SyntaxElement::Node(child) => {
                 let ir = lower_node(child, cx);
-                // A sectioning command (`\part` … `\subparagraph`) is a block-level
+                // A block-level command — sectioning (`\part` … `\subparagraph`) or
+                // curated block (`\usepackage`, `\newcommand`, …) — is a block-level
                 // statement: it opens a line and closes one, whatever trivia the
                 // author wrote around it. The old behavior kept the break only when
                 // the source had a newline there (via `line_is_command_only` below),
                 // which is exactly the lone-newline predicate trivia-invariant layout
                 // forbids — `\subsection{X}\nprose` and `\subsection{X} prose` are the
                 // same bytes to the next parse, so both must lay out alike. Reading
-                // `CommandSig::sectioning` keeps the rule in the semantic layer
-                // (decision #2) instead of a name list here.
+                // `CommandSig::sectioning`/`CommandSig::block` keeps the rule in the
+                // semantic layer (decision #2) instead of a name list here.
+                //
+                // Two gates scope the statement treatment:
+                // - Not under `ReflowKind::Statement`, whose Tier-2 contract is the
+                //   authored line: a brace-group body (`\AtBeginDocument{\setcounter
+                //   {page}{1}}`, a one-line `\newcommand` body) must not be forced
+                //   open. Block-statement synthesis lives at prose altitude.
+                // - A *block* (unlike a sectioning) command must be trivia-isolated
+                //   on both sides: breaking where the author glued
+                //   (`\ProcessOptions\relax`) materializes a space token TeX
+                //   typesets. A heading splits even glued — its own `\par` discards
+                //   the materialized glue — so sectioning keeps the unconditional
+                //   form. Gluedness is a predicate the formatter preserves, so both
+                //   reads are Tier-safe.
                 //
                 // Forced-break lowerings (a comment inside the title) fall through to
                 // the block path below, which already opens and closes a line — and
@@ -1837,7 +1859,13 @@ fn reflow_elements_checked(
                 // `end_line` pair would bypass.
                 let is_sectioning =
                     child.kind() == SyntaxKind::COMMAND && command_is_sectioning(child, cx);
-                if is_sectioning && !ir.contains_forced_break() {
+                let is_block_stmt = kind != ReflowKind::Statement
+                    && child.kind() == SyntaxKind::COMMAND
+                    && (is_sectioning
+                        || (command_is_block(child, cx)
+                            && b.atom.is_empty()
+                            && next_is_separated(&elements, idx)));
+                if is_block_stmt && !ir.contains_forced_break() {
                     b.end_line();
                     b.push_atom_piece(ir, &child.text().to_string());
                     b.end_line();
@@ -1907,11 +1935,15 @@ fn reflow_elements_checked(
                     line_all_commands = true;
                     line_has_content = false;
                     prev_was_block = true;
-                    // A heading whose lowering forced a break (a `%` bound to it as a
-                    // `DOC_COMMENT`, a comment inside its title) took this path rather
-                    // than the sectioning arm above, which cannot route a `.dtx`
-                    // margin. It still closes its line.
-                    prev_block_closes_line = is_sectioning;
+                    // A block-level statement whose lowering forced a break (a `%`
+                    // bound to it as a `DOC_COMMENT`, a comment inside a title, a
+                    // multi-line `\title` body) took this path rather than the
+                    // statement arm above, which cannot route a `.dtx` margin. It
+                    // still closes its line. Everything else that lands here — an
+                    // un-signatured command, a glued block command, `\input`'s bare
+                    // filename shape — leaves the line open so following content can
+                    // ride it (the `after_block` paths).
+                    prev_block_closes_line = is_block_stmt;
                 } else {
                     // A block-level `COMMAND` keeps the line command-only; an inline
                     // command (`\citep`, `\ref`, …) is running-text content, as is any
@@ -6337,6 +6369,38 @@ fn command_is_sectioning(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.sectioning.is_some())
 }
 
+/// Whether `command` is a curated *block-level* command (`\usepackage`,
+/// `\newcommand`, `\maketitle`, …), per the signature DB's [`CommandSig::block`]
+/// flag. Prose reflow treats such a command like a sectioning one — a block-level
+/// statement on its own line, whatever trivia the author wrote — except that a
+/// block command **glued** to adjacent non-trivia keeps its authored adjacency
+/// (see [`reflow_elements`]): breaking there materializes a space token TeX
+/// typesets (`\ProcessOptions\relax`), where a heading's own `\par` makes the
+/// materialized glue provably inert.
+///
+/// Read from the semantic layer, never from a name list in the formatter
+/// (decision #2). The flag is positive and curated-only, so an un-signatured or
+/// scanned-definition command is *not* block here and falls back to the residual
+/// authored-break rule in [`line_is_command_only`].
+///
+/// A command whose signature declares a *required* argument must actually carry
+/// an attached argument node. A **bare** head — `\newcommand` in
+/// `\newcommand\foo{…}`, where the control-word run break leaves every argument
+/// unattached — is a shape the attachment model did not capture, and
+/// intercepting it is not pass-stable: glued to a forced-break sibling it is
+/// stranded at end-of-line by the ride path (glue the engine itself breaks), so
+/// the adjacency this gate reads differs between passes
+/// (`pgfcomp-version-0-65.sty`). A bare head falls to the residual rule, whose
+/// authored-break preservation *is* the fixed point of that stranding.
+fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| {
+            sig.block
+                && (sig.args.iter().all(|arg| !arg.required) || command.children().next().is_some())
+        })
+}
+
 /// Pre-pass over a reflow element stream: replace each *inline* prose command
 /// ([`command_is_inline_prose`]) with its surface tokens, splicing its prose
 /// argument's body directly into the stream. The body's inter-word whitespace then
@@ -7593,13 +7657,20 @@ fn consume_trivia_run_slice(elements: &[SyntaxElement], i: &mut usize) -> usize 
 }
 
 /// Whether the physical source line beginning at `start` in `elements` consists
-/// solely of *block-level* command(s) and inline whitespace — the unit
-/// [`reflow_elements`] keeps on its own line rather than reflowing into its
-/// neighbours. The line runs until the next newline, comment, or end of the stream;
-/// any non-trivia element that is not a block command (a word, a control symbol, a
-/// group, math, a `\\`, a block, or an *inline* command like `\citep`/`\ref` — see
-/// [`command_is_inline`]) disqualifies it. A line with no command (e.g. an empty or
-/// comment-only line) is not a command line.
+/// solely of non-inline command(s) and inline whitespace — the unit
+/// [`reflow_elements`]'s *residual* rule keeps on its own line rather than
+/// reflowing into its neighbours. The line runs until the next newline, comment,
+/// or end of the stream; any non-trivia element that is not such a command (a
+/// word, a control symbol, a group, math, a `\\`, a block, or an *inline* command
+/// like `\citep`/`\ref` — see [`command_is_inline`]) disqualifies it. A line with
+/// no command (e.g. an empty or comment-only line) is not a command line.
+///
+/// Residual: a curated block command ([`command_is_block`]) is intercepted by the
+/// block-statement arm and gets its own line regardless of this test, so the
+/// authored-break preservation decided here matters only for un-signatured and
+/// scanned-definition commands (block-ness undecidable without meaning) and for
+/// block commands glued to adjacent content. That read of the lone-newline
+/// predicate is the recorded Tier-1 residue (TODO.md).
 ///
 /// A `CONDITIONAL` reaches this as a single non-`COMMAND` element and so
 /// disqualifies its line, which is correct: [`lower_conditional`] owns where its
@@ -7621,6 +7692,25 @@ fn line_is_command_only(elements: &[SyntaxElement], start: usize, cx: LowerCtx<'
         }
     }
     saw_command
+}
+
+/// Whether the element after `idx` leaves a break opportunity: the stream ends, or
+/// the next element is collapsible trivia (whitespace, a newline) or a `COMMENT`
+/// (a glued `%` is the line-continuation idiom and rides the committed line via
+/// the `after_block` path). Anything else is glued to `elements[idx]`, and the
+/// engine's rule is that adjacent non-whitespace elements form one unbreakable
+/// atom — splitting there would materialize a space token TeX typesets. Keyed on
+/// adjacency alone, a predicate the formatter preserves (it never converts
+/// glued↔spaced), so the block-statement gate may read it.
+fn next_is_separated(elements: &[SyntaxElement], idx: usize) -> bool {
+    match elements.get(idx + 1) {
+        None => true,
+        Some(SyntaxElement::Token(t)) => matches!(
+            t.kind(),
+            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT
+        ),
+        Some(SyntaxElement::Node(_)) => false,
+    }
 }
 
 fn absorb(tok: &SyntaxToken, newlines: &mut usize, trailing_ws: &mut String) {

@@ -219,17 +219,21 @@ fn trivia_check_fires_on_a_known_hybrid() {
 #[test]
 fn trivia_strict_check_fires_where_an_authored_break_is_preserved() {
     let dir = TempDir::new().unwrap();
-    // Two top-level commands separated by an authored newline. The
-    // command-only-line rule keeps that break, but glues the pair when the same
-    // gap is a space — the same bytes to the next parse, so exactly the
-    // lone-newline predicate trivia-invariant layout forbids reading.
+    // Two *un-signatured* top-level commands separated by an authored newline.
+    // The residual command-only-line rule keeps that break, but glues the pair
+    // when the same gap is a space — the same bytes to the next parse, so
+    // exactly the lone-newline predicate trivia-invariant layout forbids
+    // reading. Curated block commands (`\usepackage`, …) no longer reach that
+    // rule — they are intercepted as block-level statements via
+    // `CommandSig::block` — so the probe uses names no signature tier knows,
+    // whose block-ness only the authored break can carry.
     //
     // Neither `all` nor `trivia` can see it: both spellings are self-consistent
     // fixed points that round-trip losslessly, which is the whole reason the
     // strict oracle earns a CLI surface.
     std::fs::write(
         dir.path().join("preserved.tex"),
-        "\\usepackage{a}\n\\usepackage{b}\nalpha\nbeta gamma\n",
+        "\\zzalpha{a}\n\\zzbeta{b}\nalpha\nbeta gamma\n",
     )
     .unwrap();
 

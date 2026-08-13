@@ -347,6 +347,15 @@ const STRICT_TRIVIA_INVARIANT_SHAPES: &[(&str, &str)] = &[
         "\\ExplSyntaxOn\n\\cs_new:Npn \\demo_foo:n #1\n  { \\demo_use:n {#1} }\n\
          \\cs_new:Nn \\demo_bar:n { \\demo_use:n { x } }\n\\ExplSyntaxOff\n",
     ),
+    (
+        // Curated block commands are intercepted as block-level statements
+        // (`CommandSig::block`), so the authored break between them carries no
+        // layout weight — the exact gap that was the command-only-line rule's
+        // violation. The prose tail proves the boundary between a block
+        // statement and reflowed prose is invariant too.
+        "command-block-lines",
+        "\\usepackage{a}\n\\usepackage{b}\n\\title{Short Title}\nalpha\nbeta gamma\n",
+    ),
 ];
 
 /// Every registered shape must hold strict trivia invariance at **all** sweep
@@ -552,7 +561,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_in_environment", WrapMode::Reflow, 20),
     // A physical line that is solely command(s) — `\usepackage{…}` lines, a
     // `\section{…}` header — stays on its own line; the prose around it still
-    // reflows.
+    // reflows. (The `\usepackage`/`\section` lines are now held by the
+    // block-statement rule below; the residual command-line rule covers the
+    // same shape for un-signatured commands.)
     ("reflow_command_lines_preserved", WrapMode::Reflow, 80),
     // A sectioning command (`\part` … `\subparagraph`, per the signature DB's
     // `sectioning` level) is a block-level statement: a break before it and after it,
@@ -566,6 +577,40 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // own physical line rides it, and a `%` on its own line stays on its own line
     // (where it binds forward as the heading's `DOC_COMMENT`).
     ("sectioning_blank_line_and_comment", WrapMode::Reflow, 80),
+    // A curated block-level command (`CommandSig::block`: `\usepackage`,
+    // `\title`, `\setlength`, …) is a block-level statement like a heading: a
+    // break before it and after it, whatever trivia the author wrote —
+    // `\usepackage{a} \usepackage{b}` and the newline spelling are the same
+    // bytes to the next parse, so both must lay out alike (the command-only-line
+    // rule's Tier-1 lone-newline read, now bypassed for curated commands).
+    ("block_command_lines", WrapMode::Reflow, 80),
+    // Unlike a heading, a block command glued to adjacent non-trivia keeps its
+    // authored adjacency (`\ProcessOptions\relax`, `prose\setcounter{…}`):
+    // breaking there materializes a space token TeX typesets, where a heading's
+    // own `\par` discards the glue. Such shapes fall to the residual rule.
+    ("block_command_glued_stays", WrapMode::Reflow, 80),
+    // The trivia predicates the rule *may* read still hold around a block
+    // command: an authored blank line survives, a trailing `%` rides its line,
+    // and an own-line `%` stays own-line (binding forward as the next command's
+    // `DOC_COMMENT`, whose forced-break lowering still closes the line after).
+    ("block_command_blank_line_and_comment", WrapMode::Reflow, 80),
+    // Under `ReflowKind::Statement` (a brace-group body) the block-statement
+    // rule does not fire: `\AtBeginDocument{\setcounter{page}{1}}` stays one
+    // line. Statement's Tier-2 contract is the authored line.
+    ("block_command_in_brace_body_stays", WrapMode::Reflow, 80),
+    // `\caption` and `\label` are deliberately not block commands: a glued
+    // `\caption{…} \label{…}` pair must stay untouched.
+    ("block_command_exclusions", WrapMode::Reflow, 80),
+    // A *bare* block-command head — `\newcommand` in `\newcommand\foo{…}`,
+    // where the control-word run break leaves every argument unattached — is
+    // not intercepted: its adjacency is not pass-stable (glued to a
+    // forced-break sibling the ride path strands it), so it falls to the
+    // residual rule, which preserves the authored spelling either way.
+    ("block_command_bare_head_residual", WrapMode::Reflow, 80),
+    // A block command inside a conditional branch does not defeat the
+    // all-or-nothing choice: the flat candidate is collapsed from content, so
+    // `\ifdefined\x \usepackage{a} \fi` stays flat when it fits.
+    ("conditional_flat_with_block_command", WrapMode::Reflow, 80),
     // A paired `\if…\else…\or…\fi` renders all-or-nothing. Flat when the whole
     // construct fits — and the same content spelled across lines rejoins to
     // exactly that, which is the fix: before the `CONDITIONAL` node the two

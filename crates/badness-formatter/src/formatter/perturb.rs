@@ -807,11 +807,13 @@ mod tests {
         assert!(report.variants_checked > 0);
     }
 
-    /// The same input the convergence oracle accepts: the command-only-line
-    /// rule keeps the authored break between two top-level commands, so strict
-    /// invariance fails on it. That makes it the fixture for the surveying
-    /// form.
-    const STRICT_VIOLATOR: &str = "\\usepackage{a}\n\\usepackage{b}\nalpha\nbeta gamma\n";
+    /// The same input the convergence oracle accepts: the *residual*
+    /// command-only-line rule keeps the authored break between two top-level
+    /// un-signatured commands, so strict invariance fails on it. That makes it
+    /// the fixture for the surveying form. (Curated block commands like
+    /// `\usepackage` no longer qualify — they are intercepted as block-level
+    /// statements via `CommandSig::block` and lay out the same either way.)
+    const STRICT_VIOLATOR: &str = "\\zzalpha{a}\n\\zzbeta{b}\nalpha\nbeta gamma\n";
 
     #[test]
     fn survey_checks_every_variant_rather_than_stopping() {

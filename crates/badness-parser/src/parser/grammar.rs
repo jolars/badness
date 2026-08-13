@@ -164,6 +164,11 @@ enum CommentMode {
     Stop,
 }
 
+/// Newlines in a trivia run that make it a **blank line** — TeX's `\par`
+/// boundary, and one of the few trivia predicates layout may read (`AGENTS.md`,
+/// trivia-invariant layout). Two, because one newline only ends a line.
+const BLANK_LINE_NEWLINES: usize = 2;
+
 /// The result of scanning the contiguous trivia run at a position: everything the
 /// blank-line and comment-bind rules (AGENTS.md #9) need to decide, computed once.
 struct TriviaScan {
@@ -1642,14 +1647,14 @@ impl<'t> Parser<'t> {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
                     guard_newlines += 1;
-                    if newlines >= 2 {
+                    if newlines >= BLANK_LINE_NEWLINES {
                         saw_blank_line = true;
                         // A blank line breaks a leading-comment bind: only a
                         // comment *after* it can still bind, so drop any comment
                         // seen before it.
                         comment_start = None;
                     }
-                    if guard_newlines >= 2 {
+                    if guard_newlines >= BLANK_LINE_NEWLINES {
                         saw_blank_line_outside_guards = true;
                     }
                 }
@@ -1956,11 +1961,7 @@ impl<'t> Parser<'t> {
     fn element(&mut self) {
         let Some(k) = self.kind() else { return };
         match k {
-            SyntaxKind::WHITESPACE
-            | SyntaxKind::NEWLINE
-            | SyntaxKind::COMMENT
-            | SyntaxKind::DOC_MARGIN
-            | SyntaxKind::GUARD => self.bump(),
+            k if Self::is_trivia(k) => self.bump(),
             SyntaxKind::CONTROL_WORD => {
                 // Inside a definition body or an expl3 region, `\begin`/`\end`
                 // are plain commands: the two need not balance within one group
@@ -2694,13 +2695,7 @@ impl<'t> Parser<'t> {
     /// recovery anchors before invoking this, so the cursor is at body content.
     fn math_element(&mut self) {
         match self.kind() {
-            Some(
-                SyntaxKind::WHITESPACE
-                | SyntaxKind::NEWLINE
-                | SyntaxKind::COMMENT
-                | SyntaxKind::DOC_MARGIN
-                | SyntaxKind::GUARD,
-            ) => self.bump(),
+            Some(k) if Self::is_trivia(k) => self.bump(),
             _ => self.math_scripted(),
         }
     }
@@ -3349,7 +3344,7 @@ impl<'t> Parser<'t> {
                     // bracket family is the exception, and for the same reason:
                     // `optional` bails at a break wherever the cursor stands
                     // ([`ParagraphAnchor::AnyDepth`]).
-                    if newlines >= 2
+                    if newlines >= BLANK_LINE_NEWLINES
                         && match P::PARAGRAPH_ANCHOR {
                             ParagraphAnchor::None => false,
                             ParagraphAnchor::OwnLevel => depth == 0,

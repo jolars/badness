@@ -199,8 +199,8 @@ pub(crate) fn parse(tokens: &[Token], ctx: &ParseCtx) -> (Vec<Event>, Vec<Syntax
 /// `Start` matched by a later `Finish`, no `Finish` before its `Start`, and the
 /// document node closed exactly once. This is the cheap analog of
 /// rust-analyzer's per-`Marker` `DropBomb`: a grammar edit that leaks an
-/// [`Parser::open`] without a [`Parser::close`] (or a `precede`-style
-/// `events.insert` that splices an unbalanced `Start`) is caught right here,
+/// [`Parser::open`] without a [`Parser::close`] (or a [`Parser::precede`] that
+/// splices in a `Start` nobody closes) is caught right here,
 /// counting *all* start/finish events regardless of how they were emitted,
 /// before [`super::tree_builder`] feeds rowan's `GreenNodeBuilder` and fails with
 /// a far more opaque `finish_node` panic. Compiled out of release builds.
@@ -1630,6 +1630,35 @@ impl<'t> Parser<'t> {
         self.events.push(Event::Finish);
     }
 
+    /// Open a node *retroactively*, wrapping everything emitted since
+    /// `checkpoint` — the event-stream analog of rust-analyzer's
+    /// `Marker::precede`, done locally without a marker type. The caller still
+    /// owes the matching [`Self::close`]; [`debug_assert_balanced`] catches it
+    /// if not.
+    ///
+    /// Used where a construct can only be classified *after* parsing it: a
+    /// `PARAGRAPH` (whether the run held a lone block environment), a `SCRIPTED`
+    /// (whether a `^`/`_` followed the base atom).
+    fn precede(&mut self, checkpoint: usize, kind: SyntaxKind) {
+        self.events.insert(checkpoint, Event::Start(kind));
+    }
+
+    /// Move the `Start` already sitting at `at` back to `checkpoint`, so the
+    /// node it opens also covers everything emitted between them. Both its kind
+    /// and its `Finish` are the ones already in the stream, so the node's extent
+    /// grows and nothing else changes.
+    ///
+    /// Used to pull a construct's own node back over the `DOC_COMMENT` bound in
+    /// front of it ([`Self::doc_comment_bind`]): the construct self-opens, and
+    /// only then is its kind known.
+    fn extend_back(&mut self, checkpoint: usize, at: usize) {
+        debug_assert!(checkpoint <= at, "extend_back must move a Start backwards");
+        if let Event::Start(kind) = self.events[at] {
+            self.events.remove(at);
+            self.events.insert(checkpoint, Event::Start(kind));
+        }
+    }
+
     fn error(&mut self, message: impl Into<String>) {
         let (start, end) = if self.at_end() {
             let end = *self.starts.last().expect("starts is non-empty");
@@ -1862,6 +1891,35 @@ impl<'t> Parser<'t> {
             .is_some_and(|target| is_block_environment(target) && self.alias_closer(idx).is_some())
     }
 
+    /// Consume a leading comment-bind located by [`Self::binding_run`]: float
+    /// the trivia before `comment_start`, group the bound `%` run into a
+    /// `DOC_COMMENT` node, parse the construct at `construct_pos`, and extend
+    /// the construct's own node back over the comments
+    /// ([`Self::extend_back`] — the construct self-opens, so its kind is only
+    /// known afterwards).
+    ///
+    /// The bound run becomes a named node rather than bare leaves — the
+    /// named-trivia enrichment `AGENTS.md` #9 reserved — so downstream
+    /// (LSP/formatter) sees the doc comment as one unit.
+    ///
+    /// Shared by [`Self::parse_block`] and [`Self::conditional`], which differ
+    /// only in what they check *before* calling (a conditional divider is not
+    /// documentable) and what they track *after*.
+    fn doc_comment_bind(&mut self, comment_start: usize, construct_pos: usize) {
+        while self.pos < comment_start {
+            self.bump();
+        }
+        let checkpoint = self.events.len();
+        self.open(SyntaxKind::DOC_COMMENT);
+        while self.pos < construct_pos {
+            self.bump();
+        }
+        self.close();
+        let construct_start = self.events.len();
+        self.element();
+        self.extend_back(checkpoint, construct_start);
+    }
+
     /// Parse a content region, grouping runs of content into `PARAGRAPH` nodes
     /// delimited by blank lines (the TeX `\par` boundary). Blank-line trivia
     /// (and any trailing trivia) sits between paragraphs as direct children of
@@ -1901,31 +1959,12 @@ impl<'t> Parser<'t> {
                     break;
                 }
                 // Leading comment-bind: an own-line `%` run immediately before a
-                // documentable construct attaches *leading* into it. Float any
-                // trivia before the comment run, then wrap the comments + construct
-                // in the construct's node (the `precede` idiom: the construct
-                // self-opens, then its `Start` is pulled back over the comments).
-                // The bound run itself is grouped into a `DOC_COMMENT` node — the
-                // named-trivia enrichment AGENTS.md #9 reserved — so downstream
-                // (LSP/formatter) sees the doc comment as one unit rather than
-                // bare leaves.
+                // documentable construct attaches *leading* into it (see
+                // `doc_comment_bind`). Block-ness is peeked from the construct's
+                // index, so it reads the same before or after the bind.
                 if let Some((comment_start, construct_pos, _)) = self.binding_run(self.pos) {
-                    while self.pos < comment_start {
-                        self.bump();
-                    }
-                    let checkpoint = self.events.len();
-                    self.open(SyntaxKind::DOC_COMMENT);
-                    while self.pos < construct_pos {
-                        self.bump();
-                    }
-                    self.close();
                     let starts_block_env = self.starts_block_env(construct_pos);
-                    let construct_start = self.events.len();
-                    self.element();
-                    if let Event::Start(kind) = self.events[construct_start] {
-                        self.events.remove(construct_start);
-                        self.events.insert(checkpoint, Event::Start(kind));
-                    }
+                    self.doc_comment_bind(comment_start, construct_pos);
                     nontrivia_count += 1;
                     lone_block_env = nontrivia_count == 1 && starts_block_env;
                     continue;
@@ -1941,8 +1980,7 @@ impl<'t> Parser<'t> {
                 }
             }
             if !lone_block_env {
-                self.events
-                    .insert(checkpoint, Event::Start(SyntaxKind::PARAGRAPH));
+                self.precede(checkpoint, SyntaxKind::PARAGRAPH);
                 self.close(); // matching Finish for PARAGRAPH
             }
         }
@@ -2801,15 +2839,13 @@ impl<'t> Parser<'t> {
     }
 
     /// Attach any `^`/`_` scripts that follow the base atom emitted since
-    /// `checkpoint`, retro-splicing a `SCRIPTED` wrapper in front of it (the
-    /// event-stream analog of rust-analyzer's `precede`, done locally without
-    /// touching the event layer). No script → the base stays a bare atom.
+    /// `checkpoint`, retro-splicing a `SCRIPTED` wrapper in front of it
+    /// ([`Self::precede`]). No script → the base stays a bare atom.
     fn math_scripts(&mut self, checkpoint: usize) {
         if !self.at_script() {
             return; // bare atom, no wrapper
         }
-        self.events
-            .insert(checkpoint, Event::Start(SyntaxKind::SCRIPTED));
+        self.precede(checkpoint, SyntaxKind::SCRIPTED);
         while self.at_script() {
             self.skip_trivia(); // trivia between base/scripts rides inside SCRIPTED
             let sub = self.kind() == Some(SyntaxKind::UNDERSCORE);
@@ -3765,21 +3801,7 @@ impl<'t> Parser<'t> {
             if let Some((comment_start, construct_pos, _)) = self.binding_run(self.pos)
                 && self.conditional_flow_at(construct_pos).is_none()
             {
-                while self.pos < comment_start {
-                    self.bump();
-                }
-                let checkpoint = self.events.len();
-                self.open(SyntaxKind::DOC_COMMENT);
-                while self.pos < construct_pos {
-                    self.bump();
-                }
-                self.close();
-                let construct_start = self.events.len();
-                self.element();
-                if let Event::Start(kind) = self.events[construct_start] {
-                    self.events.remove(construct_start);
-                    self.events.insert(checkpoint, Event::Start(kind));
-                }
+                self.doc_comment_bind(comment_start, construct_pos);
                 continue;
             }
             self.element();

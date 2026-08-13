@@ -13,14 +13,14 @@
 //! Recovery anchors are the LaTeX-natural ones: `\end`, `}`, `]`, `$`, blank
 //! lines, and end of input.
 
+mod prescan;
+
 use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
-use crate::parser::lexer::{
-    ExplToggle, ParseCtx, Token, definition_name_slots, expl_toggle, is_block_environment,
-    is_math_environment,
-};
+use crate::parser::lexer::{ParseCtx, Token, is_block_environment, is_math_environment};
 use crate::syntax::SyntaxKind;
+use prescan::PreScan;
 use smol_str::SmolStr;
 
 const BEGIN_CMD: &str = "\\begin";
@@ -1269,116 +1269,11 @@ struct Parser<'t> {
 
 impl<'t> Parser<'t> {
     fn new(tokens: &'t [Token], ctx: &'t ParseCtx) -> Self {
-        let mut starts = Vec::with_capacity(tokens.len() + 1);
-        let mut off = 0;
-        let mut expl_toggles = Vec::new();
-        let mut conditional_openers = std::collections::HashSet::new();
-        let mut alias_openers = std::collections::HashMap::new();
-        let mut alias_closers = std::collections::HashMap::new();
-        let want_aliases = ctx.has_env_aliases();
-        let mut opener_scan = conditional::OpenerScan::new();
-        // `expl_on` mirrors `in_expl_region` exactly: the state is the one in
-        // force *before* this token, so a toggle sits outside its own region.
-        let mut expl_on = false;
-        // How many upcoming control words are *names being bound* by a definition
-        // keyword rather than calls — a countdown, since `\let\a\b` binds two. See
-        // [`Self::alias_openers`] for why this filter is mandatory.
-        let mut def_name_slots = 0u8;
-        let mut last_r_bracket = None;
-        let mut last_display_math_closer = None;
-        let mut last_inline_math_closer = None;
-        let mut last_right = None;
-        let mut last_r_brace = None;
-        let mut last_fi = None;
-        let mut last_dollar = None;
-        for (i, t) in tokens.iter().enumerate() {
-            starts.push(off);
-            off += t.text.len();
-            // Last-closer indices for the gate bounds ([`Self::last_r_bracket`]),
-            // recorded before the control-word early-out below so the
-            // non-control-word shapes are seen. `\fi` recognition deliberately
-            // skips the expl3-region filter [`Self::conditional_flow_at`]
-            // applies: an upper bound only needs to be at or past the last
-            // viable index, and keeping the recording filter-free means it can
-            // never drift *below* the gate's recognition.
-            match t.kind {
-                SyntaxKind::R_BRACKET => last_r_bracket = Some(i),
-                SyntaxKind::R_BRACE => last_r_brace = Some(i),
-                SyntaxKind::DOLLAR => last_dollar = Some(i),
-                SyntaxKind::CONTROL_SYMBOL => match t.text.as_str() {
-                    "\\]" => last_display_math_closer = Some(i),
-                    "\\)" => last_inline_math_closer = Some(i),
-                    _ => {}
-                },
-                SyntaxKind::CONTROL_WORD => {
-                    if t.text.as_str() == RIGHT_CMD {
-                        last_right = Some(i);
-                    } else if t.text.strip_prefix('\\').and_then(conditional::flow_word)
-                        == Some(conditional::FlowWord::Fi)
-                    {
-                        last_fi = Some(i);
-                    }
-                }
-                _ => {}
-            }
-            if t.kind != SyntaxKind::CONTROL_WORD {
-                // Trivia carries the definition-keyword state across (`\def  \bea`);
-                // anything else clears it.
-                if !matches!(
-                    t.kind,
-                    SyntaxKind::WHITESPACE
-                        | SyntaxKind::NEWLINE
-                        | SyntaxKind::COMMENT
-                        | SyntaxKind::DOC_MARGIN
-                        | SyntaxKind::GUARD
-                ) {
-                    def_name_slots = 0;
-                }
-                continue;
-            }
-            if want_aliases {
-                let name = (def_name_slots == 0 && !expl_on)
-                    .then(|| t.text.strip_prefix('\\'))
-                    .flatten();
-                if let Some(name) = name {
-                    if let Some(target) = ctx.begin_alias(name) {
-                        alias_openers.insert(i, SmolStr::new(target));
-                    } else if let Some(target) = ctx.end_alias(name) {
-                        alias_closers.insert(i, SmolStr::new(target));
-                    }
-                }
-                // Consuming a slot short-circuits, so a keyword sitting *in* one
-                // (`\let\a\def`) is the operand it looks like and does not arm a
-                // fresh countdown — `conditional::OpenerScan::visit` resolves the
-                // same collision the same way.
-                def_name_slots = match def_name_slots {
-                    0 => definition_name_slots(&t.text),
-                    n => n - 1,
-                };
-            }
-            // `visit` is a *state machine* over the whole stream (the operand-slot
-            // countdown, the `\ifcsname` body), so it must run for every control
-            // word, whatever we then do with the verdict. Kept on its own statement
-            // rather than folded into the condition below: buried mid-`&&` behind a
-            // cheaper test, a later reordering would skip the call and silently
-            // desync the scan from the linter's.
-            let word = t
-                .text
-                .strip_prefix('\\')
-                .map(|name| opener_scan.visit(name));
-            if word == Some(conditional::Word::Opens) && !expl_on {
-                conditional_openers.insert(i);
-            }
-            if let Some(toggle) = expl_toggle(&t.text) {
-                expl_toggles.push((i, toggle == ExplToggle::On));
-                expl_on = toggle == ExplToggle::On;
-            }
-        }
-        starts.push(off);
+        let pre = PreScan::run(tokens, ctx);
         Self {
             tokens,
             ctx,
-            starts,
+            starts: pre.starts,
             pos: 0,
             events: Vec::new(),
             steps: std::cell::Cell::new(0),
@@ -1392,21 +1287,21 @@ impl<'t> Parser<'t> {
             macrocode_end: None,
             plain_braces: std::collections::HashSet::new(),
             plain_braces_version: 0,
-            expl_toggles,
-            conditional_openers,
-            last_alias_closer: alias_closers.keys().copied().max(),
-            last_r_bracket,
-            last_display_math_closer,
-            last_inline_math_closer,
-            last_right,
-            last_r_brace,
-            last_fi,
-            last_dollar,
+            expl_toggles: pre.expl_toggles,
+            conditional_openers: pre.conditional_openers,
+            last_alias_closer: pre.alias_closers.keys().copied().max(),
+            last_r_bracket: pre.last_r_bracket,
+            last_display_math_closer: pre.last_display_math_closer,
+            last_inline_math_closer: pre.last_inline_math_closer,
+            last_right: pre.last_right,
+            last_r_brace: pre.last_r_brace,
+            last_fi: pre.last_fi,
+            last_dollar: pre.last_dollar,
             conditional_batch: std::cell::RefCell::new(None),
             #[cfg(test)]
             scan_work: std::cell::Cell::new(0),
-            alias_openers,
-            alias_closers,
+            alias_openers: pre.alias_openers,
+            alias_closers: pre.alias_closers,
             alias_batch: std::cell::RefCell::new(None),
             env_batch: std::cell::RefCell::new(None),
             left_right_batch: std::cell::RefCell::new(None),

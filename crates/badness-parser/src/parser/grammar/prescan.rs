@@ -1,0 +1,366 @@
+//! The single pass over the token stream that runs before the walk starts.
+//!
+//! Four scans share one loop because three of them carry *running state* —
+//! the definition-name countdown, the expl3 catcode mode, and the shared
+//! conditional-opener state machine — that only a single ordered pass can
+//! maintain. Fusing them is therefore not an optimization to be undone; the
+//! interleaving is the point, and this module exists so it can be tested
+//! directly rather than through a full parse.
+
+use std::collections::{HashMap, HashSet};
+
+use smol_str::SmolStr;
+
+use super::RIGHT_CMD;
+use crate::parser::conditional;
+use crate::parser::lexer::{ExplToggle, ParseCtx, Token, definition_name_slots, expl_toggle};
+use crate::syntax::SyntaxKind;
+
+/// Everything [`super::Parser::new`] needs to know about the token stream up
+/// front. Each field is documented on the `Parser` field it becomes.
+pub(super) struct PreScan {
+    pub(super) starts: Vec<usize>,
+    pub(super) expl_toggles: Vec<(usize, bool)>,
+    pub(super) conditional_openers: HashSet<usize>,
+    pub(super) alias_openers: HashMap<usize, SmolStr>,
+    pub(super) alias_closers: HashMap<usize, SmolStr>,
+    pub(super) last_r_bracket: Option<usize>,
+    pub(super) last_display_math_closer: Option<usize>,
+    pub(super) last_inline_math_closer: Option<usize>,
+    pub(super) last_right: Option<usize>,
+    pub(super) last_r_brace: Option<usize>,
+    pub(super) last_fi: Option<usize>,
+    pub(super) last_dollar: Option<usize>,
+}
+
+impl PreScan {
+    pub(super) fn run(tokens: &[Token], ctx: &ParseCtx) -> Self {
+        let mut starts = Vec::with_capacity(tokens.len() + 1);
+        let mut off = 0;
+        let mut expl_toggles = Vec::new();
+        let mut conditional_openers = HashSet::new();
+        let mut alias_openers = HashMap::new();
+        let mut alias_closers = HashMap::new();
+        let want_aliases = ctx.has_env_aliases();
+        let mut opener_scan = conditional::OpenerScan::new();
+        // `expl_on` mirrors `in_expl_region` exactly: the state is the one in
+        // force *before* this token, so a toggle sits outside its own region.
+        let mut expl_on = false;
+        // How many upcoming control words are *names being bound* by a definition
+        // keyword rather than calls — a countdown, since `\let\a\b` binds two. See
+        // [`super::Parser::alias_openers`] for why this filter is mandatory.
+        let mut def_name_slots = 0u8;
+        let mut last_r_bracket = None;
+        let mut last_display_math_closer = None;
+        let mut last_inline_math_closer = None;
+        let mut last_right = None;
+        let mut last_r_brace = None;
+        let mut last_fi = None;
+        let mut last_dollar = None;
+        for (i, t) in tokens.iter().enumerate() {
+            starts.push(off);
+            off += t.text.len();
+            // Last-closer indices for the gate bounds
+            // ([`super::Parser::last_r_bracket`]), recorded before the
+            // control-word early-out below so the non-control-word shapes are
+            // seen. `\fi` recognition deliberately skips the expl3-region filter
+            // [`super::Parser::conditional_flow_at`] applies: an upper bound only
+            // needs to be at or past the last viable index, and keeping the
+            // recording filter-free means it can never drift *below* the gate's
+            // recognition.
+            match t.kind {
+                SyntaxKind::R_BRACKET => last_r_bracket = Some(i),
+                SyntaxKind::R_BRACE => last_r_brace = Some(i),
+                SyntaxKind::DOLLAR => last_dollar = Some(i),
+                SyntaxKind::CONTROL_SYMBOL => match t.text.as_str() {
+                    "\\]" => last_display_math_closer = Some(i),
+                    "\\)" => last_inline_math_closer = Some(i),
+                    _ => {}
+                },
+                SyntaxKind::CONTROL_WORD => {
+                    if t.text.as_str() == RIGHT_CMD {
+                        last_right = Some(i);
+                    } else if t.text.strip_prefix('\\').and_then(conditional::flow_word)
+                        == Some(conditional::FlowWord::Fi)
+                    {
+                        last_fi = Some(i);
+                    }
+                }
+                _ => {}
+            }
+            if t.kind != SyntaxKind::CONTROL_WORD {
+                // Trivia carries the definition-keyword state across (`\def  \bea`);
+                // anything else clears it.
+                if !super::Parser::is_trivia(t.kind) {
+                    def_name_slots = 0;
+                }
+                continue;
+            }
+            if want_aliases {
+                let name = (def_name_slots == 0 && !expl_on)
+                    .then(|| t.text.strip_prefix('\\'))
+                    .flatten();
+                if let Some(name) = name {
+                    if let Some(target) = ctx.begin_alias(name) {
+                        alias_openers.insert(i, SmolStr::new(target));
+                    } else if let Some(target) = ctx.end_alias(name) {
+                        alias_closers.insert(i, SmolStr::new(target));
+                    }
+                }
+                // Consuming a slot short-circuits, so a keyword sitting *in* one
+                // (`\let\a\def`) is the operand it looks like and does not arm a
+                // fresh countdown — `conditional::OpenerScan::visit` resolves the
+                // same collision the same way.
+                def_name_slots = match def_name_slots {
+                    0 => definition_name_slots(&t.text),
+                    n => n - 1,
+                };
+            }
+            // `visit` is a *state machine* over the whole stream (the operand-slot
+            // countdown, the `\ifcsname` body), so it must run for every control
+            // word, whatever we then do with the verdict. Kept on its own statement
+            // rather than folded into the condition below: buried mid-`&&` behind a
+            // cheaper test, a later reordering would skip the call and silently
+            // desync the scan from the linter's.
+            let word = t
+                .text
+                .strip_prefix('\\')
+                .map(|name| opener_scan.visit(name));
+            if word == Some(conditional::Word::Opens) && !expl_on {
+                conditional_openers.insert(i);
+            }
+            if let Some(toggle) = expl_toggle(&t.text) {
+                expl_toggles.push((i, toggle == ExplToggle::On));
+                expl_on = toggle == ExplToggle::On;
+            }
+        }
+        starts.push(off);
+        Self {
+            starts,
+            expl_toggles,
+            conditional_openers,
+            alias_openers,
+            alias_closers,
+            last_r_bracket,
+            last_display_math_closer,
+            last_inline_math_closer,
+            last_right,
+            last_r_brace,
+            last_fi,
+            last_dollar,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::lexer::{LexConfig, lex_with};
+
+    /// Pre-scan `src` with no alias context — the shape every file gets before
+    /// the second pass discovers any.
+    fn scan(src: &str) -> (Vec<Token>, PreScan) {
+        let ctx = ParseCtx::default();
+        let tokens = lex_with(src, &ctx, LexConfig::default());
+        let pre = PreScan::run(&tokens, &ctx);
+        (tokens, pre)
+    }
+
+    /// Pre-scan `src` with `bea`/`eea` already registered as an `eqnarray`
+    /// alias pair — the state the second pass hands in. Registering the pair
+    /// directly rather than parsing for it keeps these tests about the *filter*
+    /// (whose job this module owns) and not about the definition scan.
+    fn scan_aliased(src: &str) -> (Vec<Token>, PreScan) {
+        let mut ctx = ParseCtx::default();
+        ctx.insert_begin_alias(SmolStr::new("bea"), SmolStr::new("eqnarray"));
+        ctx.insert_end_alias(SmolStr::new("eea"), SmolStr::new("eqnarray"));
+        let tokens = lex_with(src, &ctx, LexConfig::default());
+        let pre = PreScan::run(&tokens, &ctx);
+        (tokens, pre)
+    }
+
+    fn names_at(tokens: &[Token], idx: &HashMap<usize, SmolStr>) -> Vec<(String, String)> {
+        let mut v: Vec<_> = idx
+            .iter()
+            .map(|(&i, target)| (tokens[i].text.to_string(), target.to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn starts_are_cumulative_byte_offsets_with_a_total_at_the_end() {
+        let (tokens, pre) = scan("\\foo bar");
+        assert_eq!(pre.starts.len(), tokens.len() + 1);
+        assert_eq!(pre.starts[0], 0);
+        assert_eq!(*pre.starts.last().unwrap(), "\\foo bar".len());
+        for (i, t) in tokens.iter().enumerate() {
+            assert_eq!(pre.starts[i + 1] - pre.starts[i], t.text.len());
+        }
+    }
+
+    #[test]
+    fn empty_input_still_records_the_total_length() {
+        let (_, pre) = scan("");
+        assert_eq!(pre.starts, vec![0]);
+        assert_eq!(pre.last_r_brace, None);
+    }
+
+    #[test]
+    fn last_closer_bounds_record_the_final_occurrence_of_each_shape() {
+        let src = "] } $ \\] \\) \\right \\fi ] x";
+        let (tokens, pre) = scan(src);
+        let text = |i: Option<usize>| i.map(|i| tokens[i].text.to_string());
+        // The *last* `]`, not the first.
+        assert_eq!(text(pre.last_r_bracket), Some("]".into()));
+        assert!(pre.last_r_bracket.unwrap() > 0);
+        assert_eq!(text(pre.last_r_brace), Some("}".into()));
+        assert_eq!(text(pre.last_dollar), Some("$".into()));
+        assert_eq!(text(pre.last_display_math_closer), Some("\\]".into()));
+        assert_eq!(text(pre.last_inline_math_closer), Some("\\)".into()));
+        assert_eq!(text(pre.last_right), Some("\\right".into()));
+        assert_eq!(text(pre.last_fi), Some("\\fi".into()));
+    }
+
+    #[test]
+    fn a_missing_shape_leaves_its_bound_unset() {
+        let (_, pre) = scan("plain prose");
+        assert_eq!(pre.last_r_bracket, None);
+        assert_eq!(pre.last_r_brace, None);
+        assert_eq!(pre.last_dollar, None);
+        assert_eq!(pre.last_display_math_closer, None);
+        assert_eq!(pre.last_inline_math_closer, None);
+        assert_eq!(pre.last_right, None);
+        assert_eq!(pre.last_fi, None);
+    }
+
+    /// The `\fi` bound deliberately skips the expl3 filter the gate applies: an
+    /// upper bound may over-approximate but must never fall below the last index
+    /// the gate could recognize.
+    #[test]
+    fn the_fi_bound_ignores_expl3_regions() {
+        let (_, pre) = scan("\\ExplSyntaxOn \\fi \\ExplSyntaxOff");
+        assert!(pre.last_fi.is_some());
+        // ... while the opener set does not.
+        let (_, pre) = scan("\\ExplSyntaxOn \\iftrue \\ExplSyntaxOff");
+        assert!(pre.conditional_openers.is_empty());
+    }
+
+    #[test]
+    fn a_conditional_opener_outside_a_region_is_recorded() {
+        let (tokens, pre) = scan("\\iftrue a \\fi");
+        assert_eq!(pre.conditional_openers.len(), 1);
+        let i = *pre.conditional_openers.iter().next().unwrap();
+        assert_eq!(tokens[i].text, "\\iftrue");
+    }
+
+    /// `\newif`'s operand is a name being declared, not a live opener — the
+    /// running state `OpenerScan` carries and a per-token test could not.
+    #[test]
+    fn a_newif_operand_is_not_an_opener() {
+        let (_, pre) = scan("\\newif\\ifdraft");
+        assert!(pre.conditional_openers.is_empty());
+    }
+
+    #[test]
+    fn expl_toggles_record_the_state_after_each_switch() {
+        let (tokens, pre) = scan("a \\ExplSyntaxOn b \\ExplSyntaxOff c");
+        let states: Vec<_> = pre
+            .expl_toggles
+            .iter()
+            .map(|&(i, on)| (tokens[i].text.to_string(), on))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                ("\\ExplSyntaxOn".to_string(), true),
+                ("\\ExplSyntaxOff".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_alias_call_is_indexed_by_target() {
+        let (tokens, pre) = scan_aliased("\\bea x \\eea\n");
+        assert_eq!(
+            names_at(&tokens, &pre.alias_openers),
+            vec![("\\bea".to_string(), "eqnarray".to_string())]
+        );
+        assert_eq!(
+            names_at(&tokens, &pre.alias_closers),
+            vec![("\\eea".to_string(), "eqnarray".to_string())]
+        );
+    }
+
+    /// The definee filter is load-bearing, not defensive: `\def\bea{…}` leaves
+    /// `\bea` at brace depth 0 with `in_def_body` unset, so unfiltered the two
+    /// *definition lines* would pair with each other and swallow the prose
+    /// between them.
+    #[test]
+    fn a_definition_line_definee_is_not_an_opener() {
+        let (_, pre) = scan_aliased("\\def\\bea{\\begin{eqnarray}}\n");
+        assert!(pre.alias_openers.is_empty());
+    }
+
+    /// `\let\oldbea\bea` binds *two* names, so the countdown must span both. Left
+    /// live, the source operand is a mention that pairs with the next stray
+    /// closer and swallows the prose in between.
+    #[test]
+    fn a_let_consumes_two_name_slots() {
+        let (_, pre) = scan_aliased("\\let\\oldbea\\bea\n");
+        assert!(pre.alias_openers.is_empty());
+        // One slot short, the source operand would have been indexed.
+        let (_, pre) = scan_aliased("\\let\\oldbea\\bea \\eea\n");
+        assert!(pre.alias_openers.is_empty());
+        assert_eq!(pre.alias_closers.len(), 1);
+    }
+
+    /// A keyword sitting *in* a slot is the operand it looks like and does not
+    /// arm a fresh countdown.
+    #[test]
+    fn a_definition_keyword_in_an_operand_slot_does_not_rearm() {
+        let (tokens, pre) = scan_aliased("\\let\\a\\def\\bea x \\eea\n");
+        // `\let\a\def` consumes both its slots. Had `\def` re-armed from the
+        // operand slot, the following `\bea` would have read as a definee.
+        assert_eq!(
+            names_at(&tokens, &pre.alias_openers),
+            vec![("\\bea".to_string(), "eqnarray".to_string())]
+        );
+    }
+
+    /// Trivia between the keyword and the name must carry the countdown across.
+    #[test]
+    fn trivia_carries_the_name_countdown() {
+        for src in [
+            "\\def  \\bea",
+            "\\def\n\\bea",
+            "\\def % note\n\\bea",
+            "\\def\t\\bea",
+        ] {
+            let (_, pre) = scan_aliased(src);
+            assert!(pre.alias_openers.is_empty(), "{src:?} leaked a definee");
+        }
+    }
+
+    /// ... and anything that is not trivia clears it.
+    #[test]
+    fn a_non_trivia_token_clears_the_name_countdown() {
+        let (_, pre) = scan_aliased("\\def x \\bea\n");
+        assert_eq!(pre.alias_openers.len(), 1);
+    }
+
+    #[test]
+    fn an_alias_inside_an_expl3_region_is_excluded() {
+        let (_, pre) = scan_aliased("\\ExplSyntaxOn\n\\bea\n\\ExplSyntaxOff\n\\eea\n");
+        assert!(pre.alias_openers.is_empty());
+        // The closer after the region is not.
+        assert_eq!(pre.alias_closers.len(), 1);
+    }
+
+    #[test]
+    fn no_alias_context_means_no_alias_scan() {
+        let (_, pre) = scan("\\bea x \\eea");
+        assert!(pre.alias_openers.is_empty());
+        assert!(pre.alias_closers.is_empty());
+    }
+}

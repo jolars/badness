@@ -342,14 +342,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   into `SemanticModel::build`, and the shared name sets also serve completion
   and the LSP, which should honor the same declarations.
 
-- [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
-  LaTeX Workshop adds no lint rules of its own (it only shells out to
-  ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to
-  compare against. Badness already covers the high-value territory (ellipsis,
-  dash length, straight quotes, `$$`, space-before-`\footnote`, intersentence
-  spacing); remaining candidates include space before punctuation or
-  parentheses and missing italic correction (`\/`).
-
 - [x] **`codeexample` unknown to the signature DB.** pgfmanual's `codeexample`
   env holds verbatim-like example source that is *also* executed. Because it was
   not in `data/signatures.json` (which lists `verbatim`, `lstlisting`, `minted`,
@@ -402,6 +394,14 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   fixable gap; noted for completeness.
 
 ### Rules
+
+- [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
+  LaTeX Workshop adds no lint rules of its own (it only shells out to
+  ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to
+  compare against. Badness already covers the high-value territory (ellipsis,
+  dash length, straight quotes, `$$`, space-before-`\footnote`, intersentence
+  spacing); remaining candidates include space before punctuation or
+  parentheses and missing italic correction (`\/`).
 
 Follow-ups from `label-before-caption` (floats only, shipped). All three are
 scope limits recorded at implementation time, not regressions.

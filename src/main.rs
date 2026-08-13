@@ -2349,6 +2349,43 @@ mod tests {
     }
 
     #[test]
+    fn diff_scales_linearly_when_every_line_changes() {
+        // The shape Myers was quadratic on: a reindent-everything change, where
+        // the edit distance is the whole file. Lives here rather than in
+        // `tests/scaling.rs` because `diff_lines` is a binary-crate item; the
+        // rationale for a ratio bound and a best-of-N minimum is in that file's
+        // module docs.
+        let time = |n: usize| {
+            // Shared first and last line on purpose: that is what stops
+            // `similar`'s disjoint fast path from rescuing Myers here, exactly
+            // as a real file's unchanged preamble line does. The body relays
+            // four openers onto each line, the change `{` + N `\begin{itemize}`
+            // + `}` actually produces.
+            let old = format!("{{\n{}}}\n", "\\begin{itemize}\n".repeat(n));
+            let new = format!(
+                "{{\n{}}}\n",
+                "  \\begin{itemize} \\begin{itemize} \\begin{itemize} \\begin{itemize}\n"
+                    .repeat(n / 4)
+            );
+            (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    let diff = diff_lines(&old, &new);
+                    std::hint::black_box(diff.grouped_ops(3).len());
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let (small, large) = (time(4000), time(8000));
+        let ratio = large.as_secs_f64() / small.as_secs_f64().max(f64::EPSILON);
+        assert!(
+            ratio < 3.0,
+            "doubling the changed-line count took {ratio:.2}x ({small:?} -> {large:?})",
+        );
+    }
+
+    #[test]
     fn diff_renders_a_header_and_signed_lines() {
         let file = ChangedFile {
             path: PathBuf::from("doc.tex"),

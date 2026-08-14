@@ -799,6 +799,44 @@ Display math has its own knob, `MathWrap`, scoped to single-formula display
 bodies. Its default resolves against the effective `WrapMode`, so one `wrap`
 setting carries over to math for free.
 
+### Statement bodies
+
+Not every environment body is prose. A TikZ or pgfplots picture holds a sequence
+of `;`-terminated path statements, and a greedy prose fill actively damages it:
+it runs `\draw (0,0) -- (1,1);` and `\node at (0,0) {A};` onto one line, and at
+a narrow enough width it splits a `\foreach` header away from its loop variables
+(issue #114).
+
+The curated `statementBody` flag in `data/signatures.json` names that family —
+`tikzpicture`, `pgfpicture`, `scope`, `pgfonlayer`, and the pgfplots axis
+environments — and a paragraph inside one is lowered under
+`ReflowKind::Statement` instead of `ReflowKind::Prose`: each authored line stays
+its own logical line, and only an over-long one wraps. That is the same posture
+a code-like brace-group body (a `\newcommand` definition) already takes, and it
+inherits that arm's Tier-2 fixed-point argument unchanged — the wrap continues
+flush, so a wrapped tail re-reads on the next pass as a line already at the body
+indent.
+
+Three things keep the flag narrow. It is **curated only**: a statement
+terminator is package grammar, not a TeX-surface fact, so neither the CWL
+codegen nor the runtime definition scan can set it. It is **distinct from
+`code`**, which is the `.dtx` documentation layer's `macrocode` — a fact about
+re-lexing under the package regime, not about layout; conflating the two would
+hand a future `.dtx` consumer a `tikzpicture`. And it is read from the
+**nearest** environment ancestor, never from any of them, so an `itemize` or a
+`tabular` inside a `\node`'s label still reflows as the prose it is.
+
+What this deliberately does *not* do is indent a statement's continuation, or
+the body of a `\foreach`. That needs a node owning the whole statement, and a
+TikZ path statement (`at`, `(coord)`, `;`, `{label}`) is package grammar the
+generic parser does not model — see TODO.md, *Hanging continuation indent for
+wrapped statements*.
+
+The same picture family is curated a second time in the linter
+(`linter::rules::is_pgf_picture_environment`), which keeps `dash-length` off
+coordinate arithmetic. Merging the two waits on a signature DB reaching
+`RuleContext`.
+
 ### Reflow is safe by construction
 
 `WrapMode` used to be resolved per file extension, with `.tex` reflowing while

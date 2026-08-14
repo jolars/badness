@@ -523,6 +523,14 @@ pub(crate) fn in_rule_span_argument(tok: &crate::syntax::SyntaxToken) -> bool {
 /// meaning-bearing minus into an en dash. Curated and deliberately small like the
 /// sibling pgf gate [`in_foreach_range`]; a wrong entry only silences a prose lint
 /// inside that environment (a false negative), never the reverse.
+///
+/// The same family is curated a second time, as the `statementBody` flag in
+/// `data/signatures.json`, which is what routes a picture body to statement
+/// layout in the formatter. The two sets are near-identical (that one also names
+/// `scope` and `pgfonlayer`, which need no entry here because the ancestor walk
+/// reaches the enclosing `tikzpicture` anyway) and should be kept in step —
+/// merging them waits on a signature DB in [`RuleContext`], which has none today
+/// (TODO.md, *Linter*).
 fn is_pgf_picture_environment(name: &str) -> bool {
     matches!(
         name,

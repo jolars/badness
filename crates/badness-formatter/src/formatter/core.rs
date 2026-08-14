@@ -1121,8 +1121,27 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// whose IR carries a forced break). Each emits the run-so-far as a fill, then
 /// the line breaks; a fresh run continues after. The paragraph's lines are joined
 /// by [`Ir::hard_line`].
+///
+/// A paragraph in a `statementBody` environment is *not* prose and takes
+/// [`ReflowKind::Statement`] instead — see [`in_statement_body_env`].
 fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    reflow_elements(node.children_with_tokens(), cx, ReflowKind::Prose)
+    reflow_elements(
+        node.children_with_tokens(),
+        cx,
+        paragraph_reflow_kind(node, cx),
+    )
+}
+
+/// [`ReflowKind::Statement`] for a paragraph in a `statementBody` environment,
+/// [`ReflowKind::Prose`] otherwise. Shared by [`lower_paragraph_reflow`] and the
+/// `\begin`-tail splice in [`lower_env_body`], so a header the greedy parser
+/// over-attached lays out under the same rule as the body it is spliced into.
+fn paragraph_reflow_kind(node: &SyntaxNode, cx: LowerCtx<'_>) -> ReflowKind {
+    if in_statement_body_env(node, cx) {
+        ReflowKind::Statement
+    } else {
+        ReflowKind::Prose
+    }
 }
 
 /// Whether `node` is a `.dtx` documentation-layer paragraph. A pure CST-shape
@@ -4131,7 +4150,7 @@ fn lower_env_body(body: Vec<SyntaxElement>, tail_len: usize, lifted: bool, cx: L
                 .cloned()
                 .chain(para.children_with_tokens()),
             cx,
-            ReflowKind::Prose,
+            paragraph_reflow_kind(para, cx),
         );
         let rest = lower_element_stream(body[tail_len + 1..].iter().cloned(), cx);
         return Ir::concat(std::iter::once(spliced).chain(rest));
@@ -4666,6 +4685,31 @@ fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     cx.signatures
         .environment_at(node)
         .is_some_and(|sig| sig.no_indent)
+}
+
+/// Whether `node` — a `PARAGRAPH`, or an environment body about to be reflowed as
+/// one — sits in the body of an environment the signature DB marks
+/// `statementBody`: the TikZ/pgf picture family, whose content is a sequence of
+/// `;`-terminated path statements rather than running prose
+/// ([`crate::semantic::signature::EnvironmentSig::statement_body`]).
+///
+/// A prose fill is wrong for such a body in a way width alone cannot express: it
+/// runs `\draw …;` and `\node …;` onto one line, and it breaks a `\foreach`
+/// header away from its loop variables (issue #114). [`ReflowKind::Statement`]
+/// keeps one statement per authored line and wraps only an over-long one — the
+/// same posture a code-like brace-group body already takes, and the same Tier-2
+/// fixed-point argument (flush continuation, so a wrapped tail re-reads as a line
+/// already at the body indent) carries over unchanged.
+///
+/// The **nearest** environment ancestor decides, never any of them. An `itemize`
+/// or a `tabular` inside a `\node`'s label holds ordinary prose and must still
+/// reflow, though a `tikzpicture` encloses it.
+fn in_statement_body_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    node.ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.kind() == SyntaxKind::ENVIRONMENT)
+        .and_then(|env| cx.signatures.environment_at(&env))
+        .is_some_and(|sig| sig.statement_body)
 }
 
 /// A `\begin{…}` header, split from the content the greedy parser attached past

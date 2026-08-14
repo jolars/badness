@@ -222,6 +222,20 @@ provenance.
      per-argument `%keyvals` placeholder mark plus hand-curated entries; never
      from scanned user definitions.
 
+   - **`statementBody` is where a *body-is-not-prose* claim lives**
+     (`EnvironmentSig::statement_body`). The TikZ/pgf picture family holds
+     `;`-terminated path statements, so its paragraphs lower under
+     `ReflowKind::Statement` — one statement per authored line — instead of
+     being greedily filled, which merged `\draw …;` with `\node …;` and split a
+     `\foreach` header from its loop variables (issue #114). **Curated only**: a
+     statement terminator is package grammar, not a TeX-surface fact, so the CWL
+     codegen and the definition scan hardcode `false`. Kept **distinct from
+     `code`** on purpose — that flag is the `.dtx` "re-lexed under the package
+     regime" fact, so a future `code` consumer is asking a `.dtx` question and
+     must not be handed a `tikzpicture`. The formatter reads the **nearest**
+     environment ancestor only, so prose nested in a `\node` label still reflows
+     (`docs/src/development/architecture.md` § *Statement bodies*).
+
 3. **Hand-written recursive descent is the spine; Pratt is local to math**
    (sub/superscript binding and `\left…\right` only). Math operator atoms and the
    `$`/`\[`/`\(` shape gates are bounded, sanctioned widenings of this rule, still

@@ -408,7 +408,22 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   the node this asks for: the call unit `semantic::expl3::expl3_slots` derives
   from the argspec arity owns a whole statement, so layout there needs no source
   newlines. TikZ paths have no such static signal, which is why this entry
-  survives for `.tex` bodies.)*
+  survives for `.tex` bodies.)* **Half of the motivating case is now closed from
+  the other side:** the curated `statementBody` flag routes a picture body to
+  `ReflowKind::Statement` (issue #114), so `\draw …;` and `\node …;` no longer
+  merge into one fill and a `\foreach` header stays whole. Only the *continuation
+  indent* is still deferred, and for the same reason — flush-B is what the
+  statement arm emits.
+
+- [ ] **Fold the linter's pgf picture set into the `statementBody` flag.**
+  `linter::rules::is_pgf_picture_environment` (which keeps `dash-length` off
+  coordinate arithmetic) and `data/signatures.json`'s `statementBody` now curate
+  the same family twice. Merging them needs a `SignatureDb` on `RuleContext`,
+  which carries none today — the same plumbing the user-declared ref/cite
+  families entry below wants. Until then the two carry cross-references and must
+  be edited in step. Note the sets are not quite identical by design: the flag
+  also names `scope` and `pgfonlayer`, which the linter reaches through the
+  enclosing `tikzpicture` on its ancestor walk.
 
 ## Linter
 

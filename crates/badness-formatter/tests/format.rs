@@ -504,6 +504,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // A `statementBody` environment (the TikZ/pgf picture family) holds
+    // `;`-terminated path statements, not prose: each authored line stays its own
+    // logical line instead of being greedily filled, which is what ran `\draw …;`
+    // and `\node …;` together and split a `\foreach` header from its loop
+    // variables (issue #114). The rule reads the *nearest* environment ancestor,
+    // so an `itemize` inside a `\node` label still reflows as prose.
+    ("statement_body_picture_env", WrapMode::Reflow, 80),
     // A `%` that trails `\begin{…}` on the same source line (the space-suppression
     // idiom) rides the `\begin` header instead of dropping to its own indented
     // line; a `%` the author put on its own line is left there.

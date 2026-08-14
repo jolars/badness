@@ -1,0 +1,23 @@
+\begin{tikzpicture}
+  \draw (0,0) -- (1,1);
+  \node at (0,0) {A};
+  \node at (1,1) {B};
+  \draw[red] (2,2) circle (1);
+  \foreach \p/\pos in {A/left, B/left, C/right, D/right}%
+  \node[\pos] at (\p) {$\p$};
+  \begin{scope}[shift={(3,0)}]
+    \draw (0,0) rectangle (1,1);
+  \end{scope}
+  \node at (4,4)
+  {\begin{itemize}
+      \item prose in a node label still reflows to the width
+    \end{itemize}
+  };
+\end{tikzpicture}
+
+\begin{axis}
+  \addplot {x^2};
+  \addplot {x^3};
+\end{axis}
+
+Ordinary prose after the picture still fills greedily to the line width.

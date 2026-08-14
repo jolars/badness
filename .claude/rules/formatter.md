@@ -120,6 +120,19 @@ predicates the formatter *preserves*.
   `lower_dtx_doc_paragraph` falls back to the byte-faithful preserve path.
 - A `.dtx` `macrocode` frame lead is matched literally by docstrip — commit it
   byte-exact, never normalized to the canonical `%`.
+- **A `statementBody` environment body is not prose.** The curated TikZ/pgf
+  picture family (`tikzpicture`, `pgfpicture`, `scope`, `pgfonlayer`, the
+  pgfplots axis envs) holds `;`-terminated path statements, so its paragraphs
+  take `ReflowKind::Statement` — one statement per authored line, only an
+  over-long one wraps (`in_statement_body_env` / `paragraph_reflow_kind`, issue
+  #114). No new Tier-2 argument: it is the existing `Statement` arm, whose
+  flush-continuation fixed point already covers it. **Read the *nearest*
+  environment ancestor, never any of them** — an `itemize` in a `\node` label is
+  prose and must still reflow. The flag is **curated-only** (a `;` terminator is
+  package grammar; the CWL codegen and the definition scan hardcode `false`) and
+  **distinct from `code`**, which is the `.dtx` re-lexing fact, not a layout one.
+  Continuation indent for a wrapped statement stays deferred — it needs a node
+  owning the statement (TODO.md).
 - **A curated block-level command is a block-level statement:** a break before
   it and after it, from `CommandSig::sectioning` or `CommandSig::block`
   (`command_is_sectioning`/`command_is_block`), never from the trivia the

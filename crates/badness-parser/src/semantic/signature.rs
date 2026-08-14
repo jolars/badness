@@ -202,14 +202,30 @@ pub struct EnvironmentSig {
     /// never reflows it as prose; the distinction from `verbatim_body` is that the
     /// content is a real CST, not a single `VERBATIM_BODY` token.
     pub code: bool,
+    /// `true` for environments whose body is a sequence of *author-delimited
+    /// statements* rather than running prose — the TikZ/pgf picture family, whose
+    /// content is `;`-terminated paths (`\draw … ;`, `\node … ;`). The formatter
+    /// lays such a body out one statement per source line, wrapping only an
+    /// over-long one, instead of greedily filling it to the width.
+    ///
+    /// Distinct from [`code`](Self::code), which is the `.dtx` documentation
+    /// layer's `macrocode` — code re-lexed under the package regime, a fact about
+    /// *lexing*. This one is a fact about *layout* only, so the two must not be
+    /// conflated: a future consumer of `code` is asking a `.dtx` question.
+    ///
+    /// **Curated tier only.** The statement terminator is package grammar, not a
+    /// TeX-surface fact, so nothing mechanical can derive this; the CWL codegen
+    /// and the runtime definition scan never set it. A wrong grant reshapes
+    /// layout for the whole body, so hold it to the standard of the `math`
+    /// routing flag.
+    pub statement_body: bool,
     /// `true` for alignment environments whose `&` columns the formatter lays out
     /// into a grid (`align`, `pmatrix`, …). Independent of `math`: every flagged
     /// environment here is also math, but the formatter consults this flag, not
     /// `math`, to decide column alignment.
     pub align: bool,
     /// `true` when the body is ordinary prose the formatter may reflow. Derived as
-    /// `!(verbatim_body || math || code)`. (Reflow itself is a later item; this is
-    /// the recorded intent.)
+    /// `!(verbatim_body || math || code || statement_body)`.
     pub reflow: bool,
     /// `true` for sectioning-level *containers* whose body the formatter must
     /// *not* indent (`document`, the appendix-package `appendix`, …). The shared
@@ -243,9 +259,15 @@ pub struct EnvironmentSig {
 // (builtin DB, scanned defs) and the codegen path can never derive them
 // differently.
 
-/// `reflow`: a body is reflowable prose unless it is verbatim, math, or code.
-pub(crate) const fn derive_reflow(verbatim_body: bool, math: bool, code: bool) -> bool {
-    !(verbatim_body || math || code)
+/// `reflow`: a body is reflowable prose unless it is verbatim, math, code, or a
+/// statement sequence.
+pub(crate) const fn derive_reflow(
+    verbatim_body: bool,
+    math: bool,
+    code: bool,
+    statement_body: bool,
+) -> bool {
+    !(verbatim_body || math || code || statement_body)
 }
 
 /// `block`: math, lists, and no-indent containers are inherently block/display;
@@ -313,8 +335,11 @@ pub(crate) const fn environment(
         verbatim_arg: false,
         math,
         code,
+        // Curated-only facet, like the verbatim-argument one: a statement body is
+        // package grammar the mechanical tier cannot see.
+        statement_body: false,
         align,
-        reflow: derive_reflow(verbatim_body, math, code),
+        reflow: derive_reflow(verbatim_body, math, code, false),
         no_indent,
         list,
         block: derive_block(block_explicit, math, list, no_indent),
@@ -1001,6 +1026,8 @@ struct RawEnvironment {
     math: bool,
     #[serde(default)]
     code: bool,
+    #[serde(default, rename = "statementBody")]
+    statement_body: bool,
     #[serde(default)]
     align: bool,
     #[serde(default, rename = "noIndent")]
@@ -1023,8 +1050,9 @@ impl From<RawEnvironment> for EnvironmentSig {
             verbatim_arg: raw.verbatim_arg,
             math: raw.math,
             code: raw.code,
+            statement_body: raw.statement_body,
             align: raw.align,
-            reflow: derive_reflow(raw.verbatim_body, raw.math, raw.code),
+            reflow: derive_reflow(raw.verbatim_body, raw.math, raw.code, raw.statement_body),
             no_indent: raw.no_indent,
             list: raw.list,
             block: derive_block(raw.block, raw.math, raw.list, raw.no_indent),
@@ -1397,6 +1425,79 @@ mod tests {
         assert!(codeish.code);
         assert!(!codeish.reflow);
         assert!(!codeish.verbatim_body);
+    }
+
+    #[test]
+    fn statement_body_flag_parses_and_drives_reflow() {
+        // Like `code`, `statementBody` defaults false and suppresses reflow
+        // without making the body verbatim — but it is a distinct flag, because
+        // `code` is the `.dtx` "re-lexed under the package regime" fact and this
+        // one is about layout only.
+        let db = parse(
+            r#"{ "environments": {
+                "plain": {},
+                "stmt": { "statementBody": true }
+            } }"#,
+        )
+        .expect("valid statementBody schema");
+        let plain = db.environment("plain").unwrap();
+        assert!(!plain.statement_body);
+        assert!(plain.reflow);
+        let stmt = db.environment("stmt").unwrap();
+        assert!(stmt.statement_body);
+        assert!(!stmt.reflow);
+        assert!(!stmt.code);
+        assert!(!stmt.verbatim_body);
+    }
+
+    /// The curated TikZ/pgf picture family: bodies of `;`-terminated path
+    /// statements, which the formatter lays out one statement per authored line
+    /// rather than filling as prose (issue #114).
+    #[test]
+    fn picture_environments_are_statement_bodies() {
+        let db = builtin();
+        for name in [
+            "tikzpicture",
+            "pgfpicture",
+            "scope",
+            "pgfonlayer",
+            "axis",
+            "loglogaxis",
+            "semilogxaxis",
+            "semilogyaxis",
+            "groupplot",
+            "polaraxis",
+            "ternaryaxis",
+        ] {
+            let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
+            assert!(env.statement_body, "{name} holds statements, not prose");
+            assert!(!env.reflow, "{name} never reflows as prose");
+            assert!(!env.code, "{name} is not `.dtx` macrocode");
+            assert!(!env.verbatim_body, "{name} body is parsed, not verbatim");
+            assert!(env.block, "{name} is a block env");
+        }
+        // The curated tier masks the CWL entry wholesale, so the option bracket
+        // these carry there has to be restated by hand or it is lost.
+        for name in [
+            "tikzpicture",
+            "scope",
+            "axis",
+            "loglogaxis",
+            "semilogxaxis",
+            "semilogyaxis",
+            "groupplot",
+            "polaraxis",
+            "ternaryaxis",
+        ] {
+            let env = db.environment(name).unwrap();
+            assert_eq!(env.args.len(), 1, "{name} takes an option bracket");
+            assert!(!env.args[0].required, "{name} option is optional");
+            assert_eq!(env.args[0].content, ContentKind::Keyval, "{name} keyval");
+        }
+        // `\begin{pgfonlayer}{background}` names its layer; `pgfpicture` is bare.
+        assert_eq!(db.environment("pgfonlayer").unwrap().args.len(), 1);
+        assert!(db.environment("pgfonlayer").unwrap().args[0].required);
+        assert!(db.environment("pgfpicture").unwrap().args.is_empty());
     }
 
     #[test]

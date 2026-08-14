@@ -208,7 +208,14 @@ through every caller of `parsed_tree_root`. The language server resolves config
 per anchor directory, so a session holding two workspaces with *different*
 blocks rewrites the cell as the active document crosses between them — the
 accepted cost, and the reason the main loop mirrors the last value it published
-and writes only on a change (`GlobalState::analysis_settings`). Declaring
+and writes only on a change (`GlobalState::publish_declarations`). That crossing
+is a cost and never a wrong answer, because the republish happens in the
+**request dispatcher** rather than in each handler: nearly every request reads a
+tree, so a per-handler call would be a rule the next handler forgets, and the
+one it forgot would answer under whichever document was analyzed last. Reading
+`textDocument.uri` off the raw params covers handlers not yet written; the
+notification sites that publish ahead of an `Edit` job go through
+`GlobalState::analysis_settings`, which wants the settings anyway. Declaring
 nothing, the overwhelming default, never writes it after construction. The
 read-pool jobs that bypass the cache — a format or diagnostic that races an edit
 and falls back to reparsing its captured buffer — take the declarations off the
@@ -256,13 +263,27 @@ so a broken declaration is an error rather than a block that parses fine and
 does nothing to the document. It projects the entries into a `SignatureDb` — the
 struct already holding exactly these three maps — so the declared tier folds
 into a document's scope with the same merge the scanned tier uses. Rejected,
-each naming the key the user wrote: an unknown `like` target; `begin` without
-`end` or the mirror; delimiters for a verbatim or argument-taking environment;
-delimiters for an environment whose behavior is unknown; a spelling two entries
-both claim; and a spelling that could never lex as a single control word. An
-entry declaring behavior alone carries none of those restrictions, which is what
-makes `like = "lstlisting"` the way to name a verbatim environment no definition
-scan can find.
+each naming the key the user wrote: an entry with no keys at all; an unknown
+`like` target; `begin` without `end` or the mirror; delimiters for a verbatim or
+argument-taking environment; delimiters for an environment whose behavior is
+unknown; a spelling two entries both claim (or one entry lists twice); a
+spelling that could never lex as a single control word; and a spelling the
+curated tier already knows as a command. An entry declaring behavior alone
+carries none of the delimiter restrictions, which is what makes
+`like = "lstlisting"` the way to name a verbatim environment no definition scan
+can find.
+
+The empty-entry and known-command rules are the two that reject for *shape*
+rather than for a rule of the mechanism, and they are the two ends of the same
+concern. An empty entry is the silent no-op the whole "resolution is validation"
+posture exists to prevent, and it is exactly what a header with a typo'd body
+under it collapses to. A spelling like `'\emph'` is the opposite failure: it
+would take effect, project-wide, on a command the author never meant to touch.
+That check reads the curated tier alone — the CWL tier carries every package's
+names, so rejecting against it would refuse a spelling on the say-so of a
+package the project never loads — which leaves it partial by construction. It is
+a backstop, not the safety property; the shape gate is still what keeps a wrong
+declaration from corrupting a tree.
 
 Declared entries beat scanned definitions and the built-in tiers alike — a
 declaration is the user explicitly correcting an inference. They are merged into

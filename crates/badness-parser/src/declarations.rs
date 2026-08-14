@@ -184,7 +184,8 @@ impl Declarations {
     /// "lstlisting"` is exactly how a project names a verbatim environment the
     /// definition scan cannot find. The extra restrictions below apply only to
     /// an entry that declares *delimiter spellings*, since those are the ones a
-    /// command has to stand in for.
+    /// command has to stand in for. An entry that declares **nothing** is the
+    /// one shape rejected for saying too little rather than too much.
     pub fn resolve(&self) -> Result<ResolvedDeclarations, DeclarationError> {
         let mut db = SignatureDb::default();
         // Which entry already claimed a spelling, so a second claim is an error
@@ -193,9 +194,18 @@ impl Declarations {
 
         for (name, entry) in &self.environments {
             let error = |kind| DeclarationError {
-                key: format!("environments.{name}"),
+                key: dotted_key(["environments", name]),
                 kind,
             };
+
+            // An entry that says nothing is the one shape resolution could
+            // otherwise wave through, and it is exactly the shape a typo takes:
+            // `deny_unknown_fields` catches a misspelled key, but a user who
+            // wrote the header and nothing under it gets an entry that parses,
+            // resolves, and does nothing.
+            if entry.like.is_none() && !entry.has_delimiters() {
+                return Err(error(DeclarationErrorKind::EmptyEntry));
+            }
 
             // `like` first: it decides the behavior every later rule reads.
             let declared = match &entry.like {
@@ -203,7 +213,7 @@ impl Declarations {
                     let sig = builtin()
                         .environment(target)
                         .ok_or_else(|| DeclarationError {
-                            key: format!("environments.{name}.like"),
+                            key: dotted_key(["environments", name, "like"]),
                             kind: DeclarationErrorKind::UnknownLikeTarget {
                                 target: target.clone(),
                             },
@@ -239,24 +249,49 @@ impl Declarations {
             }
 
             for (side, spellings) in [("begin", &entry.begin), ("end", &entry.end)] {
+                let error = |kind| DeclarationError {
+                    key: dotted_key(["environments", name, side]),
+                    kind,
+                };
                 for spelling in spellings {
                     if !is_control_word_name(spelling.as_str()) {
-                        return Err(DeclarationError {
-                            key: format!("environments.{name}.{side}"),
-                            kind: DeclarationErrorKind::NotAControlWord {
-                                name: spelling.clone(),
-                            },
-                        });
+                        return Err(error(DeclarationErrorKind::NotAControlWord {
+                            name: spelling.clone(),
+                        }));
+                    }
+                    // A spelling the curated database already knows as a command
+                    // is a mistake we can name: `begin = ['\emph']` would turn
+                    // every `\emph` in the project into an environment opener
+                    // wherever the shape gate let it pair. Curated tier only,
+                    // for the same reason `like` is: the CWL tier carries every
+                    // package's names, so rejecting against it would refuse a
+                    // spelling on the say-so of a package the project never
+                    // loads. That leaves the check partial by construction — it
+                    // catches the arity-bearing commands, where a wrong pairing
+                    // also mis-attaches arguments — and it is a backstop, not
+                    // the safety property. The shape gate is still what keeps a
+                    // wrong declaration from corrupting a tree.
+                    if builtin().command(spelling.as_str()).is_some() {
+                        return Err(error(DeclarationErrorKind::SpellingIsABuiltinCommand {
+                            name: spelling.clone(),
+                        }));
                     }
                     let key = SmolStr::new(spelling.as_str());
                     if let Some(first) = claimed.get(&key) {
-                        return Err(DeclarationError {
-                            key: format!("environments.{name}.{side}"),
-                            kind: DeclarationErrorKind::DuplicateDelimiter {
+                        // Repeating a spelling *within* one entry is a different
+                        // mistake from two entries fighting over it, and reading
+                        // "already declared as a delimiter of `eqnarray`" under
+                        // `environments.eqnarray.begin` helps nobody.
+                        return Err(error(if first == name {
+                            DeclarationErrorKind::RepeatedDelimiter {
+                                name: spelling.clone(),
+                            }
+                        } else {
+                            DeclarationErrorKind::DuplicateDelimiter {
                                 name: spelling.clone(),
                                 first: first.clone(),
-                            },
-                        });
+                            }
+                        }));
                     }
                     claimed.insert(key.clone(), name.clone());
                     if side == "begin" {
@@ -317,6 +352,10 @@ pub struct DeclarationError {
 /// `AGENTS.md` decision #12 or its architecture section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclarationErrorKind {
+    /// An entry with no keys at all. Nothing to reject it on rule grounds, and
+    /// nothing for it to do either — which is the outcome this module exists to
+    /// avoid.
+    EmptyEntry,
     /// `like` named something the curated built-in database does not have.
     /// Never resolved against the CWL tier or scanned definitions: behavior
     /// comes from curated data only.
@@ -339,9 +378,43 @@ pub enum DeclarationErrorKind {
     /// A spelling two entries both claim. Silently letting the last one win
     /// would make the pairing depend on map order.
     DuplicateDelimiter { name: CommandName, first: SmolStr },
+    /// A spelling one entry lists twice — across its two sides, or twice on
+    /// one. The [`DuplicateDelimiter`](Self::DuplicateDelimiter) mistake seen
+    /// from inside a single entry, where naming the "other" entry is no help.
+    RepeatedDelimiter { name: CommandName },
     /// A spelling the lexer could never produce as one control word, so it
     /// could never match anything.
     NotAControlWord { name: CommandName },
+    /// A spelling the curated database already knows as a command. Not a
+    /// no-op — it would take effect, on a command the project did not mean to
+    /// redefine.
+    SpellingIsABuiltinCommand { name: CommandName },
+}
+
+/// Join `segments` into a TOML dotted key, quoting any segment that is not a
+/// bare key so the result can be pasted back into `badness.toml`.
+///
+/// An environment may be named anything, and `environments.my.env` would point
+/// at a key the user never wrote.
+fn dotted_key<'a>(segments: impl IntoIterator<Item = &'a str>) -> String {
+    let mut key = String::new();
+    for segment in segments {
+        if !key.is_empty() {
+            key.push('.');
+        }
+        let bare = !segment.is_empty()
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if bare {
+            key.push_str(segment);
+        } else {
+            key.push('"');
+            key.push_str(&segment.replace('\\', "\\\\").replace('"', "\\\""));
+            key.push('"');
+        }
+    }
+    key
 }
 
 impl fmt::Display for DeclarationError {
@@ -353,6 +426,11 @@ impl fmt::Display for DeclarationError {
 impl fmt::Display for DeclarationErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::EmptyEntry => write!(
+                f,
+                "declares nothing; add `like` to say what the environment behaves like, or \
+                 `begin`/`end` to give it delimiter spellings"
+            ),
             Self::UnknownLikeTarget { target } => write!(
                 f,
                 "unknown environment `{target}`; `like` must name an environment badness \
@@ -386,9 +464,21 @@ impl fmt::Display for DeclarationErrorKind {
                 f,
                 "`{name}` is already declared as a delimiter of `{first}`"
             ),
+            Self::RepeatedDelimiter { name } => {
+                write!(
+                    f,
+                    "`{name}` is listed twice as a delimiter of this environment"
+                )
+            }
             Self::NotAControlWord { name } => write!(
                 f,
                 "`{name}` is not a control word; a delimiter must be a name of letters"
+            ),
+            Self::SpellingIsABuiltinCommand { name } => write!(
+                f,
+                "`{name}` is already a LaTeX command badness knows; a delimiter spelling must \
+                 be a command of your own, or the declaration would change what `{name}` means \
+                 everywhere in the project"
             ),
         }
     }
@@ -664,6 +754,60 @@ mod tests {
         assert!(err.to_string().contains("like"), "{err}");
     }
 
+    /// The one shape that says too little. A header with nothing under it
+    /// parses, breaks no rule, and does nothing — the outcome every other rule
+    /// here exists to prevent.
+    #[test]
+    fn an_entry_that_declares_nothing_is_an_error() {
+        let err = resolve_err(r#"{"environments": {"myenv": {}}}"#);
+        assert_eq!(err.key, "environments.myenv");
+        assert_eq!(err.kind, DeclarationErrorKind::EmptyEntry);
+        assert!(err.to_string().contains("like"), "{err}");
+    }
+
+    /// A spelling badness already knows as a command would *take effect* rather
+    /// than do nothing, on a command the project never meant to touch.
+    #[test]
+    fn a_spelling_that_is_already_a_builtin_command_is_rejected() {
+        let err =
+            resolve_err(r#"{"environments": {"center": {"begin": ["\\emph"], "end": ["\\ec"]}}}"#);
+        assert_eq!(err.key, "environments.center.begin");
+        assert!(matches!(
+            err.kind,
+            DeclarationErrorKind::SpellingIsABuiltinCommand { .. }
+        ));
+        assert!(err.to_string().contains("emph"), "{err}");
+    }
+
+    /// The check reads the curated tier alone, so a name only the bulk CWL tier
+    /// carries is still a project's to spell — the same scoping `like` has, and
+    /// for the same reason: CWL knows every package, including ones the project
+    /// never loads.
+    #[test]
+    fn a_cwl_only_command_name_is_still_available_as_a_spelling() {
+        let cwl_only = crate::semantic::signature::cwl()
+            .command_names()
+            .find(|name| {
+                builtin().command(name).is_none() && is_control_word_name(name) && name.len() > 2
+            })
+            .expect("the CWL tier has a command the curated one does not")
+            .to_string();
+        let db = resolve(&format!(
+            r#"{{"environments": {{"center": {{"begin": ["{cwl_only}"], "end": ["\\ec"]}}}}}}"#
+        ));
+        assert_eq!(db.env_begin_alias(&cwl_only), Some("center"));
+    }
+
+    /// The error key is a dotted key the user can paste back, so a name that is
+    /// not a bare TOML key is quoted the way they had to write it.
+    #[test]
+    fn the_error_key_quotes_a_name_that_is_not_a_bare_key() {
+        let err = resolve_err(r#"{"environments": {"my.env": {}}}"#);
+        assert_eq!(err.key, r#"environments."my.env""#);
+        let err = resolve_err(r#"{"environments": {"my env": {"like": "algin"}}}"#);
+        assert_eq!(err.key, r#"environments."my env".like"#);
+    }
+
     /// Two entries claiming one spelling would otherwise resolve by map order.
     #[test]
     fn a_spelling_may_not_be_claimed_twice() {
@@ -682,14 +826,19 @@ mod tests {
         );
     }
 
-    /// Including across the two sides, where the two maps would each claim it.
+    /// Including across the two sides, where the two maps would each claim it —
+    /// reported as the *repeat* it is, since naming the owning entry would just
+    /// name the entry the error is already keyed to.
     #[test]
     fn a_spelling_may_not_be_both_opener_and_closer() {
         let err = resolve_err(r#"{"environments": {"align": {"begin": ["\\x"], "end": ["\\x"]}}}"#);
-        assert!(matches!(
+        assert_eq!(err.key, "environments.align.end");
+        assert_eq!(
             err.kind,
-            DeclarationErrorKind::DuplicateDelimiter { .. }
-        ));
+            DeclarationErrorKind::RepeatedDelimiter {
+                name: CommandName::new("x"),
+            }
+        );
     }
 
     /// A spelling the lexer would split into two tokens can never match, so

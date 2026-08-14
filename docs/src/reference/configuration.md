@@ -467,6 +467,7 @@ Anything a declaration cannot satisfy is an error at config load, reported
 against the key you wrote, rather than a block that parses and quietly does
 nothing:
 
+- an entry with no keys under it, which would declare nothing at all
 - `like` naming an environment Badness does not know
 - `begin` without `end`, or `end` without `begin`
 - delimiter spellings for a verbatim environment (the closing command is never
@@ -475,8 +476,10 @@ nothing:
   carries none)
 - delimiter spellings for an environment with no `like` and no built-in of that
   name, so its behavior is unknown
-- one spelling claimed by two entries
+- one spelling claimed by two entries, or listed twice by one
 - a spelling that could never be a single control word (`'\b ea'`, `'\bea2'`)
+- a spelling that is already a LaTeX command Badness knows (`'\emph'`), which
+  would change what that command means throughout the project
 
 ### `like`
 
@@ -510,6 +513,11 @@ Use this when the pair is defined somewhere Badness cannot see: a sibling
 `.sty`, or a definition built by machinery no scan follows. A pair defined by
 plain `\newcommand`s in the *same* file — `\newcommand{\bea}{\begin{eqnarray}}`
 and its `\eea` counterpart — is already recognized without any configuration.
+
+A spelling must be a command of your own. Naming one Badness already knows
+(`'\emph'`, `'\section'`) is an error rather than a redefinition: the
+declaration would apply everywhere that command appears, which is never what a
+delimiter declaration means.
 
 **Default value**: `[]`
 

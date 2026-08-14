@@ -55,10 +55,14 @@ for input in "${INPUTS[@]}"; do
   fi
   for side in before after; do
     # Two passes so the LOF/LOT and other cross-references settle.
-    (cd "${dir}" && pdflatex -interaction=nonstopmode "${side}.tex" >"${side}.out" 2>&1) || true
-    (cd "${dir}" && pdflatex -interaction=nonstopmode "${side}.tex" >"${side}.out" 2>&1) || true
+    #
+    # `.stdout`, never `.out`: hyperref writes its bookmarks to `\jobname.out`, so
+    # capturing the terminal log there hands the *next* pass its own log as the
+    # bookmark file — which typesets the log into the PDF and can hang the run.
+    (cd "${dir}" && pdflatex -interaction=nonstopmode "${side}.tex" >"${side}.stdout" 2>&1) || true
+    (cd "${dir}" && pdflatex -interaction=nonstopmode "${side}.tex" >"${side}.stdout" 2>&1) || true
     if [ ! -f "${dir}/${side}.pdf" ]; then
-      echo "error: ${name} (${side}) failed to compile; see ${dir}/${side}.out" >&2
+      echo "error: ${name} (${side}) failed to compile; see ${dir}/${side}.stdout" >&2
       failed=1
       continue 2
     fi

@@ -2,7 +2,7 @@
   "name": "badness",
   "displayName": "Badness",
   "description": "Language server, formatter, and linter for LaTeX",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "publisher": "jolars",
   "license": "MIT",
   "icon": "icon.png",
@@ -90,14 +90,14 @@
         },
         "badness.forwardSearch.executable": {
           "type": "string",
-          "markdownDescription": "PDF viewer launched by the **Badness: Forward Search** command. A program name, **not a command line** \u2014 it is spawned directly, with no shell, so flags must go in `#badness.forwardSearch.args#`. Unset by default, which disables forward search."
+          "markdownDescription": "PDF viewer launched by the **Badness: Forward Search** command. A program name, **not a command line** — it is spawned directly, with no shell, so flags must go in `#badness.forwardSearch.args#`. Unset by default, which disables forward search."
         },
         "badness.forwardSearch.args": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Arguments for the viewer. `%f` is the file the cursor is in, `%p` the root document's PDF, `%l` the line number counting from 1, and `%%f` a literal `%f`. Required \u2014 forward search stays off until both this and `#badness.forwardSearch.executable#` are set. For zathura: `[\"--synctex-forward\", \"%l:1:%f\", \"%p\"]`."
+          "markdownDescription": "Arguments for the viewer. `%f` is the file the cursor is in, `%p` the root document's PDF, `%l` the line number counting from 1, and `%%f` a literal `%f`. Required — forward search stays off until both this and `#badness.forwardSearch.executable#` are set. For zathura: `[\"--synctex-forward\", \"%l:1:%f\", \"%p\"]`."
         },
         "badness.executableStrategy": {
           "type": "string",

@@ -56,6 +56,36 @@ warning: abbreviation-spacing
   |                          ^ capital before sentence-ending punctuation suppresses intersentence spacing; use `\@` (`Word\@.`) to restore it
 ```
 
+## `blank-line-in-keyval`
+
+Flag a blank line at the top level of a `key=value` argument. A blank line is a `\par` token and a keyval processor walks its entries with macros that are not `\long`, so the call aborts -- and the error TeX reports names the processor rather than the command the author wrote (`\hypersetup` yields "Paragraph ended before `\kv@processor@default` was complete"), which is what makes the finding worth more than the compiler's own message. Scoped by measurement: a blank line *nested* inside a value's brace group (`\tikzset{aa/.style={draw,\n\nthick}}`) compiles clean and is not flagged, an unclosed `{` is left to the parse error it already draws, and only the hand-curated signature tier is consulted. The autofix drops the blank line and keeps the following indentation; it is safe by construction, since it edits only whitespace and `ContentKind::Keyval` is exactly the claim that the processor strips spaces around entries.
+
+A blank line separating two keys, which aborts the call:
+
+```tex
+\hypersetup{colorlinks=true,
+
+linkcolor=blue}
+```
+
+```text
+error: blank-line-in-keyval
+ --> example.tex:1:29
+  |
+1 |   \hypersetup{colorlinks=true,
+  |  _____________________________^
+2 | |
+3 | | linkcolor=blue}
+  | |_^ blank line in `\hypersetup`'s key-value argument; the `\par` aborts the call
+```
+
+After applying the fix:
+
+```tex
+\hypersetup{colorlinks=true,
+linkcolor=blue}
+```
+
 ## `duplicate-label`
 
 Flag a `\label{key}` defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. Definitions in mutually exclusive branches of a TeX conditional (`\iftrue...\else...\fi`, `\newif`-defined conditionals included) are not duplicates and are not flagged. No autofix: resolving a collision (rename vs delete) is the author's call.

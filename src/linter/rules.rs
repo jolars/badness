@@ -21,6 +21,7 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use super::diagnostic::{Diagnostic, Severity};
 
 pub mod abbreviation_spacing;
+pub mod blank_line_in_keyval;
 pub mod dash_length;
 pub mod deprecated_command;
 pub mod dollar_display_math;
@@ -51,6 +52,7 @@ pub mod unreferenced_label;
 pub mod verbatim_trailing_text;
 
 pub use abbreviation_spacing::AbbreviationSpacing;
+pub use blank_line_in_keyval::BlankLineInKeyval;
 pub use dash_length::DashLength;
 pub use deprecated_command::DeprecatedCommand;
 pub use dollar_display_math::DollarDisplayMath;
@@ -785,6 +787,7 @@ pub trait StreamVisitor {
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(AbbreviationSpacing),
+        Box::new(BlankLineInKeyval),
         Box::new(DuplicateLabel),
         Box::new(DeprecatedCommand),
         Box::new(MissingNonbreakingSpace),
@@ -872,6 +875,7 @@ pub fn fixable_registry() -> &'static RuleRegistry {
 /// universe is the union of the two (see [`all_known_rule_ids`]).
 pub const ALL_RULE_IDS: &[&str] = &[
     "abbreviation-spacing",
+    "blank-line-in-keyval",
     "duplicate-label",
     "deprecated-command",
     "missing-nonbreaking-space",

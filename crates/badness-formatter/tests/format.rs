@@ -10,17 +10,15 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
 
+use badness_formatter::declarations::{Declarations, ResolvedDeclarations};
 use badness_formatter::formatter::{
     FormatError, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
-    format_node_range_with_signatures, format_node_with_signatures, format_with_style,
+    format_node_range_with_signatures, format_with_declarations_sentence, format_with_style,
     format_with_style_flavored, format_with_style_flavored_sentence, perturb,
 };
-use badness_formatter::parser::{
-    LatexFlavor, LexConfig, parse, parse_with_declarations, parse_with_flavor, reconstruct,
-};
+use badness_formatter::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness_formatter::semantic::SignatureDb;
 use badness_formatter::syntax::SyntaxKind;
-use badness_parser::declarations::{Declarations, ResolvedDeclarations};
 
 /// Every `%` comment in `text`, in document order, trailing whitespace trimmed
 /// (the printer may drop a comment's trailing spaces along with the line's).
@@ -2705,21 +2703,17 @@ fn suppressed_regions_converge_under_trivia_perturbation() {
 
 // --- declared environments (`badness.toml`; AGENTS.md decision #12) ----------
 
-/// Format `input` the way the CLI does under a project's declarations: the
-/// declarations seed the parse *and* are the top tier of the signature scope.
-/// Mirrors `badness::formatter::format_pathless_sentence`, which this crate
-/// cannot reach (it is the CLI's bridge, and this one is wasm-clean).
+/// Format `input` under a project's declarations, through the same engine entry
+/// the CLI's stdin path and the language server's fallback take — not a mirror
+/// of it, so the oracles below cannot pass on a pipeline nothing ships.
 fn format_declared(input: &str, decls: &ResolvedDeclarations) -> Result<String, FormatError> {
-    let config = LexConfig::from(LatexFlavor::Document);
-    let parsed = parse_with_declarations(input, config, decls);
-    if !parsed.errors.is_empty() {
-        return Err(FormatError::ParseErrors {
-            count: parsed.errors.len(),
-        });
-    }
-    let mut scope = SignatureDb::default();
-    scope.merge_declarations(decls);
-    format_node_with_signatures(&parsed.syntax(), FormatStyle::default(), &scope)
+    format_with_declarations_sentence(
+        input,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        SentenceOptions::default(),
+        decls,
+    )
 }
 
 /// Resolve a declaration block, written as JSON — the TOML surface belongs to

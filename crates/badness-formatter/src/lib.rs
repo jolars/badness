@@ -17,6 +17,7 @@
 
 pub mod ast;
 pub mod bib;
+pub mod declarations;
 pub mod directives;
 pub mod formatter;
 pub mod parser;

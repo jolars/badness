@@ -15,10 +15,11 @@ pub mod sentence;
 pub mod style;
 
 pub use core::{
-    FormatError, format, format_node, format_node_range_with_signatures,
+    FormatError, declared_scope, format, format_node, format_node_range_with_signatures,
     format_node_range_with_signatures_sentence, format_node_with_signatures,
-    format_node_with_signatures_sentence, format_with_style, format_with_style_flavored,
-    format_with_style_flavored_sentence, format_with_style_flavored_with_signatures,
+    format_node_with_signatures_sentence, format_with_declarations_sentence, format_with_style,
+    format_with_style_flavored, format_with_style_flavored_sentence,
+    format_with_style_flavored_with_signatures,
 };
 pub use sentence::SentenceOptions;
 pub use style::{FormatStyle, LineEnding, MathWrap, WrapMode};

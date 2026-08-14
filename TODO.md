@@ -481,6 +481,36 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
 
 ### Rules
 
+- [ ] **Blank line inside a `ContentKind::Keyval` argument.** A blank line is a
+  `\par` token, and a keyval processor loops over its entries with non-`\long`
+  macros, so the call dies at expansion. Measured across all ten curated
+  mandatory-keyval setters: every one fails, most reporting `Paragraph ended
+  before …` naming an *internal* macro (`\kv@processor@default`,
+  `\pgfkeys@addpath`, `\enit@setlist@i`, `\caption@setup@options@`) rather than
+  the command the author wrote; `\geometry` fails differently (`Missing
+  \endcsname inserted`) but still fails. That misdirection is what makes the
+  lint worth more than the compiler's own message.
+
+  Neither existing layer can carry it, and that is the point of the entry rather
+  than an obstacle. The **parser** must stay silent: a `\par` in a brace group is
+  ordinary TeX surface syntax (`{\bfseries a\par b}`), the parser does not know
+  what `\hypersetup` means, and a diagnostic here would fire on every
+  multi-paragraph group — and parser diagnostics gate the formatter, so they are
+  held to high precision. A **blanket** `\long`-ness rule is also wrong: TeX's
+  default is non-`\long`, but `\newcommand` defines `\long` macros by default, so
+  most *user* commands accept `\par` and most kernel/package short commands do
+  not. Defaulting either way misfires.
+
+  What makes it cheap is that `Keyval` is *already* the proxy for "this argument
+  rejects `\par`" — the flag is asserted on exactly the arguments a keyval
+  processor consumes. So the rule needs **no new curated data**, only the
+  existing signature claim. The formatter already declines to the block form and
+  preserves the blank line (`keyval_group_declines_on_comment`), so the lint
+  would be reporting a shape the layout deliberately leaves alone. Scope
+  question to settle when writing it: whether an autofix (join the blank line)
+  is safe — it is a content edit to trivia only, but it changes what the author
+  wrote, so it may belong behind the finding rather than with it.
+
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to
   ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to

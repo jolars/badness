@@ -303,11 +303,21 @@ The semantic layer is a signature database: a curated built-in table, a bulk
 CWL-derived tier, and `\newcommand`/`\newenvironment` scanning. It assigns
 arity, verbatim-ness, sectioning, and per-argument content kinds.
 
-Meaning never leaks downward. The parser may read static lexical facts, never
-signature data that package scopes, scanned definitions, or the CWL tier can
-change. The one exception is explicit: a project may [declare](#declarations)
-constructs the parser cannot see, and those declarations name spellings rather
-than direct grouping.
+The boundary between them is an admission test, not a ban on meaning. The parser
+already reads curated semantic facts — verbatim and math routing, definition
+bodies, aliases, the conditional families — and a fact may join them only when
+two bars are met. First, every entry must be individually vetted: curated
+built-in data, or a project [declaration](#declarations). Second, its
+misapplication must be falsifiable from the text, so a shape gate can demote a
+wrong application to the generic parse. Routing and pairing facts pass both
+bars, which is why they are what the parser reads. Arity facts fail the second:
+over-attachment is byte-identical to correct attachment, so a wrong arity fails
+silently past losslessness, idempotence, and every other oracle. The bulk CWL
+tier fails both — it is harvested completion data, unvetted per entry and
+re-synced from upstream — and package scopes and scanned definitions fail for a
+different reason: they would make a parse depend on other parses and on what a
+given context can see, where the same file must parse identically under the CLI,
+stdin, the dprint plugin, and the LSP.
 
 One content kind is worth naming here, because it is the only place where a
 signature claim can change typeset output. `ContentKind::Keyval` asserts that a
@@ -717,14 +727,20 @@ argument folds in as a starred-variant marker instead of breaking the run.
 
 expl3 is the one systematic counterexample. The argspec suffix rides in the
 `CONTROL_WORD` token itself, since in-region `:` and `_` are letters, so
-arity-directed attachment there would be exactly as text-pure as greed. Greed is
-not neutral in that dialect, it is a systematically wrong guess: every
-single-token slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
-definee, and the formatter's peel-back queue exists only to undo that after the
-fact. Arity-directed expl3 attachment is the recorded candidate deviation,
-deliberately unimplemented until three questions have answers: the mixed-shape
-CST every consumer would have to handle, a false-positive blast radius that
-moves from layout into the tree, and the divergence ledger against texlab.
+arity-directed attachment there is exactly as text-pure as greed. Greed is not
+neutral in that dialect, it is a systematically wrong guess: every single-token
+slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the definee, and
+the formatter's peel-back queue exists only to undo that after the fact.
+Arity-directed expl3 attachment is an approved, staged migration (TODO.md
+carries the plan). It was long parked as a candidate awaiting a consumer that
+needed shared argument ownership; linter and language-server features are that
+consumer, and each of them would otherwise pay a reconciliation tax mapping
+semantic call units back onto mismatched greedy tree boundaries. The known risk
+is that mis-attachment is byte-invisible — a wrong tree is still lossless and
+idempotent — so the migration's oracle is a diff of grammar attachment against
+`semantic::expl3::segment_expl_statements` over the gate corpora before any
+consumer flips, with fixtures as the net thereafter, and the expl3 regions
+allowlisted wholesale in the texlab gauge.
 
 ### Trivia attachment
 

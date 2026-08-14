@@ -10,23 +10,41 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **Arity-directed expl3 attachment (decision #8's recorded candidate
-  deviation).** In-region, the argspec suffix rides in the `CONTROL_WORD` token,
-  so attachment directed by `semantic::expl3::expl3_slots` would be exactly as
+- [ ] **Arity-directed expl3 attachment (decision #8's sanctioned deviation —
+  approved, staged).** In-region, the argspec suffix rides in the `CONTROL_WORD`
+  token, so attachment directed by `semantic::expl3::expl3_slots` is exactly as
   text-pure as greed — and greedy is a systematically wrong guess there (every
   `N`/`V` slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
   definee; the formatter's peel-back of greedily over-attached arguments,
   `semantic::expl3::segment_expl_statements`, exists only to undo this). Keys on token
   shape alone (colon-suffixed names only lex as one token in-region — no grammar
-  region-awareness needed); `w`/`D`/colonless fall back to greed. Deliberately
-  unimplemented until the migration questions have answers: the mixed-shape CST
-  every consumer must then handle, the false-positive blast radius moving from
-  layout into the tree (linter/LSP see wrong structure where today only layout
-  pays), and the parse-compat divergence ledger vs. texlab. Natural trigger: an
-  LSP feature needing correct argument ownership in-region (expl3 signature
-  help). The semantic statement model is the migration's differential oracle —
-  test grammar attachment against `semantic::expl3`'s segmentation over the
-  gate corpora before flipping any consumer. Rationale in `docs/src/development/architecture.md`
+  region-awareness needed); `w`/`D`/colonless fall back to greed. **Approved**
+  because the recorded trigger has fired: linter and LSP features need shared
+  argument ownership, and while `semantic::expl3` is one module any consumer can
+  call, each caller pays a per-feature reconciliation tax mapping semantic units
+  back onto mismatched greedy tree boundaries — the same contention that
+  deferred in-region conditionals. The three migration questions, answered
+  rather than waved off:
+
+  - *Mixed-shape CST*: confined to regions the lexer already marks, and
+    consumers already handle both shapes today through the segmentation, so the
+    shape count does not grow.
+  - *False-positive blast radius*: accepted and priced. Mis-attachment is
+    byte-invisible — losslessness and idempotence hold over a wrong tree — so
+    the tree gains no oracle the formatter lacks; it keeps the same
+    fixture-grade net with wider consequences (acting consumers: autofix spans,
+    future refactoring edits). Bought because it ends the two-owner contention
+    and concentrates debugging in one snapshotable structure.
+  - *texlab divergence ledger*: expl3 regions are allowlisted wholesale as
+    intentional divergence — texlab has no argspec model to compare against.
+
+  Order of work: (1) attachment behind the existing region detection; (2) the
+  migration oracle — diff grammar attachment against
+  `semantic::expl3::segment_expl_statements` over the gate corpora and triage
+  every disagreement, *before* flipping any consumer; (3) flip consumers and
+  shrink the semantic layer to the underivable-head fallback; (4) update
+  AGENTS.md decision #8 to *landed*, `.claude/rules/parser.md`, and the
+  parse-compat allowlist. Rationale in `docs/src/development/architecture.md`
   (§ *Argument grouping and bracket policy*).
 
 - [x] ~~**Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
@@ -303,6 +321,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   merge into one fill and a `\foreach` header stays whole. Only the *continuation
   indent* is still deferred, and for the same reason — flush-B is what the
   statement arm emits.
+
+  **Status note (2026-08):** the `feat/statement-nodes` branch showed that
+  statement *extent* in the CST is tenet-legal (curated `statementBody` routing
+  plus declarations, the math-routing template, decision #2's admission test)
+  and makes the hang Tier 1 — but layout inside a statement stays width-driven
+  over an undifferentiated atom stream, so it still breaks at arbitrary atoms
+  (`\draw (6,6)` / `circle (3);`). The bottleneck is interior path grammar,
+  which no placement of the extent fact fixes. Build the TikZ-aware model
+  semantic-side first, mirroring expl3's path (unit model → layout →
+  differential oracle), with any later grammar migration judged by the same
+  admission test.
 
 - [ ] **Fold the linter's pgf picture set into the `statementBody` flag.**
   `linter::rules::is_pgf_picture_environment` (which keeps `dash-length` off

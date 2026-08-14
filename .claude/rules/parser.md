@@ -30,7 +30,12 @@ Narrative overview: `docs/src/development/architecture.md` § *The parser*.
   spelling, never a pairing** — every shape gate still runs unchanged, so a wrong
   declaration demotes like an inferred one instead of corrupting a tree. Never
   widen it into a general signature-DB read.
-- **Meaning never enters the syntactic layer.** Static lexical facts only.
+- **Meaning enters the syntactic layer only through the admission test**
+  (AGENTS.md decision #2). A fact may shape the tree when every entry is
+  individually vetted (curated built-in or declared) **and** its misapplication
+  is falsifiable from the text, so a gate can demote it. Routing and pairing
+  facts qualify; database arity never does — a wrong arity mis-attaches
+  byte-identically, past every oracle. The bulk CWL tier fails both bars.
 - **Errors never abort the parse.** Recovery anchors: `\end{…}`, `\begin`, blank
   line, `}`, `$`, `&`, `\\`. Always make progress; never loop.
 
@@ -220,10 +225,13 @@ Prefer false negatives; when in doubt a construct stays generic.
   bails at any `R_BRACE` without consulting `plain_braces` (so its two siblings
   are the loose ones: an attached optional holding a chunk-plain `}` still
   reports "unclosed `[`").
-- **Arity-directed expl3 attachment is a recorded candidate, deliberately
-  unimplemented.** Do not implement without answering the three open questions
-  in `TODO.md` (mixed-shape CST, false-positive blast radius moving into the
-  tree, texlab divergence ledger).
+- **Arity-directed expl3 attachment is an approved, staged migration**
+  (TODO.md carries the plan and the answered questions). In-region
+  colon-suffixed heads attach by argspec arity; `w`/`D`/colonless fall back to
+  greed. Before any consumer flips, diff grammar attachment against
+  `semantic::expl3::segment_expl_statements` over the gate corpora —
+  mis-attachment is byte-invisible, so that diff is the one oracle that can
+  see it.
 
 ## Trivia
 

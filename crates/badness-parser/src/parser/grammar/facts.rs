@@ -2,7 +2,8 @@
 //!
 //! Each set here is *closed and hand-maintained*, read as a lexical fact about
 //! the surface syntax and never as a claim about what the command does
-//! (`AGENTS.md` decision #1: meaning never enters the syntactic layer). The
+//! (`AGENTS.md` decision #2's admission test: individually vetted entries
+//! whose misapplication the text can falsify). The
 //! bodies these predicates route around are never executed, so a name that is
 //! not in a set simply degrades to the generic path.
 

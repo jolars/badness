@@ -99,8 +99,9 @@ patterns.
 
 - **Semantic scope nesting (the dominant pattern).** texlab opens a scope for
   sectioning commands and `\item`, nesting following siblings inside; badness
-  keeps them flat generic `COMMAND`s (tenet 2: meaning never leaks into the
-  parser). This *alone* accounts for the entire divergence in `sectioning.tex`,
+  keeps them flat generic `COMMAND`s (decision #2's admission test: sectioning
+  scope is meaning-directed tree shape with nothing in the text to falsify a
+  wrong nesting, so it stays out of the tree). This *alone* accounts for the entire divergence in `sectioning.tex`,
   `citations.tex`, `comments_trivia.tex`, `nested_envs.tex`, and
   `optional_args.tex`—in each, the constructs the probe was actually targeting
   (citations, optional/bracketed args, trivia attachment) are **concordant**;

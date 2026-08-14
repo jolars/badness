@@ -107,9 +107,10 @@ that breaks one is a bug, not a trade-off.
 
 A couple of ground rules keep the design coherent:
 
-- Keep the syntactic layer free of semantic knowledge. Parsing is the parser's
-  job; layout is the formatter's job. Never paper over a parser mistake in the
-  formatter.
+- Semantic facts reach the parser only through a narrow, curated admission test
+  (AGENTS.md decision #2); when in doubt, a fact belongs in the semantic layer.
+  Parsing is the parser's job; layout is the formatter's job. Never paper over a
+  parser mistake in the formatter.
 - New parser features need corpus and snapshot tests **and** a losslessness
   assertion.
 

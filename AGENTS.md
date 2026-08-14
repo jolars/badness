@@ -208,8 +208,18 @@ provenance.
      `docs/src/development/architecture.md` (§ *Sanctioned lexer modes*).
 
 2. **Two layers: syntactic vs. semantic.** The syntactic CST knows nothing about what
-   a command means; the semantic layer is a signature database assigning arity,
-   verbatim-ness, and sectioning. **Meaning never leaks into the parser.** See
+   a command means by default; the semantic layer is a signature database assigning
+   arity, verbatim-ness, and sectioning. The boundary is an **admission test, not a
+   ban on meaning** — the parser already reads curated semantic facts (verbatim and
+   math routing, definition bodies, aliases, the conditional families). A fact may
+   shape the tree only when **(a)** every entry is individually vetted (curated
+   built-in, or declared per decision #12) and **(b)** its misapplication is
+   falsifiable from the text, so a shape gate can demote it. That is why every
+   admitted fact is a routing or pairing fact, and why database arity never directs
+   attachment: over-attachment is byte-identical to correct attachment, so a wrong
+   arity fails silently past every oracle. (The self-describing expl3 argspec is the
+   sanctioned exception — decision #8's staged migration.) The bulk CWL tier fails
+   both bars; scanned and ambient data fail decision #8's purity reasons. See
    `docs/src/development/architecture.md`.
 
    - **`ContentKind` is where a *whitespace-safety* claim lives**
@@ -273,12 +283,18 @@ provenance.
    deviations read static facts only: **`[…]` attachment is shape-gated**—a bracket is
    an argument only when it reads as one, from static shape facts, never meaning—and
    the **expl3 argspec suffix** (the one dialect whose arity rides in the token
-   itself, so arity-directed attachment would be as text-pure as greed) is the
-   recorded *candidate* deviation, deliberately unimplemented: today the semantic
-   layer derives the arity (`semantic::expl3`) and the formatter consumes it, and
-   promoting attachment into the grammar is a migration with recorded open questions
-   (mixed-shape CST, false-positive blast radius, differential-oracle divergence),
-   not a patch. See `docs/src/development/architecture.md`
+   itself, so arity-directed attachment is as text-pure as greed) is an **approved,
+   staged migration** — TODO.md carries the plan. Today the semantic layer derives
+   the arity (`semantic::expl3`) and the formatter consumes it; the trigger the
+   candidate was parked on has fired: linter and LSP features need shared argument
+   ownership, and every consumer of the semantic units pays a per-feature
+   reconciliation tax mapping them back onto mismatched greedy tree boundaries (the
+   same contention that deferred in-region conditionals). The risk is priced, not
+   waved off: mis-attachment is byte-invisible — losslessness and idempotence hold
+   over a wrong tree — so the migration's oracle is a diff of grammar attachment
+   against `semantic::expl3::segment_expl_statements` over the gate corpora before
+   any consumer flips, and fixtures are the net thereafter. See
+   `docs/src/development/architecture.md`
    (§ *Argument grouping and bracket policy*).
 
 9. **Trivia attachment follows the rust-analyzer rule:** comments bind *forward* (a
@@ -334,7 +350,13 @@ provenance.
     convention applies only to that crate's off-by-default features),
     seeded into the existing `ParseCtx` before the self-definition scan overlays
     it — **never** the ambient `SignatureDb`, never package scopes, never the CWL
-    tier. Four rules hold the shape general:
+    tier. Each exclusion fails decision #2's admission test its own way: scopes and
+    scans make parses depend on other parses and on what a given context can see
+    (the same file must parse identically under the CLI, stdin, the dprint plugin,
+    and the LSP), while the CWL tier is bulk-imported and arity-shaped — unvetted
+    per entry, silent when wrong, and re-synced from upstream, so admitting it
+    would turn every `cwl:sync` into a de facto parser release. Four rules hold
+    the shape general:
 
     - **A declaration names a spelling, never a pairing.** Every shape gate still
       runs unchanged, so config widens what is *recognized* and can never force a
@@ -508,7 +530,9 @@ never match.
 
 ## Working agreements for agents
 
-- Keep the syntactic layer free of semantic knowledge.
+- Hold new semantic facts in the parser to decision #2's admission test:
+  individually vetted, and falsifiable from the text so a gate can demote. When
+  in doubt, the fact goes in the semantic layer.
 - Read/navigate the CST through the typed AST wrappers (decision #10): typed accessors
   and `child`/`children`/`child_token` over raw `children().find(|c| c.kind()==X)`. Add
   a wrapper struct when a node kind gains a field-extraction consumer; keep accessors

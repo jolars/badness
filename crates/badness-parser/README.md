@@ -14,8 +14,9 @@ pipeline on the same architecture.
 Semantics live in the `semantic` module as a separate layer over the CST: a
 command-signature database (arity, verbatim-ness, sectioning — including a
 generated signature tier for thousands of package commands), definition
-scanning, expl3 support, labels, and document outlines. Meaning never leaks into
-the grammar.
+scanning, expl3 support, labels, and document outlines. Meaning reaches the
+grammar only through a small set of curated routing facts; everything else stays
+in this layer.
 
 The crate builds for `wasm32-unknown-unknown`.
 

@@ -4,8 +4,8 @@
 //! single-file, this module models how files relate: the `\input`/`\include`/
 //! `\import` inclusion graph. Extraction is **purely syntactic** — it reads the
 //! generic CST with small local helpers and needs no signature DB or semantic
-//! model — so it lands ahead of those Phase 3 items (AGENTS.md decision #2:
-//! meaning never leaks into the syntactic layer).
+//! model — so it lands ahead of those Phase 3 items (AGENTS.md decision #2's
+//! two-layer split).
 //!
 //! `include.rs` handles inclusion extraction; `graph.rs` builds the cross-file
 //! graph.

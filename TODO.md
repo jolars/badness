@@ -864,9 +864,6 @@ slot in without a wire break, since config spellings are public API.
   `tests/incremental.rs`, the CLI lint and `--fix` cases in `tests/cli_lint.rs`,
   and the LSP reload case (`lsp_watched_config_change_reseeds_declarations`).
 
-- [ ] **8. Close the loop on #109.** Reply on the issue with the shape, and note
-  that the inferred path still covers the original example with no config at all.
-
 Deferred, recorded so the shape does not have to change later: `[commands.*]`
 (same `like` verb — `[commands.eqrefs] like = "eqref"` is what closes #104's
 ref-family knob); `args = "o m m"` in xparse argspec for constructs resembling

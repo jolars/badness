@@ -864,6 +864,52 @@ slot in without a wire break, since config spellings are public API.
   `tests/incremental.rs`, the CLI lint and `--fix` cases in `tests/cli_lint.rs`,
   and the LSP reload case (`lsp_watched_config_change_reseeds_declarations`).
 
+- [x] ~~**8. Review follow-ups.**~~ **Landed.** Four gaps the implementation
+  review found, each of them the mechanism failing to hold its own stated line
+  rather than a new feature:
+
+  - **The LSP invariant was stated but not enforced.** `documentSymbol` and
+    `hover` read a tree and resolved settings only for `[build]`, and a dozen
+    navigation handlers resolved none at all — so in a two-workspace session a
+    hover in one could parse under the other's block. Fixed *above* the
+    handlers: `publish_declarations_for_request` runs once in the request
+    dispatcher and reads `textDocument.uri` off the raw params, which covers
+    handlers not yet written. Sixteen call sites would have been the shape that
+    rots; `analysis_settings` now serves only the notification sites that
+    publish ahead of an `Edit` job. Pinned by
+    `lsp_a_request_is_answered_under_its_own_workspace_declarations`, which
+    fails on the pre-fix code.
+  - **`[environments.foo]` with nothing under it was a silent no-op** — the one
+    outcome `resolve()`'s own doc comment calls the worst available, reached by
+    exactly the typo `deny_unknown_fields` does not catch. Now
+    `DeclarationErrorKind::EmptyEntry`.
+  - **A delimiter spelling could shadow a curated command.**
+    `begin = ['\emph']` resolved fine and would have taken effect project-wide.
+    Rejected now, against the curated tier alone (CWL carries every package's
+    names, so it would refuse spellings on the say-so of packages the project
+    never loads). Partial by construction, and a backstop rather than the safety
+    property — the shape gate is still what bounds a wrong declaration.
+  - **`badness parse` ignored `--config`/`--no-config`**, which are `global`
+    flags clap accepts on every subcommand. It resolved by discovery only, so
+    `--no-config` dumped a tree no other subcommand would produce — the exact
+    trap threading declarations into `parse` was meant to close.
+
+  Three smaller items rode along: the mirror comparison takes an `Arc::ptr_eq`
+  fast path (`resolve_settings` returns a cached clone, so the pointer settles
+  it without walking two signature databases); a spelling repeated *within* one
+  entry reports as a repeat rather than as a collision with itself; and an error
+  key quotes a name that is not a bare TOML key, so `environments."my.env"` can
+  be pasted back.
+
+  The CLI's `format_pathless_sentence`/`declared_scope` moved into
+  `badness-formatter` as `format_with_declarations_sentence`/`declared_scope`
+  (both were already wasm-clean). The formatter's own invariant suite was
+  running a hand-rolled mirror of that pipeline; it now runs the shipped entry,
+  so the oracles cannot pass on a pipeline nothing uses — and the dprint plugin,
+  which needs exactly this and cannot see the CLI crate, has it. A
+  `badness_formatter::declarations` shim mirrors `parser`/`semantic` so an
+  embedder can build the value without naming `badness-parser`.
+
 Deferred, recorded so the shape does not have to change later: `[commands.*]`
 (same `like` verb — `[commands.eqrefs] like = "eqref"` is what closes #104's
 ref-family knob); `args = "o m m"` in xparse argspec for constructs resembling

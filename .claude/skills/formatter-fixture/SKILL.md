@@ -218,21 +218,38 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 239 existing fixture slugs. **Re-measure before trusting
-this list** — it went stale once already: `items` and brace groups were listed as
-thin at one and four fixtures, and were actually at 11 and 33 by the time someone
-read it. Count with `ls crates/badness-formatter/tests/fixtures/formatter/ |
-grep -icE '<pattern>'` first, and fix the entry if it is wrong.
+Measured against the 241 existing fixture slugs. **Re-measure before trusting
+this list** — it has gone stale twice: `items` and brace groups were listed as
+thin at one and four fixtures and were actually at 11 and 33; `specials` and
+`diacritics` sat at the top of the list for two sessions and turned out not to be
+layout families at all. Count with `ls
+crates/badness-formatter/tests/fixtures/formatter/ | grep -icE '<pattern>'`
+first, **and read a few of the family's own `.tex` files** before believing the
+family is about what its directory name suggests.
 
 Candidates not yet checked against a fresh count:
 
-1. **`specials`, `diacritics`** — small, unexamined families. (`tokenChecks` is
-   off the list on its content, not its quality: its four files probe
-   latexindent's own internal placeholder tokens colliding with document text,
-   an implementation concern badness does not share.)
-2. **`environments`, `mand-args`, `opt-and-mand-args`** — partly mined (see
-   `begin_tail_is_body` under Done); 24 and 19 slugs already match `env`/`arg`,
-   so verify against current slugs before picking.
+1. **`items`** (157 corpus files) — 7 `reflow_list_*` slugs plus
+   `list_item_continuation_hang`, `sentence_list_items`, `env_alias_list_items`,
+   `dtx_prose_itemize`, `dtx_reflow_itemize`. Decent but not deep; the corpus
+   family is much larger than the coverage.
+2. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
+   partly mined (see `begin_tail_is_body` under Done); 24 and 19 slugs already
+   match `env`/`arg`, so verify against current slugs before picking.
+3. **`namedGroupingBracesBrackets`** (29), **`unnamed-braces`** (15) — small and
+   unexamined, but latexindent-specific concepts; read the files first.
+
+Off the list, on their content rather than their quality:
+
+- **`tokenChecks`** — its four files probe latexindent's own internal
+  placeholder tokens colliding with document text, an implementation concern
+  badness does not share.
+- **`specials`** — latexindent's *specials* is its user-configurable
+  begin/end-pair mechanism, not a LaTeX construct. Its `.tex` content is display
+  math, inline math, and `\left`/`\right`, already at 33 `math`-matching slugs.
+- **`diacritics`** — two files and two directories with non-ASCII *names*; the
+  `.tex` content is a plain nested-environment document. It tests UTF-8 path
+  handling, which is a CLI concern with no `expected.tex` to write.
 
 Done: `begin_tail_is_body` — content the greedy parser attaches to `BEGIN` past
 the *declared* arity is body, not header, so it indents and reflows with the body
@@ -270,6 +287,26 @@ Done: sectioning / `headings` (`sectioning_starts_own_line`,
 statement, breaking before and after from `CommandSig::sectioning`. That landed
 the Tier-1 lone-newline fix its TODO entry described; the rest of that family is
 still open.
+
+Done: `keyEqualsValueBraces` (`keyval_group_splits_entries`,
+`keyval_group_declines_on_comment`) — the corpus's **largest family, 585 files**,
+and it was sitting under a directory name nobody had decoded. A *mandatory* brace
+argument the signature DB proves keyval segments at its top-level commas, exactly
+as the bracket does; before, `\pgfkeys{…}` fell to the prose reflow and wrapped
+mid-key.
+
+Two things generalize from it. First, **the gap was already written down in the
+code** — `gen_cwl_signatures.py` said a `%keyvals` mandatory group "is real but
+nothing consumes the flag there" and `core.rs` said `Keyval if is_bracket`. Grep
+for a guard whose comment explains why the other half is missing; that is a
+construct waiting to be taken. Second, **the whole change was a delimiter
+parameter plus eleven lines of signature data** — the rule was already there, in
+the wrong scope. Prefer that shape over a new rule.
+
+`task typeset:check` is not optional here and it earns its keep: it is the only
+oracle that sees a space token, and on the first run it failed — on an invalid
+key in the *test document* rather than a formatter bug. Compile a new
+`tests/typeset/` input on its own before trusting a diff from it.
 
 Skip constructs whose corpus family is currently a known failure until the
 underlying bug lands (`oneSentencePerLine` and `commands/figureValign` both wait

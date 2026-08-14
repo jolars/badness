@@ -4739,6 +4739,11 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                 let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
                 let keyval = match_arg_slot(args, &mut slot, is_bracket)
                     .is_some_and(|spec| spec.content == ContentKind::Keyval);
+                // A *mandatory* keyval group is deliberately not wired here, unlike
+                // on the command path ([`lower_command`]): no environment is curated
+                // with one, and the `\begin` header answers to rules a `[…]` does not
+                // — the grid router reads the colspec group, and a verbatim-body
+                // environment's header line may never break at all.
                 head.push(if keyval && is_bracket {
                     lower_optional(child, cx, true).unwrap_or_else(|| lower_node(child, cx))
                 } else {
@@ -6339,9 +6344,21 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 }
 
 /// Lower a [`SyntaxKind::OPTIONAL`] argument group, or `None` to leave it on the
-/// generic inline path.
+/// generic inline path. The bracket entry point to [`lower_segmented_group`].
+fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<Ir> {
+    lower_segmented_group(
+        node,
+        SyntaxKind::L_BRACKET,
+        SyntaxKind::R_BRACKET,
+        cx,
+        keyval,
+    )
+}
+
+/// Lower a delimited argument group as a comma-segmented Wadler group, or `None` to
+/// leave it on the generic inline path.
 ///
-/// A `[…]` is a plain Wadler group over its top-level comma-separated entries: flat
+/// The body is a plain Wadler group over its top-level comma-separated entries: flat
 /// when it fits the width, one key per line when it does not. The flat rendering is
 /// exactly the old collapsed form, so `\foo[a=1,\nb=2]` still formats as
 /// `\foo[a=1, b=2]` (issue #47) — a source line break inside `[…]` is incidental —
@@ -6358,15 +6375,27 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// opportunities, so a textual optional (`\item[red,green]`, a `\newcommand`
 /// default) can never gain a space that would be typeset.
 ///
+/// `{…}` reaches here only *through* that proof. A mandatory group is the ordinary
+/// home of typeset text, so the generic opaque lowering owns it by default; the
+/// keyval-family setters (`\pgfkeys`, `\tikzset`, `\lstset`, …) opt in through the
+/// curated signature DB, and there segmenting at commas is the whole point — the
+/// alternative is reflowing a key list as prose, which wraps mid-key.
+///
 /// A body that is not safely segmentable — a blank line, a `%` comment, nested
 /// block content — takes the indented block form ([`lower_bracketed`])
 /// unconditionally, so both spellings of the same content land on it (the
 /// choice reads content and preserved predicates, never a lone newline). With
-/// no split point at all the bracket collapses to one atom rather than
+/// no split point at all the group collapses to one atom rather than
 /// uselessly detonating into `[\n!htb\n]`. Inert under [`WrapMode::Preserve`]
 /// and the other non-prose-wrapping modes, which keep the pre-existing block
 /// layout.
-fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<Ir> {
+fn lower_segmented_group(
+    node: &SyntaxNode,
+    open_kind: SyntaxKind,
+    close_kind: SyntaxKind,
+    cx: LowerCtx<'_>,
+    keyval: bool,
+) -> Option<Ir> {
     // A `[…]` continuing across `.dtx` doc-margined lines keeps its authored
     // margins: `lower_node` already gates on this, but the signature-aware callers
     // reach here directly, and relaying such a body would move content off its `%`.
@@ -6383,22 +6412,17 @@ fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<I
         // form when the author broke the line, generic inline path otherwise.
         // Fixed-point argument on [`spans_multiple_lines`].
         return spans_multiple_lines(node)
-            .then(|| lower_bracketed(node, SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, cx));
+            .then(|| lower_bracketed(node, open_kind, close_kind, cx));
     }
-    let Some(segments) = segment_optional(node, cx, keyval) else {
+    let Some(segments) = segment_delimited_body(node, open_kind, close_kind, cx, keyval) else {
         // Not safely segmentable: blank line, comment, or a child carrying a
         // forced break. The first two put a NEWLINE directly in the node, but
         // the third occurs in single-line spellings too (`\baz[{c\n\nd}]`), so
         // the block form applies unconditionally — both spellings of the same
         // content take it, keyed on content and preserved predicates alone.
-        return Some(lower_bracketed(
-            node,
-            SyntaxKind::L_BRACKET,
-            SyntaxKind::R_BRACKET,
-            cx,
-        ));
+        return Some(lower_bracketed(node, open_kind, close_kind, cx));
     };
-    let OptionalSegments {
+    let GroupSegments {
         open,
         mut parts,
         close,
@@ -6455,25 +6479,34 @@ fn peel_padding(parts: &mut Vec<Ir>, edge: Edge) -> Ir {
     }
 }
 
-/// An `[…]` body cut into its top-level entries: the delimiters, the entry IR with
-/// [`Gap::separator`] split points already interleaved, and how many there are.
-struct OptionalSegments {
+/// A delimited body cut into its top-level entries: the delimiters, the entry IR
+/// with [`Gap::separator`] split points already interleaved, and how many there are.
+struct GroupSegments {
     open: Ir,
     parts: Vec<Ir>,
     close: Ir,
     splits: usize,
 }
 
-/// Segment an `OPTIONAL` body at its top-level commas, or `None` when the body is
-/// not safely segmentable — the same three bail conditions as
+/// Segment an `OPTIONAL` or `GROUP` body at its top-level commas, or `None` when the
+/// body is not safely segmentable — the same three bail conditions as
 /// [`collapse_arg_group`]: a blank-line `\par`, a `%` comment (which must end its
 /// line), or nested content carrying a forced break.
 ///
 /// A comma is a split point only at bracket depth 0. The parser closes an
 /// `OPTIONAL` at its first `]`, so a stray `[` inside the body (TeX does not nest
 /// `[`) opens a region that never closes — everything after it stays glued, which
-/// is the conservative reading: `\foo[a=[1,2]` must not break at the `1,2`.
-fn segment_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<OptionalSegments> {
+/// is the conservative reading: `\foo[a=[1,2]` must not break at the `1,2`. A `{…}`
+/// body needs no matching rule for braces: the parser gives every nested brace group
+/// its own `GROUP` node, so the only `L_BRACE`/`R_BRACE` *tokens* here are this
+/// body's own delimiters, and a nested comma arrives already sealed inside a child.
+fn segment_delimited_body(
+    node: &SyntaxNode,
+    open_kind: SyntaxKind,
+    close_kind: SyntaxKind,
+    cx: LowerCtx<'_>,
+    keyval: bool,
+) -> Option<GroupSegments> {
     let mut open = Ir::Nil;
     let mut close = Ir::Nil;
     let mut parts: Vec<Ir> = Vec::new();
@@ -6489,12 +6522,10 @@ fn segment_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option
     let mut iter = node.children_with_tokens().peekable();
     while let Some(element) = iter.next() {
         match element {
-            SyntaxElement::Token(t)
-                if t.kind() == SyntaxKind::L_BRACKET && matches!(open, Ir::Nil) =>
-            {
+            SyntaxElement::Token(t) if t.kind() == open_kind && matches!(open, Ir::Nil) => {
                 open = Ir::verbatim(t.text());
             }
-            SyntaxElement::Token(t) if t.kind() == SyntaxKind::R_BRACKET => {
+            SyntaxElement::Token(t) if t.kind() == close_kind => {
                 close = Ir::verbatim(t.text());
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::L_BRACKET => {
@@ -6557,7 +6588,7 @@ fn segment_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option
     if dropped_gap {
         parts.push(Ir::verbatim(" "));
     }
-    Some(OptionalSegments {
+    Some(GroupSegments {
         open,
         parts,
         close,
@@ -6865,10 +6896,12 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                     }
                     // A proven `key=value` list: its processor strips spaces around
                     // entries, so the layout may also break at a comma the author
-                    // glued (see [`ContentKind::Keyval`]).
-                    Some(ContentKind::Keyval) if is_bracket => {
+                    // glued (see [`ContentKind::Keyval`]). A `{…}` reaches this only
+                    // through the curated tier — the setters (`\pgfkeys`, `\tikzset`)
+                    // whose whole mandatory argument is the key list.
+                    Some(ContentKind::Keyval) => {
                         out.push(
-                            lower_optional(&child, cx, true)
+                            lower_segmented_group(&child, open, close, cx, true)
                                 .unwrap_or_else(|| lower_node(&child, cx)),
                         );
                     }

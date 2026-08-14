@@ -732,8 +732,8 @@ indented block form instead — preserved predicates and content only. An *edge*
 blank does not: the block form trims edge blanks away, so declining on one would
 key on a predicate the emitter destroys, and it erases to padding instead,
 matching the deletion the block form already performed. The optional-argument
-lowering makes the mirrored promise: a `segment_optional` decline takes the
-block form unconditionally, and a dropped trailing separator re-emits the
+lowering makes the mirrored promise: a `segment_delimited_body` decline takes
+the block form unconditionally, and a dropped trailing separator re-emits the
 authored whitespace it replaced. What remains of `spans_multiple_lines` is the
 delimited-group residue behind the non-`Reflow` modes and the doc-margined
 corner, sanctioned Tier 2 on the fixed-point argument written at the predicate:
@@ -829,6 +829,17 @@ already followed by whitespace is free, since flat-to-broken is just a
 space-to-newline exchange. A comma glued inside a `WORD` is not: breaking there
 materializes a space token TeX will see, so it is emitted only for an argument
 the signature database proves is a key-value list.
+
+That proof, not the delimiter, is what selects the segmented layout, so it
+extends to a *mandatory* group as well. The keyval-family setters — `\pgfkeys`,
+`\tikzset`, `\lstset`, `\setlist` — carry the whole key list in `{…}`, and
+without the routing that body fell to the prose reflow, which word-wrapped it
+mid-key. It now takes the same shape as the bracket: flat when it fits, one
+entry per line when it does not, nested commas sealed inside their child group.
+A mandatory group is the ordinary home of typeset text, though, so it reaches
+this only through the hand-curated signature tier. The bulk CWL tier still drops
+a `%keyvals` mark on a `{…}`: the mark is mechanical rather than validated, and
+a wrong claim costs more on a mandatory group than on a bracket.
 
 Table column alignment is layout, so the formatter owns it. The `{lcr}` column
 spec is parsed from static argument text only, conservatively bailing to

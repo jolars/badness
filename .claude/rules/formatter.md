@@ -186,6 +186,25 @@ predicates the formatter *preserves*.
 - **`Keyval` must never be set on an argument whose content is typeset.** It
   changes typeset output; hold it to the curated standard of math routing and
   verify with `task typeset:check`.
+- **Comma segmentation is delimiter-agnostic; the *proof* is what gates it**
+  (`lower_segmented_group` / `segment_delimited_body` take the open/close kinds;
+  `lower_optional` is the bracket entry point). A `{…}` reaches the segmented
+  layout only through `ContentKind::Keyval`, so the keyval-family setters
+  (`\pgfkeys`, `\tikzset`, `\lstset`, `\setlist`, …) get one entry per line
+  instead of a prose reflow that wrapped mid-key. Everything else keeps the
+  opaque lowering — a mandatory group is the ordinary home of typeset text, and
+  a wrong flag there is far worse than on a bracket.
+- **Mandatory `Keyval` comes from the curated tier only.** The CWL generator
+  still drops a `%keyvals` mark on a `{…}` (`gen_cwl_signatures.py`,
+  `_parse_arg_shape`): the consumer now exists, but the mark is mechanical and
+  unvalidated, and its blast radius on mandatory groups is unmeasured. Lifting
+  that scoping is a separate, measured change — not a side effect of curating a
+  name. Pinned by `keyval_group_splits_entries`.
+- **A mandatory `Keyval` is deliberately *not* wired on the `\begin` path**
+  (`lower_begin` keeps `keyval && is_bracket`). No environment is curated with
+  one, and an environment header answers to rules a `[…]` does not: the grid
+  router reads the colspec group, and a verbatim-body header line may never
+  break at all.
 - Comma splits belong here, not in the lexer: a comma is catcode 12 and
   indistinguishable from `=` or `5`, so splitting on it in the lexer would encode
   keyval-ness into lexing.
@@ -203,7 +222,8 @@ predicates the formatter *preserves*.
 - **A `%` ends its line, so nothing the formatter emits may follow one there.**
   Every lowering that owns a delimiter encodes this: `lower_bracketed` and
   `lower_prose_group` put the closer on its own line, `collapse_arg_group` /
-  `segment_optional` / `lower_opaque_group` decline their flat form outright. The
+  `segment_delimited_body` / `lower_opaque_group` decline their flat form
+  outright. The
   cost of forgetting is a *deleted closing delimiter* (`\caption{x%}`), which the
   whitespace-only oracle sees only as a comment that grew a `}`.
 - **A comment glued to an open delimiter rides that delimiter's line.** Moving it

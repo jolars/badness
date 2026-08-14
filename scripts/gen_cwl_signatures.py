@@ -163,9 +163,14 @@ def _parse_arg_shape(rest: str) -> list:
     licenses the formatter to break a key list at a comma the author glued (see
     ``ContentKind::Keyval``).
 
-    Scoped to ``[…]``: a ``%keyvals``-marked *mandatory* group (``\\tikzset{…}``,
-    ``\\lstloadlanguages{…}``) is real but nothing consumes the flag there, and
-    recording an unused, unvalidated claim is worse than omitting it."""
+    Still scoped to ``[…]``, but no longer for want of a consumer: a mandatory
+    ``ContentKind::Keyval`` *is* read now (``lower_segmented_group``), and the
+    curated tier opts the setters in by hand. What holds the mechanical tier back
+    is the asymmetry in the cost of being wrong. A bad keyval claim on a bracket
+    adds a space inside ``[…]``; on a mandatory group it adds one inside the
+    ``{…}`` that is the ordinary home of typeset text. Lifting this means first
+    measuring which names would gain the mark and running the textual ones
+    through ``task typeset:check`` -- see the TODO entry, not a one-line edit."""
     args: list = []
     i = 0
     while i < len(rest):

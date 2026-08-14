@@ -27,6 +27,18 @@
     "usepackage": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "block": true },
     "documentclass": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "block": true },
 
+    "pgfkeys": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "tikzset": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "pgfplotsset": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "pgfplotstableset": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "tcbset": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "lstset": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "hypersetup": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "sisetup": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "geometry": { "args": [{ "kind": "req", "content": "keyval" }] },
+    "setlist": { "args": ["opt", { "kind": "req", "content": "keyval" }] },
+    "captionsetup": { "args": ["opt", { "kind": "req", "content": "keyval" }] },
+
     "NeedsTeXFormat": { "args": ["req", "opt"], "block": true },
     "ProvidesPackage": { "args": ["req", "opt"], "block": true },
     "ProvidesClass": { "args": ["req", "opt"], "block": true },

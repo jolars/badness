@@ -295,8 +295,29 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   key per line) as a fallback. Needs the token-list content kind to break on
   its own separators rather than the paragraph fill.
 
+- [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
+  `ContentKind::Keyval` on a *mandatory* group is now consumed
+  (`lower_segmented_group`; `keyval_group_splits_entries`), so the setters
+  `\pgfkeys`/`\tikzset`/`\lstset`/… take one entry per line instead of a prose
+  reflow that wrapped mid-key. Two halves were deliberately left out and neither
+  is a bug:
+
+  - The bulk CWL tier still drops a `%keyvals` mark on a `{…}`
+    (`gen_cwl_signatures.py`, `_parse_arg_shape`). The reason it gave — "nothing
+    consumes the flag there" — has expired, but the other half has not: the mark
+    is mechanical, and a wrong `Keyval` on a mandatory group changes typeset
+    output where the same mistake on a bracket is contained. Lifting the scoping
+    means first *measuring* which names would gain it (needs the pinned CWL
+    source) and putting the textual ones through `task typeset:check`.
+  - Environments are unwired: `lower_begin` keeps `keyval && is_bracket`. The
+    corpus case is tabularray's `\begin{tblr}{hlines={white},…}` (latexindent's
+    `keyEqualsValueBraces/issue-378`), and it pulls in two things a command does
+    not have — the grid router reads the colspec group, and a verbatim-body
+    environment's `\begin` line may never break at all.
+
 - [ ] **Formatter-owned trailing comma (parked; the last piece of issue #47).**
-  A `[…]` is now a width-driven group over its top-level entries, and a
+  A `[…]` — and, since the segmentation above, a proven-keyval `{…}` — is a
+  width-driven group over its top-level entries, and a
   `ContentKind::Keyval` argument may also break at a glued comma
   (`docs/src/development/architecture.md` § *Optional arguments, tables, and math spacing*). What is left of the old parked
   item is the Black-style trailing comma: for a proven-keyval argument, add the

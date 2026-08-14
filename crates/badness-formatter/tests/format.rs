@@ -822,6 +822,18 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // With no split point at all a `[…]` stays inline and overflows; a breakable
     // group would push `[!htb]`-shaped brackets onto three lines to no gain.
     ("optional_unsplittable_overflows", WrapMode::Reflow, 80),
+    // The mandatory mirror: a `{…}` the curated DB proves keyval (`\pgfkeys`,
+    // `\tikzset`, `\setlist`) segments at its top-level commas instead of reflowing
+    // as prose, which wrapped mid-key. The two `\pgfkeys` spellings — one line and
+    // one entry per line — converge byte for byte, so the choice is width and
+    // content only. A nested `.style={…}` value keeps its own commas sealed inside
+    // the child `GROUP`, and a list that fits stays exactly as authored.
+    ("keyval_group_splits_entries", WrapMode::Reflow, 80),
+    // A keyval `{…}` declines to the block form on the same preserved predicates as
+    // the bracket: a `%` (which must end its line) and a blank-line `\par`. Same
+    // bytes the generic opaque lowering produced before the routing existed — but
+    // now reached through `segment_delimited_body`'s bail, so it is pinned.
+    ("keyval_group_declines_on_comment", WrapMode::Reflow, 80),
     // A dropped trailing separator (`[a, ]` / `[a,\n]`) stood for authored
     // whitespace, and an optional is textual — the space token survives as
     // trailing padding in both spellings, never deleted.

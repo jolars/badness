@@ -1,0 +1,24 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "declared_tree(\"\\\\bea a^2 &= b \\\\eea\\n\", EQNARRAY_DECL)"
+---
+ROOT@0..19
+  ENVIRONMENT@0..18
+    BEGIN@0..4
+      CONTROL_WORD@0..4 "\\bea"
+    MATH@4..14
+      WHITESPACE@4..5 " "
+      SCRIPTED@5..8
+        WORD@5..6 "a"
+        SUPERSCRIPT@6..8
+          CARET@6..7 "^"
+          WORD@7..8 "2"
+      WHITESPACE@8..9 " "
+      AMPERSAND@9..10 "&"
+      WORD@10..11 "="
+      WHITESPACE@11..12 " "
+      WORD@12..13 "b"
+      WHITESPACE@13..14 " "
+    END@14..18
+      CONTROL_WORD@14..18 "\\eea"
+  NEWLINE@18..19 "\n"

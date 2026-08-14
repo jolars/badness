@@ -2053,6 +2053,27 @@ fn declared(json: &str) -> ResolvedDeclarations {
         .expect("declarations resolve")
 }
 
+/// [`tree`], parsed under a declaration block — the snapshot counterpart of
+/// [`declared_environments`], so the *shape* a declaration produces is pinned
+/// and not just a node count.
+fn declared_tree(input: &str, json: &str) -> String {
+    let parsed = parse_with_declarations(input, LatexFlavor::Document, &declared(json));
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    let mut out = String::new();
+    render(&parsed.syntax(), 0, &mut out);
+    for err in &parsed.errors {
+        out.push_str(&format!(
+            "error @{}..{}: {}\n",
+            err.start, err.end, err.message
+        ));
+    }
+    out
+}
+
 /// [`environments`], parsed under a declaration block.
 fn declared_environments(input: &str, json: &str) -> (usize, bool) {
     let parsed = parse_with_declarations(input, LatexFlavor::Document, &declared(json));
@@ -2074,6 +2095,21 @@ fn declared_environments(input: &str, json: &str) -> (usize, bool) {
 /// follows), so the document carries no definition at all.
 const EQNARRAY_DECL: &str =
     r#"{"environments": {"eqnarray": {"begin": ["\\bea"], "end": ["\\eea"]}}}"#;
+
+/// The whole shape at once: the pair becomes an `ENVIRONMENT` whose delimiters
+/// are the declared commands, and whose body is routed as math by the *target's*
+/// curated entry. The blind reading of the same bytes is the snapshot below it.
+#[test]
+fn declared_alias_tree() {
+    insta::assert_snapshot!(declared_tree("\\bea a^2 &= b \\eea\n", EQNARRAY_DECL));
+}
+
+/// The control: the same input with no declaration is two plain commands, so
+/// the snapshot above cannot be read as something the parser did anyway.
+#[test]
+fn undeclared_alias_tree() {
+    insta::assert_snapshot!(tree("\\bea a^2 &= b \\eea\n"));
+}
 
 #[test]
 fn a_declared_alias_pairs_with_no_definition_in_the_file() {

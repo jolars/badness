@@ -49,3 +49,19 @@ PARSE_COMPAT_DUMP=1 task parse-compat   # writes target/parse_compat_diffs.txt
 
 Default to skepticism: an allowlist entry is a claim that badness is *right* and
 texlab diverges. If that is not clearly true, treat it as a parser gap.
+
+## The gauge is declaration-blind
+
+The harness parses each corpus file on its own, with no `badness.toml` in sight,
+so a project's [declarations](../../../docs/src/reference/configuration.md)
+(`[environments.…]`, AGENTS.md decision #12) never reach it. That is deliberate —
+the gauge measures the *text-only* reading both parsers can be held to — and it
+is why `declared_alias.tex` sits in the corpus as fully concordant plain
+commands: the pairing it exists to exercise is asserted in
+`tests/roundtrip.rs::roundtrip_declared_corpus_file` and
+`tests/parser.rs::declared_alias_tree`, not here. A declaration-shaped change
+should therefore move these numbers by nothing at all; if it does, something
+reached the parse that should not have.
+
+The *inferred* alias path is a different matter and does show up here
+(`env_command_alias.tex`), since it reads only the file's own definitions.

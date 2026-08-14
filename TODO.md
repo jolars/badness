@@ -816,25 +816,53 @@ slot in without a wire break, since config spellings are public API.
   `check_document_fixable`), and the format path stayed at its four parallel
   axes — the carrier struct is still owed to whichever change adds a fifth.
 
-- [ ] **7. Docs and tests.** `docs/src/reference/configuration.md` gains the
-  section (with the `'\bea'` literal-string note). Tests: corpus + snapshot +
-  losslessness for a declared pair; **a declared alias with an unreachable closer
-  still demotes** (the safety property — this is the test that has to exist);
-  declared-beats-scanned; a literal `\begin{bea}` beside a declared `\bea` stays
-  an unrelated environment (`environment_at` is node-keyed); declared
-  `like = "align"` routes math and grids; idempotency and format-invariants under
-  a declaring config; each validation error. `task parse-compat` runs without a
-  `badness.toml`, so the texlab gauge is unaffected — note that in the skill's
-  ledger rather than letting it look like a regression.
+- [x] ~~**7. Docs and tests.**~~ **Landed.** `configuration.md` gained the
+  `[environments]` section — the three shapes, the literal-string note, the
+  safety property in the user's terms ("a wrong declaration does nothing to your
+  document; it cannot corrupt it"), and every rejection listed, since resolution
+  runs at load. The formatting guide's protected-regions bullet points at it,
+  which is the only place a user with a `codeexample`-shaped problem would look.
 
-  Already landed alongside steps 3–6, so this item is what remains after them:
-  the ten parser-level cases in `tests/parser.rs` (including all three demotion
-  cases), the CLI format cases in `tests/cli_format.rs`, the salsa cases in
-  `tests/incremental.rs` (a change reparses, an equal republish does not,
-  declared outranks scanned in `scope_signatures`), the CLI lint and `--fix`
-  cases in `tests/cli_lint.rs`, and the LSP reload case
-  (`lsp_watched_config_change_reseeds_declarations`, which fails unless the
-  config path genuinely invalidates the cached parse).
+  The tests step 7 asked for that steps 3–6 had not already covered:
+
+  - **Corpus + snapshot + losslessness for a declared pair.**
+    `tests/corpus/declared_alias.tex` carries the block it is meant to be read
+    under in a header comment, since the declarations cannot travel with the
+    file. `roundtrip_declared_corpus_file` asserts losslessness under the
+    *declared* reading and pins that the two readings differ (1 environment
+    blind, 3 declared) so it cannot pass as the blind sweep restated.
+    `declared_alias_tree` and `undeclared_alias_tree` snapshot the same bytes
+    both ways: `ENVIRONMENT`/`MATH`/`SCRIPTED` against `PARAGRAPH` and two plain
+    commands.
+  - **`like = "align"` routes math and grids.** The math half is the
+    declaration's own contribution (`a+b` → `a + b` only inside math, asserted
+    against the undeclared control). The grid half is *not* distinguishable that
+    way — the generic top-level-`&` arm aligns an unknown environment too — so
+    the claim is the stronger one: a declared `myenv` lays out byte-for-byte as
+    `align` does.
+  - **Invariants under a declaring config.** `check_format_invariants` gained a
+    `_with` variant taking the formatting function, so the whole oracle suite —
+    whitespace-only, comments, idempotence, losslessness, trivia perturbation —
+    runs on a pipeline that parses through declarations. Worth its own run: a
+    declaration changes the tree's *shape*, so it reaches grid, math, and
+    body-indent lowerings the same bytes never reach without it.
+
+  One test written for this item was **deleted rather than fixed**: a declared
+  layout is not a fixed point of a declaration-*blind* reformat, and should not
+  be. Config is an input, so demanding that is like demanding `line-width = 100`
+  output be stable under the default width.
+
+  `task parse-compat` confirmed declaration-blind: `declared_alias.tex` lands
+  fully concordant (8/43 identical, up from 7/42) and adds no divergence, which
+  is the point — the gauge measures the text-only reading. Noted in the skill's
+  `SKILL.md`, the hand-written half (`PARSE_COMPAT.md` is generated).
+
+  Landed earlier, in steps 3–6: the ten parser-level cases in `tests/parser.rs`
+  (including all three demotion cases and declared-beats-scanned), every
+  validation error in `declarations.rs` plus the TOML surface in `config.rs`, the
+  CLI format cases in `tests/cli_format.rs`, the salsa cases in
+  `tests/incremental.rs`, the CLI lint and `--fix` cases in `tests/cli_lint.rs`,
+  and the LSP reload case (`lsp_watched_config_change_reseeds_declarations`).
 
 - [ ] **8. Close the loop on #109.** Reply on the issue with the shape, and note
   that the inferred path still covers the original example with no config at all.

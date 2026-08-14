@@ -418,6 +418,129 @@ forward search resolves the wrong PDF. Set `root` for that layout.
 root = "main.tex"
 ```
 
+## `[environments]`
+
+Declares environments Badness cannot recognize from the file alone: one that
+behaves like a built-in but has no built-in counterpart, one whose body is
+verbatim, and one reached through command spellings rather than `\begin`/`\end`.
+This is the only section that changes how your files are *parsed*, so it is read
+by `format`, `lint`, and the language server alike; editing it makes the server
+reparse the project.
+
+Entries are keyed by the environment's own name, whether or not Badness already
+knows it:
+
+```toml
+# \begin{myenv} … \end{myenv}, with no built-in counterpart
+[environments.myenv]
+like = "align"
+
+# extra delimiter spellings for an environment Badness already knows
+[environments.eqnarray]
+begin = ['\bea']
+end = ['\eea']
+
+# both at once: an environment reached only through commands
+[environments.mytheorem]
+like = "theorem"
+begin = ['\startmyenv']
+end = ['\endmyenv']
+```
+
+Write control words as TOML **literal** strings (single quotes) so the backslash
+needs no escaping: `'\bea'`, not `"\\bea"`. Both spellings are accepted, and so
+is a name with no backslash at all — a control word can never contain one, so
+there is nothing to disambiguate.
+
+A declaration names a **spelling**, never a pairing. Every structural rule still
+applies, so a declared `\bea` whose `\eea` is unreachable — stranded inside a
+brace group, or simply missing — stays an ordinary command, exactly as it would
+without the declaration. A wrong declaration therefore does nothing to your
+document; it cannot corrupt it.
+
+What a declaration *cannot* do is invent behavior. It only ever points at an
+environment Badness already curates, so there is no way to spell out "this one
+is math, takes two arguments, and has a verbatim body" key by key. If nothing
+built in resembles yours, that is worth an issue rather than a workaround.
+
+Anything a declaration cannot satisfy is an error at config load, reported
+against the key you wrote, rather than a block that parses and quietly does
+nothing:
+
+- `like` naming an environment Badness does not know
+- `begin` without `end`, or `end` without `begin`
+- delimiter spellings for a verbatim environment (the closing command is never
+  seen — the verbatim body has already swallowed it)
+- delimiter spellings for an environment that takes arguments (a bare command
+  carries none)
+- delimiter spellings for an environment with no `like` and no built-in of that
+  name, so its behavior is unknown
+- one spelling claimed by two entries
+- a spelling that could never be a single control word (`'\b ea'`, `'\bea2'`)
+
+### `like`
+
+The built-in environment whose behavior this one copies: whether its body is
+math, whether it aligns on `&`, whether it is verbatim, and every such property
+at once. This is also how you name a verbatim environment defined by machinery
+no scan can follow — `like = "lstlisting"` protects its body from reflowing and
+from lint findings.
+
+The target is looked up among the environments Badness curates by hand; a
+misspelled one is an error rather than a silent no-op.
+
+**Default value**: unset
+
+**Type**: string
+
+**Example**:
+
+```toml
+[environments.mycode]
+like = "lstlisting"
+```
+
+### `begin`
+
+Command spellings that stand in for this environment's `\begin{…}`. Any of them
+opens it, and any spelling in [`end`](#end) closes it — pairing is by side, not
+by position, so the two lists need not be the same length.
+
+Use this when the pair is defined somewhere Badness cannot see: a sibling
+`.sty`, or a definition built by machinery no scan follows. A pair defined by
+plain `\newcommand`s in the *same* file — `\newcommand{\bea}{\begin{eqnarray}}`
+and its `\eea` counterpart — is already recognized without any configuration.
+
+**Default value**: `[]`
+
+**Type**: array of strings (control words)
+
+**Example**:
+
+```toml
+[environments.eqnarray]
+begin = ['\bea', '\beqa']
+end = ['\eea']
+```
+
+### `end`
+
+Command spellings that stand in for this environment's `\end{…}`, the mirror of
+[`begin`](#begin). Required whenever `begin` is set, and vice versa: an opener
+that can never be closed would do nothing at all.
+
+**Default value**: `[]`
+
+**Type**: array of strings (control words)
+
+**Example**:
+
+```toml
+[environments.eqnarray]
+begin = ['\bea']
+end = ['\eea']
+```
+
 > **Note**: TEXMF-tree discovery (the former `[texmf]` section) is configured
 > through your editor's LSP settings, not `badness.toml`. Where a TeX
 > installation lives is a fact about the machine, not the project, so it does

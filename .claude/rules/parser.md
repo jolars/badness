@@ -18,12 +18,18 @@ Narrative overview: `docs/src/development/architecture.md` § *The parser*.
 
 - **Losslessness.** `reconstruct(text) == text`, byte for byte. Every new
   feature needs a losslessness assertion.
-- **The tree is a pure function of the text.** Attachment and grouping read the
-  input plus compiled-in data only — never config, package scopes, or scanned
-  definitions (beyond the two-pass *self-definition* scan: user verbatim commands
-  and environment aliases, both read from the file's own definitions). Consulting
-  the signature database during grouping would invalidate every parse on every
-  signature edit.
+- **The tree is a pure function of the text and the declarations.** Attachment
+  and grouping read the input plus compiled-in data only — never package scopes,
+  the CWL tier, or scanned definitions (beyond the two-pass *self-definition*
+  scan: user verbatim commands and environment aliases, both read from the file's
+  own definitions). Consulting the signature database during grouping would
+  invalidate every parse on every signature edit. The one non-text input is the
+  explicit `Declarations` value of decision #12 (`badness.toml`, seeded into
+  `ParseCtx`): a closed, hand-authored vocabulary at `Durability::HIGH` that
+  *names constructs* and never directs attachment. **A declaration names a
+  spelling, never a pairing** — every shape gate still runs unchanged, so a wrong
+  declaration demotes like an inferred one instead of corrupting a tree. Never
+  widen it into a general signature-DB read.
 - **Meaning never enters the syntactic layer.** Static lexical facts only.
 - **Errors never abort the parse.** Recovery anchors: `\end{…}`, `\begin`, blank
   line, `}`, `$`, `&`, `\\`. Always make progress; never loop.
@@ -45,7 +51,11 @@ New modes read static facts only and go in the catalog in `architecture.md`.
 Prefer false negatives; when in doubt a construct stays generic.
 
 - **Math environment routing reads the curated `math` flag only**, never the CWL
-  or user tiers — a wrong route is a structural change.
+  or user tiers — a wrong route is a structural change. A *declaration* counts as
+  curated (`like` copies a built-in entry and resolves against nothing else), so
+  `ParseCtx::is_math_environment` answers from the declared signature when there
+  is one. A declared entry is **authoritative for its name**: every routing
+  predicate answers from it alone, never merged with the built-in or the scan.
 - **The verbatim definition scan prefers false negatives**; a false positive
   suppresses real diagnostics.
 - **expl3 toggle names are a set shared with the formatter**
@@ -130,8 +140,16 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
   be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
-  halves must be defined in the same file. The opener index **must exclude every
-  name being bound**, as a slot countdown (`definition_name_slots`) and not a
+  halves must be defined in the same file. A pair may instead be **declared**
+  (`[environments.<target>] begin/end`, decision #12), which drops the
+  same-file and inference-shape requirements but keeps the target rules and the
+  gate: declared and inferred aliases land in the same `ParseCtx` maps and are
+  indistinguishable downstream. Non-verbatim is *TeX truth* for a declared pair
+  too — the closer alias is never expanded, because verbatim already swallowed
+  it — so a declared `begin`/`end` on a verbatim target is a config error, while
+  a name-only `[environments.x] like = "lstlisting"` is fine. The opener index
+  **must exclude every name being bound**, as a slot countdown
+  (`definition_name_slots`) and not a
   one-word test — `\def\bea{…}` leaves the definee at brace depth 0 with
   `in_def_body` unset, so unfiltered the two definition lines pair with each
   other, and `\let\oldbea\bea` leaves the *source* operand live to pair with the

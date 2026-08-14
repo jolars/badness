@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use badness::config::{Config, ConfigSource};
+use badness::declarations::ResolvedDeclarations;
 use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
@@ -25,8 +26,7 @@ use badness::formatter::perturb::{
 };
 use badness::formatter::{
     ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
-    check_paths_with_style, format_file_with_packages_sentence,
-    format_with_style_flavored_sentence,
+    check_paths_with_style, format_file_with_packages_sentence, format_stdin_sentence,
 };
 use badness::linter::{
     Diagnostic, Fix, OutputMode, RuleSelection, apply_fixes, apply_fixes_multi,
@@ -165,6 +165,7 @@ fn main() -> ExitCode {
                 style,
                 wrap_override,
                 sentence,
+                &config.resolved_declarations(),
                 &exclude_filter,
                 out,
             )
@@ -274,6 +275,7 @@ fn main() -> ExitCode {
                     style,
                     wrap_override,
                     sentence,
+                    &config.resolved_declarations(),
                     &exclude_filter,
                 )
             }
@@ -1383,6 +1385,7 @@ fn run_format(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
     out: OutputOptions,
 ) -> ExitCode {
@@ -1396,12 +1399,22 @@ fn run_format(
                 "`--check` reports on files and cannot read from stdin",
             );
         }
-        return run_check(paths, style, wrap_override, sentence, exclude, out);
+        return run_check(
+            paths,
+            style,
+            wrap_override,
+            sentence,
+            declared,
+            exclude,
+            out,
+        );
     }
     match inputs_or_exit(paths, "format", FORMAT_MISSING_INPUT) {
         // Stdin has no directory to walk, so the exclude filter never applies.
-        Inputs::Stdin => run_format_stdin(stdin_filepath, style, wrap_override, sentence),
-        Inputs::Paths(paths) => run_format_paths(paths, style, wrap_override, sentence, exclude),
+        Inputs::Stdin => run_format_stdin(stdin_filepath, style, wrap_override, sentence, declared),
+        Inputs::Paths(paths) => {
+            run_format_paths(paths, style, wrap_override, sentence, declared, exclude)
+        }
     }
 }
 
@@ -1419,10 +1432,11 @@ fn run_check(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
     out: OutputOptions,
 ) -> ExitCode {
-    match check_paths_with_style(paths, style, wrap_override, sentence, exclude) {
+    match check_paths_with_style(paths, style, wrap_override, sentence, declared, exclude) {
         Ok(result) => {
             if result.changed_files.is_empty() {
                 return ExitCode::SUCCESS;
@@ -1550,6 +1564,7 @@ fn run_format_stdin(
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
 ) -> ExitCode {
     let mut input = String::new();
     if let Err(err) = std::io::stdin().read_to_string(&mut input) {
@@ -1565,7 +1580,7 @@ fn run_format_stdin(
         | FileKind::Cls
         | FileKind::Dtx
         | FileKind::Ins => {
-            format_with_style_flavored_sentence(&input, style, kind.lex_config(), sentence)
+            format_stdin_sentence(&input, style, kind.lex_config(), sentence, declared)
                 .map_err(|e| e.to_string())
         }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
@@ -1611,6 +1626,7 @@ fn run_format_paths(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
     let files = match collect_lint_files(paths, exclude) {
@@ -1655,6 +1671,7 @@ fn run_format_paths(
                     style,
                     kind.lex_config(),
                     sentence,
+                    declared,
                 )
                 .map_err(|e| e.to_string()),
                 FileKind::Bib => {
@@ -1971,6 +1988,9 @@ fn write_debug_artifacts(
 /// A first-pass [`FormatError`] is a `format-error` finding (the invariant
 /// could not be evaluated); a second-pass error on the first pass's own output
 /// *is* a fixed-point violation and is reported as `idempotency`.
+// One parameter per formatting axis the real `format` path carries, so the
+// oracles run through exactly the pipeline they are checking.
+#[allow(clippy::too_many_arguments)]
 fn run_debug_checks_for_file(
     path: &Path,
     kind: FileKind,
@@ -1978,6 +1998,7 @@ fn run_debug_checks_for_file(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     checks: DebugChecksArg,
 ) -> DebugArtifacts {
     let mut artifacts = DebugArtifacts::default();
@@ -2007,10 +2028,15 @@ fn run_debug_checks_for_file(
             FileKind::Bib => {
                 badness::bib::format_with_style(input, style).map_err(|e| e.to_string())
             }
-            _ => {
-                format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
-                    .map_err(|e| e.to_string())
-            }
+            _ => format_file_with_packages_sentence(
+                input,
+                path,
+                style,
+                kind.lex_config(),
+                sentence,
+                declared,
+            )
+            .map_err(|e| e.to_string()),
         };
         match fmt(content) {
             Err(msg) => artifacts.failures.push(DebugFailure {
@@ -2099,8 +2125,15 @@ fn run_debug_checks_for_file(
         let mut style = style;
         style.wrap = WrapMode::Reflow;
         let fmt = |input: &str| {
-            format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
-                .map_err(|e| e.to_string())
+            format_file_with_packages_sentence(
+                input,
+                path,
+                style,
+                kind.lex_config(),
+                sentence,
+                declared,
+            )
+            .map_err(|e| e.to_string())
         };
         match check_trivia_convergence(content, kind.lex_config(), DEFAULT_SINGLE_FLIP_SAMPLES, fmt)
         {
@@ -2135,8 +2168,15 @@ fn run_debug_checks_for_file(
         let mut style = style;
         style.wrap = WrapMode::Reflow;
         let fmt = |input: &str| {
-            format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
-                .map_err(|e| e.to_string())
+            format_file_with_packages_sentence(
+                input,
+                path,
+                style,
+                kind.lex_config(),
+                sentence,
+                declared,
+            )
+            .map_err(|e| e.to_string())
         };
         match survey_trivia_invariance(content, kind.lex_config(), DEFAULT_SINGLE_FLIP_SAMPLES, fmt)
         {
@@ -2185,6 +2225,7 @@ fn run_debug_format(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
     if paths.is_empty() {
@@ -2223,6 +2264,7 @@ fn run_debug_format(
                     style,
                     wrap_override,
                     sentence,
+                    declared,
                     checks,
                 )),
                 Err(err) => Err(format!("badness: cannot read {label}: {err}")),

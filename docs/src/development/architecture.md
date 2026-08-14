@@ -142,15 +142,122 @@ safety](#reflow-is-safe-by-construction).
 `badness.toml` is found by walking ancestors from each input. The CLI is its
 only consumer; the library API takes a resolved `FormatStyle`. Sections are
 `[format]` (`line-width`, `indent-width`, `wrap`, `math-wrap`, `lang`,
-`no-break-abbreviations`), `[lint]` (`select`, `ignore`), and `[build]`
-(`aux-dir`). Excludes follow Ruff: `exclude` replaces the built-in default,
-`extend-exclude` adds to it. `wrap` is an `Option` so the LSP can tell "unset"
-from "set" when merging editor settings over project config, not because the
-fallback depends on the file.
+`no-break-abbreviations`), `[lint]` (`select`, `ignore`), `[build]` (`aux-dir`),
+and the [declaration](#declarations) maps `[environments.<name>]` and
+`[commands.<name>]`. Excludes follow Ruff: `exclude` replaces the built-in
+default, `extend-exclude` adds to it. `wrap` is an `Option` so the LSP can tell
+"unset" from "set" when merging editor settings over project config, not because
+the fallback depends on the file.
 
 TEXMF discovery is deliberately not a section here. Where a TeX installation
 lives is machine state rather than project data, so it arrives through editor
 settings.
+
+### Declarations
+
+*Landing in stages (TODO.md § Declarations): `[environments.…]` is honored by
+`badness format` and `--check`; the linter and the language server still parse
+declaration-blind.*
+
+Two sections are different in kind from the rest, because they reach the
+*parser*: `[environments.<name>]` and `[commands.<name>]` let a project name
+constructs badness cannot see. A `\bea`/`\eea` delimiter pair, an environment
+that behaves like `align`, a verbatim environment defined by machinery no scan
+can follow — all of these are facts about the document that the text alone does
+not carry (issue #109).
+
+```toml
+# \begin{myenv} … \end{myenv}, with no built-in counterpart
+[environments.myenv]
+like = "align"
+
+# extra delimiter spellings for an environment badness already knows
+[environments.eqnarray]
+begin = ['\bea']
+end = ['\eea']
+
+# both: a declared environment reached only through commands
+[environments.mytheorem]
+like = "theorem"
+begin = ['\startmyenv']
+end = ['\endmyenv']
+```
+
+Literal strings (`'\bea'`) avoid TOML's escaping; a leading `\` is optional, and
+a control-word name can never contain one, so there is nothing to disambiguate.
+
+This is a deliberate widening of the database independence claimed under
+[argument grouping](#argument-grouping-and-bracket-policy), and it is worth
+being precise about what it does and does not admit. What reaches the parser is
+a `ResolvedDeclarations` value: a closed, hand-authored vocabulary, seeded into
+the existing `ParseCtx` for the *first* pass, so a declaring project pays no
+extra parse and the second pass still asks only whether the file's own
+definition scan found something new. That the parameter is a newtype rather than
+a bare `SignatureDb` is deliberate — a value of that type can only have come
+from a declaration block, so the entry point cannot be handed a document's
+merged scope, and the database independence above is kept by construction rather
+than by review. It lives in `badness-parser` so the dprint plugin and a future
+`% badness-env` comment directive can feed the same type. It will be carried on
+a salsa input at `Durability::HIGH`, so editing `badness.toml` reparses the
+world and a keystroke does not. The ambient `SignatureDb` still never reaches
+the parser, and neither do package scopes or the CWL tier — the thing the
+original invariant protects against is data that shifts as files are scanned,
+loaded, or added, and a declaration block is none of those.
+
+The safety property that makes config admissible at all is that **a declaration
+names a spelling, never a pairing**. Every shape gate runs unchanged: a declared
+`\bea` whose `\eea` is unreachable at the same brace, environment, and math
+level demotes to a plain command exactly as an inferred one does. Config can
+therefore widen what is *recognized*, and can never force a tree the text does
+not support, which is what keeps a typo'd declaration a no-op rather than a
+corruption.
+
+`like` is the workhorse, and it means one thing: copy the curated built-in entry
+of the same kind. It resolves against `builtin()` alone — never CWL, never
+scanned definitions — for the same reason the alias arm of
+`Signatures::environment_at` does, that a declaration supplies a spelling and
+behavior always comes from curated data. An unknown target is a config error
+rather than a silent no-op, because a mistyped `like = "algin"` is otherwise
+invisible. It never crosses categories: the command-standing-in-for-a-delimiter
+relation is genuinely cross-category and gets an explicit key on the environment
+side (`begin`/`end`), rather than a tagged `like` that would turn one word into
+a query language. Where `like` runs out — a construct resembling nothing built
+in — arity is spelled in xparse argspec (`args = "o m m"`), reusing a standard
+LaTeX users already know and a parser the semantic layer already has.
+`ContentKind` has no argspec spelling, which is the known limit and the reason
+`like` stays primary.
+
+The shape generalizes by keying on **category, then name**. Everything a user
+might plausibly declare is name-keyed in one of two maps (an environment's
+behavior and delimiters; a command's arity, verbatim-ness, sectioning level, or
+ref/cite family membership), with a third map keyed by character if the
+shortverb case is ever taken. Two constraints keep that stable: a name map holds
+only entries, never scalar knobs, since a category-wide switch would collide
+with a construct of that name; and entries are keyed tables rather than an
+`[[environments]]` array, since only keyed tables merge per name once config
+layers or per-file overrides appear.
+
+Resolution is where the rules are enforced, and it runs when the config loads,
+so a broken declaration is an error rather than a block that parses fine and
+does nothing to the document. It projects the entries into a `SignatureDb` — the
+struct already holding exactly these three maps — so the declared tier folds
+into a document's scope with the same merge the scanned tier uses. Rejected,
+each naming the key the user wrote: an unknown `like` target; `begin` without
+`end` or the mirror; delimiters for a verbatim or argument-taking environment;
+delimiters for an environment whose behavior is unknown; a spelling two entries
+both claim; and a spelling that could never lex as a single control word. An
+entry declaring behavior alone carries none of those restrictions, which is what
+makes `like = "lstlisting"` the way to name a verbatim environment no definition
+scan can find.
+
+Declared entries beat scanned definitions and the built-in tiers alike — a
+declaration is the user explicitly correcting an inference. They are merged into
+a document's signature scope last, as the top tier, and carry a provenance mark
+while they are there. The mark exists for one lookup: the alias arm of
+`Signatures::environment_at` resolves its target against *curated* data only, so
+it has to tell a declared `myenv` (curated) from a scanned `\newenvironment` of
+the same name (not curated, and still unable to lend an alias its behavior) —
+and once both sit in one scope, nothing else distinguishes them.
 
 ## Two layers
 
@@ -162,7 +269,10 @@ CWL-derived tier, and `\newcommand`/`\newenvironment` scanning. It assigns
 arity, verbatim-ness, sectioning, and per-argument content kinds.
 
 Meaning never leaks downward. The parser may read static lexical facts, never
-signature data that config, package scopes, or scanned definitions can change.
+signature data that package scopes, scanned definitions, or the CWL tier can
+change. The one exception is explicit: a project may [declare](#declarations)
+constructs the parser cannot see, and those declarations name spellings rather
+than direct grouping.
 
 One content kind is worth naming here, because it is the only place where a
 signature claim can change typeset output. `ContentKind::Keyval` asserts that a
@@ -355,10 +465,13 @@ failure.
 `\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`
 makes `\bea … \eea` a spelling of `\begin{eqnarray} … \end{eqnarray}`, and
 badness learns it by scanning the file's own definitions (issue #109). This is
-the *second pass* that already exists for user-defined verbatim commands, so the
-tree stays a pure function of that file's text: no config, no directive, no
-cross-file input. An alias defined in a sibling `.sty` deliberately does **not**
-pair — package scope reaches the formatter, never the parse.
+the *second pass* that already exists for user-defined verbatim commands. An
+alias defined in a sibling `.sty` deliberately does **not** pair — package scope
+reaches the formatter, never the parse — so inference stays a pure function of
+that file's text. The complex cases inference cannot reach are covered by an
+explicit [declaration](#declarations) instead, which lands in the same
+`ParseCtx` maps and is indistinguishable downstream; the rest of this section
+describes the *inferred* path.
 
 Admission is narrow, because a wrong pairing rewrites layout. The target must be
 a **curated built-in** environment, so an alias declares a *spelling* and never
@@ -548,12 +661,17 @@ The CST greedily attaches trailing `{…}` and `[…]` groups as argument nodes,
 texlab-style. Arity is unknown at parse time; the semantic layer refines it.
 
 The load-bearing claim is database independence. Attachment reads the input text
-plus compiled-in data, never mutable signature inputs such as config, package
-scopes, or scanned definitions. Consulting the signature database during
+plus compiled-in data, never mutable signature inputs such as package scopes,
+scanned definitions, or the CWL tier. Consulting the signature database during
 grouping would make the tree a function of something other than the text, and
 every signature edit would invalidate every parse. For generic LaTeX that forces
 greed: `\foo{a}{b}` is either a two-argument call or a zero-argument command
 followed by two groups, and nothing in the text says which.
+
+Project [declarations](#declarations) are the one sanctioned input that is not
+the text. They are admissible precisely because they do not touch this: a
+declaration names a construct — a delimiter spelling, an environment's behavior
+— and never directs attachment, which stays greedy and generic.
 
 Attachment is therefore text-pure, but not uniform. Deviations read static facts
 only. Brackets are shape-gated, since `[` and `]` are not real grouping in TeX:

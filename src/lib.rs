@@ -7,6 +7,7 @@ pub mod bib;
 pub mod cli;
 pub mod completion;
 pub mod config;
+pub mod declarations;
 pub mod directives;
 pub mod file_discovery;
 pub mod formatter;

@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::file_kind_or_tex;
 use crate::parser::parse_with_flavor;
 use crate::project::{PackageTarget, collect_package_edge_keys, dtx_source_of};
@@ -40,12 +41,16 @@ pub fn collect_package_signatures(
     root: &SyntaxNode,
     base_dir: Option<&Path>,
     src: &impl PackageSource,
+    declared: &ResolvedDeclarations,
 ) -> SignatureDb {
     let mut merged = SignatureDb::default();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     collect_loaded(root, base_dir, src, &mut visited, &mut merged);
     // The document's own definitions are applied last, so they win over packages.
     merged.merge_from(&scan_definitions(root));
+    // Except the project's declarations, which win over everything: a
+    // declaration is the user explicitly correcting an inference.
+    merged.merge_declarations(declared);
     merged
 }
 
@@ -107,8 +112,12 @@ impl PackageSource for DiskPackageSource {
 /// The merged package-signature scope for a document with parsed `root` located at
 /// `path`, reading its local `.sty`/`.cls` loads from disk. The CLI's db-less
 /// equivalent of [`crate::incremental::scope_signatures`].
-pub fn disk_scope_signatures(root: &SyntaxNode, path: &Path) -> SignatureDb {
-    collect_package_signatures(root, path.parent(), &DiskPackageSource)
+pub fn disk_scope_signatures(
+    root: &SyntaxNode,
+    path: &Path,
+    declared: &ResolvedDeclarations,
+) -> SignatureDb {
+    collect_package_signatures(root, path.parent(), &DiskPackageSource, declared)
 }
 
 #[cfg(test)]
@@ -146,7 +155,12 @@ mod tests {
 
     fn scope(doc: &str, base: &str, files: &[(&str, &str)]) -> SignatureDb {
         let root = SyntaxNode::new_root(parse(doc).green);
-        collect_package_signatures(&root, Some(Path::new(base)), &MapSource::new(files))
+        collect_package_signatures(
+            &root,
+            Some(Path::new(base)),
+            &MapSource::new(files),
+            &ResolvedDeclarations::default(),
+        )
     }
 
     #[test]
@@ -263,7 +277,7 @@ mod tests {
 
         // …yet the formatter's local-only scope sees nothing from it.
         let root = SyntaxNode::new_root(parse("\\usepackage{amsmath}\n").green);
-        let db = disk_scope_signatures(&root, &main);
+        let db = disk_scope_signatures(&root, &main, &ResolvedDeclarations::default());
         assert!(
             db.command("texmfonly").is_none(),
             "the formatter must not read signatures from the TEXMF tree"

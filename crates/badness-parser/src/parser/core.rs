@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use rowan::GreenNode;
 use smol_str::SmolStr;
 
+use crate::declarations::ResolvedDeclarations;
 use crate::parser::grammar;
 use crate::parser::lexer::{LatexFlavor, LexConfig, ParseCtx, lex_with};
 use crate::parser::tree_builder::build_tree;
@@ -64,10 +65,38 @@ pub fn parse(input: &str) -> Parse {
 /// coerces in, so most callers pass one directly; [`parse`] is the
 /// [`Document`](LatexFlavor::Document) wrapper.
 pub fn parse_with_flavor(input: &str, config: impl Into<LexConfig>) -> Parse {
+    parse_with_declarations(input, config, &ResolvedDeclarations::default())
+}
+
+/// Parse LaTeX source under an explicit [`LexConfig`] *and* a project's
+/// [declarations](crate::declarations) — the one input to the tree that is not
+/// the text (`AGENTS.md` decision #12).
+///
+/// The declarations are applied to **pass 1**, so a declaring project pays no
+/// extra parse: they are known before a byte is lexed, unlike the file's own
+/// definitions, which are what the two-pass scan exists to discover. The second
+/// pass is then decided by asking whether the *scan* contributed anything the
+/// declarations did not already say — not by asking whether the context is
+/// empty, which a seeded context never is.
+///
+/// [`ResolvedDeclarations`] rather than a bare `SignatureDb`: this is the only
+/// signature data the parser accepts, and a type that can only come from a
+/// declaration block is what keeps a document's merged scope (package scans,
+/// scanned definitions, the CWL tier) from reaching the tree.
+pub fn parse_with_declarations(
+    input: &str,
+    config: impl Into<LexConfig>,
+    declared: &ResolvedDeclarations,
+) -> Parse {
     let config = config.into();
-    let pass1 = parse_with(input, &ParseCtx::default(), config);
-    let ctx = parse_ctx(&pass1.syntax());
-    if ctx.is_empty() {
+    let mut seed = ParseCtx::default();
+    seed.overlay_declarations(declared);
+
+    let pass1 = parse_with(input, &seed, config);
+    let mut ctx = parse_ctx(&pass1.syntax());
+    // Declared wins over scanned, so the overlay is applied *after* the scan.
+    ctx.overlay_declarations(declared);
+    if ctx == seed {
         return pass1;
     }
     parse_with(input, &ctx, config)

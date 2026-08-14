@@ -146,13 +146,15 @@ provenance.
      genuine typo still reports. Detail in
      `docs/src/development/architecture.md` (§ *Sanctioned lexer modes*).
 
-   - **Environment aliases are inferred from the file's own definitions, never
-     configured.** A command whose replacement body is exactly `\begin{X}` (or
-     `\end{X}`) stands in for that delimiter, so `\bea … \eea` pairs as an
+   - **Environment aliases are inferred from the file's own definitions, or
+     declared in config.** A command whose replacement body is exactly `\begin{X}`
+     (or `\end{X}`) stands in for that delimiter, so `\bea … \eea` pairs as an
      `ENVIRONMENT` of `X` (issue #109). Discovery rides the *existing* second
-     parse pass (`parser::core::parse_ctx`), so the tree stays a pure function of
-     that file's text — no config, no directive, no cross-file input, and an alias
-     defined in a sibling `.sty` deliberately does not pair. Admission is narrow
+     parse pass (`parser::core::parse_ctx`); the alternative source is an explicit
+     `badness.toml` declaration (decision #12), which is the *only* other input —
+     no cross-file inference, and an alias defined in a sibling `.sty` still
+     deliberately does not pair, because package scope reaches the formatter and
+     never the parse. The rules below govern the **inferred** path. Admission is narrow
      because a wrong pairing rewrites layout: the target must be a **curated
      built-in** environment (an alias declares a *spelling*, never a *semantic*),
      **non-verbatim** (`\newcommand{\bv}{\begin{verbatim}}` does not work in TeX),
@@ -260,11 +262,14 @@ provenance.
 8. **Argument grouping is text-pure: greedy and generic by default, deviating only on
    static lexical facts.** Greedy attachment (texlab-style) is the only total strategy
    where the text carries no arity protocol; arity is refined by the semantic layer,
-   never consulted during attachment—grouping from mutable signature data (config,
-   package scopes, scanned definitions beyond the two-pass *self-definition* scan)
-   would make the tree a function of inputs other than the text (decision #7). That
-   scan covers user verbatim commands and environment aliases; both read only the
-   file's own definitions, so the tree stays a pure function of that file's text. Sanctioned
+   never consulted during attachment—grouping from mutable signature data (package
+   scopes, scanned definitions beyond the two-pass *self-definition* scan, the CWL
+   tier) would make the tree a function of inputs other than the text (decision #7).
+   That scan covers user verbatim commands and environment aliases; both read only the
+   file's own definitions, so the tree stays a pure function of that file's text. The
+   one sanctioned non-text input is the explicit **declarations** of decision #12,
+   which *name constructs* (a delimiter spelling, an environment's behavior) and
+   never direct attachment. Sanctioned
    deviations read static facts only: **`[…]` attachment is shape-gated**—a bracket is
    an argument only when it reads as one, from static shape facts, never meaning—and
    the **expl3 argspec suffix** (the one dialect whose arity rides in the token
@@ -313,6 +318,52 @@ provenance.
     at the formatter's indent and its interior is byte-exact — the protected-region
     asymmetry, not a new one. Detail in `docs/src/development/architecture.md`
     (§ *Comment directives*).
+
+12. **The tree is a pure function of the text *and the project's declarations*.**
+    `badness.toml` may name what the parser cannot see: a `\bea`/`\eea` delimiter
+    pair, an environment that behaves like `align`, a verbatim environment no scan
+    can find (issue #109, and the knobs parked across TODO.md). This is a
+    deliberate widening of decision #8's text-purity, and it keeps that decision's
+    *reason* intact — the invariant exists so a parse cannot be invalidated by data
+    that shifts as files are scanned, loaded, or added, and a declaration block is
+    hand-authored, closed, and carried on a salsa input at `Durability::HIGH`. What
+    reaches the parser is a `Declarations` value (in `badness-parser`, wasm-clean,
+    so the dprint plugin and a future `% badness-env` directive feed the same type;
+    its serde derives are **ungated**, serde being a hard dependency there, so the
+    CLI deserializes straight into it and keeps no mirror — the `FormatStyle`
+    convention applies only to that crate's off-by-default features),
+    seeded into the existing `ParseCtx` before the self-definition scan overlays
+    it — **never** the ambient `SignatureDb`, never package scopes, never the CWL
+    tier. Four rules hold the shape general:
+
+    - **A declaration names a spelling, never a pairing.** Every shape gate still
+      runs unchanged, so config widens what is *recognized* and can never force a
+      tree the text does not support: a declared `\bea` whose `\eea` is unreachable
+      demotes exactly like an inferred one. This is what makes a wrong declaration a
+      no-op rather than a corruption, and it is why config may be admitted here at
+      all.
+    - **Keyed by category, then name** — `[environments.<name>]`,
+      `[commands.<name>]`, one dedicated map per syntactic category, and never a
+      scalar knob inside a name map (a category-wide switch would collide with a
+      construct of that name; it goes in a sibling section). Keyed tables rather
+      than `[[environments]]` arrays, because only those merge per name once config
+      layers or per-glob overrides appear.
+    - **`like` never crosses categories.** It means "copy the curated built-in entry
+      of the same kind", resolved against `builtin()` alone — never CWL, never
+      scanned definitions — for the same reason `environment_at`'s alias arm is:
+      a declaration supplies a *spelling*, and behavior always comes from curated
+      data. A genuinely cross-category relation gets its own key (an environment's
+      `begin`/`end` delimiter spellings), never a tagged `like`. Where `like` runs
+      out, arity is spelled in **xparse argspec** (`args = "o m m"`, read by
+      `semantic::xparse`), not a bespoke DSL; `ContentKind` has no argspec spelling,
+      which is why `like` stays the primary verb.
+    - **Declared wins** over scanned definitions and over the built-in tiers: a
+      declaration is the user explicitly correcting an inference.
+
+    *Landing in stages — see TODO.md § Declarations.* Honored by the parser and
+    by `badness format`; the linter and the language server still parse
+    declaration-blind. The TOML shape and the admission rules are in
+    `docs/src/development/architecture.md` (§ *Declarations*).
 
 The **formatter engine** (Wadler-style `Doc` IR, `WrapMode`, `MathWrap`, table
 alignment, expl3 layout), the **linter** (Rule trait, autofix model,

@@ -238,3 +238,105 @@ fn check_rejects_stdin() {
         "`--check` reports on files it leaves on disk"
     );
 }
+
+// --- declared environments (`[environments.…]`; AGENTS.md decision #12) ------
+
+/// The issue-#109 shape, with the pair defined somewhere this file cannot see —
+/// so the inferred alias scan has nothing to find and only the declaration can
+/// make `\bea … \eea` an environment.
+const ALIAS_CONFIG: &str = "[environments.eqnarray]\nbegin = ['\\bea']\nend = ['\\eea']\n";
+const ALIAS_DOC: &str = "\\bea a&=&b \\\\ &=&c \\eea\n";
+/// What `\begin{eqnarray} … \end{eqnarray}` formats to: body indented one step,
+/// columns aligned on `&`.
+const ALIAS_FORMATTED: &str = "\\bea\n  a & = & b \\\\\n    & = & c\n\\eea\n";
+
+#[test]
+fn a_declared_alias_formats_like_the_environment_it_names() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("badness.toml"), ALIAS_CONFIG).unwrap();
+    std::fs::write(dir.path().join("doc.tex"), ALIAS_DOC).unwrap();
+
+    let output = format(dir.path(), &["doc.tex"]);
+
+    assert!(output.status.success(), "{output:?}");
+    let formatted = std::fs::read_to_string(dir.path().join("doc.tex")).unwrap();
+    assert_eq!(formatted, ALIAS_FORMATTED);
+}
+
+/// The control: without the declaration the same file has no environment in it,
+/// so nothing indents. Keeps the test above from passing for some other reason.
+#[test]
+fn the_same_file_is_left_alone_without_the_declaration() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), ALIAS_DOC).unwrap();
+
+    let output = format(dir.path(), &["doc.tex"]);
+
+    assert!(output.status.success(), "{output:?}");
+    let formatted = std::fs::read_to_string(dir.path().join("doc.tex")).unwrap();
+    assert_ne!(formatted, ALIAS_FORMATTED);
+    assert!(
+        !formatted.contains("\\bea\n"),
+        "an undeclared `\\bea` is a plain command, got:\n{formatted}"
+    );
+}
+
+/// Stdin has no path to anchor package resolution against, but it does have a
+/// project config — so it must honor declarations too. A formatter that treats
+/// `badness format doc.tex` and `badness format < doc.tex` differently is a trap.
+#[test]
+fn stdin_honors_declarations() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("badness.toml"), ALIAS_CONFIG).unwrap();
+
+    let output = format_stdin(
+        dir.path(),
+        &["--stdin-filepath", "doc.tex"],
+        Some(ALIAS_DOC),
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), ALIAS_FORMATTED);
+}
+
+/// `--check` shares the format entry, so the two cannot disagree: a file already
+/// laid out the way the declaration implies must check clean.
+#[test]
+fn check_agrees_with_format_under_a_declaration() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("badness.toml"), ALIAS_CONFIG).unwrap();
+    std::fs::write(dir.path().join("doc.tex"), ALIAS_FORMATTED).unwrap();
+
+    let output = format(dir.path(), &["--check", "doc.tex"]);
+
+    assert!(
+        output.status.success(),
+        "formatted-under-declaration file should check clean, got:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// A declaration that breaks a rule fails at config load, before any file is
+/// touched — the "never a silent no-op" contract, seen from the CLI.
+#[test]
+fn a_broken_declaration_is_a_config_error() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[environments.myenv]\nlike = \"algin\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("doc.tex"), UNFORMATTED).unwrap();
+
+    let output = format(dir.path(), &["doc.tex"]);
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("environments.myenv.like"), "{stderr}");
+    assert!(stderr.contains("algin"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("doc.tex")).unwrap(),
+        UNFORMATTED,
+        "no file is touched when the config is rejected"
+    );
+}

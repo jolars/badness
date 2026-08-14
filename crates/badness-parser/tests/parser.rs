@@ -2,7 +2,10 @@
 //! targeted assertions on error-recovery behaviour. Every case also re-checks
 //! the losslessness invariant. Regenerate snapshots with `task snapshots`.
 
-use badness_parser::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor};
+use badness_parser::declarations::{Declarations, ResolvedDeclarations};
+use badness_parser::parser::{
+    LatexFlavor, LexConfig, parse, parse_with_declarations, parse_with_flavor,
+};
 use badness_parser::syntax::{SyntaxKind, SyntaxNode};
 use rowan::{NodeOrToken, TextSize};
 
@@ -2036,4 +2039,251 @@ fn a_literal_begin_of_an_alias_name_is_an_ordinary_environment() {
         environments(&format!("{defs}\\begin{{bc}} x \\end{{bc}}\n")),
         (1, true)
     );
+}
+
+// --- declared environments (`badness.toml`; AGENTS.md decision #12) ----------
+
+/// Resolve a declaration block, written here as JSON: the TOML surface is the
+/// CLI's and is pinned in `config.rs`, since `toml` is a dependency of the root
+/// crate only. The shapes are the same either way.
+fn declared(json: &str) -> ResolvedDeclarations {
+    serde_json::from_str::<Declarations>(json)
+        .expect("declarations deserialize")
+        .resolve()
+        .expect("declarations resolve")
+}
+
+/// [`environments`], parsed under a declaration block.
+fn declared_environments(input: &str, json: &str) -> (usize, bool) {
+    let parsed = parse_with_declarations(input, LatexFlavor::Document, &declared(json));
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    let count = parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .count();
+    (count, parsed.errors.is_empty())
+}
+
+/// The complex case the inferred scan cannot reach: the pair is defined
+/// somewhere this file cannot see (a sibling `.sty`, or machinery no scan
+/// follows), so the document carries no definition at all.
+const EQNARRAY_DECL: &str =
+    r#"{"environments": {"eqnarray": {"begin": ["\\bea"], "end": ["\\eea"]}}}"#;
+
+#[test]
+fn a_declared_alias_pairs_with_no_definition_in_the_file() {
+    assert_eq!(
+        declared_environments("\\bea a&=&b \\eea\n", EQNARRAY_DECL),
+        (1, true)
+    );
+}
+
+#[test]
+fn a_declared_alias_routes_its_body_by_the_target() {
+    // Behavior still comes from the curated entry for `eqnarray`, exactly as for
+    // an inferred alias: the declaration supplied only the spelling.
+    let parsed = parse_with_declarations(
+        "\\bea x^2 \\eea\n",
+        LatexFlavor::Document,
+        &declared(EQNARRAY_DECL),
+    );
+    let root = parsed.syntax();
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::MATH));
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::SCRIPTED));
+}
+
+#[test]
+fn declaring_nothing_parses_exactly_as_before() {
+    let input = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\bea a\n";
+    let plain = parse(input);
+    let empty = parse_with_declarations(
+        input,
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    );
+    assert_eq!(plain.syntax().to_string(), empty.syntax().to_string());
+    assert_eq!(plain.errors.len(), empty.errors.len());
+}
+
+// The safety property that makes config admissible at all: a declaration names a
+// *spelling*, never a pairing, so every shape gate still runs. These mirror the
+// inferred cases above one for one — a declared alias is refused in exactly the
+// situations an inferred one is.
+
+#[test]
+fn a_declared_alias_without_a_closer_still_demotes() {
+    assert_eq!(declared_environments("\\bea a\n", EQNARRAY_DECL), (0, true));
+}
+
+#[test]
+fn a_declared_alias_escaping_a_brace_group_still_demotes() {
+    // An environment can never outlive the brace group its opener sits in, and a
+    // declaration cannot buy an exception: braces are catcode structure, while a
+    // declared spelling is still only a macro.
+    assert_eq!(
+        declared_environments("{\\bea a} \\eea\n", EQNARRAY_DECL),
+        (0, true)
+    );
+}
+
+#[test]
+fn a_declared_alias_inside_math_still_stays_a_command() {
+    assert_eq!(
+        declared_environments("$\\bea a \\eea$\n", EQNARRAY_DECL),
+        (0, true)
+    );
+}
+
+#[test]
+fn a_literal_begin_of_a_declared_alias_name_is_an_ordinary_environment() {
+    // The node-keyed rule holds for declared aliases too: `\begin{bea}` is a
+    // `bea` environment that happens to spell the alias, and inherits nothing.
+    assert_eq!(
+        declared_environments("\\begin{bea} x \\end{bea}\n", EQNARRAY_DECL),
+        (1, true)
+    );
+}
+
+#[test]
+fn a_declared_verbatim_environment_captures_its_body() {
+    // The parked `codeexample` knob: an environment badness cannot name, whose
+    // body must not be reflowed or linted as prose.
+    let parsed = parse_with_declarations(
+        "\\begin{mycode}\n  not $math$ %not a comment\n\\end{mycode}\n",
+        LatexFlavor::Document,
+        &declared(r#"{"environments": {"mycode": {"like": "lstlisting"}}}"#),
+    );
+    let root = parsed.syntax();
+    assert!(
+        root.descendants_with_tokens()
+            .any(|n| n.kind() == SyntaxKind::VERBATIM_BODY),
+        "a declared verbatim environment must capture its body as one token"
+    );
+    assert!(root.descendants().all(|n| n.kind() != SyntaxKind::MATH));
+}
+
+#[test]
+fn a_declared_alias_pairs_for_a_declared_target() {
+    // `\startmyenv … \endmyenv` around an environment with no built-in
+    // counterpart. The pairing is the parser's; the *behavior* of a declared
+    // target reaches body routing separately.
+    assert_eq!(
+        declared_environments(
+            "\\startmyenv a \\endmyenv\n",
+            r#"{"environments": {"myenv": {
+                 "like": "center", "begin": ["\\startmyenv"], "end": ["\\endmyenv"]
+               }}}"#
+        ),
+        (1, true)
+    );
+}
+
+#[test]
+fn a_declaration_beats_a_definition_the_file_scan_found() {
+    // Declared wins: the user is explicitly correcting the inference. The file
+    // defines `\bea` as a `center` alias; the declaration says `eqnarray`, so the
+    // body is math.
+    let parsed = parse_with_declarations(
+        "\\newcommand{\\bea}{\\begin{center}}\n\\newcommand{\\eea}{\\end{center}}\n\\bea x^2 \\eea\n",
+        LatexFlavor::Document,
+        &declared(EQNARRAY_DECL),
+    );
+    let root = parsed.syntax();
+    assert_eq!(
+        root.descendants()
+            .filter(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+            .count(),
+        1
+    );
+    assert!(
+        root.descendants().any(|n| n.kind() == SyntaxKind::MATH),
+        "the declared `eqnarray` target must win over the scanned `center` one"
+    );
+}
+
+// Body routing reads a declared signature the way it reads a curated one: the
+// declaration *is* curated data, since `like` copies a built-in entry and
+// resolves against nothing else.
+
+#[test]
+fn a_declared_environment_routes_its_body_into_math() {
+    // `myenv` has no built-in counterpart at all, so this is the case
+    // `is_math_environment` could not answer before it consulted the context.
+    let parsed = parse_with_declarations(
+        "\\begin{myenv} x^2 \\end{myenv}\n",
+        LatexFlavor::Document,
+        &declared(r#"{"environments": {"myenv": {"like": "align"}}}"#),
+    );
+    let root = parsed.syntax();
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::MATH));
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::SCRIPTED));
+}
+
+#[test]
+fn a_declared_alias_of_a_declared_environment_routes_its_body_too() {
+    // Both halves of the `\startmyenv … \endmyenv` shape at once: the spelling
+    // comes from the declaration and the behavior from the target it names.
+    let parsed = parse_with_declarations(
+        "\\startmyenv x^2 \\endmyenv\n",
+        LatexFlavor::Document,
+        &declared(
+            r#"{"environments": {"myenv": {
+                 "like": "align", "begin": ["\\startmyenv"], "end": ["\\endmyenv"]
+               }}}"#,
+        ),
+    );
+    let root = parsed.syntax();
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::MATH));
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::SCRIPTED));
+}
+
+#[test]
+fn a_lone_declared_block_environment_is_not_wrapped_in_a_paragraph() {
+    let parsed = parse_with_declarations(
+        "\n\\begin{myenv} x \\end{myenv}\n",
+        LatexFlavor::Document,
+        &declared(r#"{"environments": {"myenv": {"like": "center"}}}"#),
+    );
+    let env = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+        .expect("the environment parses");
+    assert_ne!(
+        env.parent().map(|p| p.kind()),
+        Some(SyntaxKind::PARAGRAPH),
+        "a declared block environment is left bare, like the entry it copies"
+    );
+}
+
+#[test]
+fn a_declaration_is_authoritative_for_the_name_it_covers() {
+    // Not merged with what the scan found: the file defines `myenv` as verbatim,
+    // the declaration says it behaves like `align`, and the declaration wins —
+    // the body is math, not one opaque `VERBATIM_BODY` token.
+    let input = "\\lstnewenvironment{myenv}{}{}\n\\begin{myenv} x^2 \\end{myenv}\n";
+    let verbatim_body = |root: &SyntaxNode| {
+        root.descendants_with_tokens()
+            .any(|n| n.kind() == SyntaxKind::VERBATIM_BODY)
+    };
+    // Control, so the assertion below cannot pass vacuously: undeclared, the
+    // scan does find the definition and the body *is* captured.
+    assert!(verbatim_body(&parse(input).syntax()));
+
+    let parsed = parse_with_declarations(
+        input,
+        LatexFlavor::Document,
+        &declared(r#"{"environments": {"myenv": {"like": "align"}}}"#),
+    );
+    let root = parsed.syntax();
+    assert!(
+        !verbatim_body(&root),
+        "the declaration overrides the scanned verbatim definition"
+    );
+    assert!(root.descendants().any(|n| n.kind() == SyntaxKind::MATH));
 }

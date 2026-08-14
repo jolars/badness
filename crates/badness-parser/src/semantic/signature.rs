@@ -384,6 +384,17 @@ pub struct SignatureDb {
     /// with a side, so the parser's opener and closer indices cannot be confused
     /// and [`Signatures::environment`] can consult the opener side alone.
     env_end_aliases: HashMap<SmolStr, SmolStr>,
+    /// Which environment signatures came from a project *declaration*
+    /// ([`crate::declarations`]) rather than from a scan.
+    ///
+    /// Provenance, like the origin maps above, and needed for the same kind of
+    /// reason: [`Signatures::environment_at`] resolves an alias target against
+    /// *curated* data only, so it has to tell a declared entry (curated — `like`
+    /// copies a built-in and resolves against nothing else) from a scanned
+    /// `\newenvironment` of the same name (not curated, and deliberately unable
+    /// to lend an alias its behavior). Without the mark the two are
+    /// indistinguishable once merged into one scope.
+    declared_environments: std::collections::HashSet<SmolStr>,
 }
 
 impl SignatureDb {
@@ -476,7 +487,23 @@ impl SignatureDb {
     pub fn insert_environment(&mut self, name: impl Into<SmolStr>, sig: EnvironmentSig) {
         let name = name.into();
         self.environment_origins.remove(&name);
+        self.declared_environments.remove(&name);
         self.environments.insert(name, sig);
+    }
+
+    /// Record an environment signature that came from a project *declaration*,
+    /// replacing any existing entry for `name` and marking its provenance. See
+    /// [`declared_environments`](Self::declared_environments) for why the mark
+    /// exists.
+    pub fn insert_declared_environment(&mut self, name: impl Into<SmolStr>, sig: EnvironmentSig) {
+        let name = name.into();
+        self.insert_environment(name.clone(), sig);
+        self.declared_environments.insert(name);
+    }
+
+    /// Whether `name`'s signature came from a project declaration.
+    pub fn is_declared_environment(&self, name: &str) -> bool {
+        self.declared_environments.contains(name)
     }
 
     /// Merge every command and environment of `other` into `self`, with `other`
@@ -511,6 +538,15 @@ impl SignatureDb {
                     self.environment_origins.remove(name);
                 }
             }
+            // Declared-ness describes the *current* entry, exactly as the origin
+            // above does: an overwrite from a non-declared source clears it, so a
+            // scanned definition merged over a declared name cannot leave the
+            // alias resolver believing the entry is still curated.
+            if other.is_declared_environment(name) {
+                self.declared_environments.insert(name.clone());
+            } else {
+                self.declared_environments.remove(name);
+            }
             self.environments.insert(name.clone(), sig.clone());
         }
         for (name, target) in &other.env_begin_aliases {
@@ -519,6 +555,19 @@ impl SignatureDb {
         for (name, target) in &other.env_end_aliases {
             self.env_end_aliases.insert(name.clone(), target.clone());
         }
+    }
+
+    /// Overlay a project's resolved [declarations](crate::declarations) as the
+    /// **top tier** of this scope: a declaration is the user explicitly
+    /// correcting an inference, so it wins over scanned definitions and loaded
+    /// packages alike.
+    ///
+    /// A named entry rather than `merge_from(declared.as_db())` at each call
+    /// site, so the precedence rule is stated once and the two scope builders
+    /// (the CLI's `collect_package_signatures` and the salsa `scope_signatures`)
+    /// cannot disagree about where in the order it goes.
+    pub fn merge_declarations(&mut self, declared: &crate::declarations::ResolvedDeclarations) {
+        self.merge_from(declared.as_db());
     }
 
     /// Like [`merge_from`](Self::merge_from), additionally recording `origin`
@@ -536,6 +585,10 @@ impl SignatureDb {
         for (name, sig) in &other.environments {
             self.environment_origins
                 .insert(name.clone(), SmolStr::from(origin));
+            // A package's scanned definitions are never declarations, so a name
+            // it supplies loses any declared mark it had — the same
+            // current-entry rule `merge_from` follows.
+            self.declared_environments.remove(name);
             self.environments.insert(name.clone(), sig.clone());
         }
         // Aliases carry no origin: they are not a signature namespace, so there is
@@ -599,6 +652,15 @@ impl<'a> Signatures<'a> {
             .or_else(|| cwl().environment(name))
     }
 
+    /// The signature `name` was *declared* with, if the scope carries one. The
+    /// curated half of the alias resolution above; never a scanned entry.
+    fn declared_environment(&self, name: &str) -> Option<&'a EnvironmentSig> {
+        self.user
+            .is_declared_environment(name)
+            .then(|| self.user.environment(name))
+            .flatten()
+    }
+
     /// The signature governing `node` — an `ENVIRONMENT` or its `BEGIN` — which is
     /// [`environment`](Self::environment) except that an *environment-alias*
     /// delimiter resolves through the alias map instead.
@@ -609,9 +671,14 @@ impl<'a> Signatures<'a> {
     /// target's behavior; a literal `\begin{bea}` in a file that also defines `\bea`
     /// as an alias is an unrelated environment of that name and stays unknown.
     ///
-    /// The alias arm resolves against [`builtin`] only, for the same reason the
-    /// parser's `is_math_environment` does: an alias declares a *spelling*, never a
-    /// *semantic*, so every behavior flag still comes from curated data.
+    /// The alias arm resolves against **curated data only**, for the same reason
+    /// the parser's `ParseCtx::is_math_environment` does: an alias declares a
+    /// *spelling*, never a *semantic*, so every behavior flag still comes from
+    /// curated data. That means [`builtin`] plus the scope's *declared* entries
+    /// — a declaration is curated (`like` copies a built-in entry and resolves
+    /// against nothing else), which is what lets `\startmyenv … \endmyenv` reach
+    /// the behavior of a `myenv` that has no built-in counterpart. A scanned
+    /// `\newenvironment` of the same name still lends an alias nothing.
     ///
     /// [`Begin::is_alias`]: crate::ast::Begin::is_alias
     pub fn environment_at(&self, node: &SyntaxNode) -> Option<&'a EnvironmentSig> {
@@ -622,10 +689,10 @@ impl<'a> Signatures<'a> {
         };
         let name = begin.name()?;
         if begin.is_alias() {
-            return self
-                .user
-                .env_begin_alias(&name)
-                .and_then(|target| builtin().environment(target));
+            return self.user.env_begin_alias(&name).and_then(|target| {
+                self.declared_environment(target)
+                    .or_else(|| builtin().environment(target))
+            });
         }
         self.environment(&name)
     }
@@ -1094,6 +1161,9 @@ fn parse(json: &str) -> serde_json::Result<SignatureDb> {
         // Aliases are a per-file scan product only; the curated JSON never carries any.
         env_begin_aliases: HashMap::new(),
         env_end_aliases: HashMap::new(),
+        // The built-in tier *is* the curated data a declaration copies from, so
+        // nothing in it is itself declared.
+        declared_environments: std::collections::HashSet::new(),
     })
 }
 

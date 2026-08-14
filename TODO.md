@@ -420,7 +420,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   coordinate arithmetic) and `data/signatures.json`'s `statementBody` now curate
   the same family twice. Merging them needs a `SignatureDb` on `RuleContext`,
   which carries none today — the same plumbing the user-declared ref/cite
-  families entry below wants. Until then the two carry cross-references and must
+  families entry below wants, and which the Declarations plan (Semantic layer
+  § *Declarations*) has to build anyway. Until then the two carry cross-references and must
   be edited in step. Note the sets are not quite identical by design: the flag
   also names `scope` and `pgfonlayer`, which the linter reaches through the
   enclosing `tikzpicture` on its ancestor walk.
@@ -441,7 +442,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   (semantic layer only, never argument attachment, so decision #8's
   text-purity is untouched). Needs plumbing: config does not currently flow
   into `SemanticModel::build`, and the shared name sets also serve completion
-  and the LSP, which should honor the same declarations.
+  and the LSP, which should honor the same declarations. **Land it as
+  `[commands.eqrefs] like = "eqref"`** on the Declarations mechanism (Semantic
+  layer § *Declarations*) — the deferred `[commands.*]` half of it — rather than
+  as a bespoke list-of-names knob.
 
 - [x] **`codeexample` unknown to the signature DB.** pgfmanual's `codeexample`
   env holds verbatim-like example source that is *also* executed. Because it was
@@ -458,7 +462,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   - [ ] *Follow-up (open):* a project-config knob for user-declared verbatim envs
     would generalize this to package-specific envs badness cannot name. Config
     does not currently flow into the signature DB or the lexer's `VerbCtx`, so
-    this is a separable feature, not a data edit.
+    this is a separable feature, not a data edit. **Subsumed by** the Declarations
+    plan (Semantic layer § *Declarations*): `[environments.x] like = "lstlisting"`
+    is exactly this knob, and falls out of steps 3–5 rather than needing its own.
 
   - [ ] *Out of scope (catcode limitation):* the sibling `|…|` active-char
     shortverb (`\catcode`\|=13` + `\gdef|{…\verb|…}`) drives the same class of
@@ -613,6 +619,193 @@ scope limits recorded at implementation time, not regressions.
     unrepresentable; hash-map `builder::resolve` (currently O(refs ×
     labels)); move `define.rs`'s private `is_trivia` mirror into `syntax`
     beside `is_collapsible_trivia`.
+
+### Declarations (`badness.toml` → parser)
+
+**Decided** (AGENTS.md decision #12, architecture § *Declarations*); not yet
+implemented. Grew out of issue #109: the inferred environment-alias scan handles
+the reporter's example but cannot reach a pair defined in a sibling `.sty`, built
+by machinery the scan cannot follow, or spelled `\startmyenv`/`\endmyenv` around
+an environment with no built-in counterpart. The amendment lets `badness.toml`
+name constructs the parser cannot see, under the safety property that a
+declaration names a *spelling, never a pairing* — every shape gate still runs, so
+a wrong declaration demotes rather than corrupts.
+
+This is one mechanism, not one feature. Four parked entries want the same
+plumbing and should converge on it rather than grow separate knobs: the
+user-declared verbatim envs follow-up under `codeexample` (Linter § Issues), the
+user-declared ref/cite command families from #104 (same section), the
+`SignatureDb`-on-`RuleContext` the pgf picture fold needs (Formatter), and the
+"how much of `\newcommand`/xparse to model" open decision above.
+
+v1 scope is `[environments.<name>]` with `like`, `begin`, `end`. `[commands.*]`,
+raw behavior flags, `args` (xparse argspec), per-glob overrides, and the
+`% badness-env` directive are all deferred — but the type must be shaped so they
+slot in without a wire break, since config spellings are public API.
+
+- [x] ~~**1. `Declarations` type and config parsing (no behavior yet).**~~
+  **Landed.** `crates/badness-parser/src/declarations.rs` holds `Declarations`
+  over a name-keyed `EnvironmentDecl { like, begin, end }`, plus a `CommandName`
+  newtype that strips one leading `\` in the type rather than at a call site, so
+  every front end normalizes alike. `Config` gained the top-level
+  `[environments.<name>]` map and `Config::declarations()`. Wire spellings are
+  pinned by tests in both crates: JSON-level in `declarations.rs`, TOML-level in
+  `config.rs` (`toml` is a dependency of the root crate only).
+
+  Two deviations from the step as written, both deliberate:
+
+  - **No CLI mirror.** Serde is a *hard* dependency of `badness-parser` (the
+    signature DB is JSON), so unlike `FormatStyle` — whose mirror exists because
+    its derives sit behind an off-by-default feature — the CLI can deserialize
+    straight into the shared type. A mirror would only add a second wire spelling
+    to keep in sync with the one the dprint plugin reads.
+  - **No `schema` feature yet.** `SmolStr` has no `JsonSchema`, so the derive
+    needs `schemars(with = …)` on the map key, `like`, and the `CommandName`
+    newtype — annotations better written against a real schema consumer than
+    guessed at now. Add it with the plugin work; nothing else depends on it.
+
+- [x] ~~**2. Resolution and validation.**~~ **Landed.** `Declarations::resolve()`
+  checks every rule and projects the declarations into a **`SignatureDb`** —
+  deliberately not a bespoke output type, since that struct already holds exactly
+  the three maps involved (environments, opener aliases, closer aliases). The
+  declared tier therefore folds into a document's scope with the existing
+  `merge_from` that the scanned tier uses, the step-3 seed reads it the way
+  `parse_ctx` already reads the scan's, and `[commands.*]` slots in later without
+  changing this function's signature. `Config::validate` calls it, so a broken
+  declaration fails at *load* rather than parsing fine and doing nothing.
+
+  `like` resolves against `builtin()` only (a test pins that a CWL-only
+  environment is rejected, since that tier's behavior flags are all default).
+  Rejected, each naming the dotted key: unknown `like` target; `begin` without
+  `end` or vice versa; delimiters on a verbatim target (TeX truth) or on an
+  argument-taking one (v1); delimiters whose key is neither `like`-declared nor
+  built-in. A name-only entry is unrestricted — `like = "lstlisting"` is how a
+  project names a verbatim environment the scan cannot find, and
+  `like = "tabular"` is fine because `\begin{mytab}{ll}` carries its own
+  arguments.
+
+  Two rules beyond the plan, both of the same "never a silent no-op" kind: a
+  spelling may not be claimed twice (across entries *or* across the two sides —
+  otherwise the winner depends on map order), and a spelling must be able to lex
+  as one control word. The latter shares the lexer's letter set through a new
+  `parser::lexer::is_control_word_name`, checked under `\makeatletter` *and*
+  `\ExplSyntaxOn` at once because a declaration does not say which file it will
+  apply to.
+
+- [x] ~~**3. Seed `ParseCtx`.**~~ **Landed.**
+  `parse_with_declarations(text, flavor, &ResolvedDeclarations)`, with
+  `parse_with_flavor` as the empty-declarations wrapper. The seed goes into
+  **pass 1**, so a declaring project pays no extra parse, and the second pass is
+  decided by `ctx == seed` rather than `ParseCtx::is_empty` — comparing against
+  the seed answers "did the *scan* contribute anything" directly, and stays
+  correct as fields are added in a way a hand-maintained flag would not
+  (`ParseCtx` gained `PartialEq` for it). `ParseCtx::overlay_declarations` is
+  applied *after* the scan, which is what makes declared beat scanned; declared
+  aliases skip the `command_call_counts` filter, since that filter only exists to
+  avoid buying a second pass for an unused alias.
+
+  The parameter is `ResolvedDeclarations`, a **newtype** over `SignatureDb`
+  introduced here (step 2 returned the bare db). The distinction is load-bearing
+  at exactly this boundary: a value of that type can only have come from a
+  declaration block, so the entry point cannot be handed a document's merged
+  scope — package scans and the CWL tier reaching the tree is what decision #8
+  forbids, and this keeps it out by construction rather than by review.
+
+  Two things already work end to end at this step: a declared alias pairs and
+  routes its body by the *target's* curated flags (so `\bea … \eea` for
+  `eqnarray` is math), and a declared verbatim environment captures its body —
+  the parked `codeexample` knob, closed. Ten integration tests in
+  `tests/parser.rs` mirror the inferred-alias cases one for one, including the
+  three that pin the safety property: a declared alias with no reachable closer,
+  one escaping a brace group, and one inside math all demote exactly as an
+  inferred alias does.
+
+  **Not yet reachable from the CLI**: nothing threads declarations into the
+  parse call sites yet, so `badness format` still ignores them. Steps 5 and 6.
+
+- [x] ~~**4. `is_math_environment` becomes ctx-aware.**~~ **Landed.** Both it and
+  `is_block_environment` moved from free functions over `builtin()` to `ParseCtx`
+  methods, joining `is_verbatim_environment`; `grammar.rs`'s five call sites now
+  ask the context. The seed carries whole `EnvironmentSig`s rather than one fact
+  per map, because body routing reads three flags and a declaration is
+  authoritative for all of them at once.
+
+  **Authoritative, not merged**, is the rule that fell out: a declared entry
+  answers every predicate for its name *alone*, with no fall-through to the
+  built-in or the scan. Declaring `myenv` to be `like = "align"` when the file
+  also `\lstnewenvironment`s it verbatim means the declaration wins — pinned by a
+  test that first asserts the *undeclared* parse does capture a `VERBATIM_BODY`,
+  so it cannot pass vacuously if the scan ever stops finding the definition.
+
+  This also collapsed the duplicate bookkeeping step 3 left behind: a declared
+  verbatim environment is no longer copied into the scanned-args map, since
+  `verbatim_environment_args` reads the declared signature directly.
+
+- [x] ~~**5. Signature overlay for the semantic side.**~~ **Landed for the
+  format path.** `SignatureDb::merge_declarations` is the named top-tier overlay
+  (so the two scope builders cannot disagree about precedence), applied last in
+  `collect_package_signatures`. `badness format`, `--check`, stdin, and
+  `debug format` all honor `[environments.…]` now: the issue's own example
+  formats to the output it asks for.
+
+  The sharp edge needed provenance, not just an `or_else`. `environment_at`'s
+  alias arm must resolve its target against *curated* data, which now means
+  built-in **plus declared** — but a merged scope cannot tell a declared entry
+  from a scanned `\newenvironment` of the same name once both are in the
+  `environments` map. So `SignatureDb` gained a `declared_environments` marker
+  set, carried through both merge paths exactly as the origin maps are (an
+  overwrite from a non-declared source clears it). Two tests hold the line: a
+  declared alias resolves to a declared target, and a scanned redefinition of
+  `eqnarray` still lends its alias nothing — the second asserts the name-keyed
+  and node-keyed lookups genuinely diverge, so it cannot pass vacuously.
+
+  `format_stdin_sentence` is new in the CLI bridge. The engine's
+  `format_with_style_flavored_sentence` parses with `parse_with_flavor` and so
+  cannot see declarations; honoring them for `badness format doc.tex` but not
+  `badness format < doc.tex` would have been a trap.
+
+  **Deferred to step 6, deliberately:** the salsa `scope_signatures` site (it
+  needs the input step 6 creates) and the **lint path** (`check_document` /
+  `check_document_fixable` still parse with `parse_with_flavor`, so `badness
+  lint` does not yet see a declared alias as an environment). The lint and LSP
+  entries share that plumbing, so threading them is one job, not two halves.
+
+- [ ] **6. Salsa input, the lint path, and LSP reload.** A `Declarations` salsa
+  input at `Durability::HIGH` (never `LOW`, or every keystroke invalidates it),
+  read by `parsed_document` and by `scope_signatures` (step 5's second overlay
+  site). Editing `badness.toml` reparses the world; that is correct and rare.
+  Verify the LSP's config-change path actually re-seeds and invalidates rather
+  than reusing a cached parse. The same pass threads the **lint** entries
+  (`check_document`, `check_document_fixable`, the `--fix` fixpoint loop), which
+  still parse declaration-blind — they share the plumbing with the LSP, so both
+  land together. Watch the parameter count on the way through: the CLI already
+  carries style/wrap/sentence/declarations as four parallel arguments, and one
+  more axis should become a carrier struct rather than a fifth.
+
+- [ ] **7. Docs and tests.** `docs/src/reference/configuration.md` gains the
+  section (with the `'\bea'` literal-string note). Tests: corpus + snapshot +
+  losslessness for a declared pair; **a declared alias with an unreachable closer
+  still demotes** (the safety property — this is the test that has to exist);
+  declared-beats-scanned; a literal `\begin{bea}` beside a declared `\bea` stays
+  an unrelated environment (`environment_at` is node-keyed); declared
+  `like = "align"` routes math and grids; idempotency and format-invariants under
+  a declaring config; each validation error. `task parse-compat` runs without a
+  `badness.toml`, so the texlab gauge is unaffected — note that in the skill's
+  ledger rather than letting it look like a regression.
+
+- [ ] **8. Close the loop on #109.** Reply on the issue with the shape, and note
+  that the inferred path still covers the original example with no config at all.
+
+Deferred, recorded so the shape does not have to change later: `[commands.*]`
+(same `like` verb — `[commands.eqrefs] like = "eqref"` is what closes #104's
+ref-family knob); `args = "o m m"` in xparse argspec for constructs resembling
+nothing built in; per-argument `ContentKind`, which argspec cannot express and
+which is the reason `like` stays the primary verb; a `[characters."|"]` map if
+the shortverb case is ever taken; per-glob overrides; a string-or-array spelling
+for `begin`/`end` (arrays only today, since the one-or-many deserializer costs a
+hand-written JSON schema); and a `% badness-env` comment directive feeding the
+same `Declarations` type, which would be text-pure and would work in the
+sandboxed plugin without config.
 
 ## Language server
 

@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 
-use crate::semantic::signature::{ArgKind, ArgSpec, builtin};
+use crate::semantic::signature::{ArgKind, ArgSpec, EnvironmentSig, builtin};
 use crate::syntax::SyntaxKind;
 
 /// A single lexed token: its kind plus the exact source slice it covers.
@@ -122,7 +122,11 @@ impl From<LatexFlavor> for LexConfig {
 /// [`lex_verbatim_command`] must lex `\code{…}` as an ordinary group rather than capture
 /// the built-in `VERB` (follow-up to issue #53). We read only static definition facts (a
 /// visible `\newcommand`/`\def` with no catcode signal), never macro meaning.
-#[derive(Debug, Default, Clone)]
+/// `PartialEq` is load-bearing rather than incidental: `parser::core` decides
+/// whether the second pass has anything to do by comparing the scanned context
+/// against the declaration seed it started from, which stays correct as fields
+/// are added in a way a hand-maintained "did anything change" flag would not.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ParseCtx {
     commands: HashMap<SmolStr, Vec<ArgSpec>>,
     environments: HashMap<SmolStr, Vec<ArgSpec>>,
@@ -133,6 +137,12 @@ pub struct ParseCtx {
     begin_aliases: HashMap<SmolStr, SmolStr>,
     /// The closer mirror of [`begin_aliases`](Self::begin_aliases).
     end_aliases: HashMap<SmolStr, SmolStr>,
+    /// Environment signatures a project *declared*
+    /// ([`crate::declarations`]), whole rather than reduced to the one fact a
+    /// map above records: body routing reads several flags (`math`,
+    /// `verbatim_body`, `block`), and a declaration is authoritative for every
+    /// one of them at once.
+    declared_environments: HashMap<SmolStr, EnvironmentSig>,
 }
 
 /// The former name of [`ParseCtx`], kept so the published crate's API does not
@@ -153,6 +163,37 @@ impl ParseCtx {
             && self.suppressed.is_empty()
             && self.begin_aliases.is_empty()
             && self.end_aliases.is_empty()
+            && self.declared_environments.is_empty()
+    }
+
+    /// Overlay a project's [declarations](crate::declarations) onto this
+    /// context, taking precedence over anything already recorded.
+    ///
+    /// Declared beats scanned because a declaration is the user explicitly
+    /// correcting an inference (`AGENTS.md` decision #12), which is why this is
+    /// an overlay applied *after* the scan rather than a seed the scan writes
+    /// over.
+    ///
+    /// Two families cross over: the declared environment signatures, which
+    /// every body-routing predicate here then answers from, and the delimiter
+    /// spellings. The alias entries skip the "is it called anywhere" filter
+    /// `parser::core::parse_ctx` applies to scanned ones: that filter exists to
+    /// avoid buying a *second* pass for an alias no call site uses, and a
+    /// declaration is already in hand before the first.
+    pub fn overlay_declarations(&mut self, declared: &crate::declarations::ResolvedDeclarations) {
+        let db = declared.as_db();
+        for name in db.environment_names() {
+            if let Some(sig) = db.environment(name) {
+                self.declared_environments
+                    .insert(SmolStr::new(name), sig.clone());
+            }
+        }
+        for (name, target) in db.env_begin_aliases() {
+            self.insert_begin_alias(SmolStr::new(name), SmolStr::new(target));
+        }
+        for (name, target) in db.env_end_aliases() {
+            self.insert_end_alias(SmolStr::new(name), SmolStr::new(target));
+        }
     }
 
     /// Record that `name` is a verbatim-argument command with the given `leading`
@@ -183,8 +224,12 @@ impl ParseCtx {
         self.commands.get(name).map(Vec::as_slice)
     }
 
-    /// The argument shape of `name` if it is a user-defined verbatim environment.
+    /// The argument shape of `name` if it is a user-defined or declared verbatim
+    /// environment — what the lexer needs to find where the raw body begins.
     fn verbatim_environment_args(&self, name: &str) -> Option<&[ArgSpec]> {
+        if let Some(sig) = self.declared_environment(name) {
+            return sig.verbatim_body.then(|| &*sig.args);
+        }
         self.environments.get(name).map(Vec::as_slice)
     }
 
@@ -200,10 +245,15 @@ impl ParseCtx {
     /// branch is lossy if wrong, so this behavior decision rests solely on curated
     /// data (the CWL tier carries `verbatim_body == false` for every entry anyway).
     pub(crate) fn is_verbatim_environment(&self, name: &str) -> bool {
-        self.environments.contains_key(name)
-            || builtin()
-                .environment(name)
-                .is_some_and(|env| env.verbatim_body)
+        match self.declared_environment(name) {
+            Some(sig) => sig.verbatim_body,
+            None => {
+                self.environments.contains_key(name)
+                    || builtin()
+                        .environment(name)
+                        .is_some_and(|env| env.verbatim_body)
+            }
+        }
     }
 
     /// Record that command `name` (no leading `\`) opens environment `target`.
@@ -226,6 +276,54 @@ impl ParseCtx {
         self.end_aliases.get(name).map(SmolStr::as_str)
     }
 
+    /// The signature a project *declared* for environment `name`, if any.
+    ///
+    /// A declared entry is **authoritative** for its name: every predicate below
+    /// answers from it alone rather than falling back to the built-in, because a
+    /// declaration is the user correcting what badness would otherwise infer
+    /// (`AGENTS.md` decision #12). Declaring `myenv` to be `like = "align"` when
+    /// the file also `\newenvironment`s it verbatim means the declaration wins,
+    /// not that the two answers are merged.
+    fn declared_environment(&self, name: &str) -> Option<&EnvironmentSig> {
+        self.declared_environments.get(name)
+    }
+
+    /// Is `name` a block/display environment — one whose lone occurrence the
+    /// parser should leave unwrapped rather than nest in a redundant
+    /// `PARAGRAPH`? A declared one, or a curated built-in.
+    ///
+    /// The parser runs before any per-file `\newenvironment` scan, so a *scanned*
+    /// environment's block-ness is unknown at parse time and an unknown
+    /// environment stays wrapped — the conservative, lossless-safe default. The
+    /// bulk CWL tier is not consulted (it carries no `block` flag, and parser
+    /// layout decisions stay on curated data).
+    pub(crate) fn is_block_environment(&self, name: &str) -> bool {
+        match self.declared_environment(name) {
+            Some(sig) => sig.block,
+            None => builtin().environment(name).is_some_and(|env| env.block),
+        }
+    }
+
+    /// Is `name` a math environment — one whose body the parser should parse in
+    /// math mode, wrapping it in a `MATH` node exactly as `\[…\]` does (so
+    /// scripts become `SCRIPTED`, operators split, and `\left…\right` pair)? A
+    /// declared one, or a curated built-in.
+    ///
+    /// Never the bulk CWL tier, for the same reason as
+    /// [`is_block_environment`](Self::is_block_environment) and
+    /// [`is_verbatim_environment`](Self::is_verbatim_environment): routing a body
+    /// into math mode is a structural (lossless-preserving but shape-changing)
+    /// decision, so it rests solely on curated data — which a declaration is,
+    /// since `like` copies a curated entry and resolves against nothing else.
+    /// This stays a sanctioned static-fact mode (`AGENTS.md` decision #1): no
+    /// macro meaning is resolved, only the `math` flag is read.
+    pub(crate) fn is_math_environment(&self, name: &str) -> bool {
+        match self.declared_environment(name) {
+            Some(sig) => sig.math,
+            None => builtin().environment(name).is_some_and(|env| env.math),
+        }
+    }
+
     /// Whether any environment alias is recorded — the cheap guard the grammar
     /// checks before building its per-token opener/closer index.
     ///
@@ -236,32 +334,6 @@ impl ParseCtx {
     pub(crate) fn has_env_aliases(&self) -> bool {
         !self.begin_aliases.is_empty() || !self.end_aliases.is_empty()
     }
-}
-
-/// Is `name` a block/display environment — one whose lone occurrence the parser
-/// should leave unwrapped rather than nest in a redundant `PARAGRAPH`? Resolved
-/// against the built-in signature database ([`builtin`]) only: the parser runs
-/// before any per-file `\newenvironment` scan, so (as with verbatim) user-defined
-/// block-ness is unknown at parse time and a user/unknown environment stays
-/// wrapped — the conservative, lossless-safe default. The bulk CWL tier is not
-/// consulted here (it carries no `block` flag, and parser layout decisions stay on
-/// curated data).
-pub(crate) fn is_block_environment(name: &str) -> bool {
-    builtin().environment(name).is_some_and(|env| env.block)
-}
-
-/// Is `name` a math environment — one whose body the parser should parse in math
-/// mode, wrapping it in a `MATH` node exactly as `\[…\]` does (so scripts become
-/// `SCRIPTED`, operators split, and `\left…\right` pair)? Resolved against the
-/// built-in signature database ([`builtin`]) only, for the same reason as
-/// [`is_block_environment`] and [`ParseCtx::is_verbatim_environment`]: routing a body
-/// into math mode is a structural (lossless-preserving but shape-changing) decision,
-/// so it rests solely on curated data. The bulk CWL tier carries `math == false` for
-/// every entry, and a user/unknown environment stays in text mode — the
-/// conservative default. This is a sanctioned static-fact mode (AGENTS.md, Core
-/// decision #1): no macro meaning is resolved, only the curated `math` flag is read.
-pub(crate) fn is_math_environment(name: &str) -> bool {
-    builtin().environment(name).is_some_and(|env| env.math)
 }
 
 /// Whether `text` (a `CONTROL_WORD`, leading `\` included) is a command-definition
@@ -1599,6 +1671,20 @@ fn is_letter(c: char, at_letter: bool, expl_syntax: bool) -> bool {
     c.is_ascii_alphabetic() || (at_letter && c == '@') || (expl_syntax && (c == '_' || c == ':'))
 }
 
+/// Could `name` (without its leading `\`) lex as a single [control
+/// word](control_word_len) in *some* catcode regime?
+///
+/// The most permissive regime is the bar on purpose: a name is checked here
+/// against `\makeatletter` *and* `\ExplSyntaxOn` letters at once, because a
+/// declaration does not say which file it will be read in. Shares
+/// [`is_letter`] with the lexer rather than restating the letter set, for the
+/// same reason the expl3 toggle names are one set: a name the lexer would split
+/// into two tokens can never match a declaration, so accepting one would be a
+/// silent no-op (see [`crate::declarations`]).
+pub fn is_control_word_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| is_letter(c, true, true))
+}
+
 /// Ordinary text: anything that is not whitespace, a line break, or one of the
 /// characters the lexer treats specially.
 pub fn is_word_char(c: char) -> bool {
@@ -1721,9 +1807,10 @@ mod tests {
 
     #[test]
     fn block_environment_classification() {
-        assert!(is_block_environment("figure"));
-        assert!(is_block_environment("itemize")); // derived via `list`
-        assert!(!is_block_environment("myenv")); // unknown
+        let ctx = ParseCtx::default();
+        assert!(ctx.is_block_environment("figure"));
+        assert!(ctx.is_block_environment("itemize")); // derived via `list`
+        assert!(!ctx.is_block_environment("myenv")); // unknown
     }
 
     #[test]

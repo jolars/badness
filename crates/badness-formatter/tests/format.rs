@@ -523,12 +523,20 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
     // A `statementBody` environment (the TikZ/pgf picture family) holds
-    // `;`-terminated path statements, not prose: each authored line stays its own
-    // logical line instead of being greedily filled, which is what ran `\draw …;`
-    // and `\node …;` together and split a `\foreach` header from its loop
-    // variables (issue #114). The rule reads the *nearest* environment ancestor,
-    // so an `itemize` inside a `\node` label still reflows as prose.
+    // `;`-terminated path statements, not prose. Boundaries are *structural*
+    // (the parser's `STATEMENT` node, re-derived from the `;` on every parse),
+    // so one statement gets one line and every continuation — a width wrap, a
+    // post-comment tail, a `{label}` block — hangs one step under its head
+    // (`lower_statement`). Issue #114 pinned the boundary half; the hang closes
+    // TODO.md's B′. The routing still reads the *nearest* environment ancestor,
+    // so an `itemize` inside a `\node` label reflows as prose.
     ("statement_body_picture_env", WrapMode::Reflow, 80),
+    // The structural boundaries at work: two statements on one authored line
+    // split, one authored across lines joins when it fits, an over-long one
+    // wraps with its continuation hung, a glued `;\draw` junction never breaks
+    // (the second statement rides the line), and a run with no `;` (`\tikzset`)
+    // keeps the authored-line fallback.
+    ("statement_hang", WrapMode::Reflow, 40),
     // A `%` that trails `\begin{…}` on the same source line (the space-suppression
     // idiom) rides the `\begin` header instead of dropping to its own indented
     // line; a `%` the author put on its own line is left there.

@@ -1441,10 +1441,15 @@ enum ReflowKind {
     /// not the propagated bit, so inside a width-owned argument the rule must
     /// not fire at all.
     ProseArg,
-    /// Code-like statements (a `\newcommand` definition body): a lone newline ends
-    /// the line, so each source line stays its own logical line; only width forces a
-    /// wrap. Flush continuation keeps the wrap idempotent (a wrapped tail re-parses
-    /// as a line already at the body indent).
+    /// Code-like statements (a `\newcommand` definition body, a picture body's
+    /// fallback content): a lone newline ends the line, so each source line stays
+    /// its own logical line; only width forces a wrap. Flush continuation keeps
+    /// the wrap idempotent (a wrapped tail re-parses as a line already at the
+    /// body indent). In a curated `statementBody` *environment* body under
+    /// [`WrapMode::Reflow`], `STATEMENT` nodes are lowered structurally instead
+    /// ([`lower_statement`]: boundaries from the node, continuations hung) and
+    /// this authored-line contract governs only the interleaved content no `;`
+    /// terminates.
     Statement,
     /// A `.dtx` documentation-layer prose paragraph: behaves like [`Self::Prose`]
     /// (a lone newline rejoins), but the per-line `%` documentation margin
@@ -1752,8 +1757,18 @@ fn reflow_elements_checked(
     // `STATEMENT` wrappers are spliced out the same way (see
     // [`flatten_statements`]) so their contents reflow as the sibling stream
     // they wrap.
-    let elements: Vec<SyntaxElement> =
-        flatten_inline_prose(flatten_statements(elements.collect()), cx);
+    // Under `Reflow` a statement-body run is lowered *structurally*: `STATEMENT`
+    // nodes stay whole and take their own arm below (boundaries from the node,
+    // continuations hung — see [`lower_statement`]). Every other path splices
+    // the wrappers out and keeps the line-stream behavior.
+    let structural = kind == ReflowKind::Statement && cx.wrap == WrapMode::Reflow;
+    let elements: Vec<SyntaxElement> = elements.collect();
+    let elements = if structural {
+        elements
+    } else {
+        flatten_statements(elements)
+    };
+    let elements: Vec<SyntaxElement> = flatten_inline_prose(elements, cx);
 
     // Under `.dtx` prose reflow each segment is wrapped in a `% ` margin prefix and
     // the per-line `DOC_MARGIN` tokens are dropped; `None` otherwise.
@@ -1829,7 +1844,10 @@ fn reflow_elements_checked(
                     line_margined = false;
                 } else if newlines == 1 {
                     // A single source newline. Under `Statement` reflow every source
-                    // line is its own logical line, so the break always ends the line.
+                    // line is its own logical line, so the break always ends the line
+                    // (structural `STATEMENT` nodes never reach this arm — they
+                    // commit through their own arm below — so this authored-line
+                    // read governs only the fallback content no `;` terminates).
                     // Under `Semantic` an authored soft break is likewise preserved
                     // (sembr keeps the writer's clause breaks). Under `Prose`/`Sentence`
                     // it is normally just an atom boundary the run rejoins, except a
@@ -1978,6 +1996,33 @@ fn reflow_elements_checked(
                 }
                 line_has_content = true;
                 line_all_commands = false;
+            }
+            // A structural statement (`\draw …;` in a curated `statementBody`
+            // body): its own logical line, boundaries from the node — never from
+            // the trivia around it. Only present when `structural` (every other
+            // path spliced the wrapper out up front).
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::STATEMENT => {
+                let ir = lower_statement(child, cx);
+                if after_block && !after_block_gap {
+                    // Glued to the block before it (`…};\draw …`): a glued
+                    // junction never breaks — the statement rides that line.
+                    b.append_to_last_line(ir);
+                } else if !b.atom.is_empty() {
+                    // Glued to content in progress: extend the unbreakable atom;
+                    // the statement still closes its line.
+                    b.push_atom_piece(ir, &child.text().to_string());
+                    b.end_line();
+                } else {
+                    b.end_line();
+                    b.push_segment(ir);
+                }
+                line_all_commands = true;
+                line_has_content = false;
+                // One statement per line: following content starts a fresh line
+                // (`prev_block_closes_line`), while a trailing `%` still rides
+                // (the `COMMENT` arm's `after_block` path).
+                prev_was_block = true;
+                prev_block_closes_line = true;
             }
             // An explicit `\\` line break (with its `*` / `[len]`, grouped by the
             // parser into one node) rides the end of the current line, then breaks.
@@ -4754,10 +4799,11 @@ fn environment_no_indent(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// A prose fill is wrong for such a body in a way width alone cannot express: it
 /// runs `\draw …;` and `\node …;` onto one line, and it breaks a `\foreach`
 /// header away from its loop variables (issue #114). [`ReflowKind::Statement`]
-/// keeps one statement per authored line and wraps only an over-long one — the
-/// same posture a code-like brace-group body already takes, and the same Tier-2
-/// fixed-point argument (flush continuation, so a wrapped tail re-reads as a line
-/// already at the body indent) carries over unchanged.
+/// routes the body to the statement layout: under [`WrapMode::Reflow`] the
+/// parser's `STATEMENT` nodes are lowered structurally with hung continuations
+/// ([`lower_statement`], Tier 1), and content no `;` terminates keeps the
+/// authored-line fallback — the same posture a code-like brace-group body takes,
+/// with the Tier-2 flush-continuation fixed point carrying over unchanged.
 ///
 /// The **nearest** environment ancestor decides, never any of them. An `itemize`
 /// or a `tabular` inside a `\node`'s label holds ordinary prose and must still
@@ -6908,12 +6954,41 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         })
 }
 
+/// Lower one `STATEMENT` node (a `;`-terminated statement in a curated
+/// `statementBody` environment body) under [`WrapMode::Reflow`] — the
+/// structural statement lowering, entered from `reflow_elements_checked`'s
+/// `STATEMENT` arm.
+///
+/// The interior reflows under [`ReflowKind::ProseArg`]: a lone newline is a
+/// plain atom boundary the width fill re-decides, the command-only residue is
+/// off (a width-owned body must not mint forced breaks), a comment still rides
+/// and ends its line, and a forced-break child (a `{label}` holding an
+/// environment) commits as its own segment with a glued `;` riding its last
+/// line. The enclosing [`Ir::indent`] then hangs **every** continuation line —
+/// width wraps, post-comment lines, and block segments alike — one step under
+/// the statement head, so a wrapped `\node[…] at (2,3)` / `{…};` reads as a
+/// continuation rather than a sibling (TODO.md's B′).
+///
+/// Fixed point (Tier 1): the hang is *emitted*, never read. Statement extent
+/// re-derives from the terminating `;` on every parse, however the emitted
+/// layout breaks — an emitted wrap is leading line trivia to the next parse —
+/// and the interior reads only width, gluedness, and comment presence, all
+/// preserved predicates. So `fmt(fmt(x)) == fmt(x)` holds by structure, where
+/// the flush-continuation contract this replaces had to *forbid* the hang.
+fn lower_statement(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    Ir::indent(reflow_elements(
+        node.children_with_tokens(),
+        cx,
+        ReflowKind::ProseArg,
+    ))
+}
+
 /// Pre-pass over a paragraph element stream: splice each `STATEMENT` wrapper's
 /// children into the stream, restoring the sibling layout a pre-statement parse
 /// produced. Taken by every path that lays a statement-body paragraph out as a
 /// *line stream* — the non-`Reflow` prose modes and the `Preserve` paragraph arm
 /// — so the wrapper changes no bytes there; only the structural `Reflow`
-/// lowering reads the node itself.
+/// lowering ([`lower_statement`]) reads the node itself.
 fn flatten_statements(elements: Vec<SyntaxElement>) -> Vec<SyntaxElement> {
     if !elements.iter().any(|e| {
         e.as_node()
@@ -8333,7 +8408,9 @@ impl Gap {
 ///
 /// Handed only to the Tier-2 sites whose contract *is* the authored line
 /// structure: the byte-faithful stream ([`classify_trivia`]), the preserve-shaped
-/// wrap modes, [`ReflowKind::Statement`], the expl3 fallback statement, and the
+/// wrap modes, [`ReflowKind::Statement`]'s fallback content (a picture body's
+/// `STATEMENT` nodes are structural, [`lower_statement`]), the expl3 fallback
+/// statement, and the
 /// command-only-line residue. Each owes a written fixed-point argument showing
 /// every layout it can emit re-reads to itself; preservation-only rules have the
 /// easy one (a hard line prints a newline, which re-reads as a newline, and is

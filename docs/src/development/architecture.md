@@ -385,6 +385,15 @@ stays generic. The catalog:
 - **Environment aliases.** A command whose replacement body is exactly
   `\begin{X}` (or `\end{X}`) stands in for that delimiter, so `\bea … \eea`
   pairs as an `ENVIRONMENT` of `X`. See below.
+- **Picture-body statements.** In a curated `statementBody` environment body
+  (the TikZ/pgf picture family, routed by `ParseCtx::is_statement_environment`
+  from curated built-ins plus declarations, the math-routing template), each run
+  up to a top-level `;`-carrying `WORD` wraps in a `STATEMENT` node —
+  retrospectively, by the same `precede` splice that builds `PARAGRAPH`, so
+  there is no gate and no scan. A run that never reaches a `;` stays plain
+  paragraph content; a genuine `\begin` is a statement boundary. Only statement
+  *extent* is modeled — no `at`/coordinate/path grammar — because extent is what
+  statement layout needs (§ *Statement bodies*).
 
 Four shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
 matching closer is reachable before an unbalanced `}`, a paragraph break, or
@@ -981,12 +990,29 @@ a narrow enough width it splits a `\foreach` header away from its loop variables
 The curated `statementBody` flag in `data/signatures.json` names that family —
 `tikzpicture`, `pgfpicture`, `scope`, `pgfonlayer`, and the pgfplots axis
 environments — and a paragraph inside one is lowered under
-`ReflowKind::Statement` instead of `ReflowKind::Prose`: each authored line stays
-its own logical line, and only an over-long one wraps. That is the same posture
-a code-like brace-group body (a `\newcommand` definition) already takes, and it
-inherits that arm's Tier-2 fixed-point argument unchanged — the wrap continues
-flush, so a wrapped tail re-reads on the next pass as a line already at the body
-indent.
+`ReflowKind::Statement` instead of `ReflowKind::Prose`.
+
+Statement boundaries are **structural**. The parser wraps each run of a
+statement body up to a top-level `;` in a `STATEMENT` node (§ *Sanctioned lexer
+modes*, the picture-body statement entry), and under `WrapMode::Reflow` the
+formatter derives the layout from that node (`lower_statement`): one statement
+per line — two statements on one authored line split, one authored across lines
+joins when it fits — and **every continuation line hangs one indent step under
+its head**, so a wrapped `\node[…] at (2,3)` / `{…};` reads as a continuation
+rather than a sibling. The statement's interior reflows under
+`ReflowKind::ProseArg` (a lone newline is a plain atom boundary the width fill
+re-decides; a comment still rides and ends its line; a `{label}` block hangs as
+its own segment with a glued `;` riding its last line), and the whole lowering
+is Tier 1: the hang is emitted, never read, and the node re-derives from its `;`
+however the emitted layout breaks, so the hanging indent is idempotent by
+structure — the property whose absence had deferred it (the expl3 call unit is
+the same move made from the semantic side). A **glued** statement boundary
+(`…;\draw` with no gap) is never split; the statement rides the previous line,
+the glued-divider principle. Content no `;` terminates — a `\tikzset` line, a
+lone `\foreach` header — keeps the authored-line rule: its own logical line,
+flush width wraps, the Tier-2 fixed-point argument unchanged. Every non-`Reflow`
+path splices the wrappers out (`flatten_statements`) and behaves
+byte-identically to the pre-statement layout.
 
 Three things keep the flag narrow. It is **curated only**: a statement
 terminator is package grammar, not a TeX-surface fact, so neither the CWL
@@ -996,12 +1022,6 @@ re-lexing under the package regime, not about layout; conflating the two would
 hand a future `.dtx` consumer a `tikzpicture`. And it is read from the
 **nearest** environment ancestor, never from any of them, so an `itemize` or a
 `tabular` inside a `\node`'s label still reflows as the prose it is.
-
-What this deliberately does *not* do is indent a statement's continuation, or
-the body of a `\foreach`. That needs a node owning the whole statement, and a
-TikZ path statement (`at`, `(coord)`, `;`, `{label}`) is package grammar the
-generic parser does not model — see TODO.md, *Hanging continuation indent for
-wrapped statements*.
 
 The same picture family is curated a second time in the linter
 (`linter::rules::is_pgf_picture_environment`), which keeps `dash-length` off

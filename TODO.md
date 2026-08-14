@@ -297,30 +297,24 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   preserving, or spacing — is the right default for a 2e command in an expl3
   region is an open call; the tightening can read as worse than the input.
 
-- [ ] **Hanging continuation indent for wrapped statements (B', deferred ---
-  blocked on structure).** A wrapped brace-body line ideally hangs its continuation
-  one step in (`\node[…] at (2,3)`/`····{…};`) to read as a continuation rather
-  than a sibling. This **cannot be idempotent** under the generic CST: the wrap
-  becomes a real source newline, and on re-parse the continuation is just a line at
-  the body indent (no marker says "continuation"), so the next pass flushes it ---
-  `fmt(fmt(x)) != fmt(x)`. Flush-B sidesteps this precisely because there is no
-  indent delta. The real fix needs a node that *owns the whole statement*, so layout
-  derives from structure (source newlines insignificant). For the motivating case
-  (`\node[…] at (2,3) {…};`) that node is a **TikZ path statement**: `at` keyword,
-  `(coord)`, `;` terminator, `{label}`—none of which are TeX-surface facts
-  (`;`/`at`/`()` carry no special catcode in plain TeX), so grouping them is
-  package-specific grammar, out of scope for the generic parser (decisions #1, #2;
-  non-goals). Belongs in a future sanctioned **TikZ-aware mode** (its own grammar,
-  corpus, and AGENTS.md amendment), not a formatter patch. *(expl3 already has
-  the node this asks for: the call unit `semantic::expl3::expl3_slots` derives
-  from the argspec arity owns a whole statement, so layout there needs no source
-  newlines. TikZ paths have no such static signal, which is why this entry
-  survives for `.tex` bodies.)* **Half of the motivating case is now closed from
-  the other side:** the curated `statementBody` flag routes a picture body to
-  `ReflowKind::Statement` (issue #114), so `\draw …;` and `\node …;` no longer
-  merge into one fill and a `\foreach` header stays whole. Only the *continuation
-  indent* is still deferred, and for the same reason — flush-B is what the
-  statement arm emits.
+- [x] **Hanging continuation indent for wrapped statements (B') — shipped via
+  the sanctioned picture-statement mode.** The entry's own charter: a node that
+  owns the whole statement, so layout derives from structure and the hang is
+  idempotent. The node landed *smaller* than the entry predicted — no
+  `at`/coordinate/path grammar at all, just statement **extent**: in a curated
+  `statementBody` body the parser wraps each run up to a top-level `;` in a
+  `STATEMENT` node (retrospective `precede` splice, no gate, no scan; a run
+  with no reachable `;` stays plain content), and `lower_statement` derives
+  one-statement-per-line plus a hanging continuation indent from it, Tier 1.
+  The `;` terminator turned out to be the one statically readable fact the
+  entry said TikZ lacked — extent needs no more. Content no `;` terminates
+  (`\tikzset` lines, lone `\foreach` headers) keeps the flush authored-line
+  fallback, Tier 2 as before. Recorded in AGENTS.md (decision #1 sub-bullet,
+  decision #2's `statementBody` bullet, Invariants) and architecture.md
+  (§ *Sanctioned lexer modes*, § *Statement bodies*). Recorded v2 upgrades: a
+  `SubTok` split for a `;` glued mid-`WORD` (`(1,1);(2,2)` currently
+  over-extends one statement), and `[commands.…]`-style declarations naming
+  additional statement environments already work via `like = "tikzpicture"`.
 
   **Status note (2026-08):** the `feat/statement-nodes` branch showed that
   statement *extent* in the CST is tenet-legal (curated `statementBody` routing
@@ -336,7 +330,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] **Fold the linter's pgf picture set into the `statementBody` flag.**
   `linter::rules::is_pgf_picture_environment` (which keeps `dash-length` off
   coordinate arithmetic) and `data/signatures.json`'s `statementBody` now curate
-  the same family twice. Merging them needs a `SignatureDb` on `RuleContext`,
+  the same family twice — and the flag now has *three* readers (formatter
+  routing, the parser's statement mode, and the linter's duplicate set), which
+  strengthens the case for the fold. Merging them needs a `SignatureDb` on `RuleContext`,
   which carries none today — the same plumbing the user-declared ref/cite
   families entry below wants, and which the Declarations plan (Semantic layer
   § *Declarations*) has to build anyway. Until then the two carry cross-references and must

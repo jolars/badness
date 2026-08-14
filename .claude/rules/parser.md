@@ -166,6 +166,25 @@ Prefer false negatives; when in doubt a construct stays generic.
   `AliasGate` (container-stack C2.1); its only policy divergences from
   `ConditionalGate` are the absent paragraph anchor and the closer's name match
   (`GatePolicy::pairs`). Not extended to `math_atom` in v1.
+- **Picture-body statements wrap retrospectively, with no gate.** In a curated
+  `statementBody` environment body (`ParseCtx::is_statement_environment` — the
+  `is_math_environment` template: curated built-ins plus declarations, never
+  CWL or the scan), `parse_block`'s run loop wraps each run up to a top-level
+  `;`-carrying `WORD` in a `STATEMENT` node via the `PARAGRAPH` `precede`
+  idiom. Recognition is retrospective pure shape, so there is no `GatePolicy`,
+  no `PreScan` index, and no scan-work cost — the gate-mirrors-walk concern
+  cannot arise. A run that never reaches a `;` (blank line, `\end`, alias
+  closer, EOF first) stays plain paragraph content, silently; a genuine
+  `\begin` or pairing alias opener is a **statement boundary**
+  (`statement_boundary`, mirroring the `element` dispatch gate verdicts —
+  a *demoted* `\begin` stays statement content); recognition never reaches
+  `group()`/`conditional()` element loops, which is what "top-level" means.
+  The `;` is catcode-12 and lexes inside `WORD`s (`(1,1);` is one token), so
+  the terminator test is per-token text; a multi-`;` or `;(2,2)`-glued WORD
+  over-extends one statement — degradation, not corruption (a `SubTok` split
+  is the recorded v2 upgrade). No coordinate/`at`/path-operator grammar:
+  statement *extent* is the whole model, which is what keeps this inside
+  decision #1.
 - **Alias behavior resolves from the node, never the name.**
   `Signatures::environment_at` reads the alias map only for a `Begin::is_alias`
   delimiter; the name-keyed `Signatures::environment` never reads it. A literal

@@ -47,7 +47,8 @@ predicates the formatter *preserves*.
   `consume_widened_gap_slice` only as a Tier-2 site, and write the fixed-point
   argument when you do.
 - **Tier 2 sites** (`WrapMode::Stable`/`Sentence`/`Semantic`,
-  `ReflowKind::Statement`, the expl3 fallback statement, the
+  `ReflowKind::Statement`'s *fallback content* (structural `STATEMENT` nodes
+  are Tier 1 — `lower_statement`), the expl3 fallback statement, the
   command-only-line residue, the delimited-group block residue on
   `spans_multiple_lines`, and the preservation-only boundaries —
   `classify_trivia`, `lower_prose_stream`, `MathWrap::Preserve`) read the unsafe
@@ -120,19 +121,27 @@ predicates the formatter *preserves*.
   `lower_dtx_doc_paragraph` falls back to the byte-faithful preserve path.
 - A `.dtx` `macrocode` frame lead is matched literally by docstrip — commit it
   byte-exact, never normalized to the canonical `%`.
-- **A `statementBody` environment body is not prose.** The curated TikZ/pgf
-  picture family (`tikzpicture`, `pgfpicture`, `scope`, `pgfonlayer`, the
-  pgfplots axis envs) holds `;`-terminated path statements, so its paragraphs
-  take `ReflowKind::Statement` — one statement per authored line, only an
-  over-long one wraps (`in_statement_body_env` / `paragraph_reflow_kind`, issue
-  #114). No new Tier-2 argument: it is the existing `Statement` arm, whose
-  flush-continuation fixed point already covers it. **Read the *nearest*
-  environment ancestor, never any of them** — an `itemize` in a `\node` label is
-  prose and must still reflow. The flag is **curated-only** (a `;` terminator is
-  package grammar; the CWL codegen and the definition scan hardcode `false`) and
-  **distinct from `code`**, which is the `.dtx` re-lexing fact, not a layout one.
-  Continuation indent for a wrapped statement stays deferred — it needs a node
-  owning the statement (TODO.md).
+- **A `statementBody` environment body is not prose, and its statements are
+  structural.** The curated TikZ/pgf picture family (`tikzpicture`,
+  `pgfpicture`, `scope`, `pgfonlayer`, the pgfplots axis envs) holds
+  `;`-terminated path statements; its paragraphs take `ReflowKind::Statement`
+  (`in_statement_body_env` / `paragraph_reflow_kind`, issue #114). Under
+  `Reflow`, boundaries come from the parser's `STATEMENT` nodes — re-derived
+  from the `;` on every parse, however the emitted layout breaks — so
+  `lower_statement` is **Tier 1**: one statement per line, intra-statement
+  layout width-driven under `ReflowKind::ProseArg`, and **every continuation
+  hangs one `Ir::indent` step** under its head (the deferred B′, now landed).
+  A **glued statement boundary is never split** (`;\draw` rides the previous
+  line — the glued-divider principle), two space-separated statements on one
+  authored line split, and a statement authored across lines joins when it
+  fits. Content no `;` terminates keeps the authored-line fallback — Tier 2,
+  the flush-continuation fixed point unchanged — and every non-`Reflow` path
+  splices the wrappers out (`flatten_statements`), byte-identical to the
+  pre-statement layout. **Read the *nearest* environment ancestor, never any
+  of them** — an `itemize` in a `\node` label is prose and must still reflow.
+  The flag is **curated-only** (a `;` terminator is package grammar; the CWL
+  codegen and the definition scan hardcode `false`) and **distinct from
+  `code`**, which is the `.dtx` re-lexing fact, not a layout one.
 - **A curated block-level command is a block-level statement:** a break before
   it and after it, from `CommandSig::sectioning` or `CommandSig::block`
   (`command_is_sectioning`/`command_is_block`), never from the trivia the

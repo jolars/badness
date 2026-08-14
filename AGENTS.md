@@ -105,11 +105,33 @@ provenance.
    corruption. We **do** handle a bounded, growing set of *statically recognizable*
    patterns—letter modes, verbatim, `\left`/`\right` isolation, math environments,
    definition bodies, short verbs, macrocode chunks, `^^A` doc comments, expl3
-   regions, char-constant isolation, signatures—as lexer modes or grammar routing, all
+   regions, char-constant isolation, signatures, picture-body statements—as lexer
+   modes or grammar routing, all
    reading static facts only (no macro meaning). The catalog, with examples and issue
    references, is in `docs/src/development/architecture.md`
    (§ *Sanctioned lexer modes*). The related expl3 *code formatting* is a
    formatter concern (§ *expl3 code formatting*).
+
+   - **Picture-body statements wrap retrospectively behind no gate.** In a curated
+     `statementBody` environment body (the TikZ/pgf picture family, decision #2's
+     flag — read through `ParseCtx::is_statement_environment` from curated
+     built-ins plus declarations only, the math-routing template), each run up to
+     a top-level `;`-carrying `WORD` wraps in a `STATEMENT` node, spliced in
+     retrospectively by `parse_block`'s run loop exactly as `PARAGRAPH` is. What
+     is admitted is deliberately only statement *extent*: the `;` terminator is a
+     per-token text fact (`(1,1);` is one WORD), and no `at`/coordinate/
+     path-operator grammar exists — TikZ path syntax is package grammar the
+     generic parser does not model, and extent alone is what layout needs. Since
+     recognition is retrospective there is no gate to mirror and no scan: a run
+     that never reaches a `;` stays plain paragraph content, silently, and a
+     genuine `\begin` (or pairing alias opener) is a statement *boundary* — the
+     pending run is abandoned unwrapped — while a *demoted* `\begin` stays
+     content, mirroring the `element` dispatch. What carries the risk is the
+     formatter's use of the node: statement layout derives from structure
+     (boundaries, joins, and the hanging continuation indent are re-derived from
+     the `;` on every parse), which is what makes the hang idempotent — see the
+     formatter bullet in the Invariants and
+     `docs/src/development/architecture.md` (§ *Statement bodies*).
 
    - **expl3 toggles: shared name set, formatter-only positional gate.** The lexer and
      the formatter read the *same* fixed toggle *name* set (`parser::lexer::expl_toggle`)
@@ -235,17 +257,22 @@ provenance.
      from scanned user definitions.
 
    - **`statementBody` is where a *body-is-not-prose* claim lives**
-     (`EnvironmentSig::statement_body`). The TikZ/pgf picture family holds
-     `;`-terminated path statements, so its paragraphs lower under
-     `ReflowKind::Statement` — one statement per authored line — instead of
-     being greedily filled, which merged `\draw …;` with `\node …;` and split a
-     `\foreach` header from its loop variables (issue #114). **Curated only**: a
-     statement terminator is package grammar, not a TeX-surface fact, so the CWL
-     codegen and the definition scan hardcode `false`. Kept **distinct from
-     `code`** on purpose — that flag is the `.dtx` "re-lexed under the package
-     regime" fact, so a future `code` consumer is asking a `.dtx` question and
-     must not be handed a `tikzpicture`. The formatter reads the **nearest**
-     environment ancestor only, so prose nested in a `\node` label still reflows
+     (`EnvironmentSig::statement_body`), and it has two readers. The TikZ/pgf
+     picture family holds `;`-terminated path statements, so the *parser* routes
+     such a body through statement recognition (decision #1's picture-statement
+     mode: each run up to a top-level `;` wraps in a `STATEMENT` node) and the
+     *formatter* lowers its paragraphs under `ReflowKind::Statement` — one
+     statement per line, boundaries from the node, continuations hung one step —
+     instead of greedily filling, which merged `\draw …;` with `\node …;` and
+     split a `\foreach` header from its loop variables (issue #114). **Curated
+     only**: a statement terminator is package grammar, not a TeX-surface fact,
+     so the CWL codegen and the definition scan hardcode `false` — which is also
+     what keeps the parser's read of it inside decision #12's curated-plus-
+     declared boundary. Kept **distinct from `code`** on purpose — that flag is
+     the `.dtx` "re-lexed under the package regime" fact, so a future `code`
+     consumer is asking a `.dtx` question and must not be handed a
+     `tikzpicture`. The formatter reads the **nearest** environment ancestor
+     only, so prose nested in a `\node` label still reflows
      (`docs/src/development/architecture.md` § *Statement bodies*).
 
 3. **Hand-written recursive descent is the spine; Pratt is local to math**
@@ -462,6 +489,17 @@ covered in `docs/src/development/architecture.md`.
   `semantic::expl3` (greedy self-refilling lines, no wrap before a recognized
   head, junk-glued statements all-hard).
 
+  Picture-body statement boundaries are structural the same way, from the other
+  direction: the *parser* owns the node (decision #1's picture-statement mode
+  wraps each run up to a top-level `;` in a `STATEMENT`), and under `Reflow` the
+  formatter derives one-statement-per-line and a **hanging continuation
+  indent** from it (`lower_statement`, Tier 1 — the hang is emitted, never
+  read, and the node re-derives from the `;` however the layout breaks). A
+  glued statement boundary never splits (the glued-divider principle). The
+  authored-line rule survives only for content no `;` terminates — Tier 2, the
+  flush-continuation fixed point unchanged — and every non-`Reflow` path
+  splices the wrappers out (`flatten_statements`), byte-identical.
+
 There is deliberately **no parse-stability invariant**: the formatter may still change
 CST *shape* (the math operator split re-groups a catcode-12 `WORD`, so `a+2` → `a + 2`
 re-lexes into separate atoms), but the whitespace-only invariant above pins the
@@ -541,10 +579,11 @@ never match.
   width wrap and an authored newline are the same bytes to the next parse, so any rule
   that reads one is a latent idempotency bug. Blank lines and comments are fair game.
   A rule that genuinely needs the unsafe predicate (`WrapMode::Stable`, `Sentence`,
-  `Semantic`, `ReflowKind::Statement`, the expl3 fallback statement, the
+  `Semantic`, `ReflowKind::Statement`'s fallback content — its structural
+  `STATEMENT` lowering is Tier 1 — the expl3 fallback statement, the
   command-only-line residue, the delimited-group block residue on
   `spans_multiple_lines`) is Tier 2: it must carry a written fixed-point argument
-  showing every layout it can emit re-reads to itself, as `ReflowKind::Statement`'s
+  showing every layout it can emit re-reads to itself, as the statement fallback's
   flush continuation, the expl3 fallback's greedy self-refilling lines, the
   command-only residue's preservation-only hardening (`line_is_command_only`), and
   the delimited-group residue's block-re-reads-multi-line argument

@@ -121,7 +121,10 @@ provenance.
      is admitted is deliberately only statement *extent*: the `;` terminator is a
      per-token text fact (`(1,1);` is one WORD), and no `at`/coordinate/
      path-operator grammar exists — TikZ path syntax is package grammar the
-     generic parser does not model, and extent alone is what layout needs. Since
+     generic parser does not model, and extent alone is what the *hang* needs.
+     (Interior statement layout is still width-driven over an undifferentiated
+     atom stream; the recorded next step is a semantic-side TikZ unit model
+     mirroring expl3's path — TODO.md § *TikZ semantic unit model*.) Since
      recognition is retrospective there is no gate to mirror and no scan: a run
      that never reaches a `;` stays plain paragraph content, silently, and a
      genuine `\begin` (or pairing alias opener) is a statement *boundary* — the

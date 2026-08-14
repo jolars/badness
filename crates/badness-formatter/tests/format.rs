@@ -535,7 +535,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // split, one authored across lines joins when it fits, an over-long one
     // wraps with its continuation hung, a glued `;\draw` junction never breaks
     // (the second statement rides the line), and a run with no `;` (`\tikzset`)
-    // keeps the authored-line fallback.
+    // keeps the authored-line fallback. Two pinned shapes are **known-bad, not
+    // endorsed**: the interior fill breaks `\draw (6,6)` from `circle (3);` and
+    // wraps the `--` path mid-operator, because interior atoms carry no
+    // vocabulary — the recorded bottleneck TODO.md's *TikZ semantic unit model*
+    // entry exists to fix. When that model lands, these bytes change.
     ("statement_hang", WrapMode::Reflow, 40),
     // A `%` that trails `\begin{…}` on the same source line (the space-suppression
     // idiom) rides the `\begin` header instead of dropping to its own indented

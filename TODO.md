@@ -307,25 +307,41 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   with no reachable `;` stays plain content), and `lower_statement` derives
   one-statement-per-line plus a hanging continuation indent from it, Tier 1.
   The `;` terminator turned out to be the one statically readable fact the
-  entry said TikZ lacked — extent needs no more. Content no `;` terminates
-  (`\tikzset` lines, lone `\foreach` headers) keeps the flush authored-line
-  fallback, Tier 2 as before. Recorded in AGENTS.md (decision #1 sub-bullet,
-  decision #2's `statementBody` bullet, Invariants) and architecture.md
-  (§ *Sanctioned lexer modes*, § *Statement bodies*). Recorded v2 upgrades: a
-  `SubTok` split for a `;` glued mid-`WORD` (`(1,1);(2,2)` currently
-  over-extends one statement), and `[commands.…]`-style declarations naming
+  entry said TikZ lacked — extent is all the *hang* needs, and it passes
+  decision #2's admission test (curated `statementBody` routing plus
+  declarations, the math-routing template; misapplication demotes to plain
+  content). Content no `;` terminates (`\tikzset` lines, lone `\foreach`
+  headers) keeps the flush authored-line fallback, Tier 2 as before. Recorded
+  in AGENTS.md (decision #1 sub-bullet, decision #2's `statementBody` bullet,
+  Invariants) and architecture.md (§ *Sanctioned lexer modes*, § *Statement
+  bodies*). What extent does **not** fix is interior break quality — the next
+  entry. Recorded v2 upgrades: a `SubTok` split for a `;` glued mid-`WORD`
+  (`(1,1);(2,2)` currently over-extends one statement); declarations naming
   additional statement environments already work via `like = "tikzpicture"`.
 
-  **Status note (2026-08):** the `feat/statement-nodes` branch showed that
-  statement *extent* in the CST is tenet-legal (curated `statementBody` routing
-  plus declarations, the math-routing template, decision #2's admission test)
-  and makes the hang Tier 1 — but layout inside a statement stays width-driven
-  over an undifferentiated atom stream, so it still breaks at arbitrary atoms
-  (`\draw (6,6)` / `circle (3);`). The bottleneck is interior path grammar,
-  which no placement of the extent fact fixes. Build the TikZ-aware model
-  semantic-side first, mirroring expl3's path (unit model → layout →
-  differential oracle), with any later grammar migration judged by the same
-  admission test.
+- [ ] **TikZ semantic unit model (interior path grammar, semantic-side
+  first).** Layout inside a statement is still width-driven over an
+  undifferentiated atom stream, so an over-long statement breaks at arbitrary
+  atoms: `\draw (5,5) circle (2);\draw (6,6)` / `····circle (3);` splits a
+  coordinate from its operation, and `\draw[…] (0,0) -- (1,1)` /
+  `····-- (2,0) -- cycle;` wraps mid-path with no operator preference — both
+  pinned as known-bad in the `statement_hang` fixture. The bottleneck is
+  interior path *vocabulary* (`at`, `--`, `circle`, `to`, options, labels),
+  which no placement of the extent fact fixes, and which is meaning — so per
+  decision #2's admission test it lands in the **semantic layer**, mirroring
+  expl3's path: (1) a curated unit model over a `STATEMENT`'s children
+  (`semantic::tikz` — head, options, `at`+coordinate, path operators, label;
+  unrecognized vocabulary degrades to the plain atom), (2) formatter
+  consumption as *break preferences* (glue `at ⟨coord⟩`, never break a
+  coordinate from its operation, prefer breaking before a path operator, treat
+  a glued `;`-boundary ride as a break-eligible seam once the model can vouch
+  spaces are insignificant there), (3) a differential/fixture oracle before any
+  consumer widens. A wrong classification degrades to a worse break choice,
+  never a wrong tree. Any later migration of the model into the grammar is
+  judged by the same admission test — the falsifiability bar is where it will
+  struggle, since `(a)` as coordinate vs. name reference vs. prose is not
+  demotable from text shape alone. The linter's pgf gates (next entry) are the
+  second consumer.
 
 - [ ] **Fold the linter's pgf picture set into the `statementBody` flag.**
   `linter::rules::is_pgf_picture_environment` (which keeps `dash-length` off

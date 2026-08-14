@@ -393,7 +393,8 @@ stays generic. The catalog:
   there is no gate and no scan. A run that never reaches a `;` stays plain
   paragraph content; a genuine `\begin` is a statement boundary. Only statement
   *extent* is modeled — no `at`/coordinate/path grammar — because extent is what
-  statement layout needs (§ *Statement bodies*).
+  statement *boundaries* and the continuation hang need; interior statement
+  layout is the semantic layer's job (§ *Statement bodies*).
 
 Four shape gates round this out. A `$`, `\[`, or `\(` opens math only when a
 matching closer is reachable before an unbalanced `}`, a paragraph break, or
@@ -1013,6 +1014,17 @@ lone `\foreach` header — keeps the authored-line rule: its own logical line,
 flush width wraps, the Tier-2 fixed-point argument unchanged. Every non-`Reflow`
 path splices the wrappers out (`flatten_statements`) and behaves
 byte-identically to the pre-statement layout.
+
+What the extent node does **not** give is good breaks *inside* a statement: the
+interior is width-filled over an undifferentiated atom stream, so an over-long
+statement can break between a coordinate and its operation (`\draw (6,6)` /
+`circle (3);`) or mid-path where a human would break before an operator. That is
+a vocabulary problem — `at`, `--`, `circle` mean something only because TikZ's
+own parser says so — and per decision #2's admission test it is the semantic
+layer's to solve: the recorded plan (TODO.md § *TikZ semantic unit model*)
+mirrors expl3's path — a curated unit model over a statement's children,
+consumed by the formatter as break preferences, with any later grammar migration
+judged by the same admission test.
 
 Three things keep the flag narrow. It is **curated only**: a statement
 terminator is package grammar, not a TeX-surface fact, so neither the CWL

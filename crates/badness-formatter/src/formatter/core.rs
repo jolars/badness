@@ -998,7 +998,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // A `.dtx` doc paragraph is excluded (the arm above requires `wraps_prose`),
         // so it falls through to the generic stream and keeps its `%` margins.
         SyntaxKind::PARAGRAPH if cx.wrap == WrapMode::Preserve && !is_dtx_doc_paragraph(node) => {
-            let flat = flatten_inline_prose(node.children_with_tokens().collect(), cx);
+            let flat = flatten_inline_prose(
+                flatten_statements(node.children_with_tokens().collect()),
+                cx,
+            );
             return Ir::concat(lower_prose_stream(flat.into_iter(), cx));
         }
         // A `.dtx` docstrip frame (`%␣␣␣␣\begin{macrocode}`, a documentation-layer
@@ -1745,8 +1748,12 @@ fn reflow_elements_checked(
     // Collected up front so the single-newline arm can look ahead at the next
     // physical line ([`line_is_command_only`]). Inline prose commands (`\footnote`,
     // `\emph`, …) are flattened into the stream so their bodies reflow as running
-    // text rather than block-breaking their braces (see [`flatten_inline_prose`]).
-    let elements: Vec<SyntaxElement> = flatten_inline_prose(elements.collect(), cx);
+    // text rather than block-breaking their braces (see [`flatten_inline_prose`]);
+    // `STATEMENT` wrappers are spliced out the same way (see
+    // [`flatten_statements`]) so their contents reflow as the sibling stream
+    // they wrap.
+    let elements: Vec<SyntaxElement> =
+        flatten_inline_prose(flatten_statements(elements.collect()), cx);
 
     // Under `.dtx` prose reflow each segment is wrapped in a `% ` margin prefix and
     // the per-line `DOC_MARGIN` tokens are dropped; `None` otherwise.
@@ -6899,6 +6906,31 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
             sig.block
                 && (sig.args.iter().all(|arg| !arg.required) || command.children().next().is_some())
         })
+}
+
+/// Pre-pass over a paragraph element stream: splice each `STATEMENT` wrapper's
+/// children into the stream, restoring the sibling layout a pre-statement parse
+/// produced. Taken by every path that lays a statement-body paragraph out as a
+/// *line stream* — the non-`Reflow` prose modes and the `Preserve` paragraph arm
+/// — so the wrapper changes no bytes there; only the structural `Reflow`
+/// lowering reads the node itself.
+fn flatten_statements(elements: Vec<SyntaxElement>) -> Vec<SyntaxElement> {
+    if !elements.iter().any(|e| {
+        e.as_node()
+            .is_some_and(|n| n.kind() == SyntaxKind::STATEMENT)
+    }) {
+        return elements;
+    }
+    let mut out = Vec::with_capacity(elements.len());
+    for element in elements {
+        match &element {
+            SyntaxElement::Node(node) if node.kind() == SyntaxKind::STATEMENT => {
+                out.extend(node.children_with_tokens());
+            }
+            _ => out.push(element),
+        }
+    }
+    out
 }
 
 /// Pre-pass over a reflow element stream: replace each *inline* prose command

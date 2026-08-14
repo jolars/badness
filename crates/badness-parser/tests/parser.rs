@@ -2323,3 +2323,213 @@ fn a_declaration_is_authoritative_for_the_name_it_covers() {
     );
     assert!(root.descendants().any(|n| n.kind() == SyntaxKind::MATH));
 }
+
+// --- statements wrap up to a top-level `;` in statementBody bodies -----------
+
+/// The `STATEMENT` nodes in `input`, as their source text in preorder. Also
+/// re-checks losslessness, as `tree` does.
+fn statements(input: &str) -> Vec<String> {
+    let parsed = parse(input);
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    assert_eq!(parsed.errors, vec![], "unexpected errors for {input:?}");
+    parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::STATEMENT)
+        .map(|n| n.text().to_string())
+        .collect()
+}
+
+#[test]
+fn a_picture_body_wraps_each_semicolon_run_in_a_statement() {
+    // The canonical shape: one STATEMENT per `;`-terminated path statement,
+    // each a child of the body's PARAGRAPH.
+    insta::assert_snapshot!(tree(
+        "\\begin{tikzpicture}\n  \\draw (0,0) -- (1,1);\n  \\node at (0,0) {A};\n\\end{tikzpicture}\n"
+    ));
+}
+
+#[test]
+fn statements_are_paragraph_children() {
+    let parsed =
+        parse("\\begin{tikzpicture}\n  \\draw (0,0);\n  \\draw (1,1);\n\\end{tikzpicture}\n");
+    let stmts: Vec<_> = parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::STATEMENT)
+        .collect();
+    assert_eq!(stmts.len(), 2);
+    for stmt in stmts {
+        assert_eq!(
+            stmt.parent().map(|p| p.kind()),
+            Some(SyntaxKind::PARAGRAPH),
+            "PARAGRAPH ⊃ STATEMENT, so paragraph structure is untouched"
+        );
+    }
+}
+
+#[test]
+fn a_detached_label_group_and_its_lone_semicolon_join_the_statement() {
+    // `{…}` after a WORD is a sibling group and `;` after `}` is its own WORD;
+    // the statement owns head, groups, and terminator alike.
+    assert_eq!(
+        statements("\\begin{tikzpicture}\n\\node[o] at (2,3)\n{label}\n;\n\\end{tikzpicture}\n"),
+        ["\\node[o] at (2,3)\n{label}\n;"]
+    );
+}
+
+#[test]
+fn a_semicolon_inside_a_group_optional_math_or_comment_does_not_terminate() {
+    // Only a *top-level* `;` ends a statement: one nested in an argument, a
+    // label, math, or a comment is content. The statement ends at the real
+    // terminator instead.
+    assert_eq!(
+        statements(
+            "\\begin{tikzpicture}\n\\node[a;b] at (0,0) {x;y} $u;v$ % c;d\n(1,1);\n\\end{tikzpicture}\n"
+        ),
+        ["\\node[a;b] at (0,0) {x;y} $u;v$ % c;d\n(1,1);"]
+    );
+}
+
+#[test]
+fn a_run_with_no_reachable_semicolon_stays_plain_paragraph_content() {
+    // Recognition degrades silently, like every gated construct: a `\tikzset`
+    // line, a `\foreach` header, or an in-progress edit is left unwrapped for
+    // the formatter's authored-line fallback.
+    assert_eq!(
+        statements("\\begin{tikzpicture}\n\\tikzset{x=1cm}\n\\end{tikzpicture}\n"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_statement_never_crosses_a_blank_line() {
+    // A blank line is the paragraph boundary; a `;` after one cannot rescue the
+    // run before it. The second paragraph's run wraps on its own.
+    assert_eq!(
+        statements("\\begin{tikzpicture}\n\\draw (0,0)\n\n-- (1,1);\n\\end{tikzpicture}\n"),
+        ["-- (1,1);"]
+    );
+}
+
+#[test]
+fn an_unterminated_tail_after_a_statement_stays_unwrapped() {
+    assert_eq!(
+        statements("\\begin{tikzpicture}\n\\draw (0,0);\n\\draw (1,1)\n\\end{tikzpicture}\n"),
+        ["\\draw (0,0);"]
+    );
+}
+
+#[test]
+fn a_nested_environment_is_a_statement_boundary_not_statement_content() {
+    // A genuine `\begin` at statement level is a sibling: the pending run is
+    // abandoned (stays unwrapped) and recognition restarts after the `\end`.
+    // The nested `scope` is itself a statementBody environment, so its own
+    // body wraps.
+    assert_eq!(
+        statements(
+            "\\begin{tikzpicture}\n\\draw (0,0)\n\\begin{scope}\n\\draw (2,2);\n\\end{scope}\n\\draw (1,1);\n\\end{tikzpicture}\n"
+        ),
+        ["\\draw (2,2);", "\\draw (1,1);"]
+    );
+}
+
+#[test]
+fn a_non_statement_environment_body_does_not_wrap() {
+    // The flag is per environment and never inherited: an `itemize` inside a
+    // `\node` label (or anywhere else) keeps prose parsing even though the
+    // picture around it is a statement body.
+    assert_eq!(
+        statements("\\begin{itemize}\n\\item a; b\n\\end{itemize}\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        statements(
+            "\\begin{tikzpicture}\n\\node at (0,0) {\\begin{itemize}\\item a; b\\end{itemize}};\n\\end{tikzpicture}\n"
+        ),
+        ["\\node at (0,0) {\\begin{itemize}\\item a; b\\end{itemize}};"]
+    );
+}
+
+#[test]
+fn a_foreach_and_its_terminated_body_are_one_statement() {
+    // pgffor's `\foreach … {…}` iterates a body whose trailing `;` terminates
+    // the whole loop statement — the structure the authored-line rule could
+    // never see.
+    assert_eq!(
+        statements(
+            "\\begin{tikzpicture}\n\\foreach \\x in {0,1,2}\n\\draw (\\x,0) -- (\\x,1);\n\\end{tikzpicture}\n"
+        ),
+        ["\\foreach \\x in {0,1,2}\n\\draw (\\x,0) -- (\\x,1);"]
+    );
+}
+
+#[test]
+fn a_bound_comment_run_lands_inside_its_statement() {
+    // An own-line `%` run binds forward into the next construct (decision #9);
+    // the statement owns the construct, so it owns the bound run too.
+    let input = "\\begin{tikzpicture}\n% the anchor\n\\node at (0,0) {A};\n\\end{tikzpicture}\n";
+    assert_eq!(statements(input), ["% the anchor\n\\node at (0,0) {A};"]);
+    let parsed = parse(input);
+    let stmt = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::STATEMENT)
+        .expect("statement");
+    assert!(
+        stmt.descendants()
+            .any(|n| n.kind() == SyntaxKind::DOC_COMMENT),
+        "the bound run is still a DOC_COMMENT"
+    );
+}
+
+#[test]
+fn a_demoted_begin_stays_statement_content() {
+    // A `\begin` whose `\end` is unreachable before the group closes is a plain
+    // command (issue #71) — in a statement body it is statement content, not a
+    // boundary, mirroring the element dispatch exactly.
+    let input = "\\begin{tikzpicture}\n{\\draw \\begin{pgfonlayer} (0,0);}\n\\end{tikzpicture}\n";
+    let parsed = parse(input);
+    assert_eq!(parsed.syntax().to_string(), input);
+    // No statement forms (the run has no *top-level* `;` — it is inside the
+    // group), and the demoted `\begin{pgfonlayer}` opens no environment: the
+    // only ENVIRONMENT is the picture itself.
+    let root = parsed.syntax();
+    assert!(
+        !root
+            .descendants()
+            .any(|n| n.kind() == SyntaxKind::STATEMENT)
+    );
+    assert_eq!(
+        root.descendants()
+            .filter(|n| n.kind() == SyntaxKind::ENVIRONMENT)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_declared_statement_environment_wraps_like_the_entry_it_copies() {
+    // `like = "tikzpicture"` copies the curated entry wholesale, statementBody
+    // included, so a declared picture wraps with no code change (decision #12).
+    let input = "\\begin{mypic}\n\\draw (0,0);\n\\end{mypic}\n";
+    let count = |parsed: &badness_parser::parser::Parse| {
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|n| n.kind() == SyntaxKind::STATEMENT)
+            .count()
+    };
+    assert_eq!(count(&parse(input)), 0, "undeclared, the body is prose");
+    let parsed = parse_with_declarations(
+        input,
+        LatexFlavor::Document,
+        &declared(r#"{"environments": {"mypic": {"like": "tikzpicture"}}}"#),
+    );
+    assert_eq!(parsed.syntax().to_string(), input);
+    assert_eq!(count(&parsed), 1);
+}

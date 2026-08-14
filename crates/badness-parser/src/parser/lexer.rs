@@ -324,6 +324,28 @@ impl ParseCtx {
         }
     }
 
+    /// Is `name` a statement-body environment — one whose body holds
+    /// `;`-terminated statements (the TikZ/pgf picture family), so the parser
+    /// wraps each run up to a top-level `;` in a `STATEMENT` node? A declared
+    /// one, or a curated built-in.
+    ///
+    /// Never the bulk CWL tier or the definition scan, for the same reason as
+    /// [`is_math_environment`](Self::is_math_environment): wrapping statements
+    /// is a structural decision, so it rests solely on curated data — which a
+    /// declaration is, since `like` copies a curated entry. The `;` terminator
+    /// carries no special catcode; what makes this a sanctioned static-fact
+    /// mode (`AGENTS.md` decision #1) is that recognition is retrospective pure
+    /// shape (a top-level `;`-carrying WORD) and a run that never reaches one
+    /// stays plain paragraph content.
+    pub(crate) fn is_statement_environment(&self, name: &str) -> bool {
+        match self.declared_environment(name) {
+            Some(sig) => sig.statement_body,
+            None => builtin()
+                .environment(name)
+                .is_some_and(|env| env.statement_body),
+        }
+    }
+
     /// Whether any environment alias is recorded — the cheap guard the grammar
     /// checks before building its per-token opener/closer index.
     ///

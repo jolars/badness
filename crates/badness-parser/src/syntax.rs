@@ -67,7 +67,14 @@ pub enum SyntaxKind {
     DOC_COMMENT,  // a bound leading-`%` comment run, grouped before its construct
     TEXT,         // a run of text and trivia
     LINE_BREAK,   // `\\`, with a tightly-bound `*` and/or `[len]` (`\\*[2ex]`)
-    ROOT,         // the document root  (keep LAST)
+    // A `;`-terminated statement in a curated `statementBody` environment body
+    // (the TikZ/pgf picture family). Owns everything from the statement's first
+    // non-trivia element through the top-level WORD carrying the terminating
+    // `;`, so layout can derive statement boundaries from structure rather than
+    // authored newlines. A run that never reaches a `;` is left as plain
+    // paragraph content — recognition is retrospective and degrades silently.
+    STATEMENT,
+    ROOT, // the document root  (keep LAST)
 }
 
 impl SyntaxKind {

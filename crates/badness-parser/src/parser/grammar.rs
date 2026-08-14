@@ -1137,6 +1137,15 @@ struct Parser<'t> {
     /// [`Self::at_block_end`], [`Self::trivia_run_is_separator`], and
     /// [`Self::binding_run`].
     alias_end: Option<usize>,
+    /// Whether the environment body currently being parsed is a curated
+    /// `statementBody` body ([`ParseCtx::is_statement_environment`], the
+    /// TikZ/pgf picture family), so [`Self::parse_block`]'s run loop wraps each
+    /// run up to a top-level `;`-carrying `WORD` in a `STATEMENT` node. Saved
+    /// and restored around every environment body — a nested non-statement
+    /// environment turns it off for its own body, a nested `scope` turns it
+    /// back on — and never inherited by a `group()`/`conditional()` element
+    /// loop, which is what keeps recognition to the body's own top level.
+    in_statement_body: bool,
 }
 
 impl<'t> Parser<'t> {
@@ -1181,6 +1190,7 @@ impl<'t> Parser<'t> {
             text_bracket_batch: std::cell::RefCell::new(None),
             math_bracket_batch: std::cell::RefCell::new(None),
             alias_end: None,
+            in_statement_body: false,
         }
     }
 
@@ -1511,6 +1521,27 @@ impl<'t> Parser<'t> {
         })
     }
 
+    /// Whether the construct at token `idx` will parse as a genuine
+    /// `ENVIRONMENT` — a paired `\begin{…}` or a pairing alias opener. In a
+    /// `statementBody` body this is a **statement boundary**: an environment is
+    /// a sibling of the statements around it, never statement content, so the
+    /// run loop abandons its pending `STATEMENT` checkpoint here (the elements
+    /// before it stay unwrapped) and restarts after the environment.
+    ///
+    /// Mirrors [`Self::element`]'s dispatch exactly, gate verdicts included
+    /// (memoized, so re-asking is cheap): a *demoted* `\begin` is a plain
+    /// command there and stays statement content here — the same
+    /// gate-mirrors-the-walk discipline every shape gate carries.
+    fn statement_boundary(&self, idx: usize) -> bool {
+        if self.in_macro_code(idx) {
+            return false;
+        }
+        if self.env_begin_at(idx) {
+            return !self.environment_escapes_group(idx);
+        }
+        self.alias_openers.contains_key(&idx) && self.alias_closer(idx).is_some()
+    }
+
     /// Consume a leading comment-bind located by [`Self::binding_run`]: float
     /// the trivia before `comment_start`, group the bound `%` run into a
     /// `DOC_COMMENT` node, parse the construct at `construct_pos`, and extend
@@ -1571,6 +1602,13 @@ impl<'t> Parser<'t> {
             let checkpoint = self.events.len();
             let mut nontrivia_count = 0usize;
             let mut lone_block_env = false;
+            // In a curated `statementBody` body, the pending `STATEMENT`'s
+            // checkpoint. Set lazily at the run's (or the previous statement's)
+            // first non-trivia element so inter-statement trivia floats outside
+            // the node; dropped at run end, so a run that never reaches a `;`
+            // stays plain paragraph content (recognition degrades silently,
+            // like every gated construct).
+            let mut stmt_checkpoint: Option<usize> = None;
             loop {
                 if self.at_block_end(block) {
                     break;
@@ -1584,6 +1622,20 @@ impl<'t> Parser<'t> {
                 // index, so it reads the same before or after the bind.
                 if let Some((comment_start, construct_pos, _)) = self.binding_run(self.pos) {
                     let starts_block_env = self.starts_block_env(construct_pos);
+                    if self.in_statement_body {
+                        if self.statement_boundary(construct_pos) {
+                            stmt_checkpoint = None;
+                        } else {
+                            // Float the trivia before the bound `%` run first
+                            // (`doc_comment_bind` would otherwise consume it
+                            // after the checkpoint), so a lazily opened
+                            // statement starts at its `DOC_COMMENT`.
+                            while self.pos < comment_start {
+                                self.bump();
+                            }
+                            stmt_checkpoint.get_or_insert(self.events.len());
+                        }
+                    }
                     self.doc_comment_bind(comment_start, construct_pos);
                     nontrivia_count += 1;
                     lone_block_env = nontrivia_count == 1 && starts_block_env;
@@ -1593,7 +1645,25 @@ impl<'t> Parser<'t> {
                 // Peek block-env status *before* consuming (the name is only
                 // available while still on the `\begin`).
                 let starts_block_env = self.starts_block_env(self.pos);
+                // Statement bookkeeping, peeked before consuming for the same
+                // reason: a genuine environment is a *sibling* of the statements
+                // around it (the pending run is abandoned, unwrapped), and the
+                // terminator test needs the `WORD` while the cursor is on it.
+                let mut terminator = false;
+                if self.in_statement_body && is_nontrivia {
+                    if self.statement_boundary(self.pos) {
+                        stmt_checkpoint = None;
+                    } else {
+                        stmt_checkpoint.get_or_insert(self.events.len());
+                        terminator =
+                            self.kind() == Some(SyntaxKind::WORD) && self.text().contains(';');
+                    }
+                }
                 self.element();
+                if terminator && let Some(cp) = stmt_checkpoint.take() {
+                    self.precede(cp, SyntaxKind::STATEMENT);
+                    self.close(); // matching Finish for STATEMENT
+                }
                 if is_nontrivia {
                     nontrivia_count += 1;
                     lone_block_env = nontrivia_count == 1 && starts_block_env;
@@ -3342,6 +3412,8 @@ impl<'t> Parser<'t> {
         // Body routing reads the *target* name through the same curated-data-only
         // predicates a spelled-out environment uses, so no behavior flag ever comes
         // from the alias itself.
+        let saved_stmt = self.in_statement_body;
+        self.in_statement_body = self.ctx.is_statement_environment(target);
         if self.ctx.is_verbatim_environment(target) {
             self.verbatim_body(target);
         } else if self.ctx.is_math_environment(target) {
@@ -3349,6 +3421,7 @@ impl<'t> Parser<'t> {
         } else {
             self.parse_block(Block::Environment);
         }
+        self.in_statement_body = saved_stmt;
         self.open_envs.pop();
         self.alias_end = saved;
 
@@ -3478,6 +3551,13 @@ impl<'t> Parser<'t> {
         if let Some(open) = name.as_deref() {
             self.open_envs.push(open.to_owned());
         }
+        // Statement-body routing is per environment, never inherited: a nested
+        // non-statement environment (an `itemize` in a `\node` label) parses its
+        // body with the flag off, and a nested `scope` turns it back on.
+        let saved_stmt = self.in_statement_body;
+        self.in_statement_body = name
+            .as_deref()
+            .is_some_and(|n| self.ctx.is_statement_environment(n));
         if name
             .as_deref()
             .is_some_and(|n| self.ctx.is_verbatim_environment(n))
@@ -3495,6 +3575,7 @@ impl<'t> Parser<'t> {
         } else {
             self.parse_block(Block::Environment);
         }
+        self.in_statement_body = saved_stmt;
         if name.is_some() {
             self.open_envs.pop();
         }

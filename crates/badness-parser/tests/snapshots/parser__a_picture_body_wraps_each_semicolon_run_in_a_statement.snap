@@ -1,0 +1,47 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(\"\\\\begin{tikzpicture}\\n  \\\\draw (0,0) -- (1,1);\\n  \\\\node at (0,0) {A};\\n\\\\end{tikzpicture}\\n\")"
+---
+ROOT@0..84
+  ENVIRONMENT@0..83
+    BEGIN@0..19
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..19
+        L_BRACE@6..7 "{"
+        WORD@7..18 "tikzpicture"
+        R_BRACE@18..19 "}"
+    PARAGRAPH@19..65
+      NEWLINE@19..20 "\n"
+      WHITESPACE@20..22 "  "
+      STATEMENT@22..43
+        COMMAND@22..27
+          CONTROL_WORD@22..27 "\\draw"
+        WHITESPACE@27..28 " "
+        WORD@28..33 "(0,0)"
+        WHITESPACE@33..34 " "
+        WORD@34..36 "--"
+        WHITESPACE@36..37 " "
+        WORD@37..43 "(1,1);"
+      NEWLINE@43..44 "\n"
+      WHITESPACE@44..46 "  "
+      STATEMENT@46..65
+        COMMAND@46..51
+          CONTROL_WORD@46..51 "\\node"
+        WHITESPACE@51..52 " "
+        WORD@52..54 "at"
+        WHITESPACE@54..55 " "
+        WORD@55..60 "(0,0)"
+        WHITESPACE@60..61 " "
+        GROUP@61..64
+          L_BRACE@61..62 "{"
+          WORD@62..63 "A"
+          R_BRACE@63..64 "}"
+        WORD@64..65 ";"
+    NEWLINE@65..66 "\n"
+    END@66..83
+      CONTROL_WORD@66..70 "\\end"
+      NAME_GROUP@70..83
+        L_BRACE@70..71 "{"
+        WORD@71..82 "tikzpicture"
+        R_BRACE@82..83 "}"
+  NEWLINE@83..84 "\n"

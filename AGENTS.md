@@ -360,10 +360,14 @@ provenance.
     - **Declared wins** over scanned definitions and over the built-in tiers: a
       declaration is the user explicitly correcting an inference.
 
-    *Landing in stages — see TODO.md § Declarations.* Honored by the parser and
-    by `badness format`; the linter and the language server still parse
-    declaration-blind. The TOML shape and the admission rules are in
-    `docs/src/development/architecture.md` (§ *Declarations*).
+    *Landing in stages — see TODO.md § Declarations.* `[environments.…]` is
+    honored everywhere a document is parsed: `format`, `lint` (report and
+    `--fix`), `parse`, and the language server, which carries the block on a
+    **singleton salsa input at `Durability::HIGH`** read by `parsed_document` and
+    `scope_signatures` — editing `badness.toml` reparses the world, and a
+    keystroke does not. `[commands.…]` is not implemented. The TOML shape and the
+    admission rules are in `docs/src/development/architecture.md`
+    (§ *Declarations*).
 
 The **formatter engine** (Wadler-style `Doc` IR, `WrapMode`, `MathWrap`, table
 alignment, expl3 layout), the **linter** (Rule trait, autofix model,

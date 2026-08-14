@@ -155,9 +155,10 @@ settings.
 
 ### Declarations
 
-*Landing in stages (TODO.md § Declarations): `[environments.…]` is honored by
-`badness format` and `--check`; the linter and the language server still parse
-declaration-blind.*
+*Landing in stages (TODO.md § Declarations): `[environments.…]` is honored
+everywhere a document is parsed — `format`, `--check`, `lint` (report and
+`--fix`), `parse`, and the language server. `[commands.…]` is not implemented
+yet.*
 
 Two sections are different in kind from the rest, because they reach the
 *parser*: `[environments.<name>]` and `[commands.<name>]` let a project name
@@ -197,12 +198,25 @@ a bare `SignatureDb` is deliberate — a value of that type can only have come
 from a declaration block, so the entry point cannot be handed a document's
 merged scope, and the database independence above is kept by construction rather
 than by review. It lives in `badness-parser` so the dprint plugin and a future
-`% badness-env` comment directive can feed the same type. It will be carried on
-a salsa input at `Durability::HIGH`, so editing `badness.toml` reparses the
-world and a keystroke does not. The ambient `SignatureDb` still never reaches
-the parser, and neither do package scopes or the CWL tier — the thing the
-original invariant protects against is data that shifts as files are scanned,
-loaded, or added, and a declaration block is none of those.
+`% badness-env` comment directive can feed the same type. In the editor it is
+carried on a **singleton salsa input** at `Durability::HIGH`
+(`incremental::DeclarationsInput`), read by `parsed_document` and by
+`scope_signatures`, so editing `badness.toml` reparses the world and a keystroke
+does not. One cell per database rather than one per file: a declaration block is
+a property of the project, and threading it as a query parameter would push it
+through every caller of `parsed_tree_root`. The language server resolves config
+per anchor directory, so a session holding two workspaces with *different*
+blocks rewrites the cell as the active document crosses between them — the
+accepted cost, and the reason the main loop mirrors the last value it published
+and writes only on a change (`GlobalState::analysis_settings`). Declaring
+nothing, the overwhelming default, never writes it after construction. The
+read-pool jobs that bypass the cache — a format or diagnostic that races an edit
+and falls back to reparsing its captured buffer — take the declarations off the
+snapshot (`Analysis::declarations`), so a fallback differs from the cached path
+only by the package tiers it could not reach. The ambient `SignatureDb` still
+never reaches the parser, and neither do package scopes or the CWL tier — the
+thing the original invariant protects against is data that shifts as files are
+scanned, loaded, or added, and a declaration block is none of those.
 
 The safety property that makes config admissible at all is that **a declaration
 names a spelling, never a pairing**. Every shape gate runs unchanged: a declared
@@ -728,9 +742,11 @@ function of the text, and materializes red cursors on demand.
 
 Salsa's default input durability is `LOW`. `SourceFile.path` is built at
 `Durability::HIGH` because it is set once and never mutated; `text` keeps `LOW`,
-since a keystroke rewrites it. Any future input promoted from config or package
-metadata must be constructed at `HIGH` or `MEDIUM`, or every keystroke's global
-revision bump will invalidate it.
+since a keystroke rewrites it. The project's [declarations](#declarations) are
+the first genuinely config-shaped input, and are likewise built *and written* at
+`HIGH`. Any future input promoted from config or package metadata must be
+constructed at `HIGH` or `MEDIUM`, or every keystroke's global revision bump
+will invalidate it.
 
 ### Typed AST wrappers
 

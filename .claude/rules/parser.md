@@ -260,6 +260,14 @@ Prefer false negatives; when in doubt a construct stays generic.
 - **New inputs carrying rarely-changing data (config, package metadata) must be
   constructed at `Durability::HIGH`/`MEDIUM`.** Per-file `text` stays `LOW`.
   Left at `LOW`, every keystroke's revision bump invalidates them.
+- **The declarations ride a singleton input, written only on a change.**
+  `incremental::DeclarationsInput` (`HIGH`, created eagerly so every reader can
+  use `get` rather than a dependency-free `try_get` fallback) is read by
+  `parsed_document` and `scope_signatures`. Writing it reparses the whole
+  database, so `set_declarations` no-ops on an equal value and the language
+  server mirrors the last block it published. A read job that misses the cache
+  takes them off the snapshot (`Analysis::declarations`) — never re-derives them,
+  and never answers declaration-blind.
 - Don't add intra-file reparse without recording the decision in `AGENTS.md`.
 
 ## Generated `data/` artifacts

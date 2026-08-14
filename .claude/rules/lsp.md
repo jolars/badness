@@ -45,6 +45,12 @@ gets more latitude because navigation is inherently about the local environment.
   Read these off `state.editor_settings` directly: `ResolvedSettings` is built
   from the `Config` whenever a `badness.toml` exists, so a field populated only
   in `from_editor` is silently blank for every workspace that has one.
+- **A dispatch site whose job *parses* resolves settings through
+  `analysis_settings`, never `resolve_settings`.** That is the only path that
+  republishes the document's declarations to the worker's salsa input ahead of
+  the job on the same FIFO channel; going around it leaves the parse seeded from
+  whichever document was analyzed last. `resolve_settings` is for the jobs that
+  read no tree (`[build]`, forward search).
 - Delegate TEXMF root discovery to `kpsewhich -var-value`; reimplementing
   kpathsea is out of scope and MiKTeX doesn't use it.
 - Aux freshness is an mtime+length cache, so a recompile is picked up without a

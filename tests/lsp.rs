@@ -3650,6 +3650,49 @@ fn lsp_watched_config_change_reanalyzes_open_doc() {
 }
 
 #[test]
+fn lsp_watched_config_change_reseeds_declarations() {
+    // The sharper half of the test above: a config change that alters the
+    // *parse* rather than the rule filter. Declaring `mycode` verbatim
+    // (`AGENTS.md` decision #12) protects its body, so the finding inside it
+    // disappears — but only if the config path actually re-seeds the
+    // declarations input and invalidates the cached parse. A server that
+    // re-resolved settings and reused its tree would still report it.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let main_path = dir.path().join("main.tex");
+    let main = "\\begin{mycode}\nWait ... what\n\\end{mycode}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let diags =
+        recv_diagnostics_matching(&client, &uri, |codes| codes.iter().any(|c| c == "ellipsis"));
+    assert!(
+        rule_codes(&diags).iter().any(|c| c == "ellipsis"),
+        "undeclared, the body is ordinary prose, got {:?}",
+        diags.diagnostics
+    );
+
+    let config_path = dir.path().join("badness.toml");
+    std::fs::write(&config_path, "[environments.mycode]\nlike = 'lstlisting'\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&config_path), FileChangeType::CREATED)],
+    );
+
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes.iter().any(|c| c == "ellipsis")
+    });
+    assert!(
+        !rule_codes(&diags).iter().any(|c| c == "ellipsis"),
+        "a declared verbatim body must protect its contents, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_watched_change_for_open_buffer_is_ignored() {
     // A watcher event for a file open in the editor must not clobber the live buffer
     // with disk text: the editor overlay is authoritative. Open a clean buffer, change

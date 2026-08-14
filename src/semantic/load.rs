@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::file_kind_or_tex;
-use crate::parser::parse_with_flavor;
+use crate::parser::parse_with_declarations;
 use crate::project::{PackageTarget, collect_package_edge_keys, dtx_source_of};
 use crate::semantic::{SignatureDb, scan_definitions};
 use crate::syntax::SyntaxNode;
@@ -29,7 +29,13 @@ use crate::syntax::SyntaxNode;
 /// own base directory (used to resolve that package's nested loads), or `None`
 /// when the path is not a local file we can read.
 pub trait PackageSource {
-    fn load(&self, path: &Path) -> Option<(SyntaxNode, PathBuf)>;
+    /// `declared` seeds the package's own parse, so a sibling `.sty` is read
+    /// under the same declarations as the document that loads it — the salsa
+    /// counterpart parses every member through
+    /// [`parsed_document`](crate::incremental::parsed_document), which reads the
+    /// declarations input, so a blind read here would make the two scope builders
+    /// disagree about what a member contains.
+    fn load(&self, path: &Path, declared: &ResolvedDeclarations) -> Option<(SyntaxNode, PathBuf)>;
 }
 
 /// Collect the merged signature scope for a document `root`: the scanned
@@ -45,7 +51,7 @@ pub fn collect_package_signatures(
 ) -> SignatureDb {
     let mut merged = SignatureDb::default();
     let mut visited: HashSet<PathBuf> = HashSet::new();
-    collect_loaded(root, base_dir, src, &mut visited, &mut merged);
+    collect_loaded(root, base_dir, src, declared, &mut visited, &mut merged);
     // The document's own definitions are applied last, so they win over packages.
     merged.merge_from(&scan_definitions(root));
     // Except the project's declarations, which win over everything: a
@@ -61,6 +67,7 @@ fn collect_loaded(
     root: &SyntaxNode,
     base_dir: Option<&Path>,
     src: &impl PackageSource,
+    declared: &ResolvedDeclarations,
     visited: &mut HashSet<PathBuf>,
     merged: &mut SignatureDb,
 ) {
@@ -71,8 +78,8 @@ fn collect_loaded(
         if !visited.insert(path.clone()) {
             continue;
         }
-        if let Some((pkg_root, pkg_base)) = load_pkg(&path, src) {
-            collect_loaded(&pkg_root, Some(&pkg_base), src, visited, merged);
+        if let Some((pkg_root, pkg_base)) = load_pkg(&path, src, declared) {
+            collect_loaded(&pkg_root, Some(&pkg_base), src, declared, visited, merged);
             // The origin is the *edge target's* stem, so the `.dtx` fallback
             // (`mypkg.sty` absent, `mypkg.dtx` loaded) still reads `mypkg`.
             match path.file_stem().and_then(|s| s.to_str()) {
@@ -89,9 +96,13 @@ fn collect_loaded(
 /// falling back to the package's `.dtx` literate source when the generated file is
 /// absent. Mirrors the `.dtx` fallback in
 /// [`PackageGraph::build`](crate::project::PackageGraph).
-fn load_pkg(path: &Path, src: &impl PackageSource) -> Option<(SyntaxNode, PathBuf)> {
-    src.load(path)
-        .or_else(|| dtx_source_of(path).and_then(|dtx| src.load(&dtx)))
+fn load_pkg(
+    path: &Path,
+    src: &impl PackageSource,
+    declared: &ResolvedDeclarations,
+) -> Option<(SyntaxNode, PathBuf)> {
+    src.load(path, declared)
+        .or_else(|| dtx_source_of(path).and_then(|dtx| src.load(&dtx, declared)))
 }
 
 /// A [`PackageSource`] that reads local `.sty`/`.cls` files from disk, parsing
@@ -101,9 +112,9 @@ fn load_pkg(path: &Path, src: &impl PackageSource) -> Option<(SyntaxNode, PathBu
 pub struct DiskPackageSource;
 
 impl PackageSource for DiskPackageSource {
-    fn load(&self, path: &Path) -> Option<(SyntaxNode, PathBuf)> {
+    fn load(&self, path: &Path, declared: &ResolvedDeclarations) -> Option<(SyntaxNode, PathBuf)> {
         let text = std::fs::read_to_string(path).ok()?;
-        let parsed = parse_with_flavor(&text, file_kind_or_tex(path).lex_config());
+        let parsed = parse_with_declarations(&text, file_kind_or_tex(path).lex_config(), declared);
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
         Some((parsed.syntax(), base))
     }
@@ -143,11 +154,16 @@ mod tests {
     }
 
     impl PackageSource for MapSource {
-        fn load(&self, path: &Path) -> Option<(SyntaxNode, PathBuf)> {
+        fn load(
+            &self,
+            path: &Path,
+            declared: &ResolvedDeclarations,
+        ) -> Option<(SyntaxNode, PathBuf)> {
             let text = self.files.get(path)?;
             // Parse under the path's file-kind flavor, matching `DiskPackageSource`,
             // so a `.dtx` entry lexes its `macrocode` bodies as real code.
-            let parsed = parse_with_flavor(text, file_kind_or_tex(path).lex_config());
+            let parsed =
+                parse_with_declarations(text, file_kind_or_tex(path).lex_config(), declared);
             let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
             Some((parsed.syntax(), base))
         }

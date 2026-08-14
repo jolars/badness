@@ -60,16 +60,18 @@ pub fn format_file_with_packages_sentence(
     format_node_with_signatures_sentence(&root, style, &external, sentence)
 }
 
-/// Format `content` read from **stdin**, which has no path to anchor local
-/// `.sty`/`.cls` resolution against, so no package scope is folded in.
+/// Format `content` that has no path to anchor local `.sty`/`.cls` resolution
+/// against, so no package scope is folded in: the CLI's **stdin**, and the
+/// language server's cache-miss/cancellation fallback.
 ///
 /// This exists rather than calling the engine's
 /// [`format_with_style_flavored_sentence`] because that entry parses with
 /// `parse_with_flavor` and so cannot see the project's declarations — and a
 /// formatter that honors `[environments.…]` for `badness format file.tex` but
-/// not for `badness format < file.tex` would be a trap. The declarations reach
-/// both the parse and the signature scope here, exactly as they do above.
-pub fn format_stdin_sentence(
+/// not for `badness format < file.tex` (nor for the one editor request that
+/// races an edit) would be a trap. The declarations reach both the parse and the
+/// signature scope here, exactly as they do above.
+pub fn format_pathless_sentence(
     content: &str,
     style: FormatStyle,
     config: impl Into<LexConfig>,
@@ -82,7 +84,21 @@ pub fn format_stdin_sentence(
             count: parsed.errors.len(),
         });
     }
+    format_node_with_signatures_sentence(
+        &parsed.syntax(),
+        style,
+        &declared_scope(declared),
+        sentence,
+    )
+}
+
+/// The signature scope for a pathless format: the project's declarations and
+/// nothing else. They are the top tier of the disk- and salsa-backed scopes too
+/// ([`crate::semantic::collect_package_signatures`],
+/// [`crate::incremental::scope_signatures`]), so a fallback path differs from the
+/// full one only by the package tiers it could not reach — never by precedence.
+pub fn declared_scope(declared: &ResolvedDeclarations) -> crate::semantic::SignatureDb {
     let mut scope = crate::semantic::SignatureDb::default();
     scope.merge_declarations(declared);
-    format_node_with_signatures_sentence(&parsed.syntax(), style, &scope, sentence)
+    scope
 }

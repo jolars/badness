@@ -22,8 +22,9 @@ use smol_str::SmolStr;
 
 use crate::bib::semantic::Model as BibModel;
 use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
+use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::file_kind_or_tex;
-use crate::parser::parse_with_flavor;
+use crate::parser::parse_with_declarations;
 use crate::project::citations::document_cite_names;
 use crate::project::labels::{
     document_glossary_keys, document_label_names, document_ref_names, is_document_root,
@@ -60,6 +61,41 @@ pub struct SourceFile {
     pub path: PathBuf,
     #[returns(ref)]
     pub text: String,
+}
+
+/// The project's [`ResolvedDeclarations`] as a salsa input: the one non-text
+/// value the parse is allowed to read (`AGENTS.md` decision #12).
+///
+/// A **singleton** — one cell per database, not one per file — because a
+/// declaration block is a property of the project, and because both readers
+/// ([`parsed_document`] and [`scope_signatures`]) want it without threading it
+/// through every caller of `parsed_tree_root`. The language server keys its
+/// config resolution per anchor directory, so a session holding two workspaces
+/// with *different* declaration blocks writes this cell whenever the active
+/// document crosses between them; that reparses the world, exactly as editing
+/// `badness.toml` does. Declaring nothing is the overwhelmingly common case and
+/// costs nothing — [`IncrementalDatabase::set_declarations`] skips the write
+/// when the value is unchanged, so an undeclaring session never touches the
+/// cell after construction.
+///
+/// Constructed (and always written) at [`Durability::HIGH`](salsa::Durability::HIGH):
+/// left at the `LOW` default, every keystroke's revision bump would invalidate
+/// every parse in the database.
+#[salsa::input(singleton)]
+pub struct DeclarationsInput {
+    #[returns(ref)]
+    pub declarations: ResolvedDeclarations,
+}
+
+/// The project's declarations as seen from inside a query, registering the salsa
+/// dependency that makes an edit to `badness.toml` invalidate this parse.
+///
+/// Free function rather than an [`IncrementalDb`] method so the read stays a
+/// plain field read on the singleton input — a trait method returning the value
+/// could be implemented without touching salsa at all, and would then silently
+/// drop the dependency.
+fn declarations_of(db: &dyn IncrementalDb) -> &ResolvedDeclarations {
+    DeclarationsInput::get(db).declarations(db)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -179,7 +215,11 @@ pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocume
     // a letter throughout, and a `.dtx` runs the docstrip mode.
     // `file_kind_or_tex` reads only the path name.
     let config = file_kind_or_tex(file.path(db)).lex_config();
-    let parsed = parse_with_flavor(file.text(db).as_str(), config);
+    // The project's declarations seed the parse context, so a declared `\bea`
+    // pairs here exactly as it does on the CLI's `parse_with_declarations` path.
+    // Reading them registers a `HIGH`-durability dependency: editing
+    // `badness.toml` reparses every file, and nothing else does.
+    let parsed = parse_with_declarations(file.text(db).as_str(), config, declarations_of(db));
     let diagnostics = parsed
         .errors
         .into_iter()
@@ -248,7 +288,8 @@ pub fn document_signatures(db: &dyn IncrementalDb, file: SourceFile) -> Signatur
 /// load order, with the file's *own* [`document_signatures`] overlaid on top so a
 /// document redefinition wins over any package. Built from the cross-file
 /// [`package_graph`](crate::project::package_graph) and the per-file
-/// [`document_signatures`] firewall.
+/// [`document_signatures`] firewall, with the project's declarations
+/// ([`DeclarationsInput`]) folded in last.
 ///
 /// Like [`document_signatures`] this is **not** `no_eq`: [`SignatureDb`] is `Eq`,
 /// so it backdates when no definition-relevant edit occurred anywhere in the
@@ -290,6 +331,10 @@ pub fn scope_signatures<'db>(
     // The document's own definitions are applied last, so they win over packages
     // (and clear any package origin for a shadowed name).
     merged.merge_from(document_signatures(db, file));
+    // Except the project's declarations, the top tier: a declaration is the user
+    // explicitly correcting an inference. Same order as the disk-backed
+    // `collect_package_signatures`, so the two scope builders cannot disagree.
+    merged.merge_declarations(declarations_of(db));
     merged
 }
 
@@ -555,11 +600,22 @@ pub struct IncrementalDatabase {
 
 impl Default for IncrementalDatabase {
     fn default() -> Self {
-        Self {
+        let db = Self {
             storage: salsa::Storage::new(None),
             query_log: Arc::new(Mutex::new(Vec::new())),
             files: Arc::new(Mutex::new(HashMap::new())),
-        }
+        };
+        // Create the declarations singleton eagerly, declaring nothing. Every
+        // reader goes through `DeclarationsInput::get`, which panics on an
+        // uncreated cell; creating it here — the type's only constructor — is
+        // what makes that unconditional. A lazy `try_get`-with-fallback would be
+        // worse than a panic: the fallback registers no dependency, so a parse
+        // taken before the cell existed would never be invalidated by its
+        // arrival.
+        let _ = DeclarationsInput::builder(ResolvedDeclarations::default())
+            .declarations_durability(salsa::Durability::HIGH)
+            .new(&db);
+        db
     }
 }
 
@@ -643,6 +699,37 @@ impl IncrementalDatabase {
 
     pub fn set_file_text(&mut self, file: SourceFile, text: impl Into<String>) {
         file.set_text(self).to(text.into());
+    }
+
+    /// The project's declarations as currently tracked.
+    pub fn declarations(&self) -> &ResolvedDeclarations {
+        DeclarationsInput::get(self).declarations(self)
+    }
+
+    /// Replace the project's declarations, invalidating every parse that read the
+    /// old ones. Returns whether the write actually happened.
+    ///
+    /// Skipped when the value is unchanged, for the same reason
+    /// [`upsert_file`](Self::upsert_file) skips an unchanged text: setting an
+    /// input bumps the revision unconditionally, and here that would reparse the
+    /// whole database on every job the language server dispatches.
+    ///
+    /// The durability is restated on the write. Salsa would inherit the field's
+    /// existing one, so this is a guard rather than a requirement: it keeps the
+    /// `HIGH` claim legible at the site that could silently demote it, which
+    /// would cost every parse in the database its `HIGH`-durability standing and
+    /// with it the global short-circuit that keeps a keystroke from reaching them
+    /// at all.
+    pub fn set_declarations(&mut self, declared: ResolvedDeclarations) -> bool {
+        let input = DeclarationsInput::get(self);
+        if input.declarations(self) == &declared {
+            return false;
+        }
+        input
+            .set_declarations(self)
+            .with_durability(salsa::Durability::HIGH)
+            .to(declared);
+        true
     }
 
     /// Insert or update the input for `path`, reusing the existing `SourceFile`
@@ -851,6 +938,14 @@ impl Analysis {
     /// Every currently-tracked `(normalized path, input)` pair, sorted by path.
     pub fn tracked_files(&self) -> Vec<(PathBuf, SourceFile)> {
         self.0.tracked_files()
+    }
+
+    /// The project's declarations. The cached queries already carry them, so this
+    /// is for the read jobs' *fallback* paths — the ones that reparse from the
+    /// captured buffer when the snapshot is stale or a write cancels them, and
+    /// which would otherwise answer declaration-blind.
+    pub fn declarations(&self) -> &ResolvedDeclarations {
+        self.0.declarations()
     }
 
     /// Parse diagnostics for `file` (empty when it parses cleanly).

@@ -202,3 +202,57 @@ fn json_is_never_colored() {
     serde_json::from_str::<serde_json::Value>(&stdout).expect("stdout is JSON");
     assert!(!stdout.contains('\x1b'), "got:\n{stdout:?}");
 }
+
+/// A declaration block naming an environment the document's own text gives no
+/// way to recognize as verbatim (`AGENTS.md` decision #12).
+const DECLARES_VERBATIM: &str = "[environments.mycode]\nlike = 'lstlisting'\n";
+
+/// The same `...` the `ellipsis` rule flags in prose, inside that environment.
+const IN_MYCODE: &str = "\\begin{mycode}\nWait ... what\n\\end{mycode}\n";
+
+/// The linter parses through the project's declarations, so a declared verbatim
+/// body is protected from lint rules exactly as `lstlisting`'s own is. The
+/// no-config half of the pair is what keeps this from passing vacuously.
+#[test]
+fn lint_honors_declared_environments() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), IN_MYCODE).unwrap();
+
+    let blind = lint(dir.path(), &["--output=json", "doc.tex"], None);
+    let stdout = String::from_utf8(blind.stdout).unwrap();
+    let findings: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(
+        findings.as_array().expect("array").len(),
+        1,
+        "undeclared, the body is ordinary prose: {stdout}"
+    );
+
+    std::fs::write(dir.path().join("badness.toml"), DECLARES_VERBATIM).unwrap();
+    let declared = lint(dir.path(), &["--output=json", "doc.tex"], None);
+    let stdout = String::from_utf8(declared.stdout).unwrap();
+    assert!(
+        declared.status.success(),
+        "a declared verbatim body carries no findings: {stdout}"
+    );
+    assert_eq!(stdout.trim(), "[]");
+}
+
+/// The `--fix` fixpoint loop reparses each round through its own entry
+/// (`check_document_fixable`), so it needs the declarations too — otherwise a
+/// clean report and a rewritten file would disagree.
+#[test]
+fn fix_honors_declared_environments() {
+    let dir = repo_dir();
+    let doc = dir.path().join("doc.tex");
+    std::fs::write(&doc, IN_MYCODE).unwrap();
+    std::fs::write(dir.path().join("badness.toml"), DECLARES_VERBATIM).unwrap();
+
+    let output = lint(dir.path(), &["--fix", "doc.tex"], None);
+
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(&doc).unwrap(),
+        IN_MYCODE,
+        "`\\dots` must not be spliced into a protected body"
+    );
+}

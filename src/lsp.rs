@@ -125,15 +125,17 @@ use crate::bib::{
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
 use crate::config::{BuildConfig, Config, LintConfig};
+use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
-    FormatStyle, SentenceOptions, WrapMode, format_node_range_with_signatures_sentence,
-    format_node_with_signatures_sentence, format_with_style_flavored_sentence,
+    FormatStyle, SentenceOptions, WrapMode, declared_scope,
+    format_node_range_with_signatures_sentence, format_node_with_signatures_sentence,
+    format_pathless_sentence,
 };
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
-use crate::parser::{parse, parse_with_flavor};
+use crate::parser::{parse, parse_with_declarations};
 use crate::project::aux::AuxData;
 use crate::project::texmf::{TexmfConfig, TexmfIndex};
 use crate::project::{PackageGraph, ProjectMember, ResolvedCitations, ResolvedLabels};
@@ -341,6 +343,12 @@ struct GlobalState {
     /// are the fallback. Populated lazily by [`GlobalState::resolve_settings`] and
     /// cleared wholesale on `didChangeConfiguration`.
     config_cache: HashMap<PathBuf, ResolvedSettings>,
+    /// The declarations the worker's salsa input currently holds — the last value
+    /// [`GlobalState::analysis_settings`] sent it. The main loop keeps the mirror
+    /// so it can send a [`WorkerJob::Declarations`] only when the value actually
+    /// changes: writing that input reparses the whole database, so a redundant
+    /// write per keystroke would defeat every memo salsa holds.
+    declarations: Arc<ResolvedDeclarations>,
     /// The client advertised `textDocument/diagnostic` pull support, so we serve
     /// diagnostics pull-only and **suppress** the `publishDiagnostics` push (the two
     /// are mutually exclusive, matching rust-analyzer/panache).
@@ -492,6 +500,12 @@ struct ResolvedSettings {
     /// only by label hover and document symbols (resolved numbers), never the
     /// formatter — so it cannot affect `badness format` output.
     build: BuildConfig,
+    /// The project's resolved declarations (`AGENTS.md` decision #12), the one
+    /// non-text input to the parse. Held behind an `Arc` because every dispatch
+    /// site clones the settings and the value is identical (and usually empty)
+    /// across a workspace. Reaches the worker's salsa input via
+    /// [`WorkerJob::Declarations`].
+    declarations: Arc<ResolvedDeclarations>,
 }
 
 impl ResolvedSettings {
@@ -516,6 +530,7 @@ impl ResolvedSettings {
                 sentence_lang,
                 sentence_no_break,
                 build: config.build.clone(),
+                declarations: Arc::new(config.resolved_declarations()),
             }
         } else {
             Self::from_editor(editor)
@@ -534,6 +549,7 @@ impl ResolvedSettings {
             sentence_lang: SentenceLanguage::default(),
             sentence_no_break: Vec::new(),
             build: BuildConfig::default(),
+            declarations: Arc::new(ResolvedDeclarations::default()),
         }
     }
 
@@ -600,6 +616,33 @@ impl GlobalState {
         self.config_cache.insert(anchor, resolved.clone());
         resolved
     }
+
+    /// [`resolve_settings`](Self::resolve_settings) for a request whose work
+    /// *parses* — diagnostics, formatting, code actions — additionally
+    /// republishing the document's declarations to the worker when they differ
+    /// from what it holds.
+    ///
+    /// Every parse-bearing dispatch site goes through this rather than through
+    /// `resolve_settings` directly, so the declarations the worker seeds its
+    /// parses with are always the ones governing the document it is about to
+    /// analyze. The job rides the same FIFO channel as the work it precedes, so
+    /// ordering needs no separate handshake.
+    ///
+    /// A workspace whose documents resolve to *different* declaration blocks
+    /// therefore rewrites the input as the active document crosses between them,
+    /// reparsing the world each time — the accepted cost of a single project-wide
+    /// input (see [`DeclarationsInput`](crate::incremental::DeclarationsInput)).
+    /// Declaring nothing, the overwhelming default, never writes it at all.
+    fn analysis_settings(&mut self, uri: &Uri, job_tx: &Sender<WorkerJob>) -> ResolvedSettings {
+        let resolved = self.resolve_settings(uri);
+        if resolved.declarations != self.declarations {
+            self.declarations = Arc::clone(&resolved.declarations);
+            let _ = job_tx.send(WorkerJob::Declarations {
+                declarations: Arc::clone(&resolved.declarations),
+            });
+        }
+        resolved
+    }
 }
 
 /// A job from the main loop to the worker thread.
@@ -618,6 +661,15 @@ enum WorkerJob {
         /// ([`Worker::seed_dir`]). Built on the main side because the worker holds
         /// no config; exclude-nothing when no `badness.toml` governs.
         exclude: ExcludeFilter,
+    },
+    /// The project's declarations changed (or arrived): write them into the
+    /// worker's salsa input, invalidating every parse that read the old ones.
+    ///
+    /// Sent by [`GlobalState::analysis_settings`] ahead of the parse-bearing job
+    /// it governs, and only when the value actually differs from what the worker
+    /// holds — the write reparses the whole database.
+    Declarations {
+        declarations: Arc<ResolvedDeclarations>,
     },
     /// `didClose`: evict the file from the db. Diagnostics are cleared directly by
     /// the main loop.
@@ -1082,6 +1134,9 @@ fn main_loop(
         documents: HashMap::new(),
         editor_settings,
         config_cache: HashMap::new(),
+        // Matches the worker's freshly-built database, which starts out declaring
+        // nothing; the mirror is only ever compared, never read for a parse.
+        declarations: Arc::new(ResolvedDeclarations::default()),
         supports_pull_diagnostics,
         supports_diagnostic_refresh,
         supports_dynamic_watchers,
@@ -1249,7 +1304,7 @@ fn on_notification(
             );
             let path = uri_to_path(&uri);
             let kind = file_kind_for(&path);
-            let resolved = state.resolve_settings(&uri);
+            let resolved = state.analysis_settings(&uri, job_tx);
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
@@ -1280,7 +1335,7 @@ fn on_notification(
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
             let kind = file_kind_for(&path);
-            let resolved = state.resolve_settings(&uri);
+            let resolved = state.analysis_settings(&uri, job_tx);
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
@@ -1469,7 +1524,7 @@ fn on_formatting(
         )));
         return;
     }
-    let resolved = state.resolve_settings(&uri);
+    let resolved = state.analysis_settings(&uri, job_tx);
     let mut style = resolved.style;
     // A discovered `badness.toml` wins outright; only when none
     // governs does the request's `tab_size` override the indent width.
@@ -1526,7 +1581,7 @@ fn on_range_formatting(
         )));
         return;
     }
-    let resolved = state.resolve_settings(&uri);
+    let resolved = state.analysis_settings(&uri, job_tx);
     let mut style = resolved.style;
     if !resolved.config_present && params.options.tab_size > 0 {
         style.indent_width = params.options.tab_size as usize;
@@ -1580,7 +1635,7 @@ fn on_type_formatting(
         )));
         return;
     }
-    let resolved = state.resolve_settings(&uri);
+    let resolved = state.analysis_settings(&uri, job_tx);
     let mut style = resolved.style;
     if !resolved.config_present && params.options.tab_size > 0 {
         style.indent_width = params.options.tab_size as usize;
@@ -1841,7 +1896,7 @@ fn on_document_diagnostic(
     let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    let rules = state.resolve_settings(&uri).rule_selection();
+    let rules = state.analysis_settings(&uri, job_tx).rule_selection();
     let _ = job_tx.send(WorkerJob::Diagnostic {
         id,
         path,
@@ -2126,7 +2181,7 @@ fn on_code_action(
     let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    let rules = state.resolve_settings(&uri).rule_selection();
+    let rules = state.analysis_settings(&uri, job_tx).rule_selection();
     let _ = job_tx.send(WorkerJob::CodeAction {
         id,
         uri,
@@ -2577,7 +2632,7 @@ fn relint_all_open(connection: &Connection, state: &mut GlobalState, job_tx: &Se
     for (uri, text, version) in snapshot {
         let path = uri_to_path(&uri);
         let kind = file_kind_for(&path);
-        let resolved = state.resolve_settings(&uri);
+        let resolved = state.analysis_settings(&uri, job_tx);
         let _ = job_tx.send(WorkerJob::Edit {
             uri,
             path,
@@ -2777,6 +2832,11 @@ impl Worker {
                     kind,
                     rules,
                 });
+            }
+            WorkerJob::Declarations { declarations } => {
+                // `set_declarations` no-ops on an unchanged value, so this is safe
+                // to send defensively; the main loop's own mirror keeps it rare.
+                self.db.set_declarations((*declarations).clone());
             }
             WorkerJob::Close { path } => {
                 self.db.remove_file(&path);
@@ -3618,7 +3678,9 @@ fn compute_diagnostics(
         // `Ok(None)` = file not in the snapshot; `Err` = cancelled by a racing edit.
         // Either way recompute from the captured buffer (single-file: cross-file
         // findings, if any, arrive on the client's next pull after the edit settles).
-        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind, rules, enc),
+        Ok(None) | Err(_) => {
+            fallback_diagnostics(path, text, kind, rules, snapshot.declarations(), enc)
+        }
     }
 }
 
@@ -3630,6 +3692,7 @@ fn fallback_diagnostics(
     text: &str,
     kind: FileKind,
     rules: &RuleSelection,
+    declared: &ResolvedDeclarations,
     enc: PositionEncoding,
 ) -> Vec<Diagnostic> {
     let idx = LineIndex::with_encoding(text, enc);
@@ -3641,7 +3704,7 @@ fn fallback_diagnostics(
         | FileKind::Cls
         | FileKind::Dtx
         | FileKind::Ins => {
-            let parsed = parse_with_flavor(text, kind.lex_config());
+            let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
                     range: byte_range_to_lsp(&idx, err.start, err.end),
@@ -3737,7 +3800,9 @@ fn compute_lint_findings(
     }));
     match cached {
         Ok(Some(items)) => items,
-        Ok(None) | Err(_) => fallback_lint_findings(path, text, kind, rules),
+        Ok(None) | Err(_) => {
+            fallback_lint_findings(path, text, kind, rules, snapshot.declarations())
+        }
     }
 }
 
@@ -3790,6 +3855,7 @@ fn fallback_lint_findings(
     text: &str,
     kind: FileKind,
     rules: &RuleSelection,
+    declared: &ResolvedDeclarations,
 ) -> Vec<crate::linter::Diagnostic> {
     let findings = match kind {
         FileKind::Tex
@@ -3798,7 +3864,7 @@ fn fallback_lint_findings(
         | FileKind::Cls
         | FileKind::Dtx
         | FileKind::Ins => {
-            let parsed = parse_with_flavor(text, kind.lex_config());
+            let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             let root = parsed.syntax();
             let model = SemanticModel::build(&root);
             lint_document(path, &root, &model, None, None, None)
@@ -3919,9 +3985,14 @@ fn compute_format(
             | FileKind::Sty
             | FileKind::Cls
             | FileKind::Dtx
-            | FileKind::Ins => {
-                format_with_style_flavored_sentence(text, style, kind.lex_config(), sentence).ok()
-            }
+            | FileKind::Ins => format_pathless_sentence(
+                text,
+                style,
+                kind.lex_config(),
+                sentence,
+                snapshot.declarations(),
+            )
+            .ok(),
             FileKind::Bib => bib_format_with_style(text, style).ok(),
         },
     }?;
@@ -4026,7 +4097,8 @@ fn compute_range_format(
         Ok(Some(Some(edits))) => edits,
         Ok(Some(None)) => None,
         Ok(None) | Err(_) => {
-            let parsed = parse_with_flavor(text, kind.lex_config());
+            let declared = snapshot.declarations();
+            let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             if !parsed.errors.is_empty() {
                 return None;
             }
@@ -4036,7 +4108,7 @@ fn compute_range_format(
                 &idx,
                 sel,
                 style,
-                &SignatureDb::default(),
+                &declared_scope(declared),
                 sentence,
             )
         }
@@ -4154,7 +4226,8 @@ fn compute_on_type_format(
         Ok(Some(Some(edits))) => edits,
         Ok(Some(None)) => None,
         Ok(None) | Err(_) => {
-            let parsed = parse_with_flavor(text, kind.lex_config());
+            let declared = snapshot.declarations();
+            let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             if !parsed.errors.is_empty() {
                 return None;
             }
@@ -4168,7 +4241,7 @@ fn compute_on_type_format(
                 &idx,
                 sel,
                 style,
-                &SignatureDb::default(),
+                &declared_scope(declared),
                 sentence,
             )
         }
@@ -4269,7 +4342,7 @@ fn compute_symbols(
         // by file kind so a `.dtx`'s docstrip vocabulary (and thus its documented
         // macros) still surfaces off the fallback path.
         Ok(None) | Err(_) => outline(&SyntaxNode::new_root(
-            parse_with_flavor(text, kind.lex_config()).green,
+            parse_with_declarations(text, kind.lex_config(), snapshot.declarations()).green,
         )),
     };
     let aux = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -7331,6 +7404,7 @@ mod tests {
             documents: HashMap::new(),
             editor_settings: editor,
             config_cache: HashMap::new(),
+            declarations: Arc::new(ResolvedDeclarations::default()),
             supports_pull_diagnostics: false,
             supports_diagnostic_refresh: false,
             supports_dynamic_watchers: false,

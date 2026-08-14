@@ -770,17 +770,51 @@ slot in without a wire break, since config spellings are public API.
   lint` does not yet see a declared alias as an environment). The lint and LSP
   entries share that plumbing, so threading them is one job, not two halves.
 
-- [ ] **6. Salsa input, the lint path, and LSP reload.** A `Declarations` salsa
-  input at `Durability::HIGH` (never `LOW`, or every keystroke invalidates it),
-  read by `parsed_document` and by `scope_signatures` (step 5's second overlay
-  site). Editing `badness.toml` reparses the world; that is correct and rare.
-  Verify the LSP's config-change path actually re-seeds and invalidates rather
-  than reusing a cached parse. The same pass threads the **lint** entries
-  (`check_document`, `check_document_fixable`, the `--fix` fixpoint loop), which
-  still parse declaration-blind — they share the plumbing with the LSP, so both
-  land together. Watch the parameter count on the way through: the CLI already
-  carries style/wrap/sentence/declarations as four parallel arguments, and one
-  more axis should become a carrier struct rather than a fifth.
+- [x] ~~**6. Salsa input, the lint path, and LSP reload.**~~ **Landed.** Every
+  front end that parses a document now sees the declarations: `format`,
+  `--check`, stdin, `lint`, `lint --fix`, `parse`, and the language server.
+
+  The input is a **singleton** (`incremental::DeclarationsInput`, `HIGH`
+  durability on construction *and* on every write), not a query parameter: both
+  readers want it — `parsed_document` seeds the parse, `scope_signatures` folds
+  it in as the top tier, mirroring `collect_package_signatures` — and threading a
+  parameter would have reached every caller of `parsed_tree_root`. It is created
+  eagerly in `IncrementalDatabase::default`, which is what lets readers use
+  `get`: the `try_get`-with-fallback alternative registers *no dependency* on the
+  miss, so a parse taken before the cell existed would never be invalidated by
+  its arrival — quieter than a panic and strictly worse.
+
+  Two guards keep "reparses the world" from becoming "reparses on every
+  keystroke". `set_declarations` skips the write on an equal value (a salsa
+  input setter bumps the revision unconditionally), and the LSP main loop mirrors
+  the last block it published, so `GlobalState::analysis_settings` — the settings
+  entry every *parse-bearing* dispatch site now uses — sends a
+  `WorkerJob::Declarations` only on a change. It rides the same FIFO channel as
+  the job it precedes, so ordering needs no handshake. Accepted and documented:
+  a session holding two workspaces with *different* blocks rewrites the cell as
+  the active document crosses between them.
+
+  The **read-pool fallbacks** were the part that would have rotted quietly. A
+  format, diagnostic, code action, on-type format, or outline that races an edit
+  bypasses the cache and reparses its captured buffer; all six now take the
+  declarations off the snapshot (`Analysis::declarations`) and a scope from
+  `formatter::declared_scope`, so a fallback differs from the cached path only by
+  the package tiers it could not reach — never by precedence, and never by which
+  constructs it recognizes. `format_stdin_sentence` became
+  `format_pathless_sentence` in the process: the LSP fallback is the second
+  caller with no path to anchor `.sty` resolution against, and it wanted exactly
+  the entry step 5 built for stdin.
+
+  `badness parse` was threaded too, though nothing asked for it: a CST dump that
+  contradicts the tree the formatter and linter use is the debugging trap step 5
+  refused for stdin. It resolves config by discovery only (the subcommand takes
+  no `--config`).
+
+  The parameter count held. The lint chain took `&ResolvedDeclarations` as one
+  more explicit argument (`run_lint` → `analyze_source` /
+  `collect_project_diagnostics` / `apply_fixes_to_paths` → `fix_file` →
+  `check_document_fixable`), and the format path stayed at its four parallel
+  axes — the carrier struct is still owed to whichever change adds a fifth.
 
 - [ ] **7. Docs and tests.** `docs/src/reference/configuration.md` gains the
   section (with the `'\bea'` literal-string note). Tests: corpus + snapshot +
@@ -792,6 +826,15 @@ slot in without a wire break, since config spellings are public API.
   a declaring config; each validation error. `task parse-compat` runs without a
   `badness.toml`, so the texlab gauge is unaffected — note that in the skill's
   ledger rather than letting it look like a regression.
+
+  Already landed alongside steps 3–6, so this item is what remains after them:
+  the ten parser-level cases in `tests/parser.rs` (including all three demotion
+  cases), the CLI format cases in `tests/cli_format.rs`, the salsa cases in
+  `tests/incremental.rs` (a change reparses, an equal republish does not,
+  declared outranks scanned in `scope_signatures`), the CLI lint and `--fix`
+  cases in `tests/cli_lint.rs`, and the LSP reload case
+  (`lsp_watched_config_change_reseeds_declarations`, which fails unless the
+  config path genuinely invalidates the cached parse).
 
 - [ ] **8. Close the loop on #109.** Reply on the issue with the shape, and note
   that the inferred path still covers the original example with no config at all.

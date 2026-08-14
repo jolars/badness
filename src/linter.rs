@@ -2,7 +2,7 @@
 //!
 //! Beyond surfacing **parse diagnostics** (the parser's byte-range error side
 //! channel), the linter owns a small set of rules of its own ([`rules`]),
-//! comment suppression (`% badness-ignore` style — [`suppression`]), a driver
+//! comment suppression (`% badness-lint skip` style — [`suppression`]), a driver
 //! ([`check::lint_document`]) that both the CLI and the language server call, and
 //! an autofix engine ([`fix::apply_fixes`]) backing `lint --fix`.
 

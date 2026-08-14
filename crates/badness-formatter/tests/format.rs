@@ -2633,12 +2633,16 @@ fn combined_family_suppresses_layout() {
 }
 
 /// An unrecognized directive must format as the ordinary comment it is, never
-/// silently suppress. `% badness-ignore` is the live lint family and has to stay
-/// inert here in particular.
+/// silently suppress — and the lint axis, including its retired spellings, must
+/// stay inert here in particular. Those two families still resolve; they simply
+/// resolve on the other axis, and nothing about that may reach layout.
 #[test]
 fn unrecognized_and_lint_directives_do_not_suppress_layout() {
     for lead in [
+        "% badness-lint skip deprecated-command: legacy",
+        "% badness-lint off",
         "% badness-ignore deprecated-command: legacy",
+        "% badness-ignore-file: noisy",
         "% badness-format nonsense",
         "% badness",
         "% an ordinary comment",

@@ -1,93 +1,135 @@
-//! Comment-based suppression for `.bib`: the `badness-ignore` directive family,
-//! carried inside `@comment{…}` entries.
+//! Comment-based suppression for `.bib`, carried inside `@comment{…}` entries.
 //!
 //! A `%` line comment only exists *inside* an entry in BibTeX — free text between
 //! entries lexes as `JUNK`, with no comment token to hang a directive on — so
-//! unlike the LaTeX side (`% badness-ignore …` in a `COMMENT` token) the carrier is
-//! a structured `@comment` entry, a [`COMMENT_ENTRY`] node:
+//! unlike the LaTeX side the carrier is a structured `@comment` entry, a
+//! [`COMMENT_ENTRY`] node:
 //!
 //! ```text
-//! @comment{badness-ignore <rule>: <reason>}        suppress <rule> on the next entry
-//! @comment{badness-ignore-file <rule>: <reason>}   suppress <rule> file-wide
-//! @comment{badness-ignore-file: <reason>}          suppress ALL rules file-wide
+//! @comment{badness-lint skip <rule>: <reason>}       the next entry, one rule
+//! @comment{badness-lint skip: <reason>}              the next entry, every rule
+//! @comment{badness-lint off <rule>} … {… on <rule>}  a region of entries
+//! @comment{badness-lint skip-file <rule>: <reason>}  the whole file
 //! ```
 //!
-//! The bib analog of [`crate::linter::suppression`]; the directive grammar and the
-//! `is_suppressed` range test are identical, only the carrier (a `@comment` entry
-//! instead of a `%` comment) and the next-sibling attachment differ.
+//! The **grammar** is [`crate::directives::parse_directive`], shared with the
+//! LaTeX side and the formatter, so the two carriers cannot drift; only the
+//! carrier and the next-sibling attachment differ. The retired
+//! `@comment{badness-ignore …}` and `@comment{badness-ignore-file …}` spellings
+//! still resolve through the same path and are no longer documented.
+//!
+//! **Only the lint axis acts here.** `badness-format` is accepted by the shared
+//! grammar but does nothing in a `.bib`: the bib formatter is a canonical
+//! re-emitter rather than a trivia-only pass, so "reproduce this span byte for
+//! byte" is a different mechanism there, not a matter of routing these ranges
+//! through. Recorded in `TODO.md`.
 //!
 //! [`COMMENT_ENTRY`]: crate::bib::syntax::SyntaxKind::COMMENT_ENTRY
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rowan::NodeOrToken;
 
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
+use crate::directives::{Verb, parse_directive};
 
 #[derive(Debug, Clone, Default)]
 pub struct BibSuppressionMap {
-    /// Rule IDs suppressed file-wide (`@comment{badness-ignore-file <rule>: …}`).
-    file_rules: HashSet<String>,
-    /// Whether the file has a "suppress everything" directive.
-    file_all: bool,
-    /// `rule → byte ranges`. A diagnostic is suppressed if its `[start, end)`
-    /// falls fully inside one of the registered ranges for its rule.
-    node_skips: HashMap<String, Vec<(usize, usize)>>,
+    /// Byte ranges in which *every* rule is suppressed.
+    all_ranges: Vec<(usize, usize)>,
+    /// `rule → byte ranges` for the rule-selective directives.
+    rule_ranges: HashMap<String, Vec<(usize, usize)>>,
+}
+
+/// A region opened by an `off` and waiting for its `on`.
+struct OpenRegion {
+    rule: Option<String>,
+    start: usize,
 }
 
 impl BibSuppressionMap {
     pub fn build(root: &SyntaxNode) -> Self {
         let mut map = Self::default();
+        let mut open: Vec<OpenRegion> = Vec::new();
+
         for node in root.descendants() {
-            if node.kind() == SyntaxKind::COMMENT_ENTRY {
-                classify_comment(&node, &mut map);
+            if node.kind() != SyntaxKind::COMMENT_ENTRY {
+                continue;
             }
+            let Some(body) = comment_directive_text(&node) else {
+                continue;
+            };
+            let Some(directive) = parse_directive(body.trim()) else {
+                continue;
+            };
+            if !directive.axis.covers_lint() {
+                continue;
+            }
+            match directive.verb {
+                Verb::SkipFile => {
+                    map.record(span(root.text_range()), &directive.rule);
+                }
+                Verb::Skip => {
+                    if let Some(target) = next_meaningful_sibling(&node) {
+                        map.record(target, &directive.rule);
+                    }
+                }
+                // Unlike the LaTeX side there is no forward comment binding to
+                // work around here — an `@comment` entry is a sibling, never
+                // reparented into the entry below it — so the region simply
+                // opens at the next meaningful sibling.
+                Verb::Off => {
+                    if !open.iter().any(|o| o.rule == directive.rule) {
+                        let start = next_meaningful_sibling(&node)
+                            .map(|(s, _)| s)
+                            .unwrap_or_else(|| usize::from(node.text_range().end()));
+                        open.push(OpenRegion {
+                            rule: directive.rule.clone(),
+                            start,
+                        });
+                    }
+                }
+                Verb::On => {
+                    if let Some(i) = open.iter().position(|o| o.rule == directive.rule) {
+                        let region = open.remove(i);
+                        let end = usize::from(node.text_range().start());
+                        map.record((region.start, end), &region.rule);
+                    }
+                }
+            }
+        }
+
+        // Unclosed regions run to end of file.
+        let eof = usize::from(root.text_range().end());
+        for region in open {
+            map.record((region.start, eof), &region.rule);
         }
         map
     }
 
+    fn record(&mut self, range: (usize, usize), rule: &Option<String>) {
+        match rule {
+            Some(rule) => self
+                .rule_ranges
+                .entry(rule.clone())
+                .or_default()
+                .push(range),
+            None => self.all_ranges.push(range),
+        }
+    }
+
     /// Whether a `[start, end)` diagnostic for `rule` is suppressed.
     pub fn is_suppressed(&self, rule: &str, start: usize, end: usize) -> bool {
-        if self.file_all {
-            return true;
-        }
-        if self.file_rules.contains(rule) {
-            return true;
-        }
-        if let Some(ranges) = self.node_skips.get(rule) {
-            return ranges.iter().any(|(rs, re)| *rs <= start && end <= *re);
-        }
-        false
-    }
-}
-
-fn classify_comment(node: &SyntaxNode, map: &mut BibSuppressionMap) {
-    let Some(body) = comment_directive_text(node) else {
-        return;
-    };
-    let body = body.trim();
-    if let Some(rest) = body.strip_prefix("badness-ignore-file") {
-        let rest = rest.trim_start();
-        // `…-file:` (no rule) suppresses everything; `…-file <rule>:` one rule.
-        if rest.starts_with(':') {
-            map.file_all = true;
-        } else if let Some(rule) = parse_rule(rest) {
-            map.file_rules.insert(rule);
-        }
-        return;
-    }
-    if let Some(rest) = body.strip_prefix("badness-ignore")
-        && let Some(rule) = parse_rule(rest.trim_start())
-        && let Some(target) = next_meaningful_sibling(node)
-    {
-        map.node_skips.entry(rule).or_default().push(target);
+        let covers =
+            |ranges: &[(usize, usize)]| ranges.iter().any(|(rs, re)| *rs <= start && end <= *re);
+        covers(&self.all_ranges) || self.rule_ranges.get(rule).is_some_and(|r| covers(r))
     }
 }
 
 /// The inner text of a `@comment{…}` / `@comment(…)` entry — everything between
 /// the opening and closing delimiter. Returns `None` if no delimiter pair is
 /// found. Used only to read a directive, so nested braces (which never occur in a
-/// `badness-ignore` line) need no special handling.
+/// directive line) need no special handling.
 fn comment_directive_text(node: &SyntaxNode) -> Option<String> {
     let text = node.to_string();
     let open = text.find(['{', '('])?;
@@ -98,19 +140,7 @@ fn comment_directive_text(node: &SyntaxNode) -> Option<String> {
     Some(text[open + 1..close].to_string())
 }
 
-/// Read the leading `<rule>` token of `<rule>: <reason>` (or a bare `<rule>`).
-fn parse_rule(rest: &str) -> Option<String> {
-    let trimmed = rest.trim_start();
-    let end = trimmed
-        .find(|c: char| c == ':' || c.is_whitespace())
-        .unwrap_or(trimmed.len());
-    if end == 0 {
-        return None;
-    }
-    Some(trimmed[..end].to_string())
-}
-
-/// The byte range of the next non-trivia block after the `@comment` directive,
+/// The byte range of the next non-trivia block after the directive entry,
 /// skipping whitespace/newlines and further `@comment` entries (so two stacked
 /// directives both attach to the entry that follows them).
 fn next_meaningful_sibling(node: &SyntaxNode) -> Option<(usize, usize)> {
@@ -148,41 +178,73 @@ mod tests {
     }
 
     #[test]
-    fn file_all_suppresses_everything() {
-        let m = map_of("@comment{badness-ignore-file: noisy}\n@misc{k}\n");
+    fn skip_file_without_a_rule_suppresses_everything() {
+        let m = map_of("@comment{badness-lint skip-file: noisy}\n@book{a, title={T}}\n");
         assert!(m.is_suppressed("anything", 0, 1));
     }
 
     #[test]
-    fn file_rule_suppresses_only_that_rule() {
-        let m = map_of("@comment{badness-ignore-file unused-string: legacy}\n");
-        assert!(m.is_suppressed("unused-string", 0, 1));
+    fn skip_file_with_a_rule_suppresses_only_that_rule() {
+        let m = map_of("@comment{badness-lint skip-file missing-required-field: gone}\n");
+        assert!(m.is_suppressed("missing-required-field", 0, 1));
         assert!(!m.is_suppressed("duplicate-key", 0, 1));
     }
 
     #[test]
+    fn skip_targets_the_following_entry() {
+        let src = "@comment{badness-lint skip missing-required-field: gone}\n@book{a, title={T}}\n";
+        let m = map_of(src);
+        let at = src.find("@book").expect("has the entry");
+        assert!(m.is_suppressed("missing-required-field", at, at + 5));
+    }
+
+    #[test]
+    fn skip_does_not_leak_to_later_entries() {
+        let src = "@comment{badness-lint skip missing-required-field: gone}\n\
+                   @book{a, title={T}}\n@book{b, title={U}}\n";
+        let m = map_of(src);
+        let later = src.rfind("@book").expect("has a second entry");
+        assert!(!m.is_suppressed("missing-required-field", later, later + 5));
+    }
+
+    /// Region scope, which the retired family never had on either side.
+    #[test]
+    fn region_covers_the_entries_between_its_markers() {
+        let src = "@comment{badness-lint off missing-required-field}\n\
+                   @book{a, title={T}}\n\
+                   @comment{badness-lint on missing-required-field}\n\
+                   @book{b, title={U}}\n";
+        let m = map_of(src);
+        let inside = src.find("@book{a").expect("has a");
+        assert!(m.is_suppressed("missing-required-field", inside, inside + 5));
+        let outside = src.find("@book{b").expect("has b");
+        assert!(!m.is_suppressed("missing-required-field", outside, outside + 5));
+    }
+
+    /// The retired spellings keep working — deprecated in the docs, not in
+    /// behavior.
+    #[test]
+    fn retired_ignore_family_still_suppresses() {
+        let src = "@comment{badness-ignore missing-required-field: gone}\n@book{a, title={T}}\n";
+        let m = map_of(src);
+        let at = src.find("@book").expect("has the entry");
+        assert!(m.is_suppressed("missing-required-field", at, at + 5));
+
+        let file = map_of("@comment{badness-ignore-file: noisy}\n@book{a, title={T}}\n");
+        assert!(file.is_suppressed("anything", 0, 1));
+    }
+
+    /// `badness-format` parses but has no bib meaning; it must not silence a
+    /// diagnostic on its way through.
+    #[test]
+    fn format_family_does_not_suppress_lint() {
+        let m = map_of("@comment{badness-format skip-file}\n@book{a, title={T}}\n");
+        assert!(!m.is_suppressed("missing-required-field", 0, 1));
+    }
+
+    #[test]
     fn non_directive_comment_is_inert() {
-        let m = map_of("@comment{just a note}\n@misc{k}\n");
-        assert!(!m.is_suppressed("unused-string", 0, 1));
-        assert!(!m.file_all);
-    }
-
-    #[test]
-    fn node_directive_targets_following_entry() {
-        let src = "@comment{badness-ignore empty-field: ok}\n@misc{k, title = {}}\n";
-        let m = map_of(src);
-        // The empty `title` field lives inside the following entry's range.
-        let entry_start = src.find("@misc").unwrap();
-        assert!(m.is_suppressed("empty-field", entry_start + 1, entry_start + 5));
-        // A different rule at the same place is not suppressed.
-        assert!(!m.is_suppressed("duplicate-key", entry_start + 1, entry_start + 5));
-    }
-
-    #[test]
-    fn node_directive_does_not_leak_to_later_entries() {
-        let src = "@comment{badness-ignore empty-field: ok}\n@misc{a, t = {}}\n@misc{b, t = {}}\n";
-        let m = map_of(src);
-        let second = src.rfind("@misc").unwrap();
-        assert!(!m.is_suppressed("empty-field", second + 1, second + 5));
+        let m = map_of("@comment{just a note}\n@book{a, title={T}}\n");
+        assert!(!m.is_suppressed("missing-required-field", 0, 1));
     }
 }

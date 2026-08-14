@@ -27,7 +27,7 @@ Contributor recipe for a new rule: `CONTRIBUTING.md`.
 
 ## Rule declarations
 
-- `id` is stable kebab-case; it is the `% badness-ignore` target and the
+- `id` is stable kebab-case; it is the `% badness-lint skip` target and the
   reported `rule`. Renaming one is a breaking change for users.
 - **`emits_fix` must match reality** — the `--fix` fixpoint loop only runs
   fix-emitting rules each round. A test checks this.
@@ -59,14 +59,23 @@ Contributor recipe for a new rule: `CONTRIBUTING.md`.
 
 ## Suppression
 
-- `% badness-ignore <rule>` / `-file` is the rule-selective family and stays
-  lint-only. Unchanged; its spellings are user-facing API.
-- The combined `% badness skip`/`off`/`on`/`skip-file` family suppresses *every*
-  rule and the formatter together. It is resolved in
-  `badness_parser::directives` (shared with the formatter) and folded into
-  `SuppressionMap::all_ranges`. Region scope reaches the linter only this way.
+- **One grammar, in `badness_parser::directives`.** `% badness-lint <verb>
+  [<rule>]` is the lint axis, `% badness <verb>` covers lint and layout both.
+  The verb carries the scope (`skip` / `off`+`on` / `skip-file`); the rule is
+  optional and means every rule when omitted. `SuppressionMap` and
+  `BibSuppressionMap` are lookups over the resolved ranges, nothing more — don't
+  re-parse a directive in either.
+- **`% badness-ignore` / `-file` are retired but still resolve**, through the
+  same path, flagged `Directive::deprecated`. A directive spelling is
+  user-facing API, so they stay indefinitely; they are simply undocumented. The
+  `retired_ignore_family_still_suppresses` tests are the promise — deleting one
+  is how it quietly breaks.
 - A `% badness-format` directive must never suppress a diagnostic — that is the
-  whole point of having two families.
+  whole point of having separate axes. Pinned on both carriers.
+- **The `.bib` carrier is an `@comment` entry, not a `%` comment**, because
+  BibTeX has no line-comment token between entries. Same grammar; only the
+  carrier and the sibling attachment differ. The format axis parses there and
+  deliberately does nothing (the bib formatter is a canonical re-emitter).
 
 ## Registry
 

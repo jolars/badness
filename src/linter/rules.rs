@@ -683,7 +683,7 @@ pub struct Example {
 ///   node shape.
 pub trait Rule: Send + Sync {
     /// The stable, kebab-case identifier reported as the diagnostic's `rule` and
-    /// targeted by `% badness-ignore <id>`.
+    /// targeted by `% badness-lint skip <id>`.
     fn id(&self) -> &'static str;
 
     /// The severity a rule emits unless it overrides per-finding.

@@ -274,7 +274,7 @@ rule's `description()`/`examples()` in `src/linter/rules/` and regenerate. -->
 reports a diagnostic for every finding. This page is the catalogue: one section
 per rule, keyed by its stable **rule id**. That id is what appears in a
 diagnostic, what `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target,
-and what a `% badness-ignore <id>` comment suppresses.
+and what a `% badness-lint skip <id>` comment suppresses.
 
 Every rule is **on by default**; narrowing happens only through `select`/`ignore`
 in the `[lint]` table (see the
@@ -299,11 +299,26 @@ const FOOTER: &str = "\
 To suppress a rule at a single site, use a comment directive:
 
 ```tex
-% badness-ignore deprecated-command: legacy code, leave as-is
+% badness-lint skip deprecated-command: legacy code, leave as-is
 {\\bf here}
 ```
 
-`% badness-ignore-file <id>: ...` suppresses one rule file-wide, and
-`% badness-ignore-file: ...` suppresses all rules file-wide. Parse diagnostics
-(rule id `parse`) are never suppressed by `select`/`ignore`.
+The verb carries the scope. `skip` covers the next construct, `off` and `on`
+delimit a region, and `skip-file` covers the whole file wherever it sits:
+
+```tex
+% badness-lint off deprecated-command: legacy chapter
+{\\bf here}
+{\\it and here}
+% badness-lint on deprecated-command
+```
+
+Naming the `<id>` is optional; leaving it out suppresses every rule over that
+same span. The `: <reason>` tail is optional everywhere.
+
+`% badness skip` / `off` / `on` / `skip-file` do the same and turn off the
+**formatter** at the same time; see [Formatting](../guide/formatting.md#turning-the-formatter-off)
+for the layout-only `% badness-format` spellings.
+
+Parse diagnostics (rule id `parse`) are never suppressed by `select`/`ignore`.
 ";

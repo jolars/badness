@@ -237,10 +237,18 @@ BibTeX has no line-comment token, so per-site suppression rides a structured
 suppresses one rule on the **next entry**:
 
 ```bib
-@comment{badness-ignore missing-required-field: publisher long gone}
+@comment{badness-lint skip missing-required-field: publisher long gone}
 @book{oldbook, title = {An Orphaned Book}}
 ```
 
-`@comment{badness-ignore-file <id>: ...}` suppresses one rule file-wide, and
-`@comment{badness-ignore-file: ...}` suppresses all rules file-wide. Parse
-diagnostics (rule id `parse`) are never suppressed.
+The grammar is the LaTeX one, only the carrier differs. `off` and `on` delimit a
+region of entries, and `skip-file` covers the whole file wherever it sits:
+
+```bib
+@comment{badness-lint off missing-required-field: imported, incomplete by design}
+@book{oldbook, title = {An Orphaned Book}}
+@comment{badness-lint on missing-required-field}
+```
+
+Naming the `<id>` is optional; leaving it out suppresses every rule over that
+same span. Parse diagnostics (rule id `parse`) are never suppressed.

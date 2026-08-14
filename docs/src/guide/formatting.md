@@ -76,12 +76,13 @@ To exclude whole files by path instead, use `exclude`/`extend-exclude` in
 reference](../reference/configuration.md). That is the better tool when you
 control the config, since it keeps the directive out of the document.
 
-Two notes on where directives are read. A directive must be its own `%`
-comment---in a `.dtx` documentation line the leading `%` is a documentation
-margin rather than a comment, so a directive written there is inert (inside a
-`macrocode` chunk it works normally). And `% badness-ignore <rule>` is a
-different, linter-only family that has nothing to do with layout; see
-[Linting](linting.md).
+The mirror of these is `% badness-lint`, which suppresses diagnostics without
+touching layout and takes an optional rule name; see [Linting](linting.md).
+
+One note on where directives are read: a directive must be its own `%` comment.
+In a `.dtx` documentation line the leading `%` is a documentation margin rather
+than a comment, so a directive written there is inert (inside a `macrocode`
+chunk it works normally).
 
 ## Guarantees
 

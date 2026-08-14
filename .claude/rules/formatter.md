@@ -230,8 +230,8 @@ predicates the formatter *preserves*.
 - `% badness-format skip`/`off`/`on`/`skip-file` turn layout off; the bare
   `% badness` family turns off layout *and* every lint rule. Resolved once in
   `badness_parser::directives`, consumed here as `LowerCtx::suppressed` (same
-  shape as `expl3_regions`). `% badness-ignore <rule>` is a different,
-  lint-only family — never route it here.
+  shape as `expl3_regions`). `% badness-lint …` is the lint-only axis and the
+  retired `% badness-ignore` its alias — neither may ever reach layout.
 - **Containment, not overlap** (`LowerCtx::suppressed`). A region begins inside
   every construct enclosing its content, so an overlap test suppresses the
   outermost *ancestor* — one directive takes the whole `document` environment

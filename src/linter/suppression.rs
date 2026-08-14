@@ -1,190 +1,67 @@
-//! Comment-based suppression: the `% badness-ignore` directive family.
+//! Comment-based suppression, as the linter consumes it.
 //!
-//! Three forms are recognized (LaTeX line comments, so `%` not `#`):
+//! The directive grammar itself lives in [`crate::directives`], shared with the
+//! formatter — one grammar for all three families:
 //!
 //! ```text
-//! % badness-ignore <rule>: <reason>        suppress <rule> on the next meaningful sibling
-//! % badness-ignore-file <rule>: <reason>   suppress <rule> file-wide
-//! % badness-ignore-file: <reason>          suppress ALL rules file-wide
+//! % badness-lint skip <rule>: <reason>       the next construct, one rule
+//! % badness-lint skip: <reason>              the next construct, every rule
+//! % badness-lint off <rule> … on <rule>      a region
+//! % badness-lint skip-file <rule>: <reason>  the whole file
+//! % badness skip / off / on / skip-file      the same, plus the formatter
 //! ```
 //!
-//! This family is rule-selective and lint-only. The combined `% badness`
-//! family — which turns off the formatter *and* every lint rule over a `skip`
-//! target, an `off`/`on` region, or a whole file — has no selector slot and is
-//! shared with the formatter, so it is scanned by
-//! [`crate::directives`] and folded in here as
-//! [`SuppressionMap::all_ranges`]. Region scope reaches the linter only through
-//! that family; `% badness-ignore` has never had one.
+//! Omitting `<rule>` means every rule. The retired `% badness-ignore` and
+//! `% badness-ignore-file` spellings still resolve, through the same path, and
+//! are no longer documented.
 //!
-//! Byte ranges are plain `usize` offsets (the
-//! [`Diagnostic`](super::Diagnostic) stores plain offsets, not a rowan
-//! `TextRange`), matched against LaTeX comment syntax. The comment-to-node attachment
-//! for a node-level suppression is "next non-trivia sibling", computed during the
-//! walk — no `place_comment` indirection.
+//! This module is only the *lookup*: it flattens the resolved ranges into the
+//! plain `usize` offsets [`Diagnostic`](super::Diagnostic) stores (a rowan
+//! `TextRange` never reaches a diagnostic) and answers containment queries. A
+//! finding is suppressed when its `[start, end)` falls fully inside a range
+//! registered for its rule, or inside an every-rule range.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use rowan::NodeOrToken;
+use rowan::TextRange;
 
-use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
+use crate::syntax::SyntaxNode;
 
 #[derive(Debug, Clone, Default)]
 pub struct SuppressionMap {
-    /// Rule IDs suppressed file-wide (`% badness-ignore-file <rule>: …`).
-    file_rules: HashSet<String>,
-    /// Whether the file has a "suppress everything" directive.
-    file_all: bool,
-    /// `rule → byte ranges`. A diagnostic is suppressed if its `[start, end)`
-    /// falls fully inside one of the registered ranges for its rule.
-    node_skips: HashMap<String, Vec<(usize, usize)>>,
-    /// Byte ranges in which *every* rule is suppressed, from the combined
-    /// `% badness` directive family (see [`crate::directives`]). Sorted and
-    /// non-overlapping, so containment is a plain scan.
+    /// Byte ranges in which *every* rule is suppressed.
     all_ranges: Vec<(usize, usize)>,
+    /// `rule → byte ranges` for the rule-selective directives.
+    rule_ranges: HashMap<String, Vec<(usize, usize)>>,
 }
 
 impl SuppressionMap {
     pub fn build(root: &SyntaxNode) -> Self {
-        let mut map = Self::default();
-        for element in root.descendants_with_tokens() {
-            if let NodeOrToken::Token(token) = element
-                && token.kind() == SyntaxKind::COMMENT
-            {
-                classify_comment(&token, &mut map);
-            }
+        let resolved = crate::directives::Suppressions::build(root);
+        Self {
+            all_ranges: spans(resolved.lint_all_ranges()),
+            rule_ranges: resolved
+                .lint_rule_ranges()
+                .iter()
+                .map(|(rule, ranges)| (rule.clone(), spans(ranges)))
+                .collect(),
         }
-        map.all_ranges = crate::directives::Suppressions::build(root)
-            .lint_ranges()
-            .iter()
-            .map(|r| (usize::from(r.start()), usize::from(r.end())))
-            .collect();
-        map
     }
 
     /// Whether a `[start, end)` diagnostic for `rule` is suppressed.
     pub fn is_suppressed(&self, rule: &str, start: usize, end: usize) -> bool {
-        if self.file_all {
-            return true;
-        }
-        if self.file_rules.contains(rule) {
-            return true;
-        }
-        if self
-            .all_ranges
-            .iter()
-            .any(|(rs, re)| *rs <= start && end <= *re)
-        {
-            return true;
-        }
-        if let Some(ranges) = self.node_skips.get(rule) {
-            return ranges.iter().any(|(rs, re)| *rs <= start && end <= *re);
-        }
-        false
+        let covers =
+            |ranges: &[(usize, usize)]| ranges.iter().any(|(rs, re)| *rs <= start && end <= *re);
+        covers(&self.all_ranges) || self.rule_ranges.get(rule).is_some_and(|r| covers(r))
     }
 }
 
-fn classify_comment(token: &SyntaxToken, map: &mut SuppressionMap) {
-    let body = match token.text().strip_prefix('%') {
-        Some(rest) => rest.trim_start(),
-        None => return,
-    };
-    if let Some(rest) = body.strip_prefix("badness-ignore-file") {
-        let rest = rest.trim_start();
-        // `…-file:` (no rule) suppresses everything; `…-file <rule>:` one rule.
-        if rest.starts_with(':') {
-            map.file_all = true;
-        } else if let Some(rule) = parse_rule(rest) {
-            map.file_rules.insert(rule);
-        }
-        return;
-    }
-    if let Some(rest) = body.strip_prefix("badness-ignore")
-        && let Some(rule) = parse_rule(rest.trim_start())
-        && let Some(target) = next_meaningful_sibling(token)
-    {
-        map.node_skips.entry(rule).or_default().push(target);
-    }
-}
-
-/// Read the leading `<rule>` token of `<rule>: <reason>` (or a bare `<rule>`).
-fn parse_rule(rest: &str) -> Option<String> {
-    let trimmed = rest.trim_start();
-    let end = trimmed
-        .find(|c: char| c == ':' || c.is_whitespace())
-        .unwrap_or(trimmed.len());
-    if end == 0 {
-        return None;
-    }
-    Some(trimmed[..end].to_string())
-}
-
-/// The byte range a node-level directive suppresses: the next non-trivia,
-/// non-comment element after `token`, bubbling up through parents whose
-/// remaining siblings are all trivia (e.g. a comment on its own line under
-/// `ROOT`, whose target is the next block). Exception: a comment bound into a
-/// `DOC_COMMENT` targets the whole construct that owns it, not a sibling.
-fn next_meaningful_sibling(token: &SyntaxToken) -> Option<(usize, usize)> {
-    // A comment bound into a `DOC_COMMENT` node is always the *leading child*
-    // of the `COMMAND`/`ENVIRONMENT` construct it documents, not a sibling
-    // before it. Walking forward from the comment token only ever finds pieces
-    // *inside* that same construct (e.g. just its control word, missing the
-    // construct's own arguments), never the construct as a whole. Target the
-    // whole construct directly in that case.
-    if let Some(parent) = token.parent()
-        && parent.kind() == SyntaxKind::DOC_COMMENT
-    {
-        let construct = parent.parent()?;
-        return Some(span(construct.text_range()));
-    }
-    let mut current = token.clone();
-    loop {
-        let parent = current.parent()?;
-        if let Some(range) = first_meaningful_after(&parent, &NodeOrToken::Token(current.clone())) {
-            return Some(range);
-        }
-        // Nothing after `current` in `parent`: retry against `parent`'s own
-        // following siblings one level up.
-        let grand = parent.parent()?;
-        if let Some(range) = first_meaningful_after(&grand, &NodeOrToken::Node(parent.clone())) {
-            return Some(range);
-        }
-        current = grand.first_token()?;
-        // Guard against a non-progressing climb (a single-child spine).
-        if grand == parent {
-            return None;
-        }
-    }
-}
-
-/// Scan `parent`'s children for the first non-trivia element strictly after
-/// `after`, returning its byte range as `(start, end)`.
-fn first_meaningful_after(
-    parent: &SyntaxNode,
-    after: &NodeOrToken<SyntaxNode, SyntaxToken>,
-) -> Option<(usize, usize)> {
-    let mut past = false;
-    for element in parent.children_with_tokens() {
-        if !past {
-            if &element == after {
-                past = true;
-            }
-            continue;
-        }
-        match &element {
-            NodeOrToken::Token(t)
-                if matches!(
-                    t.kind(),
-                    SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT
-                ) => {}
-            _ => return Some(span(element.text_range())),
-        }
-    }
-    None
-}
-
-/// A rowan `TextRange` as the plain `(start, end)` offsets the map stores.
-fn span(range: rowan::TextRange) -> (usize, usize) {
-    (usize::from(range.start()), usize::from(range.end()))
+/// Resolved ranges as the plain `(start, end)` offsets the map stores.
+fn spans(ranges: &[TextRange]) -> Vec<(usize, usize)> {
+    ranges
+        .iter()
+        .map(|r| (usize::from(r.start()), usize::from(r.end())))
+        .collect()
 }
 
 #[cfg(test)]
@@ -197,20 +74,45 @@ mod tests {
     }
 
     #[test]
-    fn file_all_suppresses_everything() {
-        let m = map_of("% badness-ignore-file: noisy\n\\bf\n");
+    fn skip_file_without_a_rule_suppresses_everything() {
+        let m = map_of("% badness-lint skip-file: noisy\n\\bf\n");
         assert!(m.is_suppressed("anything", 0, 1));
     }
 
     #[test]
-    fn file_rule_suppresses_only_that_rule() {
-        let m = map_of("% badness-ignore-file deprecated-command: legacy\n\\bf\n");
+    fn skip_file_with_a_rule_suppresses_only_that_rule() {
+        let m = map_of("% badness-lint skip-file deprecated-command: legacy\n\\bf\n");
         assert!(m.is_suppressed("deprecated-command", 0, 1));
         assert!(!m.is_suppressed("duplicate-label", 0, 1));
     }
 
-    /// The combined family reaches the linter through the shared scanner, and
-    /// carries the region scope `% badness-ignore` does not have.
+    #[test]
+    fn skip_targets_the_next_construct_only() {
+        let src = "% badness-lint skip deprecated-command\n\\bf x\n\n\\bf y\n";
+        let m = map_of(src);
+        let first = src.find("\\bf x").expect("has first");
+        assert!(m.is_suppressed("deprecated-command", first, first + 3));
+        let second = src.find("\\bf y").expect("has second");
+        assert!(!m.is_suppressed("deprecated-command", second, second + 3));
+    }
+
+    /// Region scope, which the retired family never had.
+    #[test]
+    fn lint_region_suppresses_one_rule_between_its_markers() {
+        let src = "\\bf a\n% badness-lint off deprecated-command\n\\bf b\n\
+                   % badness-lint on deprecated-command\n\\bf c\n";
+        let m = map_of(src);
+        let inside = src.find("\\bf b").expect("has b");
+        assert!(m.is_suppressed("deprecated-command", inside, inside + 3));
+        assert!(
+            !m.is_suppressed("duplicate-label", inside, inside + 3),
+            "a rule-selective region must not silence other rules"
+        );
+        let after = src.find("\\bf c").expect("has c");
+        assert!(!m.is_suppressed("deprecated-command", after, after + 3));
+    }
+
+    /// The combined family covers every rule, and the formatter besides.
     #[test]
     fn combined_family_suppresses_every_rule_in_a_region() {
         let src = "\\bf\n% badness off\n\\it\n% badness on\n\\bf\n";
@@ -230,10 +132,26 @@ mod tests {
         assert!(!m.is_suppressed("deprecated-command", at, at + 3));
     }
 
+    /// The retired spellings keep working — deprecated in the docs, not in
+    /// behavior. Deleting these tests is how the promise quietly breaks.
+    #[test]
+    fn retired_ignore_family_still_suppresses() {
+        let node = map_of("% badness-ignore deprecated-command: legacy\n\\bf\n");
+        let at = "% badness-ignore deprecated-command: legacy\n".len();
+        assert!(node.is_suppressed("deprecated-command", at, at + 3));
+        assert!(!node.is_suppressed("duplicate-label", at, at + 3));
+
+        let file_rule = map_of("% badness-ignore-file deprecated-command: legacy\n\\bf\n");
+        assert!(file_rule.is_suppressed("deprecated-command", 0, 1));
+        assert!(!file_rule.is_suppressed("duplicate-label", 0, 1));
+
+        let file_all = map_of("% badness-ignore-file: noisy\n\\bf\n");
+        assert!(file_all.is_suppressed("anything", 0, 1));
+    }
+
     #[test]
     fn non_directive_comment_is_inert() {
         let m = map_of("% just a note\n\\bf\n");
         assert!(!m.is_suppressed("deprecated-command", 0, 1));
-        assert!(!m.file_all);
     }
 }

@@ -999,13 +999,28 @@ becoming a second sanctioned divergence from `badness format`.
 Three decisions carry the weight.
 
 **The verb carries the scope.** Rule-selective lint suppression needs a selector
-slot; layout suppression has nothing to select, so a shared grammar with the
-selector in second position would be lint-shaped by construction. Splitting on
-the verb instead (`skip` / `off` / `on` / `skip-file`, the vocabulary tex-fmt,
-ruff, and black already established) lets both axes share one grammar and keeps
-every form reading as an imperative. `% badness-ignore <rule>` is untouched and
-still the only rule-selective form; what the new families add on the lint side
-is the region scope it has never had.
+slot; layout suppression has nothing to select. A grammar putting the selector
+in second position would therefore be lint-shaped by construction, with the
+format axis forced to leave a slot nothing could fill. Splitting on the verb
+instead (`skip` / `off` / `on` / `skip-file`, the vocabulary tex-fmt, ruff, and
+black already established) lets all three axes share one grammar, keeps the
+selector optional where it means something and absent where it does not, and
+keeps every form reading as an imperative — `skip-file` is "skip this file",
+where a `-file` suffix on the subsystem name would read as a noun phrase.
+
+The retired `% badness-ignore <rule>` and `% badness-ignore-file` spellings map
+onto `% badness-lint skip <rule>` and `% badness-lint skip-file <rule>`, and
+resolve through the same path. They are undocumented but permanent: a directive
+spelling is user-facing API in the same sense a rule id is.
+`Directive::deprecated` marks them for a future lint rule (recorded in
+`TODO.md`). What the lint axis gains in the move is the **region** scope, which
+the retired family never had.
+
+The `.bib` side shares the grammar and differs only in carrier: BibTeX has no
+line-comment token between entries, so a directive rides an `@comment{…}` entry
+(`bib/linter/suppression.rs`). The format axis parses there and deliberately
+does nothing — the bib formatter is a canonical re-emitter rather than a
+trivia-only pass, so byte-exact reproduction is a different mechanism.
 
 **Suppression is containment, not overlap.** An `off`/`on` region is delimited
 by comments the author placed, not by CST boundaries, so it can begin halfway
@@ -1100,9 +1115,10 @@ a pure function over source, fixes, and that flag, shared by the CLI and the LSP
 code-action path. It drops any malformed or overlapping fix so the output stays
 well-formed, and `lint --fix` runs it to a fixpoint, re-linting between rounds.
 
-Findings are suppressed inline with `% badness-ignore <rule>: <reason>`, which
-covers the next meaningful sibling, or `% badness-ignore-file` for the whole
-file.
+Findings are suppressed inline with `% badness-lint skip <rule>: <reason>`,
+covering the next meaningful sibling; `off`/`on` covers a region and `skip-file`
+the whole file, and omitting the `<rule>` covers every rule. See [Comment
+directives](#comment-directives) for the shared grammar.
 
 ## The language server
 

@@ -1416,30 +1416,44 @@ not re-proposed.
   was already reachable through the `namedGroupingBracesBrackets` family) and no
   CST oracle can see it. See `architecture.md` § *`%` comments in `.bib`*.
 
+- [ ] **`deprecated-suppression-syntax`: report the retired `% badness-ignore`
+  family.** `% badness-ignore <rule>` and `% badness-ignore-file [<rule>]` are
+  undocumented but still resolve (permanently — a directive spelling is
+  user-facing API). Nothing tells a user their file carries the old spelling, so
+  a warning with a **safe** autofix rewriting to `% badness-lint skip <rule>` /
+  `% badness-lint skip-file <rule>` is the missing half of the deprecation. The
+  rewrite is entirely inside a comment, so it is textual, trivially lossless,
+  and needs no layout decision — exactly the fix contract. The fact is already
+  computed: `directives::Directive::deprecated` marks these at parse time, so the
+  rule needs `Suppressions` to retain the directives it saw (with the comment
+  token's range) rather than only the resolved ranges. Covers both carriers —
+  the `%` comment and the `.bib` `@comment{…}` entry.
+
 - [ ] **A meta rule for inert suppression directives.** Ruff's documented wart is
   that a misplaced `# fmt: off` does nothing and says nothing; badness now has
   the same hole. Report a `% badness…` directive that suppresses nothing: an
   `on` with no open region, a `skip` with no following construct, an `off` left
-  unclosed at EOF (which runs to end of file on purpose, but is worth saying),
-  and a directive written on a `.dtx` doc-margin line, where the leading `%` is
-  a margin rather than a comment so the directive is inert by construction.
-  Needs `directives::Suppressions` to retain the directives it saw, including the
-  ones that resolved to nothing — fatou's `meta/*-suppression` rules are the
-  model. A natural companion is `unexplained-suppression` (no `: <reason>`).
+  unclosed at EOF (which runs to end of file on purpose, but is worth saying), a
+  `% badness-format` directive in a `.bib` (parsed, deliberately inert), and a
+  directive written on a `.dtx` doc-margin line, where the leading `%` is a
+  margin rather than a comment so the directive is inert by construction. Wants
+  the same retained-directive list as the rule above, so do them together —
+  fatou's `meta/*-suppression` rules are the model. A natural companion is
+  `unexplained-suppression` (no `: <reason>`).
 
-- [ ] **Suppression directives in `.bib`.** The `% badness-format`/`% badness`
-  families are LaTeX-only. The bib formatter is a canonical re-emitter rather
-  than a trivia-only pass, so "reproduce this span byte for byte" is a genuinely
-  different mechanism there, not a matter of routing the same ranges through.
-  Worth doing together with the `% badness-ignore` carrier below, under one
-  directive grammar.
+- [ ] **Format suppression in `.bib`.** The `% badness-format` axis parses in a
+  `.bib` `@comment{…}` and deliberately does nothing. The bib formatter is a
+  canonical re-emitter rather than a trivia-only pass, so "reproduce this span
+  byte for byte" is a genuinely different mechanism there, not a matter of
+  routing the resolved ranges through. Until it exists, the axis is silently
+  inert, which is the meta rule above's job to report.
 
-- [ ] `% badness-ignore` in `.bib`. Now that a `%` comment exists inside an entry,
-  the LaTeX-side directive carrier could work here too; today only the
-  `@comment{badness-ignore …}` entry form does (`bib/linter/suppression.rs`). The
-  two would need one directive grammar and a decision about what an in-entry
-  comment attaches to (the field below it, presumably, matching the formatter's
-  forward bind).
+- [ ] **A `%`-comment directive carrier inside a `.bib` entry.** Now that a `%`
+  comment exists inside an entry, the LaTeX-side carrier could work there too;
+  today only the `@comment{…}` entry form does (`bib/linter/suppression.rs`).
+  The grammar is already shared, so this is only a decision about what an
+  in-entry comment attaches to (the field below it, presumably, matching the
+  formatter's forward bind).
 
 - [ ] **`task bib-error-compat`: biber as a `.bib` *error* oracle.** The gap the
   `%`-comment bug exposed — `bib-parse-compat` cannot see over-strictness at all,

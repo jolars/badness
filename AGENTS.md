@@ -274,12 +274,18 @@ provenance.
 11. **Suppression directives split on the verb, and suppression is containment.**
     `% badness-format skip` / `off` / `on` / `skip-file` turn off layout;
     the bare `% badness` family turns off layout *and* every lint rule over the
-    same span. The rule-selective `% badness-ignore <rule>` family is unchanged
-    and stays lint-only: only the linter has something to select, so a shared
-    grammar with a selector in second position would be lint-shaped by
-    construction — the verb carries the scope instead
-    (`badness_parser::directives`, shared because the formatter is wasm-clean and
-    the linter is in the root crate). Two invariants hold the resolution
+    same span, and `% badness-lint <verb> [<rule>]` is the lint axis, with the
+    rule optional (omitted means every rule). One grammar in
+    `badness_parser::directives`, shared because the formatter is wasm-clean and
+    the linter is in the root crate, and shared again by the `.bib` carrier
+    (`@comment{…}`, since BibTeX has no line-comment token; the format axis
+    parses there and deliberately does nothing). **The verb carries the scope**
+    because only the linter has something to select: a grammar with a selector
+    in second position would be lint-shaped by construction, forcing the format
+    axis to leave a slot nothing could fill. `% badness-ignore` / `-file` are
+    **retired but permanent** — undocumented, still resolved through the same
+    path, flagged `Directive::deprecated`; a directive spelling is user-facing
+    API in the same sense a rule id is. Two invariants hold the resolution
     together. **Containment, not overlap:** a region begins inside every
     construct that encloses its content, so overlap would suppress the outermost
     *ancestor* — one directive suppresses the whole `document` environment and

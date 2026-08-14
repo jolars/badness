@@ -38,27 +38,34 @@ Every rule is on by default. Narrow the active set through the `[lint]` table in
 Suppress a rule at one site with a comment directive:
 
 ```tex
-% badness-ignore deprecated-command: legacy code
+% badness-lint skip deprecated-command: legacy code
 {\bf here}
 ```
 
-`% badness-ignore-file <rule>: <reason>` suppresses one rule across the file,
-and `% badness-ignore-file: <reason>` suppresses all of them.
+The verb carries the scope, and there are three:
 
-To silence *every* rule over a region---which the rule-selective family above
-has no spelling for---use the combined directives, which turn off the formatter
-at the same time:
+  | Scope              | Directive                                                |
+  | ------------------ | -------------------------------------------------------- |
+  | The next construct | `% badness-lint skip <rule>: <reason>`                   |
+  | A region           | `% badness-lint off <rule>` … `% badness-lint on <rule>` |
+  | The whole file     | `% badness-lint skip-file <rule>: <reason>`              |
 
-```tex
-% badness off
-\bf legacy block, left exactly as it is
-% badness on
+Naming the `<rule>` is optional---leave it out and the directive covers every
+rule over that same span. An `off` with no matching `on` runs to the end of the
+file. The `: <reason>` tail is optional everywhere and is never interpreted.
+
+Each has a bare counterpart that turns off the **formatter** at the same time:
+`% badness skip`, `% badness off` / `% badness on`, and `% badness skip-file`.
+For layout only, use the `% badness-format` spellings described in
+[Formatting](formatting.md#turning-the-formatter-off).
+
+In `.bib` files the same grammar rides an `@comment` entry, since BibTeX has no
+line-comment token:
+
+```bib
+@comment{badness-lint skip missing-required-field: publisher long gone}
+@book{oldbook, title = {An Orphaned Book}}
 ```
-
-`% badness skip` (next construct) and `% badness skip-file` (whole file) are the
-other two scopes. These always cover both subsystems; if you want to suppress
-layout only and keep the diagnostics, use the `% badness-format` spellings
-described in [Formatting](formatting.md#turning-the-formatter-off).
 
 Some rules ship an **auto-fix**. `badness lint --fix` applies the
 meaning-preserving (Safe) ones; `--unsafe-fixes` also applies fixes that may

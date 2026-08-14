@@ -68,13 +68,13 @@ not it ships an auto-fix.
 - `docs/src/guide/linting.md` — the prose guide; lists a few example rule ids and
   the `[lint]` config shape. Keep it roughly in sync (illustrative, not gated).
 - `src/config.rs` (`LintConfig`) and `src/linter/suppression.rs` — config surface
-  (`select`/`ignore`) and `% badness-ignore` directives. You do **not** edit
+  (`select`/`ignore`) and `% badness-lint skip` directives. You do **not** edit
   these to add a rule; gating is centralized.
 
 ## Workflow
 
 1. **Pick the rule id (kebab-case).** This is the diagnostic's `rule`, the
-   `[lint]` `select`/`ignore` key, and the `% badness-ignore <id>` target. It is
+   `[lint]` `select`/`ignore` key, and the `% badness-lint skip <id>` target. It is
    user-facing and stable—renaming it later is a breaking config change. Match
    the tone of existing ids (`deprecated-command`, `dollar-display-math`,
    `missing-nonbreaking-space`, `undefined-ref`).
@@ -230,7 +230,7 @@ not it ships an auto-fix.
   `None` resolution/citations) and conservative over incomplete namespaces.
 - **Do** put rule logic in the rule module; shared structural accessors belong in
   `src/ast.rs`, not duplicated across rules.
-- **Do** respect `% badness-ignore` implicitly—the driver filters suppressed
+- **Do** respect `% badness-lint skip` implicitly—the driver filters suppressed
   ranges after the fact, so the rule emits unconditionally.
 - **Don't** run the formatter, compute layout, or worry about line width in a
   fix. Fix decides *what* to rewrite; the formatter owns *how it's laid out*.

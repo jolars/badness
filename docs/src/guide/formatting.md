@@ -93,7 +93,10 @@ oracles:
 - **Losslessness**: the parsed tree reconstructs the input byte-for-byte, so the
   formatter never loses or corrupts content.
 - **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
-  `\verb`, comments) is never altered.
+  `\verb`, comments) is never altered. An environment badness cannot tell is
+  verbatim---one built by machinery no scan follows---can be named in
+  [`[environments]`](../reference/configuration.md#environments), which is also
+  how you teach it a `\bea`/`\eea` pair defined in a sibling `.sty`.
 - **Whitespace-only**: formatting changes whitespace, line breaks, and comment
   placement, and nothing else. It never inserts, deletes, or rewrites a token of
   real content.

@@ -12,7 +12,8 @@ pub use badness_formatter::formatter::*;
 
 pub use check::{ChangedFile, CheckError, CheckResult, check_paths, check_paths_with_style};
 
-use crate::parser::{LexConfig, parse_with_flavor};
+use crate::declarations::ResolvedDeclarations;
+use crate::parser::{LexConfig, parse_with_declarations};
 use crate::semantic::disk_scope_signatures;
 
 /// Format an on-disk file's `content` (located at `path`, parsed under `config`),
@@ -26,8 +27,16 @@ pub fn format_file_with_packages(
     path: &std::path::Path,
     style: FormatStyle,
     config: impl Into<LexConfig>,
+    declared: &ResolvedDeclarations,
 ) -> Result<String, FormatError> {
-    format_file_with_packages_sentence(content, path, style, config, SentenceOptions::default())
+    format_file_with_packages_sentence(
+        content,
+        path,
+        style,
+        config,
+        SentenceOptions::default(),
+        declared,
+    )
 }
 
 /// Like [`format_file_with_packages`] but with explicit [`SentenceOptions`]
@@ -38,14 +47,15 @@ pub fn format_file_with_packages_sentence(
     style: FormatStyle,
     config: impl Into<LexConfig>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
 ) -> Result<String, FormatError> {
-    let parsed = parse_with_flavor(content, config);
+    let parsed = parse_with_declarations(content, config, declared);
     if !parsed.errors.is_empty() {
         return Err(FormatError::ParseErrors {
             count: parsed.errors.len(),
         });
     }
     let root = parsed.syntax();
-    let external = disk_scope_signatures(&root, path);
+    let external = disk_scope_signatures(&root, path, declared);
     format_node_with_signatures_sentence(&root, style, &external, sentence)
 }

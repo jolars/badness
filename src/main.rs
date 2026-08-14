@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use badness::config::{Config, ConfigSource};
+use badness::declarations::ResolvedDeclarations;
 use badness::file_discovery::{
     ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
 };
@@ -25,8 +26,7 @@ use badness::formatter::perturb::{
 };
 use badness::formatter::{
     ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
-    check_paths_with_style, format_file_with_packages_sentence,
-    format_with_style_flavored_sentence,
+    check_paths_with_style, format_file_with_packages_sentence, format_with_declarations_sentence,
 };
 use badness::linter::{
     Diagnostic, Fix, OutputMode, RuleSelection, apply_fixes, apply_fixes_multi,
@@ -38,7 +38,7 @@ use badness::cli::{
     Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, LineEndingArg, LintOutput,
     MathWrapArg, WrapArg,
 };
-use badness::parser::{LexConfig, parse_with_flavor};
+use badness::parser::{LexConfig, parse_with_declarations, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
     CiteFileFacts, FileFacts, IncludeGraph, PackageOptionFacts, ResolvedCitations, ResolvedLabels,
@@ -165,6 +165,7 @@ fn main() -> ExitCode {
                 style,
                 wrap_override,
                 sentence,
+                &config.resolved_declarations(),
                 &exclude_filter,
                 out,
             )
@@ -217,11 +218,29 @@ fn main() -> ExitCode {
                 stdin_filepath.as_deref(),
                 &exclude_filter,
                 &rules,
+                &config.resolved_declarations(),
                 lint_output_mode(output),
                 out.color,
             )
         }
-        Command::Parse { path } => run_parse(path.as_slice()),
+        Command::Parse { path } => {
+            // The dumped tree must be the tree the formatter and linter see, so
+            // `parse` resolves the project's declarations exactly as they do —
+            // including `--config`/`--no-config`, which are global flags clap
+            // accepts here whether or not this arm reads them. Ignoring them
+            // would make `badness parse --no-config` dump a tree no other
+            // subcommand would produce, which is the debugging trap threading
+            // declarations through this command was meant to close.
+            let anchor = match cwd_anchor() {
+                Ok(anchor) => anchor,
+                Err(code) => return code,
+            };
+            let (config, _) = match resolve_config(config_arg.as_deref(), no_config, &anchor) {
+                Ok(resolved) => resolved,
+                Err(code) => return code,
+            };
+            run_parse(path.as_slice(), &config.resolved_declarations())
+        }
         Command::Lsp => run_lsp(),
         Command::InverseSearch {
             input,
@@ -274,6 +293,7 @@ fn main() -> ExitCode {
                     style,
                     wrap_override,
                     sentence,
+                    &config.resolved_declarations(),
                     &exclude_filter,
                 )
             }
@@ -570,7 +590,12 @@ struct TexAnalysis {
 /// no environment access), so [`run_lint`] maps it over all files with rayon. The
 /// resolver-feeding facts use the same pure helpers the salsa queries do, so CLI
 /// and LSP agree.
-fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
+fn analyze_source(
+    path: &Path,
+    content: &str,
+    kind: FileKind,
+    declared: &ResolvedDeclarations,
+) -> FileAnalysis {
     match kind {
         FileKind::Bib => {
             // Build the model once: it yields both the lint diagnostics and the
@@ -606,7 +631,7 @@ fn analyze_source(path: &Path, content: &str, kind: FileKind) -> FileAnalysis {
         | FileKind::Cls
         | FileKind::Dtx
         | FileKind::Ins => {
-            let parsed = parse_with_flavor(content, kind.lex_config());
+            let parsed = parse_with_declarations(content, kind.lex_config(), declared);
             let diagnostics: Vec<Diagnostic> = parsed
                 .errors
                 .iter()
@@ -658,6 +683,7 @@ fn run_lint(
     stdin_filepath: Option<&Path>,
     exclude: &ExcludeFilter,
     rules: &RuleSelection,
+    declared: &ResolvedDeclarations,
     mode: OutputMode,
     color: ColorChoice,
 ) -> ExitCode {
@@ -671,7 +697,7 @@ fn run_lint(
     // Stdin has nowhere to write back, so `--fix` only acts on files.
     if fix
         && let Some(paths) = paths
-        && let Some(code) = apply_fixes_to_paths(paths, unsafe_fixes, exclude, rules)
+        && let Some(code) = apply_fixes_to_paths(paths, unsafe_fixes, exclude, rules, declared)
     {
         return code;
     }
@@ -745,7 +771,7 @@ fn run_lint(
     // Phases 1–3 (parse+analyze, cross-file resolution, resolution-aware lint) live
     // in `collect_project_diagnostics` so the `--fix` cross-file pass shares the
     // exact same pipeline — CLI report and CLI fix can never drift.
-    let mut diagnostics = collect_project_diagnostics(&sources);
+    let mut diagnostics = collect_project_diagnostics(&sources, declared);
 
     // Drop findings from rules the config/CLI deselected. Parse diagnostics
     // (`rule == "parse"`) are always kept (see `RuleSelection::is_active`).
@@ -799,12 +825,15 @@ fn run_lint(
 /// the whole set, then lint every LaTeX file with that resolution. `.bib` files
 /// are linted standalone (no cross-file resolution yet); their parse+lint
 /// findings ride along from the analyze phase.
-fn collect_project_diagnostics(sources: &[(PathBuf, String, FileKind)]) -> Vec<Diagnostic> {
+fn collect_project_diagnostics(
+    sources: &[(PathBuf, String, FileKind)],
+    declared: &ResolvedDeclarations,
+) -> Vec<Diagnostic> {
     // Phase 1 — parse + analyze every source in parallel. Each task is pure and
     // returns only `Send` data (`analyze_source`); rayon preserves input order.
     let analyses: Vec<FileAnalysis> = sources
         .par_iter()
-        .map(|(path, content, kind)| analyze_source(path, content, *kind))
+        .map(|(path, content, kind)| analyze_source(path, content, *kind, declared))
         .collect();
 
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -888,6 +917,7 @@ fn apply_fixes_to_paths(
     include_unsafe: bool,
     exclude: &ExcludeFilter,
     rules: &RuleSelection,
+    declared: &ResolvedDeclarations,
 ) -> Option<ExitCode> {
     let files = match collect_lint_files(paths, exclude) {
         Ok(files) => files,
@@ -912,7 +942,7 @@ fn apply_fixes_to_paths(
     let outcomes: Vec<FixOutcome> = files
         .par_iter()
         .map(
-            |(path, kind)| match fix_file(path, *kind, include_unsafe, rules) {
+            |(path, kind)| match fix_file(path, *kind, include_unsafe, rules, declared) {
                 Ok(0) => FixOutcome::Unchanged,
                 Ok(n) => FixOutcome::Applied {
                     path: path.clone(),
@@ -942,7 +972,7 @@ fn apply_fixes_to_paths(
     // Second pass: cross-file fixes, which need whole-project resolution the
     // per-file pass above deliberately lacks. A no-op unless a rule emits a fix
     // that reaches into another file.
-    if let Err(err) = apply_cross_file_fixes(&files, include_unsafe, rules) {
+    if let Err(err) = apply_cross_file_fixes(&files, include_unsafe, rules, declared) {
         eprintln!("badness: cannot apply cross-file fixes: {err}");
         failed = true;
     }
@@ -971,12 +1001,13 @@ fn fix_file(
     kind: FileKind,
     include_unsafe: bool,
     rules: &RuleSelection,
+    declared: &ResolvedDeclarations,
 ) -> std::io::Result<usize> {
     let mut content = std::fs::read_to_string(path)?;
     // Tenet #1: a fix owes correctness — the result still parses and is still
     // lossless. Snapshot the pre-fix parse-error count so the debug guard below
     // can assert no fix introduced a *new* syntactic error.
-    let errors_before = debug_parse_error_count(&content, kind);
+    let errors_before = debug_parse_error_count(&content, kind, declared);
     let mut total = 0usize;
     for _ in 0..MAX_FIX_ITERATIONS {
         let diagnostics = match kind {
@@ -989,7 +1020,7 @@ fn fix_file(
                 // Fixpoint loop: only fix-emitting rules can change anything, so run
                 // just those each round (report-only rules are surfaced later by the
                 // reporting pass).
-                check_document_fixable(path, &content, kind.lex_config())
+                check_document_fixable(path, &content, kind.lex_config(), declared)
             }
             FileKind::Bib => badness::bib::linter::check_document(path, &content),
         };
@@ -1009,7 +1040,7 @@ fn fix_file(
         content = outcome.output;
     }
     if total > 0 {
-        debug_assert_fixes_preserved(path, kind, &content, errors_before);
+        debug_assert_fixes_preserved(path, kind, &content, errors_before, declared);
         std::fs::write(path, &content)?;
     }
     Ok(total)
@@ -1069,6 +1100,7 @@ fn apply_cross_file_fixes(
     files: &[(PathBuf, FileKind)],
     include_unsafe: bool,
     rules: &RuleSelection,
+    declared: &ResolvedDeclarations,
 ) -> std::io::Result<()> {
     // Only LaTeX-family files take part in cross-file resolution (`.bib` has none
     // yet); a set of one can't host a cross-file edit.
@@ -1088,7 +1120,10 @@ fn apply_cross_file_fixes(
     let mut errors_before: HashMap<PathBuf, usize> = HashMap::new();
     for (path, kind) in &members {
         let text = std::fs::read_to_string(path)?;
-        errors_before.insert(path.clone(), debug_parse_error_count(&text, *kind));
+        errors_before.insert(
+            path.clone(),
+            debug_parse_error_count(&text, *kind, declared),
+        );
         texts.insert(path.clone(), text);
     }
 
@@ -1099,7 +1134,7 @@ fn apply_cross_file_fixes(
             .iter()
             .map(|(p, k)| (p.clone(), texts[p].clone(), *k))
             .collect();
-        let fixes: Vec<(PathBuf, Fix)> = collect_project_diagnostics(&sources)
+        let fixes: Vec<(PathBuf, Fix)> = collect_project_diagnostics(&sources, declared)
             .into_iter()
             .filter(|d| rules.is_active(d.rule))
             .filter_map(|d| {
@@ -1131,7 +1166,7 @@ fn apply_cross_file_fixes(
 
     for path in changed {
         let kind = kinds[&path];
-        debug_assert_fixes_preserved(&path, kind, &texts[&path], errors_before[&path]);
+        debug_assert_fixes_preserved(&path, kind, &texts[&path], errors_before[&path], declared);
         std::fs::write(&path, &texts[&path])?;
     }
     Ok(())
@@ -1140,13 +1175,19 @@ fn apply_cross_file_fixes(
 /// Parse-error count of `content` under `kind`'s flavor, computed only in debug
 /// builds (returns `0` in release, where the guard is compiled out). Feeds
 /// [`debug_assert_fixes_preserved`].
-fn debug_parse_error_count(content: &str, kind: FileKind) -> usize {
+fn debug_parse_error_count(
+    content: &str,
+    kind: FileKind,
+    declared: &ResolvedDeclarations,
+) -> usize {
     if !cfg!(debug_assertions) {
         return 0;
     }
     match kind {
         FileKind::Bib => badness::bib::parse(content).errors.len(),
-        _ => parse_with_flavor(content, kind.lex_config()).errors.len(),
+        _ => parse_with_declarations(content, kind.lex_config(), declared)
+            .errors
+            .len(),
     }
 }
 
@@ -1157,7 +1198,13 @@ fn debug_parse_error_count(content: &str, kind: FileKind) -> usize {
 /// that corrupts structure — deleting a closing brace, splicing at the wrong
 /// offset — is exactly what this catches before it reaches disk. Compiled out of
 /// release builds (`debug_assert!`), so it costs nothing in shipped binaries.
-fn debug_assert_fixes_preserved(path: &Path, kind: FileKind, content: &str, errors_before: usize) {
+fn debug_assert_fixes_preserved(
+    path: &Path,
+    kind: FileKind,
+    content: &str,
+    errors_before: usize,
+    declared: &ResolvedDeclarations,
+) {
     if !cfg!(debug_assertions) {
         return;
     }
@@ -1167,7 +1214,9 @@ fn debug_assert_fixes_preserved(path: &Path, kind: FileKind, content: &str, erro
             (parsed.syntax().to_string(), parsed.errors.len())
         }
         _ => {
-            let parsed = parse_with_flavor(content, kind.lex_config());
+            // Same declarations as the `errors_before` snapshot: the two counts
+            // are only comparable when both parses recognize the same constructs.
+            let parsed = parse_with_declarations(content, kind.lex_config(), declared);
             (
                 SyntaxNode::new_root(parsed.green.clone()).to_string(),
                 parsed.errors.len(),
@@ -1194,7 +1243,7 @@ fn plural(n: usize) -> &'static str {
 
 /// Parse a single file (or stdin) and print its CST to stdout. Parse errors are
 /// printed after the tree; the command exits non-zero if any are reported.
-fn run_parse(paths: &[PathBuf]) -> ExitCode {
+fn run_parse(paths: &[PathBuf], declared: &ResolvedDeclarations) -> ExitCode {
     // Clap caps `parse` at one positional, so the slice holds at most one path.
     let path = match inputs_or_exit(paths, "parse", PARSE_MISSING_INPUT) {
         Inputs::Stdin => None,
@@ -1219,7 +1268,7 @@ fn run_parse(paths: &[PathBuf]) -> ExitCode {
     };
 
     let config = path.map_or(LexConfig::default(), |p| file_kind_or_tex(p).lex_config());
-    let parsed = parse_with_flavor(&input, config);
+    let parsed = parse_with_declarations(&input, config, declared);
     let mut out = String::new();
     render_cst(&parsed.syntax(), 0, &mut out);
     if let Err(err) = std::io::stdout().write_all(out.as_bytes()) {
@@ -1383,6 +1432,7 @@ fn run_format(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
     out: OutputOptions,
 ) -> ExitCode {
@@ -1396,12 +1446,22 @@ fn run_format(
                 "`--check` reports on files and cannot read from stdin",
             );
         }
-        return run_check(paths, style, wrap_override, sentence, exclude, out);
+        return run_check(
+            paths,
+            style,
+            wrap_override,
+            sentence,
+            declared,
+            exclude,
+            out,
+        );
     }
     match inputs_or_exit(paths, "format", FORMAT_MISSING_INPUT) {
         // Stdin has no directory to walk, so the exclude filter never applies.
-        Inputs::Stdin => run_format_stdin(stdin_filepath, style, wrap_override, sentence),
-        Inputs::Paths(paths) => run_format_paths(paths, style, wrap_override, sentence, exclude),
+        Inputs::Stdin => run_format_stdin(stdin_filepath, style, wrap_override, sentence, declared),
+        Inputs::Paths(paths) => {
+            run_format_paths(paths, style, wrap_override, sentence, declared, exclude)
+        }
     }
 }
 
@@ -1419,10 +1479,11 @@ fn run_check(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
     out: OutputOptions,
 ) -> ExitCode {
-    match check_paths_with_style(paths, style, wrap_override, sentence, exclude) {
+    match check_paths_with_style(paths, style, wrap_override, sentence, declared, exclude) {
         Ok(result) => {
             if result.changed_files.is_empty() {
                 return ExitCode::SUCCESS;
@@ -1550,6 +1611,7 @@ fn run_format_stdin(
     mut style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
 ) -> ExitCode {
     let mut input = String::new();
     if let Err(err) = std::io::stdin().read_to_string(&mut input) {
@@ -1565,7 +1627,7 @@ fn run_format_stdin(
         | FileKind::Cls
         | FileKind::Dtx
         | FileKind::Ins => {
-            format_with_style_flavored_sentence(&input, style, kind.lex_config(), sentence)
+            format_with_declarations_sentence(&input, style, kind.lex_config(), sentence, declared)
                 .map_err(|e| e.to_string())
         }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),
@@ -1611,6 +1673,7 @@ fn run_format_paths(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
     let files = match collect_lint_files(paths, exclude) {
@@ -1655,6 +1718,7 @@ fn run_format_paths(
                     style,
                     kind.lex_config(),
                     sentence,
+                    declared,
                 )
                 .map_err(|e| e.to_string()),
                 FileKind::Bib => {
@@ -1971,6 +2035,9 @@ fn write_debug_artifacts(
 /// A first-pass [`FormatError`] is a `format-error` finding (the invariant
 /// could not be evaluated); a second-pass error on the first pass's own output
 /// *is* a fixed-point violation and is reported as `idempotency`.
+// One parameter per formatting axis the real `format` path carries, so the
+// oracles run through exactly the pipeline they are checking.
+#[allow(clippy::too_many_arguments)]
 fn run_debug_checks_for_file(
     path: &Path,
     kind: FileKind,
@@ -1978,6 +2045,7 @@ fn run_debug_checks_for_file(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     checks: DebugChecksArg,
 ) -> DebugArtifacts {
     let mut artifacts = DebugArtifacts::default();
@@ -2007,10 +2075,15 @@ fn run_debug_checks_for_file(
             FileKind::Bib => {
                 badness::bib::format_with_style(input, style).map_err(|e| e.to_string())
             }
-            _ => {
-                format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
-                    .map_err(|e| e.to_string())
-            }
+            _ => format_file_with_packages_sentence(
+                input,
+                path,
+                style,
+                kind.lex_config(),
+                sentence,
+                declared,
+            )
+            .map_err(|e| e.to_string()),
         };
         match fmt(content) {
             Err(msg) => artifacts.failures.push(DebugFailure {
@@ -2099,8 +2172,15 @@ fn run_debug_checks_for_file(
         let mut style = style;
         style.wrap = WrapMode::Reflow;
         let fmt = |input: &str| {
-            format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
-                .map_err(|e| e.to_string())
+            format_file_with_packages_sentence(
+                input,
+                path,
+                style,
+                kind.lex_config(),
+                sentence,
+                declared,
+            )
+            .map_err(|e| e.to_string())
         };
         match check_trivia_convergence(content, kind.lex_config(), DEFAULT_SINGLE_FLIP_SAMPLES, fmt)
         {
@@ -2135,8 +2215,15 @@ fn run_debug_checks_for_file(
         let mut style = style;
         style.wrap = WrapMode::Reflow;
         let fmt = |input: &str| {
-            format_file_with_packages_sentence(input, path, style, kind.lex_config(), sentence)
-                .map_err(|e| e.to_string())
+            format_file_with_packages_sentence(
+                input,
+                path,
+                style,
+                kind.lex_config(),
+                sentence,
+                declared,
+            )
+            .map_err(|e| e.to_string())
         };
         match survey_trivia_invariance(content, kind.lex_config(), DEFAULT_SINGLE_FLIP_SAMPLES, fmt)
         {
@@ -2185,6 +2272,7 @@ fn run_debug_format(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
 ) -> ExitCode {
     if paths.is_empty() {
@@ -2223,6 +2311,7 @@ fn run_debug_format(
                     style,
                     wrap_override,
                     sentence,
+                    declared,
                     checks,
                 )),
                 Err(err) => Err(format!("badness: cannot read {label}: {err}")),
@@ -2510,7 +2599,13 @@ mod tests {
         std::fs::write(&chap, chap_src).unwrap();
 
         let files = vec![(main.clone(), FileKind::Tex), (chap.clone(), FileKind::Tex)];
-        apply_cross_file_fixes(&files, false, &RuleSelection::all()).unwrap();
+        apply_cross_file_fixes(
+            &files,
+            false,
+            &RuleSelection::all(),
+            &ResolvedDeclarations::default(),
+        )
+        .unwrap();
 
         assert_eq!(std::fs::read_to_string(&main).unwrap(), main_src);
         assert_eq!(std::fs::read_to_string(&chap).unwrap(), chap_src);
@@ -2521,7 +2616,13 @@ mod tests {
         // A lone file can host no cross-file edit, so the pass returns immediately
         // (and never reads the path, which need not even exist).
         let files = vec![(PathBuf::from("/nonexistent/only.tex"), FileKind::Tex)];
-        apply_cross_file_fixes(&files, false, &RuleSelection::all()).unwrap();
+        apply_cross_file_fixes(
+            &files,
+            false,
+            &RuleSelection::all(),
+            &ResolvedDeclarations::default(),
+        )
+        .unwrap();
     }
 
     #[test]

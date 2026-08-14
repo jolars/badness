@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
-use crate::parser::lexer::{ParseCtx, Token, is_block_environment, is_math_environment};
+use crate::parser::lexer::{ParseCtx, Token};
 use crate::syntax::SyntaxKind;
 use facts::{BracketPolicy, is_big_delimiter_command, is_definition_body_command};
 use prescan::PreScan;
@@ -1494,7 +1494,7 @@ impl<'t> Parser<'t> {
     /// Whether the construct at token `idx` opens a *block* environment — one
     /// [`parse_block`](Self::parse_block) leaves bare rather than wrapping in a
     /// `PARAGRAPH`. Block-ness is read from the built-in signature DB
-    /// ([`is_block_environment`]), never from a name list here.
+    /// ([`ParseCtx::is_block_environment`]), never from a name list here.
     ///
     /// Covers both spellings, so an alias formats like the environment it stands
     /// for: `\bea … \eea` must not be wrapped in a `PARAGRAPH` when the identical
@@ -1504,11 +1504,11 @@ impl<'t> Parser<'t> {
         if self.tokens.get(idx).is_some_and(|t| t.text == BEGIN_CMD) {
             return peek_begin_name(self.tokens, idx)
                 .as_deref()
-                .is_some_and(is_block_environment);
+                .is_some_and(|name| self.ctx.is_block_environment(name));
         }
-        self.alias_openers
-            .get(&idx)
-            .is_some_and(|target| is_block_environment(target) && self.alias_closer(idx).is_some())
+        self.alias_openers.get(&idx).is_some_and(|target| {
+            self.ctx.is_block_environment(target) && self.alias_closer(idx).is_some()
+        })
     }
 
     /// Consume a leading comment-bind located by [`Self::binding_run`]: float
@@ -1567,7 +1567,7 @@ impl<'t> Parser<'t> {
             // splice in the `PARAGRAPH` wrapper afterwards (the `precede` idiom,
             // cf. `math_scripted`) — unless the run's only non-trivia element is a
             // lone block environment, which we leave bare. Block-ness is read from
-            // the built-in signature DB (`is_block_environment`).
+            // the signature data (`ParseCtx::is_block_environment`).
             let checkpoint = self.events.len();
             let mut nontrivia_count = 0usize;
             let mut lone_block_env = false;
@@ -3344,7 +3344,7 @@ impl<'t> Parser<'t> {
         // from the alias itself.
         if self.ctx.is_verbatim_environment(target) {
             self.verbatim_body(target);
-        } else if is_math_environment(target) {
+        } else if self.ctx.is_math_environment(target) {
             self.math_environment_body();
         } else {
             self.parse_block(Block::Environment);
@@ -3462,7 +3462,10 @@ impl<'t> Parser<'t> {
         // body starts right after its `\begin`, so only a directly-abutting
         // `[t]`-style optional attaches; a detached bracket is body content
         // (`\begin{align}` + newline + `[\partial_\mu V]_1`, issue #43).
-        let bracket = if name.as_deref().is_some_and(is_math_environment) {
+        let bracket = if name
+            .as_deref()
+            .is_some_and(|n| self.ctx.is_math_environment(n))
+        {
             BracketPolicy::Tight
         } else {
             BracketPolicy::Greedy
@@ -3480,7 +3483,10 @@ impl<'t> Parser<'t> {
             .is_some_and(|n| self.ctx.is_verbatim_environment(n))
         {
             self.verbatim_body(name.as_deref().expect("verbatim name"));
-        } else if name.as_deref().is_some_and(is_math_environment) {
+        } else if name
+            .as_deref()
+            .is_some_and(|n| self.ctx.is_math_environment(n))
+        {
             self.math_environment_body();
         } else if macrocode_frame {
             // A frame-lexed macrocode body is macro code, not document
@@ -3613,7 +3619,7 @@ impl<'t> Parser<'t> {
     /// atoms wrapped in a `MATH` node and parsed in math mode, exactly as `\[…\]`
     /// (see [`Self::delim_math`]) — so `^`/`_` build `SCRIPTED` nodes, the operator
     /// split fires, and `\left…\right` pair. Routed here for environments the
-    /// built-in signature DB flags `math` ([`is_math_environment`]).
+    /// signature data flags `math` ([`ParseCtx::is_math_environment`]).
     ///
     /// The terminator is the matching `\end` (or EOF), read via [`Self::at_block_end`]
     /// just like [`Self::parse_block`]; [`Self::finish_environment`] then consumes and

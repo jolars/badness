@@ -1,0 +1,28 @@
+% Environment delimiters declared in `badness.toml` (AGENTS.md decision #12):
+%
+%   [environments.eqnarray]
+%   begin = ['\bea']
+%   end = ['\eea']
+%
+% The pair is defined in a sibling `.sty` this file cannot see, so the inferred
+% alias scan has nothing to find and only the declaration can pair it. Read
+% declaration-blind — as `task parse-compat` and the corpus roundtrip do — every
+% call below is an ordinary command, which is the point: the same bytes must
+% round-trip under both readings.
+
+\bea
+  a = b
+\eea
+
+Prose between the two, so a pairing has somewhere to end.
+
+\bea
+  c = d
+\eea
+
+A literal environment of the alias's own name is unrelated to it: an alias names
+a command, and lends nothing to a name.
+
+\begin{bea}
+  e = f
+\end{bea}

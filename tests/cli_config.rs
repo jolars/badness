@@ -133,3 +133,74 @@ fn empty_env_config_counts_as_unset() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// --- the global config flags reach every subcommand -------------------------
+//
+// `--config`/`--no-config` are declared `global = true`, so clap accepts them on
+// any subcommand. A subcommand that resolves config but ignores them answers
+// under a config the user explicitly turned off — and since `[environments]`
+// reaches the *parser* (`AGENTS.md` decision #12), for `parse` that means
+// dumping a tree no other subcommand would produce.
+
+/// A declaration that visibly changes the tree: `\bea … \eea` becomes an
+/// `ENVIRONMENT` instead of two plain commands.
+const ALIAS_CONFIG: &str = "[environments.eqnarray]\nbegin = ['\\bea']\nend = ['\\eea']\n";
+const ALIAS_DOC: &str = "\\bea a = b \\eea\n";
+
+fn parse_doc(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_badness"))
+        .arg("parse")
+        .args(args)
+        .arg("doc.tex")
+        .current_dir(dir)
+        .env_remove("BADNESS_CONFIG")
+        .output()
+        .expect("run badness")
+}
+
+/// The baseline the two flag tests below are measured against.
+#[test]
+fn parse_honors_a_discovered_declaration() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("badness.toml"), ALIAS_CONFIG).unwrap();
+    std::fs::write(dir.path().join("doc.tex"), ALIAS_DOC).unwrap();
+
+    let output = parse_doc(dir.path(), &[]);
+
+    assert!(output.status.success(), "{output:?}");
+    let tree = String::from_utf8(output.stdout).unwrap();
+    assert!(tree.contains("ENVIRONMENT"), "got:\n{tree}");
+}
+
+#[test]
+fn parse_honors_no_config() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("badness.toml"), ALIAS_CONFIG).unwrap();
+    std::fs::write(dir.path().join("doc.tex"), ALIAS_DOC).unwrap();
+
+    let output = parse_doc(dir.path(), &["--no-config"]);
+
+    assert!(output.status.success(), "{output:?}");
+    let tree = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !tree.contains("ENVIRONMENT"),
+        "`--no-config` must reach `parse` too, got:\n{tree}"
+    );
+}
+
+#[test]
+fn parse_honors_an_explicit_config_path() {
+    let dir = repo_dir();
+    // The declaration lives *outside* the ancestor walk, so only `--config`
+    // being honored can bring it in.
+    let elsewhere = repo_dir();
+    let config = elsewhere.path().join("badness.toml");
+    std::fs::write(&config, ALIAS_CONFIG).unwrap();
+    std::fs::write(dir.path().join("doc.tex"), ALIAS_DOC).unwrap();
+
+    let output = parse_doc(dir.path(), &["--config", config.to_str().unwrap()]);
+
+    assert!(output.status.success(), "{output:?}");
+    let tree = String::from_utf8(output.stdout).unwrap();
+    assert!(tree.contains("ENVIRONMENT"), "got:\n{tree}");
+}

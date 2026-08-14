@@ -3650,6 +3650,130 @@ fn lsp_watched_config_change_reanalyzes_open_doc() {
 }
 
 #[test]
+fn lsp_watched_config_change_reseeds_declarations() {
+    // The sharper half of the test above: a config change that alters the
+    // *parse* rather than the rule filter. Declaring `mycode` verbatim
+    // (`AGENTS.md` decision #12) protects its body, so the finding inside it
+    // disappears — but only if the config path actually re-seeds the
+    // declarations input and invalidates the cached parse. A server that
+    // re-resolved settings and reused its tree would still report it.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let main_path = dir.path().join("main.tex");
+    let main = "\\begin{mycode}\nWait ... what\n\\end{mycode}\n";
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    let diags =
+        recv_diagnostics_matching(&client, &uri, |codes| codes.iter().any(|c| c == "ellipsis"));
+    assert!(
+        rule_codes(&diags).iter().any(|c| c == "ellipsis"),
+        "undeclared, the body is ordinary prose, got {:?}",
+        diags.diagnostics
+    );
+
+    let config_path = dir.path().join("badness.toml");
+    std::fs::write(&config_path, "[environments.mycode]\nlike = 'lstlisting'\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&config_path), FileChangeType::CREATED)],
+    );
+
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes.iter().any(|c| c == "ellipsis")
+    });
+    assert!(
+        !rule_codes(&diags).iter().any(|c| c == "ellipsis"),
+        "a declared verbatim body must protect its contents, got {:?}",
+        diags.diagnostics
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_a_request_is_answered_under_its_own_workspace_declarations() {
+    // The declarations ride a project-wide *singleton* salsa input, so a session
+    // holding two workspaces overwrites it as attention crosses between them. A
+    // request must therefore republish before its job runs — which is why the
+    // dispatcher does it for every request rather than each handler doing it for
+    // itself. `documentSymbol` is the case that pins it: it reads a tree but
+    // resolves settings only for `[build]`, so nothing in its own handler would
+    // have.
+    let declaring = tempfile::tempdir().expect("temp dir");
+    let plain = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        declaring.path().join("badness.toml"),
+        "[environments.mycode]\nlike = 'lstlisting'\n",
+    )
+    .unwrap();
+
+    // The same bytes in both workspaces: a `\section` inside `mycode`. Declared
+    // verbatim, the body is protected and the outline sees nothing in it.
+    let doc = "\\begin{mycode}\n\\section{Inside}\n\\end{mycode}\n";
+    let declared_path = declaring.path().join("main.tex");
+    let plain_path = plain.path().join("main.tex");
+    std::fs::write(&declared_path, doc).unwrap();
+    std::fs::write(&plain_path, doc).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let declared_uri = path_to_file_uri(&declared_path);
+    let plain_uri = path_to_file_uri(&plain_path);
+    did_open(&client, &declared_uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+    // The undeclaring workspace is opened *second*, so its (empty) block is what
+    // the worker's input holds when the request below arrives.
+    did_open(&client, &plain_uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    let sections = |id: i32, uri: &Uri| -> Vec<String> {
+        send_request(
+            &client,
+            id,
+            "textDocument/documentSymbol",
+            serde_json::to_value(DocumentSymbolParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .unwrap(),
+        );
+        let resp = recv_response(&client);
+        // An empty outline comes back as a bare `[]`, which deserializes as the
+        // flat variant — so both are accepted here rather than only the nested
+        // one the populated case produces.
+        match serde_json::from_value::<DocumentSymbolResponse>(resp.result().unwrap())
+            .expect("a documentSymbol response")
+        {
+            DocumentSymbolResponse::Nested(symbols) => {
+                symbols.into_iter().map(|s| s.name).collect()
+            }
+            DocumentSymbolResponse::Flat(symbols) => symbols.into_iter().map(|s| s.name).collect(),
+        }
+    };
+
+    assert!(
+        !sections(2, &declared_uri).contains(&"Inside".to_owned()),
+        "the declaring workspace's own block must govern its request"
+    );
+    // The control, and what keeps the assertion above from passing vacuously:
+    // the identical bytes under no declaration *do* surface the section.
+    assert!(
+        sections(3, &plain_uri).contains(&"Inside".to_owned()),
+        "an undeclaring workspace must still read the body as document content"
+    );
+    // Back again, so the crossing is exercised in both directions rather than
+    // once on the way out.
+    assert!(
+        !sections(4, &declared_uri).contains(&"Inside".to_owned()),
+        "crossing back must republish too"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_watched_change_for_open_buffer_is_ignored() {
     // A watcher event for a file open in the editor must not clobber the live buffer
     // with disk text: the editor overlay is authoritative. Open a clean buffer, change

@@ -756,6 +756,7 @@ fn unreferenced_label_is_silent_for_a_bare_fragment() {
 // Autofixes (`lint --fix`). The engine and the `dollar-display-math` swap.
 // ---------------------------------------------------------------------------
 
+use badness::declarations::ResolvedDeclarations;
 use badness::formatter::{FormatStyle, format_with_style};
 use badness::linter::{apply_fixes, check_document};
 use badness::parser::LatexFlavor;
@@ -766,10 +767,15 @@ fn fix_to_fixpoint(text: &str) -> String {
     let path = Path::new("doc.tex");
     let mut content = text.to_owned();
     for _ in 0..10 {
-        let fixes: Vec<_> = check_document(path, &content, LatexFlavor::Document)
-            .into_iter()
-            .filter_map(|d| d.fix)
-            .collect();
+        let fixes: Vec<_> = check_document(
+            path,
+            &content,
+            LatexFlavor::Document,
+            &ResolvedDeclarations::default(),
+        )
+        .into_iter()
+        .filter_map(|d| d.fix)
+        .collect();
         if fixes.is_empty() {
             break;
         }
@@ -812,10 +818,15 @@ fn dollar_display_fix_clears_the_finding() {
     // After the swap, re-linting the rewritten document is clean.
     let fixed = fix_to_fixpoint("$$a + b$$\n\n$$c$$\n");
     assert_eq!(fixed, "\\[a + b\\]\n\n\\[c\\]\n");
-    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed, LatexFlavor::Document)
-        .into_iter()
-        .filter(|d| d.rule == "dollar-display-math")
-        .collect();
+    let remaining: Vec<_> = check_document(
+        Path::new("doc.tex"),
+        &fixed,
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .into_iter()
+    .filter(|d| d.rule == "dollar-display-math")
+    .collect();
     assert!(
         remaining.is_empty(),
         "expected a clean re-lint, got: {remaining:?}"
@@ -860,10 +871,15 @@ fn missing_nbsp_fix_is_correct() {
 fn missing_nbsp_fix_clears_the_finding() {
     let fixed = fix_to_fixpoint("Figure \\ref{x}\n");
     assert_eq!(fixed, "Figure~\\ref{x}\n");
-    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed, LatexFlavor::Document)
-        .into_iter()
-        .filter(|d| d.rule == "missing-nonbreaking-space")
-        .collect();
+    let remaining: Vec<_> = check_document(
+        Path::new("doc.tex"),
+        &fixed,
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .into_iter()
+    .filter(|d| d.rule == "missing-nonbreaking-space")
+    .collect();
     assert!(
         remaining.is_empty(),
         "expected a clean re-lint, got: {remaining:?}"
@@ -874,10 +890,15 @@ fn missing_nbsp_fix_clears_the_finding() {
 fn missing_nbsp_skipped_without_unsafe_opt_in() {
     // The CLI's plain `--fix` (no `--unsafe-fixes`) must not insert the tie.
     let src = "Figure \\ref{x}\n";
-    let fixes: Vec<_> = check_document(Path::new("doc.tex"), src, LatexFlavor::Document)
-        .into_iter()
-        .filter_map(|d| d.fix)
-        .collect();
+    let fixes: Vec<_> = check_document(
+        Path::new("doc.tex"),
+        src,
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .into_iter()
+    .filter_map(|d| d.fix)
+    .collect();
     let out = apply_fixes(src, &fixes, false);
     assert_eq!(out.output, src, "unsafe tie fix must be skipped");
 }
@@ -1087,10 +1108,15 @@ fn label_before_caption_is_reported_end_to_end() {
 fn label_before_caption_fix_clears_the_finding() {
     let src = "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n";
     let fixed = fix_to_fixpoint(src);
-    let remaining: Vec<_> = check_document(Path::new("doc.tex"), &fixed, LatexFlavor::Document)
-        .into_iter()
-        .filter(|d| d.rule == "label-before-caption")
-        .collect();
+    let remaining: Vec<_> = check_document(
+        Path::new("doc.tex"),
+        &fixed,
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .into_iter()
+    .filter(|d| d.rule == "label-before-caption")
+    .collect();
     assert!(
         remaining.is_empty(),
         "expected a clean re-lint, got: {remaining:?}\n{fixed}"

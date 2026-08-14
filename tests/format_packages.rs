@@ -5,6 +5,7 @@
 
 use std::fs;
 
+use badness::declarations::ResolvedDeclarations;
 use badness::formatter::{FormatStyle, format_file_with_packages, format_with_style_flavored};
 use badness::parser::LatexFlavor;
 
@@ -21,9 +22,14 @@ fn local_package_environment_arity_glues_begin_argument() {
     .unwrap();
     let main = dir.path().join("main.tex");
 
-    let with_pkg =
-        format_file_with_packages(DOC, &main, FormatStyle::default(), LatexFlavor::Document)
-            .expect("formats cleanly");
+    let with_pkg = format_file_with_packages(
+        DOC,
+        &main,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .expect("formats cleanly");
 
     // Knowing `myenv` takes one argument, the formatter glues `{x}` onto the
     // `\begin{myenv}` line (the header break is dropped).
@@ -52,17 +58,27 @@ fn format_never_reads_the_aux_file() {
     let main = dir.path().join("main.tex");
     let doc = "\\section{Intro}\n\\label{sec:a}\nSee \\ref{sec:a}.\n";
 
-    let without_aux =
-        format_file_with_packages(doc, &main, FormatStyle::default(), LatexFlavor::Document)
-            .expect("formats cleanly");
+    let without_aux = format_file_with_packages(
+        doc,
+        &main,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .expect("formats cleanly");
     fs::write(
         dir.path().join("main.aux"),
         "\\newlabel{sec:a}{{1}{1}{Intro}{section.1}{}}\n",
     )
     .unwrap();
-    let with_aux =
-        format_file_with_packages(doc, &main, FormatStyle::default(), LatexFlavor::Document)
-            .expect("formats cleanly");
+    let with_aux = format_file_with_packages(
+        doc,
+        &main,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .expect("formats cleanly");
     assert_eq!(
         without_aux, with_aux,
         "the formatter must not read the .aux file"
@@ -79,10 +95,21 @@ fn formatting_is_idempotent_with_packages() {
     .unwrap();
     let main = dir.path().join("main.tex");
 
-    let once = format_file_with_packages(DOC, &main, FormatStyle::default(), LatexFlavor::Document)
-        .expect("formats cleanly");
-    let twice =
-        format_file_with_packages(&once, &main, FormatStyle::default(), LatexFlavor::Document)
-            .expect("formats cleanly");
+    let once = format_file_with_packages(
+        DOC,
+        &main,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .expect("formats cleanly");
+    let twice = format_file_with_packages(
+        &once,
+        &main,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        &ResolvedDeclarations::default(),
+    )
+    .expect("formats cleanly");
     assert_eq!(once, twice, "format must be idempotent");
 }

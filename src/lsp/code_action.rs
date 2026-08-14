@@ -143,7 +143,12 @@ mod tests {
 
     /// Lint `src` as a `.tex` document and return the raw findings.
     fn findings(src: &str) -> Vec<crate::linter::Diagnostic> {
-        check_document(std::path::Path::new("x.tex"), src, LexConfig::default())
+        check_document(
+            std::path::Path::new("x.tex"),
+            src,
+            LexConfig::default(),
+            &crate::declarations::ResolvedDeclarations::default(),
+        )
     }
 
     /// A resolver that knows no foreign files — the single-file default.

@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
 
+use badness_formatter::declarations::{Declarations, ResolvedDeclarations};
 use badness_formatter::formatter::{
-    FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
-    format_node_range_with_signatures, format_with_style, format_with_style_flavored,
-    format_with_style_flavored_sentence, perturb,
+    FormatError, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
+    format_node_range_with_signatures, format_with_declarations_sentence, format_with_style,
+    format_with_style_flavored, format_with_style_flavored_sentence, perturb,
 };
 use badness_formatter::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor, reconstruct};
 use badness_formatter::semantic::SignatureDb;
@@ -45,7 +46,24 @@ fn check_format_invariants(
     style: FormatStyle,
     config: LexConfig,
 ) -> Result<(), String> {
-    let fmt = |s: &str| format_with_style_flavored(s, style, config);
+    check_format_invariants_with(input, config, |s| {
+        format_with_style_flavored(s, style, config)
+    })
+}
+
+/// [`check_format_invariants`] over an explicit formatting function, so the same
+/// oracle can be run on a pipeline the default entry cannot express — today, one
+/// parsing under a project's [declarations](badness_parser::declarations).
+///
+/// The helper *parses* (for the non-trivia, comment, and losslessness oracles)
+/// declaration-blind on purpose: every one compares a projection of the input
+/// against the same projection of the output, so a reading both sides share is a
+/// valid oracle whether or not it is the reading `fmt` used.
+fn check_format_invariants_with(
+    input: &str,
+    config: LexConfig,
+    fmt: impl Fn(&str) -> Result<String, FormatError>,
+) -> Result<(), String> {
     let formatted = fmt(input).map_err(|e| format!("clean input failed to format: {e}"))?;
 
     // Whitespace-only: the formatter changes only trivia, never a non-trivia
@@ -2681,4 +2699,122 @@ fn suppressed_regions_converge_under_trivia_perturbation() {
          % badness-format off\n{HAND_ALIGNED}% badness-format on\n\n\
          Prose after, also long enough that the formatter has a decision to make.\n"
     ));
+}
+
+// --- declared environments (`badness.toml`; AGENTS.md decision #12) ----------
+
+/// Format `input` under a project's declarations, through the same engine entry
+/// the CLI's stdin path and the language server's fallback take — not a mirror
+/// of it, so the oracles below cannot pass on a pipeline nothing ships.
+fn format_declared(input: &str, decls: &ResolvedDeclarations) -> Result<String, FormatError> {
+    format_with_declarations_sentence(
+        input,
+        FormatStyle::default(),
+        LatexFlavor::Document,
+        SentenceOptions::default(),
+        decls,
+    )
+}
+
+/// Resolve a declaration block, written as JSON — the TOML surface belongs to
+/// the CLI crate, and the shapes are the same either way.
+fn declarations(json: &str) -> ResolvedDeclarations {
+    serde_json::from_str::<Declarations>(json)
+        .expect("declarations deserialize")
+        .resolve()
+        .expect("declarations resolve")
+}
+
+/// The full invariant suite — whitespace-only, comments, idempotence,
+/// losslessness, and the trivia-perturbation oracle — under a declaring config.
+///
+/// Worth running separately rather than trusting the blind sweep: a declaration
+/// changes the tree's *shape*, so it reaches lowerings (grid alignment, math
+/// spacing, body indent) that the same bytes never reach without it. An
+/// idempotency bug there would be invisible to every other test in this file.
+fn assert_declared_format_invariants(input: &str, json: &str) {
+    let decls = declarations(json);
+    if let Err(msg) = check_format_invariants_with(input, LatexFlavor::Document.into(), |s| {
+        format_declared(s, &decls)
+    }) {
+        panic!("{msg}\nfor declared input: {input:?}");
+    }
+}
+
+const EQNARRAY_DECL: &str =
+    r#"{"environments": {"eqnarray": {"begin": ["\\bea"], "end": ["\\eea"]}}}"#;
+const ALIGN_LIKE_DECL: &str = r#"{"environments": {"myenv": {"like": "align"}}}"#;
+
+/// A declared `like` routes the body the way its target's own body is routed:
+/// into math, and into the grid layout. `myenv` has no built-in counterpart at
+/// all, so nothing but the declaration can produce either.
+#[test]
+fn a_declared_align_like_environment_lays_out_like_its_target() {
+    let decls = declarations(ALIGN_LIKE_DECL);
+    let as_env = |name: &str, body: &str| format!("\\begin{{{name}}}\n{body}\\end{{{name}}}\n");
+
+    // Math routing, which is the declaration's own contribution: an operator
+    // glued into a `WORD` is split into atoms only inside math.
+    let math_body = "a+b = c\n";
+    let declared = format_declared(&as_env("myenv", math_body), &decls).expect("formats");
+    assert_eq!(declared, "\\begin{myenv}\n  a + b = c\n\\end{myenv}\n");
+    let blind = format(&as_env("myenv", math_body)).expect("formats");
+    assert!(
+        blind.contains("a+b"),
+        "undeclared, the body is prose and nothing splits the operator, got:\n{blind}"
+    );
+
+    // The grid, on a `&`-carrying body. Alignment alone would not prove the
+    // declaration did anything — the generic top-level-`&` arm aligns an
+    // unknown environment too — so the claim is the stronger one: the declared
+    // environment lays out byte-for-byte as its target does.
+    for body in [math_body, "a^2+b &= c \\\\ &= d\n"] {
+        let declared = format_declared(&as_env("myenv", body), &decls).expect("formats");
+        let spelled = format(&as_env("align", body)).expect("formats");
+        assert_eq!(
+            declared.replace("myenv", "align"),
+            spelled,
+            "declared `myenv` must lay out as `align` does, for body {body:?}"
+        );
+    }
+}
+
+#[test]
+fn a_declared_alias_lays_out_like_the_environment_it_names() {
+    let aliased = format_declared(
+        "\\bea a&=&b \\\\ &=&c \\eea\n",
+        &declarations(EQNARRAY_DECL),
+    )
+    .expect("formats");
+    assert_eq!(
+        aliased, "\\bea\n  a & = & b \\\\\n    & = & c\n\\eea\n",
+        "got:\n{aliased}"
+    );
+}
+
+#[test]
+fn declared_alias_layout_upholds_every_invariant() {
+    assert_declared_format_invariants("\\bea a&=&b \\\\ &=&c \\eea\n", EQNARRAY_DECL);
+    // With prose either side, so the perturber has gaps outside the environment
+    // as well as inside it.
+    assert_declared_format_invariants(
+        "Prose before, long enough that the reflow has a decision to make.\n\n\
+         \\bea\n  a &= b \\\\\n  c &= d\n\\eea\n\n\
+         Prose after, also long enough to wrap somewhere along its length.\n",
+        EQNARRAY_DECL,
+    );
+}
+
+#[test]
+fn declared_environment_layout_upholds_every_invariant() {
+    assert_declared_format_invariants(
+        "\\begin{myenv}\na&=&b \\\\ &=&c\n\\end{myenv}\n",
+        ALIGN_LIKE_DECL,
+    );
+    // A declared *verbatim* environment: the body is a protected region the
+    // formatter may not touch, and the oracle checks it comes back byte-exact.
+    assert_declared_format_invariants(
+        "\\begin{mycode}\n  keep    this   spacing\n     and this\n\\end{mycode}\n",
+        r#"{"environments": {"mycode": {"like": "lstlisting"}}}"#,
+    );
 }

@@ -54,10 +54,11 @@ use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
 use crate::ast::{AstNode, Environment, Group, command_name};
+use crate::declarations::ResolvedDeclarations;
 use crate::directives;
 use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
-use crate::parser::{LatexFlavor, parse_with_flavor};
+use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{Expl3Unit, StatementMap, expl3_unit, segment_expl_statements};
 use crate::semantic::{
     ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
@@ -151,6 +152,56 @@ pub fn format_with_style_flavored_sentence(
         });
     }
     format_node_with_signatures_sentence(&parsed.syntax(), style, &SignatureDb::default(), sentence)
+}
+
+/// Like [`format_with_style_flavored_sentence`] but under a project's
+/// [declarations](crate::declarations) — the one input to the parse that
+/// is not the text (`AGENTS.md` decision #12) — and with no other signature
+/// scope.
+///
+/// This is the entry for content with no path to anchor local `.sty`/`.cls`
+/// resolution against: the CLI's **stdin**, the language server's
+/// cache-miss/cancellation fallback, and the dprint plugin, which is sandboxed
+/// with no filesystem at all. Each of those would otherwise reach for
+/// [`format_with_style_flavored_sentence`], which parses declaration-blind — and
+/// a formatter honoring `[environments.…]` for `badness format file.tex` but not
+/// for `badness format < file.tex` (nor for the one editor request that races an
+/// edit) would be a trap.
+///
+/// The declarations reach **both** the parse and the signature scope, exactly as
+/// they do on the path-bearing entries in the `badness` crate
+/// (`formatter::format_file_with_packages_sentence`), so this differs from the
+/// full path only by the package tiers it cannot reach — never by precedence,
+/// and never by which constructs it recognizes.
+pub fn format_with_declarations_sentence(
+    input: &str,
+    style: FormatStyle,
+    config: impl Into<crate::parser::LexConfig>,
+    sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
+) -> Result<String, FormatError> {
+    let parsed = parse_with_declarations(input, config, declared);
+    if !parsed.errors.is_empty() {
+        return Err(FormatError::ParseErrors {
+            count: parsed.errors.len(),
+        });
+    }
+    format_node_with_signatures_sentence(
+        &parsed.syntax(),
+        style,
+        &declared_scope(declared),
+        sentence,
+    )
+}
+
+/// The signature scope a project's declarations alone make up: the top tier of
+/// the disk- and salsa-backed scopes (`semantic::collect_package_signatures`,
+/// `incremental::scope_signatures`, both in the `badness` crate), with nothing
+/// under it.
+pub fn declared_scope(declared: &ResolvedDeclarations) -> SignatureDb {
+    let mut scope = SignatureDb::default();
+    scope.merge_declarations(declared);
+    scope
 }
 
 /// Like [`format_with_style_flavored`] but additionally folds an `external`

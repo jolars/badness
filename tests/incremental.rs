@@ -4,7 +4,11 @@
 
 use std::path::Path;
 
+use badness::declarations::{Declarations, ResolvedDeclarations};
+use badness::file_discovery::FileKind;
 use badness::incremental::{IncrementalDatabase, QueryKind};
+use badness::project::ProjectMember;
+use badness::syntax::SyntaxKind;
 
 /// How many times `parsed_document` actually ran, per the query log.
 fn parse_count(db: &IncrementalDatabase) -> usize {
@@ -325,4 +329,100 @@ fn clone_shares_storage() {
     let _ = clone.parsed_tree(file);
     assert_eq!(parse_count(&clone), 1);
     assert_eq!(clone.file_text(file), "\\emph{hi}\n");
+}
+
+// --- declarations (`badness.toml`; AGENTS.md decision #12) -------------------
+
+/// A resolved declaration block, written in the TOML the user actually types.
+fn declared(toml_src: &str) -> ResolvedDeclarations {
+    toml::from_str::<Declarations>(toml_src)
+        .expect("declarations deserialize")
+        .resolve()
+        .expect("declarations resolve")
+}
+
+/// Declares `mycode` to behave like `lstlisting`, so its body is verbatim — a
+/// fact no scan of the document below could ever discover.
+const MYCODE_VERBATIM: &str = "[environments.mycode]\nlike = 'lstlisting'\n";
+
+/// A document whose `mycode` body only reads as protected if the environment is
+/// known to be verbatim.
+const MYCODE_DOC: &str = "\\begin{mycode}\n\\bad{x}\n\\end{mycode}\n";
+
+/// Whether the cached parse captured a protected body.
+fn has_verbatim_body(db: &IncrementalDatabase, file: badness::incremental::SourceFile) -> bool {
+    db.parsed_tree(file)
+        .descendants_with_tokens()
+        .any(|el| el.kind() == SyntaxKind::VERBATIM_BODY)
+}
+
+#[test]
+fn declaring_an_environment_reparses_the_file() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("main.tex"), MYCODE_DOC.to_owned());
+
+    // Declaration-blind, `mycode` is an unknown environment with an ordinary body.
+    assert!(!has_verbatim_body(&db, file));
+    assert_eq!(parse_count(&db), 1);
+
+    db.clear_query_log();
+    assert!(db.set_declarations(declared(MYCODE_VERBATIM)));
+
+    // Editing the declarations reparses: the memo may not survive a change to
+    // the one non-text input the parse is allowed to read.
+    assert!(has_verbatim_body(&db, file));
+    assert_eq!(parse_count(&db), 1);
+}
+
+#[test]
+fn unchanged_declarations_do_not_reparse() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("main.tex"), MYCODE_DOC.to_owned());
+    assert!(db.set_declarations(declared(MYCODE_VERBATIM)));
+    let _ = db.parsed_tree(file);
+
+    db.clear_query_log();
+    // Re-publishing the same block is what the language server does on every
+    // dispatch, so it must not bump the revision — a write here would reparse
+    // the whole database per keystroke.
+    assert!(!db.set_declarations(declared(MYCODE_VERBATIM)));
+    let _ = db.parsed_tree(file);
+
+    assert_eq!(parse_count(&db), 0);
+}
+
+#[test]
+fn declarations_are_the_top_tier_of_the_signature_scope() {
+    let mut db = IncrementalDatabase::default();
+    // The file defines `mycode` itself, one-argument and non-verbatim; the
+    // declaration corrects that inference and must win.
+    let main = db.upsert_file(
+        Path::new("main.tex"),
+        "\\newenvironment{mycode}[1]{#1}{}\n".to_owned(),
+    );
+    let members = vec![ProjectMember {
+        file: main,
+        path: db.file_path(main).to_path_buf(),
+        kind: FileKind::Tex,
+    }];
+
+    let scanned = db
+        .snapshot()
+        .scope_signatures(members.clone(), main)
+        .environment("mycode")
+        .expect("scanned environment")
+        .clone();
+    assert_eq!(scanned.args.len(), 1);
+    assert!(!scanned.verbatim_body);
+
+    db.set_declarations(declared(MYCODE_VERBATIM));
+    let scope = db.snapshot();
+    let declared_sig = scope
+        .scope_signatures(members, main)
+        .environment("mycode")
+        .expect("declared environment");
+    assert!(
+        declared_sig.verbatim_body,
+        "a declaration outranks the file's own definition"
+    );
 }

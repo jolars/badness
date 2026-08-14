@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
+use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
 use crate::formatter::{
     FormatError, FormatStyle, SentenceOptions, WrapMode, format_file_with_packages_sentence,
@@ -125,6 +126,7 @@ pub fn check_paths(paths: &[PathBuf]) -> Result<CheckResult, CheckError> {
         FormatStyle::default(),
         None,
         SentenceOptions::default(),
+        &ResolvedDeclarations::default(),
         &ExcludeFilter::none(),
     )
 }
@@ -139,6 +141,7 @@ pub fn check_paths_with_style(
     style: FormatStyle,
     wrap_override: Option<WrapMode>,
     sentence: SentenceOptions<'_>,
+    declared: &ResolvedDeclarations,
     exclude: &ExcludeFilter,
 ) -> Result<CheckResult, CheckError> {
     if paths.is_empty() {
@@ -187,6 +190,7 @@ pub fn check_paths_with_style(
                     style,
                     kind.lex_config(),
                     sentence,
+                    declared,
                 )
                 .map_err(|err| CheckError::FormatError {
                     path: path.clone(),

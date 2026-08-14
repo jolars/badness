@@ -4,7 +4,8 @@
 
 use std::path::Path;
 
-use crate::parser::{LexConfig, parse_with_flavor};
+use crate::declarations::ResolvedDeclarations;
+use crate::parser::{LexConfig, parse_with_declarations};
 use crate::project::{ResolvedCitations, ResolvedLabels, ResolvedPackageOptions};
 use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
@@ -22,9 +23,18 @@ use super::suppression::SuppressionMap;
 /// lexer's initial catcode regime so a `.sty`/`.cls` parses under the implicit
 /// `\makeatletter` ([`Package`](crate::parser::LatexFlavor::Package)) and a
 /// `.dtx` runs the docstrip mode; a bare
-/// [`LatexFlavor`](crate::parser::LatexFlavor) coerces in.
-pub fn check_document(path: &Path, text: &str, config: impl Into<LexConfig>) -> Vec<Diagnostic> {
-    let parsed = parse_with_flavor(text, config);
+/// [`LatexFlavor`](crate::parser::LatexFlavor) coerces in. `declared` is the
+/// project's declaration block (`AGENTS.md` decision #12), so a declared
+/// `\bea`/`\eea` pair is an environment here exactly as it is under `badness
+/// format`; pass [`ResolvedDeclarations::default`] where no project config
+/// governs.
+pub fn check_document(
+    path: &Path,
+    text: &str,
+    config: impl Into<LexConfig>,
+    declared: &ResolvedDeclarations,
+) -> Vec<Diagnostic> {
+    let parsed = parse_with_declarations(text, config, declared);
     let mut diagnostics: Vec<Diagnostic> = parsed
         .errors
         .iter()
@@ -44,8 +54,9 @@ pub fn check_document_fixable(
     path: &Path,
     text: &str,
     config: impl Into<LexConfig>,
+    declared: &ResolvedDeclarations,
 ) -> Vec<Diagnostic> {
-    let parsed = parse_with_flavor(text, config);
+    let parsed = parse_with_declarations(text, config, declared);
     let root = SyntaxNode::new_root(parsed.green);
     let model = SemanticModel::build(&root);
     lint_with(fixable_registry(), path, &root, &model, None, None, None)

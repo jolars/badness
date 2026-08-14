@@ -5,7 +5,10 @@
 use std::fs;
 use std::path::Path;
 
-use badness_parser::parser::{LatexFlavor, LexConfig, parse_with_flavor, reconstruct};
+use badness_parser::declarations::Declarations;
+use badness_parser::parser::{
+    LatexFlavor, LexConfig, parse_with_declarations, parse_with_flavor, reconstruct,
+};
 
 fn assert_lossless(text: &str) {
     assert_eq!(reconstruct(text), text);
@@ -121,6 +124,45 @@ fn roundtrip_dtx_corpus() {
             );
         }
     }
+}
+
+/// Losslessness holds under a **declaration block** too, on the same bytes the
+/// blind corpus sweep above already covers.
+///
+/// The invariant is the one thing config may never buy an exception to: a
+/// declaration widens what is *recognized*, so it changes the tree's shape, and
+/// a shape change that dropped a byte would be invisible to every test that
+/// parses declaration-blind. `declared_alias.tex` is the corpus file whose two
+/// readings differ — commands blind, an `eqnarray` under the block below.
+#[test]
+fn roundtrip_declared_corpus_file() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/declared_alias.tex");
+    let text = fs::read_to_string(&path).expect("read the declared-alias corpus file");
+    let declared = serde_json::from_str::<Declarations>(
+        r#"{"environments": {"eqnarray": {"begin": ["\\bea"], "end": ["\\eea"]}}}"#,
+    )
+    .expect("declarations deserialize")
+    .resolve()
+    .expect("declarations resolve");
+
+    let parsed = parse_with_declarations(&text, LatexFlavor::Document, &declared);
+    assert_eq!(parsed.syntax().to_string(), text, "declared losslessness");
+    assert!(
+        parsed.errors.is_empty(),
+        "the declared reading must parse cleanly: {:?}",
+        parsed.errors
+    );
+    // The two readings really are different trees, so the assertion above is not
+    // the blind one restated: the declaration pairs the two `\\bea … \\eea`
+    // blocks, while blind only the literal `\\begin{bea}` is an environment.
+    let environments = |root: &badness_parser::syntax::SyntaxNode| {
+        root.descendants()
+            .filter(|n| n.kind() == badness_parser::syntax::SyntaxKind::ENVIRONMENT)
+            .count()
+    };
+    let blind = parse_with_flavor(&text, LatexFlavor::Document);
+    assert_eq!(environments(&blind.syntax()), 1);
+    assert_eq!(environments(&parsed.syntax()), 3);
 }
 
 #[test]

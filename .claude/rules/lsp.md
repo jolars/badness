@@ -45,6 +45,19 @@ gets more latitude because navigation is inherently about the local environment.
   Read these off `state.editor_settings` directly: `ResolvedSettings` is built
   from the `Config` whenever a `badness.toml` exists, so a field populated only
   in `from_editor` is silently blank for every workspace that has one.
+- **The declarations are republished by the *dispatcher*, not by each handler.**
+  The salsa input carrying them is a project-wide singleton, so any job that
+  reads a tree must find the cell holding its own document's block — and a
+  per-handler call is a rule the next handler forgets, leaving that one feature
+  parsing under whichever document was analyzed last. `publish_declarations_for_request`
+  runs once in the request loop and reads `textDocument.uri` off the raw params,
+  so it covers handlers not yet written; the notification sites that publish
+  ahead of an `Edit` job go through `GlobalState::analysis_settings`, which wants
+  the settings anyway. **Do not move this back into the handlers**, and do not
+  narrow it with a method allowlist — a request whose job reads no tree
+  (`forwardSearch`) pays at most one redundant write, which is cheaper than a
+  list that can go stale. Every job rides the same FIFO channel as the write that
+  precedes it, so ordering needs no handshake.
 - Delegate TEXMF root discovery to `kpsewhich -var-value`; reimplementing
   kpathsea is out of scope and MiKTeX doesn't use it.
 - Aux freshness is an mtime+length cache, so a recompile is picked up without a

@@ -24,7 +24,10 @@ phf = "0.14.0"
 rowan = "0.17.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-smol_str = "0.3.2"
+# `serde` here is for `declarations`, whose wire spellings are public API: the
+# CLI, the dprint plugin, and (later) a comment directive all deserialize the
+# same types, so `SmolStr` has to cross the wire.
+smol_str = { version = "0.3.2", features = ["serde"] }
 
 [build-dependencies]
 phf_codegen = "0.14.0"

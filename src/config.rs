@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::declarations::{DeclarationError, Declarations, EnvironmentDecls, ResolvedDeclarations};
 use crate::formatter::{FormatStyle, LineEnding, MathWrap, WrapMode};
 
 pub const CONFIG_FILE_NAME: &str = "badness.toml";
@@ -74,6 +75,23 @@ pub struct Config {
     pub lint: LintConfig,
     #[serde(default)]
     pub build: BuildConfig,
+    /// The `[environments.<name>]` declaration map: what a user-defined
+    /// environment behaves like, and which command spellings stand in for its
+    /// delimiters (`\bea`/`\eea`).
+    ///
+    /// Different in kind from the sections above, because it reaches the
+    /// *parser* rather than the formatter or the linter (`AGENTS.md` decision
+    /// #12). It is deserialized straight into the `badness-parser` type instead
+    /// of a local mirror: serde is a hard dependency of that crate, so unlike
+    /// `FormatStyle` there is no feature to turn on, and a mirror would only add
+    /// a second wire spelling that could drift from the one the dprint plugin
+    /// reads.
+    ///
+    /// A top-level map rather than a nested section, and a keyed table rather
+    /// than an `[[environments]]` array: the key *is* the environment, so
+    /// entries merge per name once config layers or per-file overrides appear.
+    #[serde(default)]
+    pub environments: EnvironmentDecls,
 }
 
 impl Config {
@@ -90,6 +108,30 @@ impl Config {
         patterns.extend(self.extend_exclude.iter().cloned());
         patterns.extend(extra.iter().cloned());
         patterns
+    }
+
+    /// The project's [`Declarations`], gathered from the top-level declaration
+    /// maps. One value rather than a field per map, because everything
+    /// downstream — resolution, the `ParseCtx` seed, the salsa input — takes the
+    /// whole vocabulary at once, and because the other front ends (the dprint
+    /// plugin, a future comment directive) produce a `Declarations` with no
+    /// `Config` in sight.
+    pub fn declarations(&self) -> Declarations {
+        Declarations {
+            environments: self.environments.clone(),
+        }
+    }
+
+    /// The project's declarations, checked and projected into signature data —
+    /// what the parser and the signature scope actually consume.
+    ///
+    /// Infallible because [`validate`](Self::validate) already resolved them
+    /// when the file loaded, so the only way to reach a failure here is a
+    /// `Config` built in memory and never validated. Falling back to *no*
+    /// declarations beats panicking in a CLI path, and beats a `Result` every
+    /// caller would have to launder a second time.
+    pub fn resolved_declarations(&self) -> ResolvedDeclarations {
+        self.declarations().resolve().unwrap_or_default()
     }
 }
 
@@ -359,6 +401,14 @@ pub enum ConfigError {
         field: &'static str,
         message: String,
     },
+    /// A declaration broke one of its rules. Separate from
+    /// [`InvalidValue`](Self::InvalidValue) because the offending key is
+    /// dynamic (`environments.myenv.like`, not a fixed field name) and the
+    /// explanation is the parser crate's to give.
+    Declaration {
+        path: Option<PathBuf>,
+        source: DeclarationError,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -381,6 +431,10 @@ impl fmt::Display for ConfigError {
                 Some(path) => write!(f, "{}: invalid `{field}`: {message}", path.display()),
                 None => write!(f, "invalid `{field}`: {message}"),
             },
+            Self::Declaration { path, source } => match path {
+                Some(path) => write!(f, "{}: {source}", path.display()),
+                None => write!(f, "{source}"),
+            },
         }
     }
 }
@@ -389,6 +443,7 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Declaration { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -423,7 +478,18 @@ impl Config {
 
     fn validate(&self, path: Option<&Path>) -> Result<(), ConfigError> {
         self.format.validate(path)?;
-        self.build.validate(path)
+        self.build.validate(path)?;
+        // Resolution *is* the validation: a declaration that breaks a rule must
+        // fail here, at load, rather than quietly parse and then do nothing to
+        // the document. The resolved tier is rebuilt where it is consumed —
+        // config loads once, so the second pass costs nothing worth caching.
+        self.declarations()
+            .resolve()
+            .map(|_| ())
+            .map_err(|source| ConfigError::Declaration {
+                path: path.map(Path::to_path_buf),
+                source,
+            })
     }
 
     /// Walk `start` and its ancestors looking for a `badness.toml`. Stops at the
@@ -1259,5 +1325,85 @@ mod tests {
             ConfigSource::None.exclude_root(Path::new("/elsewhere")),
             Path::new("/elsewhere")
         );
+    }
+
+    // --- declarations (`AGENTS.md` decision #12)
+    //
+    // The type and its wire spellings are tested in `badness_parser::declarations`;
+    // what these pin is the *TOML* surface, which that crate cannot see (`toml` is
+    // a dependency of this crate only).
+
+    #[test]
+    fn a_project_declares_no_environments_by_default() {
+        assert!(parse("").expect("parse").declarations().is_empty());
+    }
+
+    #[test]
+    fn parses_an_environment_declared_by_behavior() {
+        let config = parse("[environments.myenv]\nlike = \"align\"\n").expect("parse");
+        let decls = config.declarations();
+        assert_eq!(decls.environments["myenv"].like.as_deref(), Some("align"));
+    }
+
+    /// TOML literal strings are what spares users `"\\bea"`, and the leading
+    /// backslash normalizes away either way.
+    #[test]
+    fn parses_delimiter_spellings_in_either_toml_string_form() {
+        let config = parse("[environments.eqnarray]\nbegin = ['\\bea']\nend = [\"\\\\eea\"]\n")
+            .expect("parse");
+        let entry = &config.declarations().environments["eqnarray"];
+        assert_eq!(entry.begin[0].as_str(), "bea");
+        assert_eq!(entry.end[0].as_str(), "eea");
+    }
+
+    /// The `\startmyenv … \endmyenv` shape from issue #109: behavior and
+    /// spellings in one entry, keyed by the environment it is.
+    #[test]
+    fn parses_an_environment_declared_by_behavior_and_spellings() {
+        let config = parse(
+            "[environments.mytheorem]\nlike = \"theorem\"\nbegin = ['\\startmyenv']\nend = ['\\endmyenv']\n",
+        )
+        .expect("parse");
+        let entry = &config.declarations().environments["mytheorem"];
+        assert_eq!(entry.like.as_deref(), Some("theorem"));
+        assert!(entry.has_delimiters());
+    }
+
+    #[test]
+    fn a_misspelled_declaration_key_is_rejected() {
+        let err = parse("[environments.myenv]\nliek = \"align\"\n")
+            .expect_err("unknown key must not be silently ignored");
+        assert!(matches!(err, ConfigError::Parse { .. }), "{err:?}");
+        assert!(err.to_string().contains("liek"), "{err}");
+    }
+
+    /// An environment may legitimately be named after a config section, so the
+    /// map must be its own table rather than sharing a key space with scalars.
+    #[test]
+    fn an_environment_may_be_named_like_a_config_section() {
+        let config = parse("[environments.format]\nlike = \"center\"\n").expect("parse");
+        assert!(config.declarations().environments.contains_key("format"));
+        assert_eq!(config.format, FormatConfig::default());
+    }
+
+    /// The rules themselves are tested in `badness_parser::declarations`; what
+    /// this pins is that loading a config *runs* them, so a broken declaration
+    /// is reported at load rather than silently doing nothing to the document.
+    #[test]
+    fn a_broken_declaration_fails_at_load() {
+        let err = parse("[environments.myenv]\nlike = \"algin\"\n")
+            .expect_err("an unknown `like` target must not load");
+        assert!(matches!(err, ConfigError::Declaration { .. }), "{err:?}");
+        let rendered = err.to_string();
+        assert!(rendered.contains("badness.toml"), "{rendered}");
+        assert!(rendered.contains("environments.myenv.like"), "{rendered}");
+        assert!(rendered.contains("algin"), "{rendered}");
+    }
+
+    #[test]
+    fn a_declared_opener_without_a_closer_fails_at_load() {
+        let err = parse("[environments.eqnarray]\nbegin = ['\\bea']\n")
+            .expect_err("an opener with no closer must not load");
+        assert!(matches!(err, ConfigError::Declaration { .. }), "{err:?}");
     }
 }

@@ -265,9 +265,10 @@ Prefer false negatives; when in doubt a construct stays generic.
   use `get` rather than a dependency-free `try_get` fallback) is read by
   `parsed_document` and `scope_signatures`. Writing it reparses the whole
   database, so `set_declarations` no-ops on an equal value and the language
-  server mirrors the last block it published. A read job that misses the cache
-  takes them off the snapshot (`Analysis::declarations`) — never re-derives them,
-  and never answers declaration-blind.
+  server mirrors the last block it published, republishing from the request
+  dispatcher rather than per handler (see `lsp.md`). A read job that misses the
+  cache takes them off the snapshot (`Analysis::declarations`) — never re-derives
+  them, and never answers declaration-blind.
 - Don't add intra-file reparse without recording the decision in `AGENTS.md`.
 
 ## Generated `data/` artifacts

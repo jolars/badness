@@ -131,7 +131,7 @@ use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
     FormatStyle, SentenceOptions, WrapMode, declared_scope,
     format_node_range_with_signatures_sentence, format_node_with_signatures_sentence,
-    format_pathless_sentence,
+    format_with_declarations_sentence,
 };
 use crate::incremental::{Analysis, IncrementalDatabase};
 use crate::linter::{RuleSelection, Severity, lint_document};
@@ -617,32 +617,102 @@ impl GlobalState {
         resolved
     }
 
-    /// [`resolve_settings`](Self::resolve_settings) for a request whose work
-    /// *parses* — diagnostics, formatting, code actions — additionally
-    /// republishing the document's declarations to the worker when they differ
-    /// from what it holds.
+    /// Republish the declarations governing `uri` to the worker's salsa input
+    /// when they differ from what it holds.
     ///
-    /// Every parse-bearing dispatch site goes through this rather than through
-    /// `resolve_settings` directly, so the declarations the worker seeds its
-    /// parses with are always the ones governing the document it is about to
-    /// analyze. The job rides the same FIFO channel as the work it precedes, so
-    /// ordering needs no separate handshake.
+    /// The input is a project-wide **singleton**, so any job that reads a tree
+    /// must find the cell holding *its own* document's block — and since a job
+    /// rides the same FIFO channel, sending the write ahead of it needs no
+    /// separate handshake. Requests are covered wholesale by
+    /// [`publish_declarations_for_request`], which calls this from the dispatcher
+    /// rather than from each handler; the notification sites that publish ahead
+    /// of an `Edit` job go through
+    /// [`analysis_settings`](Self::analysis_settings), which wants the settings
+    /// anyway.
     ///
-    /// A workspace whose documents resolve to *different* declaration blocks
-    /// therefore rewrites the input as the active document crosses between them,
-    /// reparsing the world each time — the accepted cost of a single project-wide
-    /// input (see [`DeclarationsInput`](crate::incremental::DeclarationsInput)).
-    /// Declaring nothing, the overwhelming default, never writes it at all.
+    /// A session holding two workspaces with *different* blocks therefore
+    /// rewrites the input as attention crosses between them, reparsing the world
+    /// each time — the accepted cost of a single project-wide input (see
+    /// [`DeclarationsInput`](crate::incremental::DeclarationsInput)). Declaring
+    /// nothing, the overwhelming default, never writes it at all.
+    fn publish_declarations(&mut self, uri: &Uri, job_tx: &Sender<WorkerJob>) {
+        let declarations = self.resolve_settings(uri).declarations;
+        self.publish_resolved_declarations(declarations, job_tx);
+    }
+
+    /// [`resolve_settings`](Self::resolve_settings) for a notification whose work
+    /// *parses* — `didOpen`, `didChange`, a relint sweep — additionally
+    /// republishing the document's declarations ahead of the job it precedes.
+    ///
+    /// Requests do not need this: the dispatcher publishes for every one of them
+    /// ([`publish_declarations_for_request`]), so a handler is free to resolve
+    /// settings however it likes, or not at all. Resolving *once* matters here
+    /// and not there — `didChange` runs per keystroke, and `resolve_settings`
+    /// hands back a clone of the whole settings record.
     fn analysis_settings(&mut self, uri: &Uri, job_tx: &Sender<WorkerJob>) -> ResolvedSettings {
         let resolved = self.resolve_settings(uri);
-        if resolved.declarations != self.declarations {
-            self.declarations = Arc::clone(&resolved.declarations);
-            let _ = job_tx.send(WorkerJob::Declarations {
-                declarations: Arc::clone(&resolved.declarations),
-            });
-        }
+        self.publish_resolved_declarations(Arc::clone(&resolved.declarations), job_tx);
         resolved
     }
+
+    /// The write half of [`publish_declarations`](Self::publish_declarations),
+    /// over declarations already resolved.
+    fn publish_resolved_declarations(
+        &mut self,
+        declarations: Arc<ResolvedDeclarations>,
+        job_tx: &Sender<WorkerJob>,
+    ) {
+        // `resolve_settings` hands back a clone of a cached value, so the common
+        // case is the same allocation it returned last time and the pointer
+        // check settles it without walking two signature databases.
+        if Arc::ptr_eq(&declarations, &self.declarations) || declarations == self.declarations {
+            return;
+        }
+        self.declarations = Arc::clone(&declarations);
+        let _ = job_tx.send(WorkerJob::Declarations { declarations });
+    }
+}
+
+/// Publish the declarations governing the document a request names, before the
+/// request is routed to its handler.
+///
+/// **One insertion point, not a call per handler.** Nearly every request reads a
+/// tree, the salsa input carrying the declarations is a project-wide singleton,
+/// and a per-handler call is a rule the next handler forgets — leaving that one
+/// feature parsing under whichever document was last analyzed. Reading
+/// `textDocument.uri` straight off the params covers every `textDocument/*`
+/// request, including ones not yet written.
+///
+/// A request that names no document (`workspace/symbol`) rides whatever the last
+/// one published, and a request whose job reads no tree (`forwardSearch`) pays at
+/// most one redundant write in a multi-workspace session — cheaper than the
+/// method allowlist that would avoid it, and unable to go stale.
+///
+/// `workspace/executeCommand` is the one shape a plain `params.textDocument`
+/// read misses: `changeEnvironment` carries its document one level down, in the
+/// first command argument. It reads a tree like any other, so the extractor
+/// knows both spellings.
+fn publish_declarations_for_request(
+    state: &mut GlobalState,
+    req: &Request,
+    job_tx: &Sender<WorkerJob>,
+) {
+    let document_uri = |value: &serde_json::Value| {
+        value
+            .get("textDocument")
+            .and_then(|doc| doc.get("uri"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|uri| uri.parse::<Uri>().ok())
+    };
+    let Some(uri) = document_uri(&req.params).or_else(|| {
+        req.params
+            .get("arguments")
+            .and_then(|args| args.get(0))
+            .and_then(document_uri)
+    }) else {
+        return;
+    };
+    state.publish_declarations(&uri, job_tx);
 }
 
 /// A job from the main loop to the worker thread.
@@ -1181,6 +1251,10 @@ fn main_loop(
                         if connection.handle_shutdown(&req)? {
                             break;
                         }
+                        // Ahead of the handler, so the declarations governing the
+                        // named document reach the worker before whatever job it
+                        // sends on this same channel.
+                        publish_declarations_for_request(&mut state, &req, &job_tx);
                         match req.method.as_str() {
                             Formatting::METHOD => {
                                 on_formatting(&connection, &mut state, &job_tx, req)
@@ -1524,7 +1598,7 @@ fn on_formatting(
         )));
         return;
     }
-    let resolved = state.analysis_settings(&uri, job_tx);
+    let resolved = state.resolve_settings(&uri);
     let mut style = resolved.style;
     // A discovered `badness.toml` wins outright; only when none
     // governs does the request's `tab_size` override the indent width.
@@ -1581,7 +1655,7 @@ fn on_range_formatting(
         )));
         return;
     }
-    let resolved = state.analysis_settings(&uri, job_tx);
+    let resolved = state.resolve_settings(&uri);
     let mut style = resolved.style;
     if !resolved.config_present && params.options.tab_size > 0 {
         style.indent_width = params.options.tab_size as usize;
@@ -1635,7 +1709,7 @@ fn on_type_formatting(
         )));
         return;
     }
-    let resolved = state.analysis_settings(&uri, job_tx);
+    let resolved = state.resolve_settings(&uri);
     let mut style = resolved.style;
     if !resolved.config_present && params.options.tab_size > 0 {
         style.indent_width = params.options.tab_size as usize;
@@ -1896,7 +1970,7 @@ fn on_document_diagnostic(
     let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    let rules = state.analysis_settings(&uri, job_tx).rule_selection();
+    let rules = state.resolve_settings(&uri).rule_selection();
     let _ = job_tx.send(WorkerJob::Diagnostic {
         id,
         path,
@@ -2181,7 +2255,7 @@ fn on_code_action(
     let text = doc.text.clone();
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    let rules = state.analysis_settings(&uri, job_tx).rule_selection();
+    let rules = state.resolve_settings(&uri).rule_selection();
     let _ = job_tx.send(WorkerJob::CodeAction {
         id,
         uri,
@@ -3985,7 +4059,7 @@ fn compute_format(
             | FileKind::Sty
             | FileKind::Cls
             | FileKind::Dtx
-            | FileKind::Ins => format_pathless_sentence(
+            | FileKind::Ins => format_with_declarations_sentence(
                 text,
                 style,
                 kind.lex_config(),

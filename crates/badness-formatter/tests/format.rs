@@ -830,9 +830,18 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the child `GROUP`, and a list that fits stays exactly as authored.
     ("keyval_group_splits_entries", WrapMode::Reflow, 80),
     // A keyval `{…}` declines to the block form on the same preserved predicates as
-    // the bracket: a `%` (which must end its line) and a blank-line `\par`. Same
-    // bytes the generic opaque lowering produced before the routing existed — but
-    // now reached through `segment_delimited_body`'s bail, so it is pinned.
+    // the bracket: a `%` (which must end its line) and a blank-line `\par`, reached
+    // through `segment_delimited_body`'s bail. The block form breaks after the `{`
+    // even where the author glued it, which for any *other* brace group would
+    // materialize a space token (`lower_bracketed`'s `open_glued`) — the keyval
+    // proof is what lifts that guard, and without it the group glued its opener
+    // while its closer took its own line. The blank-line half is well-formed
+    // syntax that nonetheless does not run: the blank line is a `\par` token, and
+    // `keyval`'s `\kv@processor@default` is not `\long`, so hyperref reports
+    // "Paragraph ended before \kv@processor@default was complete" on exactly this
+    // input and compiles clean without the blank line. Kept because the formatter
+    // owes it losslessness and a deterministic bail either way — but it pins the
+    // bail, not a shape to emulate.
     ("keyval_group_declines_on_comment", WrapMode::Reflow, 80),
     // A dropped trailing separator (`[a, ]` / `[a,\n]`) stood for authored
     // whitespace, and an optional is textual — the space token survives as

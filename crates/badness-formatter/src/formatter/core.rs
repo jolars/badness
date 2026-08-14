@@ -1043,7 +1043,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             // when the author broke the line, the generic inline stream below
             // otherwise. Fixed-point argument on [`spans_multiple_lines`].
             if spans_multiple_lines(node) {
-                return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+                return lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
             }
         }
         // Same margin rule as the group above: a `[…]` continuing across
@@ -6100,7 +6100,13 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
 /// wrapping), so the only `open` token is the first child and the only `close`
 /// token is the last — but an `OPTIONAL` body may contain a stray `[` (TeX does
 /// not nest `[`), so the opener is captured only once (`open_ir` still `Nil`).
-fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: LowerCtx<'_>) -> Ir {
+fn lower_bracketed(
+    node: &SyntaxNode,
+    open: SyntaxKind,
+    close: SyntaxKind,
+    cx: LowerCtx<'_>,
+    keyval: bool,
+) -> Ir {
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
@@ -6147,10 +6153,16 @@ fn lower_bracketed(node: &SyntaxNode, open: SyntaxKind, close: SyntaxKind, cx: L
     // content, a nested node) means the opener was glued. This path is never
     // reached inside an expl3 region (routed to `lower_expl_group` earlier),
     // where source whitespace is catcode-9 and the synthesized break is sound.
-    // Scoped to brace groups: an optional `[…]` freely swaps its interior
-    // newlines for spaces already (a key-value list's whitespace is insignificant;
-    // `collapse_arg_group`, issue #47), so its Allman break after `[` is by design.
+    // Two things lift the guard. A `[…]` always did (`collapse_arg_group`, issue
+    // #47): it freely swaps its interior newlines for spaces, so the Allman break
+    // after `[` is by design. And a *proven keyval* body does, whatever its
+    // delimiter — `ContentKind::Keyval` asserts the processor strips spaces around
+    // entries, which is the same license under a different name. Reading `open`
+    // alone was the proxy for that second one, sound only while keyval lived on
+    // brackets; left in place it glued a `\pgfkeys{a=1,` opener while its closer
+    // still took its own line, an asymmetry nothing justified.
     let open_glued = open == SyntaxKind::L_BRACE
+        && !keyval
         && body_elements
             .first()
             .and_then(SyntaxElement::as_token)
@@ -6246,7 +6258,7 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             }
         }
     }
-    let block = || lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx);
+    let block = || lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
     let mut open = Ir::Nil;
     let mut close = Ir::Nil;
     let mut lead: Option<String> = None;
@@ -6412,7 +6424,7 @@ fn lower_segmented_group(
         // form when the author broke the line, generic inline path otherwise.
         // Fixed-point argument on [`spans_multiple_lines`].
         return spans_multiple_lines(node)
-            .then(|| lower_bracketed(node, open_kind, close_kind, cx));
+            .then(|| lower_bracketed(node, open_kind, close_kind, cx, keyval));
     }
     let Some(segments) = segment_delimited_body(node, open_kind, close_kind, cx, keyval) else {
         // Not safely segmentable: blank line, comment, or a child carrying a
@@ -6420,7 +6432,7 @@ fn lower_segmented_group(
         // the third occurs in single-line spellings too (`\baz[{c\n\nd}]`), so
         // the block form applies unconditionally — both spellings of the same
         // content take it, keyed on content and preserved predicates alone.
-        return Some(lower_bracketed(node, open_kind, close_kind, cx));
+        return Some(lower_bracketed(node, open_kind, close_kind, cx, keyval));
     };
     let GroupSegments {
         open,

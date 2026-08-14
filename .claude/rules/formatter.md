@@ -200,6 +200,14 @@ predicates the formatter *preserves*.
   unvalidated, and its blast radius on mandatory groups is unmeasured. Lifting
   that scoping is a separate, measured change — not a side effect of curating a
   name. Pinned by `keyval_group_splits_entries`.
+- **The keyval proof also lifts `lower_bracketed`'s `open_glued` guard.** That
+  guard exists because a break after a glued `{` materializes a space token
+  (TeX state M), and it was scoped by *delimiter* — sound only while keyval
+  lived on brackets. A proven-keyval body carries the same license under a
+  different name, so it takes the Allman break whatever its delimiter;
+  otherwise the group glues its opener while its closer still takes its own
+  line. Any new keyval-shaped exemption keyed on `open ==` is that same proxy
+  coming back.
 - **A mandatory `Keyval` is deliberately *not* wired on the `\begin` path**
   (`lower_begin` keeps `keyval && is_bracket`). No environment is curated with
   one, and an environment header answers to rules a `[…]` does not: the grid

@@ -8,6 +8,14 @@
 //! % badness-ignore-file: <reason>          suppress ALL rules file-wide
 //! ```
 //!
+//! This family is rule-selective and lint-only. The combined `% badness`
+//! family — which turns off the formatter *and* every lint rule over a `skip`
+//! target, an `off`/`on` region, or a whole file — has no selector slot and is
+//! shared with the formatter, so it is scanned by
+//! [`crate::directives`] and folded in here as
+//! [`SuppressionMap::all_ranges`]. Region scope reaches the linter only through
+//! that family; `% badness-ignore` has never had one.
+//!
 //! Byte ranges are plain `usize` offsets (the
 //! [`Diagnostic`](super::Diagnostic) stores plain offsets, not a rowan
 //! `TextRange`), matched against LaTeX comment syntax. The comment-to-node attachment
@@ -29,6 +37,10 @@ pub struct SuppressionMap {
     /// `rule → byte ranges`. A diagnostic is suppressed if its `[start, end)`
     /// falls fully inside one of the registered ranges for its rule.
     node_skips: HashMap<String, Vec<(usize, usize)>>,
+    /// Byte ranges in which *every* rule is suppressed, from the combined
+    /// `% badness` directive family (see [`crate::directives`]). Sorted and
+    /// non-overlapping, so containment is a plain scan.
+    all_ranges: Vec<(usize, usize)>,
 }
 
 impl SuppressionMap {
@@ -41,6 +53,11 @@ impl SuppressionMap {
                 classify_comment(&token, &mut map);
             }
         }
+        map.all_ranges = crate::directives::Suppressions::build(root)
+            .lint_ranges()
+            .iter()
+            .map(|r| (usize::from(r.start()), usize::from(r.end())))
+            .collect();
         map
     }
 
@@ -50,6 +67,13 @@ impl SuppressionMap {
             return true;
         }
         if self.file_rules.contains(rule) {
+            return true;
+        }
+        if self
+            .all_ranges
+            .iter()
+            .any(|(rs, re)| *rs <= start && end <= *re)
+        {
             return true;
         }
         if let Some(ranges) = self.node_skips.get(rule) {
@@ -183,6 +207,27 @@ mod tests {
         let m = map_of("% badness-ignore-file deprecated-command: legacy\n\\bf\n");
         assert!(m.is_suppressed("deprecated-command", 0, 1));
         assert!(!m.is_suppressed("duplicate-label", 0, 1));
+    }
+
+    /// The combined family reaches the linter through the shared scanner, and
+    /// carries the region scope `% badness-ignore` does not have.
+    #[test]
+    fn combined_family_suppresses_every_rule_in_a_region() {
+        let src = "\\bf\n% badness off\n\\it\n% badness on\n\\bf\n";
+        let m = map_of(src);
+        let inside = src.find("\\it").expect("has \\it");
+        assert!(m.is_suppressed("any-rule", inside, inside + 3));
+        let outside = src.rfind("\\bf").expect("has trailing \\bf");
+        assert!(!m.is_suppressed("any-rule", outside, outside + 3));
+    }
+
+    /// …but the format-only family must leave the linter alone.
+    #[test]
+    fn format_family_does_not_suppress_lint() {
+        let src = "% badness-format off\n\\bf\n% badness-format on\n";
+        let m = map_of(src);
+        let at = src.find("\\bf").expect("has \\bf");
+        assert!(!m.is_suppressed("deprecated-command", at, at + 3));
     }
 
     #[test]

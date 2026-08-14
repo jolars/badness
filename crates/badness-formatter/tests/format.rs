@@ -2553,3 +2553,121 @@ fn env_alias_resolves_with_no_external_signatures() {
     let out = format(ALIAS_DOC).expect("formats");
     assert!(out.contains("a & = & b"));
 }
+
+// ---------------------------------------------------------------------------
+// Comment directives (`% badness-format …`, `% badness …`)
+// ---------------------------------------------------------------------------
+
+/// A table the formatter demonstrably rewrites when left to itself, so every
+/// test below distinguishes "suppressed" from "happened to already be canonical".
+const HAND_ALIGNED: &str =
+    "\\begin{tabular}{ll}\n  a   &   b \\\\\n  ccc &   d \\\\\n\\end{tabular}\n";
+
+#[test]
+fn baseline_reformats_the_hand_aligned_table() {
+    let out = format(HAND_ALIGNED).expect("formats");
+    assert_ne!(
+        out, HAND_ALIGNED,
+        "the fixture must be one the formatter actually rewrites"
+    );
+}
+
+#[test]
+fn format_skip_preserves_the_documented_construct() {
+    let src = format!("% badness-format skip: hand-aligned\n{HAND_ALIGNED}");
+    let out = format(&src).expect("formats");
+    assert_eq!(out, src, "a skipped construct is reproduced byte for byte");
+    assert_format_invariants(&src);
+}
+
+#[test]
+fn format_off_on_preserves_every_block_between_them() {
+    let src = format!(
+        "% badness-format off\n{HAND_ALIGNED}\n{HAND_ALIGNED}% badness-format on\n{HAND_ALIGNED}"
+    );
+    let out = format(&src).expect("formats");
+    let (suppressed, formatted) = out
+        .split_once("% badness-format on\n")
+        .expect("the closer survives");
+    assert_eq!(
+        suppressed,
+        &src[..src.find("% badness-format on").expect("has closer")],
+        "both blocks inside the region, and the seam between them, stay byte-exact"
+    );
+    assert_ne!(
+        formatted, HAND_ALIGNED,
+        "the block after `on` is formatted again"
+    );
+    assert_format_invariants(&src);
+}
+
+#[test]
+fn format_skip_file_preserves_the_whole_document() {
+    let src = format!("% badness-format skip-file: generated\n{HAND_ALIGNED}");
+    assert_eq!(format(&src).expect("formats"), src);
+    assert_format_invariants(&src);
+}
+
+/// Suppression must not leak past the region: content *outside* it is laid out
+/// exactly as if the directives were not there at all.
+#[test]
+fn suppression_does_not_leak_to_surrounding_content() {
+    let prose = "Some     prose    with     collapsible     spacing.\n";
+    let src =
+        format!("{prose}\n% badness-format off\n{HAND_ALIGNED}% badness-format on\n\n{prose}");
+    let out = format(&src).expect("formats");
+    assert_eq!(
+        out.matches("Some prose with collapsible spacing.").count(),
+        2,
+        "prose either side of the region still normalizes, got:\n{out}"
+    );
+}
+
+/// The bare `% badness` family suppresses layout too — it is the combined axis,
+/// not a lint-only one.
+#[test]
+fn combined_family_suppresses_layout() {
+    let src = format!("% badness skip: leave it alone\n{HAND_ALIGNED}");
+    assert_eq!(format(&src).expect("formats"), src);
+    assert_format_invariants(&src);
+}
+
+/// An unrecognized directive must format as the ordinary comment it is, never
+/// silently suppress. `% badness-ignore` is the live lint family and has to stay
+/// inert here in particular.
+#[test]
+fn unrecognized_and_lint_directives_do_not_suppress_layout() {
+    for lead in [
+        "% badness-ignore deprecated-command: legacy",
+        "% badness-format nonsense",
+        "% badness",
+        "% an ordinary comment",
+    ] {
+        let src = format!("{lead}\n{HAND_ALIGNED}");
+        let out = format(&src).expect("formats");
+        assert_ne!(out, src, "{lead:?} must not suppress the formatter");
+    }
+}
+
+/// An `off` with no `on` runs to end of file, as it does in every other
+/// formatter carrying the directive.
+#[test]
+fn unclosed_off_runs_to_end_of_file() {
+    let src = format!("% badness-format off\n{HAND_ALIGNED}\n{HAND_ALIGNED}");
+    assert_eq!(format(&src).expect("formats"), src);
+    assert_format_invariants(&src);
+}
+
+/// A suppressed region is a preservation-only construct, so it upholds the
+/// trivia-perturbation oracle (which [`assert_format_invariants`] runs) by
+/// construction: every perturbed variant is reproduced verbatim and is
+/// therefore its own fixed point. Asserted on an input with real prose either
+/// side, so the perturber has gaps both inside and outside the region to flip.
+#[test]
+fn suppressed_regions_converge_under_trivia_perturbation() {
+    assert_format_invariants(&format!(
+        "Prose before, long enough to wrap somewhere along its length.\n\n\
+         % badness-format off\n{HAND_ALIGNED}% badness-format on\n\n\
+         Prose after, also long enough that the formatter has a decision to make.\n"
+    ));
+}

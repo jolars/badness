@@ -225,6 +225,31 @@ predicates the formatter *preserves*.
   verbatim arm, not from a width special case. Pinned by
   `filecontents_protected_body`.
 
+## Suppression directives
+
+- `% badness-format skip`/`off`/`on`/`skip-file` turn layout off; the bare
+  `% badness` family turns off layout *and* every lint rule. Resolved once in
+  `badness_parser::directives`, consumed here as `LowerCtx::suppressed` (same
+  shape as `expl3_regions`). `% badness-ignore <rule>` is a different,
+  lint-only family — never route it here.
+- **Containment, not overlap** (`LowerCtx::suppressed`). A region begins inside
+  every construct enclosing its content, so an overlap test suppresses the
+  outermost *ancestor* — one directive takes the whole `document` environment
+  and with it the file.
+- **Checked at the top of `lower_node`, above every routing arm**, and `ROOT` is
+  excluded so a `skip-file` reaches the children instead and the range-format
+  emission filter still runs.
+- **Trivia inside a region is emitted per token, never through `consume_gap`.**
+  Otherwise the seams *between* two suppressed blocks normalize while the blocks
+  stay exact.
+- Emitted as `Ir::verbatim` of the source: first line takes the formatter's
+  indent, later lines keep their authored columns. That is the protected-region
+  asymmetry (§ *Protected regions*), not a new rule — don't "fix" it into
+  symmetry.
+- Preservation-only, so the trivia-perturbation oracle passes by construction:
+  every perturbed variant is reproduced and is its own fixed point. No Tier-2
+  argument needed beyond that sentence.
+
 ## Comments
 
 - **A `%` ends its line, so nothing the formatter emits may follow one there.**

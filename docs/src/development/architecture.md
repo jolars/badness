@@ -981,6 +981,66 @@ document came out CRLF inside the protected region and LF everywhere else. Only
 the `\r\n` and `\n` pair is touched; every other byte of the region is still
 untouched.
 
+### Comment directives
+
+`badness_parser::directives` resolves the `% badness-format` family (`skip`,
+`off`/`on`, `skip-file`) and the combined `% badness` family into sorted,
+non-overlapping byte ranges, one list per axis. The formatter takes the format
+list on `LowerCtx::suppressed` — the same shape as `expl3_regions`, owned by
+`format_root` for the lowering — and the linter folds the lint list into
+`SuppressionMap` as ranges where every rule is off.
+
+It lives in the parser crate because neither consumer can reach the other: the
+formatter is wasm-clean and is what the dprint plugin embeds, while the linter
+lives in the root crate. Resolving a directive is a pure function of the tree,
+so it sits below both, and the plugin gets suppression for free rather than
+becoming a second sanctioned divergence from `badness format`.
+
+Three decisions carry the weight.
+
+**The verb carries the scope.** Rule-selective lint suppression needs a selector
+slot; layout suppression has nothing to select, so a shared grammar with the
+selector in second position would be lint-shaped by construction. Splitting on
+the verb instead (`skip` / `off` / `on` / `skip-file`, the vocabulary tex-fmt,
+ruff, and black already established) lets both axes share one grammar and keeps
+every form reading as an imperative. `% badness-ignore <rule>` is untouched and
+still the only rule-selective form; what the new families add on the lint side
+is the region scope it has never had.
+
+**Suppression is containment, not overlap.** An `off`/`on` region is delimited
+by comments the author placed, not by CST boundaries, so it can begin halfway
+through a construct — and every construct it begins inside is an *ancestor* of
+the content it means to cover. Testing overlap would therefore suppress the
+outermost such ancestor: one directive anywhere in a document body suppresses
+the whole `document` environment, and with it the file. Containment picks the
+outermost node fitting *within* the region, so a straddling ancestor keeps
+descending and only the enclosed blocks are reproduced.
+
+**A region anchors where a `skip` would target, clamped to the previous
+directive.** An own-line `%` binds *forward* into the following construct's
+`DOC_COMMENT` (see [Trivia attachment](#trivia-attachment)), so a region
+starting at the byte after the `off` comment begins *inside* the construct it
+means to cover, which then fails the containment test. Anchoring through
+`skip_target` instead fixes that and picks up a preceding comment run bound into
+the same `DOC_COMMENT`. The clamp is what keeps consecutive directives apart:
+`on` / `off` / block puts both directives in one comment run, so the reopening
+`off` resolves to a construct starting at the `on` and would otherwise swallow
+the closer of the region before it, fusing the two.
+
+Suppressed content is emitted as `Ir::verbatim` of the node's source text.
+`Writer::write_verbatim` flushes the pending indent on the first line and leaves
+every later line at its authored column, which is the same deliberate asymmetry
+protected regions already carry: the block lands where the formatter puts it,
+its interior is untouched. Trivia *inside* a region is emitted per token rather
+than collapsed into a `Gap`, or the seams between two suppressed blocks would
+quietly normalize while the blocks themselves stayed exact.
+
+A suppressed region is preservation-only, so it upholds the
+[trivia-perturbation](#trivia-invariant-layout) oracle by construction: every
+perturbed variant is reproduced verbatim and is therefore its own fixed point.
+The document-level trailing-edge normalization and the `line_ending` post-pass
+still run over the result — the same carve-out protected regions live under.
+
 ## The linter
 
 The linter reports diagnostics over the same lossless CST the formatter

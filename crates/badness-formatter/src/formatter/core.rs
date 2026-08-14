@@ -54,6 +54,7 @@ use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
 use crate::ast::{AstNode, Environment, Group, command_name};
+use crate::directives;
 use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_flavor};
@@ -321,6 +322,11 @@ fn format_root(
     // (ignored) and `~` is catcode-10 (a literal space), so the formatter fully owns
     // layout. Held by value for the whole lowering, like `user`.
     let regions = expl3_regions(root);
+    // The spans the author turned layout off over, resolved from this file's own
+    // comment directives (see [`crate::directives`]). A pure function of the
+    // tree, held by value for the whole lowering like `regions`. Empty for the
+    // overwhelming majority of documents, in which case every query is free.
+    let suppressed = directives::Suppressions::build(root);
     // The sentence-boundary profile for the `sentence`/`semantic` wrap modes,
     // resolved from the run's [`SentenceOptions`]. `Copy`, borrowing the merged
     // no-break slice `ctx` still owns for the whole call, so it rides `LowerCtx`
@@ -340,6 +346,7 @@ fn format_root(
         stable_target: ctx.style().stable_wrap_target(),
         signatures: Signatures::new(&user),
         expl3_regions: &regions,
+        suppressed: suppressed.format_ranges(),
         profile,
         range,
         grouped_sibling_cache: &grouped_sibling_cache,
@@ -712,6 +719,12 @@ struct LowerCtx<'a> {
     /// itself — regardless of [`WrapMode`]. Borrowed from a `Vec` owned by
     /// [`format_root`], exactly like `signatures`.
     expl3_regions: &'a [TextRange],
+    /// Sorted, non-overlapping byte ranges the author turned layout off over
+    /// (`% badness-format off`/`skip`/`skip-file` and the combined `% badness`
+    /// family — see [`crate::directives`]). Content overlapping one of these is
+    /// reproduced byte-for-byte instead of laid out. Borrowed from a `Vec` owned
+    /// by [`format_root`], exactly like `expl3_regions`.
+    suppressed: &'a [TextRange],
     /// The sentence-boundary profile (built-in language plus user no-break
     /// abbreviations) for the [`WrapMode::Sentence`]/[`WrapMode::Semantic`] modes.
     /// `Copy`, borrowing the merged slice owned by [`format_root`]. Never consulted
@@ -805,6 +818,28 @@ impl<'a> LowerCtx<'a> {
             .iter()
             .any(|r| r.start() < range.end() && range.start() < r.end())
     }
+
+    /// Whether `range` lies wholly inside a directive-suppressed span, so
+    /// whatever occupies it must be reproduced byte-for-byte instead of laid out.
+    ///
+    /// **Containment, not overlap**, and the difference is the whole granularity
+    /// story. An `off`/`on` region is delimited by comments the author placed,
+    /// not by CST boundaries, so it can begin halfway through a construct — and
+    /// every construct it begins inside is an *ancestor* of the content it means
+    /// to cover. Overlap would therefore suppress the outermost such ancestor:
+    /// one directive anywhere in a document body suppresses the whole
+    /// `document` environment, and with it the entire file. Containment picks
+    /// the outermost node that fits *within* the region instead, so an ancestor
+    /// merely straddling the boundary keeps descending and only the blocks the
+    /// author actually enclosed are reproduced.
+    ///
+    /// A node straddling the boundary is laid out normally while its wholly
+    /// enclosed children are still reproduced. That is a finer granularity than
+    /// ruff's statement level, and it stays sound in the direction that matters:
+    /// every byte the author enclosed is preserved.
+    fn suppressed(self, range: TextRange) -> bool {
+        self.suppressed.iter().any(|r| r.contains_range(range))
+    }
 }
 
 /// Lower a CST node to IR. Most nodes lower generically (see
@@ -815,6 +850,18 @@ impl<'a> LowerCtx<'a> {
 /// threaded through so it reaches every nested paragraph (including environment and
 /// group bodies).
 fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    // Directive-suppressed content is reproduced, never laid out. Checked first,
+    // above every routing decision, so no arm below can claim a node the author
+    // turned the formatter off over.
+    //
+    // `ROOT` is excluded because a whole-file `skip-file` covers it: suppressing
+    // there would emit the document as one opaque blob, which is the right bytes
+    // by luck but skips the emission filter a range format depends on. Excluded,
+    // the same directive reaches every *child* instead, and both the full and the
+    // ranged path fall out of the one mechanism.
+    if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
+        return Ir::verbatim(node.text().to_string());
+    }
     // Range-formatting emission filter: at the document root, lower only the
     // children (top-level blocks plus the trivia between them) overlapping the
     // requested range; skip the rest entirely. The filter lives at `ROOT` so each
@@ -3865,6 +3912,16 @@ fn lower_element_stream(
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            // Trivia inside a suppressed span is reproduced too, one token at a
+            // time rather than collapsed into a `Gap`. Without this the *gaps
+            // between* two suppressed siblings would still normalize, so an
+            // `off`/`on` region spanning several top-level blocks would keep
+            // every block byte-exact and quietly rewrite the seams between them.
+            SyntaxElement::Token(token)
+                if is_collapsible_trivia(token.kind()) && cx.suppressed(token.text_range()) =>
+            {
+                out.push(Ir::verbatim(token.text().to_string()));
+            }
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
             }

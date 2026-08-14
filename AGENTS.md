@@ -271,6 +271,29 @@ provenance.
     over-attachment. The formatter stays raw for structural work, adopting wrappers
     only for field access. See `docs/src/development/architecture.md`.
 
+11. **Suppression directives split on the verb, and suppression is containment.**
+    `% badness-format skip` / `off` / `on` / `skip-file` turn off layout;
+    the bare `% badness` family turns off layout *and* every lint rule over the
+    same span. The rule-selective `% badness-ignore <rule>` family is unchanged
+    and stays lint-only: only the linter has something to select, so a shared
+    grammar with a selector in second position would be lint-shaped by
+    construction — the verb carries the scope instead
+    (`badness_parser::directives`, shared because the formatter is wasm-clean and
+    the linter is in the root crate). Two invariants hold the resolution
+    together. **Containment, not overlap:** a region begins inside every
+    construct that encloses its content, so overlap would suppress the outermost
+    *ancestor* — one directive suppresses the whole `document` environment and
+    with it the file. **A region anchors where a `skip` would target, clamped to
+    the previous directive:** an own-line `%` binds forward into the next
+    construct's `DOC_COMMENT` (decision #9), so the raw byte after the comment
+    lands *inside* the construct the region means to cover; and since consecutive
+    own-line comments bind into one `DOC_COMMENT`, an unclamped reopening `off`
+    resolves back onto the `on` that closed the region before it and fuses the
+    two. Suppressed content is `Ir::verbatim` of the source, so the block lands
+    at the formatter's indent and its interior is byte-exact — the protected-region
+    asymmetry, not a new one. Detail in `docs/src/development/architecture.md`
+    (§ *Comment directives*).
+
 The **formatter engine** (Wadler-style `Doc` IR, `WrapMode`, `MathWrap`, table
 alignment, expl3 layout), the **linter** (Rule trait, autofix model,
 registration), and the **LSP's** sanctioned environment awareness are all

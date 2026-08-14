@@ -42,6 +42,24 @@ Suppress a rule at one site with a comment directive:
 {\bf here}
 ```
 
+`% badness-ignore-file <rule>: <reason>` suppresses one rule across the file,
+and `% badness-ignore-file: <reason>` suppresses all of them.
+
+To silence *every* rule over a region---which the rule-selective family above
+has no spelling for---use the combined directives, which turn off the formatter
+at the same time:
+
+```tex
+% badness off
+\bf legacy block, left exactly as it is
+% badness on
+```
+
+`% badness skip` (next construct) and `% badness skip-file` (whole file) are the
+other two scopes. These always cover both subsystems; if you want to suppress
+layout only and keep the diagnostics, use the `% badness-format` spellings
+described in [Formatting](formatting.md#turning-the-formatter-off).
+
 Some rules ship an **auto-fix**. `badness lint --fix` applies the
 meaning-preserving (Safe) ones; `--unsafe-fixes` also applies fixes that may
 change output, such as `missing-nonbreaking-space` (inserting a tie changes line

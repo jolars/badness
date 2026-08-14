@@ -9,6 +9,7 @@
 
 pub mod ast;
 pub mod bib;
+pub mod directives;
 pub mod parser;
 pub mod semantic;
 pub mod syntax;

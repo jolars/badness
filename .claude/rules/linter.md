@@ -57,6 +57,17 @@ Contributor recipe for a new rule: `CONTRIBUTING.md`.
   must never touch the filesystem. It is shared by the CLI and the LSP
   code-action path.
 
+## Suppression
+
+- `% badness-ignore <rule>` / `-file` is the rule-selective family and stays
+  lint-only. Unchanged; its spellings are user-facing API.
+- The combined `% badness skip`/`off`/`on`/`skip-file` family suppresses *every*
+  rule and the formatter together. It is resolved in
+  `badness_parser::directives` (shared with the formatter) and folded into
+  `SuppressionMap::all_ranges`. Region scope reaches the linter only this way.
+- A `% badness-format` directive must never suppress a diagnostic — that is the
+  whole point of having two families.
+
 ## Registry
 
 Config (`select`/`ignore`) narrows the active set as a **post-filter** through

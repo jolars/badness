@@ -26,7 +26,7 @@ use badness::formatter::perturb::{
 };
 use badness::formatter::{
     ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
-    check_paths_with_style, format_file_with_packages_sentence, format_pathless_sentence,
+    check_paths_with_style, format_file_with_packages_sentence, format_with_declarations_sentence,
 };
 use badness::linter::{
     Diagnostic, Fix, OutputMode, RuleSelection, apply_fixes, apply_fixes_multi,
@@ -225,13 +225,17 @@ fn main() -> ExitCode {
         }
         Command::Parse { path } => {
             // The dumped tree must be the tree the formatter and linter see, so
-            // `parse` resolves the project's declarations exactly as they do.
-            // Discovery-only: the subcommand takes no `--config`/`--no-config`.
+            // `parse` resolves the project's declarations exactly as they do —
+            // including `--config`/`--no-config`, which are global flags clap
+            // accepts here whether or not this arm reads them. Ignoring them
+            // would make `badness parse --no-config` dump a tree no other
+            // subcommand would produce, which is the debugging trap threading
+            // declarations through this command was meant to close.
             let anchor = match cwd_anchor() {
                 Ok(anchor) => anchor,
                 Err(code) => return code,
             };
-            let (config, _) = match resolve_config(None, false, &anchor) {
+            let (config, _) = match resolve_config(config_arg.as_deref(), no_config, &anchor) {
                 Ok(resolved) => resolved,
                 Err(code) => return code,
             };
@@ -1623,7 +1627,7 @@ fn run_format_stdin(
         | FileKind::Cls
         | FileKind::Dtx
         | FileKind::Ins => {
-            format_pathless_sentence(&input, style, kind.lex_config(), sentence, declared)
+            format_with_declarations_sentence(&input, style, kind.lex_config(), sentence, declared)
                 .map_err(|e| e.to_string())
         }
         FileKind::Bib => badness::bib::format_with_style(&input, style).map_err(|e| e.to_string()),

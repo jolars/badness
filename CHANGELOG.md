@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.16.0](https://github.com/jolars/badness/compare/v0.15.0...v0.16.0) (2026-08-14)
+
+### Features
+- **config:** declare environments in `badness.toml` (#115) ([`a80b5af`](https://github.com/jolars/badness/commit/a80b5af3a42d8587cd323eb7f3e7bbdb4e20da5b))
+- **formatter:** lay out picture bodies as statements ([`b437091`](https://github.com/jolars/badness/commit/b4370913f7bda378a41ca5b10c4ab01eb1cee35c)), closes [#114](https://github.com/jolars/badness/issues/114)
+- **linter:** add `% badness-lint` suppression directives ([`c03114d`](https://github.com/jolars/badness/commit/c03114d711e15157c22d7fc98c928e13da5f1285)), refs [#114](https://github.com/jolars/badness/issues/114)
+- **formatter:** add suppression comment directives ([`1810cde`](https://github.com/jolars/badness/commit/1810cdedaf0e8290a0ab04e28ba0f4360f4f282e)), refs [#114](https://github.com/jolars/badness/issues/114)
+- **linter:** add `blank-line-in-keyval` ([`0758ea4`](https://github.com/jolars/badness/commit/0758ea4a8b069b3b5a848ef9012651f7252f1daf))
+- **formatter:** segment a mandatory keyval group ([`d79ec73`](https://github.com/jolars/badness/commit/d79ec73a7cef2317880cd33b2eac98725cd05f8a))
+- **formatter:** width-driven layout for opaque brace groups ([`03022a8`](https://github.com/jolars/badness/commit/03022a87fd312e08411c71e3ed6e65e5e30ec669))
+- **cli:** add the strict trivia-invariance check ([`3796d7a`](https://github.com/jolars/badness/commit/3796d7a876a464ffa1f7284678b73e6683bde732))
+- **linter:** add `label-before-caption` rule ([`e8c5b7f`](https://github.com/jolars/badness/commit/e8c5b7fd233da1e7fe82c1a676369d16582beaaf))
+- **linter:** colorize the pretty lint report ([`e4faf16`](https://github.com/jolars/badness/commit/e4faf1663d682a47e53247027adf36ce1f85fd4c))
+- **parser:** pair user-defined environment delimiters ([`2bbff60`](https://github.com/jolars/badness/commit/2bbff600db873eb5c61008972924b318b7f01d4e)), closes [#109](https://github.com/jolars/badness/issues/109)
+- **cli:** read stdin from `-`, not a bare terminal ([`5bb4788`](https://github.com/jolars/badness/commit/5bb47882af6742e28d2ed138d2f9bcf9dda92a15)), closes [#111](https://github.com/jolars/badness/issues/111)
+- **formatter:** lay conditionals out all-or-nothing ([`ed84bfe`](https://github.com/jolars/badness/commit/ed84bfef3441f467d40737bd12255dfcefbd6b71))
+- **parser:** gated `CONDITIONAL` node for `\if…\else…\or…\fi` ([`e0ca4ef`](https://github.com/jolars/badness/commit/e0ca4ef71e149ff715d59fb13afdbd973221d622))
+- **bib:** parse and preserve `%` comments ([`e005cc9`](https://github.com/jolars/badness/commit/e005cc96242ca01d886e18c2e32ccd027f8471c3))
+- **skill:** add formatter-fixture for construct coverage ([`a52095a`](https://github.com/jolars/badness/commit/a52095adece121207bfa8533d7a8680c498a3746))
+- **lsp:** add inverse search over IPC ([`3b829eb`](https://github.com/jolars/badness/commit/3b829ebc368a74d5a678ccc93b533678b95bc60f))
+- **lsp:** add `textDocument/forwardSearch` ([`8028a40`](https://github.com/jolars/badness/commit/8028a40bcd6b58d59f3cd3e3228f94386a0c8e2d))
+- **formatter:** explode sibling-attached expl3 branches ([`d3fc51a`](https://github.com/jolars/badness/commit/d3fc51a9c5f7e8274e3cca8db885be1cc4831d77))
+- **formatter:** expand optional arguments to the width ([`4c28ba4`](https://github.com/jolars/badness/commit/4c28ba4898ee417516acbc168b62388c3e3ba6d5))
+- **formatter:** add optional serde and schema features ([`80726c7`](https://github.com/jolars/badness/commit/80726c75438afedf4f4d272ddae41707c178c364))
+- **formatter:** reflow doc-margined out-of-region expl3 runs ([`aa9445a`](https://github.com/jolars/badness/commit/aa9445a015b47f3cee85980ca7aa259e05b29562))
+- **formatter:** reflow dtx prose around margined blocks ([`4f118a2`](https://github.com/jolars/badness/commit/4f118a2a946cc2a6ef44afd4129f082aa2c68c34))
+- **semantic:** add curated block-level command property ([`c54a5ff`](https://github.com/jolars/badness/commit/c54a5ffce69c459a39415a23ab210b5530fcdd37))
+
+### Bug Fixes
+- **formatter:** break a keyval group's glued opener ([`507a982`](https://github.com/jolars/badness/commit/507a982856b1c1b706328b04490cdc63cc3dfb32))
+- **scripts:** keep pdflatex stdout off hyperref's `.out` ([`1e7c4c1`](https://github.com/jolars/badness/commit/1e7c4c1cc06bb6320a352aa87e7fc71da4bbb806))
+- **formatter:** body a `\begin` tail past the declared arity ([`bd7028e`](https://github.com/jolars/badness/commit/bd7028e3d229b89eb7f38b958b0840c0b7b48448))
+- **parser:** break every gate's run at a docstrip guard ([`d682e8f`](https://github.com/jolars/badness/commit/d682e8f6e648695a32f8a3502d3afb42f8b015ee))
+- **formatter:** guard a prose argument's edge comments ([`8976815`](https://github.com/jolars/badness/commit/8976815e40136b5c1bcc31e2dac9f20096f27075))
+- **formatter:** break around curated block-level commands ([`09b8d4f`](https://github.com/jolars/badness/commit/09b8d4f182f48a07fb77dd770e31f2b0835e213f))
+- **linter:** pair straight quotes into one finding ([`e1ff0d1`](https://github.com/jolars/badness/commit/e1ff0d16de3ebdc7392a2a6ab7aefecd6885e14c))
+- **parser:** harden environment-alias pairing ([`84f11a2`](https://github.com/jolars/badness/commit/84f11a2a3fbc931fbe19cf87e3d9ba125e35323d))
+- **project:** link a subfile to its parent document ([`df3e66c`](https://github.com/jolars/badness/commit/df3e66c09857cef966beb27a76e569fbece7b0cd)), closes [#112](https://github.com/jolars/badness/issues/112)
+- **lsp:** spell decoded URI paths with native separators ([`f199bd1`](https://github.com/jolars/badness/commit/f199bd1cb206f9f2480a20cdfe949529f1917cac))
+- **formatter:** break around sectioning commands ([`f4be809`](https://github.com/jolars/badness/commit/f4be80984f304db5c989a48d41d7c24e7c601715))
+- **formatter:** stop deleting `]` inside prose arguments ([`7d2799f`](https://github.com/jolars/badness/commit/7d2799fd988f820ed7b42e66766d9cfb53f66fae))
+- **formatter:** make optional fallbacks deterministic ([`9d2095c`](https://github.com/jolars/badness/commit/9d2095c18b24d4f1e5a1c0cb17979218f6e564d6))
+- **formatter:** correct what `lower_conditional` assumes ([`902dbd9`](https://github.com/jolars/badness/commit/902dbd981991fdc5ce74d570e365c92d37e323b8))
+
+### Performance Improvements
+- **cli:** use Histogram for the `--check` diff, measured on the corpora ([`29a678a`](https://github.com/jolars/badness/commit/29a678a9859b59c6245179f35618108d9299986b))
+- **cli:** pick Patience over Histogram for the `--check` diff ([`595abb3`](https://github.com/jolars/badness/commit/595abb3b672d80badf7652f6a699af39597a3182))
+- **cli:** diff `--check` with Histogram, write it buffered ([`f34abb8`](https://github.com/jolars/badness/commit/f34abb8f650ef3ece16777bc5b42eb83389064ae))
+- **lint:** render pretty snippets from a line window ([`9dffc3d`](https://github.com/jolars/badness/commit/9dffc3d3ffa0c6607423e5351e07de3065a7c69c))
+- **parser:** one batch driver for all nine shape gates (#113) ([`9e01ee5`](https://github.com/jolars/badness/commit/9e01ee557378bd11bde3f792be0b4de00ae75eca))
+- **parser:** bound the environment-alias closer scan ([`ae83909`](https://github.com/jolars/badness/commit/ae83909940c2d1fba88f1e05aa05e461915f337a))
+- **formatter:** gate the doc-margin scans on `cx.is_dtx` ([`4e7babf`](https://github.com/jolars/badness/commit/4e7babfe3b2a828e86f6102fbbffff353e956838))
+- **parser:** answer `on_doc_margin_line` from a pre-scan ([`930380b`](https://github.com/jolars/badness/commit/930380b14671b5e0148af0fcfe99830e1f14a1da))
+
+### Dependencies
+- updated crates/badness-formatter to v0.3.0
+- updated crates/badness-parser to v0.2.0
+
 ## [0.15.0](https://github.com/jolars/badness/compare/v0.14.0...v0.15.0) (2026-08-07)
 
 ### Features

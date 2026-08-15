@@ -552,6 +552,22 @@ fn consume_unit(
             Err(Stop::Abort) => return None,
         }
     }
+    // A complete unit extends over the *greedy-attachable tail*: the trailing
+    // `{…}`/`[…]` material that greedy attachment hangs off the unit's last
+    // command. Over the greedy tree this is provably a no-op — anything
+    // attachable after an unbroken command chain is already *inside* a
+    // consumed node (that is what greedy means), so a sibling attachable only
+    // exists past a chain-breaking token, where the extension refuses. Over an
+    // arity-attached tree (decision #8's staged migration) the same material
+    // sits as siblings — a head owns exactly its argspec — and the extension
+    // is what keeps the statement *extent* identical across the flip: TeX
+    // consumes those groups through the argument command at runtime
+    // (`\exp_not:N \tl_if_blank:nF {#1}` is one conceptual step), which is
+    // also why the old extent covered them. A blank-cut unit never extends:
+    // greedy attachment stops at the same blank line.
+    if complete {
+        cur.extend_over_attachable_tail();
+    }
     Some(Expl3Unit {
         last: cur.last_sib,
         // A blank line cut the unit short, so the branch list is partial. Report
@@ -621,6 +637,13 @@ struct UnitCursor<'a> {
     /// A peeked candidate not yet consumed; the index is its sibling position
     /// when it came from the sibling stream (`None` for queue candidates).
     peeked: Option<(SyntaxElement, Option<usize>)>,
+    /// Whether the unit's textual tail ends in an unbroken *attachment chain*:
+    /// the head or a consumed `COMMAND`, followed by nothing but groups and
+    /// optionals — the shape greedy attachment hangs further `{…}` material
+    /// off. Any bare-token candidate (a relation `WORD`, a `#`-parameter, a
+    /// control symbol) breaks the chain, exactly where greedy attachment
+    /// stops. Read by [`Self::extend_over_attachable_tail`].
+    chain: bool,
 }
 
 impl<'a> UnitCursor<'a> {
@@ -631,6 +654,7 @@ impl<'a> UnitCursor<'a> {
             sib: head_idx + 1,
             last_sib: head_idx,
             peeked: None,
+            chain: true,
         };
         cur.queue_children_after_name(head, false);
         cur
@@ -741,6 +765,9 @@ impl<'a> UnitCursor<'a> {
                     SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL
                 ) =>
             {
+                // A bare control-sequence token (a peeled definee, an orphan
+                // `\)` kept as data) is not a node greedy hangs arguments off.
+                self.chain = false;
                 Ok(())
             }
             // A relation character: `\int_compare:nNnTF { … } = { 1 } {T} {F}`
@@ -752,9 +779,11 @@ impl<'a> UnitCursor<'a> {
             SyntaxElement::Token(t)
                 if t.kind() == SyntaxKind::WORD && t.text().chars().count() == 1 =>
             {
+                self.chain = false;
                 Ok(())
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::HASH => {
+                self.chain = false;
                 // `#1` (or `##1` in a nested definition): hash(es) plus one
                 // parameter digit read as one parameter token.
                 loop {
@@ -772,6 +801,7 @@ impl<'a> UnitCursor<'a> {
             }
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => {
                 self.queue_children_after_name(n, true);
+                self.chain = true;
                 Ok(())
             }
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP => Ok(()),
@@ -808,13 +838,95 @@ impl<'a> UnitCursor<'a> {
             }
             let el = self.bump()?;
             match &el {
-                SyntaxElement::Token(_) => {}
+                SyntaxElement::Token(_) => self.chain = false,
                 SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => {
                     self.queue_children_after_name(n, true);
+                    self.chain = true;
                 }
                 SyntaxElement::Node(n) if n.kind() == SyntaxKind::OPTIONAL => {}
                 _ => return Err(Stop::Abort),
             }
+        }
+    }
+
+    /// Extend a complete unit over its greedy-attachable tail: the `{…}`/`[…]`
+    /// nodes that follow the unit's last command with nothing but attachable
+    /// material between — exactly the run greedy attachment would hang off it.
+    /// See the call site in [`consume_unit`] for why this is a no-op over the
+    /// greedy tree and load-bearing over an arity-attached one.
+    ///
+    /// The gap rules here are *greedy's*, not [`Self::advance`]'s: attachment
+    /// crosses comments, guards, and doc margins, and a comment resets the
+    /// newline run (it is content on its line), so only a bare blank line
+    /// stops the extension — mirroring `peek_meaningful`'s `saw_blank_line`.
+    fn extend_over_attachable_tail(&mut self) {
+        // Whatever is still queued (material greedy attached to a consumed
+        // argument beyond the head's slots) already rides the extent through
+        // its owner's node; walk it only to keep the chain state honest.
+        if let Some((el, sib_idx)) = self.peeked.take() {
+            self.update_chain(&el);
+            // A peeked *sibling* group is consumable tail material; anything
+            // else was never consumed, so the extent must not cover it.
+            if let Some(idx) = sib_idx {
+                if self.chain
+                    && matches!(&el, SyntaxElement::Node(n) if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+                {
+                    self.last_sib = idx;
+                } else {
+                    return;
+                }
+            }
+        }
+        while let Some(el) = self.queue.pop_front() {
+            self.update_chain(&el);
+        }
+        if !self.chain {
+            return;
+        }
+        let mut newlines = 0usize;
+        let mut i = self.sib;
+        while let Some(el) = self.elements.get(i) {
+            match el {
+                SyntaxElement::Token(t) => match t.kind() {
+                    SyntaxKind::NEWLINE => {
+                        newlines += 1;
+                        if newlines >= 2 {
+                            return;
+                        }
+                    }
+                    SyntaxKind::COMMENT => newlines = 0,
+                    SyntaxKind::WHITESPACE | SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN => {}
+                    _ => return,
+                },
+                SyntaxElement::Node(n)
+                    if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+                {
+                    self.last_sib = i;
+                    newlines = 0;
+                }
+                SyntaxElement::Node(_) => return,
+            }
+            i += 1;
+        }
+    }
+
+    /// The [`Self::chain`] update for one already-consumed element, shared by
+    /// the tail walk over the leftover queue.
+    fn update_chain(&mut self, el: &SyntaxElement) {
+        match el {
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => self.chain = true,
+            SyntaxElement::Node(n)
+                if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) => {}
+            SyntaxElement::Token(t)
+                if is_collapsible_trivia(t.kind())
+                    || matches!(
+                        t.kind(),
+                        SyntaxKind::COMMENT
+                            | SyntaxKind::TILDE
+                            | SyntaxKind::GUARD
+                            | SyntaxKind::DOC_MARGIN
+                    ) => {}
+            _ => self.chain = false,
         }
     }
 }

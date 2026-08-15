@@ -1,0 +1,12 @@
+# Accepted disagreements of the expl3 attachment migration oracle
+# (`tests/expl3_attach_oracle.rs`; AGENTS.md decision #8's staged migration).
+#
+# Keys are corpus-relative paths (`latex3/l3kernel/l3tl.dtx`); values are the
+# one-line reason the file's disagreements are accepted rather than fixed.
+# Every entry must name its disagreement *class* so the reason survives the
+# harness's deletion at stage 3 — and every triaged class gets a
+# representative promoted to a corpus fixture, which is the durable net.
+#
+# Deleted together with the harness when the default flips.
+
+[deviations]

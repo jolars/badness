@@ -1,0 +1,68 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: arity_tree(EXPL3_ARITY_SAMPLE)
+---
+ROOT@0..123
+  PARAGRAPH@0..122
+    COMMAND@0..13
+      CONTROL_WORD@0..13 "\\ExplSyntaxOn"
+    NEWLINE@13..14 "\n"
+    COMMAND@14..41
+      CONTROL_WORD@14..24 "\\tl_set:Nn"
+      WHITESPACE@24..25 " "
+      COMMAND@25..35
+        CONTROL_WORD@25..35 "\\l_tmpa_tl"
+      WHITESPACE@35..36 " "
+      GROUP@36..41
+        L_BRACE@36..37 "{"
+        WHITESPACE@37..38 " "
+        WORD@38..39 "x"
+        WHITESPACE@39..40 " "
+        R_BRACE@40..41 "}"
+    NEWLINE@41..42 "\n"
+    COMMAND@42..86
+      CONTROL_WORD@42..60 "\\int_compare:nNnTF"
+      WHITESPACE@60..61 " "
+      GROUP@61..66
+        L_BRACE@61..62 "{"
+        WHITESPACE@62..63 " "
+        WORD@63..64 "1"
+        WHITESPACE@64..65 " "
+        R_BRACE@65..66 "}"
+      WHITESPACE@66..67 " "
+      WORD@67..68 "="
+      WHITESPACE@68..69 " "
+      GROUP@69..74
+        L_BRACE@69..70 "{"
+        WHITESPACE@70..71 " "
+        WORD@71..72 "2"
+        WHITESPACE@72..73 " "
+        R_BRACE@73..74 "}"
+      WHITESPACE@74..75 " "
+      GROUP@75..80
+        L_BRACE@75..76 "{"
+        WHITESPACE@76..77 " "
+        WORD@77..78 "y"
+        WHITESPACE@78..79 " "
+        R_BRACE@79..80 "}"
+      WHITESPACE@80..81 " "
+      GROUP@81..86
+        L_BRACE@81..82 "{"
+        WHITESPACE@82..83 " "
+        WORD@83..84 "n"
+        WHITESPACE@84..85 " "
+        R_BRACE@85..86 "}"
+    NEWLINE@86..87 "\n"
+    COMMAND@87..98
+      CONTROL_WORD@87..98 "\\scan_stop:"
+    WHITESPACE@98..99 " "
+    GROUP@99..107
+      L_BRACE@99..100 "{"
+      WHITESPACE@100..101 " "
+      WORD@101..105 "data"
+      WHITESPACE@105..106 " "
+      R_BRACE@106..107 "}"
+    NEWLINE@107..108 "\n"
+    COMMAND@108..122
+      CONTROL_WORD@108..122 "\\ExplSyntaxOff"
+  NEWLINE@122..123 "\n"

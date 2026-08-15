@@ -18,7 +18,8 @@ pub mod lexer;
 pub(crate) mod tree_builder;
 
 pub use core::{
-    Parse, SyntaxError, parse, parse_with_declarations, parse_with_flavor, reconstruct,
+    Parse, SyntaxError, parse, parse_with_declarations, parse_with_expl3_arity, parse_with_flavor,
+    reconstruct,
 };
 pub use grammar::is_def_prefix_command;
 pub use lexer::{LatexFlavor, LexConfig, Token, lex};

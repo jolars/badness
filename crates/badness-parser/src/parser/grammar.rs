@@ -13,6 +13,7 @@
 //! Recovery anchors are the LaTeX-natural ones: `\end`, `}`, `]`, `$`, blank
 //! lines, and end of input.
 
+mod expl3;
 mod facts;
 mod prescan;
 mod trivia;
@@ -26,6 +27,8 @@ use crate::parser::lexer::{ParseCtx, Token};
 use crate::syntax::SyntaxKind;
 use facts::{BracketPolicy, is_big_delimiter_command, is_definition_body_command};
 use prescan::PreScan;
+
+pub(crate) use expl3::Expl3Attach;
 use smol_str::SmolStr;
 use trivia::{BLANK_LINE_NEWLINES, CommentMode};
 
@@ -64,9 +67,17 @@ enum Block {
     Macrocode,
 }
 
-/// Parse a token stream into parser events and a list of syntax errors.
-pub(crate) fn parse(tokens: &[Token], ctx: &ParseCtx) -> (Vec<Event>, Vec<SyntaxError>) {
+/// Parse a token stream into parser events and a list of syntax errors. The
+/// expl3 attachment mode is `Greedy` in production; `Arity` reaches here only
+/// through the migration-only `parse_with_expl3_arity` entry (decision #8's
+/// staged migration; the parameter is deleted when the default flips).
+pub(crate) fn parse(
+    tokens: &[Token],
+    ctx: &ParseCtx,
+    expl3_attach: Expl3Attach,
+) -> (Vec<Event>, Vec<SyntaxError>) {
     let mut p = Parser::new(tokens, ctx);
+    p.expl3_attach = expl3_attach;
     p.document();
     debug_assert_balanced(&p.events);
     (p.events, p.errors)
@@ -1146,6 +1157,11 @@ struct Parser<'t> {
     /// back on — and never inherited by a `group()`/`conditional()` element
     /// loop, which is what keeps recognition to the body's own top level.
     in_statement_body: bool,
+    /// How expl3 call sites attach their arguments ([`Expl3Attach`]): greedy
+    /// in production until the migration oracle has been triaged;
+    /// arity-directed behind the migration-only parse entry. Deleted when the
+    /// default flips (`AGENTS.md` decision #8, `TODO.md`).
+    expl3_attach: Expl3Attach,
 }
 
 impl<'t> Parser<'t> {
@@ -1191,6 +1207,7 @@ impl<'t> Parser<'t> {
             math_bracket_batch: std::cell::RefCell::new(None),
             alias_end: None,
             in_statement_body: false,
+            expl3_attach: Expl3Attach::Greedy,
         }
     }
 
@@ -1876,6 +1893,17 @@ impl<'t> Parser<'t> {
         let saved = self.in_def_body;
         self.in_def_body = saved || is_definition_body_command(self.text());
         let def_prefix = is_def_prefix_command(self.text());
+        // Arity-directed expl3 attachment (decision #8's sanctioned deviation,
+        // a staged migration): resolve the head's argspec and scan the whole
+        // unit *before* any event is emitted; the replay below consumes
+        // exactly the plan, so the scan mirrors the walk by construction. A
+        // colon-carrying head is never a def-prefix or definition-body name
+        // (both sets are colonless), so the branches cannot overlap. Behind
+        // the migration-only mode until the oracle has been triaged.
+        let expl3_plan = (self.expl3_attach == Expl3Attach::Arity)
+            .then(|| self.expl3_arity_slots())
+            .flatten()
+            .and_then(|slots| self.scan_expl3_unit(&slots));
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
         // A `\def`-family primitive's next token is the control sequence being
@@ -1893,7 +1921,10 @@ impl<'t> Parser<'t> {
                 self.in_def_body = true;
             }
         }
-        self.attach_arguments(bracket);
+        match &expl3_plan {
+            Some(plan) => self.attach_expl3_arguments(plan),
+            None => self.attach_arguments(bracket),
+        }
         self.in_def_body = saved;
         self.close();
     }
@@ -3938,6 +3969,49 @@ mod tests {
         // `delim_math_closes`: display-math openers, no `\]` anywhere.
         let shape = "\\[ x\n";
         assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
+    }
+
+    /// The arity-directed expl3 scan (`grammar::expl3`) is bounded per head by
+    /// the unit it resolves or the abort that refuses it, so a run of heads
+    /// stays linear — including the adversarial shape where every head scans
+    /// its whole unit and then aborts on the last slot, leaving the span to be
+    /// re-parsed greedily: one bounded scan per head, never a restart from an
+    /// earlier position.
+    #[test]
+    fn expl3_arity_scan_stays_linear() {
+        let scan_work = |input: &str| {
+            let tokens = lex(input);
+            let ctx = ParseCtx::default();
+            let mut p = Parser::new(&tokens, &ctx);
+            p.expl3_attach = Expl3Attach::Arity;
+            p.document();
+            p.scan_work.get()
+        };
+        // Recognized units: scan + replay per head.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n{}",
+                "\\tl_set:Nn \\l_a { x y z }\n".repeat(n)
+            )
+        };
+        let (w1, w2) = (scan_work(&body(200)), scan_work(&body(400)));
+        assert!(
+            w2 < 3 * w1 + 64,
+            "arity-scan work grew superlinearly: {w1} -> {w2}"
+        );
+        // Aborting units: the final branch slot faces a bare word, so every
+        // head's scanned span falls back to greed after the scan.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n{}",
+                "\\prop_get:NnNTF \\p { k } \\l { t } x\n".repeat(n)
+            )
+        };
+        let (w1, w2) = (scan_work(&body(200)), scan_work(&body(400)));
+        assert!(
+            w2 < 3 * w1 + 64,
+            "arity-scan work grew superlinearly: {w1} -> {w2}"
+        );
     }
 
     /// The batched conditional gate (`TODO.md`, container stack C1): a run of

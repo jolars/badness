@@ -4,7 +4,8 @@
 
 use badness_parser::declarations::{Declarations, ResolvedDeclarations};
 use badness_parser::parser::{
-    LatexFlavor, LexConfig, parse, parse_with_declarations, parse_with_flavor,
+    LatexFlavor, LexConfig, parse, parse_with_declarations, parse_with_expl3_arity,
+    parse_with_flavor,
 };
 use badness_parser::syntax::{SyntaxKind, SyntaxNode};
 use rowan::{NodeOrToken, TextSize};
@@ -2532,4 +2533,102 @@ fn a_declared_statement_environment_wraps_like_the_entry_it_copies() {
     );
     assert_eq!(parsed.syntax().to_string(), input);
     assert_eq!(count(&parsed), 1);
+}
+
+// --- arity-directed expl3 attachment (migration-only entry) -----------------
+//
+// AGENTS.md decision #8's staged migration: in-region colon-suffixed heads
+// attach by argspec arity, reachable only through `parse_with_expl3_arity`
+// until the migration oracle has been triaged. The default-parse twin of each
+// test pins that production trees are unchanged in the interim.
+
+/// As [`tree`], parsing through the migration-only arity entry instead of the
+/// production greedy default. Losslessness must hold under either attachment.
+fn arity_tree(input: &str) -> String {
+    let parsed = parse_with_expl3_arity(input, LatexFlavor::Document);
+    assert_eq!(
+        parsed.syntax().to_string(),
+        input,
+        "losslessness violated for {input:?}"
+    );
+    let mut out = String::new();
+    render(&parsed.syntax(), 0, &mut out);
+    for err in &parsed.errors {
+        out.push_str(&format!(
+            "error @{}..{}: {}\n",
+            err.start, err.end, err.message
+        ));
+    }
+    out
+}
+
+/// The text of every `COMMAND` node in document order under the arity entry,
+/// after asserting a clean, lossless parse.
+fn arity_commands(input: &str) -> Vec<String> {
+    let parsed = parse_with_expl3_arity(input, LatexFlavor::Document);
+    assert_eq!(parsed.syntax().to_string(), input);
+    assert!(
+        parsed.errors.is_empty(),
+        "expected a clean parse: {:?}",
+        parsed.errors
+    );
+    parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMMAND)
+        .map(|n| n.text().to_string().trim_end().to_string())
+        .collect()
+}
+
+const EXPL3_ARITY_SAMPLE: &str = "\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl { x }\n\\int_compare:nNnTF { 1 } = { 2 } { y } { n }\n\\scan_stop: { data }\n\\ExplSyntaxOff\n";
+
+#[test]
+fn expl3_arity_attaches_call_units() {
+    insta::assert_snapshot!(arity_tree(EXPL3_ARITY_SAMPLE));
+}
+
+#[test]
+fn expl3_attachment_stays_greedy_by_default() {
+    // The migration-only mode must not leak: the production parse of the same
+    // sample keeps decision #8's greedy shape untouched.
+    insta::assert_snapshot!(tree(EXPL3_ARITY_SAMPLE));
+}
+
+#[test]
+fn expl3_arity_head_owns_its_single_token_and_group_slots() {
+    let cmds = arity_commands("\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl { x }\n");
+    assert!(cmds.contains(&"\\tl_set:Nn \\l_tmpa_tl { x }".to_string()));
+    // The N argument stays a name-keyed COMMAND node of its own.
+    assert!(cmds.contains(&"\\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_zero_arity_head_attaches_nothing() {
+    let cmds = arity_commands("\\ExplSyntaxOn\n\\scan_stop: { data }\n");
+    assert!(cmds.contains(&"\\scan_stop:".to_string()));
+    assert!(!cmds.iter().any(|c| c.contains("data")));
+}
+
+#[test]
+fn expl3_arity_blank_line_commits_the_prefix() {
+    let cmds = arity_commands("\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl\n\n{ x }\n");
+    assert!(cmds.contains(&"\\tl_set:Nn \\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_underivable_head_stays_greedy() {
+    // `w` has no derivable call-site shape; greedy attachment never consumes a
+    // control word, so the head attaches nothing.
+    let cmds = arity_commands("\\ExplSyntaxOn\n\\exp_after:wN \\l_tmpa_tl\n");
+    assert!(cmds.contains(&"\\exp_after:wN".to_string()));
+}
+
+#[test]
+fn expl3_arity_corpus_file_roundtrips_cleanly() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/expl3_arity.tex");
+    let text = std::fs::read_to_string(&path).expect("corpus file");
+    let parsed = parse_with_expl3_arity(&text, LatexFlavor::Document);
+    assert_eq!(parsed.syntax().to_string(), text, "losslessness violated");
+    assert!(parsed.errors.is_empty(), "clean: {:?}", parsed.errors);
 }

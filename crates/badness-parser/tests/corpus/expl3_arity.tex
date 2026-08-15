@@ -1,0 +1,44 @@
+% Arity-directed expl3 attachment (AGENTS.md decision #8, staged migration):
+% the call-site shapes the argspec-driven unit scan resolves, and the ones it
+% deliberately leaves greedy. Parsed by the sweeps under the production greedy
+% default, and by the migration tests under the arity entry.
+\ExplSyntaxOn
+
+% A single-token slot breaks greedy attachment; arity hands { x } to the head.
+\tl_set:Nn \l_tmpa_tl { x }
+
+% Definition: single-token slot, parameter text, body group.
+\cs_new:Npn \module_foo:nn #1#2
+  {
+    \tl_set:Nn \l_tmpa_tl {#1}
+  }
+
+% Delimited parameter text: the delimiting control word is consumed bare and
+% the body group is left for the `n` slot.
+\cs_new:Npn \module_bar:w #1 \q_stop { #1 }
+
+% Branch slots after single-token and group slots.
+\prop_get:NnNTF \l_tmpa_prop { key } \l_tmpb_tl { true } { false }
+
+% A relation character satisfies a single-token slot (issue #106).
+\int_compare:nNnTF { 1 } = { 1 } { yes } { no }
+
+% Zero-arity call: under arity the following group is a sibling, not an
+% argument.
+\scan_stop: { data }
+
+% Underivable heads (`w`, and the `\::n` expansion drivers) stay greedy.
+\exp_after:wN \module_foo:nn
+\use_none_delimit_by_q_stop:w x y \q_stop
+\::n { driver }
+
+% Braces around an N argument are grabbed whole.
+\tl_set:Nn { \l_tmpa_tl } { y }
+
+% A blank line ends a unit early: the consumed prefix commits and the rest
+% parses as ordinary siblings.
+\tl_set:Nn \l_tmpa_tl
+
+{ orphan }
+
+\ExplSyntaxOff

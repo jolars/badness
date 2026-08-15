@@ -88,24 +88,56 @@ pub fn parse_with_declarations(
     config: impl Into<LexConfig>,
     declared: &ResolvedDeclarations,
 ) -> Parse {
+    parse_with_declarations_attach(input, config, declared, grammar::Expl3Attach::Greedy)
+}
+
+/// Parse with **arity-directed expl3 attachment** (`AGENTS.md` decision #8's
+/// staged migration). Migration-only scaffolding for the attachment oracle and
+/// the stage-1 tree tests — never a production entry, hidden so it cannot
+/// become public API in the interim, and deleted when the default flips
+/// (`TODO.md` carries the plan).
+#[doc(hidden)]
+pub fn parse_with_expl3_arity(input: &str, config: impl Into<LexConfig>) -> Parse {
+    parse_with_declarations_attach(
+        input,
+        config,
+        &ResolvedDeclarations::default(),
+        grammar::Expl3Attach::Arity,
+    )
+}
+
+/// The shared body of [`parse_with_declarations`] and the migration-only
+/// [`parse_with_expl3_arity`]: the two-pass pipeline with an explicit expl3
+/// attachment mode.
+fn parse_with_declarations_attach(
+    input: &str,
+    config: impl Into<LexConfig>,
+    declared: &ResolvedDeclarations,
+    attach: grammar::Expl3Attach,
+) -> Parse {
     let config = config.into();
     let mut seed = ParseCtx::default();
     seed.overlay_declarations(declared);
 
-    let pass1 = parse_with(input, &seed, config);
+    let pass1 = parse_with(input, &seed, config, attach);
     let mut ctx = parse_ctx(&pass1.syntax());
     // Declared wins over scanned, so the overlay is applied *after* the scan.
     ctx.overlay_declarations(declared);
     if ctx == seed {
         return pass1;
     }
-    parse_with(input, &ctx, config)
+    parse_with(input, &ctx, config, attach)
 }
 
 /// Run the lex → grammar → tree-build pipeline once with a fixed scan context.
-fn parse_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Parse {
+fn parse_with(
+    input: &str,
+    ctx: &ParseCtx,
+    config: LexConfig,
+    attach: grammar::Expl3Attach,
+) -> Parse {
     let tokens = lex_with(input, ctx, config);
-    let (events, errors) = grammar::parse(&tokens, ctx);
+    let (events, errors) = grammar::parse(&tokens, ctx, attach);
     let green = build_tree(&tokens, &events);
     Parse { green, errors }
 }

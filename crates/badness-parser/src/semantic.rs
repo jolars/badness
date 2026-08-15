@@ -21,6 +21,7 @@ pub mod label;
 pub mod outline;
 pub mod pkgmeta;
 pub mod signature;
+pub mod tikz;
 pub mod xparse;
 
 pub use define::{DefSite, DefSiteKind, scan_definition_sites, scan_definitions};

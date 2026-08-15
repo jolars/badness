@@ -1015,16 +1015,35 @@ flush width wraps, the Tier-2 fixed-point argument unchanged. Every non-`Reflow`
 path splices the wrappers out (`flatten_statements`) and behaves
 byte-identically to the pre-statement layout.
 
-What the extent node does **not** give is good breaks *inside* a statement: the
-interior is width-filled over an undifferentiated atom stream, so an over-long
-statement can break between a coordinate and its operation (`\draw (6,6)` /
-`circle (3);`) or mid-path where a human would break before an operator. That is
-a vocabulary problem — `at`, `--`, `circle` mean something only because TikZ's
-own parser says so — and per decision #2's admission test it is the semantic
-layer's to solve: the recorded plan (TODO.md § *TikZ semantic unit model*)
-mirrors expl3's path — a curated unit model over a statement's children,
-consumed by the formatter as break preferences, with any later grammar migration
-judged by the same admission test.
+Breaks *inside* a statement come from the **TikZ unit model**
+(`semantic::tikz::statement_glue`) — the vocabulary the extent node cannot
+carry, held semantic-side per decision #2's admission test: `(a)` as a
+coordinate versus a node-name reference versus prose has no text-shape demotion,
+so a wrong reading could not be gated in the grammar, while here it degrades to
+a worse break choice, never a wrong tree (the same staging expl3 went through
+before its attachment migration). The model is a glue map, not a grammar: for
+each authored gap between a statement's top-level elements, one verdict —
+unit-internal (a single space, never a break) or neutral. Its curated rules,
+each backed by a survey of \~6000 statements across pgf's own manual sources and
+a user corpus: a path operator binds forward (breaks land *before* operators,
+the \~3:1 idiom), `at` binds both sides (split from its coordinate 5 times in
+3103 continuation lines), a coordinate binds its operation and an operation its
+argument (`(6,6) circle (3)` never splits), a loose `[…]` options run glues
+except after a comma (the keyval entry convention: `edge [loop above]` never
+splits an option mid-phrase, while a long keyval run still breaks per entry),
+and a comment suppresses every rule. Everything unrecognized — library verbs,
+axis prose — is neutral, i.e. today's layout. The wrap policy over the resulting
+units is a plain greedy fill (the user-corpus lean; Tantau mixes styles).
+
+One more claim rides the `statementBody` flag: whitespace *between* a picture
+body's statements is insignificant to the package that consumes them, so a
+statement always opens its own line **even at a seam the author glued**
+(`…;\draw`). That is the one sanctioned breach of the glued-divider principle,
+licensed the way `ContentKind::Keyval` licenses the glued comma split — a
+curated whitespace-safety claim, held to the same standard and proven by a real
+compile (`tests/typeset/statement_seams.tex`, `task typeset:check`). Glued seams
+are unattested in the surveyed corpora, so in practice the license buys
+uniformity: one statement per line, however the author spelled it.
 
 Three things keep the flag narrow. It is **curated only**: a statement
 terminator is package grammar, not a TeX-surface fact, so neither the CWL

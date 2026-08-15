@@ -60,6 +60,7 @@ use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{Expl3Unit, StatementMap, expl3_unit, segment_expl_statements};
+use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
     ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
 };
@@ -1451,6 +1452,16 @@ enum ReflowKind {
     /// this authored-line contract governs only the interleaved content no `;`
     /// terminates.
     Statement,
+    /// The interior of one structural `STATEMENT` ([`lower_statement`]): like
+    /// [`Self::ProseArg`] — width owns the layout, a lone newline is a plain
+    /// atom boundary, and the command-only residue is off — but the gaps
+    /// additionally consult the TikZ unit model
+    /// (`semantic::tikz::statement_glue`): a unit-internal gap (`-- (1,1)`,
+    /// `at (2,3)`, `circle (3)`) renders as a single space and never breaks,
+    /// so a width wrap lands only at unit boundaries. The verdicts read
+    /// non-trivia token text only, so this stays Tier 1: a wrap re-derives
+    /// the same units on every pass.
+    StatementInterior,
     /// A `.dtx` documentation-layer prose paragraph: behaves like [`Self::Prose`]
     /// (a lone newline rejoins), but the per-line `%` documentation margin
     /// (`DOC_MARGIN`) is *dropped* from each line and each fill segment is wrapped
@@ -1770,6 +1781,13 @@ fn reflow_elements_checked(
     };
     let elements: Vec<SyntaxElement> = flatten_inline_prose(elements, cx);
 
+    // Inside one structural statement, gaps consult the TikZ unit model: a
+    // unit-internal gap renders as a single space instead of a break
+    // opportunity (see [`ReflowKind::StatementInterior`]). Computed over the
+    // *flattened* stream so the verdict indices match the loop's.
+    let unit_glue: Option<Vec<bool>> =
+        (kind == ReflowKind::StatementInterior).then(|| statement_glue(&elements));
+
     // Under `.dtx` prose reflow each segment is wrapped in a `% ` margin prefix and
     // the per-line `DOC_MARGIN` tokens are dropped; `None` otherwise.
     let margin: Option<&'static str> = (kind == ReflowKind::DtxProse).then_some(DTX_DOC_MARGIN);
@@ -1835,6 +1853,29 @@ fn reflow_elements_checked(
             // Whitespace / newline run: a physical-line and atom boundary.
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 let newlines = consume_widened_gap_slice(&elements, &mut idx);
+                // A unit-internal gap (the TikZ unit model, statement interiors
+                // only): glue the neighbors into one atom with a single space —
+                // no break opportunity, no line boundary. Content-derived, so a
+                // wrap re-reads to the same units (Tier 1); the model never
+                // glues across a comment or a blank line.
+                if newlines < 2
+                    && let Some(glue) = &unit_glue
+                    && glue.get(idx).copied().unwrap_or(false)
+                {
+                    if after_block {
+                        // The unit is riding a block segment's last line (a
+                        // doc-commented statement head): keep riding — the next
+                        // element's `ride_after_block` gap form restores the
+                        // single space, and riding appends flat, so the
+                        // no-break promise holds there too.
+                        prev_was_block = true;
+                        block_gap = true;
+                        prev_block_closes_line = after_block_closed;
+                    } else {
+                        b.push_atom_piece(Ir::verbatim(" "), " ");
+                    }
+                    continue;
+                }
                 if newlines >= 2 {
                     // A blank line ends the line and promotes the next separator.
                     b.end_line();
@@ -1856,10 +1897,12 @@ fn reflow_elements_checked(
                     // of collapsing to a space. This is the residual rule for commands
                     // no positive signature property covers (see `line_all_commands`
                     // above); curated block commands never reach it.
-                    // The command-only residue is skipped under `ProseArg`: a
-                    // width-owned argument body must not mint forced breaks
-                    // pass 2 can see and pass 1 could not (see [`ReflowKind`]).
-                    let residue_applies = kind != ReflowKind::ProseArg;
+                    // The command-only residue is skipped under `ProseArg` and
+                    // `StatementInterior`: a width-owned body must not mint
+                    // forced breaks pass 2 can see and pass 1 could not (see
+                    // [`ReflowKind`]).
+                    let residue_applies =
+                        !matches!(kind, ReflowKind::ProseArg | ReflowKind::StatementInterior);
                     let prev_is_command = residue_applies && line_has_content && line_all_commands;
                     let next_is_command =
                         residue_applies && line_is_command_only(&elements, idx, cx);
@@ -2001,21 +2044,21 @@ fn reflow_elements_checked(
             // body): its own logical line, boundaries from the node — never from
             // the trivia around it. Only present when `structural` (every other
             // path spliced the wrapper out up front).
+            //
+            // A statement opens its own line even when the author *glued* it to
+            // what precedes (`…;\draw …`). This is the one sanctioned breach of
+            // the glued-divider principle, licensed the way `ContentKind::Keyval`
+            // licenses the glued comma split: the curated `statementBody` flag
+            // asserts that whitespace between a picture body's statements is
+            // insignificant to the package that consumes them, so the inserted
+            // break is not a typeset change. The claim is held to the curated
+            // standard (`task typeset:check` carries a case), and it is
+            // empirically idle: glued statement seams are unattested in the
+            // pgf and user corpora (~6000 statements).
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::STATEMENT => {
                 let ir = lower_statement(child, cx);
-                if after_block && !after_block_gap {
-                    // Glued to the block before it (`…};\draw …`): a glued
-                    // junction never breaks — the statement rides that line.
-                    b.append_to_last_line(ir);
-                } else if !b.atom.is_empty() {
-                    // Glued to content in progress: extend the unbreakable atom;
-                    // the statement still closes its line.
-                    b.push_atom_piece(ir, &child.text().to_string());
-                    b.end_line();
-                } else {
-                    b.end_line();
-                    b.push_segment(ir);
-                }
+                b.end_line();
+                b.push_segment(ir);
                 line_all_commands = true;
                 line_has_content = false;
                 // One statement per line: following content starts a fresh line
@@ -6959,27 +7002,33 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// structural statement lowering, entered from `reflow_elements_checked`'s
 /// `STATEMENT` arm.
 ///
-/// The interior reflows under [`ReflowKind::ProseArg`]: a lone newline is a
-/// plain atom boundary the width fill re-decides, the command-only residue is
-/// off (a width-owned body must not mint forced breaks), a comment still rides
-/// and ends its line, and a forced-break child (a `{label}` holding an
-/// environment) commits as its own segment with a glued `;` riding its last
-/// line. The enclosing [`Ir::indent`] then hangs **every** continuation line —
-/// width wraps, post-comment lines, and block segments alike — one step under
-/// the statement head, so a wrapped `\node[…] at (2,3)` / `{…};` reads as a
-/// continuation rather than a sibling (TODO.md's B′).
+/// The interior reflows under [`ReflowKind::StatementInterior`]: a lone
+/// newline is a plain atom boundary the width fill re-decides, the
+/// command-only residue is off (a width-owned body must not mint forced
+/// breaks), a comment still rides and ends its line, and a forced-break child
+/// (a `{label}` holding an environment) commits as its own segment with a
+/// glued `;` riding its last line. Gaps additionally consult the TikZ unit
+/// model (`semantic::tikz::statement_glue`): a unit-internal gap — an operator
+/// and what it connects, `at` and its coordinate, a coordinate and its
+/// operation, an operation and its argument — renders as a single space and
+/// never breaks, so a width wrap lands only at unit boundaries (idiomatically,
+/// before a path operator). The enclosing [`Ir::indent`] then hangs **every**
+/// continuation line — width wraps, post-comment lines, and block segments
+/// alike — one step under the statement head, so a wrapped `\node[…] at (2,3)`
+/// / `{…};` reads as a continuation rather than a sibling (TODO.md's B′).
 ///
 /// Fixed point (Tier 1): the hang is *emitted*, never read. Statement extent
 /// re-derives from the terminating `;` on every parse, however the emitted
 /// layout breaks — an emitted wrap is leading line trivia to the next parse —
-/// and the interior reads only width, gluedness, and comment presence, all
-/// preserved predicates. So `fmt(fmt(x)) == fmt(x)` holds by structure, where
-/// the flush-continuation contract this replaces had to *forbid* the hang.
+/// and the interior reads only width, gluedness, comment presence, and
+/// non-trivia token text (the unit model), all preserved or content-derived.
+/// So `fmt(fmt(x)) == fmt(x)` holds by structure, where the
+/// flush-continuation contract this replaces had to *forbid* the hang.
 fn lower_statement(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     Ir::indent(reflow_elements(
         node.children_with_tokens(),
         cx,
-        ReflowKind::ProseArg,
+        ReflowKind::StatementInterior,
     ))
 }
 

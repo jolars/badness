@@ -319,29 +319,35 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   (`(1,1);(2,2)` currently over-extends one statement); declarations naming
   additional statement environments already work via `like = "tikzpicture"`.
 
-- [ ] **TikZ semantic unit model (interior path grammar, semantic-side
-  first).** Layout inside a statement is still width-driven over an
-  undifferentiated atom stream, so an over-long statement breaks at arbitrary
-  atoms: `\draw (5,5) circle (2);\draw (6,6)` / `····circle (3);` splits a
-  coordinate from its operation, and `\draw[…] (0,0) -- (1,1)` /
-  `····-- (2,0) -- cycle;` wraps mid-path with no operator preference — both
-  pinned as known-bad in the `statement_hang` fixture. The bottleneck is
-  interior path *vocabulary* (`at`, `--`, `circle`, `to`, options, labels),
-  which no placement of the extent fact fixes, and which is meaning — so per
-  decision #2's admission test it lands in the **semantic layer**, mirroring
-  expl3's path: (1) a curated unit model over a `STATEMENT`'s children
-  (`semantic::tikz` — head, options, `at`+coordinate, path operators, label;
-  unrecognized vocabulary degrades to the plain atom), (2) formatter
-  consumption as *break preferences* (glue `at ⟨coord⟩`, never break a
-  coordinate from its operation, prefer breaking before a path operator, treat
-  a glued `;`-boundary ride as a break-eligible seam once the model can vouch
-  spaces are insignificant there), (3) a differential/fixture oracle before any
-  consumer widens. A wrong classification degrades to a worse break choice,
-  never a wrong tree. Any later migration of the model into the grammar is
-  judged by the same admission test — the falsifiability bar is where it will
-  struggle, since `(a)` as coordinate vs. name reference vs. prose is not
-  demotable from text shape alone. The linter's pgf gates (next entry) are the
-  second consumer.
+- [x] **TikZ semantic unit model (interior path grammar, semantic-side
+  first) — landed as `semantic::tikz::statement_glue`.** A glue map, not a
+  grammar: for each authored gap in a `STATEMENT`'s top-level element stream,
+  one verdict — unit-internal (a single space, never a break) or neutral. The
+  curated rules — an operator binds forward, `at` binds both sides, a
+  coordinate binds its operation and an operation its argument, a loose `[…]`
+  options run glues except after a comma (the keyval entry convention), a
+  comment suppresses everything — fixed both known-bad pins: `(6,6)` no longer
+  splits from `circle (3);`, and wraps land before path operators. Recorded
+  refinements for a later pass: bind an operation's *target* across its
+  options run (`edge [post] (p4)` still breaks before the coordinate), and a
+  glued-comma split inside loose options runs for space-less keyval
+  (`[surf,shader=faceted,…]` currently overflows rather than break mid-key —
+  the honest failure, but a licensed comma split would fix it properly). Policy calls made
+  against a corpus survey (~6000 statements, pgf's own manual sources plus the
+  latexindent user corpus): break-*before*-operator is the ~3:1 idiom; the
+  wrap over units is a plain **greedy fill** (users lean greedy 17:3; Tantau
+  mixes one-per-line for payload segments with greedy for bare coordinates —
+  `Ir::StickyFill`'s cascade was the recorded runner-up if taste shifts). The
+  glued `;` seam now **splits**: `statementBody` carries a curated
+  whitespace-safety claim (the `ContentKind::Keyval` licensing pattern, proven
+  by `tests/typeset/statement_seams.tex` under `task typeset:check`), and
+  glued seams are unattested in the surveyed corpora. Unrecognized vocabulary
+  degrades to a neutral gap — today's layout — so a wrong classification is a
+  worse break choice, never a wrong tree. Any later migration of the model
+  into the grammar is judged by decision #2's admission test — the
+  falsifiability bar is where it will struggle, since `(a)` as coordinate vs.
+  name reference vs. prose is not demotable from text shape alone. The
+  linter's pgf gates (next entry) are the recorded second consumer.
 
 - [ ] **Fold the linter's pgf picture set into the `statementBody` flag.**
   `linter::rules::is_pgf_picture_environment` (which keeps `dash-length` off

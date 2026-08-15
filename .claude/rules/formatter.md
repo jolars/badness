@@ -129,15 +129,29 @@ predicates the formatter *preserves*.
   `Reflow`, boundaries come from the parser's `STATEMENT` nodes — re-derived
   from the `;` on every parse, however the emitted layout breaks — so
   `lower_statement` is **Tier 1**: one statement per line, intra-statement
-  layout width-driven under `ReflowKind::ProseArg`, and **every continuation
-  hangs one `Ir::indent` step** under its head (the deferred B′, now landed).
-  A **glued statement boundary is never split** (`;\draw` rides the previous
-  line — the glued-divider principle), two space-separated statements on one
-  authored line split, and a statement authored across lines joins when it
-  fits. Content no `;` terminates keeps the authored-line fallback — Tier 2,
-  the flush-continuation fixed point unchanged — and every non-`Reflow` path
-  splices the wrappers out (`flatten_statements`), byte-identical to the
-  pre-statement layout. **Read the *nearest* environment ancestor, never any
+  layout width-driven under `ReflowKind::StatementInterior`, and **every
+  continuation hangs one `Ir::indent` step** under its head (the deferred B′,
+  now landed). Interior gaps consult the **TikZ unit model**
+  (`semantic::tikz::statement_glue`, curated vocabulary, everything
+  unrecognized neutral): a unit-internal gap — an operator and what it
+  connects, `at` and its coordinate, a coordinate and its operation, an
+  operation and its argument, and a loose `[…]` options run except after a
+  comma (the keyval entry convention — `[loop above]` never splits an option
+  mid-phrase, a long keyval run still breaks per entry) — renders as one space
+  and never breaks, so a
+  width wrap lands only at unit boundaries, idiomatically *before* a path
+  operator (the corpus survey: continuation lines lead with their operator
+  ~3:1, and `at` splits from its coordinate 5 times in 3103 lines). The model
+  reads non-trivia token text only — still Tier 1. **A glued statement seam
+  splits** (`;\draw` opens its own line): the one sanctioned breach of the
+  glued-divider principle, licensed by `statementBody`'s whitespace-safety
+  claim exactly as `ContentKind::Keyval` licenses the glued comma split, and
+  proven by `tests/typeset/statement_seams.tex` (`task typeset:check`); glued
+  seams are unattested in ~6000 corpus statements, so the license is mostly a
+  uniformity guarantee. Content no `;` terminates keeps the authored-line
+  fallback — Tier 2, the flush-continuation fixed point unchanged — and every
+  non-`Reflow` path splices the wrappers out (`flatten_statements`),
+  byte-identical to the pre-statement layout. **Read the *nearest* environment ancestor, never any
   of them** — an `itemize` in a `\node` label is prose and must still reflow.
   The flag is **curated-only** (a `;` terminator is package grammar; the CWL
   codegen and the definition scan hardcode `false`) and **distinct from

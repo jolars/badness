@@ -531,15 +531,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // TODO.md's B′. The routing still reads the *nearest* environment ancestor,
     // so an `itemize` inside a `\node` label reflows as prose.
     ("statement_body_picture_env", WrapMode::Reflow, 80),
-    // The structural boundaries at work: two statements on one authored line
-    // split, one authored across lines joins when it fits, an over-long one
-    // wraps with its continuation hung, a glued `;\draw` junction never breaks
-    // (the second statement rides the line), and a run with no `;` (`\tikzset`)
-    // keeps the authored-line fallback. Two pinned shapes are **known-bad, not
-    // endorsed**: the interior fill breaks `\draw (6,6)` from `circle (3);` and
-    // wraps the `--` path mid-operator, because interior atoms carry no
-    // vocabulary — the recorded bottleneck TODO.md's *TikZ semantic unit model*
-    // entry exists to fix. When that model lands, these bytes change.
+    // The structural boundaries and the TikZ unit model at work: two statements
+    // on one authored line split, one authored across lines joins when it fits,
+    // an over-long one wraps with its continuation hung at a *unit* boundary
+    // (before a path operator, between segments — never inside `at (…)` or
+    // between a coordinate and its operation, `semantic::tikz`), a glued
+    // `;\draw` seam splits onto its own line (the statementBody whitespace-
+    // safety claim, proven by `tests/typeset/statement_seams.tex`), and a run
+    // with no `;` (`\tikzset`) keeps the authored-line fallback.
     ("statement_hang", WrapMode::Reflow, 40),
     // A `%` that trails `\begin{…}` on the same source line (the space-suppression
     // idiom) rides the `\begin` header instead of dropping to its own indented

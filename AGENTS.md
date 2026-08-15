@@ -122,9 +122,9 @@ provenance.
      per-token text fact (`(1,1);` is one WORD), and no `at`/coordinate/
      path-operator grammar exists — TikZ path syntax is package grammar the
      generic parser does not model, and extent alone is what the *hang* needs.
-     (Interior statement layout is still width-driven over an undifferentiated
-     atom stream; the recorded next step is a semantic-side TikZ unit model
-     mirroring expl3's path — TODO.md § *TikZ semantic unit model*.) Since
+     (Interior break quality comes from the semantic-side TikZ unit model,
+     `semantic::tikz` — decision #2's `statementBody` bullet — mirroring
+     expl3's staging.) Since
      recognition is retrospective there is no gate to mirror and no scan: a run
      that never reaches a `;` stays plain paragraph content, silently, and a
      genuine `\begin` (or pairing alias opener) is a statement *boundary* — the
@@ -267,7 +267,21 @@ provenance.
      *formatter* lowers its paragraphs under `ReflowKind::Statement` — one
      statement per line, boundaries from the node, continuations hung one step —
      instead of greedily filling, which merged `\draw …;` with `\node …;` and
-     split a `\foreach` header from its loop variables (issue #114). **Curated
+     split a `\foreach` header from its loop variables (issue #114). Breaks
+     *inside* a statement consult the **TikZ unit model**
+     (`semantic::tikz::statement_glue`, curated vocabulary, everything
+     unrecognized neutral): unit-internal gaps — an operator and what it
+     connects, `at` and its coordinate, a coordinate and its operation, a
+     loose `[…]` options run except after a comma — never
+     break, so wraps land at unit boundaries; the vocabulary lives here and not
+     in the grammar because a wrong reading of `(a)` has no text-shape
+     demotion, failing the admission test's second bar, while semantic-side it
+     degrades to a worse break choice, never a wrong tree. The flag also
+     carries a **whitespace-safety claim**, the `ContentKind::Keyval` pattern:
+     whitespace between a flagged body's statements is insignificant, which
+     licenses splitting a statement seam the author glued (`…;\draw`) — the
+     one sanctioned breach of the glued-divider principle, proven by
+     `tests/typeset/statement_seams.tex` (`task typeset:check`). **Curated
      only**: a statement terminator is package grammar, not a TeX-surface fact,
      so the CWL codegen and the definition scan hardcode `false` — which is also
      what keeps the parser's read of it inside decision #12's curated-plus-
@@ -497,8 +511,12 @@ covered in `docs/src/development/architecture.md`.
   wraps each run up to a top-level `;` in a `STATEMENT`), and under `Reflow` the
   formatter derives one-statement-per-line and a **hanging continuation
   indent** from it (`lower_statement`, Tier 1 — the hang is emitted, never
-  read, and the node re-derives from the `;` however the layout breaks). A
-  glued statement boundary never splits (the glued-divider principle). The
+  read, and the node re-derives from the `;` however the layout breaks).
+  Interior wraps land at **unit boundaries** (`semantic::tikz::statement_glue`,
+  decision #2's statementBody bullet — content-derived, still Tier 1), and a
+  glued statement *seam* splits under the flag's curated whitespace-safety
+  claim (the one sanctioned breach of the glued-divider principle, proven by
+  `task typeset:check`). The
   authored-line rule survives only for content no `;` terminates — Tier 2, the
   flush-continuation fixed point unchanged — and every non-`Reflow` path
   splices the wrappers out (`flatten_statements`), byte-identical.

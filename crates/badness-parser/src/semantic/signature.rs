@@ -202,22 +202,32 @@ pub struct EnvironmentSig {
     /// never reflows it as prose; the distinction from `verbatim_body` is that the
     /// content is a real CST, not a single `VERBATIM_BODY` token.
     pub code: bool,
-    /// `true` for environments whose body is a sequence of *author-delimited
-    /// statements* rather than running prose — the TikZ/pgf picture family, whose
-    /// content is `;`-terminated paths (`\draw … ;`, `\node … ;`). The formatter
-    /// lays such a body out one statement per source line, wrapping only an
-    /// over-long one, instead of greedily filling it to the width.
+    /// `true` for environments whose body is a sequence of *delimited
+    /// statements* rather than running prose — the TikZ/pgf picture family,
+    /// whose content is `;`-terminated paths (`\draw … ;`, `\node … ;`). The
+    /// parser wraps each run up to a top-level `;` in a `STATEMENT` node, and
+    /// the formatter derives one-statement-per-line, the continuation hang,
+    /// and unit-boundary wrapping (`semantic::tikz`) from it.
+    ///
+    /// The flag also carries a **whitespace-safety claim**, the
+    /// [`ContentKind::Keyval`] pattern: whitespace *between* a flagged body's
+    /// statements is insignificant to the package that consumes them, which is
+    /// what licenses the formatter to open a new line at a statement seam the
+    /// author glued (`…;\draw`) — an inserted space token TeX sees but the
+    /// package discards. `task typeset:check` carries the proving case
+    /// (`tests/typeset/statement_seams.tex`).
     ///
     /// Distinct from [`code`](Self::code), which is the `.dtx` documentation
     /// layer's `macrocode` — code re-lexed under the package regime, a fact about
-    /// *lexing*. This one is a fact about *layout* only, so the two must not be
-    /// conflated: a future consumer of `code` is asking a `.dtx` question.
+    /// *lexing*. This one is a fact about statement structure and layout, so the
+    /// two must not be conflated: a future consumer of `code` is asking a `.dtx`
+    /// question.
     ///
     /// **Curated tier only.** The statement terminator is package grammar, not a
     /// TeX-surface fact, so nothing mechanical can derive this; the CWL codegen
     /// and the runtime definition scan never set it. A wrong grant reshapes
-    /// layout for the whole body, so hold it to the standard of the `math`
-    /// routing flag.
+    /// layout for the whole body *and* asserts the whitespace claim above, so
+    /// hold it to the standard of the `math` routing flag.
     pub statement_body: bool,
     /// `true` for alignment environments whose `&` columns the formatter lays out
     /// into a grid (`align`, `pmatrix`, …). Independent of `math`: every flagged

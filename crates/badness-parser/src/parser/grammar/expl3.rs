@@ -46,7 +46,7 @@
 //! is what prices the residue before any consumer flips.
 
 use super::Parser;
-use super::trivia::BLANK_LINE_NEWLINES;
+use super::trivia::{BLANK_LINE_NEWLINES, CommentMode};
 use crate::semantic::expl3::{Expl3Slot, expl3_slots};
 use crate::syntax::SyntaxKind;
 
@@ -155,6 +155,16 @@ impl Parser<'_> {
     /// token-level analog). Pure `&self`; the walk replays the returned plan.
     /// `None` degrades the head to greedy attachment.
     pub(super) fn scan_expl3_unit(&self, slots: &[Expl3Slot]) -> Option<Expl3Plan> {
+        // Inside math the math loop owns dispatch, and the enclosing math's
+        // closer (`\]`, `\)`, a `$`) is a boundary the token scan cannot see —
+        // a slot consuming it swallows the closer into the head and leaves the
+        // math unclosed (`xo-grid.dtx`'s `\cs_set_nopar:Npn \]{…}` inside the
+        // `\[…\]` the previous line's definition opened). The formatter's
+        // expl3 layout does not own math bodies either, so nothing is lost by
+        // refusing outright.
+        if self.in_math() {
+            return None;
+        }
         // The macrocode frame is a hard boundary in both directions, and an
         // alias environment's body ends positionally at its closer — a unit
         // reaching either has run out of stream mid-unit (`Stop::Abort`'s
@@ -265,6 +275,7 @@ impl UnitScan<'_, '_> {
     /// (EOF, the macrocode frame, an alias closer) aborts.
     fn advance(&mut self) -> Result<usize, Stop> {
         let mut newlines = 0usize;
+        let gap_start = self.i;
         loop {
             if self.i >= self.bound {
                 return Err(Stop::Abort);
@@ -274,7 +285,7 @@ impl UnitScan<'_, '_> {
                 SyntaxKind::NEWLINE => {
                     newlines += 1;
                     if newlines >= BLANK_LINE_NEWLINES {
-                        return Err(Stop::End);
+                        return Err(self.gap_stop(gap_start));
                     }
                     self.i += 1;
                 }
@@ -288,6 +299,40 @@ impl UnitScan<'_, '_> {
                 SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN => return Err(Stop::Abort),
                 _ => return Ok(self.i),
             }
+        }
+    }
+
+    /// How a blank-line-sized gap (two or more newlines, counted across
+    /// comments) stops the unit — the distinction `semantic::expl3` gets for
+    /// free from its element streams and the token scan must re-derive:
+    ///
+    /// - Inside a brace group the element loop runs to the `}` regardless of
+    ///   blank lines, so the stream continues past the gap and the unit
+    ///   commits its consumed prefix ([`Stop::End`], the sanctioned partial
+    ///   commit).
+    /// - At paragraph level, a gap the walk treats as a *paragraph separator*
+    ///   ([`Parser::trivia_run_is_separator`]: a bare blank line, or trivia
+    ///   running out into the block terminator — the macrocode frame, an
+    ///   alias closer, a genuine `\end`, EOF) ends the walk's element stream
+    ///   right here, which the semantic scan reads as running out of stream:
+    ///   [`Stop::Abort`], never a partial commit (`latex-lab-sec.dtx`'s
+    ///   `#1 #2 #3 #4` head whose commented body lives in the next chunk).
+    ///   A comment-glued gap that does *not* separate (content follows in the
+    ///   same paragraph) keeps the own-line-comment-ends-the-unit rule:
+    ///   [`Stop::End`].
+    fn gap_stop(&self, gap_start: usize) -> Stop {
+        if !self.p.group_opens.is_empty() {
+            return Stop::End;
+        }
+        let s = self.p.scan_trivia(gap_start, CommentMode::Skip);
+        let reaches_terminator = s.next_kind.is_none()
+            || self.p.macrocode_end.is_some_and(|end| s.next >= end)
+            || self.p.alias_end.is_some_and(|end| s.next >= end)
+            || (s.next_kind == Some(SyntaxKind::CONTROL_WORD) && self.p.env_end_at(s.next));
+        if s.saw_blank_line || reaches_terminator {
+            Stop::Abort
+        } else {
+            Stop::End
         }
     }
 
@@ -591,14 +636,39 @@ mod tests {
     }
 
     #[test]
-    fn blank_line_ends_the_unit_with_the_consumed_prefix() {
-        let (args, complete) = scan(
-            &format!("{ON}\\tl_set:Nn \\l_tmpa_tl\n\n{{ x }}\n"),
-            "\\tl_set:Nn",
-        )
-        .expect("recognized");
-        assert_eq!(args, ["cmd:\\l_tmpa_tl"]);
-        assert!(!complete);
+    fn blank_line_at_paragraph_level_aborts() {
+        // A paragraph separator ends the walk's element stream, which the
+        // semantic scan reads as running out of stream — the head stays
+        // greedy, exactly as `attach_arguments` stops at a paragraph break.
+        assert!(
+            scan(
+                &format!("{ON}\\tl_set:Nn \\l_tmpa_tl\n\n{{ x }}\n"),
+                "\\tl_set:Nn",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn blank_line_in_a_group_body_commits_the_prefix() {
+        // Inside a brace group the element loop runs to the `}` regardless of
+        // blank lines, so the stream continues and the unit commits what it
+        // consumed (the sanctioned partial commit). The scan is parked
+        // mid-walk, so the enclosing-group context is simulated the way the
+        // walk would carry it.
+        let input = format!("{ON}{{ \\tl_set:Nn \\l_tmpa_tl\n\n{{ x }} }}\n");
+        let tokens = lex(&input);
+        let ctx = ParseCtx::default();
+        let mut p = Parser::new(&tokens, &ctx);
+        p.pos = tokens
+            .iter()
+            .position(|t| t.text == "\\tl_set:Nn")
+            .expect("head token present");
+        p.group_opens.push(0);
+        let slots = p.expl3_arity_slots().expect("derivable");
+        let plan = p.scan_expl3_unit(&slots).expect("recognized");
+        assert_eq!(plan.args.len(), 1, "only the N slot is consumed");
+        assert!(!plan.complete);
     }
 
     #[test]

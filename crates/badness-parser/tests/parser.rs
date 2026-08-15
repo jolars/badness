@@ -2610,9 +2610,37 @@ fn expl3_arity_zero_arity_head_attaches_nothing() {
 }
 
 #[test]
-fn expl3_arity_blank_line_commits_the_prefix() {
+fn expl3_arity_blank_line_at_paragraph_level_stays_greedy() {
+    // A blank line is a paragraph separator, so the walk's element stream ends
+    // there — the semantic scan reads that as running out of stream, and the
+    // grammar scan mirrors it: the head falls back to greed, which likewise
+    // attaches nothing across a paragraph break.
     let cmds = arity_commands("\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl\n\n{ x }\n");
+    assert!(cmds.contains(&"\\tl_set:Nn".to_string()));
+    assert!(cmds.contains(&"\\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_blank_line_in_a_group_commits_the_prefix() {
+    // Inside a brace group the element loop runs to the `}` regardless of
+    // blank lines, so the unit commits its consumed prefix (the sanctioned
+    // partial commit) and the rest parses as ordinary siblings.
+    let cmds =
+        arity_commands("\\ExplSyntaxOn\n{ \\tl_set:Nn \\l_tmpa_tl\n\n{ x } }\n\\ExplSyntaxOff\n");
     assert!(cmds.contains(&"\\tl_set:Nn \\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_head_inside_math_stays_greedy() {
+    // The scan refuses in-math heads outright: an N slot facing the enclosing
+    // math's closer would swallow it into the head and leave the math
+    // unclosed (`xo-grid.dtx`'s `\cs_set_nopar:Npn \]{…}` inside the `\[…\]`
+    // the previous definition opened). `arity_commands` asserting a clean
+    // parse is the real pin — the swallowed closer surfaced as an error.
+    let cmds = arity_commands(
+        "\\ExplSyntaxOn\n\\cs_set_nopar:Npn \\[{\\begin{displaymath}}\n\\cs_set_nopar:Npn \\]{\\end{displaymath}}\n\\ExplSyntaxOff\n",
+    );
+    assert!(cmds.contains(&"\\cs_set_nopar:Npn".to_string()));
 }
 
 #[test]

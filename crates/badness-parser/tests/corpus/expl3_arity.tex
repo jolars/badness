@@ -35,10 +35,21 @@
 % Braces around an N argument are grabbed whole.
 \tl_set:Nn { \l_tmpa_tl } { y }
 
-% A blank line ends a unit early: the consumed prefix commits and the rest
-% parses as ordinary siblings.
+% A head inside math never scans: an N slot facing the enclosing math's
+% closer would swallow it and leave the math unclosed (xo-grid.dtx's
+% display-math redefinitions).
+\cs_set_nopar:Npn \[{\begin{displaymath}}
+\cs_set_nopar:Npn \]{\end{displaymath}}
+
+% A blank line is a paragraph separator at top level, so the walk's stream
+% ends and the head stays greedy; inside a group the stream continues and the
+% unit commits its consumed prefix.
 \tl_set:Nn \l_tmpa_tl
 
 { orphan }
+
+{ \tl_set:Nn \l_tmpb_tl
+
+{ orphan } }
 
 \ExplSyntaxOff

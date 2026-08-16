@@ -355,23 +355,18 @@ fn dtx_doc_margin_frame_survives_reflow() {
 /// The reduced hybrid behind [`trivia_check_fires_on_a_known_hybrid`]. Kept as a
 /// literal so the exact whitespace survives editing.
 ///
-/// Reduced from latex3's `l3kernel/l3fp-trig.dtx`, one of the
-/// `non-fixed-point` entries recorded when arity-directed expl3 attachment
-/// landed (the previous xparse-generic reduction converged under structural
-/// argument ownership). The load-bearing piece is the `\exp_after:wN` chain:
-/// every head is `w`-underivable, so the whole body is fallback statements
-/// whose greedy refill of the `all-newlines-to-spaces` variant lands the
-/// `\c_…_intarray` operands at widths the next pass re-fills differently.
+/// Fuzz-reduced from the `\exp_after:wN`-chain family that survives the arity
+/// migration in the gate baselines (`l3fp-trig.dtx` and kin; the previous
+/// xparse-generic reduction, and each subsequent corpus carve, converged as
+/// structural argument ownership stabilized more shapes). Every head is
+/// `w`-underivable, so both lines are fallback statements; the greedy refill
+/// of the `all-newlines-to-spaces` variant lands the mid-line groups at
+/// widths the next pass segments differently.
 const HYBRID_TEX: &str = r#"\ExplSyntaxOn
-\cs_new:Npn \module_trig_large:w #1
-  {
-    \exp_after:wN \module_trig_auxiii:w \int_value:w \kernel_intarray_item:Nn
-    \c_module_trig_intarray
-      { \module_int_eval:w #1 + 2 \scan_stop: }
-    \exp_after:wN \module_trig_auxiii:w \int_value:w \kernel_intarray_item:Nn
-    \c_module_trig_intarray
-      { \module_int_eval:w #1 + 3 \scan_stop: } \exp_stop_f:
-  }
+{
+\module_aux:w { \scan_stop: }
+\int_value:w \module_pack:wNNNNNNNN \scan_stop: { \module_int_eval:w \scan_stop: }
+}
 \ExplSyntaxOff
 "#;
 

@@ -384,11 +384,8 @@ fn format_root(
     // no-break slice `ctx` still owns for the whole call, so it rides `LowerCtx`
     // like the bare `wrap` mode. Never consulted under `reflow`/`preserve`.
     let profile = ctx.sentence().resolved();
-    // The grouped-sibling memo (see [`GroupedSiblingCache`]), owned here for the
-    // whole lowering like `user` and `regions`.
-    let grouped_sibling_cache = GroupedSiblingCache::default();
-    // The `.dtx` doc-paragraph reflow-safety memo (see [`DtxReflowCache`]), owned
-    // here for the whole lowering like `grouped_sibling_cache`.
+    // The `.dtx` doc-paragraph reflow-safety memo (see [`DtxReflowCache`]),
+    // owned here for the whole lowering like `user` and `regions`.
     let dtx_reflow_cache = DtxReflowCache::default();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
@@ -401,7 +398,6 @@ fn format_root(
         suppressed: suppressed.format_ranges(),
         profile,
         range,
-        grouped_sibling_cache: &grouped_sibling_cache,
         dtx_reflow_cache: &dtx_reflow_cache,
         dtx_margin_probe: false,
         is_dtx: root
@@ -790,20 +786,12 @@ struct LowerCtx<'a> {
     /// `ROOT` — every selected block still lowers in full, at its real indent-0
     /// context, so the formatter stays the sole authority on layout.
     range: Option<TextRange>,
-    /// Per-container memo for [`head_command_has_grouped_sibling_arg`]: the
-    /// gate re-segments the *enclosing* stream (which the [`Statements::Ignore`]
-    /// call lowering the owner's arguments cannot see), and doing that once per
-    /// trailing-group candidate is O(run²) over a paragraph run of
-    /// `\cmd:Nn \tgt {body}` statements. One linear pass per container instead,
-    /// shared through the whole lowering. Borrowed from [`format_root`] like
-    /// `expl3_regions`.
-    grouped_sibling_cache: &'a GroupedSiblingCache,
     /// Memo for [`dtx_doc_paragraph_reflows_safely`]. The answer is needed twice
     /// per `.dtx` doc paragraph — once by the paragraph's own lowering, once by
     /// [`margin_floats_into_paragraph`] deciding whether the floated leading `%`
     /// may be dropped — and computing it means lowering the paragraph, so without
     /// the memo a nested document pays for it repeatedly. Borrowed from
-    /// [`format_root`] like `grouped_sibling_cache`.
+    /// [`format_root`] like `expl3_regions`.
     dtx_reflow_cache: &'a DtxReflowCache,
     /// Set while *probing* whether a `.dtx` doc paragraph reflows safely. The probe
     /// lowers the paragraph, and that lowering must not consult
@@ -822,11 +810,6 @@ struct LowerCtx<'a> {
 
 /// Memoized [`dtx_doc_paragraph_reflows_safely`] answers, keyed by paragraph node.
 type DtxReflowCache = RefCell<HashMap<SyntaxNode, bool>>;
-
-/// Memoized [`head_command_has_grouped_sibling_arg`] answers: per container
-/// node, the answer for every in-region `COMMAND` child, keyed by its start
-/// offset (unique among siblings). See [`grouped_sibling_answers`].
-type GroupedSiblingCache = RefCell<HashMap<SyntaxNode, HashMap<TextSize, bool>>>;
 
 impl<'a> LowerCtx<'a> {
     /// Whether the active wrap mode lays out prose paragraphs at all (as opposed to
@@ -3021,11 +3004,7 @@ fn lower_expl_code(
                     && expl_group_body_is_multi_atom(child)
                     && is_trailing_in_statement(&elements, idx, map.as_ref())
                     && !statement_has_preceding_group(&elements, idx, map.as_ref())
-                    && !head_command_has_grouped_sibling_arg(
-                        child,
-                        cx.expl3_regions,
-                        cx.grouped_sibling_cache,
-                    )
+                    && !head_command_has_grouped_sibling_arg(child)
                     && let ExplGroupPieces::Pieces {
                         open_ir,
                         body,
@@ -3486,119 +3465,34 @@ fn is_trailing_in_statement(
     true
 }
 
-/// Whether a command *earlier in the same statement* than `child`'s owning command
-/// already carries an attached brace/optional argument — the mark of a
-/// multi-argument call (`\prop_get:NnNTF \g…_prop {#2} \l…_tl {branch}`, whose
-/// `\g…_prop` swallowed `{#2}`) rather than a plain `\cmd \target {body}` hang. The
-/// trailing-hang three-way sees only its own command's [`Statements::Ignore`] stream
-/// (`\l…_tl {body}`), so it cannot tell the two apart from that stream alone; this
-/// looks one level out, at the siblings of `child`'s parent command, to keep the
-/// three-way off the multi-argument shape (its head cannot be measured as one unit
-/// from inside a single argument, so intercepting it detonates a *preceding*
-/// argument group instead). A lone `\cmd \target {body}` (`\tl_put_right:Ne
-/// \l…_tl {body}`, `\bool_if:NF \…_bool {body}`) has no such earlier grouped
-/// command and still qualifies.
+/// Whether an *earlier argument* of `child`'s owning command is a brace or
+/// bracket group — the mark of a multi-argument call
+/// (`\prop_get:NnNTF \g…_prop {#2} \l…_tl {branch}`) rather than a plain
+/// `\cmd \target {body}` hang. The trailing-hang three-way sees only the
+/// owning command's [`Statements::Ignore`] stream from `child` onward, so it
+/// cannot tell the two apart without this look at the earlier children.
 ///
-/// "Same statement" is decided by segmenting the owner's sibling stream
-/// ([`segment_expl_statements`], memoized per container in
-/// [`GroupedSiblingCache`]): the backward walk stops at the previous
-/// statement boundary, so a grouped command in an *earlier statement*
-/// (`\tl_set:Nn \l_x { v }` on the line above) no longer suppresses the
-/// three-way for an unrelated `\bool_if:NF \…_bool {body}`.
-///
-/// The re-segmented stream must be the stream the layout segmented, or the
-/// boundaries consulted here disagree with the boundaries committing lines: a
-/// `GROUP` container's braces never reach [`lower_expl_code`]
-/// ([`expl_group_pieces`] strips them — included, the `{` opens a fallback
-/// line that swallows every boundary on the group's first physical line), and
-/// a paragraph is lowered per in-region run ([`lower_expl_paragraph`]), so the
-/// stream is the contiguous in-region slice around the owner. A container that
-/// is itself a `COMMAND` is an [`Statements::Ignore`]-level stream with no
-/// statements to bound, so the walk runs to the stream start there, mirroring
-/// [`statement_has_preceding_group`]'s `map == None` arm.
-fn head_command_has_grouped_sibling_arg(
-    child: &SyntaxNode,
-    regions: &[TextRange],
-    cache: &GroupedSiblingCache,
-) -> bool {
+/// Node-local since arity attachment landed: a recognized call owns every
+/// argument its argspec consumes, so the earlier grouped material sits among
+/// `child`'s own preceding siblings — the container re-segmentation (and its
+/// per-container memo) that reconciled greedy sibling scatter retired with
+/// the migration. Statement scoping is free: a node's children are one
+/// statement by construction.
+fn head_command_has_grouped_sibling_arg(child: &SyntaxNode) -> bool {
     let Some(owner) = child.parent() else {
         return false;
     };
     // Only an *attached* argument has a head with sibling arguments: a
-    // stream-level group's parent is the container itself, where the walk
-    // below has no head command to inspect.
+    // stream-level group's parent is the container itself, which is not a
+    // call whose earlier slots could have consumed a group.
     if owner.kind() != SyntaxKind::COMMAND {
         return false;
     }
-    let Some(container) = owner.parent() else {
-        return false;
-    };
-    // Memoized per container: segmenting the enclosing stream once per
-    // trailing-group candidate is O(run²) over a paragraph run of qualifying
-    // statements (56x wall-clock at 2000 statements), and every candidate in
-    // the same container needs the same segmentation.
-    let mut cache = cache.borrow_mut();
-    let answers = cache
-        .entry(container)
-        .or_insert_with_key(|container| grouped_sibling_answers(container, regions));
-    answers
-        .get(&owner.text_range().start())
-        .copied()
-        .unwrap_or(false)
-}
-
-/// One linear pass computing [`head_command_has_grouped_sibling_arg`] for every
-/// in-region `COMMAND` child of `container`: split the (brace-stripped) sibling
-/// stream into maximal in-region runs, segment each run once, and sweep it
-/// forward carrying "a grouped command has appeared since the last statement
-/// boundary" — the state an element's backward same-statement walk would
-/// observe. A grouped command that itself *ends* a statement resets rather than
-/// sets the flag (the backward walk meets its boundary first). An owner absent
-/// from the map (out of region — unreachable from the expl3 lowering that asks)
-/// answers `false`.
-fn grouped_sibling_answers(
-    container: &SyntaxNode,
-    regions: &[TextRange],
-) -> HashMap<TextSize, bool> {
-    let stream: Vec<SyntaxElement> = container
+    let child_start = child.text_range().start();
+    owner
         .children_with_tokens()
-        .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE))
-        .collect();
-    let in_region =
-        |el: &SyntaxElement| regions.iter().any(|r| r.contains(el.text_range().start()));
-    let mut answers = HashMap::new();
-    let mut i = 0;
-    while i < stream.len() {
-        if !in_region(&stream[i]) {
-            i += 1;
-            continue;
-        }
-        let mut end = i + 1;
-        while end < stream.len() && in_region(&stream[end]) {
-            end += 1;
-        }
-        let run = &stream[i..end];
-        let map = (container.kind() != SyntaxKind::COMMAND).then(|| segment_expl_statements(run));
-        let mut seen_grouped = false;
-        for (j, el) in run.iter().enumerate() {
-            if let SyntaxElement::Node(node) = el
-                && node.kind() == SyntaxKind::COMMAND
-            {
-                answers.insert(node.text_range().start(), seen_grouped);
-            }
-            if map.as_ref().is_some_and(|m| m.boundary_after(j)) {
-                seen_grouped = false;
-            } else if el.as_node().is_some_and(|n| {
-                n.kind() == SyntaxKind::COMMAND
-                    && n.children()
-                        .any(|c| matches!(c.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
-            }) {
-                seen_grouped = true;
-            }
-        }
-        i = end;
-    }
-    answers
+        .take_while(|el| el.text_range().start() < child_start)
+        .any(|el| matches!(el.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
 }
 
 /// Whether a `GROUP`/`OPTIONAL` sibling precedes the element at `idx` within its
@@ -8694,13 +8588,11 @@ mod expl3_region_tests {
     use crate::parser::parse;
 
     /// Run [`head_command_has_grouped_sibling_arg`] on the *innermost* `GROUP`
-    /// descendant of `input` whose text contains `marker`, with the document's
-    /// real expl3 regions.
+    /// descendant of `input` whose text contains `marker`.
     fn grouped_sibling_walk(input: &str, marker: &str) -> bool {
         let parsed = parse(input);
         assert!(parsed.errors.is_empty(), "test input should parse cleanly");
         let root = parsed.syntax();
-        let regions = expl3_regions(&root);
         // Preorder puts an enclosing group before a nested one, so the last
         // match is the innermost.
         let group = root
@@ -8708,43 +8600,52 @@ mod expl3_region_tests {
             .filter(|n| n.kind() == SyntaxKind::GROUP && n.text().to_string().contains(marker))
             .last()
             .expect("a group containing the marker");
-        head_command_has_grouped_sibling_arg(&group, &regions, &GroupedSiblingCache::default())
+        head_command_has_grouped_sibling_arg(&group)
     }
 
     #[test]
     fn grouped_sibling_walk_stops_at_the_statement_boundary() {
         // A grouped command in the *previous statement* must not suppress the
         // trailing-hang treatment for an unrelated `\bool_if:NF \l… {body}` —
-        // the backward walk stops at the segmentation boundary.
+        // free under the node-local read, since a node's children are one
+        // statement by construction.
         let src = "\\ExplSyntaxOn\n\\tl_set:Nn \\l_x { v }\n\\bool_if:NF \\l_bool { body }\n\\ExplSyntaxOff\n";
         assert!(!grouped_sibling_walk(src, "body"));
 
-        // Within one statement the earlier grouped command still counts: the
-        // `\g_prop {#2}` of a `\prop_get:NnNTF` call marks the multi-argument
-        // shape whose branch list the hang path already lays out stably.
+        // Within one call the earlier grouped argument still counts: arity
+        // attachment puts a recognized `\prop_get:NnNTF` call's `{#2}` and its
+        // branches on one head node, so the multi-argument shape whose branch
+        // list the hang path already lays out stably is read off the node.
+        let src = "\\ExplSyntaxOn\n\\prop_get:NnNTF \\g_prop {#2} \\l_tl { branch } { f }\n\\ExplSyntaxOff\n";
+        assert!(grouped_sibling_walk(src, "branch"));
+
+        // An *aborted* call (the `F` branch is missing, so the five-slot spec
+        // never resolves and greedy scatter persists) keeps its groups on the
+        // small trailing command, whose node carries no earlier grouped
+        // argument: the walk answers `false` there now — the container
+        // re-segmentation that reconciled scatter retired with the migration,
+        // and an unresolvable call is not the multi-argument shape the
+        // suppression exists for.
         let src =
             "\\ExplSyntaxOn\n\\prop_get:NnNTF \\g_prop {#2} \\l_tl { branch }\n\\ExplSyntaxOff\n";
-        assert!(grouped_sibling_walk(src, "branch"));
+        assert!(!grouped_sibling_walk(src, "branch"));
     }
 
     #[test]
     fn grouped_sibling_walk_matches_the_body_stream_segmentation() {
-        // Inside a single-line brace body, the container's braces must not
-        // reach the re-segmentation: included, the leading `{` opens a
-        // fallback line spanning the whole body, hiding the `\tl_set:Nn`
-        // statement boundary before `\bool_if:NF` — a map disagreeing with
-        // the one the layout commits lines with (`expl_group_pieces` strips
-        // the braces before lowering).
+        // Inside a brace body, a preceding *statement's* grouped call must not
+        // suppress the hang for the next statement's `\bool_if:NF … {body}` —
+        // under the node-local read the earlier call's group belongs to that
+        // call's own node, never to `{body}`'s owner.
         let src = "\\ExplSyntaxOn\n\\use:n { \\tl_set:Nn \\l_x { v } \\bool_if:NF \\l_b { body } }\n\\ExplSyntaxOff\n";
         assert!(!grouped_sibling_walk(src, "body"));
     }
 
     #[test]
     fn grouped_sibling_walk_ignores_out_of_region_prefix() {
-        // A paragraph is lowered per in-region run, so the walk segments only
-        // the contiguous in-region slice around the owner: the out-of-region
-        // `\emph{y}` sharing the authored line must not read as an earlier
-        // grouped command of the `\tl_put_right:Ne` statement.
+        // The out-of-region `\emph{y}` sharing the authored line must not
+        // read as an earlier grouped argument of the `\tl_put_right:Ne`
+        // statement — its group belongs to `\emph`'s node, not the owner's.
         let src = "x \\emph{y} \\ExplSyntaxOn \\tl_put_right:Ne \\l_t { body } \\ExplSyntaxOff\n";
         assert!(!grouped_sibling_walk(src, "body"));
     }

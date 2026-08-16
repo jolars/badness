@@ -2,7 +2,6 @@
 ./l3kernel/l3coffins.dtx	trivia	non-fixed-point
 ./l3kernel/l3doc.dtx	trivia	content-change
 ./l3kernel/l3fp-extended.dtx	trivia	content-change
-./l3kernel/l3fp-trig.dtx	trivia	non-fixed-point
 ./l3kernel/l3fp.dtx	trivia	content-change
 ./l3kernel/l3kernel-functions.dtx	trivia	content-change
 ./l3kernel/l3seq.dtx	trivia	content-change

@@ -356,7 +356,9 @@ fn dtx_doc_margin_frame_survives_reflow() {
 /// literal so the exact whitespace survives editing.
 ///
 /// Fuzz-reduced from the `\exp_after:wN`-chain family that survives the arity
-/// migration in the gate baselines (`l3fp-trig.dtx` and kin; the previous
+/// migration (`l3fp-trig.dtx` and kin — the reduction is of the *family*, not
+/// of a baseline entry: those files re-fill to a fixed point whole, which is
+/// why none of them is recorded in `tests/gate_baselines`. The previous
 /// xparse-generic reduction, and each subsequent corpus carve, converged as
 /// structural argument ownership stabilized more shapes). Every head is
 /// `w`-underivable, so both lines are fallback statements; the greedy refill

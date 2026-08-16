@@ -1131,6 +1131,11 @@ struct Parser<'t> {
     /// The [`MathBracketGate`] twin, keyed like the others — including on the
     /// enclosing math's flavor, which this gate alone reads ([`WalkKey`]).
     math_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
+    /// The arity-directed expl3 scan's matching-brace table
+    /// ([`expl3::BraceMatches`]). Not a gate batch — it settles *pairings*
+    /// rather than verdicts — but the same trade for the same reason: nested
+    /// call sites ask about spans their enclosing ones already covered.
+    brace_matches: std::cell::RefCell<Option<expl3::BraceMatches>>,
     /// Token index of the alias closer bounding the environment body currently
     /// being parsed, if any. Saved and restored around the body in
     /// [`Self::alias_environment`]. An alias environment has no `\end{…}` to stop
@@ -1190,6 +1195,7 @@ impl<'t> Parser<'t> {
             left_right_batch: std::cell::RefCell::new(None),
             text_bracket_batch: std::cell::RefCell::new(None),
             math_bracket_batch: std::cell::RefCell::new(None),
+            brace_matches: std::cell::RefCell::new(None),
             alias_end: None,
             in_statement_body: false,
         }
@@ -3978,6 +3984,35 @@ mod tests {
             )
         };
         assert_scan_work_linear(&body(200), &body(400));
+    }
+
+    /// *Nested* recognized heads are the adversarial shape for the arity scan:
+    /// every level's group slot has to find its matching `}`, and a per-slot
+    /// rescan makes that O(depth) each. The shared matching-brace table
+    /// ([`Parser::matching_brace`]) is what keeps it one pass for the whole
+    /// nest.
+    #[test]
+    fn expl3_arity_nested_scans_stay_linear() {
+        // Group slots nested to the input's full depth.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n{}x{}\n",
+                "\\use:n { ".repeat(n),
+                " }".repeat(n)
+            )
+        };
+        assert_scan_work_linear(&body(100), &body(200));
+        // The same nest under an aborting outer head: the outer unit scans its
+        // whole span before refusing, and every inner head is then asked in
+        // turn over the span it already covered.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n\\prop_get:NnNTF \\p {{ k }} \\l {}x{} y\n",
+                "\\use:n { ".repeat(n),
+                " }".repeat(n)
+            )
+        };
+        assert_scan_work_linear(&body(100), &body(200));
     }
 
     /// The batched conditional gate (`TODO.md`, container stack C1): a run of

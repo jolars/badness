@@ -758,6 +758,15 @@ inside a region — which also covers the implicit `.dtx` regions the toggle ind
 cannot see, and the formatter's positional toggle gate stays the formatter's
 alone.
 
+The scan resolves its group slots through a shared matching-brace table rather
+than a rescan per slot, for the reason the shape gates run in batches: nested
+call sites ask about spans their enclosing ones already walked, so a per-slot
+rescan is quadratic in the nesting depth. One stack pass settles every pair in
+the `macrocode` frame, keyed on the two facts that decide pairing — the
+chunk-plain brace set and the frame itself. Bounds that move without changing
+pairing (an alias closer) filter the answer at query time instead of
+invalidating the table.
+
 This landed through the staged migration TODO.md recorded. Mis-attachment is
 byte-invisible — a wrong tree is still lossless and idempotent — so before any
 consumer flipped, a migration oracle diffed grammar attachment against

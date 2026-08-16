@@ -51,6 +51,36 @@ use super::Parser;
 use super::trivia::{BLANK_LINE_NEWLINES, CommentMode};
 use crate::semantic::expl3::{Expl3Slot, expl3_slots};
 use crate::syntax::SyntaxKind;
+use std::collections::HashMap;
+
+/// The matching-brace table every group slot resolves its argument through,
+/// memoized against the walk state the build read.
+///
+/// A group slot needs its argument's closer, and a *nested* call site asks once
+/// per level over a span each outer level already covered, so a per-slot rescan
+/// is quadratic in the nesting depth
+/// (`expl3_arity_nested_scans_stay_linear`). One stack pass settles every pair
+/// at once instead, and the whole nest then answers from the table — the trade
+/// [`Parser::gated_closer`] makes for the shape gates, for the same reason.
+///
+/// Keyed by the two facts that decide *pairing*: [`Parser::plain_braces`] —
+/// through its version counter, the [`super::WalkKey`] convention, since the
+/// set is mutated per `macrocode` body — and the frame that set is scoped to.
+/// The build stops at that frame rather than at the scan's own bound, so an
+/// alias closer (which moves with no version bump) only ever filters at query
+/// time and can never invalidate the table.
+pub(super) struct BraceMatches {
+    /// [`Parser::plain_braces_version`] the table was built under.
+    plain_braces: u32,
+    /// [`Parser::macrocode_end`] the build was bounded by.
+    macrocode_end: Option<usize>,
+    /// The lowest token index the table covers. A build is seeded at its first
+    /// query and walks forward only; the walk's queries ascend, so this is one
+    /// build per key in practice.
+    from: usize,
+    /// Open token index to the index of its matching `}`.
+    ends: HashMap<usize, usize>,
+}
 
 /// One argument the scan resolved, as the token span the replay consumes.
 /// The *shape* is recorded because the replay must emit different events per
@@ -221,6 +251,58 @@ impl Parser<'_> {
             }
         }
         debug_assert_eq!(self.pos, plan.end);
+    }
+
+    /// The index of the `}` matching the group opening at `open`, from the
+    /// shared [`BraceMatches`] table, or `None` when nothing closes it before
+    /// the `macrocode` frame. Bound-free on purpose — a caller applies its own
+    /// bound to the answer, which is what keeps the table valid across the
+    /// alias closers that move without a version bump.
+    ///
+    /// A miss rebuilds from `open` forward, settling every pair in the frame
+    /// the way a gate batch settles every opener its scan passes. The build
+    /// recycles the superseded table's map: its pairings are stale, its
+    /// allocation is not ([`Parser::gated_closer`]).
+    fn matching_brace(&self, open: usize) -> Option<usize> {
+        if let Some(table) = self.brace_matches.borrow().as_ref()
+            && table.plain_braces == self.plain_braces_version
+            && table.macrocode_end == self.macrocode_end
+            && open >= table.from
+        {
+            return table.ends.get(&open).copied();
+        }
+        let mut ends = self
+            .brace_matches
+            .borrow_mut()
+            .take()
+            .map_or_else(HashMap::new, |stale| {
+                let mut map = stale.ends;
+                map.clear();
+                map
+            });
+        let mut stack: Vec<usize> = Vec::new();
+        for j in open..self.macrocode_end.unwrap_or(self.tokens.len()) {
+            self.tick_scan();
+            match self.tokens[j].kind {
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&j) => stack.push(j),
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&j) => {
+                    // An unbalanced closer belongs to a group opened before
+                    // the build's seed; it pairs with nothing here.
+                    if let Some(opened) = stack.pop() {
+                        ends.insert(opened, j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let answer = ends.get(&open).copied();
+        *self.brace_matches.borrow_mut() = Some(BraceMatches {
+            plain_braces: self.plain_braces_version,
+            macrocode_end: self.macrocode_end,
+            from: open,
+            ends,
+        });
+        answer
     }
 
     /// A control sequence consumed as an argument: a `COMMAND` node holding
@@ -495,23 +577,11 @@ impl UnitScan<'_, '_> {
         if self.p.plain_braces.contains(&open) {
             return None;
         }
-        let mut depth = 0usize;
-        let mut j = open;
-        while j < self.bound {
-            self.p.tick_scan();
-            match self.p.tokens[j].kind {
-                SyntaxKind::L_BRACE if !self.p.plain_braces.contains(&j) => depth += 1,
-                SyntaxKind::R_BRACE if !self.p.plain_braces.contains(&j) => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(j + 1);
-                    }
-                }
-                _ => {}
-            }
-            j += 1;
-        }
-        None
+        // The table is built to the `macrocode` frame, so this scan's own
+        // bound (an alias closer, the frame) is applied here: a closer past it
+        // is one the walk would not reach, and the head stays greedy.
+        let close = self.p.matching_brace(open)?;
+        (close < self.bound).then_some(close + 1)
     }
 }
 

@@ -262,7 +262,13 @@ Prefer false negatives; when in doubt a construct stays generic.
   against `semantic::expl3`'s independent consumption over the gate corpora
   (67k statement-leading heads, zero disagreements outside the benign
   greedy-leftover class); the corpus fixtures (`corpus/expl3_arity.tex`) are
-  the net since.
+  the net since. Group slots resolve through a shared matching-brace table
+  (`BraceMatches`), not a per-slot rescan: nested call sites ask about spans
+  their enclosing ones already covered, so rescanning is quadratic in the
+  nesting depth. Keyed on `plain_braces_version` + `macrocode_end` (the two
+  facts that decide pairing), built to the frame rather than the scan's own
+  bound so a moving alias closer only filters at query time. Same trade as
+  `gated_closer`, and pinned by `expl3_arity_nested_scans_stay_linear`.
 
 ## Trivia
 

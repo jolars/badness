@@ -2606,7 +2606,7 @@ fn expl3_arity_head_inside_math_stays_greedy() {
     // The scan refuses in-math heads outright: an N slot facing the enclosing
     // math's closer would swallow it into the head and leave the math
     // unclosed (`xo-grid.dtx`'s `\cs_set_nopar:Npn \]{…}` inside the `\[…\]`
-    // the previous definition opened). `arity_commands` asserting a clean
+    // the previous definition opened). `expl3_commands` asserting a clean
     // parse is the real pin — the swallowed closer surfaced as an error.
     let cmds = expl3_commands(
         "\\ExplSyntaxOn\n\\cs_set_nopar:Npn \\[{\\begin{displaymath}}\n\\cs_set_nopar:Npn \\]{\\end{displaymath}}\n\\ExplSyntaxOff\n",

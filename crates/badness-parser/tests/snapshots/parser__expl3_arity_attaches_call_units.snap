@@ -1,6 +1,6 @@
 ---
 source: crates/badness-parser/tests/parser.rs
-expression: arity_tree(EXPL3_ARITY_SAMPLE)
+expression: tree(EXPL3_ARITY_SAMPLE)
 ---
 ROOT@0..123
   PARAGRAPH@0..122

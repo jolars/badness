@@ -1,7 +1,9 @@
-% Arity-directed expl3 attachment (AGENTS.md decision #8, staged migration):
-% the call-site shapes the argspec-driven unit scan resolves, and the ones it
-% deliberately leaves greedy. Parsed by the sweeps under the production greedy
-% default, and by the migration tests under the arity entry.
+% Arity-directed expl3 attachment (AGENTS.md decision #8, landed): the
+% call-site shapes the argspec-driven unit scan resolves, and the ones it
+% deliberately leaves greedy. Arity attachment is the production default, so
+% every sweep over this corpus reads these shapes as the parser now builds
+% them; the migration harness that diffed them against `semantic::expl3` is
+% gone, and these fixtures are the net in its place.
 \ExplSyntaxOn
 
 % A single-token slot breaks greedy attachment; arity hands { x } to the head.

@@ -487,14 +487,23 @@ fn fallback_line(
     elements.len()
 }
 
-/// Whether a command node holds a direct-child newline whose next non-trivia
-/// direct child is not a braced or bracketed argument — the shape only
-/// arity-directed slot consumption produces (a bare `#1`, relation, or command
-/// argument taken across an authored line break), never greedy attachment,
-/// which crossed newlines only on its way to a `{…}`/`[…]`. Scoped to
-/// `COMMAND` nodes by the caller: a plain multi-line `GROUP` in a fallback
-/// line is interior layout the per-line model always tolerated. See the
-/// caller for why a fallback statement must end after such a node.
+/// Whether a command node holds a direct-child newline whose next direct child
+/// is not a braced or bracketed argument — the shape only arity-directed slot
+/// consumption produces (a bare `#1`, relation, or command argument taken
+/// across an authored line break), never greedy attachment, which crossed
+/// newlines only on its way to a `{…}`/`[…]`. Scoped to `COMMAND` nodes by the
+/// caller: a plain multi-line `GROUP` in a fallback line is interior layout the
+/// per-line model always tolerated. See the caller for why a fallback statement
+/// must end after such a node.
+///
+/// Only *collapsible* trivia is transparent here, so a consumed own-line
+/// `COMMENT` (or a `~`) answers `true` even though a `{…}` follows it. That is
+/// chosen, not incidental (`comment_in_a_consumed_slot_ends_the_fallback_line`):
+/// such a comment forces a break of its own, so continuing the statement past it
+/// would fuse two printed lines — the very fusing this predicate exists to
+/// prevent — and it is the *stable* answer, comment presence and own-line-ness
+/// both being predicates the formatter preserves (`AGENTS.md`, trivia-invariant
+/// layout).
 fn node_carries_bare_line_break(node: &SyntaxNode) -> bool {
     let mut after_newline = false;
     for child in node.children_with_tokens() {
@@ -1174,6 +1183,27 @@ mod segmentation_tests {
             vec![
                 "\\ExplSyntaxOn",
                 "\\cs_new:Npn \\foo:w #1 \\q_stop { body }",
+                "\\ExplSyntaxOff",
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_in_a_consumed_slot_ends_the_fallback_line() {
+        // The arity scan crosses an own-line comment to a braced candidate, so
+        // the `\tl_set:Nn` node *carries* that comment. Ending the fallback
+        // statement after such a node is deliberate
+        // ([`node_carries_bare_line_break`]): the comment forces a break of its
+        // own, so running the statement past it would fuse two printed lines.
+        let got = statements(
+            "\\ExplSyntaxOn\n\\exp_after:wN \\foo \\tl_set:Nn \\l_a\n% doc\n{ x } \\group_begin:\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\exp_after:wN \\foo \\tl_set:Nn \\l_a % doc { x }",
+                "\\group_begin:",
                 "\\ExplSyntaxOff",
             ]
         );

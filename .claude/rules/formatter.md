@@ -341,16 +341,20 @@ predicates the formatter *preserves*.
   same fill kind the line would have committed as.**
 - **Each brace argument breaks on its own body.** No sibling coupling — a
   sibling's forced break is none of its business (l3styleguide's own example).
-- **A conditional's branches are resolved from the call *unit*, not the head
-  node** (`semantic::expl3::expl3_unit` records each `T`/`F` slot's range). Where
-  greedy attachment put a branch group is an accident of the surrounding tokens
-  — an `N`/`V` slot hands it to a sibling — so it must never decide the layout.
-  A *statement-leading* conditional explodes on that, unconditionally.
-- **Only statement-leading position may use the unit rescan.** Mid-statement the
-  conditional is an argument being passed as a token, not a call
-  (`\@@_patch_check:NNnn \cs_if_exist:NTF #1 { undef }`); resolving a unit headed
-  there claims the *outer* call's arguments as branches. The trailing arm reads
-  the node's own attached children only.
+- **A conditional's branches are the head node's trailing groups** — arity
+  attachment (decision #8, landed) owns them in the tree, so the explosion is
+  node-local and the unit-scoped rescan that re-split greedy sibling scatter is
+  gone (the migration oracle measured zero recognition disagreements; a head
+  the node cannot resolve has no unit either). A *statement-leading*
+  conditional explodes unconditionally; the trailing arm is width-conditional
+  — a layout policy, no longer a tree-shape workaround.
+- **A gap before a bare argument inside a call never breaks**
+  (`lower_expl_code`'s `Ignore` arm): the house style breaks a call before a
+  braced argument, never between its single-token operands — and a minted
+  newline before a non-group child is exactly the shape
+  `semantic::expl3::fallback_line` reads as a statement boundary (its
+  bare-line-break rule, the Tier-2 pairing that keeps fused fallback lines
+  pass-stable). An over-width call overflows instead of wrapping mid-call.
 - Trailing comments ride their line zero-width and are **never relocated**;
   moving one rebinds it as the next statement's doc comment.
 - A group whose body carries a `DOC_MARGIN`/`GUARD` must take the broken form;

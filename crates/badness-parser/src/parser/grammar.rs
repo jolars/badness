@@ -13,6 +13,7 @@
 //! Recovery anchors are the LaTeX-natural ones: `\end`, `}`, `]`, `$`, blank
 //! lines, and end of input.
 
+mod expl3;
 mod facts;
 mod prescan;
 mod trivia;
@@ -1130,6 +1131,11 @@ struct Parser<'t> {
     /// The [`MathBracketGate`] twin, keyed like the others — including on the
     /// enclosing math's flavor, which this gate alone reads ([`WalkKey`]).
     math_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
+    /// The arity-directed expl3 scan's matching-brace table
+    /// ([`expl3::BraceMatches`]). Not a gate batch — it settles *pairings*
+    /// rather than verdicts — but the same trade for the same reason: nested
+    /// call sites ask about spans their enclosing ones already covered.
+    brace_matches: std::cell::RefCell<Option<expl3::BraceMatches>>,
     /// Token index of the alias closer bounding the environment body currently
     /// being parsed, if any. Saved and restored around the body in
     /// [`Self::alias_environment`]. An alias environment has no `\end{…}` to stop
@@ -1189,6 +1195,7 @@ impl<'t> Parser<'t> {
             left_right_batch: std::cell::RefCell::new(None),
             text_bracket_batch: std::cell::RefCell::new(None),
             math_bracket_batch: std::cell::RefCell::new(None),
+            brace_matches: std::cell::RefCell::new(None),
             alias_end: None,
             in_statement_body: false,
         }
@@ -1876,6 +1883,15 @@ impl<'t> Parser<'t> {
         let saved = self.in_def_body;
         self.in_def_body = saved || is_definition_body_command(self.text());
         let def_prefix = is_def_prefix_command(self.text());
+        // Arity-directed expl3 attachment (decision #8's sanctioned
+        // deviation): resolve the head's argspec and scan the whole unit
+        // *before* any event is emitted; the replay below consumes exactly
+        // the plan, so the scan mirrors the walk by construction. A
+        // colon-carrying head is never a def-prefix or definition-body name
+        // (both sets are colonless), so the branches cannot overlap.
+        let expl3_plan = self
+            .expl3_arity_slots()
+            .and_then(|slots| self.scan_expl3_unit(&slots));
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
         // A `\def`-family primitive's next token is the control sequence being
@@ -1893,7 +1909,10 @@ impl<'t> Parser<'t> {
                 self.in_def_body = true;
             }
         }
-        self.attach_arguments(bracket);
+        match &expl3_plan {
+            Some(plan) => self.attach_expl3_arguments(plan),
+            None => self.attach_arguments(bracket),
+        }
         self.in_def_body = saved;
         self.close();
     }
@@ -3938,6 +3957,62 @@ mod tests {
         // `delim_math_closes`: display-math openers, no `\]` anywhere.
         let shape = "\\[ x\n";
         assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
+    }
+
+    /// The arity-directed expl3 scan (`grammar::expl3`) is bounded per head by
+    /// the unit it resolves or the abort that refuses it, so a run of heads
+    /// stays linear — including the adversarial shape where every head scans
+    /// its whole unit and then aborts on the last slot, leaving the span to be
+    /// re-parsed greedily: one bounded scan per head, never a restart from an
+    /// earlier position.
+    #[test]
+    fn expl3_arity_scan_stays_linear() {
+        // Recognized units: scan + replay per head.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n{}",
+                "\\tl_set:Nn \\l_a { x y z }\n".repeat(n)
+            )
+        };
+        assert_scan_work_linear(&body(200), &body(400));
+        // Aborting units: the final branch slot faces a bare word, so every
+        // head's scanned span falls back to greed after the scan.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n{}",
+                "\\prop_get:NnNTF \\p { k } \\l { t } x\n".repeat(n)
+            )
+        };
+        assert_scan_work_linear(&body(200), &body(400));
+    }
+
+    /// *Nested* recognized heads are the adversarial shape for the arity scan:
+    /// every level's group slot has to find its matching `}`, and a per-slot
+    /// rescan makes that O(depth) each. The shared matching-brace table
+    /// ([`Parser::matching_brace`]) is what keeps it one pass for the whole
+    /// nest.
+    #[test]
+    fn expl3_arity_nested_scans_stay_linear() {
+        // Group slots nested to the input's full depth.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n{}x{}\n",
+                "\\use:n { ".repeat(n),
+                " }".repeat(n)
+            )
+        };
+        assert_scan_work_linear(&body(100), &body(200));
+        // The same nest under an aborting outer head: the outer unit scans its
+        // whole span before refusing, and every inner head is then asked in
+        // turn over the span it already covered.
+        let body = |n: usize| {
+            format!(
+                "\\ExplSyntaxOn\n\\prop_get:NnNTF \\p {{ k }} \\l {}x{} y\n",
+                "\\use:n { ".repeat(n),
+                " }".repeat(n)
+            )
+        };
+        assert_scan_work_linear(&body(100), &body(200));
     }
 
     /// The batched conditional gate (`TODO.md`, container stack C1): a run of

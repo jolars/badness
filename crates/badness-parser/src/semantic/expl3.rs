@@ -457,12 +457,72 @@ fn fallback_line(
                 }
                 last = j;
                 j += 1;
+                // Arity attachment consumes a bare-token or bare-command slot
+                // across a single authored newline (attachment must stay
+                // newline-insensitive), so a node can now *carry* the newline
+                // that used to end this physical line — fusing two authored
+                // lines into one fallback statement and voiding the per-line
+                // fixed point. End the statement after such a node instead.
+                // The predicate is the narrowest that names the novel shape —
+                // a direct-child newline whose next argument is *not* a
+                // `{…}`/`[…]` (greedy attachment always produced those, and
+                // those keep today's behavior) — and it is Tier-2 sound: the
+                // node's interior layout is width-driven from a column the
+                // hard gaps fix, so whether the break re-renders (and with it
+                // this boundary) is a pure function of the tree and width,
+                // reproduced identically on every pass.
+                if let SyntaxElement::Node(n) = element
+                    && n.kind() == SyntaxKind::COMMAND
+                    && node_carries_bare_line_break(n)
+                {
+                    boundary_after[last] = true;
+                    fallback[start..=last].fill(true);
+                    return j;
+                }
             }
         }
     }
     boundary_after[last] = true;
     fallback[start..=last].fill(true);
     elements.len()
+}
+
+/// Whether a command node holds a direct-child newline whose next direct child
+/// is not a braced or bracketed argument — the shape only arity-directed slot
+/// consumption produces (a bare `#1`, relation, or command argument taken
+/// across an authored line break), never greedy attachment, which crossed
+/// newlines only on its way to a `{…}`/`[…]`. Scoped to `COMMAND` nodes by the
+/// caller: a plain multi-line `GROUP` in a fallback line is interior layout the
+/// per-line model always tolerated. See the caller for why a fallback statement
+/// must end after such a node.
+///
+/// Only *collapsible* trivia is transparent here, so a consumed own-line
+/// `COMMENT` (or a `~`) answers `true` even though a `{…}` follows it. That is
+/// chosen, not incidental (`comment_in_a_consumed_slot_ends_the_fallback_line`):
+/// such a comment forces a break of its own, so continuing the statement past it
+/// would fuse two printed lines — the very fusing this predicate exists to
+/// prevent — and it is the *stable* answer, comment presence and own-line-ness
+/// both being predicates the formatter preserves (`AGENTS.md`, trivia-invariant
+/// layout).
+fn node_carries_bare_line_break(node: &SyntaxNode) -> bool {
+    let mut after_newline = false;
+    for child in node.children_with_tokens() {
+        match &child {
+            SyntaxElement::Token(t) if t.kind() == SyntaxKind::NEWLINE => after_newline = true,
+            SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
+            SyntaxElement::Node(n)
+                if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                after_newline = false;
+            }
+            _ => {
+                if after_newline {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Extend a completed unit over trailing same-line *junk*: unrecognized
@@ -552,6 +612,23 @@ fn consume_unit(
             Err(Stop::Abort) => return None,
         }
     }
+    // The unit extends over the *greedy-attachable tail*: the trailing
+    // `{…}`/`[…]` material that greedy attachment hangs off the unit's last
+    // command. Over the greedy tree this is provably a no-op — anything
+    // attachable after an unbroken command chain is already *inside* a
+    // consumed node (that is what greedy means), so a sibling attachable only
+    // exists past a chain-breaking token, where the extension refuses. Over an
+    // arity-attached tree (decision #8) the same material sits as siblings —
+    // a head owns exactly its argspec — and the extension is what keeps the
+    // statement *extent* identical across the migration: TeX consumes those
+    // groups through the argument command at runtime
+    // (`\exp_not:N \tl_if_blank:nF {#1}` is one conceptual step), which is
+    // also why the greedy-era extent covered them. Partial units extend too —
+    // a comment-glued gap ends the *unit* but not greedy attachment, whose
+    // own gap rules (a comment is content that resets the newline run) the
+    // extension carries; a genuinely blank-cut unit stops right there, since
+    // greedy attachment stops at the same blank line.
+    cur.extend_over_attachable_tail();
     Some(Expl3Unit {
         last: cur.last_sib,
         // A blank line cut the unit short, so the branch list is partial. Report
@@ -621,6 +698,13 @@ struct UnitCursor<'a> {
     /// A peeked candidate not yet consumed; the index is its sibling position
     /// when it came from the sibling stream (`None` for queue candidates).
     peeked: Option<(SyntaxElement, Option<usize>)>,
+    /// Whether the unit's textual tail ends in an unbroken *attachment chain*:
+    /// the head or a consumed `COMMAND`, followed by nothing but groups and
+    /// optionals — the shape greedy attachment hangs further `{…}` material
+    /// off. Any bare-token candidate (a relation `WORD`, a `#`-parameter, a
+    /// control symbol) breaks the chain, exactly where greedy attachment
+    /// stops. Read by [`Self::extend_over_attachable_tail`].
+    chain: bool,
 }
 
 impl<'a> UnitCursor<'a> {
@@ -631,6 +715,7 @@ impl<'a> UnitCursor<'a> {
             sib: head_idx + 1,
             last_sib: head_idx,
             peeked: None,
+            chain: true,
         };
         cur.queue_children_after_name(head, false);
         cur
@@ -741,6 +826,9 @@ impl<'a> UnitCursor<'a> {
                     SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL
                 ) =>
             {
+                // A bare control-sequence token (a peeled definee, an orphan
+                // `\)` kept as data) is not a node greedy hangs arguments off.
+                self.chain = false;
                 Ok(())
             }
             // A relation character: `\int_compare:nNnTF { … } = { 1 } {T} {F}`
@@ -752,9 +840,11 @@ impl<'a> UnitCursor<'a> {
             SyntaxElement::Token(t)
                 if t.kind() == SyntaxKind::WORD && t.text().chars().count() == 1 =>
             {
+                self.chain = false;
                 Ok(())
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::HASH => {
+                self.chain = false;
                 // `#1` (or `##1` in a nested definition): hash(es) plus one
                 // parameter digit read as one parameter token.
                 loop {
@@ -772,6 +862,7 @@ impl<'a> UnitCursor<'a> {
             }
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => {
                 self.queue_children_after_name(n, true);
+                self.chain = true;
                 Ok(())
             }
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP => Ok(()),
@@ -808,13 +899,89 @@ impl<'a> UnitCursor<'a> {
             }
             let el = self.bump()?;
             match &el {
-                SyntaxElement::Token(_) => {}
+                SyntaxElement::Token(_) => self.chain = false,
                 SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => {
                     self.queue_children_after_name(n, true);
+                    self.chain = true;
                 }
                 SyntaxElement::Node(n) if n.kind() == SyntaxKind::OPTIONAL => {}
                 _ => return Err(Stop::Abort),
             }
+        }
+    }
+
+    /// Extend a complete unit over its greedy-attachable tail: the `{…}`/`[…]`
+    /// nodes that follow the unit's last command with nothing but attachable
+    /// material between — exactly the run greedy attachment would hang off it.
+    /// See the call site in [`consume_unit`] for why this is a no-op over the
+    /// greedy tree and load-bearing over an arity-attached one.
+    ///
+    /// The gap rules here are *greedy's*, not [`Self::advance`]'s: attachment
+    /// crosses comments, guards, and doc margins, and a comment resets the
+    /// newline run (it is content on its line), so only a bare blank line
+    /// stops the extension — mirroring `peek_meaningful`'s `saw_blank_line`.
+    fn extend_over_attachable_tail(&mut self) {
+        // Whatever is still queued (material greedy attached to a consumed
+        // argument beyond the head's slots) already rides the extent through
+        // its owner's node; walk it only to keep the chain state honest. A
+        // queue-peeked candidate is the same case; a *sibling* peek is simply
+        // dropped — the rescan below starts after the last consumed sibling,
+        // so it re-encounters the element under the extension's own rules.
+        if let Some((el, sib_idx)) = self.peeked.take()
+            && sib_idx.is_none()
+        {
+            self.update_chain(&el);
+        }
+        while let Some(el) = self.queue.pop_front() {
+            self.update_chain(&el);
+        }
+        if !self.chain {
+            return;
+        }
+        let mut newlines = 0usize;
+        let mut i = self.last_sib + 1;
+        while let Some(el) = self.elements.get(i) {
+            match el {
+                SyntaxElement::Token(t) => match t.kind() {
+                    SyntaxKind::NEWLINE => {
+                        newlines += 1;
+                        if newlines >= 2 {
+                            return;
+                        }
+                    }
+                    SyntaxKind::COMMENT => newlines = 0,
+                    SyntaxKind::WHITESPACE | SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN => {}
+                    _ => return,
+                },
+                SyntaxElement::Node(n)
+                    if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+                {
+                    self.last_sib = i;
+                    newlines = 0;
+                }
+                SyntaxElement::Node(_) => return,
+            }
+            i += 1;
+        }
+    }
+
+    /// The [`Self::chain`] update for one already-consumed element, shared by
+    /// the tail walk over the leftover queue.
+    fn update_chain(&mut self, el: &SyntaxElement) {
+        match el {
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => self.chain = true,
+            SyntaxElement::Node(n)
+                if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) => {}
+            SyntaxElement::Token(t)
+                if is_collapsible_trivia(t.kind())
+                    || matches!(
+                        t.kind(),
+                        SyntaxKind::COMMENT
+                            | SyntaxKind::TILDE
+                            | SyntaxKind::GUARD
+                            | SyntaxKind::DOC_MARGIN
+                    ) => {}
+            _ => self.chain = false,
         }
     }
 }
@@ -1016,6 +1183,27 @@ mod segmentation_tests {
             vec![
                 "\\ExplSyntaxOn",
                 "\\cs_new:Npn \\foo:w #1 \\q_stop { body }",
+                "\\ExplSyntaxOff",
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_in_a_consumed_slot_ends_the_fallback_line() {
+        // The arity scan crosses an own-line comment to a braced candidate, so
+        // the `\tl_set:Nn` node *carries* that comment. Ending the fallback
+        // statement after such a node is deliberate
+        // ([`node_carries_bare_line_break`]): the comment forces a break of its
+        // own, so running the statement past it would fuse two printed lines.
+        let got = statements(
+            "\\ExplSyntaxOn\n\\exp_after:wN \\foo \\tl_set:Nn \\l_a\n% doc\n{ x } \\group_begin:\n\\ExplSyntaxOff\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "\\ExplSyntaxOn",
+                "\\exp_after:wN \\foo \\tl_set:Nn \\l_a % doc { x }",
+                "\\group_begin:",
                 "\\ExplSyntaxOff",
             ]
         );

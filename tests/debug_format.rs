@@ -354,38 +354,22 @@ fn dtx_doc_margin_frame_survives_reflow() {
 
 /// The reduced hybrid behind [`trivia_check_fires_on_a_known_hybrid`]. Kept as a
 /// literal so the exact whitespace survives editing.
-const HYBRID_TEX: &str = r#"  \ExplSyntaxOn
-  {
-      {
-      }
-  }
-  {
-      {
-          {
-          }
-      }
-  }
-  {
-    \bool_if:NT \l__xparse_defaults_bool
-      {
-          {
-          }
-      }
-      { \cs_set_nopar:Npx } { \cs_set_protected_nopar:Npx } #1
-      {
-            {
-            }
-      }
-    \bool_if:NTF \l__xparse_some_long_bool
-      {
-        \bool_if:NT \l__xparse_some_short_bool
-          {
-          }
-        \cs_set:cpx
-      }
-      { \cs_set_nopar:cpx }
-          { \l__xparse_function_tl \c_space_tl } ##1##2 { ##1 {##2} }
-  }
+///
+/// Fuzz-reduced from the `\exp_after:wN`-chain family that survives the arity
+/// migration (`l3fp-trig.dtx` and kin — the reduction is of the *family*, not
+/// of a baseline entry: those files re-fill to a fixed point whole, which is
+/// why none of them is recorded in `tests/gate_baselines`. The previous
+/// xparse-generic reduction, and each subsequent corpus carve, converged as
+/// structural argument ownership stabilized more shapes). Every head is
+/// `w`-underivable, so both lines are fallback statements; the greedy refill
+/// of the `all-newlines-to-spaces` variant lands the mid-line groups at
+/// widths the next pass segments differently.
+const HYBRID_TEX: &str = r#"\ExplSyntaxOn
+{
+\module_aux:w { \scan_stop: }
+\int_value:w \module_pack:wNNNNNNNN \scan_stop: { \module_int_eval:w \scan_stop: }
+}
+\ExplSyntaxOff
 "#;
 
 #[test]

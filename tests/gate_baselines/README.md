@@ -315,3 +315,35 @@ to cover.
 
 The generator's meaning-safety was spot-checked: 1 `dropped_unsafe` variant in
 \~157k eligible gaps over 120 latex2e files.
+
+## Re-record: arity-directed expl3 attachment (decision #8 landed)
+
+The parser now attaches in-region colon-suffixed heads by argspec arity (the
+staged migration TODO.md carried; oracle-verified over 67k statement-leading
+heads before the flip). Invariant gates: no additions anywhere, and
+`latex2e.all` **shrank** — `ltfssdcl.dtx` and `ltpara.dtx` no longer fail
+idempotency, since structural argument ownership removed the greedy-tree
+boundary accidents behind their hybrids.
+
+The `non-fixed-point` survey churned within its class, recorded here over two
+re-records (the flip itself, then the fallback-boundary and bare-argument-glue
+rules that stabilized the shapes the flip surfaced — `fallback_line`'s
+bare-line-break boundary and `lower_expl_code`'s unbreakable bare-operand gaps).
+Net: six entries healed (`ltfssdcl.dtx`, `latex-lab-testphase-bookmark.sty` in
+latex2e; `l3debug.dtx`, `l3check.dtx`, `l3kernel-extras.dtx`, `xhj.dtx` in
+latex3) and five appeared (`latex-lab-firstaid.dtx`,
+`latex-lab-l3doc-tagging.dtx` in latex2e; `l3ldbparse.dtx`, `xo-here.dtx`,
+`xo-or.dtx` in latex3). The new entries are the familiar shape —
+`all-newlines-to-spaces` over fallback-heavy `\exp_after:wN` chains failing to
+re-fill to a fixed point — i.e. the Tier-2 authored-line residue the strict
+survey exists to track, not a new invariant risk (losslessness and idempotency
+stay green on every one of them). `HYBRID_TEX` in `tests/debug_format.rs` is a
+hand reduction of that same `\exp_after:wN`-chain family rather than of any one
+entry: the corpus files it was reduced from re-fill to a fixed point at the
+whole-file level, which is why none of them is a baseline entry.
+
+A latent, pre-existing idempotency bug surfaced during this triage and is *not*
+part of the migration: a trailing comment after `\ExplSyntaxOff` relocated to
+its own line rebinds as the next construct's doc comment (reduced from
+`array-2024-06-01.sty` lines 380–392; reproduces identically on the
+pre-migration tree). Recorded in TODO.md.

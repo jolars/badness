@@ -1,0 +1,57 @@
+% Arity-directed expl3 attachment (AGENTS.md decision #8, landed): the
+% call-site shapes the argspec-driven unit scan resolves, and the ones it
+% deliberately leaves greedy. Arity attachment is the production default, so
+% every sweep over this corpus reads these shapes as the parser now builds
+% them; the migration harness that diffed them against `semantic::expl3` is
+% gone, and these fixtures are the net in its place.
+\ExplSyntaxOn
+
+% A single-token slot breaks greedy attachment; arity hands { x } to the head.
+\tl_set:Nn \l_tmpa_tl { x }
+
+% Definition: single-token slot, parameter text, body group.
+\cs_new:Npn \module_foo:nn #1#2
+  {
+    \tl_set:Nn \l_tmpa_tl {#1}
+  }
+
+% Delimited parameter text: the delimiting control word is consumed bare and
+% the body group is left for the `n` slot.
+\cs_new:Npn \module_bar:w #1 \q_stop { #1 }
+
+% Branch slots after single-token and group slots.
+\prop_get:NnNTF \l_tmpa_prop { key } \l_tmpb_tl { true } { false }
+
+% A relation character satisfies a single-token slot (issue #106).
+\int_compare:nNnTF { 1 } = { 1 } { yes } { no }
+
+% Zero-arity call: under arity the following group is a sibling, not an
+% argument.
+\scan_stop: { data }
+
+% Underivable heads (`w`, and the `\::n` expansion drivers) stay greedy.
+\exp_after:wN \module_foo:nn
+\use_none_delimit_by_q_stop:w x y \q_stop
+\::n { driver }
+
+% Braces around an N argument are grabbed whole.
+\tl_set:Nn { \l_tmpa_tl } { y }
+
+% A head inside math never scans: an N slot facing the enclosing math's
+% closer would swallow it and leave the math unclosed (xo-grid.dtx's
+% display-math redefinitions).
+\cs_set_nopar:Npn \[{\begin{displaymath}}
+\cs_set_nopar:Npn \]{\end{displaymath}}
+
+% A blank line is a paragraph separator at top level, so the walk's stream
+% ends and the head stays greedy; inside a group the stream continues and the
+% unit commits its consumed prefix.
+\tl_set:Nn \l_tmpa_tl
+
+{ orphan }
+
+{ \tl_set:Nn \l_tmpb_tl
+
+{ orphan } }
+
+\ExplSyntaxOff

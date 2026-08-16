@@ -735,22 +735,51 @@ directly abutting the command with its `]` reachable before the math ends, and
 in text mirrors the `$` gate. A lone `*` tight to a command and followed by an
 argument folds in as a starred-variant marker instead of breaking the run.
 
-expl3 is the one systematic counterexample. The argspec suffix rides in the
-`CONTROL_WORD` token itself, since in-region `:` and `_` are letters, so
-arity-directed attachment there is exactly as text-pure as greed. Greed is not
-neutral in that dialect, it is a systematically wrong guess: every single-token
-slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the definee, and
-the formatter's peel-back queue exists only to undo that after the fact.
-Arity-directed expl3 attachment is an approved, staged migration (TODO.md
-carries the plan). It was long parked as a candidate awaiting a consumer that
-needed shared argument ownership; linter and language-server features are that
-consumer, and each of them would otherwise pay a reconciliation tax mapping
-semantic call units back onto mismatched greedy tree boundaries. The known risk
-is that mis-attachment is byte-invisible — a wrong tree is still lossless and
-idempotent — so the migration's oracle is a diff of grammar attachment against
-`semantic::expl3::segment_expl_statements` over the gate corpora before any
-consumer flips, with fixtures as the net thereafter, and the expl3 regions
-allowlisted wholesale in the texlab gauge.
+expl3 is the one systematic counterexample, and the one place attachment is
+arity-directed. The argspec suffix rides in the `CONTROL_WORD` token itself,
+since in-region `:` and `_` are letters, so arity-directed attachment there is
+exactly as text-pure as greed. Greed is not neutral in that dialect, it is a
+systematically wrong guess: every single-token slot breaks the run, so under
+greed `\tl_set:Nn \l_a {x}` attached `{x}` to the definee, and the semantic
+layer's peel-back queue existed only to undo that after the fact. In-region
+colon-suffixed heads therefore attach by their argspec (`grammar/expl3.rs`): a
+pure token-level scan consumes the head's slots — a control-sequence argument
+keeps a bare `COMMAND` node of its own, a relation character or `#`-parameter
+bumps as tokens, groups and branches attach as ordinary `GROUP`s — and the walk
+replays exactly the scanned plan, so the gate mirrors the walk by construction.
+`w`/`D`/colonless heads and the `\::n` expansion drivers stay greedy, and the
+scan aborts to greed with no diagnostic wherever it cannot mirror the walk: an
+in-math head (an `N` slot would swallow the enclosing math's closer), a docstrip
+guard or doc margin mid-unit, a candidate the walk would make a node of, an
+unreachable closer, a paragraph separator. A blank-line gap inside a brace group
+instead commits the consumed prefix, the sanctioned partial commit. The trigger
+keys on token shape alone — a colon-carrying control word can only have lexed
+inside a region — which also covers the implicit `.dtx` regions the toggle index
+cannot see, and the formatter's positional toggle gate stays the formatter's
+alone.
+
+The scan resolves its group slots through a shared matching-brace table rather
+than a rescan per slot, for the reason the shape gates run in batches: nested
+call sites ask about spans their enclosing ones already walked, so a per-slot
+rescan is quadratic in the nesting depth. One stack pass settles every pair in
+the `macrocode` frame, keyed on the two facts that decide pairing — the
+chunk-plain brace set and the frame itself. Bounds that move without changing
+pairing (an alias closer) filter the answer at query time instead of
+invalidating the table.
+
+This landed through the staged migration TODO.md recorded. Mis-attachment is
+byte-invisible — a wrong tree is still lossless and idempotent — so before any
+consumer flipped, a migration oracle diffed grammar attachment against
+`semantic::expl3`'s independent consumption over the gate corpora: 67 thousand
+statement-leading heads across 265 files, triaged to zero disagreements outside
+the benign class where greed had over-attached trailing material onto a consumed
+argument. The corpus fixtures are the net since, and the expl3 regions are
+allowlisted wholesale in the texlab gauge (texlab has no argspec model).
+`semantic::expl3` remains the statement-extent resolver and the underivable-head
+fallback — its consumption is shape-agnostic, so aborted heads and their greedy
+shapes still resolve — while the formatter's reconciliation consumers (the
+conditional two-path, the grouped-sibling re-segmentation) reduced to node
+reads.
 
 ### Trivia attachment
 
@@ -1211,20 +1240,16 @@ tokens, which is lossless and cosmetic.
 Conditionals are the one construct with a layout of its own. The guide's worked
 example puts each `T`/`F` branch on its own line one indent step under the call,
 even though joining them would fit the line, so a conditional that starts a
-statement breaks that way regardless of width. Which is a decision about the
-*call*, not about the tree: greedy attachment hangs the branch groups off the
-head in `\tl_if_empty:nTF {#1} {T} {F}`, but a single-token slot breaks
-attachment and hands them to a sibling instead, and
-`\int_compare:nNnTF {a} = {1} {T} {F}` leaves them at the stream level once the
-relation intervenes. Keying on the head node's own children would format those
-differently for no reason an author could see, so the branches come from the
-resolved call unit — the same argspec scan that decides statement boundaries,
-which already had to find them.
-
-The rescan is confined to statement-leading position. Anywhere else the
-segmentation has already established that the conditional is an argument being
-passed as a token rather than a call, and resolving a unit headed there would
-claim the enclosing call's arguments as branches.
+statement breaks that way regardless of width. Since arity-directed attachment
+landed, this is a decision the *tree* already answers: a recognized conditional
+owns its branches as the head's trailing groups, whatever sat between —
+`\tl_if_empty:nTF {#1} {T} {F}` and `\int_compare:nNnTF {a} = {1} {T} {F}` are
+one shape — so the explosion reads the head node's own children, and the
+unit-scoped rescan that re-split greedy sibling scatter is gone (the migration
+oracle measured zero recognition disagreements, so a head the node cannot
+resolve has no unit either). The statement-leading/trailing distinction survives
+as pure layout policy: leading, the explosion is unconditional; trailing, it is
+width-conditional.
 
 ### Line endings
 

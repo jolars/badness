@@ -2533,3 +2533,101 @@ fn a_declared_statement_environment_wraps_like_the_entry_it_copies() {
     assert_eq!(parsed.syntax().to_string(), input);
     assert_eq!(count(&parsed), 1);
 }
+
+// --- arity-directed expl3 attachment ----------------------------------------
+//
+// AGENTS.md decision #8's sanctioned deviation, landed through the staged
+// migration TODO.md recorded: in-region colon-suffixed heads attach by
+// argspec arity; `w`/`D`/colonless and the `\::n` drivers stay greedy.
+
+/// The text of every `COMMAND` node in document order, after asserting a
+/// clean, lossless parse.
+fn expl3_commands(input: &str) -> Vec<String> {
+    let parsed = parse(input);
+    assert_eq!(parsed.syntax().to_string(), input);
+    assert!(
+        parsed.errors.is_empty(),
+        "expected a clean parse: {:?}",
+        parsed.errors
+    );
+    parsed
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMMAND)
+        .map(|n| n.text().to_string().trim_end().to_string())
+        .collect()
+}
+
+const EXPL3_ARITY_SAMPLE: &str = "\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl { x }\n\\int_compare:nNnTF { 1 } = { 2 } { y } { n }\n\\scan_stop: { data }\n\\ExplSyntaxOff\n";
+
+#[test]
+fn expl3_arity_attaches_call_units() {
+    insta::assert_snapshot!(tree(EXPL3_ARITY_SAMPLE));
+}
+
+#[test]
+fn expl3_arity_head_owns_its_single_token_and_group_slots() {
+    let cmds = expl3_commands("\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl { x }\n");
+    assert!(cmds.contains(&"\\tl_set:Nn \\l_tmpa_tl { x }".to_string()));
+    // The N argument stays a name-keyed COMMAND node of its own.
+    assert!(cmds.contains(&"\\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_zero_arity_head_attaches_nothing() {
+    let cmds = expl3_commands("\\ExplSyntaxOn\n\\scan_stop: { data }\n");
+    assert!(cmds.contains(&"\\scan_stop:".to_string()));
+    assert!(!cmds.iter().any(|c| c.contains("data")));
+}
+
+#[test]
+fn expl3_arity_blank_line_at_paragraph_level_stays_greedy() {
+    // A blank line is a paragraph separator, so the walk's element stream ends
+    // there — the semantic scan reads that as running out of stream, and the
+    // grammar scan mirrors it: the head falls back to greed, which likewise
+    // attaches nothing across a paragraph break.
+    let cmds = expl3_commands("\\ExplSyntaxOn\n\\tl_set:Nn \\l_tmpa_tl\n\n{ x }\n");
+    assert!(cmds.contains(&"\\tl_set:Nn".to_string()));
+    assert!(cmds.contains(&"\\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_blank_line_in_a_group_commits_the_prefix() {
+    // Inside a brace group the element loop runs to the `}` regardless of
+    // blank lines, so the unit commits its consumed prefix (the sanctioned
+    // partial commit) and the rest parses as ordinary siblings.
+    let cmds =
+        expl3_commands("\\ExplSyntaxOn\n{ \\tl_set:Nn \\l_tmpa_tl\n\n{ x } }\n\\ExplSyntaxOff\n");
+    assert!(cmds.contains(&"\\tl_set:Nn \\l_tmpa_tl".to_string()));
+}
+
+#[test]
+fn expl3_arity_head_inside_math_stays_greedy() {
+    // The scan refuses in-math heads outright: an N slot facing the enclosing
+    // math's closer would swallow it into the head and leave the math
+    // unclosed (`xo-grid.dtx`'s `\cs_set_nopar:Npn \]{…}` inside the `\[…\]`
+    // the previous definition opened). `expl3_commands` asserting a clean
+    // parse is the real pin — the swallowed closer surfaced as an error.
+    let cmds = expl3_commands(
+        "\\ExplSyntaxOn\n\\cs_set_nopar:Npn \\[{\\begin{displaymath}}\n\\cs_set_nopar:Npn \\]{\\end{displaymath}}\n\\ExplSyntaxOff\n",
+    );
+    assert!(cmds.contains(&"\\cs_set_nopar:Npn".to_string()));
+}
+
+#[test]
+fn expl3_arity_underivable_head_stays_greedy() {
+    // `w` has no derivable call-site shape; greedy attachment never consumes a
+    // control word, so the head attaches nothing.
+    let cmds = expl3_commands("\\ExplSyntaxOn\n\\exp_after:wN \\l_tmpa_tl\n");
+    assert!(cmds.contains(&"\\exp_after:wN".to_string()));
+}
+
+#[test]
+fn expl3_arity_corpus_file_roundtrips_cleanly() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/expl3_arity.tex");
+    let text = std::fs::read_to_string(&path).expect("corpus file");
+    let parsed = parse_with_flavor(&text, LatexFlavor::Document);
+    assert_eq!(parsed.syntax().to_string(), text, "losslessness violated");
+    assert!(parsed.errors.is_empty(), "clean: {:?}", parsed.errors);
+}

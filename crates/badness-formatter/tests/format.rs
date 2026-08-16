@@ -1349,6 +1349,14 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // must fail (that is what makes the line fallback), the multi-line group
     // must be a *sibling* rather than a greedily-attached child, and the whole
     // definition is authored on one physical line.
+    //
+    // Under arity attachment the expected bytes changed once, deliberately:
+    // `\tl_put_right:NV`'s second operand is consumed into the head, and a
+    // command node's bare-argument gaps are unbreakable (the house style
+    // breaks a call before a braced argument, never between its single-token
+    // operands — and a minted newline there is the shape
+    // `semantic::expl3::fallback_line` reads as a statement boundary), so the
+    // over-width call now overflows instead of wrapping mid-call.
     ("expl_fallback_forced_group_glue", "sty"),
     // The rest of that dispatch, gated the same way: inside a fallback
     // statement *no* arm reads the forced-break predicate, because a fallback

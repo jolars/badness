@@ -244,13 +244,31 @@ Prefer false negatives; when in doubt a construct stays generic.
   bails at any `R_BRACE` without consulting `plain_braces` (so its two siblings
   are the loose ones: an attached optional holding a chunk-plain `}` still
   reports "unclosed `[`").
-- **Arity-directed expl3 attachment is an approved, staged migration**
-  (TODO.md carries the plan and the answered questions). In-region
-  colon-suffixed heads attach by argspec arity; `w`/`D`/colonless fall back to
-  greed. Before any consumer flips, diff grammar attachment against
-  `semantic::expl3::segment_expl_statements` over the gate corpora —
-  mis-attachment is byte-invisible, so that diff is the one oracle that can
-  see it.
+- **Arity-directed expl3 attachment is landed** (decision #8's sanctioned
+  deviation; TODO.md records the migration). In-region colon-suffixed heads
+  attach by argspec arity via `grammar/expl3.rs`: a pure `&self` token scan
+  produces an `Expl3Plan` the walk **replays exactly** — the scan mirrors the
+  walk by construction, and the per-arg `debug_assert`s are the tripwire.
+  `w`/`D`/colonless heads and the `\::n` drivers stay greedy. The scan aborts
+  to greed, with no diagnostic, wherever it cannot mirror the walk: in-math
+  heads (an `N` slot would swallow the enclosing closer — `xo-grid.dtx`), a
+  `GUARD`/`DOC_MARGIN` mid-unit (#78), a candidate that would form a node
+  (gated `\begin`, live conditional opener, bound `DOC_COMMENT` run), an
+  unreachable group closer, or a paragraph separator (which ends the walk's
+  stream — `latex-lab-sec.dtx`); a blank-line gap inside a brace group instead
+  commits the consumed prefix. An `N` argument keeps its `COMMAND` node
+  (`command_bare`) so name-keyed consumers still see it. Mis-attachment is
+  byte-invisible, so the migration's oracle was a diff of grammar attachment
+  against `semantic::expl3`'s independent consumption over the gate corpora
+  (67k statement-leading heads, zero disagreements outside the benign
+  greedy-leftover class); the corpus fixtures (`corpus/expl3_arity.tex`) are
+  the net since. Group slots resolve through a shared matching-brace table
+  (`BraceMatches`), not a per-slot rescan: nested call sites ask about spans
+  their enclosing ones already covered, so rescanning is quadratic in the
+  nesting depth. Keyed on `plain_braces_version` + `macrocode_end` (the two
+  facts that decide pairing), built to the frame rather than the scan's own
+  bound so a moving alias closer only filters at query time. Same trade as
+  `gated_closer`, and pinned by `expl3_arity_nested_scans_stay_linear`.
 
 ## Trivia
 

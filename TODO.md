@@ -10,42 +10,56 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **Arity-directed expl3 attachment (decision #8's sanctioned deviation —
-  approved, staged).** In-region, the argspec suffix rides in the `CONTROL_WORD`
-  token, so attachment directed by `semantic::expl3::expl3_slots` is exactly as
-  text-pure as greed — and greedy is a systematically wrong guess there (every
-  `N`/`V` slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
-  definee; the formatter's peel-back of greedily over-attached arguments,
-  `semantic::expl3::segment_expl_statements`, exists only to undo this). Keys on token
-  shape alone (colon-suffixed names only lex as one token in-region — no grammar
-  region-awareness needed); `w`/`D`/colonless fall back to greed. **Approved**
-  because the recorded trigger has fired: linter and LSP features need shared
-  argument ownership, and while `semantic::expl3` is one module any consumer can
-  call, each caller pays a per-feature reconciliation tax mapping semantic units
-  back onto mismatched greedy tree boundaries — the same contention that
-  deferred in-region conditionals. The three migration questions, answered
-  rather than waved off:
+- [x] ~~**Arity-directed expl3 attachment (decision #8's sanctioned deviation —
+  approved, staged).**~~ **Landed.** In-region colon-suffixed heads attach by
+  argspec arity (`grammar/expl3.rs`: a pure token scan produces an `Expl3Plan`
+  the walk replays exactly, so the gate mirrors the walk by construction);
+  `w`/`D`/colonless and the `\::n` drivers stay greedy, a blank line at
+  paragraph level aborts while inside a group it commits the consumed prefix,
+  and in-math heads never scan (an `N` slot would swallow the enclosing
+  closer). Keyed on token shape alone — a colon-carrying `CONTROL_WORD` can
+  only have lexed in-region — which also covers implicit `.dtx` regions the
+  toggle index cannot see.
 
-  - *Mixed-shape CST*: confined to regions the lexer already marks, and
-    consumers already handle both shapes today through the segmentation, so the
-    shape count does not grow.
-  - *False-positive blast radius*: accepted and priced. Mis-attachment is
-    byte-invisible — losslessness and idempotence hold over a wrong tree — so
-    the tree gains no oracle the formatter lacks; it keeps the same
-    fixture-grade net with wider consequences (acting consumers: autofix spans,
-    future refactoring edits). Bought because it ends the two-owner contention
-    and concentrates debugging in one snapshotable structure.
-  - *texlab divergence ledger*: expl3 regions are allowlisted wholesale as
-    intentional divergence — texlab has no argspec model to compare against.
+  The staged plan ran as recorded: the migration oracle diffed grammar
+  attachment against `semantic::expl3`'s independent consumption over the gate
+  corpora (67k statement-leading heads, 265 files) and was triaged to zero
+  disagreements outside the benign leftover class before any consumer flipped;
+  it surfaced two scan-vs-walk boundary bugs (an in-math head consuming its
+  enclosing `\]`; a paragraph separator read as a partial-commit blank line)
+  now pinned as corpus fixtures. The formatter consumers then shrank to node
+  reads: conditional branches come from the head node
+  (`lower_expl_conditional_unit` and the two-path dispatch deleted), the
+  grouped-sibling suppression reads the owner's earlier children
+  (`GroupedSiblingCache` deleted), and `semantic::expl3`'s consumption remains
+  as the shape-agnostic statement-extent resolver — the underivable-head
+  fallback — now extended over greedy-attachable tails so statement extents
+  survived the flip unchanged. Two stabilization rules rode along, each from
+  an idempotency break the new shapes made reachable (`fallback_line`'s
+  bare-line-break boundary; unbreakable bare-operand gaps inside a call).
+  Gate results and provenance in `tests/gate_baselines/README.md`; rationale
+  in `docs/src/development/architecture.md` (§ *Argument grouping and bracket
+  policy*).
 
-  Order of work: (1) attachment behind the existing region detection; (2) the
-  migration oracle — diff grammar attachment against
-  `semantic::expl3::segment_expl_statements` over the gate corpora and triage
-  every disagreement, *before* flipping any consumer; (3) flip consumers and
-  shrink the semantic layer to the underivable-head fallback; (4) update
-  AGENTS.md decision #8 to *landed*, `.claude/rules/parser.md`, and the
-  parse-compat allowlist. Rationale in `docs/src/development/architecture.md`
-  (§ *Argument grouping and bracket policy*).
+  Unlocked follow-ups, now that argument ownership is in the tree:
+
+  - **signatureHelp inside expl3 regions** (`src/lsp/signature_help.rs`): the
+    cursor's owning call is the parent chain, and the argspec is a DB-free
+    signature source.
+  - **`missing-required-argument` in regions**: a recognized head's argument
+    count is now a node fact.
+  - **In-region conditionals** (`\if_int_compare:w … \else: … \fi:`): their
+    recorded deferral reason — a `CONDITIONAL` node would contend with the
+    segmentation's layout ownership — is retired.
+
+- [ ] **Trailing comment after `\ExplSyntaxOff` relocates and rebinds**
+  (pre-existing, surfaced by the migration triage): formatting
+  `\ExplSyntaxOff % comment` moves the comment to its own line, where the next
+  parse binds it as the following construct's `DOC_COMMENT` and changes that
+  construct's layout — an idempotency break at default settings. Reduced from
+  `array-2024-06-01.sty` lines 380–392; reproduces identically on the
+  pre-migration tree, so it is the trailing-comment-never-relocates rule
+  failing at the region boundary, not an attachment fact.
 
 - [x] ~~**Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
   node.**~~ **Landed.** The `latexindent` corpus's largest uncovered construct
@@ -84,7 +98,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   - **expl3 in-region conditionals** (`\if_int_compare:w … \else: … \fi:`, 14.5%
     of corpus openers) are skipped: the formatter owns in-region layout through
     `semantic::expl3`'s statement segmentation, and a node there would contend
-    with it.
+    with it. *That contention retired with arity-directed attachment (the
+    landed entry above), so this is now an ordinary candidate rather than a
+    carve-out.*
 
 - [ ] **Keep carving `grammar.rs`** (3,959 lines after the first cut, which
   took `grammar/facts.rs` and `grammar/trivia.rs`; `grammar/prescan.rs` came
@@ -983,6 +999,68 @@ sources below are missing.
   benchmark page `docs/src/reference/benchmarks.md`). In-process parse/format micro-bench +
   flamegraph hot paths landed (`benches/formatting.rs`, `task bench:micro`/`bench:profile`;
   see the profiling item below). Still pending: bib + lint benchmarks.
+
+The next four entries come from fatou's text-storage investigation
+(2026-08-16; implemented on its `experiment/arc-str` branch), checked against
+badness's code. They are ordered by leverage; the first two are
+near-mechanical ports, the third is a project.
+
+- [ ] **`Arc<str>` document text end to end.** Text is `String` everywhere and
+  every keystroke pays for it several times over: `did_change` clones the
+  whole buffer into the worker job (`src/lsp.rs:1409`, `WorkerJob::Edit`),
+  every read-shaped request clones it again (`doc.text.clone()` at
+  `lsp.rs:1613, 1666, 1720, 1766, 1836, 1878, 1916, 1970, ...`), `upsert_file`
+  guards the salsa write with an O(N) memcmp (`src/incremental.rs:739-771`),
+  and the read pool's staleness checks memcmp once more. Fatou's recipe was
+  ~70 lines: the live buffer and `SourceFile.text` hold `Arc<str>` (setters
+  take `impl Into<Arc<str>>`), worker jobs and request captures carry the
+  handle, and the staleness guards get an `Arc::ptr_eq` fast path in front of
+  the content compare — never instead of it, since salsa's setter does no
+  equality check of its own. Measured there: a no-op upsert went from 39 us
+  to a flat 150 ns at 1 MB. While in the area: `apply_content_changes`
+  (`lsp.rs:1549-1568`) rebuilds `LineIndex::with_encoding` per content change
+  and handlers rebuild it again per request — cache it beside the text
+  (arity's spliced-index `TextBuffer` is the model).
+
+- [ ] **A didChange -> upsert -> parse pipeline bench.** Nothing times the
+  keystroke composition: `benches/formatting.rs` and the CLI comparison never
+  touch `IncrementalDatabase` or `apply_content_changes`, and
+  `tests/scaling.rs` guards growth ratios, not the pipeline. Port fatou's
+  `benches/salsa_keystroke.rs` (rows per size: no-op upsert, write phase
+  without a parse, end-to-end with the parse; alternate insert/delete so
+  every iteration is a real revision). In fatou this exact blind spot hid a
+  6x end-to-end regression in an otherwise well-benchmarked PR; in badness it
+  currently hides the full cost of the entries above plus the full reparse
+  below. Land it before the `Arc<str>` port so the improvement is measured,
+  not asserted.
+
+- [ ] **Incremental reparse (the elephant).** Every keystroke is a full parse:
+  `parsed_document` (`src/incremental.rs:207-222`) calls
+  `parse_with_declarations` on the whole text, salsa memoizes at whole-file
+  granularity, and there is no `reparse.rs`. LaTeX parses slowly per byte, so
+  this is proportionally worse here than it was anywhere else in the family.
+  This is a multi-session project, not a port: fatou's tiered reparse
+  (`crates/fatou-parser/src/parser/reparse.rs` + its `src/incremental.rs`
+  side channel) is the reference implementation, and panache's TODO has the
+  phased graduation protocol (oracle invariant, branch discipline, mechanized
+  bench gate) worth copying as *process*. Two notes for whenever it starts:
+  `did_change` already has the exact edit range in hand (`lsp.rs:1556-1566`)
+  and discards it after splicing — keep it plumbed through, and do not let
+  the reparse re-derive it with a whole-text diff (fatou measured that diff
+  costing more than the reparse it fed).
+
+- [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
+  (`crates/badness-parser/src/parser/lexer.rs:42`, same in `bib/lexer.rs:29`),
+  so short tokens are already allocation-free and the fatou-sized win (-60%
+  lexing from `&'src str` tokens) does not transfer wholesale. The payoff
+  concentrates in the pathologically long tokens (`VERBATIM_BODY`, `VERB`),
+  and the conversion is blocked on the half-dozen sites that push constant
+  literals instead of input slices (`push_env_delimiter` at
+  `lexer.rs:1646-1662`, the braced-verb path at `lexer.rs:1344-1356`,
+  `lexer.rs:1457`) — each provably corresponds to contiguous input bytes, so
+  they can be rewritten to slice. Measure with a lexer-only bench first
+  (arity's workload-stratified `benches/lex.rs` is the template); do this
+  last, if at all.
 
 - [ ] **95 corpus files change their `%` comments** (`comment-change` in the gate
   baselines). Surfaced by the comment oracle added alongside the conditional node —

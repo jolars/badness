@@ -1400,10 +1400,17 @@ mod tests {
         assert!(rendered.contains("algin"), "{rendered}");
     }
 
+    /// Issue #117: an opener alone is a complete declaration, since the literal
+    /// `\end{eqnarray}` closes it. The TOML surface has to carry that through —
+    /// it used to be a load error.
     #[test]
-    fn a_declared_opener_without_a_closer_fails_at_load() {
-        let err = parse("[environments.eqnarray]\nbegin = ['\\bea']\n")
-            .expect_err("an opener with no closer must not load");
-        assert!(matches!(err, ConfigError::Declaration { .. }), "{err:?}");
+    fn a_declared_opener_without_a_closer_loads() {
+        let config = parse("[environments.eqnarray]\nbegin = ['\\bea']\n").expect("loads");
+        let entry = &config.declarations().environments["eqnarray"];
+        assert_eq!(
+            entry.begin,
+            vec![badness_parser::declarations::CommandName::new("bea")]
+        );
+        assert!(entry.end.is_empty());
     }
 }

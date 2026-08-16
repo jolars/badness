@@ -150,21 +150,21 @@ fn parse_ctx(root: &SyntaxNode) -> ParseCtx {
     // Gated on there being any alias at all: this is an extra tree walk, and the
     // overwhelmingly common case is a file with no aliases, which must not pay for
     // the feature.
-    if db.env_begin_aliases().next().is_some() {
+    if db.env_begin_aliases().next().is_some() || db.env_end_aliases().next().is_some() {
         let called = command_call_counts(root);
         let is_called = |name: &str| called.get(name).is_some_and(|n| *n >= 2);
-        let mut live_targets: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (name, target) in db.env_begin_aliases() {
             if is_called(name) {
                 ctx.insert_begin_alias(SmolStr::new(name), SmolStr::new(target));
-                live_targets.insert(target);
             }
         }
+        // No "its target must have a live opener" filter: since issue #117 the
+        // literal `\begin{X}` is an opener spelling too, so a closer alias whose
+        // partner is never defined still pairs. The `is_called` filter alone
+        // carries what that one was for — keeping an alias no call site uses from
+        // buying the file a second parse.
         for (name, target) in db.env_end_aliases() {
-            // A closer whose target has no live opener can never pair, and left in
-            // it would keep `ParseCtx::is_empty` false all on its own — buying the
-            // file a second parse that has no alias work to do.
-            if is_called(name) && live_targets.contains(target) {
+            if is_called(name) {
                 ctx.insert_end_alias(SmolStr::new(name), SmolStr::new(target));
             }
         }

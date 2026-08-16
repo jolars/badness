@@ -124,7 +124,8 @@ pub struct EnvironmentDecl {
     pub like: Option<SmolStr>,
     /// Command spellings that stand in for this environment's `\begin{…}`
     /// (`\bea`, `\startmyenv`). Any of them opens the environment; the closers
-    /// in [`end`](Self::end) close it.
+    /// in [`end`](Self::end) close it — and so does the literal `\end{…}`, which
+    /// is why either list may stand alone (issue #117).
     pub begin: Vec<CommandName>,
     /// Command spellings that stand in for this environment's `\end{…}`. Kept a
     /// separate list rather than begin/end tuples because pairing is by *kind*,
@@ -186,6 +187,11 @@ impl Declarations {
     /// an entry that declares *delimiter spellings*, since those are the ones a
     /// command has to stand in for. An entry that declares **nothing** is the
     /// one shape rejected for saying too little rather than too much.
+    ///
+    /// One side alone is fine (issue #117): the literal `\begin{X}`/`\end{X}` is
+    /// a spelling of each side too, so `begin = ['\bsplit']` with no `end`
+    /// declares an opener the written-out `\end{split}` closes. This used to be
+    /// two errors, on the reasoning that a half-declared pair could never pair.
     pub fn resolve(&self) -> Result<ResolvedDeclarations, DeclarationError> {
         let mut db = SignatureDb::default();
         // Which entry already claimed a spelling, so a second claim is an error
@@ -227,12 +233,6 @@ impl Declarations {
             if !entry.has_delimiters() {
                 continue;
             }
-            if entry.end.is_empty() {
-                return Err(error(DeclarationErrorKind::MissingCloser));
-            }
-            if entry.begin.is_empty() {
-                return Err(error(DeclarationErrorKind::MissingOpener));
-            }
 
             // A delimiter command has to stand in for *something*: an entry with
             // no `like` falls back to the built-in of the same name, and an
@@ -254,6 +254,18 @@ impl Declarations {
                     kind,
                 };
                 for spelling in spellings {
+                    // Named apart from the general not-a-control-word rule
+                    // because it is a *different mistake with a different fix*,
+                    // and the one the issue-#117 reporter actually made: reaching
+                    // for `end = ['\end{split}']` to say "closed by the written
+                    // -out delimiter". That is the default now, so the fix is to
+                    // delete the key — advice the generic message cannot give.
+                    if let Some(env) = literal_delimiter_target(spelling.as_str()) {
+                        return Err(error(DeclarationErrorKind::SpellingIsALiteralDelimiter {
+                            name: spelling.clone(),
+                            environment: SmolStr::new(env),
+                        }));
+                    }
                     if !is_control_word_name(spelling.as_str()) {
                         return Err(error(DeclarationErrorKind::NotAControlWord {
                             name: spelling.clone(),
@@ -360,11 +372,6 @@ pub enum DeclarationErrorKind {
     /// Never resolved against the CWL tier or scanned definitions: behavior
     /// comes from curated data only.
     UnknownLikeTarget { target: SmolStr },
-    /// `begin` without `end`. An opener with no closer can never pair, so the
-    /// declaration would do nothing at all.
-    MissingCloser,
-    /// `end` without `begin`, the mirror.
-    MissingOpener,
     /// Delimiter spellings for a verbatim environment. Not conservatism but TeX
     /// truth, which is why it is rejected rather than merely discouraged.
     VerbatimTarget,
@@ -382,6 +389,14 @@ pub enum DeclarationErrorKind {
     /// one. The [`DuplicateDelimiter`](Self::DuplicateDelimiter) mistake seen
     /// from inside a single entry, where naming the "other" entry is no help.
     RepeatedDelimiter { name: CommandName },
+    /// A spelling that *is* the written-out delimiter (`\end{split}`) rather
+    /// than a command standing in for one. A special case of
+    /// [`NotAControlWord`](Self::NotAControlWord) with its own fix: the literal
+    /// delimiter is already a spelling of both sides, so the key is redundant.
+    SpellingIsALiteralDelimiter {
+        name: CommandName,
+        environment: SmolStr,
+    },
     /// A spelling the lexer could never produce as one control word, so it
     /// could never match anything.
     NotAControlWord { name: CommandName },
@@ -389,6 +404,22 @@ pub enum DeclarationErrorKind {
     /// no-op — it would take effect, on a command the project did not mean to
     /// redefine.
     SpellingIsABuiltinCommand { name: CommandName },
+}
+
+/// The environment named by `spelling` when it is the written-out delimiter
+/// (`end{split}`, `begin{split}` — the leading backslash is already stripped by
+/// [`CommandName`]), or `None` for an ordinary command name.
+///
+/// Deliberately shape-only, with no check that the name is one badness knows: a
+/// user who writes `end = ['\end{myenv}']` made this mistake whether or not
+/// `myenv` exists, and pointing at the wrong rule would send them looking for a
+/// missing `like`.
+fn literal_delimiter_target(spelling: &str) -> Option<&str> {
+    let rest = spelling
+        .strip_prefix("begin")
+        .or_else(|| spelling.strip_prefix("end"))?;
+    let name = rest.strip_prefix('{')?.strip_suffix('}')?.trim();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Join `segments` into a TOML dotted key, quoting any segment that is not a
@@ -436,14 +467,6 @@ impl fmt::Display for DeclarationErrorKind {
                 "unknown environment `{target}`; `like` must name an environment badness \
                  knows about"
             ),
-            Self::MissingCloser => write!(
-                f,
-                "declares `begin` but no `end`; an opener that cannot be closed never pairs"
-            ),
-            Self::MissingOpener => write!(
-                f,
-                "declares `end` but no `begin`; a closer with nothing to close never pairs"
-            ),
             Self::VerbatimTarget => write!(
                 f,
                 "a command cannot stand in for a verbatim environment's delimiters, because \
@@ -470,6 +493,13 @@ impl fmt::Display for DeclarationErrorKind {
                     "`{name}` is listed twice as a delimiter of this environment"
                 )
             }
+            Self::SpellingIsALiteralDelimiter { name, environment } => write!(
+                f,
+                "`{name}` is the delimiter itself, not a command standing in for one — and \
+                 badness already pairs a declared spelling with the written-out \
+                 `\\begin{{{environment}}}`/`\\end{{{environment}}}`, so this key can be \
+                 removed"
+            ),
             Self::NotAControlWord { name } => write!(
                 f,
                 "`{name}` is not a control word; a delimiter must be a name of letters"
@@ -710,17 +740,38 @@ mod tests {
         assert_eq!(db.env_begin_alias("beqa"), Some("eqnarray"));
     }
 
+    /// Issue #117: one side alone resolves, because the literal delimiter is a
+    /// spelling of the other side. Both directions, since the two used to be
+    /// symmetric errors.
     #[test]
-    fn an_opener_without_a_closer_is_an_error() {
-        let err = resolve_err(r#"{"environments": {"eqnarray": {"begin": ["\\bea"]}}}"#);
-        assert_eq!(err.key, "environments.eqnarray");
-        assert_eq!(err.kind, DeclarationErrorKind::MissingCloser);
+    fn one_side_alone_resolves() {
+        let db = resolve(r#"{"environments": {"eqnarray": {"begin": ["\\bea"]}}}"#);
+        assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(db.env_end_alias("bea"), None);
+
+        let db = resolve(r#"{"environments": {"eqnarray": {"end": ["\\eea"]}}}"#);
+        assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
+        assert_eq!(db.env_begin_alias("eea"), None);
     }
 
+    /// The target rules are what bound a wrong declaration, so each is
+    /// re-checked on the one-sided shape the old requirement hid.
     #[test]
-    fn a_closer_without_an_opener_is_an_error() {
-        let err = resolve_err(r#"{"environments": {"eqnarray": {"end": ["\\eea"]}}}"#);
-        assert_eq!(err.kind, DeclarationErrorKind::MissingOpener);
+    fn one_side_alone_still_obeys_every_target_rule() {
+        for json in [
+            r#"{"environments": {"verbatim": {"begin": ["\\bv"]}}}"#,
+            r#"{"environments": {"verbatim": {"end": ["\\ev"]}}}"#,
+        ] {
+            assert_eq!(resolve_err(json).kind, DeclarationErrorKind::VerbatimTarget);
+        }
+        assert_eq!(
+            resolve_err(r#"{"environments": {"tabular": {"begin": ["\\bt"]}}}"#).kind,
+            DeclarationErrorKind::TargetTakesArguments
+        );
+        assert_eq!(
+            resolve_err(r#"{"environments": {"myenv": {"end": ["\\e"]}}}"#).kind,
+            DeclarationErrorKind::UndeclaredTarget
+        );
     }
 
     /// TeX truth, not conservatism: the closer alias is never expanded, because
@@ -839,6 +890,48 @@ mod tests {
                 name: CommandName::new("x"),
             }
         );
+    }
+
+    /// The exact key the issue-#117 reporter wrote. It is not a control word,
+    /// so the general rule already caught it — but only to say "a delimiter must
+    /// be a name of letters", which does not tell them that what they were
+    /// reaching for is now the default and the key should simply go.
+    #[test]
+    fn the_written_out_delimiter_is_rejected_with_its_own_advice() {
+        let err = resolve_err(
+            r#"{"environments": {"split": {"begin": ["\\bsplit"], "end": ["\\end{split}"]}}}"#,
+        );
+        assert_eq!(err.key, "environments.split.end");
+        assert!(
+            matches!(
+                err.kind,
+                DeclarationErrorKind::SpellingIsALiteralDelimiter { .. }
+            ),
+            "{err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("\\end{split}"), "{rendered}");
+        assert!(rendered.contains("removed"), "{rendered}");
+
+        // The opening side, and a name badness does not curate: the shape is the
+        // mistake, so neither changes which rule fires.
+        for json in [
+            r#"{"environments": {"split": {"begin": ["\\begin{split}"]}}}"#,
+            r#"{"environments": {"split": {"end": ["\\end{myenv}"]}}}"#,
+        ] {
+            assert!(
+                matches!(
+                    resolve_err(json).kind,
+                    DeclarationErrorKind::SpellingIsALiteralDelimiter { .. }
+                ),
+                "{json}"
+            );
+        }
+
+        // A command that merely *starts* with those letters is an ordinary
+        // spelling, not the delimiter.
+        let db = resolve(r#"{"environments": {"center": {"begin": ["\\beginning"]}}}"#);
+        assert_eq!(db.env_begin_alias("beginning"), Some("center"));
     }
 
     /// A spelling the lexer would split into two tokens can never match, so

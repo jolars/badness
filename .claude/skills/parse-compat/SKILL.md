@@ -64,4 +64,5 @@ should therefore move these numbers by nothing at all; if it does, something
 reached the parse that should not have.
 
 The *inferred* alias path is a different matter and does show up here
-(`env_command_alias.tex`), since it reads only the file's own definitions.
+(`env_command_alias.tex`, and `one_sided_env_alias.tex` for the issue-#117
+half-defined shapes), since it reads only the file's own definitions.

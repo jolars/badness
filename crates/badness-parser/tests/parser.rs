@@ -1981,12 +1981,21 @@ fn alias_body_spans_a_blank_line() {
 }
 
 #[test]
-fn alias_inside_math_stays_a_command() {
-    // `math_atom` is deliberately not extended in v1 — it calls `environment()`
-    // ungated, so an ungated alias opener there would be strictly worse. Pins the
-    // accepted false negative.
+fn an_alias_inside_math_pairs_as_its_literal_spelling_does() {
+    // `math_atom` dispatches alias openers since issue #117, and it had to: the
+    // environments aliases get written for (`split`, `matrix`) are math-only, so
+    // a text-mode-only feature could not see the shape that issue reports at
+    // all. The arm is gated exactly as the text one is, and sits beside the
+    // `environment()` call that already pairs the literal spelling right here.
     let defs = "\\newcommand{\\bm}{\\begin{matrix}}\n\\newcommand{\\em}{\\end{matrix}}\n";
-    assert_eq!(environments(&format!("{defs}$\\bm a \\em$\n")), (0, true));
+    assert_eq!(environments(&format!("{defs}$\\bm a \\em$\n")), (1, true));
+    assert_eq!(
+        environments("$\\begin{matrix} a \\end{matrix}$\n"),
+        (1, true),
+        "the alias must land where the spelling it stands in for does"
+    );
+    // Still gated: no reachable closer, so the opener stays a plain command.
+    assert_eq!(environments(&format!("{defs}$\\bm a$\n")), (0, true));
 }
 
 #[test]
@@ -2038,6 +2047,125 @@ fn a_literal_begin_of_an_alias_name_is_an_ordinary_environment() {
     assert_eq!(
         environments(&format!("{defs}\\begin{{bc}} x \\end{{bc}}\n")),
         (1, true)
+    );
+}
+
+// --- one-sided aliases (issue #117) ------------------------------------------
+
+/// The reported file's own shape: only the opener is defined, and the author
+/// writes the closer out. `\bsplit` *expands to* `\begin{split}`, so `\end{split}`
+/// is what closes it — nothing about that needs a partner command to exist.
+const BSPLIT_DEF: &str = "\\def\\bsplit{\\begin{split}}\n";
+
+#[test]
+fn a_lone_opener_alias_pairs_with_the_literal_end() {
+    assert_eq!(
+        environments(&format!("{BSPLIT_DEF}\\bsplit a&=b \\end{{split}}\n")),
+        (1, true)
+    );
+}
+
+/// The reported document, whole: `split` is math-only, so the shape that
+/// actually ships has the alias nested inside a display environment. This is
+/// the case a text-mode-only feature would miss.
+#[test]
+fn a_lone_opener_alias_pairs_inside_a_math_environment() {
+    let src = format!(
+        "{BSPLIT_DEF}\\begin{{equation}}\n\\bsplit\na&=b,\\\\\nc&=d.\n\\end{{split}}\n\\end{{equation}}\n"
+    );
+    assert_eq!(environments(&src), (2, true));
+}
+
+/// The `END` a literal closer produces is byte-for-byte the ordinary one — a
+/// `\end` plus its `NAME_GROUP`, not the bare control word an alias closer
+/// leaves. Every downstream reader of `Environment::end` depends on that.
+#[test]
+fn a_literally_closed_alias_end_carries_its_name_group() {
+    let parsed = parse(&format!("{BSPLIT_DEF}\\bsplit a \\end{{split}}\n"));
+    let end = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::END)
+        .expect("the alias pairs");
+    assert!(
+        end.children().any(|c| c.kind() == SyntaxKind::NAME_GROUP),
+        "a literal `\\end{{split}}` closer keeps its name group"
+    );
+}
+
+/// The mirror: only the *closer* is defined, and the opener is written out.
+#[test]
+fn a_lone_closer_alias_closes_a_literal_begin() {
+    let defs = "\\def\\eeq{\\end{equation}}\n";
+    assert_eq!(
+        environments(&format!("{defs}\\begin{{equation}} a \\eeq\n")),
+        (1, true)
+    );
+    let parsed = parse(&format!("{defs}\\begin{{equation}} a \\eeq\n"));
+    let end = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::END)
+        .expect("the environment closes");
+    assert!(
+        !end.children().any(|c| c.kind() == SyntaxKind::NAME_GROUP),
+        "an alias closer is the bare control word"
+    );
+}
+
+/// An alias closer naming some *other* environment is a plain command, exactly
+/// as a mismatched `\end{…}` is left for the caller to unwind. Only the
+/// innermost open environment's own closer terminates a body.
+#[test]
+fn an_alias_closer_for_another_environment_does_not_close_this_one() {
+    let defs = "\\def\\eeq{\\end{equation}}\n";
+    let src = format!("{defs}\\begin{{center}} a \\eeq b \\end{{center}}\n");
+    assert_eq!(environments(&src), (1, true));
+}
+
+/// Both one-sided directions still run every shape gate — a declaration or an
+/// inference names a *spelling*, never a pairing.
+#[test]
+fn one_sided_aliases_are_still_gated() {
+    // No `\end{split}` anywhere: the opener stays a plain command, silently.
+    assert_eq!(
+        environments(&format!("{BSPLIT_DEF}\\bsplit a\n")),
+        (0, true)
+    );
+    // The closer is stranded outside the brace group the opener sits in.
+    assert_eq!(
+        environments(&format!("{BSPLIT_DEF}\\foo{{\\bsplit a}} \\end{{split}}\n")),
+        (0, true)
+    );
+    // …and behind a math delimiter the scan does not model.
+    assert_eq!(
+        environments(&format!("{BSPLIT_DEF}\\bsplit $x$ \\end{{split}}\n")),
+        (0, true)
+    );
+}
+
+/// A literal `\end{X}` whose `X` no alias opens is untouched — the index only
+/// admits the names some opener alias actually targets, so an ordinary stray
+/// `\end` still reports.
+#[test]
+fn an_unrelated_literal_end_is_not_an_alias_closer() {
+    assert_eq!(
+        environments(&format!("{BSPLIT_DEF}\\bsplit a \\end{{center}}\n")),
+        (0, false),
+        "the alias does not pair, and the stray `\\end{{center}}` still reports"
+    );
+}
+
+/// The whole point of keeping the two closer maps separate: a file with both
+/// spellings live must pair each with the shape it actually is.
+#[test]
+fn both_closer_spellings_coexist() {
+    let defs = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n";
+    assert_eq!(
+        environments(&format!(
+            "{defs}\\bea a \\eea\n\n\\bea b \\end{{eqnarray}}\n\n\\begin{{eqnarray}} c \\eea\n"
+        )),
+        (3, true)
     );
 }
 
@@ -2168,10 +2296,39 @@ fn a_declared_alias_escaping_a_brace_group_still_demotes() {
 }
 
 #[test]
-fn a_declared_alias_inside_math_still_stays_a_command() {
+fn a_declared_alias_inside_math_pairs_too() {
     assert_eq!(
         declared_environments("$\\bea a \\eea$\n", EQNARRAY_DECL),
+        (1, true)
+    );
+    // And is still gated there: no reachable closer, no environment.
+    assert_eq!(
+        declared_environments("$\\bea a$\n", EQNARRAY_DECL),
         (0, true)
+    );
+}
+
+/// The issue-#117 config surface: half an entry is a whole declaration, because
+/// the literal delimiter is a spelling of the other side. This is the block the
+/// reporter needed and could not write — theirs was rejected for having no
+/// `end`, and `end = ['\end{split}']` is not a control word.
+#[test]
+fn a_declared_alias_may_name_one_side_only() {
+    const OPENER_ONLY: &str = r#"{"environments": {"split": {"begin": ["\\bsplit"]}}}"#;
+    assert_eq!(
+        declared_environments("\\bsplit a&=b \\end{split}\n", OPENER_ONLY),
+        (1, true)
+    );
+    // Gated like any other: no closer, no environment, no diagnostic.
+    assert_eq!(
+        declared_environments("\\bsplit a\n", OPENER_ONLY),
+        (0, true)
+    );
+
+    const CLOSER_ONLY: &str = r#"{"environments": {"eqnarray": {"end": ["\\eea"]}}}"#;
+    assert_eq!(
+        declared_environments("\\begin{eqnarray} a \\eea\n", CLOSER_ONLY),
+        (1, true)
     );
 }
 

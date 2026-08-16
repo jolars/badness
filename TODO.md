@@ -873,6 +873,41 @@ hand-written JSON schema); and a `% badness-env` comment directive feeding the
 same `Declarations` type, which would be text-pure and would work in the
 sandboxed plugin without config.
 
+- [x] ~~**9. One-sided aliases (issue #117).**~~ **Landed**, and it is a change
+  to the *alias mechanism* rather than to declarations — the config surface just
+  inherits it. The literal `\begin{X}`/`\end{X}` is a spelling of each side, so
+  `\def\bsplit{\begin{split}}` alone pairs `\bsplit … \end{split}` and
+  `\def\eeq{\end{equation}}` alone closes a written-out `\begin{equation}`. Two
+  rules retired: the inference scan's "both halves must be defined in the file"
+  (its stated reason, "a lone opener can never pair anyway", held only while the
+  closer had to be an alias too; the cost half is carried by `parse_ctx`'s
+  is-it-called filter) and resolution's `MissingCloser`/`MissingOpener`, whose
+  variants are gone. The reporter's block was rejected for having no `end`, and
+  their way out — `end = ['\end{split}']` — is not a control word, so the
+  feature had no expressible workaround at all.
+
+  Three things the implementation turned on. The closer spellings are **separate
+  indices** (`alias_closers`, `literal_alias_closers`) joined only by
+  `closer_target`, since a literal closer emits the ordinary
+  `END > \end NAME_GROUP` and an alias closer the bare word. The **mirror needs
+  no gate** — a `\begin{…}` pairs by default and locates nothing — so
+  `at_block_end` just also stops at a closer alias naming the innermost open
+  environment, and `finish_environment` tests that arm *before* the `\end` one
+  (`peek_end_name` would read `\eeq{…}`'s own group as an environment name). And
+  `math_atom` had to grow the opener dispatch: `split` is math-only, so a
+  text-mode-only feature could not see the reported shape at all — which also
+  forced its `\end` arm to learn `end_orphans_a_demoted_begin`, the verdict
+  `at_block_end` already relies on and `math_atom` was contradicting.
+
+  Measured on the corpus file the report minimizes,
+  `latexindent/test-cases/benchmarks/paperSS122018arxivv2.tex` (267 `\bsplit`
+  calls, no `\esplit` anywhere): 266 parse diagnostics before, 0 after, output
+  idempotent. Gate baselines unchanged; `parse-compat` adds one allowlisted
+  deviation and no unexplained one. Knowingly left: the other gates' `\begin`/
+  `\end` level counting still does not see alias delimiters, so a literal
+  `\begin{X}` closed by an alias inside a brace group can be demoted — silent
+  and conservative, and closing it means teaching every gate the alias maps.
+
 ## Language server
 
 ### Feature status vs LaTeX Workshop
@@ -1194,8 +1229,11 @@ near-mechanical ports, the third is a project.
     69/230/984ms; `bracket_closes_in_text` (N `\cmd[`, one `]`) 31/102/271ms;
     `left_right_closes` (N `\left(`, one `\right)`) 22/68/230ms;
     `dollar_closes` (N `${`) 15/48/180ms. `delim_math_closes` measures linear
-    on its own shape, and alias needs both halves defined in the same file, so
-    those two are migrated for uniformity rather than for speed.
+    on its own shape, and alias needed both halves defined in the same file, so
+    those two are migrated for uniformity rather than for speed. (That second
+    reason has since lapsed — issue #117 admits a one-sided alias, so an opener
+    with no closer in reach is now an ordinary shape. The migration still stands
+    on the uniformity argument, and the linearity tests cover it either way.)
 
     - [x] **C2.0 — extract the batch driver; re-express conditionals on it**
       (done). `conditional_closers_from` became `Parser::gate_batch`, owning

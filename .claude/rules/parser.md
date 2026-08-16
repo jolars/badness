@@ -144,10 +144,26 @@ Prefer false negatives; when in doubt a construct stays generic.
   named axis with its reason, and say whether it was *chosen* or *preserved*.
 - **Environment aliases pair behind a *positive* gate** (#109). A command whose
   body is exactly `\begin{X}`/`\end{X}` stands in for that delimiter. Target must
-  be curated built-in, non-verbatim, argument-free; alias must be arity 0; both
-  halves must be defined in the same file. A pair may instead be **declared**
-  (`[environments.<target>] begin/end`, decision #12), which drops the
-  same-file and inference-shape requirements but keeps the target rules and the
+  be curated built-in, non-verbatim, argument-free; alias must be arity 0.
+  **One half is enough** (#117): the literal `\begin{X}`/`\end{X}` is a spelling
+  of each side, so a lone opener alias pairs with a written-out `\end{X}` and a
+  lone closer alias closes a written-out `\begin{X}`. Keep the two closer
+  spellings in *separate* indices (`alias_closers`, `literal_alias_closers`),
+  joined only by `closer_target`: a literal closer emits the ordinary
+  `END > \end NAME_GROUP`, an alias closer the bare word, and
+  `finish_environment` must not confuse them. The literal index is built from the
+  looser `peek_end_name`, so the gate re-tests `env_end_at` — an over-approximate
+  index is fine, an over-approximate *verdict* is not. The mirror direction has
+  no gate (a `\begin{…}` pairs by default): `at_block_end` stops at a closer
+  alias naming the **innermost** open environment, no further. `math_atom`
+  dispatches openers too — not optional, since `split` is math-only — and its
+  `\end` arm therefore had to learn `end_orphans_a_demoted_begin`, which
+  `at_block_end` already relies on. Knowingly left: the other gates' `\begin`/
+  `\end` counting does not see alias delimiters, so a literal `\begin{X}` closed
+  by an alias inside a brace group can be demoted (silent, conservative).
+  A pair may instead be **declared**
+  (`[environments.<target>] begin/end`, either key alone, decision #12), which
+  drops the same-file and inference-shape requirements but keeps the target rules and the
   gate: declared and inferred aliases land in the same `ParseCtx` maps and are
   indistinguishable downstream. Non-verbatim is *TeX truth* for a declared pair
   too — the closer alias is never expanded, because verbatim already swallowed
@@ -165,7 +181,7 @@ Prefer false negatives; when in doubt a construct stays generic.
   that never pair are otherwise quadratic. Runs on the shared batch driver as
   `AliasGate` (container-stack C2.1); its only policy divergences from
   `ConditionalGate` are the absent paragraph anchor and the closer's name match
-  (`GatePolicy::pairs`). Not extended to `math_atom` in v1.
+  (`GatePolicy::pairs`).
 - **Picture-body statements wrap retrospectively, with no gate.** In a curated
   `statementBody` environment body (`ParseCtx::is_statement_environment` — the
   `is_math_environment` template: curated built-ins plus declarations, never

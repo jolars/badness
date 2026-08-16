@@ -199,19 +199,21 @@ fn record_env_alias(
 /// - **The target must take no arguments.** The alias head consumes none, so an
 ///   `array` alias would drop its column spec into the body and the formatter
 ///   would grid it with no alignments.
-/// - **Both halves must be defined in the file.** A lone opener can never pair
-///   anyway (no closer to locate), so recording it is pure risk and pure cost —
-///   it would make every such file pay a second parse for nothing.
+///
+/// One rule that used to be here is gone: **both halves no longer have to be
+/// defined**. It read "a lone opener can never pair anyway (no closer to
+/// locate)", and that stopped being true when the *literal* delimiter joined
+/// each side's spellings (issue #117): `\def\bsplit{\begin{split}}` expands to
+/// `\begin{split}`, so a plain `\end{split}` closes it, and a lone
+/// `\def\eeq{\end{equation}}` closes a plain `\begin{equation}`. The cost half
+/// of that rationale is carried by `parser::core::parse_ctx`'s "is it called
+/// anywhere" filter, which is what actually keeps an unused alias from buying a
+/// file a second parse.
 fn apply_env_aliases(db: &mut SignatureDb, candidates: &HashMap<SmolStr, EnvAliasCandidate>) {
     let admissible = |target: &str| {
         builtin()
             .environment(target)
             .is_some_and(|sig| !sig.verbatim_body && sig.args.is_empty())
-    };
-    let has_side = |side: AliasSide, target: &str| {
-        candidates
-            .values()
-            .any(|c| c.side == side && c.target == target)
     };
     for (name, candidate) in candidates {
         let target = candidate.target.as_str();
@@ -219,13 +221,12 @@ fn apply_env_aliases(db: &mut SignatureDb, candidates: &HashMap<SmolStr, EnvAlia
             continue;
         }
         match candidate.side {
-            AliasSide::Begin if has_side(AliasSide::End, target) => {
+            AliasSide::Begin => {
                 db.insert_env_begin_alias(name.clone(), candidate.target.clone());
             }
-            AliasSide::End if has_side(AliasSide::Begin, target) => {
+            AliasSide::End => {
                 db.insert_env_end_alias(name.clone(), candidate.target.clone());
             }
-            _ => {}
         }
     }
 }
@@ -1523,10 +1524,43 @@ mod tests {
         assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
     }
 
+    /// Issue #117: one half is enough, because the *literal* delimiter is a
+    /// spelling of the other side. `\bea` expands to `\begin{eqnarray}`, so a
+    /// written-out `\end{eqnarray}` closes it; `\eea` closes a written-out
+    /// `\begin{eqnarray}`. Recording each side alone is what lets the parser
+    /// pair either shape.
     #[test]
-    fn env_alias_needs_both_halves() {
+    fn a_lone_env_alias_half_is_recorded() {
         let db = db_of("\\newcommand{\\bea}{\\begin{eqnarray}}\n");
-        assert_eq!(db.env_begin_alias("bea"), None);
+        assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
+        assert_eq!(db.env_end_alias("bea"), None);
+
+        let db = db_of("\\newcommand{\\eea}{\\end{eqnarray}}\n");
+        assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
+        assert_eq!(db.env_begin_alias("eea"), None);
+    }
+
+    /// Dropping the both-halves rule must not loosen the *target* rules, which
+    /// are what keep a wrong pairing from rewriting layout. Each is re-checked
+    /// on the lone-half shape the rule used to hide.
+    #[test]
+    fn a_lone_half_still_obeys_every_target_rule() {
+        assert_eq!(
+            db_of("\\newcommand{\\bmy}{\\begin{notacuratedenv}}\n").env_begin_alias("bmy"),
+            None
+        );
+        assert_eq!(
+            db_of("\\newcommand{\\ev}{\\end{verbatim}}\n").env_end_alias("ev"),
+            None
+        );
+        assert_eq!(
+            db_of("\\newcommand{\\bt}{\\begin{tabular}}\n").env_begin_alias("bt"),
+            None
+        );
+        assert_eq!(
+            db_of("\\newcommand{\\bea}[1]{\\begin{eqnarray}}\n").env_begin_alias("bea"),
+            None
+        );
     }
 
     #[test]

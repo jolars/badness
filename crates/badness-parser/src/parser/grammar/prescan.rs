@@ -25,6 +25,7 @@ pub(super) struct PreScan {
     pub(super) conditional_openers: HashSet<usize>,
     pub(super) alias_openers: HashMap<usize, SmolStr>,
     pub(super) alias_closers: HashMap<usize, SmolStr>,
+    pub(super) literal_alias_closers: HashMap<usize, SmolStr>,
     pub(super) last_r_bracket: Option<usize>,
     pub(super) last_display_math_closer: Option<usize>,
     pub(super) last_inline_math_closer: Option<usize>,
@@ -42,7 +43,17 @@ impl PreScan {
         let mut conditional_openers = HashSet::new();
         let mut alias_openers = HashMap::new();
         let mut alias_closers = HashMap::new();
+        let mut literal_alias_closers = HashMap::new();
         let want_aliases = ctx.has_env_aliases();
+        // The environments some alias opens: a literal `\end{X}` closes one of
+        // those just as a closer alias does (issue #117), so it is indexed here
+        // beside the alias spellings. Empty — and never consulted — for a file
+        // whose only aliases are closers.
+        let begin_alias_targets: HashSet<&str> = if want_aliases {
+            ctx.begin_alias_targets().collect()
+        } else {
+            HashSet::new()
+        };
         let mut opener_scan = conditional::OpenerScan::new();
         // `expl_on` mirrors `in_expl_region` exactly: the state is the one in
         // force *before* this token, so a toggle sits outside its own region.
@@ -118,6 +129,19 @@ impl PreScan {
                         alias_openers.insert(i, SmolStr::new(target));
                     } else if let Some(target) = ctx.end_alias(name) {
                         alias_closers.insert(i, SmolStr::new(target));
+                    } else if name == "end"
+                        && let Some(env) = super::peek_end_name(tokens, i)
+                        && begin_alias_targets.contains(env.as_ref())
+                    {
+                        // `\def\bsplit{\begin{split}}` expands to `\begin{split}`,
+                        // so a plain `\end{split}` closes it (issue #117). Indexed
+                        // here rather than tested in the gate so the closer bound
+                        // ([`super::AliasGate::last_closer`]) can be derived from
+                        // it. `peek_end_name` is looser than the walk's
+                        // [`super::Parser::env_end_at`] — it skips a blank line and
+                        // takes a computed name — so the gate re-tests that; an
+                        // index recorded here may over-approximate, never under-.
+                        literal_alias_closers.insert(i, SmolStr::new(env.as_ref()));
                     }
                 }
                 // Consuming a slot short-circuits, so a keyword sitting *in* one
@@ -161,6 +185,7 @@ impl PreScan {
             conditional_openers,
             alias_openers,
             alias_closers,
+            literal_alias_closers,
             last_r_bracket,
             last_display_math_closer,
             last_inline_math_closer,

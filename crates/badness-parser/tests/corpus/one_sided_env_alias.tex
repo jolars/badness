@@ -1,0 +1,48 @@
+\documentclass{article}
+
+% Issue #117: only one half of an alias pair is defined, because the other half
+% needs no definition — the literal `\begin{X}`/`\end{X}` is a spelling of each
+% side. `\bsplit` expands to `\begin{split}`, so a written-out `\end{split}`
+% closes it; `\eeq` expands to `\end{equation}`, so it closes a written-out
+% `\begin{equation}`. This is the shape the reporter's paper is full of.
+\def\bsplit{\begin{split}}
+\def\eeq{\end{equation}}
+
+\begin{document}
+
+% `split` is math-only, so the shape that actually ships is nested inside a
+% display environment — the alias dispatch has to reach math mode to see it.
+\begin{equation}
+  \bsplit
+    a &= b, \\
+    c &= d.
+  \end{split}
+\end{equation}
+
+% The mirror, on the other side of the same equation.
+\begin{equation}
+  a = b
+\eeq
+
+% Both spellings live at once, each pairing with the shape it is.
+\begin{equation}
+  \bsplit
+    e &= f
+  \end{split}
+\eeq
+
+% Gated shapes: none of these pair, and none of them diagnose. Ordered so each
+% one's would-be closer is genuinely out of reach — the last `\end{split}` in
+% the file is the one on the math line, so the opener below it has none at all.
+
+% A closer stranded outside the brace group the opener sits in.
+\foo{\bsplit stranded}
+\end{split}
+
+% A closer behind a math delimiter the scan does not model.
+\bsplit $x$ behind math \end{split}
+
+% No reachable closer whatsoever.
+\bsplit
+
+\end{document}

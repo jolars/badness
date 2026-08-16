@@ -184,8 +184,19 @@ provenance.
      built-in** environment (an alias declares a *spelling*, never a *semantic*),
      **non-verbatim** (`\newcommand{\bv}{\begin{verbatim}}` does not work in TeX),
      and **argument-free** on both sides (attaching from the target's signature
-     would be arity-directed grouping from scanned data, decision #8); **both
-     halves** must be defined in the file. Two things carry the risk: the opener
+     would be arity-directed grouping from scanned data, decision #8). **One half
+     is enough** (issue #117): the literal `\begin{X}`/`\end{X}` is a spelling of
+     each side too, so a lone `\def\bsplit{\begin{split}}` pairs
+     `\bsplit … \end{split}` and a lone `\def\eeq{\end{equation}}` closes a
+     written-out `\begin{equation}` — the retired both-halves rule read "a lone
+     opener can never pair anyway", true only while the closer had to be an alias.
+     The two closer spellings stay separate indices, read as one only by
+     `closer_target`, because a literal closer emits the ordinary
+     `END > \end NAME_GROUP` and an alias closer the bare word. The mirror
+     direction needs no gate — a `\begin{…}` pairs by default — so `at_block_end`
+     just also stops at a closer alias naming the **innermost** open environment.
+     `math_atom` dispatches openers on the same gate as text, because `split` is
+     math-only and an alias for it is read nowhere else. Two things carry the risk: the opener
      index must exclude every *name being bound*, as a slot countdown rather than
      a one-word test (`\def\bea{…}` leaves the definee at brace depth 0 with
      `in_def_body` unset, so unfiltered the two definition lines pair with each

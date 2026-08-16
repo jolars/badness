@@ -440,6 +440,11 @@ like = "align"
 begin = ['\bea']
 end = ['\eea']
 
+# one side alone: `\bsplit` expands to `\begin{split}`, so a written-out
+# `\end{split}` closes it — there is no closing command to declare
+[environments.split]
+begin = ['\bsplit']
+
 # both at once: an environment reached only through commands
 [environments.mytheorem]
 like = "theorem"
@@ -469,7 +474,6 @@ nothing:
 
 - an entry with no keys under it, which would declare nothing at all
 - `like` naming an environment Badness does not know
-- `begin` without `end`, or `end` without `begin`
 - delimiter spellings for a verbatim environment (the closing command is never
   seen — the verbatim body has already swallowed it)
 - delimiter spellings for an environment that takes arguments (a bare command
@@ -477,6 +481,9 @@ nothing:
 - delimiter spellings for an environment with no `like` and no built-in of that
   name, so its behavior is unknown
 - one spelling claimed by two entries, or listed twice by one
+- a spelling that is the delimiter itself (`'\end{split}'`) rather than a
+  command standing in for one — the written-out delimiter already pairs with a
+  declared spelling, so the key can just be removed
 - a spelling that could never be a single control word (`'\b ea'`, `'\bea2'`)
 - a spelling that is already a LaTeX command Badness knows (`'\emph'`), which
   would change what that command means throughout the project
@@ -509,10 +516,16 @@ Command spellings that stand in for this environment's `\begin{…}`. Any of the
 opens it, and any spelling in [`end`](#end) closes it — pairing is by side, not
 by position, so the two lists need not be the same length.
 
-Use this when the pair is defined somewhere Badness cannot see: a sibling
-`.sty`, or a definition built by machinery no scan follows. A pair defined by
-plain `\newcommand`s in the *same* file — `\newcommand{\bea}{\begin{eqnarray}}`
-and its `\eea` counterpart — is already recognized without any configuration.
+The written-out `\end{…}` closes it too, which is why `end` is optional. A
+command defined as `\def\bsplit{\begin{split}}` *expands to* `\begin{split}`, so
+`\bsplit … \end{split}` is a perfectly ordinary environment and there may be no
+closing command to name at all.
+
+Use this when the definition is somewhere Badness cannot see: a sibling `.sty`,
+or one built by machinery no scan follows. A definition written with a plain
+`\newcommand` or `\def` in the *same* file —
+`\newcommand{\bea}{\begin{eqnarray}}`, or `\def\bsplit{\begin{split}}` on its
+own — is already recognized without any configuration.
 
 A spelling must be a command of your own. Naming one Badness already knows
 (`'\emph'`, `'\section'`) is an error rather than a redefinition: the
@@ -534,8 +547,9 @@ end = ['\eea']
 ### `end`
 
 Command spellings that stand in for this environment's `\end{…}`, the mirror of
-[`begin`](#begin). Required whenever `begin` is set, and vice versa: an opener
-that can never be closed would do nothing at all.
+[`begin`](#begin) in every respect — including that it stands alone. A command
+defined as `\def\eeq{\end{equation}}` closes a written-out `\begin{equation}`,
+so an entry may name a closing spelling without naming an opening one.
 
 **Default value**: `[]`
 

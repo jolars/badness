@@ -281,6 +281,47 @@ fn the_same_file_is_left_alone_without_the_declaration() {
     );
 }
 
+/// Issue #117, end to end and from both directions. The reporter defines only
+/// `\bsplit` and writes `\end{split}` out; the literal delimiter is a spelling
+/// of the closing side, so the pair formats with **no configuration at all**.
+/// The declared half-entry below is the block they tried to write and could not
+/// — `end` used to be mandatory, and `end = ['\end{split}']` is not a control
+/// word.
+#[test]
+fn a_one_sided_alias_formats_like_the_environment_it_names() {
+    let dir = repo_dir();
+    let doc = "\\def\\bsplit{\\begin{split}}\n\\bsplit\na&=b,\\\\\nc&=d.\n\\end{split}\n";
+    let expected =
+        "\\def\\bsplit{\\begin{split}}\n\\bsplit\n  a & = b, \\\\\n  c & = d.\n\\end{split}\n";
+    std::fs::write(dir.path().join("doc.tex"), doc).unwrap();
+
+    let output = format(dir.path(), &["doc.tex"]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("doc.tex")).unwrap(),
+        expected
+    );
+
+    // The mirror, and the declared spelling of the same one-sided shape.
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[environments.equation]\nend = ['\\eeq']\n",
+    )
+    .unwrap();
+    let doc = "\\begin{equation}\na&=b,\\\\\nc&=d.\n\\eeq\n";
+    std::fs::write(dir.path().join("doc.tex"), doc).unwrap();
+
+    let output = format(dir.path(), &["doc.tex"]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("doc.tex")).unwrap(),
+        "\\begin{equation}\n  a & = b, \\\\\n  c & = d.\n\\eeq\n"
+    );
+}
+
 /// Stdin has no path to anchor package resolution against, but it does have a
 /// project config — so it must honor declarations too. A formatter that treats
 /// `badness format doc.tex` and `badness format < doc.tex` differently is a trap.

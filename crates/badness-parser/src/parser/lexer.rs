@@ -276,6 +276,13 @@ impl ParseCtx {
         self.end_aliases.get(name).map(SmolStr::as_str)
     }
 
+    /// Every environment some alias *opens*, so the pre-scan can recognize the
+    /// literal `\end{X}` that closes it (issue #117). Names repeat when an
+    /// environment has several opener spellings; callers collect into a set.
+    pub(crate) fn begin_alias_targets(&self) -> impl Iterator<Item = &str> {
+        self.begin_aliases.values().map(SmolStr::as_str)
+    }
+
     /// The signature a project *declared* for environment `name`, if any.
     ///
     /// A declared entry is **authoritative** for its name: every predicate below

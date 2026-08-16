@@ -264,14 +264,20 @@ does nothing to the document. It projects the entries into a `SignatureDb` — t
 struct already holding exactly these three maps — so the declared tier folds
 into a document's scope with the same merge the scanned tier uses. Rejected,
 each naming the key the user wrote: an entry with no keys at all; an unknown
-`like` target; `begin` without `end` or the mirror; delimiters for a verbatim or
-argument-taking environment; delimiters for an environment whose behavior is
-unknown; a spelling two entries both claim (or one entry lists twice); a
-spelling that could never lex as a single control word; and a spelling the
-curated tier already knows as a command. An entry declaring behavior alone
-carries none of the delimiter restrictions, which is what makes
-`like = "lstlisting"` the way to name a verbatim environment no definition scan
-can find.
+`like` target; delimiters for a verbatim or argument-taking environment;
+delimiters for an environment whose behavior is unknown; a spelling two entries
+both claim (or one entry lists twice); a spelling that could never lex as a
+single control word; and a spelling the curated tier already knows as a command.
+An entry declaring behavior alone carries none of the delimiter restrictions,
+which is what makes `like = "lstlisting"` the way to name a verbatim environment
+no definition scan can find.
+
+`begin` without `end` (and the mirror) used to be on that list, on the reasoning
+that a half-declared pair could never pair. Issue #117 retired both: the literal
+`\begin{X}`/`\end{X}` is a spelling of each side, so `begin = ['\bsplit']` alone
+declares an opener the written-out `\end{split}` closes. That is the block the
+reporter needed and could not write — `end` was mandatory, and the natural way
+out, `end = ['\end{split}']`, is not a control word.
 
 The empty-entry and known-command rules are the two that reject for *shape*
 rather than for a rule of the mechanism, and they are the two ends of the same
@@ -535,8 +541,24 @@ a *semantic* — every behavior flag still comes from curated data, exactly as
 `\newcommand{\bv}{\begin{verbatim}}` does not work in TeX at all (the body is
 tokenized before the macro expands). It must take **no arguments**, and so must
 the alias, since the head consumes none and attaching them from the target's
-signature would be arity-directed grouping from scanned data. And **both
-halves** must be defined in the file, since a lone opener can never pair anyway.
+signature would be arity-directed grouping from scanned data. What it need
+**not** be is half of a defined pair: the literal `\begin{X}`/`\end{X}` is a
+spelling of each side too, so `\def\bsplit{\begin{split}}` alone pairs
+`\bsplit … \end{split}`, and `\def\eeq{\end{equation}}` alone closes a
+written-out `\begin{equation}` (issue #117). The rule used to be that both
+halves had to be defined, on the reasoning that a lone opener could never pair —
+which was true only while the closer had to be an alias too. What that rule was
+*also* doing, keeping a file from buying a second parse for an alias nothing
+calls, is carried by the "is it called anywhere" filter in `parser::core`, which
+is where it belongs.
+
+The two spellings stay separate indices (`alias_closers` and
+`literal_alias_closers`), read as one only by `closer_target`, because they are
+consumed differently: a literal closer emits the ordinary two-token
+`END > \end NAME_GROUP`, an alias closer the bare control word. The literal
+index is built from the pre-scan's looser `peek_end_name`, so the gate re-tests
+`env_end_at` before admitting one — a `\end` the walk would treat as a plain
+command must not become an `END` with a name group that is not there.
 
 Two details carry most of the risk. First, the opener index must exclude every
 *name being bound*, which is a **slot countdown** and not a test of the single
@@ -592,9 +614,35 @@ than inherit `eqnarray`'s math and alignment. By the same token a
 `\newenvironment{bea}` and an alias `\bea` coexist, each node resolving to its
 own.
 
-Accepted false negatives: `\let` chains, aliases used inside math (`math_atom`
-pairs environments ungated, so an alias arm there would be strictly worse), and
-argument-taking aliases.
+The mirror direction needs no gate at all, because a spelled-out `\begin{X}`
+pairs by default and locates nothing: `at_block_end` simply also stops at a
+closer alias naming the environment innermost open, and `finish_environment`
+consumes it as the `END`. That arm is tested *before* the `\end` one, since
+`peek_end_name` would otherwise read an alias's own following group (`\eeq{…}`)
+as an environment name and report a mismatch against it. It is deliberately not
+generalized past the innermost environment — an alias closer naming some outer
+one stays a plain command, exactly as a mismatched `\end{…}` is left for the
+caller to unwind.
+
+`math_atom` dispatches alias openers too, on the same gate as the text arm. That
+was not optional: `split` — the environment issue #117 is about — is math-only,
+so an alias for it is *always* read there and nowhere else. The arm sits beside
+the `environment()` call one token earlier in the same match, which already
+pairs the literal spelling here, so the two spellings reach the same node. The
+`\end` arm in that match had to learn `end_orphans_a_demoted_begin` at the same
+time: `at_block_end` declines to end a math body at a `\end` that orphans a
+demoted `\begin` (issue #71), so that one arrives in `math_atom` and must land
+as the plain command the gate already made it, rather than as a stray closer the
+two halves of one gate would then disagree about.
+
+One asymmetry is knowingly left: the other gates' `\begin`/`\end` level counting
+does not see alias delimiters, so a literal `\begin{X}` closed by an alias and
+sitting inside a brace group can be demoted by the `\begin` gate, which finds no
+level anchor where the alias closer is. The failure mode is the standing one — a
+silent conservative demotion to a plain command — and fixing it would mean
+teaching every gate the alias maps.
+
+Accepted false negatives: `\let` chains and argument-taking aliases.
 
 ### The conditional gate
 

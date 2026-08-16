@@ -513,7 +513,13 @@ impl GatePolicy for ConditionalGate {
 ///   crossing `\bea \bce \eea \ece` refuses outright instead of letting an
 ///   inner walk run past the outer bound.
 ///
-/// Both halves are recognized only outside macro code, where `\begin`/`\end`
+/// A closer is either spelling ([`Parser::closer_target`], issue #117): the
+/// alias command, or the literal `\end{X}` the alias's own expansion pairs with.
+/// The literal arm is what takes it *out* of the driver's `\end` anchor branch —
+/// a matching `\end{X}` is this entry's closer, and only a non-matching one is
+/// still the level anchor it was.
+///
+/// Every half is recognized only outside macro code, where `\begin`/`\end`
 /// are plain commands that need not pair (issues #45/#60) — the same filter the
 /// driver applies to its own `\begin`/`\end` counting.
 struct AliasGate;
@@ -530,11 +536,11 @@ impl GatePolicy for AliasGate {
     }
 
     fn closes_at(&self, p: &Parser<'_>, i: usize) -> bool {
-        p.alias_closers.contains_key(&i) && !p.in_macro_code(i)
+        p.closer_target(i).is_some() && !p.in_macro_code(i)
     }
 
     fn pairs(&self, p: &Parser<'_>, opener: usize, closer: usize) -> bool {
-        p.alias_closers.get(&closer) == p.alias_openers.get(&opener)
+        p.closer_target(closer) == p.alias_openers.get(&opener).map(SmolStr::as_str)
     }
 }
 
@@ -1050,10 +1056,26 @@ struct Parser<'t> {
     alias_openers: std::collections::HashMap<usize, SmolStr>,
     /// The closer mirror of [`Self::alias_openers`] (`\end{X}` bodies).
     alias_closers: std::collections::HashMap<usize, SmolStr>,
-    /// The largest index in [`Self::alias_closers`], or `None` when the file has
-    /// no alias closer at all. [`Self::alias_closer`] can only ever return an
-    /// index in that map, so this bounds its forward scan — which is what keeps
-    /// a file of openers that never pair linear instead of quadratic.
+    /// Token indices of *literal* `\end{X}` closers whose `X` some alias opens,
+    /// mapped to that `X` (issue #117).
+    ///
+    /// A begin alias stands in for `\begin{X}`, so what closes it is whatever
+    /// closes an `X` — a closer alias, and equally the `\end{X}` an author
+    /// writes out. Kept a separate map from [`Self::alias_closers`] because the
+    /// two are consumed differently: this one's token is a `\end` carrying a
+    /// `NAME_GROUP`, so [`Self::alias_environment`] emits the same two-token
+    /// `END` a spelled-out environment does, and [`Self::finish_environment`]'s
+    /// mirror arm must not mistake one for the other.
+    ///
+    /// The index is an *over*-approximation, per the pre-scan's standing rule:
+    /// it is built from `peek_end_name`, which is looser than the walk's
+    /// [`Self::env_end_at`], so the gate re-tests membership against that.
+    literal_alias_closers: std::collections::HashMap<usize, SmolStr>,
+    /// The largest index in [`Self::alias_closers`] or
+    /// [`Self::literal_alias_closers`], or `None` when the file has neither.
+    /// [`Self::alias_closer`] can only ever return an index in one of those two
+    /// maps, so this bounds its forward scan — which is what keeps a file of
+    /// openers that never pair linear instead of quadratic.
     last_alias_closer: Option<usize>,
     /// The `last_alias_closer` treatment, generalized (`TODO.md`, container
     /// stack C0): each shape gate succeeds only at one closer token shape, so
@@ -1177,7 +1199,12 @@ impl<'t> Parser<'t> {
             expl_toggles: pre.expl_toggles,
             doc_margin_lines: pre.doc_margin_lines,
             conditional_openers: pre.conditional_openers,
-            last_alias_closer: pre.alias_closers.keys().copied().max(),
+            last_alias_closer: pre
+                .alias_closers
+                .keys()
+                .chain(pre.literal_alias_closers.keys())
+                .copied()
+                .max(),
             last_r_bracket: pre.last_r_bracket,
             last_display_math_closer: pre.last_display_math_closer,
             last_inline_math_closer: pre.last_inline_math_closer,
@@ -1190,6 +1217,7 @@ impl<'t> Parser<'t> {
             scan_work: std::cell::Cell::new(0),
             alias_openers: pre.alias_openers,
             alias_closers: pre.alias_closers,
+            literal_alias_closers: pre.literal_alias_closers,
             alias_batch: std::cell::RefCell::new(None),
             env_batch: std::cell::RefCell::new(None),
             left_right_batch: std::cell::RefCell::new(None),
@@ -1694,11 +1722,36 @@ impl<'t> Parser<'t> {
                     // this one bound terminates both the math and the prose body.
                     self.alias_end.is_some_and(|end| self.pos >= end)
                         || (self.at_env_end() && !self.end_orphans_a_demoted_begin(self.pos))
+                        || self.at_alias_end_for_open_env()
                 }
                 // `>=` (not `==`): defensive against an element overshooting the
                 // pre-scanned terminator, so the loop still stops.
                 Block::Macrocode => self.macrocode_end.is_some_and(|end| self.pos >= end),
             }
+    }
+
+    /// Whether the cursor is on a *closer alias* for the environment innermost
+    /// open here — the mirror of the literal closer [`Self::closer_target`]
+    /// admits (issue #117).
+    ///
+    /// `\def\eeq{\end{equation}}` expands to `\end{equation}`, so it closes a
+    /// spelled-out `\begin{equation}` just as it closes an alias-opened one. The
+    /// alias-opened direction already stops at [`Self::alias_end`], the index its
+    /// gate positively located; this arm is what a `\begin{…}` needs, which pairs
+    /// by default and locates nothing.
+    ///
+    /// Deliberately *not* generalized past the innermost environment: an alias
+    /// closer naming some outer environment is a plain command here, exactly as
+    /// a mismatched `\end{…}` is left for the caller to unwind.
+    fn alias_end_for_open_env(&self, idx: usize) -> bool {
+        self.alias_closers.get(&idx).is_some_and(|target| {
+            !self.in_macro_code(idx) && self.open_envs.last().is_some_and(|open| open == target)
+        })
+    }
+
+    /// [`Self::alias_end_for_open_env`] at the cursor.
+    fn at_alias_end_for_open_env(&self) -> bool {
+        self.alias_end_for_open_env(self.pos)
     }
 
     /// True if the contiguous trivia run at the current position should separate
@@ -1721,7 +1774,10 @@ impl<'t> Parser<'t> {
                 block == Block::Environment
                     && (self.env_end_at(s.next)
                             // The alias twin: the run reaches the located closer.
-                            || self.alias_end.is_some_and(|end| s.next >= end))
+                            || self.alias_end.is_some_and(|end| s.next >= end)
+                            // …or a closer alias for the environment open here,
+                            // which is what an unlocated `\begin{…}` stops at.
+                            || self.alias_end_for_open_env(s.next))
             }
             Some(_) => false,
         }
@@ -2585,7 +2641,30 @@ impl<'t> Parser<'t> {
                 if !self.in_macro_code(self.pos) && self.at_env_begin() {
                     self.environment();
                 } else if !self.in_macro_code(self.pos) && self.at_env_end() {
-                    self.stray_end();
+                    // [`Self::at_block_end`] declines to end a math body at a
+                    // `\end` that orphans a `\begin` the brace-group gate demoted
+                    // (issue #71), so that one arrives *here* — and must land as
+                    // the plain command that verdict already made it. Reporting
+                    // it stray would have the two halves of one gate disagree.
+                    if self.end_orphans_a_demoted_begin(self.pos) {
+                        self.command();
+                    } else {
+                        self.stray_end();
+                    }
+                } else if let Some((target, closer)) = (!self.in_macro_code(self.pos))
+                    .then(|| {
+                        let target = self.alias_openers.get(&self.pos)?.clone();
+                        Some((target, self.alias_closer(self.pos)?))
+                    })
+                    .flatten()
+                {
+                    // The [`Self::element`] arm, in math (issue #117). Not an
+                    // optional extra: `split` — the environment the issue is
+                    // about — is math-only, so an alias for it is *always* read
+                    // here and nowhere else. `alias_environment` routes the body
+                    // by the target exactly as `environment()` does one token
+                    // earlier in this same match.
+                    self.alias_environment(&target, closer);
                 } else if self.at_command(LEFT_CMD) && self.left_right_closes(self.pos) {
                     self.left_right();
                 } else if self.at_command(RIGHT_CMD) {
@@ -3406,15 +3485,42 @@ impl<'t> Parser<'t> {
         self.gated_closer(open, &AliasGate, &self.alias_batch)
     }
 
-    /// `\bea … \eea`: an environment opened and closed by bare control words, for
-    /// the closer [`Self::alias_closer`] located at token index `closer`.
+    /// The environment the token at `idx` closes, under *either* spelling: a
+    /// closer alias (`\eea`), or the literal `\end{X}` an alias-opened `X` pairs
+    /// with (issue #117). `None` when it closes neither.
+    ///
+    /// The two maps stay separate ([`Self::literal_alias_closers`]) because the
+    /// consumers differ; this is the one place that reads them as one. The
+    /// literal arm re-tests [`Self::env_end_at`] because the pre-scan's index is
+    /// built from the looser `peek_end_name` — a `\end` the walk would treat as
+    /// a plain command must not become an `END` here, or the `NAME_GROUP`
+    /// [`Self::alias_environment`] then asks for is not there.
+    fn closer_target(&self, idx: usize) -> Option<&str> {
+        if let Some(target) = self.alias_closers.get(&idx) {
+            return Some(target.as_str());
+        }
+        let target = self.literal_alias_closers.get(&idx)?;
+        self.env_end_at(idx).then_some(target.as_str())
+    }
+
+    /// Whether the closer at `idx` is spelled out as `\end{X}` rather than as a
+    /// closer alias — the one thing the two [`Self::closer_target`] arms are
+    /// consumed differently for.
+    fn closer_is_literal(&self, idx: usize) -> bool {
+        !self.alias_closers.contains_key(&idx) && self.literal_alias_closers.contains_key(&idx)
+    }
+
+    /// `\bea … \eea`: an environment opened by a bare control word, for the
+    /// closer [`Self::alias_closer`] located at token index `closer` — which is
+    /// either the closer alias or a literal `\end{X}` (issue #117).
     ///
     /// Emits the *same* `ENVIRONMENT > BEGIN … END` shape a spelled-out
     /// `\begin{X} … \end{X}` does, so every consumer downstream — the formatter's
     /// lowering, folding, the outline, [`crate::ast::Environment`] — works
-    /// unchanged. The only difference is that `BEGIN`/`END` hold a bare
+    /// unchanged. The only difference is that `BEGIN` holds a bare
     /// `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, which is why
-    /// [`crate::ast::Begin::name`] falls back to the head control word.
+    /// [`crate::ast::Begin::name`] falls back to the head control word; a
+    /// literally-closed `END` is byte-for-byte the ordinary one.
     ///
     /// No arguments are attached to either delimiter: the alias head consumes none
     /// (that is an admission rule of the scan, `semantic::define`), and attaching
@@ -3451,7 +3557,13 @@ impl<'t> Parser<'t> {
         // `END`, exactly as an unclosed `\begin` does.
         if self.pos == closer {
             self.open(SyntaxKind::END);
-            self.bump();
+            self.bump(); // the closing control word
+            // A literal closer is a `\end` carrying its name, so it emits the
+            // same `END > CONTROL_WORD NAME_GROUP` a spelled-out environment
+            // does (issue #117); an alias closer is the bare word alone.
+            if self.closer_is_literal(closer) {
+                self.name_group();
+            }
             self.close();
         }
         self.close(); // ENVIRONMENT
@@ -3687,7 +3799,21 @@ impl<'t> Parser<'t> {
                     format!("unclosed environment `{}`", name.as_deref().unwrap_or("")),
                 );
             }
-            // The cursor is at a `\end` (the only non-EOF stop condition).
+            // The cursor is at a closer alias for this very environment: consume
+            // the bare control word as the `END` (issue #117). Tested before the
+            // `\end` arm because `peek_end_name` would read the alias's own
+            // following group (`\eeq{…}`) as an environment name and report a
+            // mismatch against it.
+            Some(_)
+                if self.alias_closers.get(&self.pos).is_some_and(|target| {
+                    !self.in_macro_code(self.pos) && name.as_deref() == Some(target.as_str())
+                }) =>
+            {
+                self.open(SyntaxKind::END);
+                self.bump();
+                self.close();
+            }
+            // The cursor is at a `\end` (the only other non-EOF stop condition).
             Some(_) => {
                 let end_name = peek_end_name(self.tokens, self.pos);
                 if name.is_none() || name.as_deref() == end_name.as_deref() {

@@ -59,7 +59,7 @@ use crate::directives;
 use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
-use crate::semantic::expl3::{Expl3Unit, StatementMap, expl3_unit, segment_expl_statements};
+use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
     ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
@@ -3980,79 +3980,19 @@ fn expl_branch_lines(tail: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<Ir>
     Some(parts)
 }
 
-/// The same explosion as [`lower_expl_conditional`], for a call whose branches
-/// greedy attachment did **not** give to the head command.
+/// The exploded form of the expl3 conditional headed by `elements[idx]`, plus
+/// the index of the unit's last element (the caller resumes at `last + 1`).
 ///
-/// A single-token (`N`/`V`) slot breaks attachment, so the branch groups land on a
-/// later sibling (`\seq_if_in:NnTF \l_seq {item} {T} {F}` hangs all three off
-/// `\l_seq`; `\prop_get:NnNTF \p {k} \l {T} {F}` hangs two off `\l`) or on the
-/// stream itself when a `WORD` intervenes (`\int_compare:nNnTF {a} = {1} {T} {F}`).
-/// Where a branch ended up is an accident of the surrounding tokens, so it must not
-/// decide the layout — [`Expl3Unit::branches`] resolves all three shapes alike.
-///
-/// The head is assembled as a plain element vector mixing the unit's top-level
-/// siblings with a *prefix* of the owning node's children; nothing in the tree is
-/// moved, and lowering that prefix through [`lower_expl_code`] under
-/// [`Statements::Ignore`] is byte-for-byte what [`lower_node`]'s `COMMAND` arm
-/// would have done with the whole node.
-///
-/// Pass-stable for the same reason the head-attached explosion is: brace arguments
-/// attach across the inserted newlines, so the exploded output re-parses to the
-/// same unit with the same branches and re-explodes identically.
-///
-/// `None` unless the tail is a clean branch list — the `GROUP`s after the split
-/// must be *exactly* `unit.branches`, which rejects both an over-attached trailing
-/// group and a group that merely *contains* a branch deeper down.
-fn lower_expl_conditional_unit(
-    elements: &[SyntaxElement],
-    head_idx: usize,
-    unit: &Expl3Unit,
-    cx: LowerCtx<'_>,
-) -> Option<Ir> {
-    let first = unit.branches.first()?.start();
-    let mut head: Vec<SyntaxElement> = Vec::new();
-    let mut tail: Vec<SyntaxElement> = Vec::new();
-    for element in &elements[head_idx..=unit.last] {
-        let range = element.text_range();
-        if range.end() <= first {
-            head.push(element.clone());
-        } else if range.start() >= first {
-            tail.push(element.clone());
-        } else {
-            // The *owner*: the sibling greedy attachment gave the branches to. Its
-            // children split at the first branch — the leading ones (its own name
-            // token, and any argument satisfying an earlier slot) finish the head
-            // line, the rest start the branch list.
-            let owner = element.as_node()?;
-            for child in owner.children_with_tokens() {
-                if child.text_range().end() <= first {
-                    head.push(child);
-                } else {
-                    tail.push(child);
-                }
-            }
-        }
-    }
-    let found: Vec<TextRange> = tail
-        .iter()
-        .filter(|el| el.kind() == SyntaxKind::GROUP)
-        .map(|el| el.text_range())
-        .collect();
-    if found != unit.branches {
-        return None;
-    }
-    let branch_lines = expl_branch_lines(&tail, cx)?;
-    let head = trim_trailing_break(lower_expl_code(head.into_iter(), cx, Statements::Ignore));
-    Some(Ir::concat(std::iter::once(head).chain(branch_lines)))
-}
-
-/// The exploded form of the expl3 conditional headed by `elements[idx]`, plus the
-/// index of the unit's last element (the caller resumes at `last + 1`).
-///
-/// Tries the head-attached shape first ([`lower_expl_conditional`], which needs
-/// only the node and so also covers a head whose *arity* is underivable while its
-/// branch count is not — `:wTF`), then the unit-scoped one. Returns `None` when
-/// neither resolves, leaving the call on the width-driven path.
+/// Node-local: arity attachment gives a recognized conditional its branches as
+/// the head's own trailing groups, so [`lower_expl_conditional`] covers every
+/// resolvable shape — including a head whose *arity* is underivable while its
+/// branch count is not (`:wTF`), when greed happened to attach the branches.
+/// The unit-scoped reconciliation that re-split greedy sibling scatter
+/// (`\seq_if_in:NnTF \l_seq {item} {T} {F}` peeled off `\l_seq`) retired with
+/// the migration: the attachment oracle measured zero recognition
+/// disagreements between the grammar and the semantic scan over the gate
+/// corpora, so a head the node-local read cannot resolve has no unit either.
+/// Returns `None` to leave the call on the width-driven path.
 fn expl_conditional_at(
     elements: &[SyntaxElement],
     idx: usize,
@@ -4063,15 +4003,8 @@ fn expl_conditional_at(
         return None;
     }
     let n = expl3::conditional_branches(&command_name(node)?)?;
-    if let Some(ir) = lower_expl_conditional(node, cx, n) {
-        return Some((ir, idx));
-    }
-    let unit = expl3_unit(elements, idx)?;
-    if unit.branches.len() != n {
-        return None;
-    }
-    let ir = lower_expl_conditional_unit(elements, idx, &unit, cx)?;
-    Some((ir, unit.last))
+    let ir = lower_expl_conditional(node, cx, n)?;
+    Some((ir, idx))
 }
 
 /// Lower a single loose token (one not collapsed into a trivia run) to inline IR.

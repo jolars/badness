@@ -41,7 +41,6 @@
 ./base/ltfntcmd.dtx	content-change
 ./base/ltfssaxes.dtx	comment-change
 ./base/ltfssaxes.dtx	content-change
-./base/ltfssdcl.dtx	idempotency
 ./base/ltfssini.dtx	comment-change
 ./base/ltfssini.dtx	content-change
 ./base/ltfsstrc.dtx	comment-change
@@ -62,7 +61,6 @@
 ./base/ltpage.dtx	content-change
 ./base/ltpara.dtx	comment-change
 ./base/ltpara.dtx	content-change
-./base/ltpara.dtx	idempotency
 ./base/ltpictur.dtx	comment-change
 ./base/ltpictur.dtx	content-change
 ./base/ltplain.dtx	comment-change

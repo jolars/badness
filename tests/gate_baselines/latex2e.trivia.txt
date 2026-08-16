@@ -22,7 +22,6 @@
 ./base/ltfloat.dtx	trivia	content-change
 ./base/ltfntcmd.dtx	trivia	content-change
 ./base/ltfssaxes.dtx	trivia	content-change
-./base/ltfssdcl.dtx	trivia	non-fixed-point
 ./base/ltfssini.dtx	trivia	content-change
 ./base/lthooks.dtx	trivia	content-change
 ./base/ltluatex.dtx	trivia	content-change
@@ -59,7 +58,9 @@
 ./required/latex-lab/latex-lab-block.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-context.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-enumitem.dtx	format-error	format-error
+./required/latex-lab/latex-lab-firstaid.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-graphic.dtx	trivia	non-fixed-point
+./required/latex-lab/latex-lab-l3doc-tagging.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-math.dtx	trivia	non-fixed-point
 ./required/latex-lab/latex-lab-new-or-2.dtx	format-error	format-error
 ./required/latex-lab/latex-lab-sec-template.dtx	trivia	non-fixed-point
@@ -79,5 +80,4 @@
 ./texmf/tex/latex/l3kernel/l3doc.cls	trivia	non-fixed-point
 ./texmf/tex/latex/l3packages/xparse/xparse-2018-04-12.sty	trivia	non-fixed-point
 ./texmf/tex/latex/l3packages/xparse/xparse-generic.tex	trivia	non-fixed-point
-./texmf/tex/latex/pdfmanagement/latex-lab-testphase-bookmark.sty	trivia	non-fixed-point
 ./texmf/tex/latex/tagpdf/tagpdf.sty	trivia	non-fixed-point

@@ -1,6 +1,8 @@
 //! Arity-directed argument attachment for expl3 call sites — the grammar half
-//! of `AGENTS.md` decision #8's sanctioned deviation (staged migration;
-//! `TODO.md` carries the plan and the answered questions).
+//! of `AGENTS.md` decision #8's sanctioned deviation. Landed through the
+//! staged migration `TODO.md` recorded: the token-level scan was diffed
+//! against `semantic::expl3`'s independent consumption over the gate corpora
+//! (67k statement-leading heads) before any consumer flipped.
 //!
 //! In an expl3 region `:`/`_` are letters, so a function name lexes as one
 //! `CONTROL_WORD` carrying its own argspec suffix (`\tl_set:Nn`). Attachment
@@ -49,20 +51,6 @@ use super::Parser;
 use super::trivia::{BLANK_LINE_NEWLINES, CommentMode};
 use crate::semantic::expl3::{Expl3Slot, expl3_slots};
 use crate::syntax::SyntaxKind;
-
-/// Which attachment strategy expl3 call sites use. `Greedy` is the production
-/// default until the migration oracle (`TODO.md`, the staged plan) has been
-/// triaged; `Arity` is reachable only through the `#[doc(hidden)]`
-/// `parse_with_expl3_arity` entry that the oracle harness and the stage-1
-/// tree tests use. The mode, the entry, and this enum are all deleted when
-/// the default flips — this is migration scaffolding, not user config
-/// (decision #12 forbids config directing attachment).
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Expl3Attach {
-    #[default]
-    Greedy,
-    Arity,
-}
 
 /// One argument the scan resolved, as the token span the replay consumes.
 /// The *shape* is recorded because the replay must emit different events per
@@ -262,19 +250,23 @@ impl UnitScan<'_, '_> {
     /// comments, and `~` (a `~` is a space token TeX skips before an
     /// undelimited argument, so it can never satisfy a slot; it stays in the
     /// extent for the layout loop's tilde arm). Returns the candidate's index
-    /// without consuming it.
+    /// without consuming it, plus whether the gap crossed an *own-line
+    /// comment* — the slot handlers read that flag, because a comment-glued
+    /// gap stops the unit only where greedy attachment would have stopped
+    /// too: a `{…}` candidate past it was glued by greed (a comment is
+    /// content that resets the newline run for attachment), while any other
+    /// candidate keeps the own-line-comment-ends-the-unit rule.
     ///
-    /// A gap of two or more newlines is [`Stop::End`]. A comment is
-    /// transparent, but its flanking newlines still bound the gap — the
-    /// newline count is *not* reset, so an own-line comment mid-unit ends the
-    /// unit exactly like a blank line — and an own-line comment run that binds
-    /// forward into a following construct ([`Parser::binding_run`]) becomes
-    /// that construct's `DOC_COMMENT`, a node the unit must not swallow, so it
-    /// aborts. A docstrip `GUARD` or `DOC_MARGIN` mid-unit aborts: guarded
-    /// alternative bodies make arity lie (issue #78). Running out of stream
-    /// (EOF, the macrocode frame, an alias closer) aborts.
-    fn advance(&mut self) -> Result<usize, Stop> {
+    /// A *bare* blank line (two newlines with no comment between) stops per
+    /// [`Self::gap_stop`]. An own-line comment run that binds forward into a
+    /// following construct ([`Parser::binding_run`]) becomes that construct's
+    /// `DOC_COMMENT`, a node the unit must not swallow, so it aborts. A
+    /// docstrip `GUARD` or `DOC_MARGIN` mid-unit aborts: guarded alternative
+    /// bodies make arity lie (issue #78). Running out of stream (EOF, the
+    /// macrocode frame, an alias closer) aborts.
+    fn advance(&mut self) -> Result<(usize, bool), Stop> {
         let mut newlines = 0usize;
+        let mut crossed_comment = false;
         let gap_start = self.i;
         loop {
             if self.i >= self.bound {
@@ -294,10 +286,14 @@ impl UnitScan<'_, '_> {
                     if self.p.binding_run(self.i).is_some() {
                         return Err(Stop::Abort);
                     }
+                    if newlines > 0 {
+                        crossed_comment = true;
+                    }
+                    newlines = 0;
                     self.i += 1;
                 }
                 SyntaxKind::GUARD | SyntaxKind::DOC_MARGIN => return Err(Stop::Abort),
-                _ => return Ok(self.i),
+                _ => return Ok((self.i, crossed_comment)),
             }
         }
     }
@@ -383,8 +379,14 @@ impl UnitScan<'_, '_> {
     /// braced group (TeX-faithful: `N` vs `n` is convention, not matching
     /// behavior).
     fn take_single_token(&mut self) -> Result<(), Stop> {
-        let idx = self.advance()?;
+        let (idx, crossed) = self.advance()?;
         let t = &self.p.tokens[idx];
+        // Past an own-line comment, only what greedy attachment glued is
+        // consumable — a real braced candidate; anything else ends the unit
+        // at the comment (`semantic::expl3`'s own-line-comment rule).
+        if crossed && !(t.kind == SyntaxKind::L_BRACE && !self.p.plain_braces.contains(&idx)) {
+            return Err(Stop::End);
+        }
         match t.kind {
             SyntaxKind::CONTROL_WORD if !self.control_word_forms_node(idx) => {
                 self.args.push(PlanArg::Command(idx));
@@ -402,8 +404,11 @@ impl UnitScan<'_, '_> {
             SyntaxKind::HASH => {
                 self.push_token(idx);
                 loop {
-                    let next = self.advance()?;
+                    let (next, crossed) = self.advance()?;
                     let t = &self.p.tokens[next];
+                    if crossed {
+                        return Err(Stop::End);
+                    }
                     match t.kind {
                         SyntaxKind::HASH => self.push_token(next),
                         SyntaxKind::WORD if is_param_digit_text(&t.text) => {
@@ -429,9 +434,11 @@ impl UnitScan<'_, '_> {
     /// sloppy shapes swallow the next statement's head — those stay greedy,
     /// matching the semantic scan.
     fn take_group(&mut self) -> Result<(), Stop> {
-        let idx = self.advance()?;
+        let (idx, crossed) = self.advance()?;
         if self.p.tokens[idx].kind != SyntaxKind::L_BRACE {
-            return Err(Stop::Abort);
+            // Past an own-line comment the unit ends rather than aborts: the
+            // comment bounded the gap, and the consumed prefix commits.
+            return Err(if crossed { Stop::End } else { Stop::Abort });
         }
         let end = self.group_end(idx).ok_or(Stop::Abort)?;
         self.args.push(PlanArg::Group(idx..end));
@@ -449,8 +456,11 @@ impl UnitScan<'_, '_> {
     /// abort.
     fn take_parameter_text(&mut self) -> Result<(), Stop> {
         loop {
-            let idx = self.advance()?;
+            let (idx, crossed) = self.advance()?;
             let t = &self.p.tokens[idx];
+            if crossed && !(t.kind == SyntaxKind::L_BRACE && !self.p.plain_braces.contains(&idx)) {
+                return Err(Stop::End);
+            }
             match t.kind {
                 SyntaxKind::L_BRACE if !self.p.plain_braces.contains(&idx) => return Ok(()),
                 SyntaxKind::R_BRACE if !self.p.plain_braces.contains(&idx) => {
@@ -672,15 +682,30 @@ mod tests {
     }
 
     #[test]
-    fn own_line_comment_mid_unit_ends_the_unit() {
-        // The comment's flanking newlines bound the gap like a blank line; the
-        // `{ x }` on the next line is not consumed.
+    fn braced_candidate_past_an_own_line_comment_is_consumed() {
+        // Greedy attachment crosses an own-line comment to a following `{…}`
+        // (a comment is content that resets the newline run), so the glued
+        // group is consumable — the comment rides the unit, exactly as it
+        // rode the attached sibling before the migration.
         let (args, complete) = scan(
             &format!("{ON}\\tl_set:Nn \\l_tmpa_tl\n% doc\n{{ x }}\n"),
             "\\tl_set:Nn",
         )
         .expect("recognized");
-        assert_eq!(args, ["cmd:\\l_tmpa_tl"]);
+        assert_eq!(args, ["cmd:\\l_tmpa_tl", "group:{ x }"]);
+        assert!(complete);
+    }
+
+    #[test]
+    fn non_braced_candidate_past_an_own_line_comment_ends_the_unit() {
+        // Anything greedy would not have glued keeps the own-line-comment
+        // rule: the unit ends at the gap with its consumed prefix.
+        let (args, complete) = scan(
+            &format!("{ON}\\cs_new:Npn \\module_foo:n\n% doc\n#1 {{ x }}\n"),
+            "\\cs_new:Npn",
+        )
+        .expect("recognized");
+        assert_eq!(args, ["cmd:\\module_foo:n"]);
         assert!(!complete);
     }
 

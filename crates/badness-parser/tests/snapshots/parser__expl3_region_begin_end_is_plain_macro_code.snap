@@ -1,6 +1,5 @@
 ---
-source: tests/parser.rs
-assertion_line: 895
+source: crates/badness-parser/tests/parser.rs
 expression: "tree(\"\\\\ExplSyntaxOn\\n\\\\tl_set:Nn \\\\l_tmpa_tl { \\\\begin { longtable } { ll } }\\n\\\\tl_put_right:Nn \\\\l_tmpa_tl { \\\\end { longtable } }\\n\\\\ExplSyntaxOff\\n\")"
 ---
 ROOT@0..134
@@ -8,11 +7,11 @@ ROOT@0..134
     COMMAND@0..13
       CONTROL_WORD@0..13 "\\ExplSyntaxOn"
     NEWLINE@13..14 "\n"
-    COMMAND@14..24
+    COMMAND@14..67
       CONTROL_WORD@14..24 "\\tl_set:Nn"
-    WHITESPACE@24..25 " "
-    COMMAND@25..67
-      CONTROL_WORD@25..35 "\\l_tmpa_tl"
+      WHITESPACE@24..25 " "
+      COMMAND@25..35
+        CONTROL_WORD@25..35 "\\l_tmpa_tl"
       WHITESPACE@35..36 " "
       GROUP@36..67
         L_BRACE@36..37 "{"
@@ -36,11 +35,11 @@ ROOT@0..134
         WHITESPACE@65..66 " "
         R_BRACE@66..67 "}"
     NEWLINE@67..68 "\n"
-    COMMAND@68..84
+    COMMAND@68..118
       CONTROL_WORD@68..84 "\\tl_put_right:Nn"
-    WHITESPACE@84..85 " "
-    COMMAND@85..118
-      CONTROL_WORD@85..95 "\\l_tmpa_tl"
+      WHITESPACE@84..85 " "
+      COMMAND@85..95
+        CONTROL_WORD@85..95 "\\l_tmpa_tl"
       WHITESPACE@95..96 " "
       GROUP@96..118
         L_BRACE@96..97 "{"

@@ -354,38 +354,25 @@ fn dtx_doc_margin_frame_survives_reflow() {
 
 /// The reduced hybrid behind [`trivia_check_fires_on_a_known_hybrid`]. Kept as a
 /// literal so the exact whitespace survives editing.
-const HYBRID_TEX: &str = r#"  \ExplSyntaxOn
+///
+/// Reduced from latex3's `l3kernel/l3fp-trig.dtx`, one of the
+/// `non-fixed-point` entries recorded when arity-directed expl3 attachment
+/// landed (the previous xparse-generic reduction converged under structural
+/// argument ownership). The load-bearing piece is the `\exp_after:wN` chain:
+/// every head is `w`-underivable, so the whole body is fallback statements
+/// whose greedy refill of the `all-newlines-to-spaces` variant lands the
+/// `\c_…_intarray` operands at widths the next pass re-fills differently.
+const HYBRID_TEX: &str = r#"\ExplSyntaxOn
+\cs_new:Npn \module_trig_large:w #1
   {
-      {
-      }
+    \exp_after:wN \module_trig_auxiii:w \int_value:w \kernel_intarray_item:Nn
+    \c_module_trig_intarray
+      { \module_int_eval:w #1 + 2 \scan_stop: }
+    \exp_after:wN \module_trig_auxiii:w \int_value:w \kernel_intarray_item:Nn
+    \c_module_trig_intarray
+      { \module_int_eval:w #1 + 3 \scan_stop: } \exp_stop_f:
   }
-  {
-      {
-          {
-          }
-      }
-  }
-  {
-    \bool_if:NT \l__xparse_defaults_bool
-      {
-          {
-          }
-      }
-      { \cs_set_nopar:Npx } { \cs_set_protected_nopar:Npx } #1
-      {
-            {
-            }
-      }
-    \bool_if:NTF \l__xparse_some_long_bool
-      {
-        \bool_if:NT \l__xparse_some_short_bool
-          {
-          }
-        \cs_set:cpx
-      }
-      { \cs_set_nopar:cpx }
-          { \l__xparse_function_tl \c_space_tl } ##1##2 { ##1 {##2} }
-  }
+\ExplSyntaxOff
 "#;
 
 #[test]

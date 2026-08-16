@@ -2675,10 +2675,35 @@ fn lower_expl_code(
                     // [`StatementMap::glue_before`] and
                     // [`StatementMap::is_glued`]) — the line overflows instead.
                     if sep_before_next.is_none() {
+                        // Inside a command node's own stream (`Ignore` — no
+                        // boundary map), a gap before a *bare* argument (a
+                        // consumed `#`-parameter, relation, or bare command;
+                        // anything but a `{…}`/`[…]`) is unbreakable:
+                        // `glue_before`'s rationale one level down, and the
+                        // house style's — a call breaks before a braced
+                        // argument, never between its single-token operands.
+                        // A width wrap here would emit a newline inside the
+                        // node before a non-group child, the shape the
+                        // fallback segmentation reads as a statement boundary
+                        // (`semantic::expl3::fallback_line`'s bare-line-break
+                        // rule); hardening the gap is what makes that rule's
+                        // fixed-point argument total: the formatter can only
+                        // ever break a command node before a braced argument.
+                        let bare_arg_glue = map.is_none() && elements.get(idx).is_some_and(|el| {
+                            !matches!(
+                                el,
+                                SyntaxElement::Node(n)
+                                    if matches!(n.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
+                            ) && !matches!(
+                                el,
+                                SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT
+                            )
+                        });
                         sep_before_next = Some(
-                            if map
-                                .as_ref()
-                                .is_some_and(|m| m.glue_before(idx) || m.is_glued(idx))
+                            if bare_arg_glue
+                                || map
+                                    .as_ref()
+                                    .is_some_and(|m| m.glue_before(idx) || m.is_glued(idx))
                             {
                                 Ir::verbatim(" ")
                             } else {

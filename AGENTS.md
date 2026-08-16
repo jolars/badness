@@ -243,7 +243,7 @@ provenance.
    admitted fact is a routing or pairing fact, and why database arity never directs
    attachment: over-attachment is byte-identical to correct attachment, so a wrong
    arity fails silently past every oracle. (The self-describing expl3 argspec is the
-   sanctioned exception — decision #8's staged migration.) The bulk CWL tier fails
+   sanctioned, landed exception — decision #8.) The bulk CWL tier fails
    both bars; scanned and ambient data fail decision #8's purity reasons. See
    `docs/src/development/architecture.md`.
 
@@ -326,19 +326,24 @@ provenance.
    never direct attachment. Sanctioned
    deviations read static facts only: **`[…]` attachment is shape-gated**—a bracket is
    an argument only when it reads as one, from static shape facts, never meaning—and
-   the **expl3 argspec suffix** (the one dialect whose arity rides in the token
-   itself, so arity-directed attachment is as text-pure as greed) is an **approved,
-   staged migration** — TODO.md carries the plan. Today the semantic layer derives
-   the arity (`semantic::expl3`) and the formatter consumes it; the trigger the
-   candidate was parked on has fired: linter and LSP features need shared argument
-   ownership, and every consumer of the semantic units pays a per-feature
-   reconciliation tax mapping them back onto mismatched greedy tree boundaries (the
-   same contention that deferred in-region conditionals). The risk is priced, not
-   waved off: mis-attachment is byte-invisible — losslessness and idempotence hold
-   over a wrong tree — so the migration's oracle is a diff of grammar attachment
-   against `semantic::expl3::segment_expl_statements` over the gate corpora before
-   any consumer flips, and fixtures are the net thereafter. See
-   `docs/src/development/architecture.md`
+   **in-region expl3 heads attach by their argspec suffix** (landed via the staged
+   migration TODO.md recorded): the one dialect whose arity rides in the token
+   itself, so arity-directed attachment is as text-pure as greed — and greed was a
+   systematically wrong guess there, every single-token slot breaking the run. The
+   trigger keys on token shape alone (a colon-carrying `CONTROL_WORD` only lexes
+   in-region); `w`/`D`/colonless heads and the `\::n` drivers stay greedy, and the
+   scan aborts to greed wherever it cannot mirror the walk (in-math heads, guard
+   or margin mid-unit, unreachable closers), with no diagnostic. The scan and the
+   attachment are one implementation (`grammar/expl3.rs`: a pure token scan
+   produces a plan the walk replays exactly). The priced risk was retired by
+   measurement, not waved off: mis-attachment is byte-invisible, so before any
+   consumer flipped, the migration oracle diffed grammar attachment against
+   `semantic::expl3`'s independent consumption over the gate corpora — 67k
+   statement-leading heads, zero disagreements outside the benign
+   greedy-leftover class — and fixtures are the net since. `semantic::expl3`
+   remains the statement-extent resolver and the underivable-head fallback;
+   the formatter's per-feature reconciliation (the conditional two-path, the
+   grouped-sibling cache) is gone. See `docs/src/development/architecture.md`
    (§ *Argument grouping and bracket policy*).
 
 9. **Trivia attachment follows the rust-analyzer rule:** comments bind *forward* (a
@@ -496,15 +501,18 @@ covered in `docs/src/development/architecture.md`.
   \#71, \#94, \#96, \#97) is one decision keyed on the unsafe predicate.
 
   expl3 statement boundaries are **structural**: a call unit is the head plus the
-  arguments its argspec arity consumes (`semantic::expl3::expl3_slots`, decision #2's
-  "semantic layer assigns arity"; segmentation in
-  `semantic::expl3::segment_expl_statements`), so the formatter owns
-  one-call-per-line and a width wrap re-derives the same unit on every pass. The old
-  newline rule survives only as the per-statement **fallback** for underivable heads
-  (no `:` suffix, `w`/`D`/unknown letters, shape mismatches, guards mid-unit) and for
-  a unit's same-line trailing junk — Tier 2, with its fixed-point argument written in
+  arguments its argspec arity consumes — now attached in the *tree* (decision #8's
+  landed deviation, `grammar/expl3.rs`), with `semantic::expl3::expl3_slots` the
+  shared arity model and `semantic::expl3::segment_expl_statements` resolving
+  statement extents over recognized and greedy-shaped material alike — so the
+  formatter owns one-call-per-line and a width wrap re-derives the same unit on
+  every pass. The old newline rule survives only as the per-statement **fallback**
+  for underivable heads (no `:` suffix, `w`/`D`/unknown letters, shape mismatches,
+  guards mid-unit — where the grammar scan aborted to greed) and for a unit's
+  same-line trailing junk — Tier 2, with its fixed-point argument written in
   `semantic::expl3` (greedy self-refilling lines, no wrap before a recognized
-  head, junk-glued statements all-hard).
+  head, junk-glued statements all-hard, a fallback statement ending after a node
+  that carries a bare-argument line break).
 
   Picture-body statement boundaries are structural the same way, from the other
   direction: the *parser* owns the node (decision #1's picture-statement mode

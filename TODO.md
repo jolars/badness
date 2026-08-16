@@ -10,42 +10,56 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **Arity-directed expl3 attachment (decision #8's sanctioned deviation —
-  approved, staged).** In-region, the argspec suffix rides in the `CONTROL_WORD`
-  token, so attachment directed by `semantic::expl3::expl3_slots` is exactly as
-  text-pure as greed — and greedy is a systematically wrong guess there (every
-  `N`/`V` slot breaks the run, so `\tl_set:Nn \l_a {x}` attaches `{x}` to the
-  definee; the formatter's peel-back of greedily over-attached arguments,
-  `semantic::expl3::segment_expl_statements`, exists only to undo this). Keys on token
-  shape alone (colon-suffixed names only lex as one token in-region — no grammar
-  region-awareness needed); `w`/`D`/colonless fall back to greed. **Approved**
-  because the recorded trigger has fired: linter and LSP features need shared
-  argument ownership, and while `semantic::expl3` is one module any consumer can
-  call, each caller pays a per-feature reconciliation tax mapping semantic units
-  back onto mismatched greedy tree boundaries — the same contention that
-  deferred in-region conditionals. The three migration questions, answered
-  rather than waved off:
+- [x] ~~**Arity-directed expl3 attachment (decision #8's sanctioned deviation —
+  approved, staged).**~~ **Landed.** In-region colon-suffixed heads attach by
+  argspec arity (`grammar/expl3.rs`: a pure token scan produces an `Expl3Plan`
+  the walk replays exactly, so the gate mirrors the walk by construction);
+  `w`/`D`/colonless and the `\::n` drivers stay greedy, a blank line at
+  paragraph level aborts while inside a group it commits the consumed prefix,
+  and in-math heads never scan (an `N` slot would swallow the enclosing
+  closer). Keyed on token shape alone — a colon-carrying `CONTROL_WORD` can
+  only have lexed in-region — which also covers implicit `.dtx` regions the
+  toggle index cannot see.
 
-  - *Mixed-shape CST*: confined to regions the lexer already marks, and
-    consumers already handle both shapes today through the segmentation, so the
-    shape count does not grow.
-  - *False-positive blast radius*: accepted and priced. Mis-attachment is
-    byte-invisible — losslessness and idempotence hold over a wrong tree — so
-    the tree gains no oracle the formatter lacks; it keeps the same
-    fixture-grade net with wider consequences (acting consumers: autofix spans,
-    future refactoring edits). Bought because it ends the two-owner contention
-    and concentrates debugging in one snapshotable structure.
-  - *texlab divergence ledger*: expl3 regions are allowlisted wholesale as
-    intentional divergence — texlab has no argspec model to compare against.
+  The staged plan ran as recorded: the migration oracle diffed grammar
+  attachment against `semantic::expl3`'s independent consumption over the gate
+  corpora (67k statement-leading heads, 265 files) and was triaged to zero
+  disagreements outside the benign leftover class before any consumer flipped;
+  it surfaced two scan-vs-walk boundary bugs (an in-math head consuming its
+  enclosing `\]`; a paragraph separator read as a partial-commit blank line)
+  now pinned as corpus fixtures. The formatter consumers then shrank to node
+  reads: conditional branches come from the head node
+  (`lower_expl_conditional_unit` and the two-path dispatch deleted), the
+  grouped-sibling suppression reads the owner's earlier children
+  (`GroupedSiblingCache` deleted), and `semantic::expl3`'s consumption remains
+  as the shape-agnostic statement-extent resolver — the underivable-head
+  fallback — now extended over greedy-attachable tails so statement extents
+  survived the flip unchanged. Two stabilization rules rode along, each from
+  an idempotency break the new shapes made reachable (`fallback_line`'s
+  bare-line-break boundary; unbreakable bare-operand gaps inside a call).
+  Gate results and provenance in `tests/gate_baselines/README.md`; rationale
+  in `docs/src/development/architecture.md` (§ *Argument grouping and bracket
+  policy*).
 
-  Order of work: (1) attachment behind the existing region detection; (2) the
-  migration oracle — diff grammar attachment against
-  `semantic::expl3::segment_expl_statements` over the gate corpora and triage
-  every disagreement, *before* flipping any consumer; (3) flip consumers and
-  shrink the semantic layer to the underivable-head fallback; (4) update
-  AGENTS.md decision #8 to *landed*, `.claude/rules/parser.md`, and the
-  parse-compat allowlist. Rationale in `docs/src/development/architecture.md`
-  (§ *Argument grouping and bracket policy*).
+  Unlocked follow-ups, now that argument ownership is in the tree:
+
+  - **signatureHelp inside expl3 regions** (`src/lsp/signature_help.rs`): the
+    cursor's owning call is the parent chain, and the argspec is a DB-free
+    signature source.
+  - **`missing-required-argument` in regions**: a recognized head's argument
+    count is now a node fact.
+  - **In-region conditionals** (`\if_int_compare:w … \else: … \fi:`): their
+    recorded deferral reason — a `CONDITIONAL` node would contend with the
+    segmentation's layout ownership — is retired.
+
+- [ ] **Trailing comment after `\ExplSyntaxOff` relocates and rebinds**
+  (pre-existing, surfaced by the migration triage): formatting
+  `\ExplSyntaxOff % comment` moves the comment to its own line, where the next
+  parse binds it as the following construct's `DOC_COMMENT` and changes that
+  construct's layout — an idempotency break at default settings. Reduced from
+  `array-2024-06-01.sty` lines 380–392; reproduces identically on the
+  pre-migration tree, so it is the trailing-comment-never-relocates rule
+  failing at the region boundary, not an attachment fact.
 
 - [x] ~~**Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
   node.**~~ **Landed.** The `latexindent` corpus's largest uncovered construct
@@ -84,7 +98,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   - **expl3 in-region conditionals** (`\if_int_compare:w … \else: … \fi:`, 14.5%
     of corpus openers) are skipped: the formatter owns in-region layout through
     `semantic::expl3`'s statement segmentation, and a node there would contend
-    with it.
+    with it. *That contention retired with arity-directed attachment (the
+    landed entry above), so this is now an ordinary candidate rather than a
+    carve-out.*
 
 - [ ] **Keep carving `grammar.rs`** (3,959 lines after the first cut, which
   took `grammar/facts.rs` and `grammar/trivia.rs`; `grammar/prescan.rs` came

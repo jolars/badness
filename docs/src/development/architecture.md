@@ -828,6 +828,22 @@ snippets — one per sanctioned lexer mode — and the parser corpus. Both oracl
 carry should-panic self-tests, since a net nobody has watched catch something is
 not evidence that it can.
 
+Breadth comes from the **corpus sweep**
+(`crates/badness-parser/tests/reparse_corpus_sweep.rs`,
+`task reparse-corpora:check`): the same generator and the same checker, shared
+as `tests/support/reparse_harness.rs`, run over the pinned gate corpora — \~6.3k
+files against the fast suite's \~90 — with each file parsed under the
+`LexConfig` its extension would get. It asserts the invariant and a per-driver
+splice-rate **floor**, and records the exact tallies in
+`tests/reparse_baselines/` as a two-sided ratchet in the shape of
+`tests/gate_baselines/`. The floor and the record answer different questions:
+every invariant assertion is vacuously true on a refusal, so a guard that
+narrowed a tier to nothing would leave the sweep green while testing nothing
+(panache's window cutoff cost its fuzzer two thirds of its coverage with every
+assertion still passing), while the recorded tier columns catch the movement no
+floor can see — a workload changing *tier*, which keeps every rate identical
+because declining is always sound.
+
 ### Typed AST wrappers
 
 On top of the untyped rowan CST sits a thin typed layer: rust-analyzer-style

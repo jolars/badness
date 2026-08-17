@@ -2397,12 +2397,163 @@ copies plus a table splice, and the remainder is the parse's own consumers.
     now and a layout mode moves row 0 with it. The bimodality lived in the
     byte-at-a-time rescan that `LineTable::patch` deleted.
 
-- [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
-  files, already pinned) as a two-sided ratchet in the shape of
-  `scripts/check_gate_baselines.sh` + `tests/gate_baselines/`. Assert a floor on
-  the splice rate per driver, so a future guard cannot silently empty the
-  harness — panache's window cutoff cost its fuzzer two thirds of its coverage
-  while every assertion still passed.
+- [x] **Phase 6: corpus sweep.** Seeded edits over the pinned `corpora/` — 6,276
+  source files and 38.7 MB of them, the 312 MB this item used to quote being the
+  four checkouts with their `.git` directories — as a two-sided ratchet in the shape of
+  `scripts/check_gate_baselines.sh` + `tests/gate_baselines/`:
+  `scripts/check_reparse_baselines.sh` + `tests/reparse_baselines/`, driven by
+  `crates/badness-parser/tests/reparse_corpus_sweep.rs` (`task
+  reparse-corpora:check`, 59 s). Five drivers — `word-typing`, `word-deleting`,
+  `protected-typing`, `hazard-single`, `hazard-chain` — each with a per-corpus
+  splice-rate floor. **No divergence anywhere**: 256k generated edits, of which
+  99k spliced and were each compared against a full parse — in release, where the
+  in-crate debug oracle is absent.
+
+  The generator, the alphabet, and the checker moved into
+  `tests/support/reparse_harness.rs`, shared with `incremental_reparse.rs`: a
+  second copy of the hazard alphabet that drifted by one entry would make a sweep
+  failure unreachable from the fast suite, which is where a reduction actually
+  gets written.
+
+  Four findings.
+
+  - **The sweep must parse each file the way the CLI would, and that is not a
+    detail.** Read as plain documents, latex3 typed at 72%; under each
+    extension's real `LexConfig` it is 40%. The difference is `.dtx`, and the
+    number to record is the second one — the first measures a workload no caller
+    can ask for.
+  - **`.dtx` splices nothing at all, and it is most of the package corpora.**
+    Both leaf tiers bail on `config.dtx` in their first statement (a known
+    refusal: `implicit_expl` is a whole-input fact, so a fragment can be lexed
+    under a regime the file never had *and still pass* faithfulness). The sweep
+    puts a number on it: 4,405 word-typing attempts across latex3 and latex2e,
+    zero splices, against 85%/89% on the same corpora's `.tex` files and 99% for
+    protected typing in pgf, which holds no `.dtx`. That is the largest hole
+    either tier has, and the measurement is what makes it worth reopening rather
+    than a refusal to live with — Phase 6.5 below.
+  - **Floors are per corpus, not over the union.** A collapse confined to `.tex`
+    would hide behind pgf's volume otherwise. They sit at roughly half the lowest
+    recorded rate: a tripwire that survives an ordinary re-record, since the
+    recorded tallies are what notice ordinary movement.
+  - **The tier columns are load-bearing, not decoration.** Declining is always
+    sound, so a workload moving from one tier to another leaves every rate
+    identical and every assertion green. `token=`/`verbatim=`/`region=` is the
+    only thing in the ratchet that would see it; the check classifies a row that
+    moved that way as `CHANGED`, distinct from `REGRESSION` and `STALE`.
+
+- [ ] **Phase 6.5: `.dtx` on the leaf tiers.** Phase 6 put a number on the
+  largest hole either tier has: `.dtx` splices **nothing**, 4,405 word-typing
+  attempts for zero splices, over 301 files that are half of latex3 and latex2e
+  by count and more by bytes. Every keystroke in l3 package source is a full
+  parse. Establish whether the wholesale refusal is *necessary*, and if not, what
+  the narrowest sound version is.
+
+  The refusal reads as one reason and is really two. The token tier says the
+  docstrip mode lexes by line and by column 0, which an isolated fragment cannot
+  reproduce. The protected tier says `implicit_expl` is derived from a scan of the
+  entire input, so a fragment can be lexed under a regime the file never had **and
+  still pass faithfulness** — Phase 3 hoped the whole-node relex would lift the
+  first reason and found the second underneath it. The second is the load-bearing
+  one, and it generalizes past `implicit_expl`: what a `.dtx` fragment lacks is not
+  *column* but the lexer's left-to-right state at the leaf's offset —
+  `at_line_start`, `in_doc_line`, `at_letter`/`expl_syntax` (both raised inside a
+  `macrocode` chunk), `macrocode` itself, and `implicit_expl`. Decision #6 says
+  none of that is checkpointed, and adding a checkpoint is a new decision.
+
+  **Where state *is* needed, none of it needs checkpointing: every bit is
+  derivable from the base tree or carried on the base.** (That is the route for
+  the protected tier. The token tier turned out not to need any of it — step 1
+  below.) `at_line_start` is `O(1)` from the byte before the leaf. `in_doc_line` is
+  whether the line's first leaf is a `DOC_MARGIN`, which is `O(1)` from the leaf's
+  own siblings. `macrocode`/`at_letter`/`expl_syntax` are an *ancestor* question,
+  the same shape as the protected tier's "the delimiters are the mode".
+  `implicit_expl` is a function of the base text that the base parse already
+  computed once: carry it on `ReparseBase` and refuse when the edit could move the
+  signal (`\ProvidesExpl`, a `%<@@=…>` line). None of that is a checkpoint — it is
+  the same trick the protected tier already plays, read off the tree instead of
+  saved during the walk.
+
+  **Direction is not symmetric, and that is the part to get right.** Most
+  wrong-state relexes are *conservative*: the isolated fragment defaults to fewer
+  letters than a `macrocode` body has (`at_letter: false`, `expl_syntax: false`),
+  so it splits where the file merges, the kind sequence grows, and the tier
+  refuses. The unsound direction is where the isolated default is *more*
+  permissive, and at least one such case exists — `in_doc_line: false` makes a
+  `^^A` ordinary content where the file reads it as a comment to end of line. That
+  one turns out to be blocked, but incidentally rather than deliberately (step 1),
+  which is why the work still owes an enumeration of the permissive directions:
+  assuming the sequence check catches everything is exactly the assumption the
+  protected tier's note records as having failed.
+
+  **Step 1 is done, and it says the token tier's bail is probably redundant.**
+  Deleting `reparse_token`'s `if base.config.dtx` and re-running the Phase 6 sweep
+  (release, ~256k edits) produced **zero divergences** and moved only what it
+  should:
+
+  | row                  | before  | after   | `.dtx` share of the gain |
+  | -------------------- | ------- | ------- | ------------------------ |
+  | latex3 word-typing   | 40%     | 73%     | +1305 of 2035 (64%)      |
+  | latex2e word-typing  | 45%     | 77%     | +1670 of 2370 (70%)      |
+  | latex3 hazard-single | 19%     | 25%     |                          |
+  | pgf, every row       | —       | —       | byte-identical (no `.dtx`) |
+
+  pgf holding *exactly* still is the control: the change is confined to the flavor
+  it was supposed to touch. The protected tier's rows are unchanged too, since only
+  the token tier's bail came out.
+
+  A second, sharper probe backs it up, because the sweep is structurally blind to
+  the hazard this phase predicts — its alphabet has no `^^A`, no `%<@@=`, no bare
+  `|`, and it samples offsets. An exhaustive one (every offset × a `.dtx`-aimed
+  alphabet over nine hand-written snippets: 43,623 edits, in a **debug** build, so
+  the in-crate oracle fired on every splice as well) also found nothing. Kept out
+  of the tree for now; it is step 2's raw material.
+
+  **The mechanism is the leaf-kind allowlist, not a `.dtx` argument.** Pointed
+  cases, with the bail out:
+
+  - doc-line prose word + a letter → **splices**. This is the entire win; `.dtx`
+    files are mostly documentation by word count.
+  - a bare word inside a `macrocode` body, + a letter and + `@` → **splices**
+    (`@` is catcode-12 in a `WORD` under either regime, so `at_letter` cannot bite).
+  - `^^A` into a doc-line word → refuses. Not by a guard: `^` is not `WORD`
+    material, so the isolated relex is more than one token.
+  - `%` into a doc-line word → refuses. The fragment *is* at column 0 of its own
+    input, so the isolated relex makes it a margin — a different *kind*.
+  - `@` into a control word, and an expl3 name in a `macrocode` body → refuse,
+    because `try_leaf` admits only `WORD | WHITESPACE | COMMENT` and never relexes
+    a `CONTROL_WORD` at all.
+
+  That last one is the crux: every `.dtx` state bit that changes lexing changes it
+  for control words, margins, guards, and `^^A` — and each of those changes the
+  *kind* an isolated relex yields, which the one-token-same-kind check already
+  refuses. So the argument to write is the allowlist's, and `implicit_expl` never
+  reaches the token tier because expl3 names are control words.
+
+  Remaining, in order:
+
+  1. **Write that as the enumeration test**, in the shape
+     `reparse::leaf::tests::the_text_read_survey_is_complete` already has: one
+     verdict per state bit — `at_line_start`, `in_doc_line`, `at_letter`,
+     `expl_syntax`, `macrocode`, `implicit_expl`, `short_verbs` — each with a lexer
+     counterexample beside it, and each saying *which* guard refuses it. Two
+     generators finding nothing is not the proof; this is. Only then does the bail
+     come out, and the comment it leaves behind has to carry the argument.
+  2. **The protected tier is a separate question and does not inherit any of
+     this.** It relexes whole nodes, control words included, and `implicit_expl` is
+     precisely its stated objection. Its `.dtx` rows stayed at 0 through the whole
+     experiment. Carrying `implicit_expl` on `ReparseBase` (a fact the base parse
+     already computed) plus a refusal when the edit could move the signal is the
+     obvious first cut, but it is its own enumeration.
+  3. **`benches/reparse.rs` has no `.dtx` document**, so there is no number to
+     move. It needs one — with its declared tier and its floor — *before* the work
+     lands, not after.
+  4. **Re-record `tests/reparse_baselines/` in the same commit.** The rows above
+     are what the ratchet will show; a `STALE` verdict on four of them is the
+     expected outcome, not a surprise.
+
+  Not negotiable: this is a speed item. A `.dtx` tier that produces a tree a full
+  parse would not is worse than no tier at all, because the formatter writes the
+  file.
 
 - [ ] **Phase 7: region tier.** Runs of top-level `ROOT` children, blank-line
   decoupled, with `no_straddle` plus boundary-parse-concatenation proofs. This

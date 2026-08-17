@@ -114,6 +114,18 @@ tasks:
       - cargo build --release
       - ./scripts/check_gate_baselines.sh
 
+  reparse-corpora:check:
+    desc: Sweep seeded edits over the pinned corpora and diff the splice tallies against tests/reparse_baselines/ (two-sided ratchet)
+    cmds:
+      - ./scripts/check_reparse_baselines.sh
+
+  reparse-corpora:record:
+    desc: Re-record tests/reparse_baselines/ from a fresh sweep
+    env:
+      RECORD: "1"
+    cmds:
+      - ./scripts/check_reparse_baselines.sh
+
   gate-corpora:strict-survey:
     desc: "Survey strict trivia invariance over the pinned corpora and print a reproducer histogram (non-gating: strict is the end-state contract, so most files still fail)"
     cmds:

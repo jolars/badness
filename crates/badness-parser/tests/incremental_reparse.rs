@@ -1,33 +1,11 @@
-//! The incremental reparse oracle.
+//! The incremental reparse oracle: depth.
 //!
-//! # What is asserted
-//!
-//! The governing invariant, on every edit this harness generates: whenever
-//! [`reparse`] returns `Some`, its green tree and its error vector must be
-//! byte-identical to a full parse of the edited text — and the tree must still be
-//! lossless, the house oracle every other parser test leans on. A `None` is
-//! trivially correct, since the caller full-parses.
-//!
-//! The in-crate assert (`parser::reparse::assert_matches_full_parse`) already fires
-//! on every successful reparse in a debug build, so this harness is a *generator*
-//! rather than a second checker: its job is to reach shapes a hand-written test
-//! would not. It re-checks anyway, because the in-crate assert is compiled out in
-//! release and a `cargo test --release` run must still be worth something.
-//!
-//! # Why the alphabet is what it is
-//!
-//! Random ASCII would spend its whole budget on prose. Every entry in
-//! [`HAZARD_ALPHABET`] is a character or word that changes how *later* text lexes
-//! or parses — the boundary of one of the sanctioned lexer modes. Typing a `%` mid
-//! line turns the rest of it into a comment; a `\begin{` opens an environment whose
-//! `\end` is now missing; an `\ExplSyntaxOn` re-lexes `_` and `:` as letters for
-//! the rest of the file. Those are the edits a tier has to refuse, and an alphabet
-//! that cannot spell them proves nothing.
-//!
-//! CRLF entries are deliberate rather than incidental. Panache lost its entire
-//! reparse feature on Windows-authored files to a seam predicate written as a
-//! literal `"\n\n"` test — safe, since it simply never spliced, and a total loss.
-//! Measuring the gap beats discovering it.
+//! The invariant, the alphabet's rationale, and the checker live in
+//! [`reparse_harness`], because the corpus sweep (`reparse_corpus_sweep.rs`) has to
+//! generate the same edits and check the same thing. This file is the *depth* half:
+//! hand-written snippets, one per construct whose recognition depends on text a
+//! keystroke can reach, plus the workload drivers a real editor produces. The sweep
+//! is the breadth half, over the pinned gate corpora.
 //!
 //! # Status
 //!
@@ -42,123 +20,24 @@
 //! [`the_harness_reaches_the_reparse_entry_point`] is the pointwise half of the same
 //! idea: it pins that the harness is calling the thing it claims to check.
 
+#[path = "support/reparse_harness.rs"]
+mod reparse_harness;
+
 use std::fs;
 use std::path::Path;
 
 use badness_parser::declarations::ResolvedDeclarations;
 use badness_parser::parser::{
-    Edit, LatexFlavor, LexConfig, ReparseBase, ReparseTier, Reparsed, fingerprint,
-    parse_with_declarations_resolved, reparse, reparse_edits,
+    Edit, ReparseBase, ReparseTier, Reparsed, parse_with_declarations_resolved, reparse,
 };
-use badness_parser::syntax::SyntaxNode;
 
-/// A seeded linear congruential generator (MMIX constants).
-///
-/// Hand-rolled rather than a dependency: the parser crate is wasm-clean and
-/// publishable, and a dev-dependency on a PRNG for one test is not worth the
-/// supply-chain surface. Determinism is the point — every failure prints its seed,
-/// so a reproducer is a one-line change.
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        self.0
-    }
-
-    fn below(&mut self, n: usize) -> usize {
-        if n == 0 {
-            return 0;
-        }
-        (self.next() >> 33) as usize % n
-    }
-}
-
-/// Insert candidates, each chosen because it changes how later text lexes or parses.
-const HAZARD_ALPHABET: &[&str] = &[
-    // Catcode-bearing characters: the whole reason a LaTeX token tier needs a ban list.
-    "\\",
-    "{",
-    "}",
-    "$",
-    "$$",
-    "%",
-    "&",
-    "#",
-    "^",
-    "_",
-    "~",
-    "[",
-    "]",
-    // Environment and math delimiters.
-    "\\begin{",
-    "\\end{",
-    "\\[",
-    "\\]",
-    "\\(",
-    "\\)",
-    "\\\\",
-    // Names that route the parser: verbatim bodies, math environments, aliases.
-    "verbatim",
-    "lstlisting",
-    "equation",
-    "align",
-    "itemize",
-    "document",
-    // Protected regions and short verbs.
-    "\\verb|",
-    "\\verb+",
-    "\\MakeShortVerb{\\|}",
-    // Letter-mode and expl3 region toggles, whose scope runs to end of file.
-    "\\makeatletter",
-    "\\makeatother",
-    "\\ExplSyntaxOn",
-    "\\ExplSyntaxOff",
-    ":nn",
-    ":Nn",
-    "_int",
-    // Conditionals, which pair by a forward scan for their closer.
-    "\\iffalse",
-    "\\ifnum",
-    "\\else",
-    "\\or",
-    "\\fi",
-    "\\newif",
-    // `.dtx` structure: doc margins, guards, macrocode frames.
-    "%",
-    "%<*debug>",
-    "%</debug>",
-    "%    \\begin{macrocode}",
-    "%    \\end{macrocode}",
-    // Definition heads, which drive the second parse pass.
-    "\\newcommand",
-    "\\def",
-    "\\let",
-    "\\renewcommand",
-    // Picture-body statement terminators.
-    ";",
-    "\\draw",
-    "\\node",
-    // Line structure, including the CRLF forms.
-    "\n",
-    "\n\n",
-    "\r\n",
-    "\r\n\r\n",
-    " ",
-    "  ",
-    // Ordinary content, including a multi-byte char so offsets are exercised.
-    "x",
-    "1",
-    "α",
-    "…",
-];
+use reparse_harness::{
+    Base, Lcg, Tally, assert_result_matches, assert_splice_floor, config, random_edit,
+};
 
 /// Hand-written inputs, one per construct whose recognition depends on text a
 /// keystroke can reach. These are where the interesting edits live; the corpus
-/// sweep below is breadth.
+/// sweep is breadth.
 const HAZARD_SNIPPETS: &[&str] = &[
     // Plain prose: the case the token tier exists for.
     "Some ordinary prose with a \\emph{command} in it.\n\nA second paragraph.\n",
@@ -214,112 +93,6 @@ const HAZARD_SNIPPETS: &[&str] = &[
     "{",
 ];
 
-/// The parse inputs every case in this harness runs under.
-fn config() -> LexConfig {
-    LatexFlavor::Document.into()
-}
-
-/// Full-parse `text` and check one edit against the invariant.
-///
-/// Returns whether a tier accepted the edit, so drivers can report a splice rate —
-/// a harness that stops splicing is a harness that stops testing, and that has to
-/// be visible rather than silent.
-fn check_edit(text: &str, edit: &Edit, seed: u64, label: &str) -> bool {
-    let declared = ResolvedDeclarations::default();
-    let (base_parse, ctx) = parse_with_declarations_resolved(text, config(), &declared);
-    let base = ReparseBase {
-        text,
-        green: &base_parse.green,
-        errors: &base_parse.errors,
-        ctx: &ctx,
-        config: config(),
-        declared: &declared,
-    };
-
-    if !edit.fits(text) {
-        return false;
-    }
-    let new_text = edit.apply(text);
-
-    let Some(result) = reparse(&base, edit, &new_text) else {
-        return false;
-    };
-    assert_result_matches(&result, &new_text, &declared, seed, label, edit);
-    true
-}
-
-fn assert_result_matches(
-    result: &Reparsed,
-    new_text: &str,
-    declared: &ResolvedDeclarations,
-    seed: u64,
-    label: &str,
-    edit: &Edit,
-) {
-    let full = parse_with_declarations_resolved(new_text, config(), declared).0;
-    let spliced = SyntaxNode::new_root(result.green.clone());
-
-    assert_eq!(
-        fingerprint(&spliced),
-        fingerprint(&full.syntax()),
-        "tree diverged\n  case: {label}\n  seed: {seed}\n  tier: {:?}\n  edit: {edit:?}\n  text: {new_text:?}",
-        result.tier,
-    );
-    assert_eq!(
-        result.errors, full.errors,
-        "errors diverged\n  case: {label}\n  seed: {seed}\n  tier: {:?}\n  edit: {edit:?}\n  text: {new_text:?}",
-        result.tier,
-    );
-    // Losslessness is implied by tree equality plus the full parse's own guarantee,
-    // but it is the house oracle and it costs a string compare.
-    assert_eq!(
-        spliced.to_string(),
-        new_text,
-        "losslessness failed\n  case: {label}\n  seed: {seed}\n  edit: {edit:?}",
-    );
-}
-
-/// Draw one random edit against `text`: ~70% insert, ~20% delete, ~10% replace.
-fn random_edit(rng: &mut Lcg, text: &str) -> Edit {
-    let at = char_boundary_at_or_below(text, rng.below(text.len() + 1));
-    match rng.below(10) {
-        0..=6 => Edit {
-            range: at..at,
-            insert: HAZARD_ALPHABET[rng.below(HAZARD_ALPHABET.len())].to_string(),
-        },
-        7..=8 => {
-            let end = next_char_boundary(text, at);
-            Edit {
-                range: at..end,
-                insert: String::new(),
-            }
-        }
-        _ => {
-            let end = next_char_boundary(text, at);
-            Edit {
-                range: at..end,
-                insert: HAZARD_ALPHABET[rng.below(HAZARD_ALPHABET.len())].to_string(),
-            }
-        }
-    }
-}
-
-fn char_boundary_at_or_below(text: &str, mut at: usize) -> usize {
-    at = at.min(text.len());
-    while at > 0 && !text.is_char_boundary(at) {
-        at -= 1;
-    }
-    at
-}
-
-fn next_char_boundary(text: &str, at: usize) -> usize {
-    let mut end = (at + 1).min(text.len());
-    while end < text.len() && !text.is_char_boundary(end) {
-        end += 1;
-    }
-    end
-}
-
 /// How many edits each snippet gets. Scaled by `BADNESS_REPARSE_FUZZ_ITERS`, so the
 /// gate before a default flip can run the same harness at 10x without a code change.
 fn iterations(base: usize) -> usize {
@@ -332,54 +105,38 @@ fn iterations(base: usize) -> usize {
 
 #[test]
 fn single_edits_over_hazard_snippets() {
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
 
     for (i, snippet) in HAZARD_SNIPPETS.iter().enumerate() {
+        let base = Base::new(*snippet);
         for n in 0..iterations(64) {
             let seed = (i as u64) << 32 | n as u64;
-            let mut rng = Lcg(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
+            let mut rng = Lcg::new(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
             let edit = random_edit(&mut rng, snippet);
-            attempted += 1;
-            if check_edit(snippet, &edit, seed, &format!("snippet #{i}")) {
-                spliced += 1;
-            }
+            base.check(&edit, seed, &format!("snippet #{i}"), &mut tally);
         }
     }
 
-    eprintln!("single edits: {spliced}/{attempted} spliced");
+    eprintln!(
+        "single edits: {}/{} spliced",
+        tally.spliced, tally.attempted
+    );
     // A floor, not a target. The hazard alphabet is deliberately most of what a
     // tier must refuse — `\`, `{`, `$`, `%`, `\begin{`, `\ExplSyntaxOn` — so the
     // rate here is low by construction and its only job is to catch a guard that
     // empties the harness rather than narrowing it.
-    assert_splice_floor("single edits over hazard snippets", spliced, attempted, 5);
-}
-
-/// Assert a driver still splices often enough to be testing anything.
-///
-/// Phrased as a percentage of attempts so `BADNESS_REPARSE_FUZZ_ITERS` does not
-/// change the verdict, and reported with both numbers so a failure says how far it
-/// fell rather than merely that it did.
-fn assert_splice_floor(driver: &str, spliced: usize, attempted: usize, floor_percent: usize) {
-    assert!(attempted > 0, "{driver}: nothing was attempted");
-    let percent = spliced * 100 / attempted;
-    assert!(
-        percent >= floor_percent,
-        "{driver}: splice rate fell to {percent}% ({spliced}/{attempted}), floor is \
-         {floor_percent}%. A guard narrowed the tier; either it is wrong or this \
-         floor moves — deliberately, in its own commit.",
-    );
+    assert_splice_floor("single edits over hazard snippets", &tally, 5);
 }
 
 #[test]
 fn chained_edits_over_hazard_snippets() {
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
 
     for (i, snippet) in HAZARD_SNIPPETS.iter().enumerate() {
+        let base = Base::new(*snippet);
         for n in 0..iterations(16) {
             let seed = (i as u64) << 40 | n as u64;
-            let mut rng = Lcg(seed.wrapping_add(0x1234_5678_9ABC_DEF0));
+            let mut rng = Lcg::new(seed.wrapping_add(0x1234_5678_9ABC_DEF0));
 
             // Build a chain of 2-4 edits, each against the text its predecessors
             // produced — the shape a `didChange` batch arrives in.
@@ -397,48 +154,37 @@ fn chained_edits_over_hazard_snippets() {
                 continue;
             }
 
-            let declared = ResolvedDeclarations::default();
-            let (base_parse, ctx) = parse_with_declarations_resolved(snippet, config(), &declared);
-            let base = ReparseBase {
-                text: snippet,
-                green: &base_parse.green,
-                errors: &base_parse.errors,
-                ctx: &ctx,
-                config: config(),
-                declared: &declared,
-            };
-
-            attempted += 1;
-            if let Some(result) = reparse_edits(&base, &chain, &text) {
-                spliced += 1;
-                assert_result_matches(
-                    &result,
-                    &text,
-                    &declared,
-                    seed,
-                    &format!("chain over snippet #{i}"),
-                    chain.last().expect("non-empty chain"),
-                );
-            }
+            base.check_chain(
+                &chain,
+                &text,
+                seed,
+                &format!("chain over snippet #{i}"),
+                &mut tally,
+            );
         }
     }
 
-    eprintln!("chained edits: {spliced}/{attempted} spliced");
+    eprintln!(
+        "chained edits: {}/{} spliced",
+        tally.spliced, tally.attempted
+    );
     // Lower than the single-edit floor on purpose: a chain splices only if *every*
     // step does, so the rate is roughly the single-edit rate raised to the chain
     // length.
-    assert_splice_floor("chained edits over hazard snippets", spliced, attempted, 1);
+    assert_splice_floor("chained edits over hazard snippets", &tally, 1);
 }
 
 /// Breadth over real documents: the corpus carries constructs no hand-written
 /// snippet thought of, and the `.dtx` files carry the doc-margin and guard layers
 /// that no `.tex` does.
+///
+/// This is the in-crate corpus, which runs in `cargo test`. The pinned gate corpora
+/// are two orders of magnitude larger and live behind `task reparse-corpora:check`.
 #[test]
 fn single_edits_over_the_corpus() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
     let mut files = 0usize;
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
 
     for entry in fs::read_dir(&dir).expect("read corpus dir") {
         let path = entry.expect("dir entry").path();
@@ -450,20 +196,21 @@ fn single_edits_over_the_corpus() {
         files += 1;
 
         let label = path.display().to_string();
+        let base = Base::new(text.clone());
         for n in 0..iterations(24) {
             let seed = n as u64;
-            let mut rng = Lcg(seed.wrapping_add(path.as_os_str().len() as u64));
+            let mut rng = Lcg::new(seed.wrapping_add(path.as_os_str().len() as u64));
             let edit = random_edit(&mut rng, &text);
-            attempted += 1;
-            if check_edit(&text, &edit, seed, &label) {
-                spliced += 1;
-            }
+            base.check(&edit, seed, &label, &mut tally);
         }
     }
 
     assert!(files > 0, "no corpus files found in {dir:?}");
-    eprintln!("corpus edits: {spliced}/{attempted} spliced across {files} files");
-    assert_splice_floor("single edits over the corpus", spliced, attempted, 5);
+    eprintln!(
+        "corpus edits: {}/{} spliced across {files} files",
+        tally.spliced, tally.attempted
+    );
+    assert_splice_floor("single edits over the corpus", &tally, 5);
 }
 
 /// Typing a word one character at a time, the workload the token tier exists for
@@ -475,29 +222,28 @@ fn char_by_char_typing_into_prose() {
     let typed = "incremental";
 
     let mut text = format!("{prefix}{suffix}");
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
     for (i, ch) in typed.char_indices() {
         let at = prefix.len() + i;
         let edit = Edit {
             range: at..at,
             insert: ch.to_string(),
         };
-        attempted += 1;
-        if check_edit(&text, &edit, i as u64, "char-by-char typing") {
-            spliced += 1;
-        }
+        Base::new(text.clone()).check(&edit, i as u64, "char-by-char typing", &mut tally);
         text = edit.apply(&text);
     }
 
     assert_eq!(text, format!("{prefix}{typed}{suffix}"));
-    eprintln!("prose typing: {spliced}/{attempted} spliced");
+    eprintln!(
+        "prose typing: {}/{} spliced",
+        tally.spliced, tally.attempted
+    );
     // The one floor that is a *target* rather than a tripwire. This is the workload
     // the tier exists for, so anything short of every keystroke after the first is a
     // regression worth failing over. The first character is genuinely outside the
     // tier: inserted between two spaces it splits one `WHITESPACE` token into three
     // tokens, which is a change to the kind sequence.
-    assert_splice_floor("char-by-char typing into prose", spliced, attempted, 90);
+    assert_splice_floor("char-by-char typing into prose", &tally, 90);
 }
 
 /// The same, inside a protected body — where newlines are safe but the closing
@@ -509,32 +255,26 @@ fn char_by_char_typing_into_a_verbatim_body() {
     let typed = "raw $ % { text";
 
     let mut text = format!("{prefix}{suffix}");
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
     for (i, ch) in typed.char_indices() {
         let at = prefix.len() + i;
         let edit = Edit {
             range: at..at,
             insert: ch.to_string(),
         };
-        attempted += 1;
-        if check_edit(&text, &edit, i as u64, "typing into verbatim") {
-            spliced += 1;
-        }
+        Base::new(text.clone()).check(&edit, i as u64, "typing into verbatim", &mut tally);
         text = edit.apply(&text);
     }
 
-    eprintln!("verbatim typing: {spliced}/{attempted} spliced");
+    eprintln!(
+        "verbatim typing: {}/{} spliced",
+        tally.spliced, tally.attempted
+    );
     // A *target*, like the prose driver. Until the protected-body tier landed this
     // driver asserted nothing about splicing at all, so it stayed green while every
     // keystroke here fell back — the shape of hole the floors exist to close. Every
     // character is inside one `VERBATIM_BODY` leaf, so every one should splice.
-    assert_splice_floor(
-        "char-by-char typing into a verbatim body",
-        spliced,
-        attempted,
-        100,
-    );
+    assert_splice_floor("char-by-char typing into a verbatim body", &tally, 100);
 }
 
 /// Pressing Enter inside a listing, repeatedly.
@@ -547,31 +287,29 @@ fn enter_pressed_repeatedly_inside_a_listing() {
     let suffix = "}\n\\end{lstlisting}\n";
 
     let mut text = format!("{prefix}{suffix}");
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
     for i in 0..8 {
         let at = prefix.len();
         let edit = Edit {
             range: at..at,
             insert: "\n  return 0;".to_string(),
         };
-        attempted += 1;
-        if check_edit(&text, &edit, i, "enter inside a listing") {
-            spliced += 1;
-        }
+        Base::new(text.clone()).check(&edit, i, "enter inside a listing", &mut tally);
         text = edit.apply(&text);
     }
 
-    eprintln!("listing newlines: {spliced}/{attempted} spliced");
-    assert_splice_floor("enter pressed inside a listing", spliced, attempted, 100);
+    eprintln!(
+        "listing newlines: {}/{} spliced",
+        tally.spliced, tally.attempted
+    );
+    assert_splice_floor("enter pressed inside a listing", &tally, 100);
 }
 
 /// Typing inside each attached `VERB` shape, where the fragment is the command node
 /// rather than the token — the case a token-only relex cannot reach.
 #[test]
 fn char_by_char_typing_into_a_verb() {
-    let mut spliced = 0usize;
-    let mut attempted = 0usize;
+    let mut tally = Tally::default();
     for (prefix, suffix) in [
         ("Inline \\verb|raw ", "| and after.\n"),
         ("A \\lstinline|x_", "| here.\n"),
@@ -584,16 +322,13 @@ fn char_by_char_typing_into_a_verb() {
                 range: at..at,
                 insert: ch.to_string(),
             };
-            attempted += 1;
-            if check_edit(&text, &edit, i as u64, "typing into a verb") {
-                spliced += 1;
-            }
+            Base::new(text.clone()).check(&edit, i as u64, "typing into a verb", &mut tally);
             text = edit.apply(&text);
         }
     }
 
-    eprintln!("verb typing: {spliced}/{attempted} spliced");
-    assert_splice_floor("char-by-char typing into a verb", spliced, attempted, 100);
+    eprintln!("verb typing: {}/{} spliced", tally.spliced, tally.attempted);
+    assert_splice_floor("char-by-char typing into a verb", &tally, 100);
 }
 
 /// The harness must be calling the thing it claims to check.
@@ -641,12 +376,13 @@ fn the_harness_rejects_a_wrong_tree() {
     let result = Reparsed {
         green: wrong.green,
         errors: wrong.errors,
-        tier: badness_parser::parser::ReparseTier::Token,
+        tier: ReparseTier::Token,
     };
     assert_result_matches(
         &result,
         "\\section{Hi}\n",
         &declared,
+        config(),
         0,
         "self-test",
         &Edit {
@@ -670,12 +406,13 @@ fn the_harness_rejects_a_perturbed_error_vector() {
             start: 0,
             end: 1,
         }],
-        tier: badness_parser::parser::ReparseTier::Token,
+        tier: ReparseTier::Token,
     };
     assert_result_matches(
         &result,
         text,
         &declared,
+        config(),
         0,
         "self-test",
         &Edit {

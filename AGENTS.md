@@ -94,6 +94,9 @@ comparison, not a byte-target.
 - Relex a mode-only leaf (`VERBATIM_BODY`, `VERB`) with its enclosing delimiters;
   the delimiters establish the mode. Do not reproduce catcode/capture rules in
   incremental code.
+- Incremental coverage needs both splice-rate floors (to prevent a vacuously
+  declining tier) and exact per-tier corpus tallies (to catch silent tier
+  migration). The fast and corpus suites share their generator/checker.
 - Keep formatter rules newline-safe: do not key layout on lone authored
   newlines in consumed gaps.
 - Keep parser pure with respect to text + declarations; do not let ambient

@@ -90,6 +90,9 @@ parser*. Keep this file operational.
 - Measure the two sides of a gated benchmark ratio interleaved block by block and
   take the median of block ratios. Calibrate on an idle machine; interleaving
   removes drift variance, not load sensitivity.
+- A new tier also needs a seeded corpus-sweep row. Parse each file under its real
+  extension `LexConfig`, keep splice-rate floors per corpus, and record exact
+  per-tier tallies as a two-sided baseline ratchet in the same change.
 
 ## Data and maintenance
 

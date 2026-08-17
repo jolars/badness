@@ -1,0 +1,6 @@
+latexindent	corpus	files=5209	bytes=9827417
+latexindent	word-typing	spliced=28197/44590	token=28145	verbatim=52	region=0	files=3396
+latexindent	word-deleting	spliced=28064/44590	token=28000	verbatim=64	region=0	files=3396
+latexindent	protected-typing	spliced=1830/1900	token=0	verbatim=1830	region=0	files=262
+latexindent	hazard-single	spliced=18045/83344	token=17273	verbatim=772	region=0	files=5209
+latexindent	hazard-chain	spliced=763/26045	token=692	verbatim=71	region=0	files=5209

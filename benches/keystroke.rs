@@ -101,17 +101,29 @@
 //!
 //! ```text
 //!                          small      cv    masters       phd
-//!   text copy (ref)         38 ns   67 ns    1.20 us   10.76 us
-//!   noop upsert            135 ns  135 ns     144 ns     142 ns
-//!   write phase           1.34 us 4.71 us   65.85 us  566.22 us
-//!     as document copies   35.2x   71.3x      54.6x      53.1x
-//!   keystroke end to end  3.52 us 8.26 us   81.49 us  623.14 us
+//!   text copy (ref)         42 ns   81 ns    1.20 us   11.15 us
+//!   noop upsert            136 ns  137 ns     140 ns     138 ns
+//!   write phase            413 ns  558 ns    3.19 us   28.02 us
+//!     as document copies    9.9x    6.9x       2.7x       2.5x
+//!   keystroke end to end  2.60 us 4.20 us   19.93 us   91.04 us
 //! ```
 //!
-//! The write phase costs ~52 copies of the document, where the two linear passes
-//! it needs would be 2-3. The rest is `TextBuffer::new` rebuilding the entire
-//! `LineIndex` on every keystroke. With the parse now cheap, that is the single
-//! largest thing in a keystroke on a large file.
+//! 2.5 copies of the document is the floor plus change. Two are the text rebuild
+//! an `Arc<str>` cannot avoid — it adopts no `String`'s allocation, so the splice
+//! is built and then copied — and the rest is cloning the line table and shifting
+//! its tail. Getting below it means `Arc<String>` and `Arc::make_mut`, which taxes
+//! every read; it is not filed as work.
+//!
+//! It arrived in two measured steps, and the middle column is why the first was
+//! worth taking separately: the reshape made the table cheap to *build* and the
+//! patch made it not get built.
+//!
+//! ```text
+//!   write phase, thesis    baseline    reshaped    patched
+//!   absolute              575.28 us   161.57 us   28.02 us
+//!   document copies           51.8x       14.7x       2.5x
+//!   end to end            640.37 us   246.43 us   91.04 us
+//! ```
 
 use std::env;
 use std::fs;
@@ -512,21 +524,30 @@ const WRITE_MAX_COPIES_SCALING: f64 = 1.6;
 /// different one. `small.tex` and `cv.tex` did tighten (12-17% run to run before,
 /// 4% and 8% after), but at those sizes the write phase is dominated by *fixed*
 /// costs rather than by the linear passes the reference measures, so the ratio is
-/// not reading the thing this row exists to watch: a `LineIndex` fix would barely
-/// move cv, and an extra small allocation in `upsert_file` would fire it. They are
-/// still measured and printed.
+/// not reading the thing this row exists to watch: an extra small allocation in
+/// `upsert_file` would fire it. They are still measured and printed. The
+/// prediction this doc used to carry — that a `LineIndex` fix "would barely move
+/// cv" — was wrong, and measurably: cv went 76.9x to 6.9x, more in *ratio* than
+/// either gated document. Fixed costs dominating is a reason the ratio is noisy
+/// there, not a reason it is insensitive.
 ///
-/// **The measured value is ~52 copies, and that is a finding, not a unit.** Two
-/// linear passes — build the spliced bytes, let the `Arc` copy them — is the
-/// floor for an owned text, so a splice "should" cost 2-3. The rest is
-/// `TextBuffer::new` rebuilding the whole `LineIndex` on every keystroke: a
-/// byte-at-a-time scan for line starts over 730 KB, which is far slower per byte
-/// than the memcpy this is measured against. That is now the single largest thing
-/// in a keystroke, and it is filed in `TODO.md`. **Ratchet these down** when it
-/// lands; they are a ceiling over a known-bad number, not a target.
+/// **These are now a floor plus change rather than a ceiling over a known-bad
+/// number.** The measured 51.8x was the whole `LineIndex` being rescanned per
+/// keystroke; with the table patched instead
+/// ([`TextBuffer::with_replacement`](badness::text::TextBuffer::with_replacement))
+/// it reads **2.45-2.58** on the thesis and **2.61-2.88** on the masters over
+/// five runs of each site, and the ceilings sit ~10% over the highest — the same
+/// convention as before, over numbers an order of magnitude smaller. Two of those
+/// copies are the text rebuild, which is why there is no room left to ratchet and
+/// no [`WRITE_MIN_COPIES`] to go with them: the `Arc<String>` step that would go
+/// below 2 is a real option, so a floor here would fail the improvement.
+///
+/// What this catches, and the scaling check no longer can, is a *returning
+/// rescan*: it lands both documents back above 10 (post-reshape) or above 50
+/// (before it), while barely moving a ratio between them.
 const WRITE_MAX_COPIES: [(&str, f64); 2] = [
-    ("masters_dissertation.tex", 62.0),
-    ("phd_dissertation.tex", 58.0),
+    ("masters_dissertation.tex", 3.2),
+    ("phd_dissertation.tex", 2.9),
 ];
 
 fn row_us(
@@ -540,13 +561,47 @@ fn row_us(
         .map(|d| pick(d) / 1_000.0)
 }
 
+/// How a contract came out.
+///
+/// `Waived` is kept apart from `Ok` on purpose. A ratio waived for sitting under
+/// [`MIN_ABSOLUTE_US`] measured *nothing*, and printing it as `ok` reads as
+/// coverage the run does not have — which is the failure mode this whole harness
+/// is built against, since a guard that has narrowed to nothing leaves every
+/// assertion above it vacuously green.
+#[derive(PartialEq, Eq)]
+enum Verdict {
+    Ok,
+    Waived,
+    Fail,
+}
+
+impl Verdict {
+    /// `held` is the contract; `waived` is the escape that means it was never
+    /// really asked.
+    fn of(held: bool, waived: bool) -> Self {
+        match (held, waived) {
+            (true, _) => Verdict::Ok,
+            (false, true) => Verdict::Waived,
+            (false, false) => Verdict::Fail,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Verdict::Ok => "ok    ",
+            Verdict::Waived => "waived",
+            Verdict::Fail => "FAIL  ",
+        }
+    }
+}
+
 /// Check the measured rows against their contracts, printing every check with its
 /// margin so drift is visible well before it fails.
 ///
 /// Returns every failure rather than stopping at the first, so one run says
 /// everything that moved.
 fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
-    let mut checks: Vec<(bool, String)> = Vec::new();
+    let mut checks: Vec<(Verdict, String)> = Vec::new();
 
     println!("\nThresholds");
     println!("{}", "=".repeat(64));
@@ -558,7 +613,7 @@ fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
     if let Some((from, to)) = scaling(|d| d.noop_upsert_ns) {
         let ratio = to / from.max(f64::EPSILON);
         checks.push((
-            ratio <= NOOP_MAX_SCALING || to <= MIN_ABSOLUTE_US,
+            Verdict::of(ratio <= NOOP_MAX_SCALING, to <= MIN_ABSOLUTE_US),
             format!(
                 "noop upsert: {SCALE_FROM} -> {SCALE_TO} scaling {ratio:.2}x <= \
                  {NOOP_MAX_SCALING:.2}x ({SCALE_BYTES:.1}x the bytes) or {to:.1} us <= \
@@ -580,7 +635,7 @@ fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
     ) {
         let ratio = to / from.max(f64::EPSILON);
         checks.push((
-            ratio <= WRITE_MAX_COPIES_SCALING || to_us <= MIN_ABSOLUTE_US,
+            Verdict::of(ratio <= WRITE_MAX_COPIES_SCALING, to_us <= MIN_ABSOLUTE_US),
             format!(
                 "write phase: {SCALE_FROM} -> {SCALE_TO} costs {ratio:.2}x the document \
                  copies ({from:.2} -> {to:.2}) <= {WRITE_MAX_COPIES_SCALING:.2}x \
@@ -589,6 +644,7 @@ fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
         ));
     }
 
+    let mut copies_waived = 0usize;
     for (name, max) in WRITE_MAX_COPIES {
         let (Some(write), Some(copies)) = (
             row_us(documents, name, |d| d.write_phase_ns),
@@ -597,22 +653,44 @@ fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
                 .find(|d| d.name == name)
                 .map(|d| d.write_copies),
         ) else {
-            checks.push((false, format!("{name}: declared a ceiling but never ran")));
+            checks.push((
+                Verdict::Fail,
+                format!("{name}: declared a ceiling but never ran"),
+            ));
             continue;
         };
+        let verdict = Verdict::of(copies <= max, write <= MIN_ABSOLUTE_US);
+        if verdict == Verdict::Waived {
+            copies_waived += 1;
+        }
         checks.push((
-            copies <= max || write <= MIN_ABSOLUTE_US,
+            verdict,
             format!(
                 "{name}: write phase is {copies:.2} document copies <= {max:.2} \
                  or {write:.1} us <= {MIN_ABSOLUTE_US:.0} us"
             ),
         ));
     }
+    // The write phase is what this gate is *for*, so it may not pass by having
+    // measured nothing. It is closer to that than it looks: the masters row is now
+    // 3.2 us against a 2 us waiver, so one more improvement retires the check. The
+    // move then is a fifth document between the masters and the thesis
+    // (`sites::DOCUMENTS`, which means pinning it in `download.sh` and asserting
+    // its size) — not widening the waiver, and not dropping the row.
+    if copies_waived == WRITE_MAX_COPIES.len() {
+        checks.push((
+            Verdict::Fail,
+            format!(
+                "every write-phase copies ceiling was waived under \
+                 {MIN_ABSOLUTE_US:.0} us: this run checked nothing"
+            ),
+        ));
+    }
 
     let mut failures = Vec::new();
-    for (passed, description) in checks {
-        println!("  {} {description}", if passed { "ok  " } else { "FAIL" });
-        if !passed {
+    for (verdict, description) in checks {
+        println!("  {} {description}", verdict.label());
+        if verdict == Verdict::Fail {
             failures.push(description);
         }
     }

@@ -1885,18 +1885,45 @@ being benchmarked against a whole-text diff.
   only.) And `task gate-corpora:check` matches all eight baselines exactly, which
   is 6205 files through the formatter and linter with identical results.
 
-- [ ] **Phase 2: precise LSP edits.** `apply_content_changes` already computes
-  `(start, end, insert)` and throws it away; return `Option<Vec<Edit>>` instead,
-  carry it on `WorkerJob::Edit`, and stage it **after** `upsert_file` so the
-  chain is never ahead of the buffer it describes. Budget enforced where edits
-  are *staged*, not where they are read (`MAX_CHAIN_EDITS = 16`,
-  `MAX_CHAIN_INSERT_BYTES = 64 KiB`): under pull diagnostics the worker stages
-  per keystroke without ever demanding a parse, so a read-side budget grows one
-  edit per keypress. Job coalescing must carry a dropped request's edits onto
-  the survivor, and set `None` when the texts differ. **Do not let the reparse
-  re-derive the edit with a whole-text diff** — fatou measured `diff_edit` at
-  ~200 us of a ~500 us keystroke, more than the tier it feeds. `diff_edit` stays
-  the fallback for a text that changed by a route carrying no edits.
+- [ ] **Phase 2: precise LSP edits.** Purely LSP-side plumbing: the receiving
+  end (`reparse_stage_edits`, the chain, and its budget) already landed in Phase
+  1, so this phase only has to *feed* it. Nothing in `src/incremental.rs` should
+  need to change.
+
+  The anchors, all in `src/lsp.rs` (line numbers as of Phase 1 — verify, the file
+  is 7749 lines and drifts):
+
+  - `apply_content_changes` (`:1553-1585`) resolves `(start, end, change.text)`
+    at `:1575-1580` and drops it. Return `Option<Vec<Edit>>`. `None` means an
+    unknown transform — a range-less whole-buffer replacement, which the loop
+    already special-cases at `:1571`. It is already `pub` (the keystroke bench
+    times it), so the signature change touches `benches/keystroke.rs` too.
+  - The `did_change` handler (`:1404-1430`) consumes the changes at `:1415` and
+    sends `WorkerJob::Edit` at `:1421-1429`. Add the edits to that variant.
+  - Other `WorkerJob::Edit` send sites that must pass `None`: `:1394` (didOpen)
+    and `:2727`. The sibling-seeding path at `:3375` likewise.
+  - The handler (`:2896-2926`) calls `upsert_file` at `:2912`. Stage the edits
+    **immediately after** that call, never before: the chain must never be ahead
+    of the buffer it describes, and `upsert_file` may skip its write.
+
+  Two things are easy to get wrong and neither is caught by a type. **Job
+  coalescing** (find the queue drop path) must carry a superseded request's edits
+  onto the survivor rather than dropping them, and must degrade to `None` when the
+  superseded request's *text* differs, since the chain no longer describes how the
+  surviving text was reached. And edits must be **appended**, not replaced, so a
+  chain a cancelled analysis never consumed survives to be replayed.
+
+  Note this phase changes no output, so `task check` and `gate-corpora:check`
+  green is necessary but proves little; the real check is a test that a staged
+  chain reconstructs the buffer (`apply_edits(old, &staged) == new`), which is the
+  property the reparse's verification step actually leans on. `tests/lsp.rs` is
+  the home.
+
+  **Do not add a whole-text `diff_edit` fallback in `parsed_document`.** Phase 1
+  deliberately left it out (see its deviations); fatou has one and its own TODO
+  records the cost as an open problem. That is what makes this phase load-bearing
+  rather than an optimization: the staged chain is the *only* incremental input,
+  so no tier can do anything until it arrives.
 
 - [ ] **Phase 3: token tier, plain leaves.** Edit inside one `WORD` /
   `WHITESPACE` / `COMMENT` leaf. Guards cheapest-first: newline ban →
@@ -1913,6 +1940,25 @@ being benchmarked against a whole-text diff.
   grammar sources, extracts every text comparison, and asserts each is covered,
   *and* asserts a known set was found so a rewrite that hides comparisons from
   the scan fails loudly rather than silently covering nothing.
+
+  What that scan has to cover, from the Phase 1 survey — start here rather than
+  rediscovering it. The grammar reads token *text*, not just kind, in at least:
+  `PreScan::run` (`parser/grammar/prescan.rs`), which builds name-keyed indices
+  for expl3 toggles, conditional openers, alias openers/closers, and doc-margin
+  lines; `parser::conditional`'s opener recognizer, shared with the linter's
+  `ConditionalIndex`; `semantic::define::scan_definitions`, which drives the
+  two-pass `ParseCtx` and reads command names *and* `NAME_GROUP` text; and
+  `Signatures::environment_at`, which reads a `\begin`'s `NAME_GROUP`. The
+  practical consequence is that the parent-kind ban is not optional decoration:
+  a `WORD` inside a `NAME_GROUP` is an environment *name*, and relexing it to the
+  same kind proves nothing about what the parser will do with it.
+
+  Note also that the ban list is only sound because the tier proves the whole
+  file's token-*kind* sequence is unchanged. Everything the grammar does is a
+  function of the token vector plus the `ParseCtx`; if kinds are identical and one
+  token's text changed, the only decisions that can differ are the text-reading
+  ones the scan enumerates. Write that argument down in the module docs — it is
+  the tier's soundness proof, and it is what a reviewer has to check.
 
 - [ ] **Phase 4: protected-body tier.** `VERBATIM_BODY`, `VERB`, and comment
   runs, via fatou's `STRING_CONTENT` trick: relex the **whole enclosing node**

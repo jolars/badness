@@ -1099,20 +1099,14 @@ near-mechanical ports, the third is a project.
   change, which is how the entry above was retro-measured (see its numbers).
   Still pending as separate rows: a lint pass and the `.bib` pipeline.
 
-- [ ] **Incremental reparse (the elephant).** Every keystroke is a full parse:
-  `parsed_document` (`src/incremental.rs:207-222`) calls
-  `parse_with_declarations` on the whole text, salsa memoizes at whole-file
-  granularity, and there is no `reparse.rs`. LaTeX parses slowly per byte, so
-  this is proportionally worse here than it was anywhere else in the family.
-  This is a multi-session project, not a port: fatou's tiered reparse
-  (`crates/fatou-parser/src/parser/reparse.rs` + its `src/incremental.rs`
-  side channel) is the reference implementation, and panache's TODO has the
-  phased graduation protocol (oracle invariant, branch discipline, mechanized
-  bench gate) worth copying as *process*. Two notes for whenever it starts:
-  `did_change` already has the exact edit range in hand (`lsp.rs:1556-1566`)
-  and discards it after splicing — keep it plumbed through, and do not let
-  the reparse re-derive it with a whole-text diff (fatou measured that diff
-  costing more than the reparse it fed).
+- [~] **Incremental reparse (the elephant).** *In progress — see
+  § Incremental reparse below for the phased plan and the status line.*
+  Every keystroke is a full parse: `parsed_document` calls
+  `parse_with_declarations` on the whole text and salsa memoizes at whole-file
+  granularity. LaTeX parses slowly per byte, so this is proportionally worse
+  here than it was anywhere else in the family — `benches/keystroke.rs` row 4
+  prices it at 37 us / 127 us / 2.84 ms / 27.3 ms across the corpus, which at
+  730 KB is 97% of the keystroke.
 
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
   (`crates/badness-parser/src/parser/lexer.rs:42`, same in `bib/lexer.rs:29`),
@@ -1762,12 +1756,186 @@ near-mechanical ports, the third is a project.
   formatter-only rule for it, the survey already showed every such rule is
   trivia-reading, typeset-unsafe, or lopsided.
 
-- [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
+- [~] Intra-file incremental reparse (reuse green subtrees on contained edits).
+  *See § Incremental reparse below.*
 
 - [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
   crate + the docs playground page (`docs/src/playground.md`), formatter-only;
   linting in the playground would first need the linter core extracted from the
   root crate (its logic is fs/salsa-free, but its crate is not wasm-clean).
+
+### Incremental reparse
+
+Multi-session effort to reparse intra-file edits instead of re-parsing the whole
+text on every keystroke. Reference implementations audited for this plan, all on
+disk and all rowan 0.17: `../fatou` (`crates/fatou-parser/src/parser/reparse.rs`
+plus its `src/incremental.rs` side channel) is the **primary model**; `../arity`
+(`crates/arity-parser/src/parser/reparse.rs`) is the older, simpler three-tier
+ladder that landed organically; `../panache` (its `TODO.md` § Incremental Parsing)
+contributes the **process** — the phased graduation protocol, the mechanized bench
+gate, and the record of where its own plan was wrong.
+
+**Governing invariant** (fatou's "Tenet 4 strong form"): a successful incremental
+reparse must yield a green tree **and** a `SyntaxError` vector byte-identical to a
+full parse of the edited text, enforced by a `#[cfg(debug_assertions)]` oracle on
+every reparse. Every guard failure bails to a full parse — never an error, never
+best-effort. That refusal-first contract is what makes reading mutable state from
+inside an otherwise-pure salsa query sound: the side channel is not
+memoization-visible, because the query's *output* does not depend on it.
+
+**The load-bearing discovery, which sets the whole shape:** the tiers sit *on top
+of* `parse` and `lex` and need **no parser restructuring**. Tier 1 is
+`SyntaxToken::replace_with(GreenToken)`; the region tier is a plain `parse()` over a
+substring plus `GreenNode::splice_children`, with neighbour-sized boundary parses
+used purely as *proofs* and then discarded. There is no incremental lexer state, no
+token-stream reuse, no parser-restart-at-an-offset. So the four obstacles a first
+reading suggests — the nine forward-scanning shape gates, the two-pass `ParseCtx`,
+the unbounded left-to-right lexer state (`at_letter`, `expl_syntax`, `short_verbs`,
+`macrocode`, `brace_depth`), and the absolute token indices in `Event::Tok` /
+`PreScan` / the gate memo — do **not** need solving for the token tiers. They come
+back only at the region tier (Phase 7), which is last on purpose.
+
+Work happens on the `feat/incremental-reparse` branch; the user files the PR. Do
+**not** squash it: panache's six graduation phases landed as one squash-merge and
+its phase-by-phase history is gone, leaving its TODO as the only record.
+
+**Handover protocol:** a fresh session reads this section, picks the first
+unchecked phase, verifies its entry criteria (previous phase's boxes checked,
+workspace green on the branch), and works TDD with atomic conventional commits. On
+completion it checks the phase box, updates the status line below, and records any
+deviation or discovered follow-up as an indented bullet under the phase. Never
+leave a phase half-landed: partial work is noted in the status line with the exact
+next step. The deviation bullets are the most valuable thing here — they are where
+the plan was wrong.
+
+**Current status / next step:** Phase 1 in progress (see its box).
+
+- [ ] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
+  `reparse` returns `None` for every edit, so every keystroke still full-parses
+  and `task bench:keystroke` must not move. New
+  `crates/badness-parser/src/parser/reparse.rs` carrying `Edit` /
+  `apply_edits` / `try_apply_edits` / `diff_edit`, `ReparseTier`, `Reparsed`,
+  the two entry points, `fingerprint`, and the debug-only
+  `assert_matches_full_parse`; `parse_with_declarations` grows a variant
+  returning the resolved `ParseCtx` (it computes one at `core.rs:96` and throws
+  it away, and the token tier's isolated relex must run under the same one);
+  `src/incremental.rs` grows `PrevParse`, the default-method side channel, a
+  two-class LRU `ReparseCache`, and the `parsed_document` dispatch.
+
+  Three enforcement layers, all landing here so every later phase is caught by
+  instrumentation that already exists:
+
+  1. the in-crate debug oracle at every `Some(...)` return site, with
+     `fingerprint` `#[doc(hidden)] pub` so the assert and the harness can never
+     drift;
+  2. the randomized harness (`crates/badness-parser/tests/incremental_reparse.rs`),
+     seeded LCG, LaTeX hazard alphabet, hand-written snippets per sanctioned
+     lexer mode, plus the parser corpus;
+  3. an `O(1)` **every-build** backstop that the spliced tree spans exactly its
+     text, which *falls back* rather than panicking. Panache added its
+     equivalent late, having noticed that debug-only oracles check nothing in
+     the build that writes the user's file.
+
+  The harness is trivially green while the stub refuses everything, which is why
+  this phase must also ship oracle **self-tests**: an injected wrong tree and a
+  perturbed error vector each have to trip the assert, or Phase 1 ships a net
+  with no proof it catches anything.
+
+  Also here, because every later diagnostic splice depends on it: an assertion
+  over the parser corpus that `Parse::errors` is sorted by start offset. badness
+  has a single error source (`grammar::parse`), so fatou's five-stream
+  `DIAGNOSTIC_STREAMS` machinery is not needed — but the ordering has never been
+  asserted, and a splice is unsound without it.
+
+- [ ] **Phase 2: precise LSP edits.** `apply_content_changes` already computes
+  `(start, end, insert)` and throws it away; return `Option<Vec<Edit>>` instead,
+  carry it on `WorkerJob::Edit`, and stage it **after** `upsert_file` so the
+  chain is never ahead of the buffer it describes. Budget enforced where edits
+  are *staged*, not where they are read (`MAX_CHAIN_EDITS = 16`,
+  `MAX_CHAIN_INSERT_BYTES = 64 KiB`): under pull diagnostics the worker stages
+  per keystroke without ever demanding a parse, so a read-side budget grows one
+  edit per keypress. Job coalescing must carry a dropped request's edits onto
+  the survivor, and set `None` when the texts differ. **Do not let the reparse
+  re-derive the edit with a whole-text diff** — fatou measured `diff_edit` at
+  ~200 us of a ~500 us keystroke, more than the tier it feeds. `diff_edit` stays
+  the fallback for a text that changed by a route carrying no edits.
+
+- [ ] **Phase 3: token tier, plain leaves.** Edit inside one `WORD` /
+  `WHITESPACE` / `COMMENT` leaf. Guards cheapest-first: newline ban →
+  construct-character ban → leaf kind allow-list → parent/ancestor ban (never a
+  `NAME_GROUP`, a definition body, or a `.dtx` margin/guard line) → isolated
+  relex under the cached `ParseCtx` yields exactly one token of the same kind →
+  forward join probe → backward join probe → no diagnostic touches the leaf.
+  Splice with `token.replace_with`, shift diagnostics at or after the leaf end
+  by delta. `O(depth)`, not `O(file)`.
+
+  The guard with no compile-time link to what it describes is the set of places
+  the grammar branches on a token's *text* — badness's analogue of fatou's
+  `CONTEXTUAL_IDENTS`. Keep it honest the way fatou does: a test that reads the
+  grammar sources, extracts every text comparison, and asserts each is covered,
+  *and* asserts a known set was found so a rewrite that hides comparisons from
+  the scan fails loudly rather than silently covering nothing.
+
+- [ ] **Phase 4: protected-body tier.** `VERBATIM_BODY`, `VERB`, and comment
+  runs, via fatou's `STRING_CONTENT` trick: relex the **whole enclosing node**
+  with its `\begin{verbatim}`/`\end{verbatim}` delimiters, which puts the
+  isolated lexer into the right mode for free instead of hand-writing a catcode
+  table. Needs a *faithfulness* relex (the unedited node text must reproduce the
+  node's own tokens) to make the soundness argument an induction rather than an
+  assumption, plus a *terminated* check. Newlines are allowed on this tier —
+  that is what puts Enter inside an `lstlisting` on it, and the analogous case
+  was worth 30x in fatou.
+
+- [ ] **Phase 5: mechanize the bench gate.** `benches/reparse.rs` with a
+  per-case `Expect` (expected tier, speedup floor, regression ceiling), checked
+  under `BADNESS_BENCH_ASSERT=1`, plus `task bench:reparse-gate`. Two rules
+  learned from panache. Every ratio carries an absolute-microsecond escape,
+  because a ratio on a 2 us baseline measures noise. And corpus **presence** is
+  asserted: `benches/documents/` is gitignored save `small.tex`, so a gate on a
+  fresh checkout otherwise passes by not measuring exactly the strictest cases.
+  Thresholds live in the harness and nowhere else — a number in this file cannot
+  be checked, and panache's drifted from its harness within one phase.
+
+- [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
+  files, already pinned) as a two-sided ratchet in the shape of
+  `scripts/check_gate_baselines.sh` + `tests/gate_baselines/`. Assert a floor on
+  the splice rate per driver, so a future guard cannot silently empty the
+  harness — panache's window cutoff cost its fuzzer two thirds of its coverage
+  while every assertion still passed.
+
+- [ ] **Phase 7: region tier.** Runs of top-level `ROOT` children, blank-line
+  decoupled, with `no_straddle` plus boundary-parse-concatenation proofs. This
+  is where the nine forward-scanning shape gates finally bite: a gate verdict
+  for a node *before* the edit can flip because a closer *after* it appeared or
+  vanished, so a fragment parse is not equivalent to the same region in a full
+  parse. Natural dependency on the precomputed closer map (the container-stack
+  item under *Parser*), which would make gate reach analyzable instead of
+  per-opener. Do not start it before Phases 3-5 have measured whether the token
+  tiers already carry the workload — fatou's token tier is 408x and its
+  top-level tier only 12x.
+
+- [ ] **Phase 8: closeout.** Architecture docs, dead-path pruning, and
+  `LineIndex::patch` (splicing the line table across an edit), which the
+  `Arc<str>` entry above parked *because* every keystroke paid a full reparse
+  that dwarfed a `memchr` scan. That stops being true here.
+
+**Deferred (explicit non-goals).** Nested-region reparse — inside environments,
+groups, or math — is unsound without a context-parameterized fragment entry point
+carrying the lexer's left-to-right state and the open-container stack. That is
+fatou's recorded lesson and panache reached it independently; regions stay
+restricted to top-level `ROOT` children until such an entry point exists.
+`SyntaxNodePtr` re-anchoring across edits (arity's `map_range_through_edits`) is
+needed only if badness starts caching node identities across edits, which the
+CST/AST section already tracks as latent.
+
+**Hazards to design against from the start**, both learned the expensive way
+elsewhere. **CRLF:** panache lost the entire feature on Windows-authored files
+because a blank-line check was a literal `"\n\n"` test — safe, and a total loss,
+since it simply never spliced. Every textual seam predicate must be line-ending
+agnostic and the fuzz corpus needs CRLF entries so the gap is measured rather than
+accidental. **Bail cost:** a rejected attempt is paid *on top of* the full parse it
+falls back to (16% of one in fatou), which bounds how much a new guard may cost
+before rejecting — a guard bails on cheap evidence, never after a fragment parse.
 
 ## Editor integration
 

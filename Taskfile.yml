@@ -131,6 +131,11 @@ tasks:
     cmds:
       - cargo bench --bench formatting
 
+  bench:keystroke:
+    desc: In-process LSP keystroke bench (didChange splice -> salsa upsert -> parse)
+    cmds:
+      - cargo bench --bench keystroke
+
   bench:profile:
     desc: Flamegraph the masters_dissertation per-byte hot paths (writes benches/flamegraph_masters.svg)
     env:

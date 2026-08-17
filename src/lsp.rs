@@ -1559,7 +1559,11 @@ fn on_watched_files_change(
 /// and because a job that captured the buffer before this notification must keep
 /// seeing the version it captured. The usual batch is one change, so the usual
 /// keystroke builds one index and rebuilds the text once.
-fn apply_content_changes(
+///
+/// `pub` so `benches/keystroke.rs` can time the real splice rather than a
+/// re-implementation of it — the write phase it measures is exactly this call
+/// plus [`upsert_file`](crate::incremental::IncrementalDatabase::upsert_file).
+pub fn apply_content_changes(
     buffer: &mut Arc<TextBuffer>,
     changes: Vec<TextDocumentContentChangeEvent>,
 ) {

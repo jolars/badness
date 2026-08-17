@@ -1056,9 +1056,25 @@ near-mechanical ports, the third is a project.
   cross-file member loops still build their own, and `analyze_tex`/`analyze_bib`
   dropped a whole-buffer `to_owned()` while in the area). Measured in-process at
   1 MB: a no-op upsert 14.8 us -> 127 ns, an index build 1.79 ms -> free after
-  the first reader. Those numbers are ad hoc (a throwaway test, not committed),
-  because the pipeline bench below is still outstanding — it was meant to land
-  first. Still `String`: the code action's foreign-file resolver
+  the first reader. Those numbers were ad hoc (a throwaway test); the pipeline
+  bench below then landed and re-measured the commit against its parent, one
+  document at a time on an otherwise idle machine (medians of three):
+
+  | Document (size)  | no-op upsert | write phase   | end-to-end     |
+  | ---------------- | -----------: | ------------: | -------------: |
+  | small.tex 1.2 KB | 178 -> 146ns | 1.55 -> 1.58us| 36.7 -> 38.8us |
+  | cv.tex 6.3 KB    | 264 -> 142ns | 6.05 -> 5.96us|  128 -> 133us  |
+  | masters 95 KB    | 2.44us->144ns| 82.2 -> 83.5us| 2.87 -> 2.92ms |
+  | phd 730 KB       | 21.7us->134ns|  692 -> 704us | 27.8 -> 28.0ms |
+
+  The no-op upsert was linear in the document and is now flat (162x at 730 KB,
+  the same effect the 1 MB throwaway measured). The other two rows are a wash,
+  as expected and worth stating: both branches copy the whole text once per
+  keystroke (`with_replacement` allocates a fresh `Arc<str>` where
+  `replace_range` + `to_string()` spliced in place and then copied), so what
+  this port removed was the *second* copy on the read-job side and the
+  per-request index rebuild — neither of which these rows cover.
+  Still `String`: the code action's foreign-file resolver
   (`(Uri, String)` per cross-file target), which is off the keystroke path.
   Deliberately **not** done: splicing the line table across an edit
   (fatou/arity's `LineStarts::patch`). Every keystroke here still pays a full
@@ -1066,19 +1082,22 @@ near-mechanical ports, the third is a project.
   patch is worth writing once that is not true, and `TextBuffer` is where it
   goes.
 
-- [ ] **A didChange -> upsert -> parse pipeline bench.** Nothing times the
-  keystroke composition: `benches/formatting.rs` and the CLI comparison never
-  touch `IncrementalDatabase` or `apply_content_changes`, and
-  `tests/scaling.rs` guards growth ratios, not the pipeline. Port fatou's
-  `benches/salsa_keystroke.rs` (rows per size: no-op upsert, write phase
-  without a parse, end-to-end with the parse; alternate insert/delete so
-  every iteration is a real revision). In fatou this exact blind spot hid a
-  6x end-to-end regression in an otherwise well-benchmarked PR; in badness it
-  currently hides the full cost of the entries above plus the full reparse
-  below. This was meant to land *before* the `Arc<str>` port; it did not, so
-  that port's numbers came off a throwaway test rather than a committed row.
-  It is now the guard for the reparse work below, where a regression would be
-  much harder to see.
+- [x] **A didChange -> upsert -> parse pipeline bench — landed.**
+  `benches/keystroke.rs` (`task bench:keystroke`, `harness = false`), ported
+  from fatou's `benches/salsa_keystroke.rs`: three rows per corpus document —
+  no-op upsert (the staleness guard alone), splice + upsert with no parse
+  demanded (the write phase, where the per-keystroke text copies live), and
+  end-to-end with the parse. Each iteration alternates an insert and a delete,
+  so every round is a genuine salsa revision rather than a memoized no-op, and
+  `lsp::apply_content_changes` is `pub` so the row times the real splice.
+  Iteration counts auto-calibrate to a per-row budget (`BADNESS_BENCH_TARGET_MS`,
+  500 ms) because the corpus spans three orders of magnitude in size; the
+  calibration probe is *not* reused as the warmup, which was worth 16% of a
+  phantom regression on the largest document. Until the reparse below lands,
+  row 3 minus row 2 *is* the full-reparse cost, and it is the number that work
+  has to beat. `handoff` is the one line to edit when A/B'ing a text-storage
+  change, which is how the entry above was retro-measured (see its numbers).
+  Still pending as separate rows: a lint pass and the `.bib` pipeline.
 
 - [ ] **Incremental reparse (the elephant).** Every keystroke is a full parse:
   `parsed_document` (`src/incremental.rs:207-222`) calls

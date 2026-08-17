@@ -1,16 +1,21 @@
 # Benchmarking and profiling
 
-Two complementary tools, measuring different things:
+Three complementary tools, measuring different things:
 
-  | Tool                                         | What it measures                                  | Includes startup floor?       |
-  | -------------------------------------------- | ------------------------------------------------- | ----------------------------- |
-  | `benches/compare_format.sh` (`task bench`)   | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
-  | `benches/formatting.rs` (`task bench:micro`) | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
+  | Tool                                            | What it measures                                  | Includes startup floor?       |
+  | ----------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+  | `benches/compare_format.sh` (`task bench`)      | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
+  | `benches/formatting.rs` (`task bench:micro`)    | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
+  | `benches/keystroke.rs` (`task bench:keystroke`) | what one editor keystroke costs through salsa     | **no** (library entry points) |
 
-The CLI script answers "how fast is the `badness` binary"; the in-process bench
+The CLI script answers "how fast is the `badness` binary"; the formatting bench
 answers "where does the per-byte work go, with no process startup in the way."
 Use them together to separate the **fixed startup floor** from the **per-byte
 cost** (the TODO's profiling task).
+
+The keystroke bench answers a different question — not throughput but *latency
+per edit*, on the composition (`didChange` splice → `upsert_file` → parse) that
+neither of the other two touches. See its own section below.
 
 ## Quick start
 
@@ -27,6 +32,44 @@ task bench:micro
 
 # Machine-readable JSON from the micro-bench
 BADNESS_BENCH_OUTPUT_JSON=benches/micro_results.json cargo bench --bench formatting
+
+# LSP keystroke pipeline (didChange splice → salsa upsert → parse)
+task bench:keystroke
+```
+
+## The keystroke bench
+
+`benches/keystroke.rs` times the composition a real editor session runs on every
+character, which nothing else here touches: `benches/formatting.rs` and the CLI
+comparison never construct an `IncrementalDatabase`, and `tests/scaling.rs`
+guards growth ratios rather than the pipeline. Three rows per document:
+
+1. **`upsert, text unchanged`** — the staleness guard alone: what a no-op
+   `upsert_file` costs to prove there is nothing to do. This is what the
+   language server pays whenever a job re-writes text salsa already has, and the
+   one row that must stay **flat** in the document size.
+2. **`splice + upsert (write phase)`** — `lsp::apply_content_changes` on the
+   live `TextBuffer` plus handing the result to `upsert_file`, no parse
+   demanded. The per-keystroke *text copies* live here, so this is the row on
+   which text-storage designs (`String`, `Arc<str>`, a rope) are comparable.
+3. **`keystroke end-to-end (parse included)`** — the same plus `parsed_tree`.
+   Badness has no intra-file reparse yet (AGENTS.md decision #6), so **row 3
+   minus row 2 is the full-reparse cost**, printed as its own line.
+
+Each iteration alternates an insert and a delete of one character, so the text
+genuinely changes every round: salsa sees a fresh revision and the number is one
+keystroke, never a memoized no-op.
+
+To A/B a text-storage change, edit `handoff` (and its return type) on each
+branch to whatever that branch's `upsert_file` takes, and run both. Iteration
+counts auto-calibrate to `BADNESS_BENCH_TARGET_MS` (500 ms per row) because the
+corpus spans three orders of magnitude; on the largest document the end-to-end
+row buys only a couple of dozen samples, so **run one document at a time on an
+idle machine** when the difference you are chasing is under \~10%:
+
+```bash
+BADNESS_BENCH_DOC=phd_dissertation.tex cargo bench --bench keystroke
+BADNESS_BENCH_OUTPUT_JSON=/tmp/head.json cargo bench --bench keystroke
 ```
 
 ## Profiling

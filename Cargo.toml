@@ -130,6 +130,10 @@ assets = [
 name = "formatting"
 harness = false
 
+[[bench]]
+name = "keystroke"
+harness = false
+
 [profile.release]
 strip = "symbols"
 

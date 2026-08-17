@@ -627,12 +627,12 @@ input.
 ### Incrementality
 
 Incrementality is salsa-first. Cross-file and cross-query incrementality is the
-v1 story; intra-file reparse that reuses green subtrees is a later optimization,
-since a whole-file reparse of a typical `.tex` is sub-millisecond.
+v1 story. Intra-file reparse is layered on top of it, described under
+[Intra-file reparse](#intra-file-reparse) below.
 
 Green nodes are stored in salsa, never red ones, because red trees are not
 `Send`, `Eq`, or `salsa::Update`. `incremental.rs` stores `rowan::GreenNode`
-under `no_eq, unsafe(non_update_types)`, sound because the tree is a pure
+under `no_eq, unsafe(non_salsa_values)`, sound because the tree is a pure
 function of the text, and materializes red cursors on demand.
 
 `SourceFile.text` is an `Arc<str>`, not a `String`, and every setter takes
@@ -656,6 +656,83 @@ the first genuinely config-shaped input, and are likewise built *and written* at
 `HIGH`. Any future input promoted from config or package metadata must be
 constructed at `HIGH` or `MEDIUM`, or every keystroke's global revision bump
 will invalidate it.
+
+### Intra-file reparse
+
+A keystroke re-parses the whole file. On a small `.tex` that is fine; on a 730
+KB thesis it is 27 ms, which is 97% of the keystroke. `parser::reparse` exists
+to splice the edit into the previous green tree instead. It lands in phases,
+tracked in `TODO.md` § Incremental reparse; what follows is the design the
+phases fill in.
+
+**The invariant.** A successful reparse yields a green tree *and* a
+`SyntaxError` vector byte-identical to a full parse of the edited text. Nothing
+weaker is admissible, because the tree feeds the formatter — which writes the
+user's file — and the linter, whose fixes rewrite content. Every guard failure
+returns `None` and the caller full-parses: never an error, never a best-effort
+tree. That refusal-first contract is what makes the design extensible. A
+construct the guards do not understand costs speed and nothing else, so a new
+guard is always a safe change and an oracle failure is always fixed by *adding a
+bail*, never by relaxing the assert.
+
+**The shape, and what it does not require.** The tiers sit strictly on top of
+`parse` and `lex`. The token tier relexes one leaf in isolation, proves the
+relex is a single token of the same kind joining its neighbours the same way,
+and splices with rowan's `SyntaxToken::replace_with` — every green node off the
+leaf-to-root path is shared, so the cost is `O(depth)`, not `O(file)`. The
+region tier re-runs the *ordinary* parser over a substring and splices the
+resulting children under `ROOT`, using neighbour-sized boundary parses purely as
+proofs that the substring is decoupled from its context, then discarding them.
+
+So none of the parser's left-to-right state is checkpointed: not the lexer's
+(`at_letter`, `expl_syntax`, `short_verbs`, `macrocode`, brace depth), not the
+grammar's prescan indices, not the gate memo's token-keyed verdicts. This is
+worth stating because a first reading of the parser suggests the opposite —
+those look like the obstacles, and they would be for a parser that resumed
+mid-stream. They return only at the region tier, where a shape gate's verdict
+for a node *before* the edit can flip because a closer *after* it appeared or
+vanished, which is why that tier is last and why it wants the precomputed closer
+map rather than per-opener scans.
+
+**The salsa side channel.** `parsed_document` needs the previous text, tree,
+errors, and the edits since — none of which are salsa inputs, and none of which
+may become any. A base that invalidated on write would defeat the purpose; one
+that did not would lie to the dependency graph. Instead they live beside salsa,
+reached through default `IncrementalDb` methods (`reparse_prev`,
+`reparse_stage_edits`, `reparse_pending_edits`, `reparse_store`,
+`reparse_evict`), so a database without a cache simply always full-parses.
+Reading mutable state from inside a tracked query is sound *only* because of the
+invariant above: the query returns what `parse(text)` would whatever the cache
+holds, so a cold, stale, or evicted cache costs a parse.
+
+Three details are load-bearing. The store happens **last**, after every fallible
+step, so a panic or a salsa cancellation cannot leave a base whose text and tree
+disagree. The chain is drained by **consumed prefix count** rather than cleared,
+because a stage can land between the peek and the store — and it is drained
+**unconditionally**, even when it went unused, since a chain kept back because
+it failed to verify describes a transform out of a text the base no longer holds
+and would poison every later parse. And eviction has **two classes**: an entry
+is *hot* once it has shown it benefits, and cold entries go first, because a
+`package_graph` or `scope_signatures` sweep parses every workspace member and
+stores a base it can never hit — under a plain LRU one project-wide query would
+cost every open buffer its base.
+
+There is deliberately **no whole-text `diff_edit`** in the query. The language
+server knows the range it spliced and hands it over; re-deriving it costs more
+than the reparse it feeds. A text that changed by a route carrying no edits — a
+disk reload, a whole-buffer replace — simply full-parses, and both are shapes a
+cost guard would decline anyway.
+
+**How it is held.** A `#[cfg(debug_assertions)]` oracle compares every
+successful reparse against a full parse, and every tier returns through a single
+`finish` so it cannot skip that or the `O(1)` check that the tree spans exactly
+its text. The latter runs in *every* build and falls back rather than panicking,
+because the release binary is precisely the one the debug oracle is absent from
+and also the one whose formatter writes the file. On top sits a seeded harness
+(`crates/badness-parser/tests/incremental_reparse.rs`) over hand-written hazard
+snippets — one per sanctioned lexer mode — and the parser corpus. Both oracles
+carry should-panic self-tests, since a net nobody has watched catch something is
+not evidence that it can.
 
 ### Typed AST wrappers
 

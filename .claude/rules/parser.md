@@ -23,6 +23,9 @@ parser*. Keep this file operational.
 - **No parser abort:** recover and continue; make progress on malformed input.
 - **Generic degradation:** unresolved shapes become generic nodes, never crash
   and never silent corruption.
+- **Incremental reparse is refusal-first:** success must match a full parse's tree
+  and errors exactly. Every tier returns through the shared oracle/length check;
+  an unproved edit returns `None` and full-parses.
 
 ## Purity and semantic admission
 
@@ -57,6 +60,17 @@ parser*. Keep this file operational.
   safety and not overpromise closers.
 - Environment aliases from self-definition scan and declarations are allowed;
   cross-file/package inference is not.
+
+## Incremental reparse
+
+- Tiers sit on ordinary `parse`/`lex`: leaf or node splices, or fixed-context
+  fragment parses with explicit locality proofs. Do not checkpoint lexer state,
+  reuse token streams, or restart the grammar at an offset without recording a
+  new architecture decision.
+- Relex fragments under the base parse's `ParseCtx` and full-file `.dtx` facts.
+- The previous-parse side channel is not a salsa input and may not become one.
+- Forward-gate effects outside a fragment require an explicit proof; otherwise
+  decline. A debug-oracle divergence is repaired by adding a bail.
 
 ## Data and maintenance
 

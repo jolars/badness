@@ -1040,22 +1040,31 @@ The next four entries come from fatou's text-storage investigation
 badness's code. They are ordered by leverage; the first two are
 near-mechanical ports, the third is a project.
 
-- [ ] **`Arc<str>` document text end to end.** Text is `String` everywhere and
-  every keystroke pays for it several times over: `did_change` clones the
-  whole buffer into the worker job (`src/lsp.rs:1409`, `WorkerJob::Edit`),
-  every read-shaped request clones it again (`doc.text.clone()` at
-  `lsp.rs:1613, 1666, 1720, 1766, 1836, 1878, 1916, 1970, ...`), `upsert_file`
-  guards the salsa write with an O(N) memcmp (`src/incremental.rs:739-771`),
-  and the read pool's staleness checks memcmp once more. Fatou's recipe was
-  ~70 lines: the live buffer and `SourceFile.text` hold `Arc<str>` (setters
-  take `impl Into<Arc<str>>`), worker jobs and request captures carry the
-  handle, and the staleness guards get an `Arc::ptr_eq` fast path in front of
+- [x] **`Arc<str>` document text end to end — landed.** `SourceFile.text` is an
+  `Arc<str>` and every text setter takes `impl Into<Arc<str>>`; the live buffer
+  is a `text::TextBuffer` (`Arc<str>` + the negotiated encoding + a `OnceLock`
+  `LineIndex`) held as `Arc<TextBuffer>` by `Document` and by every
+  buffer-carrying `WorkerJob`, so a `didChange`, a request capture, and the
+  salsa write are all refcount bumps. `upsert_file`'s guard and the read jobs'
+  staleness checks go through `Arc::ptr_eq` / a fat-pointer test in front of
   the content compare — never instead of it, since salsa's setter does no
-  equality check of its own. Measured there: a no-op upsert went from 39 us
-  to a flat 150 ns at 1 MB. While in the area: `apply_content_changes`
-  (`lsp.rs:1549-1568`) rebuilds `LineIndex::with_encoding` per content change
-  and handlers rebuild it again per request — cache it beside the text
-  (arity's spliced-index `TextBuffer` is the model).
+  equality check of its own and a disk re-read is a fresh allocation
+  (`text_is_current`, `a_shared_text_handle_is_recognized_without_a_content_compare`).
+  The per-request `LineIndex` rebuild is gone with it: the ~18 handlers that
+  index the *cursor* buffer take `&TextBuffer` and call `line_index()`, so the
+  table is built once per document version instead of once per request (the
+  cross-file member loops still build their own, and `analyze_tex`/`analyze_bib`
+  dropped a whole-buffer `to_owned()` while in the area). Measured in-process at
+  1 MB: a no-op upsert 14.8 us -> 127 ns, an index build 1.79 ms -> free after
+  the first reader. Those numbers are ad hoc (a throwaway test, not committed),
+  because the pipeline bench below is still outstanding — it was meant to land
+  first. Still `String`: the code action's foreign-file resolver
+  (`(Uri, String)` per cross-file target), which is off the keystroke path.
+  Deliberately **not** done: splicing the line table across an edit
+  (fatou/arity's `LineStarts::patch`). Every keystroke here still pays a full
+  reparse (the elephant below), which dwarfs a `memchr` scan of the buffer; the
+  patch is worth writing once that is not true, and `TextBuffer` is where it
+  goes.
 
 - [ ] **A didChange -> upsert -> parse pipeline bench.** Nothing times the
   keystroke composition: `benches/formatting.rs` and the CLI comparison never
@@ -1066,8 +1075,10 @@ near-mechanical ports, the third is a project.
   every iteration is a real revision). In fatou this exact blind spot hid a
   6x end-to-end regression in an otherwise well-benchmarked PR; in badness it
   currently hides the full cost of the entries above plus the full reparse
-  below. Land it before the `Arc<str>` port so the improvement is measured,
-  not asserted.
+  below. This was meant to land *before* the `Arc<str>` port; it did not, so
+  that port's numbers came off a throwaway test rather than a committed row.
+  It is now the guard for the reparse work below, where a regression would be
+  much harder to see.
 
 - [ ] **Incremental reparse (the elephant).** Every keystroke is a full parse:
   `parsed_document` (`src/incremental.rs:207-222`) calls

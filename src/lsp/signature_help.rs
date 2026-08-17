@@ -39,16 +39,16 @@ use lsp_types::{
 pub(crate) fn compute_signature_help(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     enc: PositionEncoding,
 ) -> Option<SignatureHelp> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
-        Some(file) if snapshot.file_text(file) == text => {
+        Some(file) if snapshot.text_is_current(file, text) => {
             let root = snapshot.parsed_tree(file);
             let scope = snapshot.scope_signatures(members, file);
             signature_help_at(&root, scope, offset, enc)
@@ -299,7 +299,7 @@ mod tests {
         compute_signature_help(
             &snapshot,
             path,
-            src,
+            &TextBuffer::new(src, PositionEncoding::Utf16),
             Position { line, character },
             members,
             PositionEncoding::Utf16,

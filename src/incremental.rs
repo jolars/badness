@@ -59,8 +59,16 @@ pub struct SourceFile {
     /// keystroke's `LOW` write would invalidate them.
     #[returns(ref)]
     pub path: PathBuf,
+    /// The file's current text, as a shared handle rather than a `String`.
+    ///
+    /// A language-server keystroke moves this text through several hands — the
+    /// live buffer, the worker job, the salsa cell, every in-flight read job —
+    /// and each of them only ever reads it. `Arc<str>` makes all but the first
+    /// of those a refcount bump, and gives the staleness guards
+    /// ([`text_is_current`](IncrementalDatabase::text_is_current)) a pointer
+    /// comparison in front of the `O(N)` content compare.
     #[returns(ref)]
-    pub text: String,
+    pub text: Arc<str>,
 }
 
 /// The project's [`ResolvedDeclarations`] as a salsa input: the one non-text
@@ -219,7 +227,7 @@ pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocume
     // pairs here exactly as it does on the CLI's `parse_with_declarations` path.
     // Reading them registers a `HIGH`-durability dependency: editing
     // `badness.toml` reparses every file, and nothing else does.
-    let parsed = parse_with_declarations(file.text(db).as_str(), config, declarations_of(db));
+    let parsed = parse_with_declarations(file.text(db), config, declarations_of(db));
     let diagnostics = parsed
         .errors
         .into_iter()
@@ -500,7 +508,7 @@ pub fn parsed_bib_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedBi
         file: Some(file),
     });
 
-    let parsed = crate::bib::parse(file.text(db).as_str());
+    let parsed = crate::bib::parse(file.text(db));
     let diagnostics = parsed
         .errors
         .into_iter()
@@ -689,7 +697,7 @@ impl IncrementalDatabase {
     /// Track an in-memory document with no on-disk path. Each call mints a
     /// unique synthetic path. Used by tests and one-shot single-file checks; the
     /// LSP/CLI use [`upsert_file`](Self::upsert_file) with the real path.
-    pub fn add_file(&self, text: impl Into<String>) -> SourceFile {
+    pub fn add_file(&self, text: impl Into<Arc<str>>) -> SourceFile {
         let n = MEM_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = PathBuf::from(format!("<mem>/{n}.tex"));
         SourceFile::builder(path, text.into())
@@ -697,7 +705,7 @@ impl IncrementalDatabase {
             .new(self)
     }
 
-    pub fn set_file_text(&mut self, file: SourceFile, text: impl Into<String>) {
+    pub fn set_file_text(&mut self, file: SourceFile, text: impl Into<Arc<str>>) {
         file.set_text(self).to(text.into());
     }
 
@@ -736,8 +744,9 @@ impl IncrementalDatabase {
     /// when one is already tracked. The hot path for editor buffers: a keystroke
     /// updates the text of an existing input so unchanged downstream queries stay
     /// cached.
-    pub fn upsert_file(&mut self, path: &Path, text: String) -> SourceFile {
+    pub fn upsert_file(&mut self, path: &Path, text: impl Into<Arc<str>>) -> SourceFile {
         let key = normalize_path(path);
+        let text = text.into();
         let existing = self
             .files
             .lock()
@@ -749,7 +758,17 @@ impl IncrementalDatabase {
                 // Skip the write when the text is unchanged: setting an input
                 // unconditionally bumps the revision and would re-run every
                 // downstream query (a sibling file re-read on each keystroke).
-                if file.text(self) != &text {
+                // Salsa's setter does no equality check of its own, so this
+                // guard is the only thing standing between a redundant upsert
+                // and a full reanalysis — hence the `ptr_eq` fast path *in front
+                // of* the content compare, never instead of it: the language
+                // server hands us the same allocation it already wrote, while a
+                // re-read from disk is a fresh one that may still be equal.
+                let unchanged = {
+                    let tracked = file.text(self);
+                    Arc::ptr_eq(tracked, &text) || **tracked == *text
+                };
+                if !unchanged {
                     file.set_text(self).to(text);
                 }
                 file
@@ -817,6 +836,21 @@ impl IncrementalDatabase {
     /// The text currently tracked for `file`.
     pub fn file_text(&self, file: SourceFile) -> &str {
         file.text(self)
+    }
+
+    /// Whether the text currently tracked for `file` *is* `text`.
+    ///
+    /// The language server asks this of every read job, to decide between the
+    /// snapshot's cached parse and a reparse of the buffer it captured. Both
+    /// sides of the comparison normally come from the same [`Arc<str>`] the
+    /// buffer handed to [`upsert_file`](Self::upsert_file), so the fat-pointer
+    /// test settles the common case without touching a byte; the content
+    /// compare behind it is what keeps the answer correct for a text that
+    /// arrived by another route (a disk re-read, a test).
+    pub fn text_is_current(&self, file: SourceFile, text: &str) -> bool {
+        let tracked: &str = file.text(self);
+        let same_bytes = std::ptr::eq(tracked.as_ptr(), text.as_ptr());
+        (same_bytes && tracked.len() == text.len()) || tracked == text
     }
 
     /// The path `file` is tracked under.
@@ -928,6 +962,13 @@ impl Analysis {
     /// The text currently tracked for `file`.
     pub fn file_text(&self, file: SourceFile) -> &str {
         self.0.file_text(file)
+    }
+
+    /// Whether the text currently tracked for `file` *is* `text` — the read
+    /// jobs' "is this snapshot still the buffer I captured?" guard. See
+    /// [`IncrementalDatabase::text_is_current`].
+    pub fn text_is_current(&self, file: SourceFile, text: &str) -> bool {
+        self.0.text_is_current(file, text)
     }
 
     /// The normalized path `file` is tracked under (its cross-file identity).

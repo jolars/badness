@@ -114,6 +114,36 @@ fn upsert_unchanged_text_does_not_reparse() {
     assert_eq!(parse_count(&db), 2);
 }
 
+/// The language server re-upserts the *same* `Arc<str>` the live buffer holds
+/// on every keystroke that lands on an unedited file, and asks whether a read
+/// job's captured buffer is still current before every cached-tree read. Both
+/// settle by pointer; both must still settle correctly for a text that arrived
+/// by another route (a disk re-read), which shares no allocation.
+#[test]
+fn a_shared_text_handle_is_recognized_without_a_content_compare() {
+    use std::sync::Arc;
+
+    let mut db = IncrementalDatabase::default();
+    let path = std::path::Path::new("/tmp/shared.tex");
+
+    let held: Arc<str> = Arc::from("x\n");
+    let file = db.upsert_file(path, Arc::clone(&held));
+    let _ = db.parsed_tree(file);
+    assert_eq!(parse_count(&db), 1);
+
+    // The same allocation, and an equal one built independently.
+    let _ = db.upsert_file(path, Arc::clone(&held));
+    let _ = db.upsert_file(path, "x\n".to_string());
+    let _ = db.parsed_tree(file);
+    assert_eq!(parse_count(&db), 1);
+
+    assert!(db.text_is_current(file, &held));
+    assert!(db.text_is_current(file, "x\n"));
+    assert!(!db.text_is_current(file, "y\n"));
+    // A prefix shares the pointer but not the length.
+    assert!(!db.text_is_current(file, &held[..1]));
+}
+
 #[test]
 fn cached_tree_is_lossless() {
     let db = IncrementalDatabase::default();

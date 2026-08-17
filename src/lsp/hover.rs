@@ -49,24 +49,23 @@ use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 pub(crate) fn compute_hover(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
-    enc: PositionEncoding,
 ) -> Option<Hover> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         match snapshot.lookup_file(path) {
-            Some(file) if snapshot.file_text(file) == text => {
+            Some(file) if snapshot.text_is_current(file, text) => {
                 let root = snapshot.parsed_tree(file);
                 let model = snapshot.semantic_model(file);
                 let scope = snapshot.scope_signatures(members.clone(), file);
                 let lint_path = snapshot.file_path(file).to_path_buf();
                 build_hover(
-                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, build,
+                    snapshot, &root, model, scope, &lint_path, members, offset, idx, build,
                 )
             }
             // Untracked or stale: a fresh parse + scan (no cross-package scope), like
@@ -77,7 +76,7 @@ pub(crate) fn compute_hover(
                 let model = SemanticModel::build(&root);
                 let scanned = crate::semantic::scan_definitions(&root);
                 build_hover(
-                    snapshot, &root, &model, &scanned, path, members, offset, &idx, build,
+                    snapshot, &root, &model, &scanned, path, members, offset, idx, build,
                 )
             }
         }
@@ -843,11 +842,10 @@ mod tests {
         let hover = compute_hover(
             &snapshot,
             path,
-            src,
+            &TextBuffer::new(src, PositionEncoding::Utf16),
             position,
             members,
             &BuildConfig::default(),
-            PositionEncoding::Utf16,
         )?;
         match hover.contents {
             HoverContents::Markup(m) => Some(m.value),

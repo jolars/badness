@@ -63,6 +63,33 @@ gets more latitude because navigation is inherently about the local environment.
 - Aux freshness is an mtime+length cache, so a recompile is picked up without a
   watcher.
 
+## The live buffer
+
+**A document buffer is an `Arc<TextBuffer>` — never a `String` — from the main
+loop through the job to the read pool.** The main loop is on the keystroke path,
+so capturing a buffer for a job must be a refcount bump; `TextBuffer` carries
+the negotiated encoding and a `OnceLock<LineIndex>`, so the index is built once
+per document version rather than once per request (1.8 ms over 1 MB).
+
+- **A handler that indexes the cursor buffer takes `&TextBuffer` and calls
+  `line_index()`.** Never `LineIndex::with_encoding` over it — that is the
+  rebuild the type exists to remove. Handlers walking *other* project members
+  still build their own; those texts come off the snapshot and have no buffer.
+- **A `&TextBuffer` handler must not also take an `enc`**, since the buffer
+  knows its own encoding and two sources can disagree. Keep `enc` only where it
+  feeds a cross-file index.
+- **The buffer is immutable**: an edit yields a new one (`with_replacement`), so
+  a job that captured the previous version keeps a consistent text *and* index
+  with no lock — and the pointer identity stays meaningful.
+- **Staleness is `text_is_current`, never a `file_text(file) == text` compare.**
+  It pointer-tests first and falls back to the content compare; both halves are
+  load-bearing (a disk re-read is a fresh allocation that may still be equal).
+  Same rule for `upsert_file`'s skip-the-write guard — salsa's setter does no
+  equality check of its own.
+- The line table is **rebuilt, not patched**, across an edit: a keystroke still
+  pays a full reparse, which dwarfs the scan. Revisit with incremental reparse,
+  in `TextBuffer`.
+
 ## Transport
 
 `lsp-server` + `lsp-types`, not tower-lsp: salsa cancellation is a synchronous

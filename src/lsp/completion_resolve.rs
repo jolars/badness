@@ -250,11 +250,10 @@ mod tests {
             &snapshot,
             &uri,
             path,
-            src,
+            &TextBuffer::new(src, PositionEncoding::Utf16),
             Position { line, character },
             members,
             &texmf,
-            PositionEncoding::Utf16,
         )
     }
 

@@ -33,7 +33,7 @@ use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionRespo
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn code_actions_for_range(
     findings: &[crate::linter::Diagnostic],
-    text: &str,
+    text: &TextBuffer,
     uri: &Uri,
     self_path: &Path,
     request_range: Range,
@@ -41,7 +41,7 @@ pub(crate) fn code_actions_for_range(
     link_docs: bool,
     resolve: &dyn Fn(&Path) -> Option<(Uri, String)>,
 ) -> CodeActionResponse {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let req_start = idx.offset_at(request_range.start.line, request_range.start.character);
     let req_end = idx.offset_at(request_range.end.line, request_range.end.character);
 
@@ -53,13 +53,13 @@ pub(crate) fn code_actions_for_range(
             if !byte_ranges_overlap(d.start, d.end, req_start, req_end) {
                 return None;
             }
-            let changes = workspace_changes(fix, uri, &idx, enc, resolve)?;
+            let changes = workspace_changes(fix, uri, idx, enc, resolve)?;
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.description.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 // Link the action to the finding it fixes, so the client can dim it
                 // once the diagnostic clears.
-                diagnostics: Some(vec![lint_to_lsp(&idx, d.clone(), link_docs, self_path)]),
+                diagnostics: Some(vec![lint_to_lsp(idx, d.clone(), link_docs, self_path)]),
                 edit: Some(WorkspaceEdit {
                     changes: Some(changes),
                     ..Default::default()
@@ -145,10 +145,15 @@ mod tests {
     fn findings(src: &str) -> Vec<crate::linter::Diagnostic> {
         check_document(
             std::path::Path::new("x.tex"),
-            src,
+            &buf(src),
             LexConfig::default(),
             &crate::declarations::ResolvedDeclarations::default(),
         )
+    }
+
+    /// The document buffer the entry point takes, over a test source.
+    fn buf(src: &str) -> TextBuffer {
+        TextBuffer::new(src, PositionEncoding::Utf16)
     }
 
     /// A resolver that knows no foreign files — the single-file default.
@@ -161,7 +166,7 @@ mod tests {
         let src = "{\\bf hi}\n";
         let actions = code_actions_for_range(
             &findings(src),
-            src,
+            &buf(src),
             &uri(),
             std::path::Path::new("x.tex"),
             full_range(src),
@@ -206,7 +211,7 @@ mod tests {
             };
             let actions = code_actions_for_range(
                 &findings(src),
-                src,
+                &buf(src),
                 &uri(),
                 std::path::Path::new("x.tex"),
                 cursor,
@@ -250,7 +255,7 @@ mod tests {
         };
         let actions = code_actions_for_range(
             &findings(src),
-            src,
+            &buf(src),
             &uri(),
             std::path::Path::new("x.tex"),
             cursor,
@@ -266,7 +271,7 @@ mod tests {
         let src = "$$x = y$$\n";
         let actions = code_actions_for_range(
             &findings(src),
-            src,
+            &buf(src),
             &uri(),
             std::path::Path::new("x.tex"),
             full_range(src),
@@ -314,7 +319,7 @@ mod tests {
 
         let actions = code_actions_for_range(
             std::slice::from_ref(&d),
-            src,
+            &buf(src),
             &uri(),
             std::path::Path::new("x.tex"),
             full_range(src),
@@ -366,7 +371,7 @@ mod tests {
         };
         let actions = code_actions_for_range(
             std::slice::from_ref(&d),
-            src,
+            &buf(src),
             &uri(),
             std::path::Path::new("x.tex"),
             full_range(src),

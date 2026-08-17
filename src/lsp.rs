@@ -144,7 +144,7 @@ use crate::semantic::{
     scan_definition_sites,
 };
 use crate::syntax::{SyntaxKind, SyntaxNode};
-use crate::text::{LineIndex, PositionEncoding};
+use crate::text::{LineIndex, PositionEncoding, TextBuffer};
 use forward_search::{ForwardSearchRequest, ForwardSearchStatus};
 use name_refs::{NameKind, NameTarget};
 
@@ -328,8 +328,14 @@ fn server_capabilities(
 }
 
 /// An open document buffer: its current text and the version it is at.
+///
+/// The text is an [`Arc<TextBuffer>`] rather than a `String` because everything
+/// downstream of an edit only reads it: the worker job, the salsa input, and
+/// every read job the same keystroke fires. Capturing the buffer for one of
+/// those is a refcount bump, and they share the [`LineIndex`] the first of them
+/// builds.
 struct Document {
-    text: String,
+    text: Arc<TextBuffer>,
     version: i32,
 }
 
@@ -716,13 +722,18 @@ fn publish_declarations_for_request(
 }
 
 /// A job from the main loop to the worker thread.
+///
+/// Every variant carrying a document buffer carries it as an
+/// [`Arc<TextBuffer>`], never a `String`: the main loop is on the keystroke
+/// path, so capturing a buffer for a job must not copy it, and the read job at
+/// the far end wants the same [`LineIndex`] the buffer already holds.
 enum WorkerJob {
     /// A buffer edit (from `didOpen` or `didChange`): write the full text into the
     /// db, then (re)analyze diagnostics.
     Edit {
         uri: Uri,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         version: i32,
         kind: FileKind,
         /// The document's resolved lint-rule selection, applied to the analyze.
@@ -754,7 +765,7 @@ enum WorkerJob {
     Format {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         style: FormatStyle,
         kind: FileKind,
         /// The `sentence`/`semantic` language and merged no-break abbreviations,
@@ -767,7 +778,7 @@ enum WorkerJob {
     RangeFormat {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         style: FormatStyle,
         kind: FileKind,
         range: Range,
@@ -782,7 +793,7 @@ enum WorkerJob {
     OnTypeFormat {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         style: FormatStyle,
         kind: FileKind,
         position: Position,
@@ -796,7 +807,7 @@ enum WorkerJob {
     Symbols {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         kind: FileKind,
         build: BuildConfig,
     },
@@ -810,7 +821,7 @@ enum WorkerJob {
     FoldingRange {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         kind: FileKind,
     },
     /// A selection-range request: for each cursor `positions`, compute the nested
@@ -820,7 +831,7 @@ enum WorkerJob {
     SelectionRange {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         kind: FileKind,
         positions: Vec<Position>,
     },
@@ -833,7 +844,7 @@ enum WorkerJob {
     DocumentLink {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         kind: FileKind,
         texmf: TexmfConfig,
     },
@@ -844,7 +855,7 @@ enum WorkerJob {
     Completion {
         id: RequestId,
         uri: Uri,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
         texmf: TexmfConfig,
     },
@@ -866,7 +877,7 @@ enum WorkerJob {
     Hover {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
         /// `[build]` settings for the label-number lookup (a `\label`/`\ref` hover
         /// reads the compile's `.aux`).
@@ -895,7 +906,7 @@ enum WorkerJob {
     SignatureHelp {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
     },
     /// A go-to-definition request: resolve the `\ref`/`\cite` under the cursor to
@@ -906,7 +917,7 @@ enum WorkerJob {
     GotoDefinition {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
         texmf: TexmfConfig,
     },
@@ -917,7 +928,7 @@ enum WorkerJob {
     References {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
         include_declaration: bool,
     },
@@ -928,7 +939,7 @@ enum WorkerJob {
     DocumentHighlight {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
     },
     /// A `prepareRename` request: confirm the cursor sits on a renameable label/cite
@@ -938,7 +949,7 @@ enum WorkerJob {
     PrepareRename {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
     },
     /// A `rename` request: build the project-wide [`WorkspaceEdit`] renaming the
@@ -948,7 +959,7 @@ enum WorkerJob {
     Rename {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
         new_name: String,
     },
@@ -962,7 +973,7 @@ enum WorkerJob {
         id: RequestId,
         uri: Uri,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         position: Position,
         new_name: String,
     },
@@ -975,7 +986,7 @@ enum WorkerJob {
     Diagnostic {
         id: RequestId,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         kind: FileKind,
         previous_result_id: Option<String>,
         /// The document's resolved lint-rule selection, applied to the report.
@@ -990,7 +1001,7 @@ enum WorkerJob {
         id: RequestId,
         uri: Uri,
         path: PathBuf,
-        text: String,
+        text: Arc<TextBuffer>,
         kind: FileKind,
         range: Range,
         /// The document's resolved lint-rule selection, applied to the findings.
@@ -1369,10 +1380,11 @@ fn on_notification(
             };
             let doc = params.text_document;
             let uri = doc.uri;
+            let text = Arc::new(TextBuffer::new(doc.text, state.position_encoding));
             state.documents.insert(
                 uri.clone(),
                 Document {
-                    text: doc.text.clone(),
+                    text: text.clone(),
                     version: doc.version,
                 },
             );
@@ -1382,7 +1394,7 @@ fn on_notification(
             let _ = job_tx.send(WorkerJob::Edit {
                 path,
                 uri,
-                text: doc.text,
+                text,
                 version: doc.version,
                 kind,
                 rules: resolved.rule_selection(),
@@ -1400,11 +1412,7 @@ fn on_notification(
             let Some(doc) = state.documents.get_mut(&uri) else {
                 return;
             };
-            apply_content_changes(
-                &mut doc.text,
-                params.content_changes,
-                state.position_encoding,
-            );
+            apply_content_changes(&mut doc.text, params.content_changes);
             doc.version = version;
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
@@ -1542,28 +1550,33 @@ fn on_watched_files_change(
     }
 }
 
-/// Apply a batch of `didChange` content changes to `text`, in order. A change
+/// Apply a batch of `didChange` content changes to `buffer`, in order. A change
 /// with no range replaces the whole buffer; a ranged change splices via the
-/// (encoding-aware) [`LineIndex`]. The index is rebuilt per change because each
-/// mutation shifts later offsets.
+/// buffer's (encoding-aware) [`LineIndex`].
+///
+/// Each change yields a *new* [`TextBuffer`], because each mutation shifts later
+/// offsets and so invalidates the index the next change resolves against —
+/// and because a job that captured the buffer before this notification must keep
+/// seeing the version it captured. The usual batch is one change, so the usual
+/// keystroke builds one index and rebuilds the text once.
 fn apply_content_changes(
-    text: &mut String,
+    buffer: &mut Arc<TextBuffer>,
     changes: Vec<TextDocumentContentChangeEvent>,
-    enc: PositionEncoding,
 ) {
     for change in changes {
-        match change.range {
-            None => *text = change.text,
+        let next = match change.range {
+            None => TextBuffer::new(change.text, buffer.encoding()),
             Some(range) => {
-                let idx = LineIndex::with_encoding(text, enc);
+                let idx = buffer.line_index();
                 let start = idx.offset_at(range.start.line, range.start.character);
                 let end = idx.offset_at(range.end.line, range.end.character);
                 // Guard against a degenerate (start > end) range from a misbehaving
-                // client: clamp rather than panic on `replace_range`.
+                // client: clamp rather than panic on the splice.
                 let (start, end) = (start.min(end), start.max(end));
-                text.replace_range(start..end, &change.text);
+                buffer.with_replacement(start..end, &change.text)
             }
-        }
+        };
+        *buffer = Arc::new(next);
     }
 }
 
@@ -2698,7 +2711,7 @@ fn relint_all_open(connection: &Connection, state: &mut GlobalState, job_tx: &Se
     // discovers no new members, so it can't re-trigger `RelintAll` (no loop). Snapshot
     // the buffers first so the per-document `resolve_settings` (`&mut self`) doesn't
     // alias the `documents` borrow.
-    let snapshot: Vec<(Uri, String, i32)> = state
+    let snapshot: Vec<(Uri, Arc<TextBuffer>, i32)> = state
         .documents
         .iter()
         .map(|(uri, doc)| (uri.clone(), doc.text.clone(), doc.version))
@@ -2892,7 +2905,7 @@ impl Worker {
                 // is a lazy salsa query deferred to the analyze. Acquiring `&mut
                 // db` blocks until any outstanding read snapshot drops (single
                 // writer), which is how a fresher edit preempts an in-flight read.
-                self.db.upsert_file(&path, text);
+                self.db.upsert_file(&path, text.text_arc());
                 // Lazily pull the rest of the project off disk so cross-file rules
                 // can fire. If this grows the member set, every open document's
                 // resolution may have changed — re-lint them all.
@@ -2936,9 +2949,7 @@ impl Worker {
                 self.read_spawner.spawn(move || {
                     let sentence =
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
-                    run_format(
-                        &snapshot, id, &path, &text, style, kind, sentence, enc, &out_tx,
-                    )
+                    run_format(&snapshot, id, &path, &text, style, kind, sentence, &out_tx)
                 });
             }
             WorkerJob::RangeFormat {
@@ -2959,7 +2970,7 @@ impl Worker {
                     let sentence =
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
                     run_range_format(
-                        &snapshot, id, &path, &text, style, kind, range, sentence, enc, &out_tx,
+                        &snapshot, id, &path, &text, style, kind, range, sentence, &out_tx,
                     )
                 });
             }
@@ -2981,7 +2992,7 @@ impl Worker {
                     let sentence =
                         SentenceOptions::from_resolved(sentence_lang, &sentence_no_break);
                     run_on_type_format(
-                        &snapshot, id, &path, &text, style, kind, position, sentence, enc, &out_tx,
+                        &snapshot, id, &path, &text, style, kind, position, sentence, &out_tx,
                     )
                 });
             }
@@ -2999,9 +3010,7 @@ impl Worker {
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_symbols(
-                        &snapshot, id, &path, &text, kind, members, &build, enc, &out_tx,
-                    )
+                    run_symbols(&snapshot, id, &path, &text, kind, members, &build, &out_tx)
                 });
             }
             WorkerJob::WorkspaceSymbols { id, query } => {
@@ -3026,7 +3035,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
-                    .spawn(move || run_folding(&snapshot, id, &path, &text, kind, enc, &out_tx));
+                    .spawn(move || run_folding(&snapshot, id, &path, &text, kind, &out_tx));
             }
             WorkerJob::SelectionRange {
                 id,
@@ -3040,7 +3049,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_selection_range(&snapshot, id, &path, &text, kind, &positions, enc, &out_tx)
+                    run_selection_range(&snapshot, id, &path, &text, kind, &positions, &out_tx)
                 });
             }
             WorkerJob::DocumentLink {
@@ -3057,7 +3066,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_document_link(&snapshot, id, &path, &text, kind, &texmf, enc, &out_tx)
+                    run_document_link(&snapshot, id, &path, &text, kind, &texmf, &out_tx)
                 });
             }
             WorkerJob::Completion {
@@ -3077,7 +3086,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_completion(
-                        &snapshot, id, &uri, &text, position, members, &texmf, enc, &out_tx,
+                        &snapshot, id, &uri, &text, position, members, &texmf, &out_tx,
                     )
                 });
             }
@@ -3105,7 +3114,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_hover(
-                        &snapshot, id, &path, &text, position, members, &build, enc, &out_tx,
+                        &snapshot, id, &path, &text, position, members, &build, &out_tx,
                     )
                 });
             }
@@ -3207,7 +3216,7 @@ impl Worker {
                 let snapshot = self.db.snapshot();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_document_highlight(&snapshot, id, &path, &text, position, enc, &out_tx)
+                    run_document_highlight(&snapshot, id, &path, &text, position, &out_tx)
                 });
             }
             WorkerJob::PrepareRename {
@@ -3224,7 +3233,7 @@ impl Worker {
                 let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_prepare_rename(&snapshot, id, &path, &text, position, members, enc, &out_tx)
+                    run_prepare_rename(&snapshot, id, &path, &text, position, members, &out_tx)
                 });
             }
             WorkerJob::Rename {
@@ -3259,7 +3268,7 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_change_environment(
-                        &snapshot, id, &uri, &path, &text, position, &new_name, enc, &out_tx,
+                        &snapshot, id, &uri, &path, &text, position, &new_name, &out_tx,
                     )
                 });
             }
@@ -3397,7 +3406,7 @@ impl Worker {
         // Skip the relint when the content is identical to what we already track
         // (a `touch` or a metadata-only event), so we don't re-lint every open doc for
         // nothing. `upsert_file` itself also no-ops the salsa write on equal text.
-        if tracked.is_some_and(|file| self.db.file_text(file) == text) {
+        if tracked.is_some_and(|file| self.db.text_is_current(file, &text)) {
             return false;
         }
         self.db.upsert_file(path, text);
@@ -3519,11 +3528,10 @@ fn analyze_tex(
     enc: PositionEncoding,
 ) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
-    let text = snapshot.file_text(file).to_owned();
     // The file's normalized identity, which keys the cross-file resolvers (it
     // equals this file's `ProjectMember::path`).
     let lint_path = snapshot.file_path(file).to_path_buf();
-    let idx = LineIndex::with_encoding(&text, enc);
+    let idx = LineIndex::with_encoding(snapshot.file_text(file), enc);
     let mut diags: Vec<Diagnostic> = snapshot
         .parse_diagnostics(file)
         .iter()
@@ -3565,8 +3573,7 @@ fn analyze_bib(
     enc: PositionEncoding,
 ) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
-    let text = snapshot.file_text(file).to_owned();
-    let idx = LineIndex::with_encoding(&text, enc);
+    let idx = LineIndex::with_encoding(snapshot.file_text(file), enc);
     let mut diags: Vec<Diagnostic> = snapshot
         .bib_parse_diagnostics(file)
         .iter()
@@ -3692,7 +3699,7 @@ fn run_document_diagnostic(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     members: Vec<ProjectMember>,
     previous_result_id: Option<String>,
@@ -3732,7 +3739,7 @@ fn run_document_diagnostic(
 fn compute_diagnostics(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     members: Vec<ProjectMember>,
     rules: &RuleSelection,
@@ -3752,9 +3759,7 @@ fn compute_diagnostics(
         // `Ok(None)` = file not in the snapshot; `Err` = cancelled by a racing edit.
         // Either way recompute from the captured buffer (single-file: cross-file
         // findings, if any, arrive on the client's next pull after the edit settles).
-        Ok(None) | Err(_) => {
-            fallback_diagnostics(path, text, kind, rules, snapshot.declarations(), enc)
-        }
+        Ok(None) | Err(_) => fallback_diagnostics(path, text, kind, rules, snapshot.declarations()),
     }
 }
 
@@ -3763,13 +3768,12 @@ fn compute_diagnostics(
 /// node-shape lint findings, with no cross-file resolution (`None` resolvers).
 fn fallback_diagnostics(
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     rules: &RuleSelection,
     declared: &ResolvedDeclarations,
-    enc: PositionEncoding,
 ) -> Vec<Diagnostic> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let mut diags: Vec<Diagnostic> = Vec::new();
     match kind {
         FileKind::Tex
@@ -3781,7 +3785,7 @@ fn fallback_diagnostics(
             let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(&idx, err.start, err.end),
+                    range: byte_range_to_lsp(idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3792,7 +3796,7 @@ fn fallback_diagnostics(
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, d, true, path));
+                    diags.push(lint_to_lsp(idx, d, true, path));
                 }
             }
         }
@@ -3800,7 +3804,7 @@ fn fallback_diagnostics(
             let parsed = bib_parse(text);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(&idx, err.start, err.end),
+                    range: byte_range_to_lsp(idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3811,7 +3815,7 @@ fn fallback_diagnostics(
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(&idx, d, false, path));
+                    diags.push(lint_to_lsp(idx, d, false, path));
                 }
             }
         }
@@ -3831,7 +3835,7 @@ fn run_code_action(
     id: RequestId,
     uri: &Uri,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     range: Range,
     members: Vec<ProjectMember>,
@@ -3982,7 +3986,7 @@ fn result_id_for(items: &[Diagnostic]) -> String {
 /// Format the buffer behind a [`WorkerJob::Format`] on the read pool and reply.
 ///
 /// Fast path: reuse the snapshot's cached tree (no reparse). On a racing write
-/// (`salsa::Cancelled`), a stale snapshot (`file_text != text`), or a cache miss,
+/// (`salsa::Cancelled`), a stale snapshot (`!text_is_current`), or a cache miss,
 /// recompute from the captured `text` via [`format_with_style`] (which itself
 /// guards parse errors) so the client always gets a correct response.
 #[allow(clippy::too_many_arguments)]
@@ -3990,14 +3994,13 @@ fn run_format(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     style: FormatStyle,
     kind: FileKind,
     sentence: SentenceOptions<'_>,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_format(snapshot, path, text, style, kind, sentence, enc) {
+    let result = match compute_format(snapshot, path, text, style, kind, sentence) {
         Some(edit) => serde_json::to_value(vec![edit]).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -4010,17 +4013,16 @@ fn run_format(
 fn compute_format(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     style: FormatStyle,
     kind: FileKind,
     sentence: SentenceOptions<'_>,
-    enc: PositionEncoding,
 ) -> Option<TextEdit> {
     // `Some(Some(s))` = formatted; `Some(None)` = clean refusal (parse/format
     // error); `None` = cache miss / stale snapshot (fall back to the captured text).
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
         match kind {
@@ -4071,10 +4073,10 @@ fn compute_format(
         },
     }?;
 
-    if formatted == text {
+    if formatted == text.text() {
         return None;
     }
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let (end_line, end_col) = idx.position(text.len());
     Some(TextEdit {
         range: Range {
@@ -4093,16 +4095,14 @@ fn run_range_format(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     style: FormatStyle,
     kind: FileKind,
     range: Range,
     sentence: SentenceOptions<'_>,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = match compute_range_format(snapshot, path, text, style, kind, range, sentence, enc)
-    {
+    let result = match compute_range_format(snapshot, path, text, style, kind, range, sentence) {
         Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
@@ -4122,12 +4122,11 @@ fn run_range_format(
 fn compute_range_format(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     style: FormatStyle,
     kind: FileKind,
     sel_range: Range,
     sentence: SentenceOptions<'_>,
-    enc: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
     // Range formatting is LaTeX-only for now; bib falls back to no edits.
     match kind {
@@ -4140,7 +4139,7 @@ fn compute_range_format(
         FileKind::Bib => return None,
     }
 
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let start = idx.offset_at(sel_range.start.line, sel_range.start.character);
     let end = idx.offset_at(sel_range.end.line, sel_range.end.character);
     let (lo, hi) = (start.min(end), start.max(end));
@@ -4154,7 +4153,7 @@ fn compute_range_format(
     // → reparse from the captured text.
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
         if !snapshot.parse_diagnostics(file).is_empty() {
@@ -4163,7 +4162,7 @@ fn compute_range_format(
         let root = snapshot.parsed_tree(file);
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, &idx, sel, style, sigs, sentence,
+            &root, text, idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -4179,7 +4178,7 @@ fn compute_range_format(
             range_edits_for_root(
                 &parsed.syntax(),
                 text,
-                &idx,
+                idx,
                 sel,
                 style,
                 &declared_scope(declared),
@@ -4223,19 +4222,18 @@ fn run_on_type_format(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     style: FormatStyle,
     kind: FileKind,
     position: Position,
     sentence: SentenceOptions<'_>,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result =
-        match compute_on_type_format(snapshot, path, text, style, kind, position, sentence, enc) {
-            Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
-            None => serde_json::Value::Null,
-        };
+    let result = match compute_on_type_format(snapshot, path, text, style, kind, position, sentence)
+    {
+        Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    };
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
@@ -4253,12 +4251,11 @@ fn run_on_type_format(
 fn compute_on_type_format(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     style: FormatStyle,
     kind: FileKind,
     position: Position,
     sentence: SentenceOptions<'_>,
-    enc: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
     match kind {
         FileKind::Tex
@@ -4270,7 +4267,7 @@ fn compute_on_type_format(
         FileKind::Bib => return None,
     }
 
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
     let off = offset.min(u32::MAX as usize) as u32;
     let sel = TextRange::empty(TextSize::new(off));
@@ -4280,7 +4277,7 @@ fn compute_on_type_format(
     // snapshot / cancellation → reparse from the captured text.
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
         if !snapshot.parse_diagnostics(file).is_empty() {
@@ -4292,7 +4289,7 @@ fn compute_on_type_format(
         }
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, &idx, sel, style, sigs, sentence,
+            &root, text, idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -4312,7 +4309,7 @@ fn compute_on_type_format(
             range_edits_for_root(
                 &root,
                 text,
-                &idx,
+                idx,
                 sel,
                 style,
                 &declared_scope(declared),
@@ -4360,7 +4357,7 @@ fn closes_multiline_construct(root: &SyntaxNode, text: &str, offset: u32) -> boo
 /// and reply with a nested [`DocumentSymbolResponse`].
 ///
 /// Fast path: reuse the snapshot's cached tree. On a racing write
-/// (`salsa::Cancelled`), a stale snapshot (`file_text != text`), or a cache miss,
+/// (`salsa::Cancelled`), a stale snapshot (`!text_is_current`), or a cache miss,
 /// reparse the captured `text` directly. Best-effort — unlike formatting, a parse
 /// error does *not* suppress the outline (the tree is error-tolerant).
 #[allow(clippy::too_many_arguments)]
@@ -4368,11 +4365,10 @@ fn run_symbols(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     let symbols = match kind {
@@ -4381,8 +4377,8 @@ fn run_symbols(
         | FileKind::Sty
         | FileKind::Cls
         | FileKind::Dtx
-        | FileKind::Ins => compute_symbols(snapshot, path, text, kind, members, build, enc),
-        FileKind::Bib => compute_bib_symbols(snapshot, path, text, enc),
+        | FileKind::Ins => compute_symbols(snapshot, path, text, kind, members, build),
+        FileKind::Bib => compute_bib_symbols(snapshot, path, text),
     };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
         .unwrap_or(serde_json::Value::Null);
@@ -4396,16 +4392,15 @@ fn run_symbols(
 fn compute_symbols(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
-    enc: PositionEncoding,
 ) -> Vec<DocumentSymbol> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
         Some(outline(&snapshot.parsed_tree(file)))
@@ -4428,23 +4423,18 @@ fn compute_symbols(
     let mut toc_cursor = 0;
     items
         .iter()
-        .map(|item| to_document_symbol(item, &idx, aux.as_ref(), &mut toc_cursor))
+        .map(|item| to_document_symbol(item, idx, aux.as_ref(), &mut toc_cursor))
         .collect()
 }
 
 /// Compute the BibTeX outline (a flat entry list) for `text`, preferring the
 /// snapshot's cached bib model and falling back to a direct reparse when it is
 /// unavailable or stale.
-fn compute_bib_symbols(
-    snapshot: &Analysis,
-    path: &Path,
-    text: &str,
-    enc: PositionEncoding,
-) -> Vec<DocumentSymbol> {
-    let idx = LineIndex::with_encoding(text, enc);
+fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &TextBuffer) -> Vec<DocumentSymbol> {
+    let idx = text.line_index();
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
         Some(bib_outline(snapshot.bib_semantic_model(file)))
@@ -4456,7 +4446,7 @@ fn compute_bib_symbols(
     };
     items
         .iter()
-        .map(|item| bib_to_document_symbol(item, &idx))
+        .map(|item| bib_to_document_symbol(item, idx))
         .collect()
 }
 
@@ -4540,12 +4530,11 @@ fn run_folding(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let ranges = compute_folding(snapshot, path, text, kind, enc);
+    let ranges = compute_folding(snapshot, path, text, kind);
     let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -4556,27 +4545,24 @@ fn run_folding(
 fn compute_folding(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
-    enc: PositionEncoding,
 ) -> Vec<FoldingRange> {
     if kind == FileKind::Bib {
         return Vec::new();
     }
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
-        Some(folding::folding_ranges(&snapshot.parsed_tree(file), &idx))
+        Some(folding::folding_ranges(&snapshot.parsed_tree(file), idx))
     }));
     match cached {
         Ok(Some(ranges)) => ranges,
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
-        Ok(None) | Err(_) => {
-            folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx)
-        }
+        Ok(None) | Err(_) => folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), idx),
     }
 }
 
@@ -4588,13 +4574,12 @@ fn run_selection_range(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     positions: &[Position],
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let ranges = compute_selection_range(snapshot, path, text, kind, positions, enc);
+    let ranges = compute_selection_range(snapshot, path, text, kind, positions);
     let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -4606,10 +4591,9 @@ fn run_selection_range(
 fn compute_selection_range(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     positions: &[Position],
-    enc: PositionEncoding,
 ) -> Vec<SelectionRange> {
     if kind == FileKind::Bib {
         return positions
@@ -4620,15 +4604,15 @@ fn compute_selection_range(
             })
             .collect();
     }
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let file = snapshot.lookup_file(path)?;
-        if snapshot.file_text(file) != text {
+        if !snapshot.text_is_current(file, text) {
             return None;
         }
         Some(selection_range::selection_ranges(
             &snapshot.parsed_tree(file),
-            &idx,
+            idx,
             positions,
         ))
     }));
@@ -4637,7 +4621,7 @@ fn compute_selection_range(
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
         Ok(None) | Err(_) => selection_range::selection_ranges(
             &SyntaxNode::new_root(parse(text).green),
-            &idx,
+            idx,
             positions,
         ),
     }
@@ -4650,13 +4634,12 @@ fn run_document_link(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     texmf: &TexmfConfig,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let links = compute_document_link(snapshot, path, text, kind, texmf, enc);
+    let links = compute_document_link(snapshot, path, text, kind, texmf);
     let result = serde_json::to_value(links).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -4670,15 +4653,14 @@ fn run_document_link(
 fn compute_document_link(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     kind: FileKind,
     texmf: &TexmfConfig,
-    enc: PositionEncoding,
 ) -> Vec<DocumentLink> {
     if kind == FileKind::Bib {
-        return compute_bib_document_link(snapshot, path, text, enc);
+        return compute_bib_document_link(snapshot, path, text);
     }
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let base_dir = path.parent();
     // The installed-tree index for the system-package fallback. Built lazily on first
     // use (this read-pool thread), empty when scanning is disabled — either way the
@@ -4687,7 +4669,7 @@ fn compute_document_link(
     let targets = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let cached = snapshot
             .lookup_file(path)
-            .filter(|&file| snapshot.file_text(file) == text);
+            .filter(|&file| snapshot.text_is_current(file, text));
         match cached {
             Some(file) => {
                 document_link::document_links(&snapshot.parsed_tree(file), base_dir, index)
@@ -4707,7 +4689,7 @@ fn compute_document_link(
         .into_iter()
         .filter_map(|target| {
             Some(DocumentLink {
-                range: lsp_range(&idx, target.range),
+                range: lsp_range(idx, target.range),
                 target: Some(path_to_uri(&target.target)?),
                 tooltip: None,
                 data: None,
@@ -4723,14 +4705,13 @@ fn compute_document_link(
 fn compute_bib_document_link(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
-    enc: PositionEncoding,
+    text: &TextBuffer,
 ) -> Vec<DocumentLink> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let links = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let cached = snapshot
             .lookup_file(path)
-            .filter(|&file| snapshot.file_text(file) == text);
+            .filter(|&file| snapshot.text_is_current(file, text));
         match cached {
             Some(file) => {
                 crate::bib::document_link::document_links(&snapshot.parsed_bib_tree(file))
@@ -4744,7 +4725,7 @@ fn compute_bib_document_link(
         .into_iter()
         .filter_map(|link| {
             Some(DocumentLink {
-                range: lsp_range(&idx, link.range),
+                range: lsp_range(idx, link.range),
                 target: Some(link.target.parse::<Uri>().ok()?),
                 tooltip: None,
                 data: None,
@@ -4930,11 +4911,10 @@ fn run_completion(
     snapshot: &Analysis,
     id: RequestId,
     uri: &Uri,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     // The salsa-key path is derived from the URI (the same mapping `on_completion` uses).
@@ -4942,7 +4922,7 @@ fn run_completion(
     // The `[texmf]` config is threaded down; the installed-tree index is resolved
     // *only* when the cursor is in a package/class argument (see
     // `build_completion_items`), so a command/label completion never pays the walk.
-    let items = compute_completion(snapshot, uri, &path, text, position, members, texmf, enc);
+    let items = compute_completion(snapshot, uri, &path, text, position, members, texmf);
     // `is_incomplete`: command/label/key universes are prefix-filtered server-side, so
     // the client re-queries as the typed prefix narrows.
     let result = serde_json::to_value(CompletionResponse::List(CompletionList {
@@ -4980,13 +4960,12 @@ fn compute_completion(
     snapshot: &Analysis,
     uri: &Uri,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
-    enc: PositionEncoding,
 ) -> Vec<CompletionItem> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     if file_kind_for(path) == FileKind::Bib {
@@ -5032,7 +5011,7 @@ fn compute_tex_completion(
     // read also falls back to a reparse (`unwrap_or_else`) — neither touches `members`.
     let resolved = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         if let Some(file) = snapshot.lookup_file(path)
-            && snapshot.file_text(file) == text
+            && snapshot.text_is_current(file, text)
         {
             let root = snapshot.parsed_tree(file);
             let ctx = crate::completion::classify_context(&root, offset);
@@ -5234,14 +5213,13 @@ fn run_hover(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     build: &BuildConfig,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = hover::compute_hover(snapshot, path, text, position, members, build, enc)
+    let result = hover::compute_hover(snapshot, path, text, position, members, build)
         .and_then(|hover| serde_json::to_value(hover).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -5317,7 +5295,7 @@ fn run_signature_help(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     enc: PositionEncoding,
@@ -5337,7 +5315,7 @@ fn run_goto_definition(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
@@ -5357,7 +5335,7 @@ fn run_references(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     include_declaration: bool,
@@ -5387,12 +5365,11 @@ fn run_document_highlight(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let highlights = compute_document_highlight(snapshot, path, text, position, enc);
+    let highlights = compute_document_highlight(snapshot, path, text, position);
     let result = serde_json::to_value(highlights).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -5402,13 +5379,12 @@ fn run_prepare_rename(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = compute_prepare_rename(snapshot, path, text, position, members, enc)
+    let result = compute_prepare_rename(snapshot, path, text, position, members)
         .map(|(range, placeholder)| {
             serde_json::to_value(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder })
                 .unwrap_or(serde_json::Value::Null)
@@ -5425,7 +5401,7 @@ fn run_rename(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     new_name: &str,
     members: Vec<ProjectMember>,
@@ -5448,18 +5424,17 @@ fn run_change_environment(
     id: RequestId,
     uri: &Uri,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     new_name: &str,
-    enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    match compute_change_environment(snapshot, path, text, position, enc) {
+    match compute_change_environment(snapshot, path, text, position) {
         Some((old_name, ranges)) => {
-            let idx = LineIndex::with_encoding(text, enc);
+            let idx = text.line_index();
             let mut changes = HashMap::new();
             for range in ranges {
-                push_edit(&mut changes, uri, &idx, range, new_name);
+                push_edit(&mut changes, uri, idx, range, new_name);
             }
             let edit = WorkspaceEdit {
                 changes: Some(changes),
@@ -5486,18 +5461,17 @@ fn run_change_environment(
 fn compute_change_environment(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
-    enc: PositionEncoding,
 ) -> Option<(String, Vec<TextRange>)> {
     if file_kind_for(path) == FileKind::Bib {
         return None;
     }
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
-        Some(file) if snapshot.file_text(file) == text => {
+        Some(file) if snapshot.text_is_current(file, text) => {
             environment_change_target(&snapshot.parsed_tree(file), offset)
         }
         _ => environment_change_target(&SyntaxNode::new_root(parse(text).green), offset),
@@ -5534,13 +5508,13 @@ struct RenameTarget {
 fn compute_goto_definition(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
     enc: PositionEncoding,
 ) -> Vec<Location> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
     let base_dir = path.parent();
 
@@ -5549,7 +5523,7 @@ fn compute_goto_definition(
         // else a fresh parse), then resolve cross-file against the db snapshot. The
         // parsed `root` is also kept for the file-target fallback below.
         let (root, target, lint_path) = match snapshot.lookup_file(path) {
-            Some(file) if snapshot.file_text(file) == text => (
+            Some(file) if snapshot.text_is_current(file, text) => (
                 snapshot.parsed_tree(file),
                 reference_under_cursor(snapshot.semantic_model(file), offset),
                 snapshot.file_path(file).to_path_buf(),
@@ -5662,13 +5636,13 @@ fn reference_under_cursor(model: &SemanticModel, offset: usize) -> Option<Cursor
 fn compute_references(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
     include_declaration: bool,
     enc: PositionEncoding,
 ) -> Vec<Location> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -5688,7 +5662,7 @@ fn compute_references(
                 .map(|file| snapshot.file_path(file).to_path_buf())
                 .unwrap_or_else(|| path.to_path_buf());
             let decl = if include_declaration {
-                location_for(&origin, &idx, key_range)
+                location_for(&origin, idx, key_range)
             } else {
                 None
             };
@@ -5707,7 +5681,7 @@ fn compute_references(
         // `.tex` origin: a `\ref`/`\cite` use *or* a `\label` definition. The parsed
         // `root` is kept for the command/environment name fallback below.
         let (root, target, origin) = match snapshot.lookup_file(path) {
-            Some(file) if snapshot.file_text(file) == text => (
+            Some(file) if snapshot.text_is_current(file, text) => (
                 snapshot.parsed_tree(file),
                 references_target_under_cursor(snapshot.semantic_model(file), offset),
                 snapshot.file_path(file).to_path_buf(),
@@ -6007,11 +5981,10 @@ fn environment_change_target(root: &SyntaxNode, offset: usize) -> Option<(String
 fn compute_document_highlight(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
-    enc: PositionEncoding,
 ) -> Vec<DocumentHighlight> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -6019,7 +5992,7 @@ fn compute_document_highlight(
             return Vec::new();
         }
         let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
-            range: lsp_range(&idx, range),
+            range: lsp_range(idx, range),
             kind: Some(kind),
         };
         let collect = |root: &SyntaxNode, model: &SemanticModel| -> Vec<DocumentHighlight> {
@@ -6058,7 +6031,7 @@ fn compute_document_highlight(
                 .collect()
         };
         match snapshot.lookup_file(path) {
-            Some(file) if snapshot.file_text(file) == text => {
+            Some(file) if snapshot.text_is_current(file, text) => {
                 collect(&snapshot.parsed_tree(file), snapshot.semantic_model(file))
             }
             _ => {
@@ -6073,24 +6046,23 @@ fn compute_document_highlight(
 fn compute_prepare_rename(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     members: Vec<ProjectMember>,
-    enc: PositionEncoding,
 ) -> Option<(Range, String)> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         // `.bib` origin: the `@entry` key under the cursor.
         if file_kind_for(path) == FileKind::Bib {
             let (key, key_range) = bib_entry_under_cursor(snapshot, path, text, offset)?;
-            return Some((lsp_range(&idx, key_range), key.to_string()));
+            return Some((lsp_range(idx, key_range), key.to_string()));
         }
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
         // `root` is kept for the command/environment name fallback below.
         let (root, target) = match snapshot.lookup_file(path) {
-            Some(file) if snapshot.file_text(file) == text => (
+            Some(file) if snapshot.text_is_current(file, text) => (
                 snapshot.parsed_tree(file),
                 rename_target_under_cursor(snapshot.semantic_model(file), offset),
             ),
@@ -6102,7 +6074,7 @@ fn compute_prepare_rename(
             }
         };
         if let Some(target) = target {
-            return Some((lsp_range(&idx, target.span), target.placeholder.to_string()));
+            return Some((lsp_range(idx, target.span), target.placeholder.to_string()));
         }
         // Not a key: a command or environment name, gated to user-defined names
         // (a project definition site must exist — renaming `\textbf` or
@@ -6112,7 +6084,7 @@ fn compute_prepare_rename(
         if !name_rename_allowed(snapshot, &members, path, &sites, &target) {
             return None;
         }
-        Some((lsp_range(&idx, target.span), target.name.to_string()))
+        Some((lsp_range(idx, target.span), target.name.to_string()))
     }));
     computed.ok().flatten()
 }
@@ -6157,13 +6129,13 @@ fn name_rename_allowed(
 fn compute_rename(
     snapshot: &Analysis,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     position: Position,
     new_name: &str,
     members: Vec<ProjectMember>,
     enc: PositionEncoding,
 ) -> Option<WorkspaceEdit> {
-    let idx = LineIndex::with_encoding(text, enc);
+    let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let changes = salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -6198,7 +6170,7 @@ fn compute_rename(
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
         // `root` is kept for the command/environment name fallback below.
         let (root, target, origin) = match snapshot.lookup_file(path) {
-            Some(file) if snapshot.file_text(file) == text => (
+            Some(file) if snapshot.text_is_current(file, text) => (
                 snapshot.parsed_tree(file),
                 rename_target_under_cursor(snapshot.semantic_model(file), offset),
                 snapshot.file_path(file).to_path_buf(),
@@ -6289,7 +6261,9 @@ fn bib_entry_under_cursor(
             .map(|e| (e.key.clone(), e.key_range))
     };
     match snapshot.lookup_file(path) {
-        Some(file) if snapshot.file_text(file) == text => find(snapshot.bib_semantic_model(file)),
+        Some(file) if snapshot.text_is_current(file, text) => {
+            find(snapshot.bib_semantic_model(file))
+        }
         _ => find(&BibModel::build(&bib_parse(text).syntax())),
     }
 }
@@ -7414,7 +7388,7 @@ mod tests {
     #[test]
     fn apply_content_changes_splices_ranged_edit() {
         // Replace "world" with "there" in "hello world".
-        let mut text = "hello world\n".to_owned();
+        let mut text = Arc::new(TextBuffer::new("hello world\n", PositionEncoding::Utf16));
         let change = TextDocumentContentChangeEvent {
             range: Some(Range {
                 start: Position::new(0, 6),
@@ -7423,20 +7397,20 @@ mod tests {
             range_length: None,
             text: "there".to_owned(),
         };
-        apply_content_changes(&mut text, vec![change], PositionEncoding::Utf16);
-        assert_eq!(text, "hello there\n");
+        apply_content_changes(&mut text, vec![change]);
+        assert_eq!(text.text(), "hello there\n");
     }
 
     #[test]
     fn apply_content_changes_full_replace_on_no_range() {
-        let mut text = "old".to_owned();
+        let mut text = Arc::new(TextBuffer::new("old", PositionEncoding::Utf16));
         let change = TextDocumentContentChangeEvent {
             range: None,
             range_length: None,
             text: "new".to_owned(),
         };
-        apply_content_changes(&mut text, vec![change], PositionEncoding::Utf16);
-        assert_eq!(text, "new");
+        apply_content_changes(&mut text, vec![change]);
+        assert_eq!(text.text(), "new");
     }
 
     #[test]

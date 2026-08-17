@@ -864,6 +864,20 @@ Green nodes are stored in salsa, never red ones, because red trees are not
 under `no_eq, unsafe(non_update_types)`, sound because the tree is a pure
 function of the text, and materializes red cursors on demand.
 
+`SourceFile.text` is an `Arc<str>`, not a `String`, and every setter takes
+`impl Into<Arc<str>>`. A keystroke moves a document's text through several hands
+— the live buffer, the worker job, the salsa cell, every in-flight read job —
+and all but the first only read it, so each of those hand-offs is a refcount
+bump. It also gives the two hot guards a pointer test: `upsert_file` skips the
+salsa write when the text is unchanged (salsa's setter does no equality check of
+its own, and writing bumps the revision unconditionally), and every read job
+asks whether the snapshot still holds the buffer it captured. Both go through
+`Arc::ptr_eq` / a fat-pointer comparison **in front of** the content compare,
+never instead of it: the language server hands back the same allocation it
+already wrote, while a file re-read from disk is a fresh allocation that may
+still be equal. See `IncrementalDatabase::text_is_current`, and [the language
+server](#the-language-server) for the buffer at the other end.
+
 Salsa's default input durability is `LOW`. `SourceFile.path` is built at
 `Durability::HIGH` because it is set once and never mutated; `text` keeps `LOW`,
 since a keystroke rewrites it. The project's [declarations](#declarations) are
@@ -1465,6 +1479,32 @@ The LSP is built on `lsp-server` and `lsp-types`, rust-analyzer's stack, rather
 than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
 `lsp-server`'s sync main loop plus threadpool and fights tower-lsp's async
 `&self` model.
+
+### The live buffer
+
+An open document is a `text::TextBuffer`: the text as an `Arc<str>`, the
+position encoding negotiated at `initialize`, and the `LineIndex` over them,
+built on first use behind a `OnceLock`. The main loop holds it as an
+`Arc<TextBuffer>` and so does every buffer-carrying `WorkerJob`, which is what
+makes a keystroke's fan-out cheap in both directions: capturing the buffer for a
+job is a refcount bump rather than a copy of the document, and the index — 1.8
+ms to build over a 1 MB file — is built once per document version rather than
+once per request, on whichever thread asks first. The handlers that index the
+*cursor* buffer take `&TextBuffer` and call `line_index()`; the ones that walk
+*other* project members still build their own index per member, since those
+texts come off the salsa snapshot and have no buffer.
+
+The buffer is immutable: an edit yields a new one rather than mutating in place.
+That is not a cost, because an `Arc<str>` cannot be spliced in place anyway, and
+it is what lets a job that captured the previous version keep reading a
+consistent text and index with no lock. It also means the pointer identity is
+meaningful, which is what the salsa-side staleness guards trade on (see
+[Incrementality](#incrementality)).
+
+The line table is rebuilt, not patched, across an edit. Fatou and arity splice
+theirs; here a keystroke still pays a full reparse of the file, which dwarfs a
+`memchr` scan of the same buffer, so the splice would be optimizing the wrong
+row. `TextBuffer` is where it goes when that changes.
 
 Environment awareness has four sources, all reading static facts only, with no
 macro meaning and no typesetting.

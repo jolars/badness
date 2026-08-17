@@ -60,7 +60,7 @@ pub(super) fn is_big_delimiter_command(text: &str) -> bool {
 /// Inside those bodies `\begin`/`\end` parse as plain commands (see
 /// [`Parser::in_def_body`]). A closed, curated set read as a static fact — the
 /// bodies are never executed, mirroring [`is_big_delimiter_command`].
-pub(super) fn is_definition_body_command(text: &str) -> bool {
+pub(crate) fn is_definition_body_command(text: &str) -> bool {
     matches!(
         text,
         "\\newenvironment"

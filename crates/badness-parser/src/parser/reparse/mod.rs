@@ -43,9 +43,12 @@
 //!
 //! # Status
 //!
-//! Phase 1. The infrastructure, the oracle, and the single exit are here; no tier
-//! is implemented yet, so [`reparse`] and [`reparse_edits`] refuse every edit and
-//! every keystroke still costs a full parse. See `TODO.md` § Incremental reparse.
+//! Phase 3. The token tier is implemented ([`token`], whose module docs carry its
+//! soundness argument); the protected-body and region tiers are not, so an edit
+//! outside a plain leaf still costs a full parse. See `TODO.md` § Incremental
+//! reparse.
+
+mod token;
 
 use rowan::GreenNode;
 
@@ -175,11 +178,11 @@ pub fn reparse_edits(base: &ReparseBase<'_>, edits: &[Edit], new_text: &str) -> 
 }
 
 /// The tier ladder for one already-validated edit, cheapest first.
+///
+/// Each tier lands here as an `.or_else` and returns through [`finish`], so none
+/// can skip the length check or the oracle.
 fn reparse_one(base: &ReparseBase<'_>, edit: &Edit, new_text: &str) -> Option<Reparsed> {
-    // Phase 1: no tier is implemented. Each lands here as an `.or_else`, and each
-    // returns through `finish` so it cannot skip the length check or the oracle.
-    let _ = (base, edit, new_text);
-    None
+    token::reparse_token(base, edit, new_text)
 }
 
 /// The single exit for every tier.
@@ -195,7 +198,6 @@ fn reparse_one(base: &ReparseBase<'_>, edit: &Edit, new_text: &str) -> Option<Re
 /// span exactly its text is the cheap, `O(1)`, always-affordable half of the
 /// invariant, and it catches the whole class of offset-arithmetic bugs a splice can
 /// have. It *falls back* rather than panicking, per the refusal-first contract.
-#[allow(dead_code, reason = "the single exit for tiers landing in phases 3-7")]
 fn finish(
     green: GreenNode,
     errors: Vec<SyntaxError>,
@@ -306,10 +308,17 @@ mod tests {
         }
     }
 
+    /// An edit that lands on no spliceable leaf falls back. The ladder is
+    /// refusal-first, so "no tier claimed it" is the ordinary outcome and has to
+    /// stay cheap and silent rather than becoming an error.
     #[test]
-    fn every_edit_falls_back_in_phase_one() {
+    fn an_edit_outside_a_plain_leaf_falls_back() {
         with_base("\\section{Hi}\n\nbody text\n", |base| {
-            let e = edit(15..15, "x");
+            // On the `{`: a structural token, not a leaf this tier relexes.
+            let e = edit(8..8, "x");
+            assert!(reparse(base, &e, &e.apply(base.text)).is_none());
+            // Straddling two tokens: the covering element is a node.
+            let e = edit(7..10, "zz");
             assert!(reparse(base, &e, &e.apply(base.text)).is_none());
         });
     }

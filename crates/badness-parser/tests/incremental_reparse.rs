@@ -42,7 +42,7 @@ use std::path::Path;
 
 use badness_parser::declarations::ResolvedDeclarations;
 use badness_parser::parser::{
-    Edit, LatexFlavor, LexConfig, ReparseBase, Reparsed, fingerprint,
+    Edit, LatexFlavor, LexConfig, ReparseBase, ReparseTier, Reparsed, fingerprint,
     parse_with_declarations_resolved, reparse, reparse_edits,
 };
 use badness_parser::syntax::SyntaxNode;
@@ -335,10 +335,34 @@ fn single_edits_over_hazard_snippets() {
     }
 
     eprintln!("single edits: {spliced}/{attempted} spliced");
+    // A floor, not a target. The hazard alphabet is deliberately most of what a
+    // tier must refuse — `\`, `{`, `$`, `%`, `\begin{`, `\ExplSyntaxOn` — so the
+    // rate here is low by construction and its only job is to catch a guard that
+    // empties the harness rather than narrowing it.
+    assert_splice_floor("single edits over hazard snippets", spliced, attempted, 5);
+}
+
+/// Assert a driver still splices often enough to be testing anything.
+///
+/// Phrased as a percentage of attempts so `BADNESS_REPARSE_FUZZ_ITERS` does not
+/// change the verdict, and reported with both numbers so a failure says how far it
+/// fell rather than merely that it did.
+fn assert_splice_floor(driver: &str, spliced: usize, attempted: usize, floor_percent: usize) {
+    assert!(attempted > 0, "{driver}: nothing was attempted");
+    let percent = spliced * 100 / attempted;
+    assert!(
+        percent >= floor_percent,
+        "{driver}: splice rate fell to {percent}% ({spliced}/{attempted}), floor is \
+         {floor_percent}%. A guard narrowed the tier; either it is wrong or this \
+         floor moves — deliberately, in its own commit.",
+    );
 }
 
 #[test]
 fn chained_edits_over_hazard_snippets() {
+    let mut spliced = 0usize;
+    let mut attempted = 0usize;
+
     for (i, snippet) in HAZARD_SNIPPETS.iter().enumerate() {
         for n in 0..iterations(16) {
             let seed = (i as u64) << 40 | n as u64;
@@ -371,7 +395,9 @@ fn chained_edits_over_hazard_snippets() {
                 declared: &declared,
             };
 
+            attempted += 1;
             if let Some(result) = reparse_edits(&base, &chain, &text) {
+                spliced += 1;
                 assert_result_matches(
                     &result,
                     &text,
@@ -383,6 +409,12 @@ fn chained_edits_over_hazard_snippets() {
             }
         }
     }
+
+    eprintln!("chained edits: {spliced}/{attempted} spliced");
+    // Lower than the single-edit floor on purpose: a chain splices only if *every*
+    // step does, so the rate is roughly the single-edit rate raised to the chain
+    // length.
+    assert_splice_floor("chained edits over hazard snippets", spliced, attempted, 1);
 }
 
 /// Breadth over real documents: the corpus carries constructs no hand-written
@@ -392,6 +424,8 @@ fn chained_edits_over_hazard_snippets() {
 fn single_edits_over_the_corpus() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
     let mut files = 0usize;
+    let mut spliced = 0usize;
+    let mut attempted = 0usize;
 
     for entry in fs::read_dir(&dir).expect("read corpus dir") {
         let path = entry.expect("dir entry").path();
@@ -407,11 +441,16 @@ fn single_edits_over_the_corpus() {
             let seed = n as u64;
             let mut rng = Lcg(seed.wrapping_add(path.as_os_str().len() as u64));
             let edit = random_edit(&mut rng, &text);
-            check_edit(&text, &edit, seed, &label);
+            attempted += 1;
+            if check_edit(&text, &edit, seed, &label) {
+                spliced += 1;
+            }
         }
     }
 
     assert!(files > 0, "no corpus files found in {dir:?}");
+    eprintln!("corpus edits: {spliced}/{attempted} spliced across {files} files");
+    assert_splice_floor("single edits over the corpus", spliced, attempted, 5);
 }
 
 /// Typing a word one character at a time, the workload the token tier exists for
@@ -423,17 +462,29 @@ fn char_by_char_typing_into_prose() {
     let typed = "incremental";
 
     let mut text = format!("{prefix}{suffix}");
+    let mut spliced = 0usize;
+    let mut attempted = 0usize;
     for (i, ch) in typed.char_indices() {
         let at = prefix.len() + i;
         let edit = Edit {
             range: at..at,
             insert: ch.to_string(),
         };
-        check_edit(&text, &edit, i as u64, "char-by-char typing");
+        attempted += 1;
+        if check_edit(&text, &edit, i as u64, "char-by-char typing") {
+            spliced += 1;
+        }
         text = edit.apply(&text);
     }
 
     assert_eq!(text, format!("{prefix}{typed}{suffix}"));
+    eprintln!("prose typing: {spliced}/{attempted} spliced");
+    // The one floor that is a *target* rather than a tripwire. This is the workload
+    // the tier exists for, so anything short of every keystroke after the first is a
+    // regression worth failing over. The first character is genuinely outside the
+    // tier: inserted between two spaces it splits one `WHITESPACE` token into three
+    // tokens, which is a change to the kind sequence.
+    assert_splice_floor("char-by-char typing into prose", spliced, attempted, 90);
 }
 
 /// The same, inside a protected body — where newlines are safe but the closing
@@ -458,12 +509,11 @@ fn char_by_char_typing_into_a_verbatim_body() {
 
 /// The harness must be calling the thing it claims to check.
 ///
-/// While no tier is implemented every assertion above is vacuously true, so without
-/// this the suite could pass with `reparse` unwired entirely. It is the weakest
-/// form of the splice-rate floor that replaces it once a tier lands: a future guard
-/// must not be able to silently empty this harness, which is exactly what a window
-/// cutoff did to panache's (two thirds of its coverage, every assertion still
-/// green).
+/// Every assertion above is vacuously true on a `None`, so without this the suite
+/// could pass with `reparse` unwired entirely. It is the pointwise half of the
+/// splice-rate floors the drivers carry: a future guard must not be able to
+/// silently empty this harness, which is exactly what a window cutoff did to
+/// panache's (two thirds of its coverage, every assertion still green).
 #[test]
 fn the_harness_reaches_the_reparse_entry_point() {
     let text = "Some ordinary prose.\n";
@@ -482,12 +532,9 @@ fn the_harness_reaches_the_reparse_entry_point() {
         range: 5..5,
         insert: "x".to_string(),
     };
-    // Phase 1: no tier, so this is `None`. When the first tier lands this assertion
-    // inverts and the drivers above grow splice-rate floors.
-    assert!(
-        reparse(&base, &edit, &edit.apply(text)).is_none(),
-        "a tier landed: invert this assertion and add splice-rate floors to the drivers",
-    );
+    let result = reparse(&base, &edit, &edit.apply(text))
+        .expect("a letter typed into a prose word is the token tier's whole reason to exist");
+    assert_eq!(result.tier, ReparseTier::Token);
 }
 
 /// The harness's own checker must be able to fail.

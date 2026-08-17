@@ -1027,6 +1027,28 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Whether a control word makes the lexer read the *raw text that follows it*,
+/// beyond the ordinary token scan — so a later token's own text can decide how the
+/// rest of the file lexes.
+///
+/// Two families, and between them this is the whole set. [`apply_toggles`] reads a
+/// following argument for the short-verb and document-class toggles (the
+/// `\makeatletter` and expl3 toggles read only the control word itself, so they are
+/// not here). And [`next_pending`] arms the one-shot lookahead, which changes how
+/// the *next* token lexes; asking it rather than restating its four sets is what
+/// keeps this from drifting when a fifth is added.
+///
+/// Exists for [`crate::parser::reparse`]'s token tier, which may not splice a leaf
+/// whose text one of these reads: the tier's soundness rests on the token *kind*
+/// vector being unchanged, and these are the lexer's way of making one token's text
+/// change another token's kind.
+pub(crate) fn reads_following_text(text: &str) -> bool {
+    matches!(
+        text,
+        "\\MakeShortVerb" | "\\DeleteShortVerb" | "\\documentclass" | "\\LoadClass"
+    ) || next_pending(None, SyntaxKind::CONTROL_WORD, text).is_some()
+}
+
 /// The one-shot mode in force after lexing a token of `kind`/`text`: newly armed
 /// by a command that takes one, carried across the trivia the awaited token may
 /// sit behind, and otherwise spent.

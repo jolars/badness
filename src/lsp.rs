@@ -133,7 +133,7 @@ use crate::formatter::{
     format_node_range_with_signatures_sentence, format_node_with_signatures_sentence,
     format_with_declarations_sentence,
 };
-use crate::incremental::{Analysis, IncrementalDatabase};
+use crate::incremental::{Analysis, IncrementalDatabase, IncrementalDb};
 use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{Edit, parse, parse_with_declarations};
 use crate::project::aux::AuxData;
@@ -742,6 +742,16 @@ enum WorkerJob {
         /// ([`Worker::seed_dir`]). Built on the main side because the worker holds
         /// no config; exclude-nothing when no `badness.toml` governs.
         exclude: ExcludeFilter,
+        /// The exact transform from the text the db currently holds to `text`, for
+        /// the incremental reparse to splice (`AGENTS.md` decision #6). [`None`]
+        /// when the text arrived by a route carrying no edits — a `didOpen`, a
+        /// re-lint sweep — which clears the chain rather than leaving one that no
+        /// longer describes how this text was reached.
+        ///
+        /// Only ever a hint: a stale or missing chain costs a full parse and
+        /// nothing else, because [`reparse_edits`](crate::parser::reparse_edits)
+        /// rejects any chain that does not land on exactly this text.
+        edits: Option<Vec<Edit>>,
     },
     /// The project's declarations changed (or arrived): write them into the
     /// worker's salsa input, invalidating every parse that read the old ones.
@@ -1399,6 +1409,8 @@ fn on_notification(
                 kind,
                 rules: resolved.rule_selection(),
                 exclude: resolved.exclude,
+                // A whole buffer arriving fresh: no transform to describe.
+                edits: None,
             });
         }
         DidChangeTextDocument::METHOD => {
@@ -1412,7 +1424,7 @@ fn on_notification(
             let Some(doc) = state.documents.get_mut(&uri) else {
                 return;
             };
-            let _edits = apply_content_changes(&mut doc.text, params.content_changes);
+            let edits = apply_content_changes(&mut doc.text, params.content_changes);
             doc.version = version;
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
@@ -1426,6 +1438,7 @@ fn on_notification(
                 kind,
                 rules: resolved.rule_selection(),
                 exclude: resolved.exclude,
+                edits,
             });
         }
         DidCloseTextDocument::METHOD => {
@@ -2766,6 +2779,10 @@ fn relint_all_open(connection: &Connection, state: &mut GlobalState, job_tx: &Se
             kind,
             rules: resolved.rule_selection(),
             exclude: resolved.exclude,
+            // The same text at the same version: nothing moved, so there is no
+            // transform to describe. Clearing costs nothing — the base already is
+            // this text, so `parsed_document` answers from it without a chain.
+            edits: None,
         });
     }
 }
@@ -2938,12 +2955,23 @@ impl Worker {
                 kind,
                 rules,
                 exclude,
+                edits,
             } => {
                 // Write-phase: push the live buffer into the db. Cheap — the parse
                 // is a lazy salsa query deferred to the analyze. Acquiring `&mut
                 // db` blocks until any outstanding read snapshot drops (single
                 // writer), which is how a fresher edit preempts an in-flight read.
-                self.db.upsert_file(&path, text.text_arc());
+                let file = self.db.upsert_file(&path, text.text_arc());
+                // Stage the transform for the incremental reparse, **after** the
+                // write and never before: that `&mut db` is what proves no analyze
+                // is reading. A chain staged ahead of the text it describes could be
+                // peeked by an in-flight `parsed_document`, which would fail to
+                // verify it, full-parse, and then drain it — losing the edit for
+                // good. Staged unconditionally, including when `upsert_file` skipped
+                // its write: the chain is anchored at the reparse *base*, not at the
+                // db text, and a buffer that round-trips back to what salsa holds
+                // still took a transform to get there.
+                self.db.reparse_stage_edits(file, edits);
                 // Lazily pull the rest of the project off disk so cross-file rules
                 // can fire. If this grows the member set, every open document's
                 // resolution may have changed — re-lint them all.
@@ -3406,7 +3434,12 @@ impl Worker {
                 continue; // open buffer or already seeded — keep its live text
             }
             if let Ok(text) = std::fs::read_to_string(&sibling) {
-                self.db.upsert_file(&sibling, text);
+                let file = self.db.upsert_file(&sibling, text);
+                // A whole file off disk: no transform to describe. Pairing every
+                // `upsert_file` with a stage is what keeps the rule exceptionless —
+                // and clearing a chain a fresh file never had is a no-op, entry
+                // included.
+                self.db.reparse_stage_edits(file, None);
                 grew = true;
             }
         }
@@ -3447,7 +3480,10 @@ impl Worker {
         if tracked.is_some_and(|file| self.db.text_is_current(file, &text)) {
             return false;
         }
-        self.db.upsert_file(path, text);
+        let file = self.db.upsert_file(path, text);
+        // A disk re-read carries no edits, so any chain this file holds describes a
+        // transform out of a text it no longer has. Drop it.
+        self.db.reparse_stage_edits(file, None);
         true
     }
 

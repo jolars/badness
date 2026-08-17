@@ -549,6 +549,62 @@ fn an_unread_edit_chain_stays_bounded() {
     assert!(db.reparse_pending_edits(file).is_empty());
 }
 
+/// The language server's write phase, end to end: splice the `didChange` into the
+/// live buffer, hand the text to salsa, stage the transform. This is the phase-2
+/// contract — the chain the editor stages is *exactly* the transform out of the
+/// base, which is the property `reparse_edits` verifies before it splices anything.
+///
+/// Driven through the real `apply_content_changes` rather than hand-built edits,
+/// because the thing under test is precisely that the LSP-side offset resolution
+/// and the parser-side chain agree.
+#[test]
+fn the_language_server_write_phase_stages_the_transform_out_of_the_base() {
+    use badness::lsp::apply_content_changes;
+    use badness::parser::apply_edits;
+    use badness::text::{PositionEncoding, TextBuffer};
+    use lsp_types::{Position, Range, TextDocumentContentChangeEvent};
+
+    let source = "\\section{Hi}\n\nbody $x^2$\n";
+    let mut buffer = std::sync::Arc::new(TextBuffer::new(source, PositionEncoding::Utf16));
+    let mut db = IncrementalDatabase::default();
+    let path = Path::new("a.tex");
+    let file = db.upsert_file(path, buffer.text_arc());
+    db.parsed_tree(file);
+
+    let base = db.reparse_prev(file).expect("a base after the first parse");
+    let base_text = base.text.to_string();
+
+    // Three keystrokes, no parse demanded in between — the pull-diagnostics shape.
+    for (line, character, insert) in [(2, 4, "X"), (2, 5, "Y"), (0, 9, "Z")] {
+        let at = Position::new(line, character);
+        let edits = apply_content_changes(
+            &mut buffer,
+            vec![TextDocumentContentChangeEvent {
+                range: Some(Range::new(at, at)),
+                range_length: None,
+                text: insert.to_owned(),
+            }],
+        );
+        let file = db.upsert_file(path, buffer.text_arc());
+        db.reparse_stage_edits(file, edits);
+    }
+
+    let staged = db.reparse_pending_edits(file);
+    assert_eq!(staged.len(), 3, "one edit per keystroke, appended in order");
+    assert_eq!(
+        apply_edits(&base_text, &staged),
+        buffer.text(),
+        "the staged chain must reconstruct the buffer from the base",
+    );
+
+    // And the parse it feeds still answers exactly what a full parse would, then
+    // drains what it consumed.
+    assert_eq!(db.parsed_tree(file).to_string(), buffer.text());
+    assert!(db.reparse_pending_edits(file).is_empty());
+    let refreshed = db.reparse_prev(file).expect("a refreshed base");
+    assert_eq!(&*refreshed.text, buffer.text());
+}
+
 /// Staging `None` means "the text changed by a route carrying no edits" — a disk
 /// reload, a sweep. The chain must go, or it would claim to describe a transform it
 /// does not.

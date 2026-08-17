@@ -1475,6 +1475,91 @@ fn incremental_did_change_splices_buffer() {
     shutdown(&client, server_thread);
 }
 
+/// A `didChange` may carry several changes, each expressed against the text its
+/// predecessors produced. The server has to fold them in order — and, since the
+/// incremental reparse replays exactly that fold, a batch that lands wrong here is
+/// the shape that would have it splice against the wrong text.
+#[test]
+fn incremental_did_change_folds_a_multi_change_batch() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///batch.tex".parse().unwrap();
+
+    // Deliberately messy (a doubled inter-word space), so the formatter always has
+    // an edit to return and the assertion below can never pass vacuously.
+    did_open(&client, &uri, 1, "\\section{Hi}\nab  c\n");
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    // Insert "XYZ" after "a", then replace "b" — the second range counts columns in
+    // "aXYZb", so a server folding both against the original text would land on the
+    // "Z" instead.
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![
+                TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position::new(1, 1),
+                        end: Position::new(1, 1),
+                    }),
+                    range_length: None,
+                    text: "XYZ".to_owned(),
+                },
+                TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position::new(1, 4),
+                        end: Position::new(1, 5),
+                    }),
+                    range_length: None,
+                    text: "Q".to_owned(),
+                },
+            ],
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    // Formatting reads the buffer back, so its output says which text the server
+    // holds — a mis-resolved second range would leave the `b` or eat the `Z`.
+    send_request(
+        &client,
+        2,
+        "textDocument/formatting",
+        serde_json::to_value(DocumentFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
+    assert_eq!(edits.len(), 1, "expected one whole-document edit");
+    let expected = format_with_style(
+        "\\section{Hi}\naXYZQ  c\n",
+        FormatStyle {
+            line_width: 80,
+            indent_width: 2,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(edits[0].new_text, expected);
+
+    shutdown(&client, server_thread);
+}
+
 #[test]
 fn line_width_from_initialization_options() {
     // A narrow line width must reflow a long paragraph the default-80 width would

@@ -15,10 +15,11 @@
 //!    re-read, a redundant sync), and the one row that must stay flat in the
 //!    document size.
 //! 2. `splice + upsert (write phase)` — [`apply_content_changes`] on the live
-//!    [`TextBuffer`] plus handing the result to `upsert_file`, with no parse
-//!    demanded. This is where the per-keystroke *text copies* live (or don't),
-//!    so it is the row on which text-storage designs — `String`, `Arc<str>`, a
-//!    rope — are actually comparable.
+//!    [`TextBuffer`], handing the result to `upsert_file`, and staging the edit
+//!    chain for the incremental reparse, with no parse demanded. This is where
+//!    the per-keystroke *text copies* live (or don't), so it is the row on which
+//!    text-storage designs — `String`, `Arc<str>`, a rope — are actually
+//!    comparable.
 //! 3. `keystroke end-to-end (parse included)` — the same plus `parsed_tree`.
 //!    Badness has no intra-file reparse yet (`AGENTS.md` decision #6: salsa
 //!    first, intra-file later), so row 3 minus row 2 *is* the full-reparse cost,
@@ -54,7 +55,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use badness::incremental::IncrementalDatabase;
+use badness::incremental::{IncrementalDatabase, IncrementalDb};
 use badness::lsp::apply_content_changes;
 use badness::text::{PositionEncoding, TextBuffer};
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent};
@@ -193,8 +194,13 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     let write = time(target, || {
         flip = !flip;
         let batch = if flip { insert.clone() } else { delete.clone() };
-        let _edits = apply_content_changes(&mut live, batch);
-        db.upsert_file(&path, handoff(&live))
+        let edits = apply_content_changes(&mut live, batch);
+        let file = db.upsert_file(&path, handoff(&live));
+        // The language server's write phase is splice + upsert + stage, so the row
+        // has to carry the stage too — it is what a Phase 3 tier reads, and its
+        // cost (one `Vec<Edit>` and one lock) is paid per keystroke either way.
+        db.reparse_stage_edits(file, edits);
+        file
     });
     row("splice + upsert (write phase)", write);
 
@@ -206,8 +212,9 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     let end_to_end = time(target, || {
         flip = !flip;
         let batch = if flip { insert.clone() } else { delete.clone() };
-        let _edits = apply_content_changes(&mut live, batch);
+        let edits = apply_content_changes(&mut live, batch);
         let file = db.upsert_file(&path, handoff(&live));
+        db.reparse_stage_edits(file, edits);
         black_box(db.parsed_tree(file))
     });
     row("keystroke end-to-end (parse included)", end_to_end);

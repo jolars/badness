@@ -1935,6 +1935,32 @@ whole-text diff.
     minting an empty cache entry for a file that had none. Harmless alone, but
     sibling seeding stages `None` per file read off disk, so a large project would
     crowd out the buffers being edited until a store swept them.
+  - **The keystroke bench's *write-phase* row rose 14-26%; end to end did not
+    move.** Alternating A/B against `f58a9d7`, row 2 goes 572 us -> 697 us on
+    `phd_dissertation.tex` (66 -> 83 us masters, 5.25 -> 5.83 us cv, 1.38 ->
+    1.57 us small) while row 3 — the keystroke a user feels — is 27.76 -> 27.71
+    ms, i.e. flat, because the full parse is still 97% of it. Reproducible across
+    six interleaved runs, so it is not machine noise.
+
+    It is **not extra work**. Bisected to `3f4c629`, and within it to the
+    *presence of a heap-allocated insert in the pushed `Edit`*: pushing only the
+    `(start, end)` spans restores 571 us exactly, while pushing the `Edit` —
+    `change.text` moved or cloned, staged or dropped immediately — costs the same
+    125 us. Time-boxed `perf stat` has the branch retiring *fewer* instructions
+    than the base for the same cycles, so the delta is stalls, not instructions;
+    `MALLOC_MMAP_THRESHOLD_` moves both arms equally, so it is not the mmap
+    threshold. Read as: interleaving one small alloc/free with the ~730 KB
+    buffer the splice allocates and frees each iteration costs the base's
+    pristine same-chunk reuse. A real session allocates constantly between
+    keystrokes anyway, so that pristine pattern is arguably the bench's artifact
+    rather than the server's property — but that reading is an inference, not a
+    measurement, and it is the one thing here nobody has verified.
+
+    Left as measured rather than optimized: the fix (an inline small-string
+    `insert`, in the parser crate's `Edit`) would be speculative work against a
+    locality effect, and the row it costs is invisible until a tier makes the
+    parse cheap. **Phase 5's gate must cover row 2**, which is exactly when this
+    stops being invisible.
   - **The `apply_edits` round-trip tests live beside the function**, in
     `src/lsp.rs`'s `mod tests`, not in `tests/lsp.rs` as planned: that file is a
     protocol-transcript harness over `Connection::memory()` and never calls
@@ -1998,6 +2024,12 @@ whole-text diff.
   fresh checkout otherwise passes by not measuring exactly the strictest cases.
   Thresholds live in the harness and nowhere else — a number in this file cannot
   be checked, and panache's drifted from its harness within one phase.
+
+  Gate the keystroke bench's **write-phase** row too, not just the reparse: Phase
+  2 raised it 14-26% and that was invisible end to end only because the full
+  parse was 97% of the keystroke. A tier is exactly what stops making it
+  invisible. See Phase 2's bench deviation for the measurement and the one
+  inference in it nobody has checked.
 
 - [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
   files, already pinned) as a two-sided ratchet in the shape of

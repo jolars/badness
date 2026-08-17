@@ -43,6 +43,8 @@
 //!
 //! Env knobs:
 //!   - `BADNESS_BENCH_DOC` — bench only this doc under `benches/documents/`.
+//!   - `BADNESS_BENCH_SITE` — which keystroke to measure: `word` (the default) or
+//!     `verbatim` (see [`Site`]).
 //!   - `BADNESS_BENCH_TARGET_MS` — per-row timing budget (default 500 ms); each
 //!     row auto-calibrates its iteration count to fill it.
 //!   - `BADNESS_BENCH_OUTPUT_JSON` — write a machine-readable report to this
@@ -131,6 +133,9 @@ fn row(name: &str, ns: f64) {
 #[derive(Debug, Serialize)]
 struct DocumentResult {
     name: String,
+    /// Which keystroke this row measured ([`Site`]). A report that does not say is
+    /// not comparable with another: the two sites reach different reparse tiers.
+    site: &'static str,
     size_bytes: usize,
     line_count: usize,
     /// Row 1: a no-op upsert (the staleness guard alone).
@@ -184,12 +189,93 @@ fn word_interior_at_or_after(text: &str, from: usize) -> usize {
     at
 }
 
-fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
+/// Which keystroke the bench measures.
+///
+/// A tier's number is only as trustworthy as its edit site — Phase 3 of the
+/// incremental-reparse work found this bench silently timing a construct the token
+/// tier declines, two runs of the same binary differing 45x. So the site is an
+/// explicit choice, it is printed, and it rides the JSON report.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Site {
+    /// A letter typed into a word of plain prose: the token tier.
+    Word,
+    /// A line typed inside an `lstlisting` body: the protected-body tier, and the
+    /// one keystroke that carries a newline.
+    Verbatim,
+}
+
+impl Site {
+    fn from_env() -> Self {
+        match env::var("BADNESS_BENCH_SITE").as_deref() {
+            Ok("verbatim") => Self::Verbatim,
+            Ok("word") | Err(_) => Self::Word,
+            Ok(other) => panic!("BADNESS_BENCH_SITE={other:?}: expected `word` or `verbatim`"),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Word => "word",
+            Self::Verbatim => "verbatim",
+        }
+    }
+}
+
+/// One line of the synthetic listing, sized so the block is a few kilobytes — big
+/// enough that relexing it is a real cost, small enough to stay a plausible listing.
+const LISTING_LINE: &str = "    for (int i = 0; i < n; i++) { total += weights[i] * values[i]; }\n";
+const LISTING_LINES: usize = 32;
+
+/// The document the bench actually edits, and the byte offset it edits at.
+///
+/// No document under `benches/documents/` contains a verbatim environment, a
+/// `\verb`, or a `\url`, so the protected-body site has to *inject* its construct.
+/// That makes the `verbatim` numbers comparable across runs but not against the
+/// `word` ones on a different document — which is why the site is printed and
+/// recorded rather than inferred.
+fn prepare(text: &str, site: Site) -> (String, usize) {
+    match site {
+        Site::Word => {
+            let at = word_interior_at_or_after(text, text.len() * 4 / 5);
+            (text.to_owned(), at)
+        }
+        Site::Verbatim => {
+            let anchor = line_start_at_or_after(text, text.len() * 4 / 5);
+            let body: String = LISTING_LINE.repeat(LISTING_LINES);
+            let block =
+                format!("\n\\begin{{lstlisting}}[language=C]\n{body}\\end{{lstlisting}}\n\n");
+            // Halfway down the body, inside a code line rather than at its edge, so
+            // the edit is unambiguously interior to the one `VERBATIM_BODY` leaf.
+            let into_body = "\n\\begin{lstlisting}[language=C]\n".len()
+                + LISTING_LINE.len() * (LISTING_LINES / 2)
+                + LISTING_LINE.len() / 2;
+            let mut out = String::with_capacity(text.len() + block.len());
+            out.push_str(&text[..anchor]);
+            out.push_str(&block);
+            out.push_str(&text[anchor..]);
+            (out, anchor + into_body)
+        }
+    }
+}
+
+/// The start of the first line at or after `from`.
+fn line_start_at_or_after(text: &str, from: usize) -> usize {
+    match text[from.min(text.len())..].find('\n') {
+        Some(rel) => from + rel + 1,
+        None => text.len(),
+    }
+}
+
+fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> DocumentResult {
+    let (prepared, at) = prepare(text, site);
+    let text = prepared.as_str();
+
     println!("\n{}", "=".repeat(64));
     println!(
-        "{name}  ({} bytes, {} lines)",
+        "{name}  ({} bytes, {} lines, {} site)",
         text.len(),
-        text.lines().count()
+        text.lines().count(),
+        site.name(),
     );
     println!("{}", "=".repeat(64));
 
@@ -202,7 +288,6 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     // measures a full parse; and since the rows alternate insert/delete, whether
     // the site still held the synthetic `z` when the next row started decided which
     // of the two it measured. That was a 45x swing between runs of the same binary.
-    let at = word_interior_at_or_after(text, text.len() * 4 / 5);
     // Printed because the site decides which workload rows 2 and 3 measure, and a
     // silently-relocated one would look like a performance change.
     println!(
@@ -213,14 +298,36 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     let mut live = Arc::new(TextBuffer::new(text, UTF16));
     let (line, character) = live.line_index().position(at);
     let position = Position::new(line, character);
+    // The `word` site types one letter; the `verbatim` site types a whole line, since
+    // a line terminator is the edit the protected-body tier exists to claim and the
+    // token tier refuses outright.
+    let typed = match site {
+        Site::Word => "z",
+        Site::Verbatim => "\n    total = 0;",
+    };
     let insert = vec![TextDocumentContentChangeEvent {
         range: Some(Range::new(position, position)),
         range_length: None,
-        text: "z".to_owned(),
+        text: typed.to_owned(),
     }];
-    let after_z = Position::new(position.line, position.character + 1);
+    let (typed_lines, typed_last) = {
+        let mut lines = typed.split('\n');
+        let first = lines.next().unwrap_or_default();
+        let mut count = 0u32;
+        let mut last = first.chars().count() as u32;
+        for line in lines {
+            count += 1;
+            last = line.chars().count() as u32;
+        }
+        (count, last)
+    };
+    let after_typed = if typed_lines == 0 {
+        Position::new(position.line, position.character + typed_last)
+    } else {
+        Position::new(position.line + typed_lines, typed_last)
+    };
     let delete = vec![TextDocumentContentChangeEvent {
-        range: Some(Range::new(position, after_z)),
+        range: Some(Range::new(position, after_typed)),
         range_length: None,
         text: String::new(),
     }];
@@ -277,6 +384,7 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
 
     DocumentResult {
         name: name.to_owned(),
+        site: site.name(),
         size_bytes: text.len(),
         line_count: text.lines().count(),
         noop_upsert_ns: noop,
@@ -303,6 +411,8 @@ fn main() {
     // The same size gradient the formatter bench uses: small.tex is committed
     // (zero-network), the rest come from benches/documents/download.sh and are
     // skipped with a note when absent.
+    let site = Site::from_env();
+
     let names: Vec<String> = match env::var("BADNESS_BENCH_DOC") {
         Ok(doc) => vec![doc],
         Err(_) => [
@@ -319,14 +429,14 @@ fn main() {
     let mut documents = Vec::new();
     for name in &names {
         match load_document(name) {
-            Some(text) => documents.push(bench_document(name, &text, target)),
+            Some(text) => documents.push(bench_document(name, &text, target, site)),
             None => println!("\n{name}: not found — run `task bench:download`, skipping"),
         }
     }
 
     if let Ok(path) = env::var("BADNESS_BENCH_OUTPUT_JSON") {
         let report = Report {
-            schema_version: 1,
+            schema_version: 2,
             documents,
         };
         match serde_json::to_string_pretty(&report) {

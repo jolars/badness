@@ -136,6 +136,13 @@ tasks:
     cmds:
       - cargo bench --bench keystroke
 
+  bench:keystroke-verbatim:
+    desc: The same, typing a line inside an injected lstlisting (protected-body tier)
+    env:
+      BADNESS_BENCH_SITE: verbatim
+    cmds:
+      - cargo bench --bench keystroke
+
   bench:profile:
     desc: Flamegraph the masters_dissertation per-byte hot paths (writes benches/flamegraph_masters.svg)
     env:

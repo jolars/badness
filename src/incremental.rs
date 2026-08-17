@@ -24,7 +24,10 @@ use crate::bib::semantic::Model as BibModel;
 use crate::bib::syntax::SyntaxNode as BibSyntaxNode;
 use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::file_kind_or_tex;
-use crate::parser::parse_with_declarations;
+use crate::parser::{
+    Edit, LexConfig, ParseCtx, ReparseBase, ReparseTier, SyntaxError,
+    parse_with_declarations_resolved, reparse_edits,
+};
 use crate::project::citations::document_cite_names;
 use crate::project::labels::{
     document_glossary_keys, document_label_names, document_ref_names, is_document_root,
@@ -206,9 +209,121 @@ pub struct ParsedBibDocument {
     pub diagnostics: Vec<ParseDiagnosticData>,
 }
 
+/// The previous parse an incremental reparse splices against, plus the inputs it
+/// was produced under.
+///
+/// All four inputs are carried, not just the text, because a base is only usable
+/// for a parse that would have used the same ones: `config` is fixed per file by
+/// its extension, `declared` changes when `badness.toml` does, and `ctx` is the
+/// scanned context the tree was parsed with (a tier that relexes a fragment must
+/// use the same one, or a `\newcommand` the scan found makes the fragment's tokens
+/// disagree with the tree's).
+///
+/// `text` is an `Arc<str>` shared with the tracked input and the live editor
+/// buffer, so storing a base costs a refcount bump rather than a copy.
+#[derive(Debug, Clone)]
+pub struct PrevParse {
+    pub text: Arc<str>,
+    pub green: rowan::GreenNode,
+    pub errors: Vec<SyntaxError>,
+    pub ctx: ParseCtx,
+    pub config: LexConfig,
+    pub declared: ResolvedDeclarations,
+}
+
+impl PrevParse {
+    /// Whether this base already *is* the parse being asked for — same text, same
+    /// inputs. The tree can then be handed back whole.
+    fn is_current(
+        &self,
+        text: &Arc<str>,
+        config: LexConfig,
+        declared: &ResolvedDeclarations,
+    ) -> bool {
+        self.config == config
+            && &self.declared == declared
+            // `ptr_eq` is the free half: the language server hands the query the
+            // same allocation it wrote. The content compare behind it is what makes
+            // the guard correct for an equal-but-distinct text (a disk re-read).
+            && (Arc::ptr_eq(&self.text, text) || *self.text == **text)
+    }
+
+    /// Borrow this base in the shape the parser's reparse entry points take.
+    fn as_reparse_base<'a>(&'a self, declared: &'a ResolvedDeclarations) -> ReparseBase<'a> {
+        ReparseBase {
+            text: &self.text,
+            green: &self.green,
+            errors: &self.errors,
+            ctx: &self.ctx,
+            config: self.config,
+            declared,
+        }
+    }
+}
+
+/// How many files may hold a reparse base at once.
+const MAX_REPARSE_BASES: usize = 64;
+/// How many edits may queue for one file before the chain is abandoned.
+const MAX_CHAIN_EDITS: usize = 16;
+/// How many inserted bytes may queue for one file before the chain is abandoned.
+const MAX_CHAIN_INSERT_BYTES: usize = 64 * 1024;
+
 #[salsa::db]
 pub trait IncrementalDb: salsa::Database {
     fn record_query(&self, entry: QueryLogEntry);
+
+    /// The reparse base for `file`, if one is cached.
+    ///
+    /// This and the four methods below are the **side channel**: mutable state read
+    /// from inside an otherwise-pure tracked query. That is sound only because of
+    /// the reparse's governing invariant — `parsed_document` returns exactly what
+    /// `parse(text)` would whatever this cache holds, so a cold, stale, or evicted
+    /// cache costs a full parse and nothing else. Nothing here is a salsa input, and
+    /// nothing here may become one: a base that invalidated on write would defeat
+    /// the point, and one that did not would be a lie to the dependency graph.
+    ///
+    /// Default-implemented so a database without a cache simply always full-parses.
+    /// That keeps the query total for bare test databases and for any future
+    /// non-editor host, without either having to opt out.
+    fn reparse_prev(&self, _file: SourceFile) -> Option<Arc<PrevParse>> {
+        None
+    }
+
+    /// Append `edits` to `file`'s pending chain, or clear it when `None`.
+    ///
+    /// `None` means "the text changed by a route carrying no edits" — a disk
+    /// reload, a whole-buffer replacement, a sweep. Clearing rather than keeping is
+    /// what makes the chain self-healing: a chain that no longer describes how the
+    /// current text was reached can never describe it again.
+    fn reparse_stage_edits(&self, _file: SourceFile, _edits: Option<Vec<Edit>>) {}
+
+    /// Peek at `file`'s pending chain without draining it.
+    ///
+    /// Peek rather than take, because the query that reads this may be cancelled
+    /// before it stores a result; draining here would lose the chain for the retry.
+    /// [`reparse_store`](Self::reparse_store) drains the prefix that was consumed.
+    fn reparse_pending_edits(&self, _file: SourceFile) -> Vec<Edit> {
+        Vec::new()
+    }
+
+    /// Install `prev` as `file`'s base and drop the first `consumed` pending edits.
+    ///
+    /// `tier` says whether a splice actually landed, which is what promotes the
+    /// entry to the cache's *hot* class.
+    fn reparse_store(
+        &self,
+        _file: SourceFile,
+        _prev: PrevParse,
+        _tier: Option<ReparseTier>,
+        _consumed: usize,
+    ) {
+    }
+
+    /// Drop `file`'s base and chain outright.
+    ///
+    /// For the case where the buffer the base describes is *gone* rather than
+    /// merely changed — a `didClose`, a revert to disk.
+    fn reparse_evict(&self, _file: SourceFile) {}
 }
 
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
@@ -227,21 +342,108 @@ pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocume
     // pairs here exactly as it does on the CLI's `parse_with_declarations` path.
     // Reading them registers a `HIGH`-durability dependency: editing
     // `badness.toml` reparses every file, and nothing else does.
-    let parsed = parse_with_declarations(file.text(db), config, declarations_of(db));
-    let diagnostics = parsed
-        .errors
-        .into_iter()
+    let declared = declarations_of(db);
+    let text = file.text(db);
+
+    // The side channel (see `IncrementalDb::reparse_prev`). Everything below is a
+    // hint: each branch produces exactly what a full parse of `text` would, so a
+    // cold or stale cache costs a parse and nothing else.
+    let staged = db.reparse_pending_edits(file);
+    let prev = db.reparse_prev(file);
+
+    // The base already *is* this parse. Reached when salsa re-executes after
+    // evicting the memo, or when a write set the text back to what it was. Store
+    // nothing and leave the chain anchored to the base: its net effect on this text
+    // is a no-op, so a later appended edit still describes the whole transform.
+    if let Some(prev) = prev
+        .as_ref()
+        .filter(|prev| prev.is_current(text, config, declared))
+    {
+        return ParsedDocument {
+            green: prev.green.clone(),
+            diagnostics: to_diagnostics(&prev.errors),
+        };
+    }
+
+    // Replay the staged chain. Deliberately the *only* incremental route: there is
+    // no whole-text `diff_edit` fallback here, because re-deriving an edit the
+    // language server already handed us costs more than the reparse it feeds (fatou
+    // measured ~200 us of a ~500 us keystroke at 1 MB). A text that changed by a
+    // route carrying no edits is a disk reload or a whole-buffer replace — both
+    // shapes a cost guard would decline anyway — so it simply full-parses.
+    let reparsed = prev
+        .as_ref()
+        .and_then(|prev| reparse_edits(&prev.as_reparse_base(declared), &staged, text));
+
+    let tier = reparsed.as_ref().map(|r| r.tier);
+    let (green, errors) = match reparsed {
+        Some(r) => (r.green, r.errors),
+        None => {
+            let (parsed, ctx) = parse_with_declarations_resolved(text, config, declared);
+            // Carrying the scanned context out of the parse is what lets the next
+            // reparse relex a fragment under the same one.
+            let (green, errors) = (parsed.green, parsed.errors);
+            db.reparse_store(
+                file,
+                PrevParse {
+                    text: text.clone(),
+                    green: green.clone(),
+                    errors: errors.clone(),
+                    ctx,
+                    config,
+                    declared: declared.clone(),
+                },
+                tier,
+                staged.len(),
+            );
+            return ParsedDocument {
+                diagnostics: to_diagnostics(&errors),
+                green,
+            };
+        }
+    };
+
+    // A splice keeps the base's context: the tiers only admit edits that cannot
+    // change what the definition scan found, so the context the tree was parsed
+    // under is still the one it holds.
+    let ctx = prev
+        .as_ref()
+        .map(|prev| prev.ctx.clone())
+        .unwrap_or_default();
+    // Stored last, after every fallible step, so a panic or a salsa cancellation
+    // can never leave a base whose text and tree disagree. The drain is by
+    // *consumed prefix count* rather than "clear all": a stage can land between the
+    // peek above and this store, and it must survive.
+    db.reparse_store(
+        file,
+        PrevParse {
+            text: text.clone(),
+            green: green.clone(),
+            errors: errors.clone(),
+            ctx,
+            config,
+            declared: declared.clone(),
+        },
+        tier,
+        staged.len(),
+    );
+
+    ParsedDocument {
+        green,
+        diagnostics: to_diagnostics(&errors),
+    }
+}
+
+/// The parser's error currency, in the shape the rest of the crate consumes.
+fn to_diagnostics(errors: &[SyntaxError]) -> Vec<ParseDiagnosticData> {
+    errors
+        .iter()
         .map(|error| ParseDiagnosticData {
-            message: error.message,
+            message: error.message.clone(),
             start: error.start,
             end: error.end,
         })
-        .collect();
-
-    ParsedDocument {
-        green: parsed.green,
-        diagnostics,
-    }
+        .collect()
 }
 
 /// The parse diagnostics for `file` (empty when the file parses cleanly).
@@ -596,6 +798,64 @@ pub fn file_cite_facts(db: &dyn IncrementalDb, file: SourceFile) -> FileCiteFact
     }
 }
 
+/// One file's entry in the [`ReparseCache`].
+#[derive(Default)]
+struct FileReparseState {
+    prev: Option<Arc<PrevParse>>,
+    pending: Vec<Edit>,
+    /// Logical timestamp of the last store, for LRU ordering.
+    used: u64,
+    /// Whether this entry has ever shown it benefits — an editor staged a real
+    /// chain, or a splice actually landed. See [`ReparseCache::evict_if_full`].
+    hot: bool,
+}
+
+/// Reparse bases and pending edit chains, keyed by file.
+///
+/// Base and chain live under **one** lock because a store must advance both
+/// atomically: the store runs on whichever thread demanded the parse while a stage
+/// runs on the language server's worker, and a drain that raced a stage would
+/// either lose an edit or keep a stale one.
+#[derive(Default)]
+struct ReparseCache {
+    files: HashMap<SourceFile, FileReparseState>,
+    clock: u64,
+}
+
+impl ReparseCache {
+    fn touch(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
+    /// Drop entries until at most [`MAX_REPARSE_BASES`] remain, **cold ones first**.
+    ///
+    /// The class matters because most parses in this database are not editor
+    /// keystrokes. A `package_graph` or `scope_signatures` sweep parses every
+    /// workspace member, each storing a base it will never hit; under a plain LRU
+    /// one project-wide query would cost every open buffer its base and turn the
+    /// next keystroke in each of them into a full parse. An entry becomes hot only
+    /// by demonstrating use, so a sweep can never evict a buffer being edited.
+    fn evict_if_full(&mut self) {
+        if self.files.len() <= MAX_REPARSE_BASES {
+            return;
+        }
+        let mut stamps: Vec<(bool, u64, SourceFile)> = self
+            .files
+            .iter()
+            .map(|(&file, state)| (state.hot, state.used, file))
+            .collect();
+        // Cold before hot, then least-recently-used first. Keyed rather than a bare
+        // sort because `SourceFile` is a salsa handle with no `Ord` — and its
+        // identity must not decide evictions anyway.
+        stamps.sort_unstable_by_key(|&(hot, used, _)| (hot, used));
+        let excess = self.files.len() - MAX_REPARSE_BASES;
+        for (_, _, file) in stamps.into_iter().take(excess) {
+            self.files.remove(&file);
+        }
+    }
+}
+
 #[salsa::db]
 pub struct IncrementalDatabase {
     storage: salsa::Storage<Self>,
@@ -604,6 +864,11 @@ pub struct IncrementalDatabase {
     /// `SourceFile` input (and thus its cached queries) instead of creating a
     /// fresh one each time. Seeds the cross-file project graph (later items).
     files: Arc<Mutex<HashMap<PathBuf, SourceFile>>>,
+    /// The incremental-reparse side channel: previous parses to splice against,
+    /// plus the edits staged since. Shared across database clones exactly as the
+    /// path map is, so a read job off the worker thread sees the base the worker
+    /// stored. Never a salsa input — see [`IncrementalDb::reparse_prev`].
+    reparse_cache: Arc<Mutex<ReparseCache>>,
 }
 
 impl Default for IncrementalDatabase {
@@ -612,6 +877,7 @@ impl Default for IncrementalDatabase {
             storage: salsa::Storage::new(None),
             query_log: Arc::new(Mutex::new(Vec::new())),
             files: Arc::new(Mutex::new(HashMap::new())),
+            reparse_cache: Arc::new(Mutex::new(ReparseCache::default())),
         };
         // Create the declarations singleton eagerly, declaring nothing. Every
         // reader goes through `DeclarationsInput::get`, which panics on an
@@ -641,6 +907,7 @@ impl Clone for IncrementalDatabase {
             storage: self.storage.clone(),
             query_log: Arc::clone(&self.query_log),
             files: Arc::clone(&self.files),
+            reparse_cache: Arc::clone(&self.reparse_cache),
         }
     }
 }
@@ -827,10 +1094,32 @@ impl IncrementalDatabase {
     /// is no cross-file label resolver yet (see TODO.md), and [`include_edges`]
     /// re-resolves targets from disk.
     pub fn remove_file(&mut self, path: &Path) -> Option<SourceFile> {
-        self.files
+        let removed = self
+            .files
             .lock()
             .unwrap_or_else(recover_poison)
-            .remove(&normalize_path(path))
+            .remove(&normalize_path(path));
+        // The buffer this file's reparse base described is gone, and a later
+        // `didOpen` mints a fresh input anyway, so the entry could never be hit
+        // again — it would just occupy a slot until the LRU noticed.
+        if let Some(file) = removed {
+            self.reparse_evict(file);
+        }
+        removed
+    }
+
+    /// How many files currently hold a reparse base or a pending chain.
+    ///
+    /// Observability for tests and diagnostics only. Reuse is invisible in a
+    /// query's *value* by construction — the whole contract is that a splice and a
+    /// full parse agree — so the cache's own state is the only honest observable,
+    /// and a test that only checked the value would prove nothing about it.
+    pub fn reparse_cache_len(&self) -> usize {
+        self.reparse_cache
+            .lock()
+            .unwrap_or_else(recover_poison)
+            .files
+            .len()
     }
 
     /// The text currently tracked for `file`.
@@ -1102,11 +1391,185 @@ impl IncrementalDb for IncrementalDatabase {
             .unwrap_or_else(recover_poison)
             .push(entry);
     }
+
+    fn reparse_prev(&self, file: SourceFile) -> Option<Arc<PrevParse>> {
+        self.reparse_cache
+            .lock()
+            .unwrap_or_else(recover_poison)
+            .files
+            .get(&file)
+            .and_then(|state| state.prev.clone())
+    }
+
+    fn reparse_stage_edits(&self, file: SourceFile, edits: Option<Vec<Edit>>) {
+        let mut cache = self.reparse_cache.lock().unwrap_or_else(recover_poison);
+        let state = cache.files.entry(file).or_default();
+
+        let Some(edits) = edits else {
+            // An unknown transform. Clear the chain, and deliberately do *not* mark
+            // the entry hot: a sweep and a disk revert look identical from here, and
+            // neither is evidence that a splice would pay off.
+            state.pending.clear();
+            return;
+        };
+
+        state.hot = true;
+        state.pending.extend(edits);
+
+        // Budget the chain where it is *staged*, not where it is read. Under pull
+        // diagnostics the worker stages an edit per keystroke and may demand no
+        // parse for a long time, so a read-side budget would grow one edit per
+        // keypress. Over budget, the chain is abandoned and the next parse is a full
+        // one — the base is still good, only the shortcut is gone.
+        let inserted: usize = state.pending.iter().map(|e| e.insert.len()).sum();
+        if state.pending.len() > MAX_CHAIN_EDITS || inserted > MAX_CHAIN_INSERT_BYTES {
+            state.pending.clear();
+        }
+    }
+
+    fn reparse_pending_edits(&self, file: SourceFile) -> Vec<Edit> {
+        self.reparse_cache
+            .lock()
+            .unwrap_or_else(recover_poison)
+            .files
+            .get(&file)
+            .map(|state| state.pending.clone())
+            .unwrap_or_default()
+    }
+
+    fn reparse_store(
+        &self,
+        file: SourceFile,
+        prev: PrevParse,
+        tier: Option<ReparseTier>,
+        consumed: usize,
+    ) {
+        let mut cache = self.reparse_cache.lock().unwrap_or_else(recover_poison);
+        let used = cache.touch();
+        let state = cache.files.entry(file).or_default();
+
+        state.prev = Some(Arc::new(prev));
+        state.used = used;
+        // A landed splice is the other way an entry earns its hot class.
+        state.hot |= tier.is_some();
+        // Drain the prefix the caller consumed, unconditionally — including when the
+        // chain went unused. A chain kept back because it did not splice is stale
+        // forever after: it describes a transform out of a text the base no longer
+        // holds, so it would fail to verify on every later parse and poison them all.
+        let consumed = consumed.min(state.pending.len());
+        state.pending.drain(..consumed);
+
+        cache.evict_if_full();
+    }
+
+    fn reparse_evict(&self, file: SourceFile) {
+        self.reparse_cache
+            .lock()
+            .unwrap_or_else(recover_poison)
+            .files
+            .remove(&file);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a base for `text` the way [`parsed_document`]'s full-parse branch does.
+    fn base_for(text: &str) -> PrevParse {
+        let text: Arc<str> = Arc::from(text);
+        let declared = ResolvedDeclarations::default();
+        let config = LexConfig::default();
+        let (parse, ctx) = parse_with_declarations_resolved(&text, config, &declared);
+        PrevParse {
+            text,
+            green: parse.green,
+            errors: parse.errors,
+            ctx,
+            config,
+            declared,
+        }
+    }
+
+    /// The fast path's predicate. It has to be all three inputs, not just the text:
+    /// the same bytes parse differently under a different `badness.toml` or a
+    /// different file flavor, so a text-only check would hand back a stale tree the
+    /// oracle never sees (this path does not splice, so nothing verifies it).
+    #[test]
+    fn a_base_is_current_only_for_the_inputs_it_was_parsed_under() {
+        let base = base_for("\\section{Hi}\n");
+        let declared = ResolvedDeclarations::default();
+        let same: Arc<str> = Arc::from("\\section{Hi}\n");
+        let other: Arc<str> = Arc::from("\\section{Ho}\n");
+
+        // Equal but distinct allocations still count: a disk re-read is a fresh one.
+        assert!(base.is_current(&same, LexConfig::default(), &declared));
+        assert!(base.is_current(&base.text.clone(), LexConfig::default(), &declared));
+
+        assert!(!base.is_current(&other, LexConfig::default(), &declared));
+        assert!(
+            !base.is_current(
+                &same,
+                LexConfig {
+                    flavor: crate::parser::LatexFlavor::Package,
+                    dtx: false,
+                },
+                &declared,
+            ),
+            "a `.sty` reads `@` as a letter, so the same bytes are a different parse"
+        );
+    }
+
+    /// Eviction drops cold entries first, so a project-wide sweep cannot cost an
+    /// edited buffer its base.
+    #[test]
+    fn eviction_prefers_cold_entries() {
+        let mut db = IncrementalDatabase::default();
+        let hot = db.upsert_file(Path::new("hot.tex"), "hot\n".to_owned());
+        db.reparse_store(hot, base_for("hot\n"), Some(ReparseTier::Token), 0);
+
+        for n in 0..MAX_REPARSE_BASES + 10 {
+            let cold = db.upsert_file(Path::new(&format!("cold{n}.tex")), "cold\n".to_owned());
+            db.reparse_store(cold, base_for("cold\n"), None, 0);
+        }
+
+        assert!(db.reparse_cache_len() <= MAX_REPARSE_BASES);
+        assert!(
+            db.reparse_prev(hot).is_some(),
+            "the hot entry outlived every cold one"
+        );
+    }
+
+    /// A store drains only the prefix its caller peeked. A stage that lands between
+    /// the peek and the store describes an edit the parse never saw, and clearing
+    /// wholesale would drop it.
+    #[test]
+    fn a_store_drains_only_the_prefix_it_consumed() {
+        let mut db = IncrementalDatabase::default();
+        let file = db.upsert_file(Path::new("a.tex"), "x\n".to_owned());
+
+        db.reparse_stage_edits(
+            file,
+            Some(vec![Edit {
+                range: 0..0,
+                insert: "a".to_string(),
+            }]),
+        );
+        let peeked = db.reparse_pending_edits(file).len();
+        // The race: another stage arrives before the store.
+        db.reparse_stage_edits(
+            file,
+            Some(vec![Edit {
+                range: 0..0,
+                insert: "b".to_string(),
+            }]),
+        );
+
+        db.reparse_store(file, base_for("ax\n"), None, peeked);
+        let left = db.reparse_pending_edits(file);
+        assert_eq!(left.len(), 1, "the late stage must survive");
+        assert_eq!(left[0].insert, "b");
+    }
 
     /// A panic while holding the `files` lock poisons it, but the database must
     /// keep working afterward: `recover_poison` takes the inner guard instead of

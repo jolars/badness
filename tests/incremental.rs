@@ -6,9 +6,18 @@ use std::path::Path;
 
 use badness::declarations::{Declarations, ResolvedDeclarations};
 use badness::file_discovery::FileKind;
-use badness::incremental::{IncrementalDatabase, QueryKind};
+use badness::incremental::{IncrementalDatabase, IncrementalDb, QueryKind};
+use badness::parser::Edit;
 use badness::project::ProjectMember;
 use badness::syntax::SyntaxKind;
+
+/// A byte-range edit, the currency the reparse side channel stages.
+fn edit(range: std::ops::Range<usize>, insert: &str) -> Edit {
+    Edit {
+        range,
+        insert: insert.to_string(),
+    }
+}
 
 /// How many times `parsed_document` actually ran, per the query log.
 fn parse_count(db: &IncrementalDatabase) -> usize {
@@ -454,5 +463,212 @@ fn declarations_are_the_top_tier_of_the_signature_scope() {
     assert!(
         declared_sig.verbatim_body,
         "a declaration outranks the file's own definition"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The incremental-reparse side channel
+// ---------------------------------------------------------------------------
+//
+// Reuse is invisible in a query's value by construction — the governing invariant
+// is that a splice and a full parse agree byte for byte — so these assert on the
+// cache's own state, and assert the value is right anyway alongside it. Phase 1
+// implements no tier, so nothing splices yet; what is pinned here is the channel's
+// bookkeeping, which every later phase runs on.
+
+/// A base is installed by the first parse and refreshed by the next one, so a
+/// reparse always has something to splice against.
+#[test]
+fn parsing_populates_and_refreshes_the_reparse_base() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("a.tex"), "\\section{One}\n".to_owned());
+
+    assert!(db.reparse_prev(file).is_none(), "nothing parsed yet");
+
+    db.parsed_tree(file);
+    let first = db.reparse_prev(file).expect("a base after the first parse");
+    assert_eq!(&*first.text, "\\section{One}\n");
+
+    db.upsert_file(Path::new("a.tex"), "\\section{Two}\n".to_owned());
+    db.parsed_tree(file);
+    let second = db.reparse_prev(file).expect("a base after the edit");
+    assert_eq!(&*second.text, "\\section{Two}\n");
+}
+
+/// The base shares the tracked text rather than copying it, so holding one costs a
+/// refcount bump. A copy here would be a whole extra document per open buffer.
+#[test]
+fn the_reparse_base_shares_the_tracked_text() {
+    let mut db = IncrementalDatabase::default();
+    let text: std::sync::Arc<str> = std::sync::Arc::from("\\section{Hi}\n");
+    let file = db.upsert_file(Path::new("a.tex"), text.clone());
+    db.parsed_tree(file);
+
+    let base = db.reparse_prev(file).expect("a base");
+    assert!(
+        std::sync::Arc::ptr_eq(&base.text, &text),
+        "the base should hold the same allocation, not a copy"
+    );
+}
+
+/// The base's tree is the one a full parse produces, so answering from it (which
+/// the query does when it re-executes on unchanged text after a memo eviction) is
+/// lossless like every other route.
+///
+/// The fast path's *predicate* is unit-tested in `src/incremental.rs`, where it is
+/// visible; salsa gives no deterministic way to force a memo eviction from out here.
+#[test]
+fn the_reparse_base_holds_a_lossless_tree() {
+    let mut db = IncrementalDatabase::default();
+    let source = "\\section{Hi}\n\nbody $x^2$ % c\n\\begin{verbatim}\n  raw {\n\\end{verbatim}\n";
+    let file = db.upsert_file(Path::new("a.tex"), source.to_owned());
+    db.parsed_tree(file);
+
+    let base = db.reparse_prev(file).expect("a base");
+    let from_base = badness::syntax::SyntaxNode::new_root(base.green.clone());
+    assert_eq!(from_base.to_string(), source);
+    assert_eq!(db.parsed_tree(file).to_string(), source);
+}
+
+/// The chain is bounded where it is *staged*: under pull diagnostics the worker
+/// stages an edit per keystroke and may demand no parse for a long time, so an
+/// unbounded chain would grow one edit per keypress.
+#[test]
+fn an_unread_edit_chain_stays_bounded() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("a.tex"), "x\n".to_owned());
+
+    for _ in 0..100 {
+        db.reparse_stage_edits(file, Some(vec![edit(0..0, "a")]));
+        assert!(db.reparse_pending_edits(file).len() <= 16);
+    }
+
+    // A single oversized paste clears the chain outright rather than carrying 64 KiB
+    // of insert text no splice would accept anyway.
+    db.reparse_stage_edits(file, Some(vec![edit(0..0, &"z".repeat(65 * 1024))]));
+    assert!(db.reparse_pending_edits(file).is_empty());
+}
+
+/// Staging `None` means "the text changed by a route carrying no edits" — a disk
+/// reload, a sweep. The chain must go, or it would claim to describe a transform it
+/// does not.
+#[test]
+fn staging_an_unknown_transform_clears_the_chain() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("a.tex"), "x\n".to_owned());
+
+    db.reparse_stage_edits(file, Some(vec![edit(0..0, "a")]));
+    assert_eq!(db.reparse_pending_edits(file).len(), 1);
+
+    db.reparse_stage_edits(file, None);
+    assert!(db.reparse_pending_edits(file).is_empty());
+}
+
+/// A parse drains the chain it consumed **even when it did not splice**. A chain
+/// kept back because it failed to verify is stale forever after — it describes a
+/// transform out of a text the base no longer holds — so it would fail on every
+/// later parse and poison them all.
+#[test]
+fn a_chain_is_drained_even_when_it_does_not_splice() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("a.tex"), "x\n".to_owned());
+    db.parsed_tree(file);
+
+    // A chain that does not describe the transform at all.
+    db.reparse_stage_edits(file, Some(vec![edit(0..0, "nonsense")]));
+    db.upsert_file(Path::new("a.tex"), "y\n".to_owned());
+    assert_eq!(db.parsed_tree(file).to_string(), "y\n");
+
+    assert!(
+        db.reparse_pending_edits(file).is_empty(),
+        "the consumed chain must be dropped whether or not it spliced"
+    );
+}
+
+/// The cache is bounded, and eviction is a performance concern only: an evicted
+/// file still parses correctly and simply repopulates.
+#[test]
+fn the_reparse_cache_is_bounded() {
+    let mut db = IncrementalDatabase::default();
+    let mut files = Vec::new();
+    for n in 0..200 {
+        let file = db.upsert_file(
+            Path::new(&format!("f{n}.tex")),
+            format!("\\section{{S{n}}}\n"),
+        );
+        db.parsed_tree(file);
+        files.push(file);
+    }
+
+    assert!(
+        db.reparse_cache_len() <= 64,
+        "cache grew to {}",
+        db.reparse_cache_len()
+    );
+
+    let first = files[0];
+    assert_eq!(db.parsed_tree(first).to_string(), "\\section{S0}\n");
+}
+
+/// A project-wide sweep parses every member, each storing a base it will never hit.
+/// Under a plain LRU that would cost the buffer being edited its base and turn the
+/// next keystroke into a full parse, so the sweep's cold entries must go first.
+#[test]
+fn a_sweep_does_not_evict_an_edited_buffer() {
+    let mut db = IncrementalDatabase::default();
+    let edited = db.upsert_file(Path::new("edited.tex"), "\\section{Hi}\n".to_owned());
+    db.parsed_tree(edited);
+    // An editor staging a real chain is what marks the entry hot.
+    db.reparse_stage_edits(edited, Some(vec![edit(0..0, "x")]));
+
+    // Now sweep far more files than the cache holds.
+    for n in 0..200 {
+        let file = db.upsert_file(
+            Path::new(&format!("swept{n}.tex")),
+            format!("\\section{{S{n}}}\n"),
+        );
+        db.parsed_tree(file);
+    }
+
+    assert!(
+        db.reparse_prev(edited).is_some(),
+        "the swept files should have evicted each other, not the edited buffer"
+    );
+}
+
+/// Closing a file drops its base: the buffer it described is gone, and a later
+/// `didOpen` mints a fresh input that could never hit the entry anyway.
+#[test]
+fn closing_a_file_evicts_its_reparse_base() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("a.tex"), "\\section{Hi}\n".to_owned());
+    db.parsed_tree(file);
+    assert!(db.reparse_prev(file).is_some());
+
+    db.remove_file(Path::new("a.tex"));
+    assert!(db.reparse_prev(file).is_none());
+}
+
+/// The base carries the inputs its tree was produced under, not just the text, so a
+/// later parse can tell whether it is usable. Editing `badness.toml` changes what a
+/// parse means for the same bytes.
+#[test]
+fn the_reparse_base_carries_the_declarations_it_was_parsed_under() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(
+        Path::new("main.tex"),
+        "\\newenvironment{mycode}[1]{#1}{}\n".to_owned(),
+    );
+    db.parsed_tree(file);
+    let before = db.reparse_prev(file).expect("a base");
+    assert_eq!(before.declared, ResolvedDeclarations::default());
+
+    db.set_declarations(declared(MYCODE_VERBATIM));
+    db.parsed_tree(file);
+    let after = db.reparse_prev(file).expect("a base");
+    assert_ne!(
+        after.declared,
+        ResolvedDeclarations::default(),
+        "the refreshed base must record the declarations in force"
     );
 }

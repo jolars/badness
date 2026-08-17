@@ -673,9 +673,10 @@ claims still costs a full parse.
 Those numbers are held by `benches/reparse.rs` (`task bench:gate`), where every
 case declares the tier it must reach as well as the speed it claims: a floor
 alone would still pass after a case silently fell back to a full parse, because
-declining is always sound and fails nothing else. With the parse this cheap, the
-keystroke's remaining cost has moved to the write phase — mostly rebuilding the
-`LineIndex` — which the same gate now watches.
+declining is always sound and fails nothing else. With the parse this cheap the
+keystroke's remaining cost moved to the write phase, which was mostly rebuilding
+the line table; patching it instead took that keystroke to 91 µs end to end (see
+[The live buffer](#the-live-buffer)). `task bench:keystroke-gate` watches both.
 
 **The invariant.** A successful reparse yields a green tree *and* a
 `SyntaxError` vector byte-identical to a full parse of the edited text. Nothing
@@ -1343,16 +1344,29 @@ than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
 ### The live buffer
 
 An open document is a `text::TextBuffer`: the text as an `Arc<str>`, the
-position encoding negotiated at `initialize`, and the `LineIndex` over them,
+position encoding negotiated at `initialize`, and the `LineTable` over them,
 built on first use behind a `OnceLock`. The main loop holds it as an
 `Arc<TextBuffer>` and so does every buffer-carrying `WorkerJob`, which is what
 makes a keystroke's fan-out cheap in both directions: capturing the buffer for a
-job is a refcount bump rather than a copy of the document, and the index — 1.8
-ms to build over a 1 MB file — is built once per document version rather than
-once per request, on whichever thread asks first. The handlers that index the
-*cursor* buffer take `&TextBuffer` and call `line_index()`; the ones that walk
-*other* project members still build their own index per member, since those
-texts come off the salsa snapshot and have no buffer.
+job is a refcount bump rather than a copy of the document, and the table is
+built once per document version rather than once per request, on whichever
+thread asks first. The handlers that index the *cursor* buffer take
+`&TextBuffer` and call `line_index()`; the ones that walk *other* project
+members still build their own index per member, since those texts come off the
+salsa snapshot and have no buffer.
+
+The *table* and the *queries* are separate types, and the split is what makes
+the table patchable. `LineTable` is the value — a line-start offset per line,
+plus a flag per line for "holds a non-ASCII byte" — and `LineIndex<'a>` is the
+short-lived pairing of a text with a table, borrowing one where a buffer
+maintains it and scanning otherwise. So a query reads the text: a UTF-16 column
+walks the one line concerned, and the flag is what keeps an ASCII line a plain
+byte distance. Precomputing every wide character instead, which is the shape
+this had, cost more to build than every conversion it ever answered, and it is
+the shape that *cannot* be patched — a table keyed by line number has to be
+rekeyed wholesale when the line count moves. The one hazard the split adds is
+`LineIndex::with_table`, the single place a text and a table are paired: given a
+table built for other bytes it answers wrong positions rather than panicking.
 
 The buffer is immutable: an edit yields a new one rather than mutating in place.
 That is not a cost, because an `Arc<str>` cannot be spliced in place anyway, and
@@ -1361,14 +1375,44 @@ consistent text and index with no lock. It also means the pointer identity is
 meaningful, which is what the salsa-side staleness guards trade on (see
 [Incrementality](#incrementality)).
 
-The line table is rebuilt, not patched, across an edit. Fatou and arity splice
-theirs; here the rebuild was long dwarfed by the full reparse every keystroke
-paid, so splicing it would have been optimizing the wrong row. **That is no
-longer true.** With both leaf tiers landed the parse is \~37 µs and the write
-phase \~580 µs on the thesis, of which the rebuild is most — the write phase
-costs \~52 copies of the document where its two linear passes would be 2-3.
-`TextBuffer` is where the patch goes, and `task bench:keystroke-gate` is the row
-that watches it.
+The line table is **patched, not rebuilt**, across an edit. It was rebuilt for a
+long time, and defensibly: the rescan was dwarfed by the full reparse every
+keystroke paid, so splicing it would have been optimizing the wrong row. Once
+both leaf tiers landed and the parse fell to \~37 µs, the rebuild *was* the row
+— \~580 µs of a \~640 µs keystroke on the thesis, 52 copies of the document
+where the two linear passes a splice needs would be 2-3.
+
+`LineTable::patch` splices it instead. Line starts fall into three groups: those
+before the edit are untouched, those after it keep their verdict and shift by
+the byte delta, and those *at* its boundaries are re-derived from the edited
+text. That third group is the whole subtlety, and it is why the patch cannot be
+copied from fatou's. Badness treats a bare `\r` as a line break, so whether a
+byte ends a line depends on the byte *after* it too — meaning an edit can split
+or join a `\r\n` without touching either of its bytes. Inserting `x` into
+`"a\r\nb"` at offset 2 gives `"a\rx\nb"`, which has a line the pre-edit table
+did not. With `\n` alone the predicate reads one byte, a start at the edit
+cannot flip, and the new breaks can be read straight out of the insert; here
+both boundary positions have to be re-read out of the result.
+
+Reuse is *structural* rather than cached. The table lives in the buffer and the
+buffer is what an edit derives, so the pair travels together: nothing validates
+a table against the text it describes, and one patch serves the write phase and
+every read job off the same edit. Panache, whose index lives in a salsa memo
+that every keystroke invalidates, needs a side cache keyed by document and an
+`Arc::ptr_eq` to know whether an entry is still true — and because that cache is
+main-thread-only, its readers still rebuild once per revision. A buffer with no
+table yet stays without one, so a document nobody asks a positional question
+about never pays; on the keystroke path there is always one, because
+`apply_content_changes` resolves the change's range through `line_index()`
+before splicing.
+
+The write phase now costs **2.5 copies** of the document — 28 µs on the thesis
+against 575 µs, with the keystroke at 91 µs end to end. Two of those copies are
+the text rebuild an `Arc<str>` cannot avoid; the rest is cloning the table and
+shifting its tail. A `debug_assert` rescans after every patch, which makes every
+test in the suite that edits a buffer an oracle for it, and is also why
+`task bench:keystroke-gate` — the row that watches all of this — must never be
+run in a debug build.
 
 Environment awareness has four sources, all reading static facts only, with no
 macro meaning and no typesetting.

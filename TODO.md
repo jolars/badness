@@ -1816,22 +1816,22 @@ idle machine; a floor calibrated against a loaded one fails later for no reason.
 Interleaving the write-phase ceiling's two rows removed its run-to-run spread but
 not its sensitivity to load, so this is a standing requirement, not a workaround.
 
-**Current status / next step:** Phases 1-5 done. Both leaf tiers are live and
-both are now gated. A keystroke typed into prose on the 730 KB thesis costs
-**0.71 ms end to end instead of 27.7 ms**; a line typed inside an `lstlisting`
-on the same file costs **~0.85 ms instead of 27-30 ms**. Next is **Phase 6**
-(the corpus sweep), whose entry criteria are met.
+**Current status / next step:** Phases 1-5 done, and the write phase that Phase 5
+exposed is fixed. Both leaf tiers are live and both are gated. A keystroke typed
+into prose on the 730 KB thesis costs **91 us end to end instead of 27.7 ms**; a
+line typed inside an `lstlisting` on the same file costs **~94 us**. Next is
+**Phase 6** (the corpus sweep), whose entry criteria are met.
 
 Run `task bench:gate` before touching any of this. Read the gate's output for
 what the tiers are worth — the thresholds live in the harness and are
 deliberately not restated here.
 
-The one number worth carrying forward: with the parse now cheap, **the write
-phase is the keystroke**, and Phase 5 measured what it is made of. It costs ~52
-copies of the document where two linear passes would do, and the difference is
-`TextBuffer::new` rebuilding the whole `LineIndex` on every keystroke. That is
-now the largest single thing a user waits for on a large file, and it is filed
-below.
+The number worth carrying forward has moved twice. With the parse cheap the write
+phase *was* the keystroke, at ~52 copies of the document where two linear passes
+would do; patching the line table instead of rebuilding it took that to **2.5
+copies**, 28 us on the thesis against 575. Nothing in a keystroke is now
+conspicuously the wrong shape: the parse is ~37 us, the write phase is two text
+copies plus a table splice, and the remainder is the parse's own consumers.
 
 - [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
   `reparse` returns `None` for every edit, so every keystroke still full-parses
@@ -2259,7 +2259,9 @@ below.
     copies), so noise is no longer the argument. They stay out because at those
     sizes the ratio reads fixed costs rather than the linear passes the reference
     measures: a `LineIndex` fix would barely move cv, and an unrelated small
-    allocation in `upsert_file` would fire it.
+    allocation in `upsert_file` would fire it. (The first half of that was wrong
+    — cv went 76.9x to 6.9x, more in ratio than either gated document. The
+    exclusion stands on the noise; the prediction is corrected in the harness.)
 
   Also visible, and worth not mistaking for a change: the median-of-blocks
   estimator lowered every printed absolute (the thesis write phase reads 566 us
@@ -2267,19 +2269,78 @@ below.
   the run's tail. Numbers from before this commit are not comparable with numbers
   after it.
 
-- [ ] **The write phase rebuilds the whole `LineIndex` on every keystroke.**
-  Phase 5's reference row put a number on it: the write phase costs **~52 copies
-  of the document** where the two linear passes it needs (build the spliced
-  bytes, let the `Arc` copy them) would be 2-3. The rest is `TextBuffer::new`
-  scanning the entire text for line starts. With the parse now cheap this is the
-  largest single thing in a keystroke on a large file — ~580 us of a ~630 us
-  keystroke on the thesis.
+- [x] **The write phase rebuilt the whole `LineIndex` on every keystroke.** Phase
+  5's reference row put a number on it: **~52 copies of the document** where the
+  two linear passes it needs (build the spliced bytes, let the `Arc` copy them)
+  would be 2-3, the rest being `TextBuffer::new` scanning the entire text. That
+  was ~580 us of a ~640 us keystroke on the thesis. It is now **2.5 copies**, 28
+  us, with the keystroke at 91 us end to end.
 
-  Panache filed and fixed the same thing: patch one `LineIndex` per notification
-  rather than rebuilding it, and hand salsa the `Arc<str>` that index owns. Its
-  write phase went 282 us -> 98 us on a 293 KB file. `task bench:keystroke-gate`
-  is the gate for this work, and its ceiling should be ratcheted down when it
-  lands.
+  Landed in two measured steps, deliberately: the tables were reshaped first
+  (still rebuilt per keystroke) and only then stopped being rebuilt, so the win
+  is attributed rather than inferred — which is the complaint the item below
+  makes about Phase 2. On the thesis: **575.28 us / 51.8x → 161.57 / 14.7x →
+  28.02 / 2.5x**, and end to end 640 → 246 → 91 us.
+
+  - **The `LineIndex` had to be reshaped before it could be patched.** Its
+    wide-character data was a `HashMap<line, Vec<WideChar>>`, so a line-count
+    change means rekeying every later line and shifting every offset in it. It is
+    now a bool per line ("holds a non-ASCII byte") with the one line concerned
+    walked on demand — panache's shape, and panache's recorded verdict that the
+    per-character table cost more to build than every conversion it answered.
+    `line_ends` went the same way: derivable from the next line's start and the
+    two bytes before it, so a parallel table was one more thing to keep in step
+    for no information. The reshape is why *every* index build got cheaper,
+    including `didOpen` and the ~14 cross-file sites that build one per project
+    member per request.
+
+  - **Fatou's `patch` boundary is wrong here, and the exhaustive oracle is what
+    says so.** It splices at `line_start <= edit_start` and reads the new breaks
+    out of the insert, which is sound only because it indexes `\n` alone: a
+    one-byte predicate cannot flip *at* the edit. Badness treats a bare `\r` as a
+    break, so the predicate reads two bytes and an edit splits or joins a `\r\n`
+    without touching either — inserting `x` into `"a\r\nb"` at 2 gives
+    `"a\rx\nb"`, one line more than the pre-edit table had. Both boundary
+    positions are re-derived from the edited text. Checked by *making* the
+    mistake: fatou's boundary fails `patching_matches_a_rescan` and three
+    integration tests.
+
+  - **The reuse needed no cache, because badness's table lives in the buffer.**
+    Panache keeps a warm index on `GlobalState`, validated by `Arc::ptr_eq`,
+    because its index lives in a salsa memo that every keystroke invalidates —
+    and since that cache is main-thread-only its *readers* still rebuild once per
+    revision (`panache/TODO.md`). Here the buffer is what an edit derives, so the
+    text and its table travel together: no cache, no validation, and one patch
+    serves the write phase and every read job off the same edit.
+
+  - **One vectorized ASCII check for the whole document is worth as much as the
+    reshape was.** A first cut recomputed the per-line flag with an `is_ascii()`
+    call per line, which is ~10 ns where the document fits in L2 and ~22 ns where
+    it does not: on the thesis that was the *entire* cost of building the table,
+    and the reshape measured **646 us — worse than the byte-at-a-time scan it
+    replaced** — while the masters improved 2.4x. Checking the whole document
+    once settles every line when it passes, which for LaTeX it nearly always
+    does, and took the thesis to 161 us. Recorded because the shape of the
+    mistake generalizes: a per-line call is not a per-line cost.
+
+  - **The write-phase *scaling* ceiling had to be re-based, and not because of a
+    regression.** It was `SCALE_BYTES * 1.33`, i.e. stated over the byte ratio.
+    One linear pass is not linear in *time* at these sizes: row 0 — one alloc and
+    one memcpy — scales 8.6-9.3x over a 7.7x byte ratio in every run including
+    the baseline, because the masters fits in L2 and the thesis does not. That
+    slack was invisible while a rescan dominated and became the binding
+    constraint the moment it went (10.3-11.6x measured against a 10.18x ceiling,
+    tight to 4% over four runs). It now sits over row 0's own scaling. Same shape
+    as panache re-basing `BATCH_FANOUT_MAX`: a check can stop meaning what it was
+    written to mean without anything getting worse.
+
+  - **`upsert_file`'s content compare is not a second full scan and wants no
+    bypassing.** Transferred from panache, established by reading rather than by
+    the clock: `**tracked == *text` bottoms out in a slice compare that checks
+    length first, so any insert or delete short-circuits and only an
+    equal-length edit (typing over a same-length selection, an equal-length
+    completion, a full resync) reaches the memcmp. Recorded so the "second
+    near-full scan per keystroke" is not re-derived.
 
 - [ ] **Nobody has checked Phase 2's alloc-locality inference.** Phase 2
   measured +125 us on the write phase and attributed it to the bench's tight
@@ -2309,10 +2370,10 @@ below.
   tiers already carry the workload — fatou's token tier is 408x and its
   top-level tier only 12x.
 
-- [ ] **Phase 8: closeout.** Architecture docs, dead-path pruning, and
-  `LineIndex::patch` (splicing the line table across an edit), which the
-  `Arc<str>` entry above parked *because* every keystroke paid a full reparse
-  that dwarfed a `memchr` scan. That stops being true here.
+- [ ] **Phase 8: closeout.** Architecture docs and dead-path pruning.
+  `LineTable::patch` was the third item here and landed early, out of order,
+  because Phase 5's gate made it the largest thing left in a keystroke — see the
+  closed item above.
 
 **Deferred (explicit non-goals).** Nested-region reparse — inside environments,
 groups, or math — is unsound without a context-parameterized fragment entry point

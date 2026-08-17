@@ -46,6 +46,12 @@ server*.
 - Avoid dual encoding sources in a handler (`&TextBuffer` + separate `enc`).
 - Staleness checks must use `text_is_current` semantics (pointer-aware, then
   content fallback).
+- Patch an initialized line table across edits with `LineTable::patch`; keep an
+  uninitialized table lazy. Text and table must remain structurally paired in the
+  same `TextBuffer`, and the patch must handle edits that split/join CRLF.
+- `LineIndex::with_table` may only pair text with the table derived from those
+  exact bytes; a mismatched table returns wrong positions without necessarily
+  panicking.
 
 ## Feeding the reparse
 

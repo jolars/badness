@@ -150,7 +150,8 @@ impl LineTable {
     /// Group 3 is what makes this different from a table indexing `\n` alone,
     /// where the predicate reads one byte so a start *at* the edit cannot flip
     /// and the new breaks can be scanned out of the insert. Here it reads two
-    /// (see [`ends_line`]), so an edit splits or joins a `\r\n` without touching
+    /// (a bare `\r` breaks unless a `\n` follows), so an edit splits or joins a
+    /// `\r\n` without touching
     /// either byte: inserting `x` into `"a\r\nb"` at 2 yields `"a\rx\nb"`, which
     /// has a line the pre-edit table had not. Both boundary positions are
     /// therefore re-read out of `new`, never carried across and never inferred

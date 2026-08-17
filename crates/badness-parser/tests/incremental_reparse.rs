@@ -31,11 +31,16 @@
 //!
 //! # Status
 //!
-//! Phase 1 implements no tier, so every edit here currently falls back and the
-//! assertions are vacuously true. That is expected and it is why
-//! [`the_harness_reaches_the_reparse_entry_point`] exists: it pins that the harness
-//! is actually calling the thing it claims to check, so the suite cannot quietly
-//! become a no-op. The splice-rate floor that replaces it lands with the first tier.
+//! The token and protected-body tiers are live, so the drivers below splice and the
+//! assertions bite. Each driver carries a **splice-rate floor**, because a guard that
+//! narrows a tier to nothing would otherwise leave every assertion above it vacuously
+//! green — panache lost two thirds of its fuzz coverage exactly that way. Two of the
+//! floors are *targets* rather than tripwires: prose typing and typing inside a
+//! protected body are the workloads the tiers exist for, so anything short of every
+//! keystroke is a regression worth failing over.
+//!
+//! [`the_harness_reaches_the_reparse_entry_point`] is the pointwise half of the same
+//! idea: it pins that the harness is calling the thing it claims to check.
 
 use std::fs;
 use std::path::Path;
@@ -162,6 +167,14 @@ const HAZARD_SNIPPETS: &[&str] = &[
     "\\begin{lstlisting}[language=C]\nint main() { return 0; }\n\\end{lstlisting}\n",
     "Inline \\verb|raw $ % {| and after.\n",
     "\\MakeShortVerb{\\|}\nnow |raw| is verbatim\n\\DeleteShortVerb{\\|}\n",
+    // The attached `VERB` shapes, braced and delimited. Also the one place a `WORD`
+    // edit sits next to a raw capture the lexer decides by a forward scan, which is
+    // not a shape the token tier's join probes were written for.
+    "See \\url{https://x/a_b} and \\lstinline|x_$y$| here.\n",
+    "\\begin{minted}{python}\nif x: pass  # $not math$\n\\end{minted}\n",
+    // Unterminated: the body runs to EOF, so its extent is fixed by the file rather
+    // than by anything inside the construct.
+    "\\begin{verbatim}\n  raw with no closer\n",
     // Math, including the shape-gated delimiters.
     "Text $x^2 + y_1$ and \\[ \\int_0^1 f \\] and \\(a\\).\n",
     "\\begin{align}\n  a &= b \\\\\n  c &= d\n\\end{align}\n",
@@ -496,15 +509,91 @@ fn char_by_char_typing_into_a_verbatim_body() {
     let typed = "raw $ % { text";
 
     let mut text = format!("{prefix}{suffix}");
+    let mut spliced = 0usize;
+    let mut attempted = 0usize;
     for (i, ch) in typed.char_indices() {
         let at = prefix.len() + i;
         let edit = Edit {
             range: at..at,
             insert: ch.to_string(),
         };
-        check_edit(&text, &edit, i as u64, "typing into verbatim");
+        attempted += 1;
+        if check_edit(&text, &edit, i as u64, "typing into verbatim") {
+            spliced += 1;
+        }
         text = edit.apply(&text);
     }
+
+    eprintln!("verbatim typing: {spliced}/{attempted} spliced");
+    // A *target*, like the prose driver. Until the protected-body tier landed this
+    // driver asserted nothing about splicing at all, so it stayed green while every
+    // keystroke here fell back — the shape of hole the floors exist to close. Every
+    // character is inside one `VERBATIM_BODY` leaf, so every one should splice.
+    assert_splice_floor(
+        "char-by-char typing into a verbatim body",
+        spliced,
+        attempted,
+        100,
+    );
+}
+
+/// Pressing Enter inside a listing, repeatedly.
+///
+/// The token tier bans a line terminator outright; this is the workload the
+/// protected-body tier exists for, and the analogous case was worth 30x in fatou.
+#[test]
+fn enter_pressed_repeatedly_inside_a_listing() {
+    let prefix = "\\begin{lstlisting}[language=C]\nint main() {";
+    let suffix = "}\n\\end{lstlisting}\n";
+
+    let mut text = format!("{prefix}{suffix}");
+    let mut spliced = 0usize;
+    let mut attempted = 0usize;
+    for i in 0..8 {
+        let at = prefix.len();
+        let edit = Edit {
+            range: at..at,
+            insert: "\n  return 0;".to_string(),
+        };
+        attempted += 1;
+        if check_edit(&text, &edit, i, "enter inside a listing") {
+            spliced += 1;
+        }
+        text = edit.apply(&text);
+    }
+
+    eprintln!("listing newlines: {spliced}/{attempted} spliced");
+    assert_splice_floor("enter pressed inside a listing", spliced, attempted, 100);
+}
+
+/// Typing inside each attached `VERB` shape, where the fragment is the command node
+/// rather than the token — the case a token-only relex cannot reach.
+#[test]
+fn char_by_char_typing_into_a_verb() {
+    let mut spliced = 0usize;
+    let mut attempted = 0usize;
+    for (prefix, suffix) in [
+        ("Inline \\verb|raw ", "| and after.\n"),
+        ("A \\lstinline|x_", "| here.\n"),
+        ("See \\url{https://x/", "} now.\n"),
+    ] {
+        let mut text = format!("{prefix}{suffix}");
+        for (i, ch) in "abc".char_indices() {
+            let at = prefix.len() + i;
+            let edit = Edit {
+                range: at..at,
+                insert: ch.to_string(),
+            };
+            attempted += 1;
+            if check_edit(&text, &edit, i as u64, "typing into a verb") {
+                spliced += 1;
+            }
+            text = edit.apply(&text);
+        }
+    }
+
+    eprintln!("verb typing: {spliced}/{attempted} spliced");
+    assert_splice_floor("char-by-char typing into a verb", spliced, attempted, 100);
 }
 
 /// The harness must be calling the thing it claims to check.

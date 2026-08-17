@@ -723,6 +723,24 @@ than the reparse it feeds. A text that changed by a route carrying no edits — 
 disk reload, a whole-buffer replace — simply full-parses, and both are shapes a
 cost guard would decline anyway.
 
+**Where the chain comes from.** `apply_content_changes` (`lsp.rs`) already
+resolves each `didChange` range to byte offsets to splice the live buffer, so it
+returns that as an `Edit` chain — the clamped offsets it actually used, each
+edit against the text its predecessors produced, `None` for a range-less
+whole-buffer replacement. `WorkerJob::Edit` carries it to the worker, which
+stages it against the `SourceFile` returned by `upsert_file`, on the line after.
+Every other `upsert_file` site — `didOpen`, the push-mode re-lint sweep, sibling
+seeding, a watched-file re-read — stages `None`, so the pairing needs no
+exceptions.
+
+Two details, both about *after*. The stage follows the write because
+`upsert_file`'s `&mut db` is what proves no analyze is reading: a chain staged
+ahead of the text it describes could be peeked by an in-flight
+`parsed_document`, which would fail to verify it, full-parse, and drain it. And
+it is staged even when `upsert_file` skips its write, because the chain is
+anchored at the *base*, not at the db text — a buffer that round-trips back to
+what salsa holds still took a transform to get there.
+
 **How it is held.** A `#[cfg(debug_assertions)]` oracle compares every
 successful reparse against a full parse, and every tier returns through a single
 `finish` so it cannot skip that or the `O(1)` check that the tree spans exactly

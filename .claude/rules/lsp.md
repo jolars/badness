@@ -47,6 +47,31 @@ server*.
 - Staleness checks must use `text_is_current` semantics (pointer-aware, then
   content fallback).
 
+## Feeding the reparse
+
+**Every `upsert_file` call site pairs with a `reparse_stage_edits`** — the chain
+`apply_content_changes` returned where the edits are known, `None` where the text
+arrived by a route carrying none (`didOpen`, the re-lint sweep, sibling seeding, a
+watched-file re-read). No exceptions: an exceptionless rule survives the next call
+site, and the failure is silent, since a missing chain costs a full parse and
+nothing else (`reparse_edits` rejects any chain that does not land on exactly the
+text being asked about).
+
+- **Stage *after* the upsert, never before.** Its `&mut db` is what proves no
+  analyze is reading. A chain staged ahead of the write can be peeked by an
+  in-flight `parsed_document`, which fails to verify it, full-parses, and then
+  *drains* it — losing the edit for good.
+- **Stage even when `upsert_file` skipped its write.** The chain is anchored at
+  the reparse *base*, not at the db text, so a buffer that round-trips back to
+  what salsa holds still took a transform to get there.
+- **The offsets are the clamped ones the splice used**, never the raw client
+  positions: the chain describes the transform the buffer took, not the one the
+  client asked for.
+- **Coalescing stays on the analyze side of the write.** `Worker::run` handles
+  every `WorkerJob`, so N keystrokes are N upsert+stage pairs in order; only
+  `AnalyzeRequest` coalesces, and it carries no text. A job kind that batched
+  writes would have to carry the superseded chain forward instead.
+
 ## Concurrency/processes
 
 - Never block read-pool threads waiting for spawned viewer processes.

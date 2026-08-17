@@ -1808,12 +1808,13 @@ leave a phase half-landed: partial work is noted in the status line with the exa
 next step. The deviation bullets are the most valuable thing here — they are where
 the plan was wrong.
 
-**Current status / next step:** Phase 1 done. The infrastructure, both oracles, and
-the side channel are in; no tier is implemented, so every keystroke still
-full-parses and nothing has changed for anyone. Next is **Phase 2** (precise LSP
-edits), whose entry criteria are met: it is the last piece of plumbing before a tier
-can measure anything, and doing it before Phase 3 is what keeps a tier from ever
-being benchmarked against a whole-text diff.
+**Current status / next step:** Phases 1 and 2 done. The infrastructure, both
+oracles, the side channel, and its producer are in; no tier is implemented, so
+`reparse_edits` still refuses every chain, every keystroke still full-parses, and
+nothing has changed for anyone. Next is **Phase 3** (token tier, plain leaves),
+whose entry criteria are met: a real chain now reaches `parsed_document` on every
+keystroke, so a tier can be measured the moment it exists rather than against a
+whole-text diff.
 
 - [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
   `reparse` returns `None` for every edit, so every keystroke still full-parses
@@ -1885,45 +1886,63 @@ being benchmarked against a whole-text diff.
   only.) And `task gate-corpora:check` matches all eight baselines exactly, which
   is 6205 files through the formatter and linter with identical results.
 
-- [ ] **Phase 2: precise LSP edits.** Purely LSP-side plumbing: the receiving
-  end (`reparse_stage_edits`, the chain, and its budget) already landed in Phase
-  1, so this phase only has to *feed* it. Nothing in `src/incremental.rs` should
-  need to change.
+- [x] **Phase 2: precise LSP edits.** Purely LSP-side plumbing feeding the
+  receiving end Phase 1 landed. `apply_content_changes` returns
+  `Option<Vec<Edit>>` (`#[must_use]`, since a dropped chain is invisible to every
+  oracle), `WorkerJob::Edit` carries it, and the worker stages it against the
+  `SourceFile` that `upsert_file` returns. `None` is an unknown transform — a
+  range-less whole-buffer replacement anywhere in the batch.
 
-  The anchors, all in `src/lsp.rs` (line numbers as of Phase 1 — verify, the file
-  is 7749 lines and drifts):
-
-  - `apply_content_changes` (`:1553-1585`) resolves `(start, end, change.text)`
-    at `:1575-1580` and drops it. Return `Option<Vec<Edit>>`. `None` means an
-    unknown transform — a range-less whole-buffer replacement, which the loop
-    already special-cases at `:1571`. It is already `pub` (the keystroke bench
-    times it), so the signature change touches `benches/keystroke.rs` too.
-  - The `did_change` handler (`:1404-1430`) consumes the changes at `:1415` and
-    sends `WorkerJob::Edit` at `:1421-1429`. Add the edits to that variant.
-  - Other `WorkerJob::Edit` send sites that must pass `None`: `:1394` (didOpen)
-    and `:2727`. The sibling-seeding path at `:3375` likewise.
-  - The handler (`:2896-2926`) calls `upsert_file` at `:2912`. Stage the edits
-    **immediately after** that call, never before: the chain must never be ahead
-    of the buffer it describes, and `upsert_file` may skip its write.
-
-  Two things are easy to get wrong and neither is caught by a type. **Job
-  coalescing** (find the queue drop path) must carry a superseded request's edits
-  onto the survivor rather than dropping them, and must degrade to `None` when the
-  superseded request's *text* differs, since the chain no longer describes how the
-  surviving text was reached. And edits must be **appended**, not replaced, so a
-  chain a cancelled analysis never consumed survives to be replayed.
-
-  Note this phase changes no output, so `task check` and `gate-corpora:check`
-  green is necessary but proves little; the real check is a test that a staged
-  chain reconstructs the buffer (`apply_edits(old, &staged) == new`), which is the
-  property the reparse's verification step actually leans on. `tests/lsp.rs` is
-  the home.
+  Behavior-neutral: no tier exists, so `reparse_edits` refuses every chain and
+  every keystroke still full-parses. `task check` and `gate-corpora:check` green
+  therefore prove little; the load-bearing test is that a staged chain
+  reconstructs the buffer (`apply_edits(old, &staged) == new`), which is the
+  property the reparse's verification step leans on.
 
   **Do not add a whole-text `diff_edit` fallback in `parsed_document`.** Phase 1
   deliberately left it out (see its deviations); fatou has one and its own TODO
   records the cost as an open problem. That is what makes this phase load-bearing
   rather than an optimization: the staged chain is the *only* incremental input,
   so no tier can do anything until it arrives.
+
+  Landed with five deviations. The first two retire hazards this plan named, and
+  the reasons are worth keeping — a later phase that adds a job kind or another
+  `upsert_file` site has to re-check exactly them.
+
+  - **The job-coalescing hazard does not exist.** This plan said a superseded
+    request's edits must be carried onto the survivor. They cannot be lost:
+    `Worker::run` drains and handles *every* `WorkerJob`, so N keystrokes are N
+    `upsert_file`+stage pairs in order, and the only coalescing is of
+    `AnalyzeRequest` (`Worker::enqueue`), which carries no text and no edits — the
+    read side re-reads the buffer off the db snapshot. The plan assumed edits
+    would ride the coalesced queue. **The invariant to preserve** is that
+    coalescing stays on the *analyze* side of the write.
+  - **`upsert_file`'s write-skip needs no special case**, and the plan's "the
+    chain must never be ahead of the buffer it describes" was the wrong reason for
+    the right rule. A chain is anchored at the reparse *base*, not at the db text,
+    so a buffer that round-trips back to what salsa holds still took a transform to
+    get there and must still stage it — `parsed_document`'s `is_current` arm
+    already returns the base and deliberately stores nothing, leaving the chain
+    anchored. The real reason to stage **after** the upsert is that its `&mut db`
+    is what proves no analyze is reading: a chain staged ahead of the write could
+    be peeked by an in-flight `parsed_document`, which would fail to verify it,
+    full-parse, and then *drain* it, losing the edit for good.
+  - **Every `upsert_file` site pairs with a stage**, `None` at the three that
+    carry no edits (`didOpen`, the push-mode re-lint sweep, sibling seeding, a
+    watched-file re-read). An exceptionless rule survives the next call site.
+  - **One change in `src/incremental.rs`**, which this plan said would need none:
+    `reparse_stage_edits`'s `None` branch cleared through `entry().or_default()`,
+    minting an empty cache entry for a file that had none. Harmless alone, but
+    sibling seeding stages `None` per file read off disk, so a large project would
+    crowd out the buffers being edited until a store swept them.
+  - **The `apply_edits` round-trip tests live beside the function**, in
+    `src/lsp.rs`'s `mod tests`, not in `tests/lsp.rs` as planned: that file is a
+    protocol-transcript harness over `Connection::memory()` and never calls
+    `apply_content_changes`, whose two existing tests were already in-file. It
+    gained the end-to-end multi-change-batch transcript instead, and
+    `tests/incremental.rs` — the only place the chain is observable — gained the
+    worker-sequence test that drives `apply_content_changes` + `upsert_file` +
+    `reparse_stage_edits` and asserts the chain reconstructs the buffer.
 
 - [ ] **Phase 3: token tier, plain leaves.** Edit inside one `WORD` /
   `WHITESPACE` / `COMMENT` leaf. Guards cheapest-first: newline ban →

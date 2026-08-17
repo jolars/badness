@@ -564,6 +564,31 @@ fn staging_an_unknown_transform_clears_the_chain() {
     assert!(db.reparse_pending_edits(file).is_empty());
 }
 
+/// Clearing a chain a file does not have is a no-op, entry included. The language
+/// server pairs *every* `upsert_file` with a stage so the rule needs no exceptions,
+/// and most of those writes are project seeding — a directory walk that reads every
+/// sibling off disk. Minting an empty entry per sibling would fill the cache with
+/// files nothing is editing, and only a later store ever sweeps them.
+#[test]
+fn staging_an_unknown_transform_does_not_mint_a_cache_entry() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("a.tex"), "x\n".to_owned());
+
+    db.reparse_stage_edits(file, None);
+    assert_eq!(
+        db.reparse_cache_len(),
+        0,
+        "nothing to clear, nothing to hold"
+    );
+
+    // A real chain still creates one, so the no-op is about the absent entry and
+    // not about `None` generally.
+    db.reparse_stage_edits(file, Some(vec![edit(0..0, "a")]));
+    assert_eq!(db.reparse_cache_len(), 1);
+    db.reparse_stage_edits(file, None);
+    assert_eq!(db.reparse_cache_len(), 1);
+}
+
 /// A parse drains the chain it consumed **even when it did not splice**. A chain
 /// kept back because it failed to verify is stale forever after — it describes a
 /// transform out of a text the base no longer holds — so it would fail on every

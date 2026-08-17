@@ -1403,16 +1403,21 @@ impl IncrementalDb for IncrementalDatabase {
 
     fn reparse_stage_edits(&self, file: SourceFile, edits: Option<Vec<Edit>>) {
         let mut cache = self.reparse_cache.lock().unwrap_or_else(recover_poison);
-        let state = cache.files.entry(file).or_default();
 
         let Some(edits) = edits else {
             // An unknown transform. Clear the chain, and deliberately do *not* mark
             // the entry hot: a sweep and a disk revert look identical from here, and
-            // neither is evidence that a splice would pay off.
-            state.pending.clear();
+            // neither is evidence that a splice would pay off. A file with no entry
+            // has no chain to clear, and must not gain one: the language server
+            // pairs every `upsert_file` with a stage, and most of those writes are
+            // project seeding, which would otherwise mint an entry per sibling.
+            if let Some(state) = cache.files.get_mut(&file) {
+                state.pending.clear();
+            }
             return;
         };
 
+        let state = cache.files.entry(file).or_default();
         state.hot = true;
         state.pending.extend(edits);
 

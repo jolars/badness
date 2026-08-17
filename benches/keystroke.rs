@@ -149,6 +149,41 @@ struct Report {
     documents: Vec<DocumentResult>,
 }
 
+/// The first offset at or after `from` that sits strictly inside a word on a line
+/// of plain prose — a place where inserting a letter extends one word and changes
+/// nothing else about the document.
+///
+/// "Two adjacent letters" is not enough on its own: that is also the inside of
+/// `\lesssim`, and at 80% of a real thesis that is exactly what it finds. So the
+/// line has to be free of every character that makes it something other than
+/// prose, which is what keeps the bench measuring the keystroke it claims to.
+///
+/// Falls back to `from` (snapped to a char boundary) when the tail holds no such
+/// line, so a pathological document still benches — it just benches a different
+/// keystroke, which the printed site lets you see.
+fn word_interior_at_or_after(text: &str, from: usize) -> usize {
+    const STRUCTURE: [char; 8] = ['\\', '{', '}', '$', '%', '&', '#', '~'];
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        if offset < from || line.trim().len() < 40 || line.contains(STRUCTURE) {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        if let Some(i) = (1..line.len())
+            .find(|&i| bytes[i - 1].is_ascii_alphabetic() && bytes[i].is_ascii_alphabetic())
+        {
+            return line_start + i;
+        }
+    }
+    let mut at = from.min(text.len());
+    while at < text.len() && !text.is_char_boundary(at) {
+        at += 1;
+    }
+    at
+}
+
 fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     println!("\n{}", "=".repeat(64));
     println!(
@@ -158,13 +193,23 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     );
     println!("{}", "=".repeat(64));
 
-    // The edit site: ~80% of the way through the buffer, on a char boundary, so
-    // the splice copies a realistic amount of tail and the reparse is not a
-    // best case for a future incremental one.
-    let mut at = text.len() * 4 / 5;
-    while at < text.len() && !text.is_char_boundary(at) {
-        at += 1;
-    }
+    // The edit site: ~80% of the way through the buffer, so the splice copies a
+    // realistic amount of tail, and *strictly inside a word*, so every row measures
+    // the same workload — a character typed into prose.
+    //
+    // The "inside a word" part is load-bearing rather than cosmetic. A site that
+    // lands on a `\` or a newline makes the incremental reparse refuse, so the row
+    // measures a full parse; and since the rows alternate insert/delete, whether
+    // the site still held the synthetic `z` when the next row started decided which
+    // of the two it measured. That was a 45x swing between runs of the same binary.
+    let at = word_interior_at_or_after(text, text.len() * 4 / 5);
+    // Printed because the site decides which workload rows 2 and 3 measure, and a
+    // silently-relocated one would look like a performance change.
+    println!(
+        "edit site: byte {at} ({:.0}% in) — …{}…",
+        at as f64 / text.len() as f64 * 100.0,
+        text[at.saturating_sub(24)..(at + 24).min(text.len())].replace('\n', "\\n"),
+    );
     let mut live = Arc::new(TextBuffer::new(text, UTF16));
     let (line, character) = live.line_index().position(at);
     let position = Position::new(line, character);
@@ -204,8 +249,15 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     });
     row("splice + upsert (write phase)", write);
 
-    // Row 2 demanded no parse, so the cached tree is now many revisions stale.
-    // Resync before row 3 so its first iteration is an ordinary keystroke.
+    // Rewind to the original text before row 3, so it measures the same pair of
+    // states row 2 did rather than whichever one row 2's iteration count left
+    // behind. The count is calibrated, so its parity is a property of the machine —
+    // and with an alternating edit, parity decides which text each row starts from.
+    // Row 2 also demanded no parse, so the cached tree is many revisions stale;
+    // the resync makes row 3's first iteration an ordinary keystroke.
+    live = Arc::new(TextBuffer::new(text, UTF16));
+    let file = db.upsert_file(&path, handoff(&live));
+    db.reparse_stage_edits(file, None);
     black_box(db.parsed_tree(file));
 
     let mut flip = false;

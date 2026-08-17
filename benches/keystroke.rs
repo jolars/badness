@@ -36,7 +36,11 @@
 //!
 //! Each timed iteration alternates inserting and deleting one character, so the
 //! text genuinely changes every round: salsa sees a fresh revision and the
-//! printed number is one keystroke, never a memoized no-op.
+//! printed number is one keystroke, never a memoized no-op. Every row is the
+//! median of nine blocks, and **rows 0 and 2 are measured interleaved** — a block
+//! of one, then a block of the other — because their ratio is the contract and
+//! anything that drifts between two rows timed to completion in turn lands in the
+//! quotient and nowhere else.
 //!
 //! The one line that differs per branch is [`handoff`], which converts the live
 //! buffer into what `upsert_file` takes on that branch — the knob for A/B'ing a
@@ -74,26 +78,34 @@
 //! phase costs. Each is waived below [`MIN_ABSOLUTE_US`], because a ratio on a
 //! sub-microsecond baseline measures noise.
 //!
+//! Run it on an **idle** machine. Interleaving rows 0 and 2 fixed the variance
+//! (eight runs held under 4%, where sequential timing spread 49.8 to 64.4), but
+//! not the level: under twenty spinning threads the same binary reads half again
+//! as many copies, tight to under 1%, because contention costs the branchy write
+//! phase more than it costs a memcpy. See [`WRITE_MAX_COPIES`].
+//!
 //! There is deliberately **no "write phase is N% of the keystroke" check**, which
 //! is the obvious one to reach for. Rows 2 and 3 are separately calibrated loops
 //! and their difference is smaller than the noise on either, so on the thesis row
 //! 2 measures *above* row 3 and the share reads over 100% — the same reason the
 //! derived reparse row was deleted. Row 0 exists so the write phase has something
-//! to be a ratio of that is genuinely nested with it.
+//! to be a ratio of that is genuinely nested with it — and is measured *beside*
+//! it, block by block, so the pairing is real and not just nominal.
 //!
 //! The gate is off by default, so a run that only wants the numbers stays a
 //! measurement and never fails the shell it was typed into.
 //!
 //! # Results
 //!
-//! One dev machine, release, `word` site. Treat the ratios as the finding.
+//! One idle dev machine, release, `word` site. Treat the ratios as the finding.
 //!
 //! ```text
-//!                          small     cv     masters      phd
-//!   text copy (ref)         43 ns   75 ns    1.20 us   11.26 us
-//!   noop upsert            137 ns  141 ns     139 ns     142 ns
-//!   write phase           1.38 us 4.80 us   64.35 us  582.44 us
-//!   keystroke end to end  3.64 us 8.27 us   83.32 us  630.34 us
+//!                          small      cv    masters       phd
+//!   text copy (ref)         38 ns   67 ns    1.20 us   10.76 us
+//!   noop upsert            135 ns  135 ns     144 ns     142 ns
+//!   write phase           1.34 us 4.71 us   65.85 us  566.22 us
+//!     as document copies   35.2x   71.3x      54.6x      53.1x
+//!   keystroke end to end  3.52 us 8.26 us   81.49 us  623.14 us
 //! ```
 //!
 //! The write phase costs ~52 copies of the document, where the two linear passes
@@ -134,41 +146,104 @@ fn handoff(live: &TextBuffer) -> Arc<str> {
     live.text_arc()
 }
 
-/// Time `f` in a warm loop, returning nanoseconds per iteration.
+/// How many blocks a row is measured in, and takes the median of.
 ///
-/// The iteration count is calibrated rather than fixed: the documents span three
-/// orders of magnitude in size and the three rows another three in cost, so one
-/// hardcoded count would either take minutes on the largest or measure noise on
-/// the cheapest.
+/// Odd, so the median is a measured block rather than the mean of two. Matching
+/// `benches/reparse.rs`: a single mean over one batch lets a scheduler hiccup
+/// anywhere in the run move the number, and on the largest document a budget buys
+/// only a couple of dozen iterations, so one bad iteration is a large share.
+const BLOCKS: usize = 9;
+
+/// The per-block iteration count for `f`, calibrated from a short probe.
 ///
-/// The probe is deliberately *not* reused as the warmup. On the largest document
-/// the end-to-end row costs tens of milliseconds, so the budget buys only a
-/// couple of dozen iterations and the first few — cold allocator, cold caches —
-/// are a large share of the total: a probe-warmed run reported the reparse up to
-/// 16% high, enough to invent a regression that a repeat run erased. So the
-/// calibrated count is warmed at a tenth of itself, and the floor is high enough
-/// that the timed loop never averages over a handful of samples.
-fn time<T>(target: Duration, mut f: impl FnMut() -> T) -> f64 {
+/// Calibrated rather than fixed: the documents span three orders of magnitude in
+/// size and the four rows another three in cost, so one hardcoded count would
+/// either take minutes on the largest or measure noise on the cheapest. The clamp
+/// is a sanity bound, not the budget — `block_budget / per_iter` is what actually
+/// sizes the loop, so a cheap row fills its block rather than finishing early and
+/// leaving its paired row to be timed at a different moment.
+fn block_iters<T>(target: Duration, f: &mut impl FnMut() -> T) -> usize {
     let probe = 5;
     let start = Instant::now();
     for _ in 0..probe {
         black_box(f());
     }
     let per_iter = start.elapsed().as_nanos() as f64 / probe as f64;
-    let iters = if per_iter > 0.0 {
-        ((target.as_nanos() as f64 / per_iter) as usize).clamp(20, 200_000)
+    let block_budget = target.as_nanos() as f64 / BLOCKS as f64;
+    if per_iter > 0.0 {
+        ((block_budget / per_iter) as usize).clamp(3, 5_000_000)
     } else {
-        200_000
-    };
+        5_000_000
+    }
+}
 
-    for _ in 0..(iters / 10).max(1) {
+/// Warm `f` for one block's worth of iterations before anything is timed.
+///
+/// The probe is deliberately *not* reused as the warmup. On the largest document
+/// the end-to-end row costs tens of milliseconds, so a block buys only a couple of
+/// dozen iterations and the first few — cold allocator, cold caches — are a large
+/// share of the total: a probe-warmed run once reported the reparse 16% high,
+/// enough to invent a regression that a repeat run erased.
+fn warm<T>(iters: usize, f: &mut impl FnMut() -> T) {
+    for _ in 0..iters {
         black_box(f());
     }
+}
+
+/// One timed block, in nanoseconds per iteration.
+fn block<T>(iters: usize, f: &mut impl FnMut() -> T) -> f64 {
     let start = Instant::now();
     for _ in 0..iters {
         black_box(f());
     }
     start.elapsed().as_nanos() as f64 / iters as f64
+}
+
+fn median(mut samples: Vec<f64>) -> f64 {
+    samples.sort_by(f64::total_cmp);
+    samples[samples.len() / 2]
+}
+
+/// Time one row, returning its median block in nanoseconds per iteration.
+fn time<T>(target: Duration, mut f: impl FnMut() -> T) -> f64 {
+    let iters = block_iters(target, &mut f);
+    warm(iters, &mut f);
+    median((0..BLOCKS).map(|_| block(iters, &mut f)).collect())
+}
+
+/// Time two rows **interleaved**, block by block, returning each row's median
+/// block and the median of the per-block ratios.
+///
+/// Measured this way because the ratio is the assertion and the absolutes are not.
+/// Timing the two rows to completion one after the other puts seconds between
+/// them, so any load that drifts across that gap lands in the quotient and nowhere
+/// else — which is what the write-phase ceiling's first calibration ran into (see
+/// [`WRITE_MAX_COPIES`]), while `benches/reparse.rs`, whose ratios come from
+/// adjacent measurements, holds under 1%. Alternating blocks makes drift
+/// common-mode within each pair, and taking the median of the per-block *ratios*
+/// (rather than the ratio of the two medians) keeps that pairing instead of
+/// discarding it.
+fn time_ratio<A, B>(
+    target: Duration,
+    mut numerator: impl FnMut() -> A,
+    mut denominator: impl FnMut() -> B,
+) -> (f64, f64, f64) {
+    let n_iters = block_iters(target, &mut numerator);
+    let d_iters = block_iters(target, &mut denominator);
+    warm(n_iters, &mut numerator);
+    warm(d_iters, &mut denominator);
+
+    let mut numerators = Vec::with_capacity(BLOCKS);
+    let mut denominators = Vec::with_capacity(BLOCKS);
+    let mut ratios = Vec::with_capacity(BLOCKS);
+    for _ in 0..BLOCKS {
+        let n = block(n_iters, &mut numerator);
+        let d = block(d_iters, &mut denominator);
+        numerators.push(n);
+        denominators.push(d);
+        ratios.push(n / d.max(f64::EPSILON));
+    }
+    (median(numerators), median(denominators), median(ratios))
 }
 
 fn format_ns(ns: f64) -> String {
@@ -200,6 +275,12 @@ struct DocumentResult {
     noop_upsert_ns: f64,
     /// Row 2: splice + upsert, no parse demanded.
     write_phase_ns: f64,
+    /// Row 2 as a multiple of row 0 — the write-phase contract's number.
+    ///
+    /// Not `write_phase_ns / text_copy_ns`: the two rows are measured interleaved
+    /// and this is the median of the *per-block* ratios, which is what keeps a
+    /// drift between blocks common-mode instead of landing in the quotient.
+    write_copies: f64,
     /// Row 3: row 2 plus the parse the keystroke triggers.
     end_to_end_ns: f64,
 }
@@ -275,6 +356,10 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
     let file = db.upsert_file(&path, handoff(&live));
     black_box(db.parsed_tree(file));
 
+    let noop = time(target, || black_box(db.upsert_file(&path, handoff(&live))));
+
+    // Rows 0 and 2, measured interleaved because their *ratio* is the contract.
+    //
     // Row 0 is a *reference*, not a stage of the pipeline: one allocation and one
     // linear copy of the document, which is the irreducible per-keystroke cost of
     // handing salsa an owned text. The write phase is read as a multiple of it.
@@ -285,27 +370,31 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
     // us on the masters, which leaves the scaling ratio almost exactly where it
     // was — so a gate built only on scaling would have missed the one regression
     // this row exists to catch. A ratio against a raw copy moves with it.
-    let copy = time(target, || black_box(Arc::<str>::from(text)));
-    row("text copy (reference)", copy);
-
-    let noop = time(target, || black_box(db.upsert_file(&path, handoff(&live))));
-    row("upsert, text unchanged", noop);
-
-    // Alternate an insert and a delete so every iteration is a genuine text
+    //
+    // Row 2 alternates an insert and a delete so every iteration is a genuine text
     // change: a fresh salsa revision, never a memoized no-op.
     let mut flip = false;
-    let write = time(target, || {
-        flip = !flip;
-        let batch = if flip { insert.clone() } else { delete.clone() };
-        let edits = apply_content_changes(&mut live, batch);
-        let file = db.upsert_file(&path, handoff(&live));
-        // The language server's write phase is splice + upsert + stage, so the row
-        // has to carry the stage too — it is what a Phase 3 tier reads, and its
-        // cost (one `Vec<Edit>` and one lock) is paid per keystroke either way.
-        db.reparse_stage_edits(file, edits);
-        file
-    });
+    let (write, copy, copies) = time_ratio(
+        target,
+        || {
+            flip = !flip;
+            let batch = if flip { insert.clone() } else { delete.clone() };
+            let edits = apply_content_changes(&mut live, batch);
+            let file = db.upsert_file(&path, handoff(&live));
+            // The language server's write phase is splice + upsert + stage, so the
+            // row has to carry the stage too — it is what a Phase 3 tier reads, and
+            // its cost (one `Vec<Edit>` and one lock) is paid per keystroke either
+            // way.
+            db.reparse_stage_edits(file, edits);
+            file
+        },
+        || black_box(Arc::<str>::from(text)),
+    );
+
+    row("text copy (reference)", copy);
+    row("upsert, text unchanged", noop);
     row("splice + upsert (write phase)", write);
+    println!("  {:<40}{copies:>9.2} copies", "  as document copies");
 
     // Rewind to the original text before row 3, so it measures the same pair of
     // states row 2 did rather than whichever one row 2's iteration count left
@@ -337,6 +426,7 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
         text_copy_ns: copy,
         noop_upsert_ns: noop,
         write_phase_ns: write,
+        write_copies: copies,
         end_to_end_ns: end_to_end,
     }
 }
@@ -384,29 +474,29 @@ const WRITE_MAX_SCALING: f64 = SCALE_BYTES * 1.33;
 /// over 100%. A ratio is only worth asserting between two numbers that are
 /// actually nested, and these are not.
 ///
-/// Only `phd_dissertation.tex` carries a ceiling, and the exclusions are the
-/// point rather than an oversight. On `small.tex` and `cv.tex` the write phase is
-/// dominated by fixed costs rather than by the linear passes the reference
-/// measures, so the ratio is both larger and noisier (12-17% run to run).
-/// `masters_dissertation.tex` measured *bimodally* on the machine this was
-/// calibrated on — 65 us and 91 us for the same row — and a ceiling loose enough
-/// to be quiet there would be too loose to catch anything. A guard that has to be
-/// loosened to pass is not a guard; `tests/scaling.rs` omits a case for the same
-/// reason. It is still measured and printed, it just does not gate.
+/// Read from the *interleaved* measurement ([`time_ratio`]): the median of the
+/// per-block ratios, not the quotient of two rows timed seconds apart. That is
+/// what makes the number below tight enough to be a guard. The first calibration
+/// took the two rows to completion one after the other and saw 49.8-51.7 copies
+/// over four runs and then 63.6-64.4 over two more on one machine, so the ceiling
+/// shipped at 72 — a doubling catcher, not the ~20% watch this row is for.
+/// Interleaved, eight runs of one binary held **51.1-53.1** on the thesis and
+/// **54.6-55.9** on the masters; the ceilings sit ~10% over the highest of those.
 ///
-/// **The ceiling below is calibrated loose and wants tightening on an idle
-/// machine.** The thesis held 49.8-51.7 copies over four runs and then 63.6-64.4
-/// over two more, while its absolute write phase moved 565 -> 734 us; the
-/// calibrating machine was in use, and that spread is what a busy one looks like.
-/// 57 was the honest ceiling for the quiet cluster. Until someone re-runs this
-/// quiet, it sits above the loud one, which catches a doubling but not the ~20%
-/// regression the row exists to watch for.
+/// **Still calibrate on an idle machine.** Interleaving fixes the *variance*, not
+/// the *level*: under twenty spinning threads the same binary read 76.7-76.9 and
+/// 83.8-84.1, each cluster tight to under 1% but half again as high, because
+/// contention costs the branchy write phase far more than it costs a memcpy. So a
+/// loaded run reproduces itself and still fails the gate, which is the honest
+/// behaviour — it is the same directive the reparse floors carry.
 ///
-/// The residual noise is structural and fixable: row 0 and row 2 are measured
-/// seconds apart, so load drifting between them lands in the ratio. Measuring
-/// them *interleaved*, block by block, would make it as robust as the reparse
-/// bench's ratios, which come from the same moment and hold to under 1%. Filed in
-/// `TODO.md`.
+/// The exclusions are the point rather than an oversight, and the reason is now a
+/// different one. `small.tex` and `cv.tex` did tighten (12-17% run to run before,
+/// 4% and 8% after), but at those sizes the write phase is dominated by *fixed*
+/// costs rather than by the linear passes the reference measures, so the ratio is
+/// not reading the thing this row exists to watch: a `LineIndex` fix would barely
+/// move cv, and an extra small allocation in `upsert_file` would fire it. They are
+/// still measured and printed.
 ///
 /// **The measured value is ~52 copies, and that is a finding, not a unit.** Two
 /// linear passes — build the spliced bytes, let the `Arc` copy them — is the
@@ -416,7 +506,10 @@ const WRITE_MAX_SCALING: f64 = SCALE_BYTES * 1.33;
 /// than the memcpy this is measured against. That is now the single largest thing
 /// in a keystroke, and it is filed in `TODO.md`. **Ratchet these down** when it
 /// lands; they are a ceiling over a known-bad number, not a target.
-const WRITE_MAX_COPIES: [(&str, f64); 1] = [("phd_dissertation.tex", 72.0)];
+const WRITE_MAX_COPIES: [(&str, f64); 2] = [
+    ("masters_dissertation.tex", 62.0),
+    ("phd_dissertation.tex", 58.0),
+];
 
 fn row_us(
     documents: &[DocumentResult],
@@ -469,14 +562,16 @@ fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
     }
 
     for (name, max) in WRITE_MAX_COPIES {
-        let (Some(write), Some(copy)) = (
+        let (Some(write), Some(copies)) = (
             row_us(documents, name, |d| d.write_phase_ns),
-            row_us(documents, name, |d| d.text_copy_ns),
+            documents
+                .iter()
+                .find(|d| d.name == name)
+                .map(|d| d.write_copies),
         ) else {
             checks.push((false, format!("{name}: declared a ceiling but never ran")));
             continue;
         };
-        let copies = write / copy.max(f64::EPSILON);
         checks.push((
             copies <= max || write <= MIN_ABSOLUTE_US,
             format!(
@@ -568,7 +663,7 @@ fn main() {
     // worth keeping.
     if let Ok(path) = env::var("BADNESS_BENCH_OUTPUT_JSON") {
         let report = Report {
-            schema_version: 3,
+            schema_version: 4,
             documents: documents.clone(),
         };
         match serde_json::to_string_pretty(&report) {

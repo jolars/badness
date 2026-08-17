@@ -1812,8 +1812,9 @@ the plan was wrong.
 release, default budget — a shortened run measures sampling noise),
 `BADNESS_REPARSE_FUZZ_ITERS=10 cargo test -p badness-parser --test
 incremental_reparse`, and `task gate-corpora:check`. Run the bench gates on an
-idle machine; a floor calibrated against a loaded one fails later for no reason,
-and Phase 5's own write-phase ceiling is loose for exactly that reason.
+idle machine; a floor calibrated against a loaded one fails later for no reason.
+Interleaving the write-phase ceiling's two rows removed its run-to-run spread but
+not its sensitivity to load, so this is a standing requirement, not a workaround.
 
 **Current status / next step:** Phases 1-5 done. Both leaf tiers are live and
 both are now gated. A keystroke typed into prose on the 730 KB thesis costs
@@ -2228,20 +2229,43 @@ below.
     the document, with the write phase gated as a multiple of it. On the thesis
     that ratio held to 0.8% across runs whose absolute times moved 3%.
 
-- [ ] **Ratchet the write-phase ceiling, and interleave the two rows it
-  compares.** The write-phase ceiling shipped **loose** and says so at the
-  constant. The calibrating machine was in use: the thesis measured 49.8-51.7
-  copies over four runs and then 63.6-64.4 over two more, so the ceiling sits
-  above the loud cluster and catches a doubling rather than the ~20% regression
-  it is meant to watch. `masters_dissertation.tex` was excluded outright for the
-  same reason (65 us and 91 us for the same row) — a guard that has to be
-  loosened to pass is not a guard.
+- [x] **Ratchet the write-phase ceiling, and interleave the two rows it
+  compares.** Rows 0 and 2 are now measured interleaved — a block of one, a block
+  of the other, nine times — and the ratio is the median of the per-block ratios
+  rather than the quotient of two rows timed to completion seconds apart. Every
+  row is a median of blocks now, matching `benches/reparse.rs`'s estimator. The
+  ceiling ratcheted 72 -> **58** on the thesis, and
+  `masters_dissertation.tex` — excluded outright before, for measuring bimodally
+  at 65 us and 91 us — is back in the gate at **62**. Both sit ~10% over the
+  highest of eight runs. The `copies` figure is printed under the write-phase row
+  and rides the JSON report (`write_copies`, schema 4), so it is read rather than
+  recomputed from two medians.
 
-  The residual noise is structural and fixable. Row 0 and row 2 are measured
-  seconds apart, so load drifting between them lands in the ratio; the reparse
-  bench's ratios come from the same moment and hold to under 1%. Measure the two
-  interleaved, block by block, then recalibrate both documents on an idle machine
-  at the default iteration count.
+  Three findings.
+
+  - **The interleaving fixed the variance outright.** Eight runs of one binary
+    held 51.1-53.1 copies on the thesis and 54.6-55.9 on the masters, against
+    49.8-64.4 for the sequential measurement the ceiling was first calibrated
+    against. The masters' bimodality was the same artifact and is gone.
+  - **It does not fix the *level*, and the ceiling is not machine-independent
+    after all.** Under twenty spinning threads the same binary reads 76.7-76.9 on
+    the thesis and 83.8-84.1 on the masters — each cluster tight to under 1%, and
+    half again as high — because contention costs the branchy write phase far
+    more than it costs a memcpy. A loaded run now reproduces itself *and* fails
+    the gate, which is the honest behaviour; "calibrate idle" stays a directive
+    rather than becoming unnecessary.
+  - **`small.tex` and `cv.tex` still do not gate, and the reason changed.** They
+    tightened too (12-17% run to run before, 4% and 8% after, at 36 and 71
+    copies), so noise is no longer the argument. They stay out because at those
+    sizes the ratio reads fixed costs rather than the linear passes the reference
+    measures: a `LineIndex` fix would barely move cv, and an unrelated small
+    allocation in `upsert_file` would fire it.
+
+  Also visible, and worth not mistaking for a change: the median-of-blocks
+  estimator lowered every printed absolute (the thesis write phase reads 566 us
+  where the single mean read ~705 us on the same machine) because the mean carried
+  the run's tail. Numbers from before this commit are not comparable with numbers
+  after it.
 
 - [ ] **The write phase rebuilds the whole `LineIndex` on every keystroke.**
   Phase 5's reference row put a number on it: the write phase costs **~52 copies

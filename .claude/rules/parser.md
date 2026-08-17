@@ -87,6 +87,9 @@ parser*. Keep this file operational.
 - A new tier needs a direct-reparse benchmark case that asserts the exact tier,
   a calibrated speedup floor, and a release-build full-parse comparison. Keep a
   declining case to price the guard cascade; thresholds live only in the harness.
+- Measure the two sides of a gated benchmark ratio interleaved block by block and
+  take the median of block ratios. Calibrate on an idle machine; interleaving
+  removes drift variance, not load sensitivity.
 
 ## Data and maintenance
 

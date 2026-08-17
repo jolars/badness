@@ -88,6 +88,26 @@ pub fn parse_with_declarations(
     config: impl Into<LexConfig>,
     declared: &ResolvedDeclarations,
 ) -> Parse {
+    parse_with_declarations_resolved(input, config, declared).0
+}
+
+/// [`parse_with_declarations`], additionally handing back the [`ParseCtx`] the
+/// returned tree was parsed under.
+///
+/// The context is not a second output so much as a *witness*: an incremental
+/// reparse that relexes a fragment of this text must do so under the same context,
+/// or the fragment's tokens are not the ones the tree holds — a `\newcommand` the
+/// scan found makes its call sites lex differently, and a relex under a default
+/// context would silently disagree. It is free to hand back, since both passes
+/// compute it anyway (the one-pass case returns the seed it compared equal to).
+///
+/// The plain [`parse_with_declarations`] stays the entry point for everyone who
+/// only wants a tree.
+pub fn parse_with_declarations_resolved(
+    input: &str,
+    config: impl Into<LexConfig>,
+    declared: &ResolvedDeclarations,
+) -> (Parse, ParseCtx) {
     let config = config.into();
     let mut seed = ParseCtx::default();
     seed.overlay_declarations(declared);
@@ -97,9 +117,10 @@ pub fn parse_with_declarations(
     // Declared wins over scanned, so the overlay is applied *after* the scan.
     ctx.overlay_declarations(declared);
     if ctx == seed {
-        return pass1;
+        return (pass1, ctx);
     }
-    parse_with(input, &ctx, config)
+    let pass2 = parse_with(input, &ctx, config);
+    (pass2, ctx)
 }
 
 /// Run the lex → grammar → tree-build pipeline once with a fixed scan context.
@@ -203,6 +224,46 @@ mod tests {
     fn reconstruct_is_identity() {
         let input = "\\section{Hi}\n\nbody $x^2$ % c\n";
         assert_eq!(reconstruct(input), input);
+    }
+
+    /// The resolved context is the one the *returned* tree was parsed under, which
+    /// for a two-pass file is the scanned one, not the seed. An incremental reparse
+    /// relexes fragments under it, so handing back the seed here would relex a
+    /// `\shellcmd{…}` call site as an ordinary group and disagree with the tree.
+    #[test]
+    fn the_resolved_context_carries_the_second_pass_scan() {
+        let input = "\\newcommand\\shellcmd[1]{\\@makeother\\$#1}\n\\shellcmd{a_$b$}\n";
+        let (parse, ctx) =
+            parse_with_declarations_resolved(input, LatexFlavor::Document, &Default::default());
+
+        assert_ne!(
+            ctx,
+            ParseCtx::default(),
+            "the scan found a verbatim definition, so the context must not be the seed"
+        );
+        // The witness property: relexing the whole input under the resolved context
+        // reproduces the token run the tree holds. Under the seed it would not — the
+        // call site would lex as an ordinary group rather than a `VERB`.
+        let relexed: String = lex_with(input, &ctx, LatexFlavor::Document.into())
+            .iter()
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(relexed, parse.syntax().to_string());
+        assert!(
+            parse.syntax().to_string().contains("a_$b$"),
+            "the call-site argument should be captured whole"
+        );
+    }
+
+    /// The one-pass case still hands back a usable witness rather than nothing: the
+    /// seed and the scan compared equal, so either is the context the tree was
+    /// parsed under.
+    #[test]
+    fn the_resolved_context_is_the_seed_when_no_scan_contributes() {
+        let input = "\\section{Hi}\n\nplain prose\n";
+        let (_, ctx) =
+            parse_with_declarations_resolved(input, LatexFlavor::Document, &Default::default());
+        assert_eq!(ctx, ParseCtx::default());
     }
 
     #[test]

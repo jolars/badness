@@ -48,6 +48,7 @@
 //! outside a plain leaf still costs a full parse. See `TODO.md` § Incremental
 //! reparse.
 
+mod leaf;
 mod token;
 
 use rowan::GreenNode;

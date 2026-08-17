@@ -55,7 +55,16 @@ pub(super) struct Context {
 ///   not care what the tree made of it.
 /// - **By immediate adjacency**, for the reads that only ever fire on the token
 ///   right after another: a parameter digit after a `#`.
-pub(super) fn context_admits(leaf: &SyntaxToken) -> Option<Context> {
+///
+/// The line scan runs back from `relex_from`, the first token of the span the tier
+/// actually relexes, rather than from the leaf. For the token tier the two are the
+/// same token. For the protected-body tier they are not, and the difference is the
+/// whole reason that tier can splice at all: it relexes from the construct's opener,
+/// so a reader *inside* the fragment — the `\begin` whose forward scan finds the raw
+/// body's `\end` — is reproduced by the relex rather than merely assumed inert. Only
+/// a reader that starts *before* the relexed span is unaccounted for, and that is
+/// exactly what the scan still covers.
+pub(super) fn context_admits(leaf: &SyntaxToken, relex_from: &SyntaxToken) -> Option<Context> {
     let mut in_math = false;
     for node in leaf.parent_ancestors() {
         match node.kind() {
@@ -73,7 +82,7 @@ pub(super) fn context_admits(leaf: &SyntaxToken) -> Option<Context> {
         }
     }
 
-    let mut prev = leaf.prev_token();
+    let mut prev = relex_from.prev_token();
     while let Some(token) = prev {
         if token.kind() == SyntaxKind::NEWLINE {
             break;

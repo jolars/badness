@@ -120,7 +120,7 @@ pub(super) fn reparse_token(
 /// to its right, while typing one after a word extends the word to its left. Both
 /// are offered and the guards decide. A non-empty range has at most one covering
 /// token, and a range that straddles two lands on their parent node instead.
-fn candidates(root: &SyntaxNode, range: TextRange) -> Vec<SyntaxToken> {
+pub(super) fn candidates(root: &SyntaxNode, range: TextRange) -> Vec<SyntaxToken> {
     if range.is_empty() {
         root.token_at_offset(range.start()).collect()
     } else {
@@ -147,7 +147,7 @@ fn try_leaf(
     ) {
         return None;
     }
-    let ctx = context_admits(leaf)?;
+    let ctx = context_admits(leaf, leaf)?;
 
     let leaf_start = usize::from(leaf.text_range().start());
     let old = leaf.text();

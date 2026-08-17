@@ -49,6 +49,7 @@
 //! reparse.
 
 mod leaf;
+mod protected;
 mod token;
 
 use rowan::GreenNode;
@@ -184,6 +185,7 @@ pub fn reparse_edits(base: &ReparseBase<'_>, edits: &[Edit], new_text: &str) -> 
 /// can skip the length check or the oracle.
 fn reparse_one(base: &ReparseBase<'_>, edit: &Edit, new_text: &str) -> Option<Reparsed> {
     token::reparse_token(base, edit, new_text)
+        .or_else(|| protected::reparse_protected(base, edit, new_text))
 }
 
 /// The single exit for every tier.

@@ -71,6 +71,13 @@ parser*. Keep this file operational.
 - The previous-parse side channel is not a salsa input and may not become one.
 - Forward-gate effects outside a fragment require an explicit proof; otherwise
   decline. A debug-oracle divergence is repaired by adding a bail.
+- The token tier's text-read classification is a hand-maintained soundness
+  enumeration backed by a source-scanning test. Adding a grammar text comparison
+  means classifying it there, with a positional guard if it can observe a `WORD`.
+- Guard text reads where they are reachable, not by spelling alone; otherwise a
+  math/expl3-only read can reject ordinary prose and erase the tier's workload.
+- Lexer readers count too: keep following-text/one-shot lookahead recognition in
+  the shared lexer predicates rather than restating it in a reparse guard.
 
 ## Data and maintenance
 

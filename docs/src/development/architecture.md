@@ -659,11 +659,13 @@ will invalidate it.
 
 ### Intra-file reparse
 
-A keystroke re-parses the whole file. On a small `.tex` that is fine; on a 730
-KB thesis it is 27 ms, which is 97% of the keystroke. `parser::reparse` exists
-to splice the edit into the previous green tree instead. It lands in phases,
-tracked in `TODO.md` § Incremental reparse; what follows is the design the
-phases fill in.
+A keystroke used to re-parse the whole file. On a small `.tex` that is fine; on
+a 730 KB thesis it was 27 ms, which was 97% of the keystroke. `parser::reparse`
+splices the edit into the previous green tree instead: with the token tier in,
+the same keystroke typed into prose costs 0.71 ms, of which the reparse is 140
+µs. It lands in phases, tracked in `TODO.md` § Incremental reparse — the token
+tier is live, the protected-body and region tiers are not, and an edit no tier
+claims still costs a full parse.
 
 **The invariant.** A successful reparse yields a green tree *and* a
 `SyntaxError` vector byte-identical to a full parse of the edited text. Nothing
@@ -683,6 +685,35 @@ leaf-to-root path is shared, so the cost is `O(depth)`, not `O(file)`. The
 region tier re-runs the *ordinary* parser over a substring and splices the
 resulting children under `ROOT`, using neighbour-sized boundary parses purely as
 proofs that the substring is decoupled from its context, then discarding them.
+
+**What the token tier has to prove, and how.** A parse is a function of exactly
+two things: the token vector and the `ParseCtx`. Fix both and the grammar is
+deterministic — the shape gates, the prescan indices, the trivia binding, and
+the attachment walk all read tokens, never source offsets. So changing one
+leaf's text reproduces a full parse when three things hold. The token *kind*
+sequence is unchanged: the new text must relex, alone, to a single token of the
+leaf's own kind, and two join probes must show it still separates from its
+neighbours (`\foo` beside `1ab` is two tokens only because the word starts with
+a non-letter, and editing it to `aab` merges the pair). The definition scan
+cannot have moved: it walks only `COMMAND` nodes whose head names a definition
+family, so a leaf under none of them changes nothing it found. And no decision
+that reads a token's *text* can flip.
+
+That third one is the interesting one, because it has no compile-time link to
+the code it describes. It is held by a test that scans the grammar sources for
+every text comparison and fails on one nobody classified — 42 sites, each
+carrying a verdict, of which 35 are kind-gated to a control sequence and so can
+never see a spliced leaf at all. The remaining handful are the real reads: the
+`;` that ends a picture-body statement, the lone `*` of a starred variant, the
+math operator split, the expl3 argument slots, and the environment-name
+assembly. Each is neutralized either by a text guard or by a position ban, and
+the position matters as much as the text: applied everywhere rather than only in
+math, the math-split guard refuses every hyphenated word in English prose.
+
+Refusals are free, so they are generous. A `.dtx` parse is declined outright —
+the docstrip mode lexes by line and by column 0, and an isolated fragment is
+always at the start of its own input. So are line terminators, environment
+names, definition bodies, and a join probe against an oversized neighbour.
 
 So none of the parser's left-to-right state is checkpointed: not the lexer's
 (`at_letter`, `expl_syntax`, `short_verbs`, `macrocode`, brace depth), not the

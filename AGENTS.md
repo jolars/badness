@@ -88,6 +88,9 @@ comparison, not a byte-target.
 - Keep incremental tiers on top of ordinary `parse`/`lex`; adding lexer
   checkpoints, token-stream reuse, or grammar restart state is a new architecture
   decision. The mutable previous-parse cache must never become a salsa input.
+- A hand-maintained incremental soundness enumeration must be backed by a test
+  that discovers unclassified sites. In particular, adding a grammar text
+  comparison means classifying it in the token tier's text-read survey.
 - Keep formatter rules newline-safe: do not key layout on lone authored
   newlines in consumed gaps.
 - Keep parser pure with respect to text + declarations; do not let ambient

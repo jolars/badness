@@ -1808,13 +1808,17 @@ leave a phase half-landed: partial work is noted in the status line with the exa
 next step. The deviation bullets are the most valuable thing here — they are where
 the plan was wrong.
 
-**Current status / next step:** Phases 1 and 2 done. The infrastructure, both
-oracles, the side channel, and its producer are in; no tier is implemented, so
-`reparse_edits` still refuses every chain, every keystroke still full-parses, and
-nothing has changed for anyone. Next is **Phase 3** (token tier, plain leaves),
-whose entry criteria are met: a real chain now reaches `parsed_document` on every
-keystroke, so a tier can be measured the moment it exists rather than against a
-whole-text diff.
+**Current status / next step:** Phases 1-3 done. The token tier is live, so a
+keystroke typed into prose on the 730 KB thesis costs **0.71 ms end to end
+instead of 27.7 ms** — the reparse itself 140 us instead of 27.0 ms, a ~190x cut
+that holds from 95 KB up. Next is **Phase 4** (protected-body tier), whose entry
+criteria are met.
+
+But read Phase 3's last deviation first: the write phase is now **80% of the
+keystroke** (568 us of 709 us), so the parse is no longer where the time goes.
+Phase 4 buys a construct the token tier refuses; the write phase is what every
+keystroke pays. If the next session wants the biggest number, that is where it
+is — and Phase 5's gate should cover it before anyone optimizes it.
 
 - [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
   `reparse` returns `None` for every edit, so every keystroke still full-parses
@@ -1970,7 +1974,7 @@ whole-text diff.
     worker-sequence test that drives `apply_content_changes` + `upsert_file` +
     `reparse_stage_edits` and asserts the chain reconstructs the buffer.
 
-- [ ] **Phase 3: token tier, plain leaves.** Edit inside one `WORD` /
+- [x] **Phase 3: token tier, plain leaves.** Edit inside one `WORD` /
   `WHITESPACE` / `COMMENT` leaf. Guards cheapest-first: newline ban →
   construct-character ban → leaf kind allow-list → parent/ancestor ban (never a
   `NAME_GROUP`, a definition body, or a `.dtx` margin/guard line) → isolated
@@ -2005,6 +2009,62 @@ whole-text diff.
   ones the scan enumerates. Write that argument down in the module docs — it is
   the tier's soundness proof, and it is what a reviewer has to check.
 
+  Landed as `parser/reparse/token.rs`, with the argument in its module docs and
+  the survey as `the_text_read_survey_is_complete` (42 classified sites, each
+  with a verdict — `ControlSequence`, `Accessor`, `Offsets`, `Guarded`,
+  `Context` — because a bare list of matched lines proves the scan still runs but
+  not that anyone read what it found). Measured, on a prose keystroke:
+
+  | document | reparse before | after | end-to-end before → after |
+  |---|---|---|---|
+  | `small.tex` (1.2 KB) | 33 us | 2.1 us | 35 us → 3.5 us |
+  | `cv.tex` (6 KB) | 119 us | 3.5 us | 126 us → 9.4 us |
+  | `masters_dissertation.tex` (95 KB) | 2.79 ms | 14.5 us | 2.89 ms → 82 us |
+  | `phd_dissertation.tex` (730 KB) | 27.0 ms | 140 us | 27.7 ms → 0.71 ms |
+
+  Five deviations, each a decision a later phase inherits.
+
+  - **The scan the plan asked for is a *classified* survey, not a checklist.**
+    The plan wanted every text comparison extracted and asserted covered. What
+    landed also records *why* each is safe, because the four verdicts that are
+    not `Guarded`/`Context` — 35 of 42 sites are kind-gated to a control
+    sequence — are the ones a future reader would otherwise re-derive every time.
+    The test fails in both directions: an unclassified new site, and a table
+    entry whose line the grammar no longer has.
+  - **Two guards the plan implied are much narrower than stated.** The plan's
+    "parent/ancestor ban" reads as structural, but two of the reads it has to
+    stop are *not* reachable through ancestry: the lexer's `\documentclass{…}`
+    class-name scan (which decides whether `|` is a short verb for the whole
+    file) and its `\MakeShortVerb` argument scan run over **raw text**, so they
+    do not care what the tree made of them. Hence a second, token-level ban over
+    the preceding tokens on the line, and a `lexer::reads_following_text` that
+    asks `next_pending` rather than restating its four sets.
+  - **Two guards had to be *loosened* to be worth having.** Written literally,
+    "the math word split must be inert" refuses every hyphenated word (`-` is a
+    sign, so `well-known` splits) and "an expl3 `N` slot takes a one-character
+    `WORD`" refuses the second keystroke of every word. Both are gated on
+    position instead: the split guard on a `MATH` ancestor (exact — every math
+    body opens one), the expl3 guards on a colon-carrying head on an ancestor
+    `COMMAND` (sound because attachment is greedy, so a slot the expl3 scan
+    *declined* is attached to the same command anyway). Ungated, prose typing
+    spliced on 1 of 11 keystrokes; gated, 10 of 11.
+  - **`.dtx` is refused wholesale**, which the plan did not anticipate: the
+    docstrip mode lexes by line and by column 0, and an isolated fragment is
+    always at the start of its own input, so the relex cannot be faithful.
+    Phase 4 relexes whole nodes with their delimiters, which is the shape that
+    could lift this — worth trying there rather than inventing a column model.
+  - **The keystroke bench was measuring the wrong thing, in a way that hid
+    itself.** Its edit site was "80% in, snapped to a char boundary", which on
+    the thesis lands inside `\lesssim` in an `align*`. Since the rows alternate
+    insert/delete and the iteration count is calibrated, whether the previous row
+    left its synthetic `z` behind decided which workload the next row measured:
+    two runs of the same binary differed **45x**. Fixed to a word interior on a
+    structure-free line, with the buffer rewound between rows and the site
+    printed. **The consequence for Phase 5:** a tier's number is only as
+    trustworthy as its site, so the gate's cases must pin theirs and assert the
+    tier reached — and it wants a *refusing* site as a case too, since the
+    fallback path is what most edits still take.
+
 - [ ] **Phase 4: protected-body tier.** `VERBATIM_BODY`, `VERB`, and comment
   runs, via fatou's `STRING_CONTENT` trick: relex the **whole enclosing node**
   with its `\begin{verbatim}`/`\end{verbatim}` delimiters, which puts the
@@ -2025,11 +2085,18 @@ whole-text diff.
   Thresholds live in the harness and nowhere else — a number in this file cannot
   be checked, and panache's drifted from its harness within one phase.
 
-  Gate the keystroke bench's **write-phase** row too, not just the reparse: Phase
-  2 raised it 14-26% and that was invisible end to end only because the full
-  parse was 97% of the keystroke. A tier is exactly what stops making it
-  invisible. See Phase 2's bench deviation for the measurement and the one
-  inference in it nobody has checked.
+  Gate the keystroke bench's **write-phase** row too, not just the reparse. This
+  is no longer a precaution: with the token tier in, the write phase is **80% of
+  a keystroke** (568 us of 709 us on the thesis), so the 125 us Phase 2 added to
+  it is ~18% of what a user waits for rather than the 0.4% it was. See Phase 2's
+  bench deviation for the measurement and for the one inference in it nobody has
+  checked — that the cost is an artifact of the bench's tight alloc/free loop
+  rather than a property of the server. Checking that is now worth doing.
+
+  Each case must also **pin its edit site and assert the tier reached**, and the
+  set must include a site the tier *refuses*: Phase 3 found the bench silently
+  measuring a construct the tier declines, and a ratio that does not say which
+  path it timed is not a gate. Detail in Phase 3's last deviation.
 
 - [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
   files, already pinned) as a two-sided ratchet in the shape of

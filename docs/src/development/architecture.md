@@ -663,9 +663,11 @@ A keystroke used to re-parse the whole file. On a small `.tex` that is fine; on
 a 730 KB thesis it was 27 ms, which was 97% of the keystroke. `parser::reparse`
 splices the edit into the previous green tree instead: with the token tier in,
 the same keystroke typed into prose costs 0.71 ms, of which the reparse is 140
-µs. It lands in phases, tracked in `TODO.md` § Incremental reparse — the token
-tier is live, the protected-body and region tiers are not, and an edit no tier
-claims still costs a full parse.
+µs. Typing a line inside an `lstlisting` on the same file went from 27 ms to
+well under 200 µs when the protected-body tier landed. It arrives in phases,
+tracked in `TODO.md` § Incremental reparse — the token and protected-body tiers
+are live, the region tier is not, and an edit no tier claims still costs a full
+parse.
 
 **The invariant.** A successful reparse yields a green tree *and* a
 `SyntaxError` vector byte-identical to a full parse of the edited text. Nothing
@@ -682,6 +684,7 @@ bail*, never by relaxing the assert.
 relex is a single token of the same kind joining its neighbours the same way,
 and splices with rowan's `SyntaxToken::replace_with` — every green node off the
 leaf-to-root path is shared, so the cost is `O(depth)`, not `O(file)`. The
+protected-body tier makes the same splice from a different proof (below). The
 region tier re-runs the *ordinary* parser over a substring and splices the
 resulting children under `ROOT`, using neighbour-sized boundary parses purely as
 proofs that the substring is decoupled from its context, then discarding them.
@@ -710,10 +713,43 @@ assembly. Each is neutralized either by a text guard or by a position ban, and
 the position matters as much as the text: applied everywhere rather than only in
 math, the math-split guard refuses every hyphenated word in English prose.
 
-Refusals are free, so they are generous. A `.dtx` parse is declined outright —
-the docstrip mode lexes by line and by column 0, and an isolated fragment is
-always at the start of its own input. So are line terminators, environment
-names, definition bodies, and a join probe against an oversized neighbour.
+Refusals are free, so they are generous. A `.dtx` parse is declined outright. So
+are line terminators, environment names, definition bodies, and a join probe
+against an oversized neighbour.
+
+**What the protected-body tier has to prove instead.** An edit inside an
+`lstlisting`, a `\verb`, or a `\url` is the same one-leaf splice, but the token
+tier's proof is unavailable: a raw capture is a kind the lexer only emits once
+it has seen an opener, so the body lexed on its own comes back as ordinary
+prose. Rather than restate the catcode rules — a second copy of the lexer, to be
+kept in step forever — this tier relexes the leaf's **whole enclosing node with
+its delimiters**, which puts the isolated lexer into the capturing mode for
+free. Four legs. *Faithfulness*: the unedited fragment must relex to the
+fragment's own tokens, which is the evidence that these bytes do not depend on
+the state the file arrived in, and is what rules out a short-verb span, an
+`@`-bearing name under `\makeatletter`, and a name that only lexes whole inside
+an expl3 region, without enumerating any of them. *Locality*: a raw capture's
+bytes never reach the lexer's state updates, so it leaves the fragment in the
+state it entered — a claim about lexer code, and therefore a lexer test, with a
+counterexample beside it (a body that *breaks* its capture does move later
+lexing). *Termination*: a `VERB` carries its closer in its own text, but a
+`VERBATIM_BODY`'s `\end{name}` is a sibling, and an unterminated body runs to
+EOF — so the tier requires that `\end` to be inside the fragment, or the
+isolated scan would stop where the file's does not. *The sequence check*: the
+edited fragment must relex to the same tokens with only the leaf's text changed,
+which is what catches an `\end{verbatim}` typed into a body or a brace that
+unbalances a `\url`.
+
+Newlines are allowed here, unlike on the token tier. That is the point — inside
+a raw body a line break restructures nothing, because the grammar sees one
+opaque token either way, and pressing Enter in a listing is the workload.
+
+`.dtx` stays refused on both tiers, and the whole-node relex does not lift it.
+The docstrip mode lexes by line and by column 0, but the deeper problem is that
+`implicit_expl` is derived from a scan of the *entire input*: an isolated
+fragment can be lexed under a regime the file never had, and can pass the
+faithfulness check anyway when the difference does not happen to show in those
+bytes. Faithfulness is evidence about the fragment, not about the file.
 
 So none of the parser's left-to-right state is checkpointed: not the lexer's
 (`at_letter`, `expl_syntax`, `short_verbs`, `macrocode`, brace depth), not the

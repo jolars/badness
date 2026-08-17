@@ -1808,17 +1808,20 @@ leave a phase half-landed: partial work is noted in the status line with the exa
 next step. The deviation bullets are the most valuable thing here — they are where
 the plan was wrong.
 
-**Current status / next step:** Phases 1-3 done. The token tier is live, so a
+**Current status / next step:** Phases 1-4 done. Both leaf tiers are live. A
 keystroke typed into prose on the 730 KB thesis costs **0.71 ms end to end
-instead of 27.7 ms** — the reparse itself 140 us instead of 27.0 ms, a ~190x cut
-that holds from 95 KB up. Next is **Phase 4** (protected-body tier), whose entry
-criteria are met.
+instead of 27.7 ms**; a line typed inside an `lstlisting` on the same file costs
+**~0.85 ms instead of 27-30 ms**. Next is **Phase 5** (mechanize the bench
+gate), whose entry criteria are met — and which Phase 4 has already half-built:
+`BADNESS_BENCH_SITE` picks the edit site and the JSON report records it.
 
-But read Phase 3's last deviation first: the write phase is now **80% of the
-keystroke** (568 us of 709 us), so the parse is no longer where the time goes.
-Phase 4 buys a construct the token tier refuses; the write phase is what every
-keystroke pays. If the next session wants the biggest number, that is where it
-is — and Phase 5's gate should cover it before anyone optimizes it.
+Read two things first. Phase 3's last deviation: the write phase is now the
+**bulk of the keystroke** (~750 us of ~850 us on the thesis), so the parse is no
+longer where the time goes — that is where the biggest remaining number is, and
+Phase 5's gate should cover it before anyone optimizes it. And Phase 4's last
+deviation: the bench's derived reparse row is now a *difference of two large
+numbers* and reads anywhere from 30 us to 150 us run to run on the thesis, so
+the gate cannot be built on it as it stands.
 
 - [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
   `reparse` returns `None` for every edit, so every keystroke still full-parses
@@ -2065,7 +2068,7 @@ is — and Phase 5's gate should cover it before anyone optimizes it.
     tier reached — and it wants a *refusing* site as a case too, since the
     fallback path is what most edits still take.
 
-- [ ] **Phase 4: protected-body tier.** `VERBATIM_BODY`, `VERB`, and comment
+- [x] **Phase 4: protected-body tier.** `VERBATIM_BODY`, `VERB`, and comment
   runs, via fatou's `STRING_CONTENT` trick: relex the **whole enclosing node**
   with its `\begin{verbatim}`/`\end{verbatim}` delimiters, which puts the
   isolated lexer into the right mode for free instead of hand-writing a catcode
@@ -2074,6 +2077,81 @@ is — and Phase 5's gate should cover it before anyone optimizes it.
   assumption, plus a *terminated* check. Newlines are allowed on this tier —
   that is what puts Enter inside an `lstlisting` on it, and the analogous case
   was worth 30x in fatou.
+
+  Landed as `parser/reparse/protected.rs`, with the four-leg argument in its
+  module docs. Measured on the new `verbatim` bench site (a line typed inside an
+  injected `lstlisting`), alternating A/B against `67fd92d`:
+
+  | document | reparse before | after | end-to-end before → after |
+  |---|---|---|---|
+  | `small.tex` | 36 us | 4.4 us | 40 us → 7.9 us |
+  | `cv.tex` | 124 us | 5.4 us | 132 us → 13 us |
+  | `masters_dissertation.tex` (95 KB) | 2.85 ms | ~20 us | 2.94 ms → 0.11 ms |
+  | `phd_dissertation.tex` (730 KB) | 27-29 ms | ~30-150 us | 27.7-30.1 ms → 0.8-0.9 ms |
+
+  Splice rates over the seeded harness at 10x: single edits 2567 → 3412 of
+  19840, chains 137 → 180 of 4960, corpus 3723 → 4099 of 13920.
+
+  Six deviations, each a decision a later phase inherits.
+
+  - **Comment runs are out, and were already covered.** The plan's third kind was
+    speculative — a transposition of fatou's shape. The token tier splices a
+    `COMMENT` leaf today (`splices_inside_a_comment_and_inside_whitespace`), and
+    the only comment edits it refuses carry a **newline**, which splits one token
+    into several. That is a token-*count* change, which no leaf splice models
+    whatever proof it carries, so it belongs to the region tier and not here.
+  - **The plan's "faithfulness plus terminated" is four legs, not two**, and the
+    two it did not name are the ones a reviewer has to check. *Locality* — a raw
+    capture's bytes never reach `apply_toggles`, `next_pending`, or the
+    brace-depth fold, so the lexer leaves the fragment in the state it entered —
+    is what licenses splicing without re-lexing the tail, and it is a claim about
+    lexer *code*, so it is pinned by a lexer test rather than by the tier. Writing
+    that test immediately produced its own **counterexample**: a body that
+    *breaks* its capture (`\url{{}`) leaves ordinary braces behind, ratchets
+    `brace_depth`, and flips the char-constant reading of a later `` \char`{ ``.
+    That is now the second half of the test, and it is the concrete reason the
+    tier re-lexes a whole fragment instead of trusting the body's own bytes. The
+    fourth leg is the *sequence check* on the edited fragment, which is what
+    actually catches that case at run time.
+  - **`text_reads_are_inert` was not a kind allow-list to widen.** It
+    short-circuited `true` for every non-`WORD` kind on a *trivia* argument — the
+    grammar's text comparisons all run on tokens it has established are
+    non-trivia. `VERB` and `VERBATIM_BODY` are not trivia, so admitting them meant
+    a per-kind dispatch, with an unclassified kind **refused** rather than
+    defaulted through. The re-audit found exactly one real read: `peek_meaningful_text`
+    feeding `attach_arguments`, which distinguishes a standalone `\verb|…|` from a
+    `\lstinline`'s bare `|…|` by the leading backslash. It also found that every
+    `strip_prefix('\\')` in the grammar sits behind a `CONTROL_WORD` gate — until
+    now an incidental fact, and load-bearing from here, since a `VERB` *does* start
+    with a backslash.
+  - **`context_admits`'s line scan had to move.** It banned any spliceable leaf
+    with a text-reading command earlier on its line, and `\begin` is one — which
+    is every verbatim body, since the scan walks back through the environment's own
+    opener. The fix is not an exception for `\begin` but a change of origin: the
+    scan starts at the **first token of the relexed span**, because a reader
+    *inside* the fragment is reproduced by the relex rather than assumed inert, and
+    only a reader starting before it is unaccounted for. The token tier passes the
+    leaf for both arguments, so nothing there moved.
+  - **`.dtx` stays refused, and the whole-node relex does not lift it.** Phase 3
+    hoped it would. The blocker is not the column model it named: `Lexer::new`
+    derives `implicit_expl` from a scan of the **entire input**, so an isolated
+    fragment can be lexed under a regime the file never had — and can pass the
+    faithfulness relex anyway when the difference does not happen to show in those
+    bytes. Faithfulness is evidence about the fragment, not about the file. Lifting
+    this needs the fragment's *entry state* carried in, which is the region tier's
+    problem and a new decision either way.
+  - **The bench's derived reparse row stops being a measurement.** Row 3 minus
+    row 2 was a fine proxy while the parse was 97% of the keystroke. It is now a
+    difference of two ~800 us numbers on the thesis, and repeated runs of the same
+    binary gave 150 us, 75 us, 67 us, 30 us, and one clamped **0 ns** (row 3 came
+    out *below* row 2). The tier's real cost is not in doubt — the before/after
+    gap is three orders of magnitude — but **Phase 5 cannot gate on this row**. It
+    needs to time `reparse` directly, which is also what lets a case assert the
+    tier it reached. Also discovered: `benches/documents/` holds no verbatim
+    environment, no `\verb`, and no `\url`, so the `verbatim` site *injects* an
+    `lstlisting` block. Phase 5's corpus-presence assertion has to cover the
+    injection too — a site that silently stopped injecting would look like a
+    speedup.
 
 - [ ] **Phase 5: mechanize the bench gate.** `benches/reparse.rs` with a
   per-case `Expect` (expected tier, speedup floor, regression ceiling), checked
@@ -2097,6 +2175,17 @@ is — and Phase 5's gate should cover it before anyone optimizes it.
   set must include a site the tier *refuses*: Phase 3 found the bench silently
   measuring a construct the tier declines, and a ratio that does not say which
   path it timed is not a gate. Detail in Phase 3's last deviation.
+
+  Phase 4 built half of this and found the other half broken. `BADNESS_BENCH_SITE`
+  already picks the site (`word` / `verbatim`), prints it, and records it in the
+  JSON report; `task bench:keystroke-verbatim` runs the second. But the reparse
+  row it reports is **row 3 minus row 2**, and with a tier in place that is a
+  difference of two large numbers — five runs of the same binary spread 30 us to
+  150 us, one of them clamping to zero. So `benches/reparse.rs` must time
+  `parser::reparse` **directly** rather than deriving it, which is also the only
+  way a case can assert `ReparseTier`. And since the `verbatim` site *injects* its
+  construct (no bench document contains one), the corpus-presence assertion has to
+  cover the injection: a site that stopped injecting would read as a speedup.
 
 - [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
   files, already pinned) as a two-sided ratchet in the shape of

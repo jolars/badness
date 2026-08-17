@@ -91,6 +91,9 @@ comparison, not a byte-target.
 - A hand-maintained incremental soundness enumeration must be backed by a test
   that discovers unclassified sites. In particular, adding a grammar text
   comparison means classifying it in the token tier's text-read survey.
+- Relex a mode-only leaf (`VERBATIM_BODY`, `VERB`) with its enclosing delimiters;
+  the delimiters establish the mode. Do not reproduce catcode/capture rules in
+  incremental code.
 - Keep formatter rules newline-safe: do not key layout on lone authored
   newlines in consumed gaps.
 - Keep parser pure with respect to text + declarations; do not let ambient

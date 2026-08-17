@@ -31,6 +31,9 @@
 //!   single token of the same kind that joins to its neighbours the same way, and
 //!   splices with rowan's [`SyntaxToken::replace_with`], sharing every green node
 //!   off the leaf-to-root path — `O(depth)`, not `O(file)`;
+//! - the protected-body tier splices the same way, but proves it differently: a raw
+//!   capture cannot be relexed alone, so it relexes the leaf's whole enclosing node
+//!   with its delimiters and requires that to reproduce the tree's own tokens;
 //! - the region tier re-runs the *ordinary* parser over a substring and splices the
 //!   resulting children under `ROOT`, using neighbour-sized boundary parses purely
 //!   as proofs that the substring is decoupled from its context.
@@ -43,10 +46,10 @@
 //!
 //! # Status
 //!
-//! Phase 3. The token tier is implemented ([`token`], whose module docs carry its
-//! soundness argument); the protected-body and region tiers are not, so an edit
-//! outside a plain leaf still costs a full parse. See `TODO.md` § Incremental
-//! reparse.
+//! Phase 4. The token tier ([`token`]) and the protected-body tier ([`protected`])
+//! are implemented, each with its soundness argument in its own module docs; the
+//! region tier is not, so an edit outside a single leaf still costs a full parse.
+//! See `TODO.md` § Incremental reparse.
 
 mod leaf;
 mod protected;
@@ -71,7 +74,8 @@ pub use crate::parser::edit::{Edit, apply_edits, diff_edit, try_apply_edits};
 pub enum ReparseTier {
     /// One leaf token was relexed in isolation and spliced in place.
     Token,
-    /// A protected body (`VERBATIM_BODY`, `VERB`) was relexed with its delimiters.
+    /// A protected body (`VERBATIM_BODY`, `VERB`) was relexed with its enclosing
+    /// node's delimiters and spliced in place.
     Verbatim,
     /// A run of top-level children was reparsed and spliced under `ROOT`.
     Region,

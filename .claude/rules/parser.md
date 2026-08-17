@@ -78,6 +78,12 @@ parser*. Keep this file operational.
   math/expl3-only read can reject ordinary prose and erase the tier's workload.
 - Lexer readers count too: keep following-text/one-shot lookahead recognition in
   the shared lexer predicates rather than restating it in a reparse guard.
+- Protected bodies relex their enclosing construct with its delimiters; the
+  delimiters establish the real lexer mode, so never copy the catcode/capture
+  rules into the reparser. Require old-fragment faithfulness, capture locality,
+  a closer inside the fragment, and an edited token-sequence match.
+- A raw capture's bytes must not update later lexer state. Keep that claim pinned
+  by a lexer test with a state-changing counterexample beside it.
 
 ## Data and maintenance
 

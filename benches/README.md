@@ -1,21 +1,60 @@
 # Benchmarking and profiling
 
-Three complementary tools, measuring different things:
+Four complementary tools, measuring different things:
 
   | Tool                                            | What it measures                                  | Includes startup floor?       |
   | ----------------------------------------------- | ------------------------------------------------- | ----------------------------- |
   | `benches/compare_format.sh` (`task bench`)      | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
   | `benches/formatting.rs` (`task bench:micro`)    | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
   | `benches/keystroke.rs` (`task bench:keystroke`) | what one editor keystroke costs through salsa     | **no** (library entry points) |
+  | `benches/reparse.rs` (`task bench:reparse`)     | what one incremental reparse costs, per tier      | **no** (library entry points) |
 
 The CLI script answers "how fast is the `badness` binary"; the formatting bench
 answers "where does the per-byte work go, with no process startup in the way."
 Use them together to separate the **fixed startup floor** from the **per-byte
 cost** (the TODO's profiling task).
 
-The keystroke bench answers a different question — not throughput but *latency
-per edit*, on the composition (`didChange` splice → `upsert_file` → parse) that
-neither of the other two touches. See its own section below.
+The last two answer a different question — not throughput but *latency per
+edit*. The keystroke bench times the whole composition (`didChange` splice →
+`upsert_file` → parse); the reparse bench times `parser::reparse` alone, which
+is the only place the tier a scenario reaches is observable. Both have their own
+sections below, and both carry a **gate** (`task bench:gate`).
+
+## The gates
+
+```bash
+task bench:gate              # both gates
+task bench:reparse-gate      # tiers, speedup floors, bail budget
+task bench:keystroke-gate    # the write phase
+```
+
+Each case declares what it claims and the gate checks it, printing every check
+with its margin so a threshold can be watched drifting long before it fails. Off
+by default: a plain `task bench:reparse` stays a measurement and never fails the
+shell it was typed into.
+
+Three rules the gates are built on, and one habit they need.
+
+- **Thresholds live in the harness and nowhere else.** A number in `TODO.md`
+  cannot be checked, and panache's drifted from its harness inside one phase.
+  Read the gate's output, not a table in a document.
+- **Every ratio rule carries an absolute-microsecond escape**, because a ratio
+  on a 2 µs baseline measures noise. Speedup *floors* deliberately do not: an
+  escape large enough to matter would forgive every result a small document can
+  produce.
+- **A gate must not pass by not measuring.** Every document but `small.tex` is
+  gitignored, so the gates assert the corpus is present *and* the expected size
+  — the floors are a function of document size, and `download.sh` pins release
+  tags precisely so those sizes hold. They also assert that each pinned edit
+  site still lands in the leaf kind it claims, which is simultaneously the check
+  that the `verbatim` site is still injecting its `lstlisting`.
+- **Calibrate on an idle machine**, at the default iteration count, taking
+  floors \~5% under the lowest of three runs. A shortened run measures sampling
+  noise, and a floor set against a loaded machine fails later for no reason.
+
+The gates do **not** run in CI: they need the gitignored corpus and a release
+build, and a timing assert on a shared runner would land flaky. Run them locally
+before touching the reparse path.
 
 ## Quick start
 
@@ -35,6 +74,12 @@ BADNESS_BENCH_OUTPUT_JSON=benches/micro_results.json cargo bench --bench formatt
 
 # LSP keystroke pipeline (didChange splice → salsa upsert → parse)
 task bench:keystroke
+
+# Incremental reparse, per tier
+task bench:reparse
+
+# Check both against their declared contracts (exits non-zero on a violation)
+task bench:gate
 ```
 
 ## The keystroke bench
@@ -42,19 +87,64 @@ task bench:keystroke
 `benches/keystroke.rs` times the composition a real editor session runs on every
 character, which nothing else here touches: `benches/formatting.rs` and the CLI
 comparison never construct an `IncrementalDatabase`, and `tests/scaling.rs`
-guards growth ratios rather than the pipeline. Three rows per document:
+guards growth ratios rather than the pipeline. Four rows per document, of which
+the first is a reference rather than a stage:
 
+0. **`text copy (reference)`** — one allocation and one linear copy of the
+   document. Nothing in the pipeline calls this; it is the machine-independent
+   unit the write phase is measured in, since what a splice *should* cost is a
+   small number of linear passes.
 1. **`upsert, text unchanged`** — the staleness guard alone: what a no-op
    `upsert_file` costs to prove there is nothing to do. This is what the
    language server pays whenever a job re-writes text salsa already has, and the
    one row that must stay **flat** in the document size.
 2. **`splice + upsert (write phase)`** — `lsp::apply_content_changes` on the
-   live `TextBuffer` plus handing the result to `upsert_file`, no parse
-   demanded. The per-keystroke *text copies* live here, so this is the row on
-   which text-storage designs (`String`, `Arc<str>`, a rope) are comparable.
+   live `TextBuffer`, handing the result to `upsert_file`, and staging the edit
+   chain, no parse demanded. The per-keystroke *text copies* live here, so this
+   is the row on which text-storage designs (`String`, `Arc<str>`, a rope) are
+   comparable. It currently costs **\~52 document copies** on a large file,
+   almost all of it `TextBuffer::new` rebuilding the whole `LineIndex`; with the
+   parse now cheap, that is the largest single thing in a keystroke.
 3. **`keystroke end-to-end (parse included)`** — the same plus `parsed_tree`.
-   Badness has no intra-file reparse yet (AGENTS.md decision #6), so **row 3
-   minus row 2 is the full-reparse cost**, printed as its own line.
+
+There is deliberately **no reparse row here**. It used to be derived as row 3
+minus row 2, which was fair while a full parse was 97% of the keystroke and
+became a difference of two \~800 µs numbers once the leaf tiers landed: five
+runs of one binary gave 150, 75, 67 and 30 µs, and one clamped to zero when row
+3 came out *below* row 2. Use `benches/reparse.rs` instead.
+
+## The reparse bench
+
+`benches/reparse.rs` times `parser::reparse` directly, against a `ReparseBase`
+it builds itself. That is the only way to observe which `ReparseTier` answered —
+through the salsa layer the tier is computed and dropped, and the reparse side
+channel may not grow an accessor for it.
+
+Twelve cases: four documents by three sites. `word` (a letter typed into prose)
+must reach the token tier, `verbatim` (a line typed into an injected
+`lstlisting`) the protected-body tier, and `decline` must reach neither. The
+declining case types a backslash at the *same offset* as the word case, so the
+pair isolates the guard rather than confounding it with position, and it prices
+the full guard cascade rather than bailing on the first check.
+
+```bash
+task bench:reparse
+BADNESS_BENCH_CASE=phd_dissertation.tex/word cargo bench --bench reparse
+```
+
+Two things to know about the numbers. They are **not** comparable with the
+keystroke bench's end-to-end row, which carries the splice, the upsert and the
+cache lookups around this call — a thesis keystroke is \~0.71 ms end to end, of
+which the reparse is \~37 µs. And a decline costs about what a splice does,
+because both pay the same `O(top-level arity)` descent to the leaf; that is what
+is left of a cheap reparse.
+
+The bench **pre-warms the heap** before measuring. Without it the first case on
+a large document reads \~40% high and no amount of warmup inside the measurement
+fixes it: glibc trims the heap as each iteration's tree is freed and the next
+faults those pages back in, so the number depended on where a case sat in the
+list. `MALLOC_TRIM_THRESHOLD_=-1` collapses all three thesis cases onto the same
+\~26 ms, which is how that was pinned down.
 
 Each iteration alternates an insert and a delete of one character, so the text
 genuinely changes every round: salsa sees a fresh revision and the number is one

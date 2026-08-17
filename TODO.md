@@ -1808,20 +1808,29 @@ leave a phase half-landed: partial work is noted in the status line with the exa
 next step. The deviation bullets are the most valuable thing here — they are where
 the plan was wrong.
 
-**Current status / next step:** Phases 1-4 done. Both leaf tiers are live. A
-keystroke typed into prose on the 730 KB thesis costs **0.71 ms end to end
-instead of 27.7 ms**; a line typed inside an `lstlisting` on the same file costs
-**~0.85 ms instead of 27-30 ms**. Next is **Phase 5** (mechanize the bench
-gate), whose entry criteria are met — and which Phase 4 has already half-built:
-`BADNESS_BENCH_SITE` picks the edit site and the JSON report records it.
+**Gates before touching any of this:** `task bench:gate` (both bench gates,
+release, default budget — a shortened run measures sampling noise),
+`BADNESS_REPARSE_FUZZ_ITERS=10 cargo test -p badness-parser --test
+incremental_reparse`, and `task gate-corpora:check`. Run the bench gates on an
+idle machine; a floor calibrated against a loaded one fails later for no reason,
+and Phase 5's own write-phase ceiling is loose for exactly that reason.
 
-Read two things first. Phase 3's last deviation: the write phase is now the
-**bulk of the keystroke** (~750 us of ~850 us on the thesis), so the parse is no
-longer where the time goes — that is where the biggest remaining number is, and
-Phase 5's gate should cover it before anyone optimizes it. And Phase 4's last
-deviation: the bench's derived reparse row is now a *difference of two large
-numbers* and reads anywhere from 30 us to 150 us run to run on the thesis, so
-the gate cannot be built on it as it stands.
+**Current status / next step:** Phases 1-5 done. Both leaf tiers are live and
+both are now gated. A keystroke typed into prose on the 730 KB thesis costs
+**0.71 ms end to end instead of 27.7 ms**; a line typed inside an `lstlisting`
+on the same file costs **~0.85 ms instead of 27-30 ms**. Next is **Phase 6**
+(the corpus sweep), whose entry criteria are met.
+
+Run `task bench:gate` before touching any of this. Read the gate's output for
+what the tiers are worth — the thresholds live in the harness and are
+deliberately not restated here.
+
+The one number worth carrying forward: with the parse now cheap, **the write
+phase is the keystroke**, and Phase 5 measured what it is made of. It costs ~52
+copies of the document where two linear passes would do, and the difference is
+`TextBuffer::new` rebuilding the whole `LineIndex` on every keystroke. That is
+now the largest single thing a user waits for on a large file, and it is filed
+below.
 
 - [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
   `reparse` returns `None` for every edit, so every keystroke still full-parses
@@ -1934,7 +1943,7 @@ the gate cannot be built on it as it stands.
     is what proves no analyze is reading: a chain staged ahead of the write could
     be peeked by an in-flight `parsed_document`, which would fail to verify it,
     full-parse, and then *drain* it, losing the edit for good.
-  - **Every `upsert_file` site pairs with a stage**, `None` at the three that
+  - **Every `upsert_file` site pairs with a stage**, `None` at the four that
     carry no edits (`didOpen`, the push-mode re-lint sweep, sibling seeding, a
     watched-file re-read). An exceptionless rule survives the next call site.
   - **One change in `src/incremental.rs`**, which this plan said would need none:
@@ -2153,39 +2162,110 @@ the gate cannot be built on it as it stands.
     injection too — a site that silently stopped injecting would look like a
     speedup.
 
-- [ ] **Phase 5: mechanize the bench gate.** `benches/reparse.rs` with a
-  per-case `Expect` (expected tier, speedup floor, regression ceiling), checked
-  under `BADNESS_BENCH_ASSERT=1`, plus `task bench:reparse-gate`. Two rules
-  learned from panache. Every ratio carries an absolute-microsecond escape,
-  because a ratio on a 2 us baseline measures noise. And corpus **presence** is
-  asserted: `benches/documents/` is gitignored save `small.tex`, so a gate on a
-  fresh checkout otherwise passes by not measuring exactly the strictest cases.
-  Thresholds live in the harness and nowhere else — a number in this file cannot
-  be checked, and panache's drifted from its harness within one phase.
+- [x] **Phase 5: mechanize the bench gate.** Landed as `benches/reparse.rs`
+  (twelve cases: four documents by `word`/`verbatim`/`decline`, each declaring
+  the tier it must reach and what it claims for speed), an assert mode on
+  `benches/keystroke.rs` for the write phase, and `task bench:reparse-gate` /
+  `bench:keystroke-gate` / `bench:gate`. Both gates print every check with its
+  margin, collect all failures rather than stopping at the first, write their
+  JSON *before* the verdict, and are off by default. `benches/sites/` holds the
+  corpus table and the edit sites both benches share, so a site cannot drift in
+  one and not the other. Thresholds are in the harness and deliberately not
+  restated here; the directive is now in `.claude/rules/parser.md`.
 
-  Gate the keystroke bench's **write-phase** row too, not just the reparse. This
-  is no longer a precaution: with the token tier in, the write phase is **80% of
-  a keystroke** (568 us of 709 us on the thesis), so the 125 us Phase 2 added to
-  it is ~18% of what a user waits for rather than the 0.4% it was. See Phase 2's
-  bench deviation for the measurement and for the one inference in it nobody has
-  checked — that the cost is an artifact of the bench's tight alloc/free loop
-  rather than a property of the server. Checking that is now worth doing.
+  Six deviations, and the last two are findings rather than plan corrections.
 
-  Each case must also **pin its edit site and assert the tier reached**, and the
-  set must include a site the tier *refuses*: Phase 3 found the bench silently
-  measuring a construct the tier declines, and a ratio that does not say which
-  path it timed is not a gate. Detail in Phase 3's last deviation.
+  - **The corpus assertion pins *sizes*, not just presence.** Presence was what
+    the plan asked for. But every floor is a function of document size, and
+    panache lost two floors when upstream grew a fixture 300 856 -> 304 665 bytes
+    and spent a session proving its parser had not regressed. `download.sh`
+    already pins release tags, so pinning the bytes those tags produce is the
+    cheap other half — and it is what makes "the corpus drifted" a named failure
+    instead of a threshold mystery.
+  - **The site pin and the injection check turned out to be one assertion.**
+    Phase 4 asked for both separately. Asserting the *kind of the leaf covering
+    the pinned offset* (`WORD`, `VERBATIM_BODY`) covers a relocated site, an
+    injection that stopped, and a drifted document at once — where grepping for
+    `lstlisting` would prove the block exists but not that the edit is inside it.
+    Verified by deleting the injection: four cases fail by name before anything
+    is timed.
+  - **The declining case types a backslash, not a newline.** The plan just said
+    "a site the tier refuses". A newline is refused by the first guard in the
+    cascade, so it would price nothing. A backslash at the *same offset as the
+    word case* clears the newline ban, the flavor ban, the kind allow-list and
+    the context scan, then relexes `wo\rd` into two tokens and refuses — so the
+    case prices the whole cascade, and the pair isolates the guard rather than
+    confounding it with position.
+  - **A speedup floor must *not* carry the absolute-microsecond escape.** The
+    plan said every ratio carries one. That is right for the regression rules,
+    where a small absolute overhead reads as a large ratio penalty on a cheap
+    baseline. Applied to a floor it nullifies it: `small.tex` reparses in under
+    two microseconds, so an escape at any useful size forgives every result the
+    case can produce. Panache has the same asymmetry; it is worth stating rather
+    than rediscovering.
+  - **The bench had to pre-warm the heap, and the reason invalidates any
+    per-case number taken without it.** The first case on a large document read
+    ~40% high (35.7 ms against 25.9 ms), and no amount of warmup *inside* the
+    measurement fixed it — 100 iterations did nothing. glibc trims the heap as
+    each iteration's tree is freed and the next faults those pages back in;
+    once a whole case has run, the heap holds chunks that are no longer
+    trimmable. `MALLOC_TRIM_THRESHOLD_=-1` collapses all three thesis cases onto
+    the same ~26 ms, which is what pinned it down. Left as a pre-warm rather
+    than a `mallopt` call: the allocator is the machine's, and a bench that
+    reconfigures it measures a program nobody runs. The consequence to keep is
+    that **case order was silently part of the measurement** — `phd/word` read
+    959x before the fix and 720x after, and the inflated number was the one that
+    looked better.
+  - **The obvious write-phase contract is unsound, and row 0 is the answer.**
+    The plan wanted "the write phase is at most N% of the end-to-end keystroke".
+    Rows 2 and 3 are separately calibrated loops whose *difference* is smaller
+    than the noise on either, so on the thesis row 2 measures **above** row 3 and
+    the share comes out at 101% — the same defect that killed the derived reparse
+    row, re-entering through the gate. Worse, a *proportional* regression like
+    Phase 2's +125 us leaves a scaling ratio almost unmoved (8.4 against 8.67),
+    so scaling alone would have missed the one regression this row exists to
+    catch. The fix is a new reference row: one allocation and one linear copy of
+    the document, with the write phase gated as a multiple of it. On the thesis
+    that ratio held to 0.8% across runs whose absolute times moved 3%.
 
-  Phase 4 built half of this and found the other half broken. `BADNESS_BENCH_SITE`
-  already picks the site (`word` / `verbatim`), prints it, and records it in the
-  JSON report; `task bench:keystroke-verbatim` runs the second. But the reparse
-  row it reports is **row 3 minus row 2**, and with a tier in place that is a
-  difference of two large numbers — five runs of the same binary spread 30 us to
-  150 us, one of them clamping to zero. So `benches/reparse.rs` must time
-  `parser::reparse` **directly** rather than deriving it, which is also the only
-  way a case can assert `ReparseTier`. And since the `verbatim` site *injects* its
-  construct (no bench document contains one), the corpus-presence assertion has to
-  cover the injection: a site that stopped injecting would read as a speedup.
+- [ ] **Ratchet the write-phase ceiling, and interleave the two rows it
+  compares.** The write-phase ceiling shipped **loose** and says so at the
+  constant. The calibrating machine was in use: the thesis measured 49.8-51.7
+  copies over four runs and then 63.6-64.4 over two more, so the ceiling sits
+  above the loud cluster and catches a doubling rather than the ~20% regression
+  it is meant to watch. `masters_dissertation.tex` was excluded outright for the
+  same reason (65 us and 91 us for the same row) — a guard that has to be
+  loosened to pass is not a guard.
+
+  The residual noise is structural and fixable. Row 0 and row 2 are measured
+  seconds apart, so load drifting between them lands in the ratio; the reparse
+  bench's ratios come from the same moment and hold to under 1%. Measure the two
+  interleaved, block by block, then recalibrate both documents on an idle machine
+  at the default iteration count.
+
+- [ ] **The write phase rebuilds the whole `LineIndex` on every keystroke.**
+  Phase 5's reference row put a number on it: the write phase costs **~52 copies
+  of the document** where the two linear passes it needs (build the spliced
+  bytes, let the `Arc` copy them) would be 2-3. The rest is `TextBuffer::new`
+  scanning the entire text for line starts. With the parse now cheap this is the
+  largest single thing in a keystroke on a large file — ~580 us of a ~630 us
+  keystroke on the thesis.
+
+  Panache filed and fixed the same thing: patch one `LineIndex` per notification
+  rather than rebuilding it, and hand salsa the `Arc<str>` that index owns. Its
+  write phase went 282 us -> 98 us on a 293 KB file. `task bench:keystroke-gate`
+  is the gate for this work, and its ceiling should be ratcheted down when it
+  lands.
+
+- [ ] **Nobody has checked Phase 2's alloc-locality inference.** Phase 2
+  measured +125 us on the write phase and attributed it to the bench's tight
+  alloc/free loop losing the base's pristine same-chunk reuse, rather than to
+  anything the server does — explicitly recorded there as "an inference, not a
+  measurement, and the one thing here nobody has verified". Phase 5 was scoped to
+  gate the row, not to settle this, and the gate now exists. Phase 5 also found a
+  second, *independent* allocator artifact in the same benches (the heap pre-warm
+  above), which is reason to think this one is worth an hour rather than reason
+  to assume it is the same effect.
 
 - [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
   files, already pinned) as a two-sided ratchet in the shape of

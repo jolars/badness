@@ -661,13 +661,21 @@ will invalidate it.
 
 A keystroke used to re-parse the whole file. On a small `.tex` that is fine; on
 a 730 KB thesis it was 27 ms, which was 97% of the keystroke. `parser::reparse`
-splices the edit into the previous green tree instead: with the token tier in,
-the same keystroke typed into prose costs 0.71 ms, of which the reparse is 140
-µs. Typing a line inside an `lstlisting` on the same file went from 27 ms to
-well under 200 µs when the protected-body tier landed. It arrives in phases,
-tracked in `TODO.md` § Incremental reparse — the token and protected-body tiers
-are live, the region tier is not, and an edit no tier claims still costs a full
-parse.
+splices the edit into the previous green tree instead: the same keystroke typed
+into prose now costs 0.71 ms end to end, and a line typed inside an `lstlisting`
+\~0.85 ms. Timed on its own, the reparse those keystrokes pay for is \~37 µs and
+\~40 µs against a \~26 ms full parse — roughly 700x, and the ratio grows with
+the file, since both leaf tiers are `O(depth)` where a parse is `O(file)`. It
+arrives in phases, tracked in `TODO.md` § Incremental reparse — the token and
+protected-body tiers are live, the region tier is not, and an edit no tier
+claims still costs a full parse.
+
+Those numbers are held by `benches/reparse.rs` (`task bench:gate`), where every
+case declares the tier it must reach as well as the speed it claims: a floor
+alone would still pass after a case silently fell back to a full parse, because
+declining is always sound and fails nothing else. With the parse this cheap, the
+keystroke's remaining cost has moved to the write phase — mostly rebuilding the
+`LineIndex` — which the same gate now watches.
 
 **The invariant.** A successful reparse yields a green tree *and* a
 `SyntaxError` vector byte-identical to a full parse of the edited text. Nothing
@@ -1354,9 +1362,13 @@ meaningful, which is what the salsa-side staleness guards trade on (see
 [Incrementality](#incrementality)).
 
 The line table is rebuilt, not patched, across an edit. Fatou and arity splice
-theirs; here a keystroke still pays a full reparse of the file, which dwarfs a
-`memchr` scan of the same buffer, so the splice would be optimizing the wrong
-row. `TextBuffer` is where it goes when that changes.
+theirs; here the rebuild was long dwarfed by the full reparse every keystroke
+paid, so splicing it would have been optimizing the wrong row. **That is no
+longer true.** With both leaf tiers landed the parse is \~37 µs and the write
+phase \~580 µs on the thesis, of which the rebuild is most — the write phase
+costs \~52 copies of the document where its two linear passes would be 2-3.
+`TextBuffer` is where the patch goes, and `task bench:keystroke-gate` is the row
+that watches it.
 
 Environment awareness has four sources, all reading static facts only, with no
 macro meaning and no typesetting.

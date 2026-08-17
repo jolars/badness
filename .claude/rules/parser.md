@@ -84,6 +84,9 @@ parser*. Keep this file operational.
   a closer inside the fragment, and an edited token-sequence match.
 - A raw capture's bytes must not update later lexer state. Keep that claim pinned
   by a lexer test with a state-changing counterexample beside it.
+- A new tier needs a direct-reparse benchmark case that asserts the exact tier,
+  a calibrated speedup floor, and a release-build full-parse comparison. Keep a
+  declining case to price the guard cascade; thresholds live only in the harness.
 
 ## Data and maintenance
 

@@ -108,6 +108,7 @@ dependencies = [
  "log",
  "lsp-server",
  "lsp-types",
+ "memchr",
  "rayon",
  "rowan 0.17.0",
  "salsa",

@@ -5,4 +5,4 @@ pub mod buffer;
 pub mod line_index;
 
 pub use buffer::TextBuffer;
-pub use line_index::{LineCol, LineIndex, PositionEncoding};
+pub use line_index::{LineCol, LineIndex, LineTable, PositionEncoding};

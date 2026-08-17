@@ -144,7 +144,7 @@ use crate::semantic::{
     scan_definition_sites,
 };
 use crate::syntax::{SyntaxKind, SyntaxNode};
-use crate::text::{LineIndex, PositionEncoding, TextBuffer};
+use crate::text::{LineIndex, LineTable, PositionEncoding, TextBuffer};
 use forward_search::{ForwardSearchRequest, ForwardSearchStatus};
 use name_refs::{NameKind, NameTarget};
 
@@ -3859,7 +3859,7 @@ fn fallback_diagnostics(
             let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(idx, err.start, err.end),
+                    range: byte_range_to_lsp(&idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3870,7 +3870,7 @@ fn fallback_diagnostics(
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(idx, d, true, path));
+                    diags.push(lint_to_lsp(&idx, d, true, path));
                 }
             }
         }
@@ -3878,7 +3878,7 @@ fn fallback_diagnostics(
             let parsed = bib_parse(text);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(idx, err.start, err.end),
+                    range: byte_range_to_lsp(&idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3889,7 +3889,7 @@ fn fallback_diagnostics(
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(idx, d, false, path));
+                    diags.push(lint_to_lsp(&idx, d, false, path));
                 }
             }
         }
@@ -4236,7 +4236,7 @@ fn compute_range_format(
         let root = snapshot.parsed_tree(file);
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, idx, sel, style, sigs, sentence,
+            &root, text, &idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -4252,7 +4252,7 @@ fn compute_range_format(
             range_edits_for_root(
                 &parsed.syntax(),
                 text,
-                idx,
+                &idx,
                 sel,
                 style,
                 &declared_scope(declared),
@@ -4363,7 +4363,7 @@ fn compute_on_type_format(
         }
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, idx, sel, style, sigs, sentence,
+            &root, text, &idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -4383,7 +4383,7 @@ fn compute_on_type_format(
             range_edits_for_root(
                 &root,
                 text,
-                idx,
+                &idx,
                 sel,
                 style,
                 &declared_scope(declared),
@@ -4497,7 +4497,7 @@ fn compute_symbols(
     let mut toc_cursor = 0;
     items
         .iter()
-        .map(|item| to_document_symbol(item, idx, aux.as_ref(), &mut toc_cursor))
+        .map(|item| to_document_symbol(item, &idx, aux.as_ref(), &mut toc_cursor))
         .collect()
 }
 
@@ -4520,7 +4520,7 @@ fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &TextBuffer) -> V
     };
     items
         .iter()
-        .map(|item| bib_to_document_symbol(item, idx))
+        .map(|item| bib_to_document_symbol(item, &idx))
         .collect()
 }
 
@@ -4631,12 +4631,14 @@ fn compute_folding(
         if !snapshot.text_is_current(file, text) {
             return None;
         }
-        Some(folding::folding_ranges(&snapshot.parsed_tree(file), idx))
+        Some(folding::folding_ranges(&snapshot.parsed_tree(file), &idx))
     }));
     match cached {
         Ok(Some(ranges)) => ranges,
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
-        Ok(None) | Err(_) => folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), idx),
+        Ok(None) | Err(_) => {
+            folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx)
+        }
     }
 }
 
@@ -4686,7 +4688,7 @@ fn compute_selection_range(
         }
         Some(selection_range::selection_ranges(
             &snapshot.parsed_tree(file),
-            idx,
+            &idx,
             positions,
         ))
     }));
@@ -4695,7 +4697,7 @@ fn compute_selection_range(
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
         Ok(None) | Err(_) => selection_range::selection_ranges(
             &SyntaxNode::new_root(parse(text).green),
-            idx,
+            &idx,
             positions,
         ),
     }
@@ -4763,7 +4765,7 @@ fn compute_document_link(
         .into_iter()
         .filter_map(|target| {
             Some(DocumentLink {
-                range: lsp_range(idx, target.range),
+                range: lsp_range(&idx, target.range),
                 target: Some(path_to_uri(&target.target)?),
                 tooltip: None,
                 data: None,
@@ -4799,7 +4801,7 @@ fn compute_bib_document_link(
         .into_iter()
         .filter_map(|link| {
             Some(DocumentLink {
-                range: lsp_range(idx, link.range),
+                range: lsp_range(&idx, link.range),
                 target: Some(link.target.parse::<Uri>().ok()?),
                 tooltip: None,
                 data: None,
@@ -5508,7 +5510,7 @@ fn run_change_environment(
             let idx = text.line_index();
             let mut changes = HashMap::new();
             for range in ranges {
-                push_edit(&mut changes, uri, idx, range, new_name);
+                push_edit(&mut changes, uri, &idx, range, new_name);
             }
             let edit = WorkspaceEdit {
                 changes: Some(changes),
@@ -5736,7 +5738,7 @@ fn compute_references(
                 .map(|file| snapshot.file_path(file).to_path_buf())
                 .unwrap_or_else(|| path.to_path_buf());
             let decl = if include_declaration {
-                location_for(&origin, idx, key_range)
+                location_for(&origin, &idx, key_range)
             } else {
                 None
             };
@@ -6066,7 +6068,7 @@ fn compute_document_highlight(
             return Vec::new();
         }
         let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
-            range: lsp_range(idx, range),
+            range: lsp_range(&idx, range),
             kind: Some(kind),
         };
         let collect = |root: &SyntaxNode, model: &SemanticModel| -> Vec<DocumentHighlight> {
@@ -6131,7 +6133,7 @@ fn compute_prepare_rename(
         // `.bib` origin: the `@entry` key under the cursor.
         if file_kind_for(path) == FileKind::Bib {
             let (key, key_range) = bib_entry_under_cursor(snapshot, path, text, offset)?;
-            return Some((lsp_range(idx, key_range), key.to_string()));
+            return Some((lsp_range(&idx, key_range), key.to_string()));
         }
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
         // `root` is kept for the command/environment name fallback below.
@@ -6148,7 +6150,7 @@ fn compute_prepare_rename(
             }
         };
         if let Some(target) = target {
-            return Some((lsp_range(idx, target.span), target.placeholder.to_string()));
+            return Some((lsp_range(&idx, target.span), target.placeholder.to_string()));
         }
         // Not a key: a command or environment name, gated to user-defined names
         // (a project definition site must exist — renaming `\textbf` or
@@ -6158,7 +6160,7 @@ fn compute_prepare_rename(
         if !name_rename_allowed(snapshot, &members, path, &sites, &target) {
             return None;
         }
-        Some((lsp_range(idx, target.span), target.name.to_string()))
+        Some((lsp_range(&idx, target.span), target.name.to_string()))
     }));
     computed.ok().flatten()
 }

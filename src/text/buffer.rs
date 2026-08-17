@@ -14,7 +14,7 @@
 use std::ops::{Deref, Range};
 use std::sync::{Arc, OnceLock};
 
-use super::line_index::{LineIndex, PositionEncoding};
+use super::line_index::{LineIndex, LineTable, PositionEncoding};
 
 /// An immutable snapshot of a document's text, plus the position index over it.
 ///
@@ -38,7 +38,7 @@ pub struct TextBuffer {
     /// Built on first use and shared from there on. A document nobody asks a
     /// positional question about — the common case for a `.tex` file being
     /// typed into faster than the editor re-queries — never pays for one.
-    index: OnceLock<LineIndex>,
+    table: OnceLock<LineTable>,
 }
 
 impl TextBuffer {
@@ -47,7 +47,7 @@ impl TextBuffer {
         Self {
             text: text.into(),
             encoding,
-            index: OnceLock::new(),
+            table: OnceLock::new(),
         }
     }
 
@@ -69,11 +69,16 @@ impl TextBuffer {
         self.encoding
     }
 
-    /// The position index over this buffer, built once and shared. Call it
-    /// freely: unlike [`LineIndex::with_encoding`] it does not rescan.
-    pub fn line_index(&self) -> &LineIndex {
-        self.index
-            .get_or_init(|| LineIndex::with_encoding(&self.text, self.encoding))
+    /// The position index over this buffer. Call it freely: unlike
+    /// [`LineIndex::with_encoding`] it pairs the text with the table this buffer
+    /// already holds instead of rescanning.
+    pub fn line_index(&self) -> LineIndex<'_> {
+        LineIndex::with_table(&self.text, self.line_table(), self.encoding)
+    }
+
+    /// This buffer's line table, built once and shared from there on.
+    pub(crate) fn line_table(&self) -> &LineTable {
+        self.table.get_or_init(|| LineTable::new(&self.text))
     }
 
     /// The buffer that results from replacing the bytes in `range` with
@@ -111,12 +116,14 @@ mod tests {
         TextBuffer::new(text, PositionEncoding::Utf16)
     }
 
+    /// The table is scanned once per buffer, not once per query: `line_index`
+    /// only pairs it with the text.
     #[test]
-    fn the_index_is_built_once_and_shared() {
+    fn the_line_table_is_built_once_and_shared() {
         let buf = buffer("ab\ncd\nef");
-        let first = buf.line_index() as *const LineIndex;
+        let first = buf.line_table();
         assert_eq!(buf.line_index().line_start(1), 3);
-        assert!(std::ptr::eq(buf.line_index(), first));
+        assert!(std::ptr::eq(buf.line_table(), first));
     }
 
     #[test]

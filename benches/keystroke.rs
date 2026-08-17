@@ -443,9 +443,9 @@ const SCALE_FROM: &str = "masters_dissertation.tex";
 const SCALE_TO: &str = "phd_dissertation.tex";
 
 /// `phd_dissertation.tex` over `masters_dissertation.tex`, from the pinned sizes
-/// [`sites::DOCUMENTS`] asserts. Named because both scaling ceilings are stated
-/// as multiples of it rather than as bare numbers — a ceiling that does not say
-/// what shape it expects cannot be read later.
+/// [`sites::DOCUMENTS`] asserts. Named because [`NOOP_MAX_SCALING`] is stated as a
+/// multiple of it rather than as a bare number — a ceiling that does not say what
+/// shape it expects cannot be read later.
 const SCALE_BYTES: f64 = 730369.0 / 95383.0;
 
 /// Row 1 is the staleness guard alone, which compares an `Arc` pointer and
@@ -454,11 +454,29 @@ const SCALE_BYTES: f64 = 730369.0 / 95383.0;
 /// The allowance is for cache effects on the larger buffer, not for growth.
 const NOOP_MAX_SCALING: f64 = 2.5;
 
-/// Row 2 splices bytes and hands salsa an `Arc`, so linear in the document size
-/// is the expected shape. The ceiling is linear plus a third: it fails on a
-/// superlinear regression (a rebuilt index, a second copy) and not on the memcpy
-/// the row exists to measure.
-const WRITE_MAX_SCALING: f64 = SCALE_BYTES * 1.33;
+/// Row 2 splices bytes and hands salsa an `Arc`, so *one linear pass per byte* is
+/// the shape to hold it to. What that is not is a fixed multiple of the byte
+/// count: a single pass is not linear in *time* at these sizes, and row 0 — one
+/// allocation and one memcpy — measures exactly how far off it is. Row 0 scales
+/// **8.6-9.3x** over a 7.7x byte ratio in every run recorded here, the baseline
+/// included, because the masters fits in L2 and the thesis does not.
+///
+/// So the ceiling is stated over row 0's own scaling rather than over the bytes.
+/// Over the bytes it charged this row for the machine's cache hierarchy — slack
+/// while a per-keystroke table rescan dominated, and the binding constraint the
+/// moment that went: `SCALE_BYTES * 1.33` is 10.18x, against 10.3-11.6x measured
+/// over four runs, tight to 4%, with no regression behind it.
+///
+/// Row 2 over row 0 *is* [`DocumentResult::write_copies`], so this reads two
+/// copies figures — which also keeps it on the interleaved estimator instead of a
+/// quotient of medians timed seconds apart. Measured 1.18-1.28; the ceiling sits
+/// ~25% over the highest.
+///
+/// What it catches is work worse than one pass per byte. What it does not catch,
+/// and is not asked to, is a *rebuilt* table: that raises the absolute copies on
+/// both documents and barely moves this ratio — the pre-reshape baseline read
+/// **0.93** here, i.e. below 1. [`WRITE_MAX_COPIES`] is the guard for that.
+const WRITE_MAX_COPIES_SCALING: f64 = 1.6;
 
 /// How many copies of the document the write phase may cost.
 ///
@@ -537,28 +555,38 @@ fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
         row_us(documents, SCALE_FROM, pick).zip(row_us(documents, SCALE_TO, pick))
     };
 
-    for (label, pick, max) in [
-        (
-            "noop upsert",
-            (|d: &DocumentResult| d.noop_upsert_ns) as fn(&DocumentResult) -> f64,
-            NOOP_MAX_SCALING,
-        ),
-        (
-            "write phase",
-            (|d: &DocumentResult| d.write_phase_ns) as fn(&DocumentResult) -> f64,
-            WRITE_MAX_SCALING,
-        ),
-    ] {
-        if let Some((from, to)) = scaling(pick) {
-            let ratio = to / from.max(f64::EPSILON);
-            checks.push((
-                ratio <= max || to <= MIN_ABSOLUTE_US,
-                format!(
-                    "{label}: {SCALE_FROM} -> {SCALE_TO} scaling {ratio:.2}x <= {max:.2}x \
-                     ({SCALE_BYTES:.1}x the bytes) or {to:.1} us <= {MIN_ABSOLUTE_US:.0} us"
-                ),
-            ));
-        }
+    if let Some((from, to)) = scaling(|d| d.noop_upsert_ns) {
+        let ratio = to / from.max(f64::EPSILON);
+        checks.push((
+            ratio <= NOOP_MAX_SCALING || to <= MIN_ABSOLUTE_US,
+            format!(
+                "noop upsert: {SCALE_FROM} -> {SCALE_TO} scaling {ratio:.2}x <= \
+                 {NOOP_MAX_SCALING:.2}x ({SCALE_BYTES:.1}x the bytes) or {to:.1} us <= \
+                 {MIN_ABSOLUTE_US:.0} us"
+            ),
+        ));
+    }
+
+    let copies_of = |name: &str| {
+        documents
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.write_copies)
+    };
+    if let (Some(from), Some(to), Some(to_us)) = (
+        copies_of(SCALE_FROM),
+        copies_of(SCALE_TO),
+        row_us(documents, SCALE_TO, |d| d.write_phase_ns),
+    ) {
+        let ratio = to / from.max(f64::EPSILON);
+        checks.push((
+            ratio <= WRITE_MAX_COPIES_SCALING || to_us <= MIN_ABSOLUTE_US,
+            format!(
+                "write phase: {SCALE_FROM} -> {SCALE_TO} costs {ratio:.2}x the document \
+                 copies ({from:.2} -> {to:.2}) <= {WRITE_MAX_COPIES_SCALING:.2}x \
+                 or {to_us:.1} us <= {MIN_ABSOLUTE_US:.0} us"
+            ),
+        ));
     }
 
     for (name, max) in WRITE_MAX_COPIES {

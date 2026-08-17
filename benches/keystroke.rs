@@ -378,10 +378,13 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
     //
     // This is what makes the write-phase contract machine-independent without
     // being blind. Scaling across document sizes cannot see a regression that is
-    // proportional — Phase 2 added 125 us to the write phase on the thesis and 17
-    // us on the masters, which leaves the scaling ratio almost exactly where it
-    // was — so a gate built only on scaling would have missed the one regression
-    // this row exists to catch. A ratio against a raw copy moves with it.
+    // proportional — Phase 2's +125 us on the thesis and +17 us on the masters
+    // left the scaling ratio almost exactly where it was — so a gate built only
+    // on scaling would miss the shape of regression this row exists to catch. A
+    // ratio against a raw copy moves with it. (That particular 125 us has since
+    // been measured back to a bench-layout artifact rather than a cost — see
+    // TODO.md § Incremental reparse. The argument for row 0 is unaffected; the
+    // example is no longer one.)
     //
     // Row 2 alternates an insert and a delete so every iteration is a genuine text
     // change: a fresh salsa revision, never a memoized no-op.
@@ -493,8 +496,11 @@ const WRITE_MAX_COPIES_SCALING: f64 = 1.6;
 /// How many copies of the document the write phase may cost.
 ///
 /// This is the row Phase 5 exists to cover: with both leaf tiers landed the parse
-/// is cheap, so the write phase is most of what a user waits for, and the 125 us
-/// Phase 2 measured into it stopped being invisible.
+/// is cheap, so the write phase is most of what a user waits for, and anything
+/// measured into it stopped being invisible. (The 125 us that prompted the gate
+/// turned out not to be a cost at all — a bench-layout artifact, checked out in
+/// TODO.md § Incremental reparse. The row still wants a gate; that number is not
+/// the evidence for one.)
 ///
 /// Stated against row 0 rather than against the end-to-end keystroke. The obvious
 /// contract — "the write phase is at most N% of row 3" — is unsound here, and

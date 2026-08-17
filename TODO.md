@@ -1978,6 +1978,12 @@ copies plus a table splice, and the remainder is the parse's own consumers.
     locality effect, and the row it costs is invisible until a tier makes the
     parse cheap. **Phase 5's gate must cover row 2**, which is exactly when this
     stops being invisible.
+
+    *Settled later, and against this reading:* the 125 us is not a cost at all —
+    the chain measures ~50 ns, and the row is bimodal at ~575/~710 us on a mode
+    that trivial bench-side edits flip in either direction. See the closed
+    alloc-locality item below; the small-string `insert` is now a **do not
+    write**.
   - **The `apply_edits` round-trip tests live beside the function**, in
     `src/lsp.rs`'s `mod tests`, not in `tests/lsp.rs` as planned: that file is a
     protocol-transcript harness over `Connection::memory()` and never calls
@@ -2342,15 +2348,54 @@ copies plus a table splice, and the remainder is the parse's own consumers.
     completion, a full resync) reaches the memcmp. Recorded so the "second
     near-full scan per keystroke" is not re-derived.
 
-- [ ] **Nobody has checked Phase 2's alloc-locality inference.** Phase 2
-  measured +125 us on the write phase and attributed it to the bench's tight
-  alloc/free loop losing the base's pristine same-chunk reuse, rather than to
-  anything the server does — explicitly recorded there as "an inference, not a
-  measurement, and the one thing here nobody has verified". Phase 5 was scoped to
-  gate the row, not to settle this, and the gate now exists. Phase 5 also found a
-  second, *independent* allocator artifact in the same benches (the heap pre-warm
-  above), which is reason to think this one is worth an hour rather than reason
-  to assume it is the same effect.
+- [x] **Phase 2's alloc-locality inference, checked.** The reading holds, and the
+  conclusion is stronger than "arguably the bench's artifact": **the 125 us was
+  never a cost, in either build.** The original A/B reproduces exactly today —
+  `f58a9d7` against `3f4c629`, alternating, six runs each, 570-601 us against
+  693-750 us on the thesis — so it was not noise and not that day's machine. It
+  is also not the `Edit`.
+
+  - **The chain costs ~50 ns, flat in the document size.** A/B'd at HEAD against
+    a local `apply_content_changes` that splices identically but pushes only
+    `(start, end)` into a reused vector and stages nothing: cv 543 -> 486 ns,
+    masters 3.09 -> 3.07 us, thesis inside its own run-to-run noise (26.4-27.6 us
+    either way). Tens of nanoseconds is what one 40-byte `Vec`, one one-byte
+    `String`, and one staging lock should cost — and that is the entire
+    difference Phase 2's bisect named.
+  - **The row is bimodal at ~575/~710 us, and which mode a build lands in is
+    decided by incidental heap layout.** Three bench-side edits that cannot
+    change the work measured each moved it, with the library code untouched: one
+    `Vec`-of-256 allocated before the row took **`3f4c629`** *down* to 572-594; a
+    page-fault counter plus an address log took it down again to 566-584; an env
+    read plus a restructured closure tail took **`f58a9d7`** *up* to 694-724,
+    arm difference gone. Each build then reproduces its own mode run after run,
+    which is exactly why the original A/B looked solid.
+  - **The pristine-reuse half is the one that survives.** Give the loop a live
+    allocator set with holes — a 256-slot ring, eight allocations of 32 B-8 KB
+    per iteration, standing in for what a session leaves between keystrokes — and
+    the base's fast mode decays to 594-708 while the branch does not move
+    (701-724 pristine, 704-724 churned). The fast mode is what needs a clean
+    heap; the slow one is what survives contact with a real one.
+  - **It is none of the mechanisms worth reaching for next.** Minor faults run
+    1.1/iteration against 1.5 — half a fault is not 125 us. THP is `madvise` on
+    this machine, so the heap is not hugepage-backed. Padding the environment
+    block 0-2048 bytes moves neither build, so it is heap layout and not stack or
+    env layout. Process-level `perf stat` has the branch retiring *fewer*
+    instructions in fewer cycles for the same wall time, which is the rows being
+    time-budgeted — a dearer iteration just buys fewer of them — and matches
+    Phase 2's own reading that the delta is stalls, not work.
+  - **Every attempt to instrument the row from the inside erased the effect**,
+    which is both the signature of the diagnosis and the reason this needed a
+    bisect across builds rather than a profile.
+  - **Nothing to do, and one thing not to do.** The inline small-string `insert`
+    Phase 2 left on the table would buy ~50 ns; do not write it. And the write
+    row's *absolute* microseconds are comparable across runs of one build, never
+    across builds of the bench — which is what row 0 and the interleaved ratio
+    already exist for. The gate is not exposed: at HEAD the same class of
+    perturbation leaves the thesis at 2.42-2.49 copies against 2.42-2.44 and the
+    masters at 2.63-2.71 against 2.65-2.66, because the row is memcpy-dominated
+    now and a layout mode moves row 0 with it. The bimodality lived in the
+    byte-at-a-time rescan that `LineTable::patch` deleted.
 
 - [ ] **Phase 6: corpus sweep.** Seeded edits over `corpora/` (312 MB, 6205
   files, already pinned) as a two-sided ratchet in the shape of

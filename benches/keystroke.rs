@@ -7,8 +7,12 @@
 //! ratios, not the pipeline. This bench is that missing row: the path from a
 //! `didChange` notification to a parse tree, timed as one thing.
 //!
-//! Three rows per document:
+//! Four rows per document, of which the first is a reference rather than a stage:
 //!
+//! 0. `text copy (reference)` — one allocation and one linear copy of the
+//!    document. Nothing in the pipeline calls this; it is here so the write phase
+//!    has a machine-independent unit to be measured in, since what a splice
+//!    *should* cost is a small number of linear passes.
 //! 1. `upsert, text unchanged` — the staleness guard alone: what a no-op upsert
 //!    costs to prove there is nothing to do. This is the cost the language
 //!    server pays whenever a job re-writes text salsa already has (a disk
@@ -21,9 +25,14 @@
 //!    text-storage designs — `String`, `Arc<str>`, a rope — are actually
 //!    comparable.
 //! 3. `keystroke end-to-end (parse included)` — the same plus `parsed_tree`.
-//!    Badness has no intra-file reparse yet (`AGENTS.md` decision #6: salsa
-//!    first, intra-file later), so row 3 minus row 2 *is* the full-reparse cost,
-//!    and it is the number a future incremental reparse has to beat.
+//!
+//! This bench deliberately reports **no reparse row**. It used to derive one as
+//! row 3 minus row 2, which was a fair proxy while a full parse was 97% of the
+//! keystroke. With both leaf tiers landed it is a difference of two ~800 us
+//! numbers on the thesis: five runs of one binary gave 150, 75, 67 and 30 us, and
+//! one clamped to zero when row 3 came out *below* row 2. `benches/reparse.rs`
+//! times `parser::reparse` directly instead, which is also the only way a case
+//! can assert which tier it reached.
 //!
 //! Each timed iteration alternates inserting and deleting one character, so the
 //! text genuinely changes every round: salsa sees a fresh revision and the
@@ -43,17 +52,59 @@
 //!
 //! Env knobs:
 //!   - `BADNESS_BENCH_DOC` — bench only this doc under `benches/documents/`.
-//!   - `BADNESS_BENCH_SITE` — which keystroke to measure: `word` (the default) or
-//!     `verbatim` (see [`Site`]).
+//!   - `BADNESS_BENCH_SITE` — which keystroke to measure: `word` (the default),
+//!     `verbatim`, or `decline` (see [`Site`]).
 //!   - `BADNESS_BENCH_TARGET_MS` — per-row timing budget (default 500 ms); each
 //!     row auto-calibrates its iteration count to fill it.
 //!   - `BADNESS_BENCH_OUTPUT_JSON` — write a machine-readable report to this
 //!     path (the A/B diff between two builds).
+//!   - `BADNESS_BENCH_ASSERT=1` — check every row against its declared contract
+//!     and exit non-zero on a violation (see [`check_expectations`]).
+//!
+//! # The gate
+//!
+//! ```bash
+//! task bench:keystroke-gate
+//! BADNESS_BENCH_ASSERT=1 cargo bench --bench keystroke
+//! ```
+//!
+//! Absolute microseconds are machine-dependent, so **every check is a ratio
+//! between two numbers from the same run** — how a row scales across an order of
+//! magnitude of document size, and how many copies of the document the write
+//! phase costs. Each is waived below [`MIN_ABSOLUTE_US`], because a ratio on a
+//! sub-microsecond baseline measures noise.
+//!
+//! There is deliberately **no "write phase is N% of the keystroke" check**, which
+//! is the obvious one to reach for. Rows 2 and 3 are separately calibrated loops
+//! and their difference is smaller than the noise on either, so on the thesis row
+//! 2 measures *above* row 3 and the share reads over 100% — the same reason the
+//! derived reparse row was deleted. Row 0 exists so the write phase has something
+//! to be a ratio of that is genuinely nested with it.
+//!
+//! The gate is off by default, so a run that only wants the numbers stays a
+//! measurement and never fails the shell it was typed into.
+//!
+//! # Results
+//!
+//! One dev machine, release, `word` site. Treat the ratios as the finding.
+//!
+//! ```text
+//!                          small     cv     masters      phd
+//!   text copy (ref)         43 ns   75 ns    1.20 us   11.26 us
+//!   noop upsert            137 ns  141 ns     139 ns     142 ns
+//!   write phase           1.38 us 4.80 us   64.35 us  582.44 us
+//!   keystroke end to end  3.64 us 8.27 us   83.32 us  630.34 us
+//! ```
+//!
+//! The write phase costs ~52 copies of the document, where the two linear passes
+//! it needs would be 2-3. The rest is `TextBuffer::new` rebuilding the entire
+//! `LineIndex` on every keystroke. With the parse now cheap, that is the single
+//! largest thing in a keystroke on a large file.
 
 use std::env;
 use std::fs;
 use std::hint::black_box;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,6 +113,10 @@ use badness::lsp::apply_content_changes;
 use badness::text::{PositionEncoding, TextBuffer};
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent};
 use serde::Serialize;
+
+mod sites;
+
+use sites::{DOCUMENTS, Site, check_corpus, check_site_pin, load_document, prepare};
 
 /// The encoding an LSP client negotiates by default, and so the one the live
 /// buffer's [`LineIndex`](badness::text::LineIndex) is built in.
@@ -130,7 +185,7 @@ fn row(name: &str, ns: f64) {
     println!("  {name:<40}{}", format_ns(ns));
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct DocumentResult {
     name: String,
     /// Which keystroke this row measured ([`Site`]). A report that does not say is
@@ -138,132 +193,21 @@ struct DocumentResult {
     site: &'static str,
     size_bytes: usize,
     line_count: usize,
+    /// Row 0: one allocation and one linear copy of the document — the reference
+    /// the write phase is read against, not a stage of the pipeline.
+    text_copy_ns: f64,
     /// Row 1: a no-op upsert (the staleness guard alone).
     noop_upsert_ns: f64,
     /// Row 2: splice + upsert, no parse demanded.
     write_phase_ns: f64,
     /// Row 3: row 2 plus the parse the keystroke triggers.
     end_to_end_ns: f64,
-    /// Row 3 minus row 2: the full reparse, until an intra-file one lands.
-    reparse_ns: f64,
 }
 
 #[derive(Debug, Serialize)]
 struct Report {
     schema_version: u32,
     documents: Vec<DocumentResult>,
-}
-
-/// The first offset at or after `from` that sits strictly inside a word on a line
-/// of plain prose — a place where inserting a letter extends one word and changes
-/// nothing else about the document.
-///
-/// "Two adjacent letters" is not enough on its own: that is also the inside of
-/// `\lesssim`, and at 80% of a real thesis that is exactly what it finds. So the
-/// line has to be free of every character that makes it something other than
-/// prose, which is what keeps the bench measuring the keystroke it claims to.
-///
-/// Falls back to `from` (snapped to a char boundary) when the tail holds no such
-/// line, so a pathological document still benches — it just benches a different
-/// keystroke, which the printed site lets you see.
-fn word_interior_at_or_after(text: &str, from: usize) -> usize {
-    const STRUCTURE: [char; 8] = ['\\', '{', '}', '$', '%', '&', '#', '~'];
-    let mut offset = 0usize;
-    for line in text.split_inclusive('\n') {
-        let line_start = offset;
-        offset += line.len();
-        if offset < from || line.trim().len() < 40 || line.contains(STRUCTURE) {
-            continue;
-        }
-        let bytes = line.as_bytes();
-        if let Some(i) = (1..line.len())
-            .find(|&i| bytes[i - 1].is_ascii_alphabetic() && bytes[i].is_ascii_alphabetic())
-        {
-            return line_start + i;
-        }
-    }
-    let mut at = from.min(text.len());
-    while at < text.len() && !text.is_char_boundary(at) {
-        at += 1;
-    }
-    at
-}
-
-/// Which keystroke the bench measures.
-///
-/// A tier's number is only as trustworthy as its edit site — Phase 3 of the
-/// incremental-reparse work found this bench silently timing a construct the token
-/// tier declines, two runs of the same binary differing 45x. So the site is an
-/// explicit choice, it is printed, and it rides the JSON report.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Site {
-    /// A letter typed into a word of plain prose: the token tier.
-    Word,
-    /// A line typed inside an `lstlisting` body: the protected-body tier, and the
-    /// one keystroke that carries a newline.
-    Verbatim,
-}
-
-impl Site {
-    fn from_env() -> Self {
-        match env::var("BADNESS_BENCH_SITE").as_deref() {
-            Ok("verbatim") => Self::Verbatim,
-            Ok("word") | Err(_) => Self::Word,
-            Ok(other) => panic!("BADNESS_BENCH_SITE={other:?}: expected `word` or `verbatim`"),
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Word => "word",
-            Self::Verbatim => "verbatim",
-        }
-    }
-}
-
-/// One line of the synthetic listing, sized so the block is a few kilobytes — big
-/// enough that relexing it is a real cost, small enough to stay a plausible listing.
-const LISTING_LINE: &str = "    for (int i = 0; i < n; i++) { total += weights[i] * values[i]; }\n";
-const LISTING_LINES: usize = 32;
-
-/// The document the bench actually edits, and the byte offset it edits at.
-///
-/// No document under `benches/documents/` contains a verbatim environment, a
-/// `\verb`, or a `\url`, so the protected-body site has to *inject* its construct.
-/// That makes the `verbatim` numbers comparable across runs but not against the
-/// `word` ones on a different document — which is why the site is printed and
-/// recorded rather than inferred.
-fn prepare(text: &str, site: Site) -> (String, usize) {
-    match site {
-        Site::Word => {
-            let at = word_interior_at_or_after(text, text.len() * 4 / 5);
-            (text.to_owned(), at)
-        }
-        Site::Verbatim => {
-            let anchor = line_start_at_or_after(text, text.len() * 4 / 5);
-            let body: String = LISTING_LINE.repeat(LISTING_LINES);
-            let block =
-                format!("\n\\begin{{lstlisting}}[language=C]\n{body}\\end{{lstlisting}}\n\n");
-            // Halfway down the body, inside a code line rather than at its edge, so
-            // the edit is unambiguously interior to the one `VERBATIM_BODY` leaf.
-            let into_body = "\n\\begin{lstlisting}[language=C]\n".len()
-                + LISTING_LINE.len() * (LISTING_LINES / 2)
-                + LISTING_LINE.len() / 2;
-            let mut out = String::with_capacity(text.len() + block.len());
-            out.push_str(&text[..anchor]);
-            out.push_str(&block);
-            out.push_str(&text[anchor..]);
-            (out, anchor + into_body)
-        }
-    }
-}
-
-/// The start of the first line at or after `from`.
-fn line_start_at_or_after(text: &str, from: usize) -> usize {
-    match text[from.min(text.len())..].find('\n') {
-        Some(rel) => from + rel + 1,
-        None => text.len(),
-    }
 }
 
 fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> DocumentResult {
@@ -298,13 +242,7 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
     let mut live = Arc::new(TextBuffer::new(text, UTF16));
     let (line, character) = live.line_index().position(at);
     let position = Position::new(line, character);
-    // The `word` site types one letter; the `verbatim` site types a whole line, since
-    // a line terminator is the edit the protected-body tier exists to claim and the
-    // token tier refuses outright.
-    let typed = match site {
-        Site::Word => "z",
-        Site::Verbatim => "\n    total = 0;",
-    };
+    let typed = site.typed();
     let insert = vec![TextDocumentContentChangeEvent {
         range: Some(Range::new(position, position)),
         range_length: None,
@@ -336,6 +274,19 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
     let path = PathBuf::from("/bench/keystroke.tex");
     let file = db.upsert_file(&path, handoff(&live));
     black_box(db.parsed_tree(file));
+
+    // Row 0 is a *reference*, not a stage of the pipeline: one allocation and one
+    // linear copy of the document, which is the irreducible per-keystroke cost of
+    // handing salsa an owned text. The write phase is read as a multiple of it.
+    //
+    // This is what makes the write-phase contract machine-independent without
+    // being blind. Scaling across document sizes cannot see a regression that is
+    // proportional — Phase 2 added 125 us to the write phase on the thesis and 17
+    // us on the masters, which leaves the scaling ratio almost exactly where it
+    // was — so a gate built only on scaling would have missed the one regression
+    // this row exists to catch. A ratio against a raw copy moves with it.
+    let copy = time(target, || black_box(Arc::<str>::from(text)));
+    row("text copy (reference)", copy);
 
     let noop = time(target, || black_box(db.upsert_file(&path, handoff(&live))));
     row("upsert, text unchanged", noop);
@@ -377,25 +328,172 @@ fn bench_document(name: &str, text: &str, target: Duration, site: Site) -> Docum
         black_box(db.parsed_tree(file))
     });
     row("keystroke end-to-end (parse included)", end_to_end);
-    row(
-        "  of which reparse (row 3 - row 2)",
-        (end_to_end - write).max(0.0),
-    );
 
     DocumentResult {
         name: name.to_owned(),
         site: site.name(),
         size_bytes: text.len(),
         line_count: text.lines().count(),
+        text_copy_ns: copy,
         noop_upsert_ns: noop,
         write_phase_ns: write,
         end_to_end_ns: end_to_end,
-        reparse_ns: (end_to_end - write).max(0.0),
     }
 }
 
-fn load_document(name: &str) -> Option<String> {
-    fs::read_to_string(Path::new("benches/documents").join(name)).ok()
+/// Ratio checks are waived below this.
+///
+/// A ratio on a sub-microsecond baseline measures noise: on `small.tex` the
+/// write phase is under two microseconds, so a hundred nanoseconds of anything
+/// reads as a 5% regression.
+const MIN_ABSOLUTE_US: f64 = 2.0;
+
+/// The pair every scaling ratio is taken between, an order of magnitude apart.
+const SCALE_FROM: &str = "masters_dissertation.tex";
+const SCALE_TO: &str = "phd_dissertation.tex";
+
+/// `phd_dissertation.tex` over `masters_dissertation.tex`, from the pinned sizes
+/// [`sites::DOCUMENTS`] asserts. Named because both scaling ceilings are stated
+/// as multiples of it rather than as bare numbers — a ceiling that does not say
+/// what shape it expects cannot be read later.
+const SCALE_BYTES: f64 = 730369.0 / 95383.0;
+
+/// Row 1 is the staleness guard alone, which compares an `Arc` pointer and
+/// returns. It must stay **flat** in the document size — that is the row's whole
+/// claim, and the README has asserted it in prose since before there was a gate.
+/// The allowance is for cache effects on the larger buffer, not for growth.
+const NOOP_MAX_SCALING: f64 = 2.5;
+
+/// Row 2 splices bytes and hands salsa an `Arc`, so linear in the document size
+/// is the expected shape. The ceiling is linear plus a third: it fails on a
+/// superlinear regression (a rebuilt index, a second copy) and not on the memcpy
+/// the row exists to measure.
+const WRITE_MAX_SCALING: f64 = SCALE_BYTES * 1.33;
+
+/// How many copies of the document the write phase may cost.
+///
+/// This is the row Phase 5 exists to cover: with both leaf tiers landed the parse
+/// is cheap, so the write phase is most of what a user waits for, and the 125 us
+/// Phase 2 measured into it stopped being invisible.
+///
+/// Stated against row 0 rather than against the end-to-end keystroke. The obvious
+/// contract — "the write phase is at most N% of row 3" — is unsound here, and
+/// unsound for exactly the reason the derived reparse row was deleted: rows 2 and
+/// 3 are separately calibrated loops whose *difference* is smaller than the noise
+/// on either, so on the thesis row 2 measures above row 3 and the share comes out
+/// over 100%. A ratio is only worth asserting between two numbers that are
+/// actually nested, and these are not.
+///
+/// Only `phd_dissertation.tex` carries a ceiling, and the exclusions are the
+/// point rather than an oversight. On `small.tex` and `cv.tex` the write phase is
+/// dominated by fixed costs rather than by the linear passes the reference
+/// measures, so the ratio is both larger and noisier (12-17% run to run).
+/// `masters_dissertation.tex` measured *bimodally* on the machine this was
+/// calibrated on — 65 us and 91 us for the same row — and a ceiling loose enough
+/// to be quiet there would be too loose to catch anything. A guard that has to be
+/// loosened to pass is not a guard; `tests/scaling.rs` omits a case for the same
+/// reason. It is still measured and printed, it just does not gate.
+///
+/// **The ceiling below is calibrated loose and wants tightening on an idle
+/// machine.** The thesis held 49.8-51.7 copies over four runs and then 63.6-64.4
+/// over two more, while its absolute write phase moved 565 -> 734 us; the
+/// calibrating machine was in use, and that spread is what a busy one looks like.
+/// 57 was the honest ceiling for the quiet cluster. Until someone re-runs this
+/// quiet, it sits above the loud one, which catches a doubling but not the ~20%
+/// regression the row exists to watch for.
+///
+/// The residual noise is structural and fixable: row 0 and row 2 are measured
+/// seconds apart, so load drifting between them lands in the ratio. Measuring
+/// them *interleaved*, block by block, would make it as robust as the reparse
+/// bench's ratios, which come from the same moment and hold to under 1%. Filed in
+/// `TODO.md`.
+///
+/// **The measured value is ~52 copies, and that is a finding, not a unit.** Two
+/// linear passes — build the spliced bytes, let the `Arc` copy them — is the
+/// floor for an owned text, so a splice "should" cost 2-3. The rest is
+/// `TextBuffer::new` rebuilding the whole `LineIndex` on every keystroke: a
+/// byte-at-a-time scan for line starts over 730 KB, which is far slower per byte
+/// than the memcpy this is measured against. That is now the single largest thing
+/// in a keystroke, and it is filed in `TODO.md`. **Ratchet these down** when it
+/// lands; they are a ceiling over a known-bad number, not a target.
+const WRITE_MAX_COPIES: [(&str, f64); 1] = [("phd_dissertation.tex", 72.0)];
+
+fn row_us(
+    documents: &[DocumentResult],
+    name: &str,
+    pick: fn(&DocumentResult) -> f64,
+) -> Option<f64> {
+    documents
+        .iter()
+        .find(|d| d.name == name)
+        .map(|d| pick(d) / 1_000.0)
+}
+
+/// Check the measured rows against their contracts, printing every check with its
+/// margin so drift is visible well before it fails.
+///
+/// Returns every failure rather than stopping at the first, so one run says
+/// everything that moved.
+fn check_expectations(documents: &[DocumentResult]) -> Vec<String> {
+    let mut checks: Vec<(bool, String)> = Vec::new();
+
+    println!("\nThresholds");
+    println!("{}", "=".repeat(64));
+
+    let scaling = |pick: fn(&DocumentResult) -> f64| {
+        row_us(documents, SCALE_FROM, pick).zip(row_us(documents, SCALE_TO, pick))
+    };
+
+    for (label, pick, max) in [
+        (
+            "noop upsert",
+            (|d: &DocumentResult| d.noop_upsert_ns) as fn(&DocumentResult) -> f64,
+            NOOP_MAX_SCALING,
+        ),
+        (
+            "write phase",
+            (|d: &DocumentResult| d.write_phase_ns) as fn(&DocumentResult) -> f64,
+            WRITE_MAX_SCALING,
+        ),
+    ] {
+        if let Some((from, to)) = scaling(pick) {
+            let ratio = to / from.max(f64::EPSILON);
+            checks.push((
+                ratio <= max || to <= MIN_ABSOLUTE_US,
+                format!(
+                    "{label}: {SCALE_FROM} -> {SCALE_TO} scaling {ratio:.2}x <= {max:.2}x \
+                     ({SCALE_BYTES:.1}x the bytes) or {to:.1} us <= {MIN_ABSOLUTE_US:.0} us"
+                ),
+            ));
+        }
+    }
+
+    for (name, max) in WRITE_MAX_COPIES {
+        let (Some(write), Some(copy)) = (
+            row_us(documents, name, |d| d.write_phase_ns),
+            row_us(documents, name, |d| d.text_copy_ns),
+        ) else {
+            checks.push((false, format!("{name}: declared a ceiling but never ran")));
+            continue;
+        };
+        let copies = write / copy.max(f64::EPSILON);
+        checks.push((
+            copies <= max || write <= MIN_ABSOLUTE_US,
+            format!(
+                "{name}: write phase is {copies:.2} document copies <= {max:.2} \
+                 or {write:.1} us <= {MIN_ABSOLUTE_US:.0} us"
+            ),
+        ));
+    }
+
+    let mut failures = Vec::new();
+    for (passed, description) in checks {
+        println!("  {} {description}", if passed { "ok  " } else { "FAIL" });
+        if !passed {
+            failures.push(description);
+        }
+    }
+    failures
 }
 
 fn main() {
@@ -408,36 +506,70 @@ fn main() {
             .unwrap_or(500),
     );
 
+    // Off by default, so a run that only wants the numbers stays a measurement and
+    // never fails the shell it was typed into.
+    let assert_mode = matches!(
+        env::var("BADNESS_BENCH_ASSERT").as_deref(),
+        Ok("1") | Ok("true")
+    );
+
     // The same size gradient the formatter bench uses: small.tex is committed
     // (zero-network), the rest come from benches/documents/download.sh and are
     // skipped with a note when absent.
     let site = Site::from_env();
 
-    let names: Vec<String> = match env::var("BADNESS_BENCH_DOC") {
-        Ok(doc) => vec![doc],
-        Err(_) => [
-            "small.tex",
-            "cv.tex",
-            "masters_dissertation.tex",
-            "phd_dissertation.tex",
-        ]
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect(),
+    let single = env::var("BADNESS_BENCH_DOC").ok();
+    if assert_mode && single.is_some() {
+        eprintln!(
+            "BADNESS_BENCH_ASSERT=1 cannot run with BADNESS_BENCH_DOC: every contract is a \
+             ratio between two documents from the same run."
+        );
+        std::process::exit(1);
+    }
+
+    if assert_mode {
+        let missing = check_corpus();
+        if !missing.is_empty() {
+            eprintln!("BADNESS_BENCH_ASSERT=1 needs the pinned corpus:");
+            for entry in &missing {
+                eprintln!("  {entry}");
+            }
+            eprintln!("Run `task bench:download`.");
+            std::process::exit(1);
+        }
+    }
+
+    let names: Vec<String> = match single {
+        Some(doc) => vec![doc],
+        None => DOCUMENTS.iter().map(|d| d.name.to_owned()).collect(),
     };
 
     let mut documents = Vec::new();
+    let mut failures = Vec::new();
     for name in &names {
         match load_document(name) {
-            Some(text) => documents.push(bench_document(name, &text, target, site)),
+            Some(text) => {
+                // Before timing: the site has to be where it claims. A relocated site
+                // measures a different workload at the same name, which is how this
+                // bench once reported a 45x swing between runs of one binary.
+                if assert_mode {
+                    let (prepared, at) = prepare(&text, site);
+                    if let Some(problem) = check_site_pin(name, &prepared, at, site) {
+                        failures.push(problem);
+                    }
+                }
+                documents.push(bench_document(name, &text, target, site));
+            }
             None => println!("\n{name}: not found — run `task bench:download`, skipping"),
         }
     }
 
+    // Written before the verdict: a failing gate is exactly when the numbers are
+    // worth keeping.
     if let Ok(path) = env::var("BADNESS_BENCH_OUTPUT_JSON") {
         let report = Report {
-            schema_version: 2,
-            documents,
+            schema_version: 3,
+            documents: documents.clone(),
         };
         match serde_json::to_string_pretty(&report) {
             Ok(json) => match fs::write(&path, json) {
@@ -446,5 +578,17 @@ fn main() {
             },
             Err(e) => eprintln!("\ncould not serialize report: {e}"),
         }
+    }
+
+    if assert_mode {
+        failures.extend(check_expectations(&documents));
+        if !failures.is_empty() {
+            eprintln!("\n{} contract violation(s):", failures.len());
+            for failure in &failures {
+                eprintln!("  {failure}");
+            }
+            std::process::exit(1);
+        }
+        println!("\nall contracts held");
     }
 }

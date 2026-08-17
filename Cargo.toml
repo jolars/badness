@@ -32,6 +32,11 @@ categories = [
     "parser-implementations",
 ]
 
+# `benches/sites.rs` is a module the bench binaries share, not a bench of its own.
+# Cargo would otherwise auto-discover it as a target, so every bench is declared
+# explicitly below.
+autobenches = false
+
 [lib]
 name = "badness"
 
@@ -132,6 +137,10 @@ harness = false
 
 [[bench]]
 name = "keystroke"
+harness = false
+
+[[bench]]
+name = "reparse"
 harness = false
 
 [profile.release]

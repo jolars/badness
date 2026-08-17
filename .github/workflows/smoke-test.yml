@@ -456,6 +456,50 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           existing_labels="$(gh label list --repo "$GITHUB_REPOSITORY" --limit 500 --json name --jq '.[].name')"
 
+          # GitHub rejects issue and comment bodies over 65536 characters. A
+          # report line is a whole formatted LaTeX line, so a 120-line excerpt
+          # can be hundreds of kilobytes; bound it by bytes and width too. Both
+          # awk passes run under LC_ALL=C so `length` counts bytes and a clamp
+          # never lands mid-character.
+          MAX_EXCERPT_BYTES=20000
+          MAX_REPORT_LINES=120
+          MAX_REPORT_LINE_BYTES=1000
+          MAX_BODY_BYTES=60000
+
+          report_excerpt_of() {
+            LC_ALL=C awk \
+              -v max_bytes="$MAX_EXCERPT_BYTES" \
+              -v max_lines="$MAX_REPORT_LINES" \
+              -v max_width="$MAX_REPORT_LINE_BYTES" '
+              NR > max_lines { print "[report truncated: line limit reached]"; exit }
+              {
+                line = $0
+                if (length(line) > max_width) {
+                  line = substr(line, 1, max_width) " [line truncated]"
+                }
+                total += length(line) + 1
+                if (total > max_bytes) {
+                  print "[report truncated: size limit reached]"
+                  exit
+                }
+                print line
+              }
+            ' "$1"
+          }
+
+          clamp_body() {
+            local file="$1"
+            if [ "$(wc -c < "$file")" -le "$MAX_BODY_BYTES" ]; then
+              return 0
+            fi
+            local clamped="$file.clamped"
+            LC_ALL=C awk -v max_bytes="$MAX_BODY_BYTES" '
+              { total += length($0) + 1; if (total > max_bytes) exit; print }
+            ' "$file" > "$clamped"
+            printf '\n[Body truncated. See artifact `debug-format-repo-scan-results` for full logs.]\n' >> "$clamped"
+            mv "$clamped" "$file"
+          }
+
           has_label() {
             local target="$1"
             grep -Fxq "$target" <<< "$existing_labels"
@@ -502,7 +546,7 @@ jobs:
             report_excerpt=""
             sample_diff_line=""
             if [ -n "$sample_report_path" ] && [ -f "$sample_report_path" ]; then
-              report_excerpt="$(sed -n '1,120p' "$sample_report_path")"
+              report_excerpt="$(report_excerpt_of "$sample_report_path")"
               sample_diff_line="$(grep -Eo 'Approx\. diff start line: [0-9]+' "$sample_report_path" | head -n 1 | awk '{print $NF}' || true)"
             fi
 
@@ -570,6 +614,7 @@ jobs:
                   echo "</details>"
                 fi
               } > "$comment_file"
+              clamp_body "$comment_file"
               gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file "$comment_file"
             else
               body_file="$RUNNER_TEMP/badness-issue-body.md"
@@ -639,6 +684,7 @@ jobs:
                 echo ""
                 echo "See artifact \`debug-format-repo-scan-results\` for full logs."
               } > "$body_file"
+              clamp_body "$body_file"
 
               ensure_label "ci" "0366D6" "Continuous integration"
               ensure_label "debug-format" "5319E7" "Badness debug format scan regressions"

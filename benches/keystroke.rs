@@ -193,7 +193,7 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     let write = time(target, || {
         flip = !flip;
         let batch = if flip { insert.clone() } else { delete.clone() };
-        apply_content_changes(&mut live, batch);
+        let _edits = apply_content_changes(&mut live, batch);
         db.upsert_file(&path, handoff(&live))
     });
     row("splice + upsert (write phase)", write);
@@ -206,7 +206,7 @@ fn bench_document(name: &str, text: &str, target: Duration) -> DocumentResult {
     let end_to_end = time(target, || {
         flip = !flip;
         let batch = if flip { insert.clone() } else { delete.clone() };
-        apply_content_changes(&mut live, batch);
+        let _edits = apply_content_changes(&mut live, batch);
         let file = db.upsert_file(&path, handoff(&live));
         black_box(db.parsed_tree(file))
     });

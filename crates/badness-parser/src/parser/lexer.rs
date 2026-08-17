@@ -2398,4 +2398,139 @@ mod tests {
         );
         assert_lossless("\\MakeShortVerb{\\|} a|b\nc");
     }
+
+    /// A raw capture's *content* changes nothing about how the rest of the file
+    /// lexes.
+    ///
+    /// This is a lexer property stated as one, but the reason it is pinned lives in
+    /// `parser::reparse::protected`: that tier splices a new body into an existing
+    /// tree without re-lexing anything after it, which is sound only because the
+    /// lexer leaves a raw capture in the state it entered. Structurally it holds
+    /// because `lex_verbatim_environment` / `lex_verbatim_command` /
+    /// [`Lexer::try_short_verb`] push straight to `out`, so the captured bytes never
+    /// reach [`Lexer::apply_toggles`], [`next_pending`], or
+    /// [`Lexer::sync_brace_depth`] — but that is an argument about code, and this is
+    /// the test that would notice it stop being true.
+    ///
+    /// The suffix is chosen to be sensitive to every state variable the lexer
+    /// carries: `@` in a control word (`at_letter`), `_`/`:` (`expl_syntax`), a `|`
+    /// (`short_verbs`), a `` ` `` after a `\char` (`brace_depth`), and a `\left`
+    /// delimiter (`pending`).
+    #[test]
+    fn raw_capture_content_does_not_change_later_lexing() {
+        /// Bodies that stay captured. Each would toggle a lexer mode or open a
+        /// group if it were read as code rather than swallowed as data.
+        const ENV_BODIES: &[&str] = &[
+            "",
+            "plain text",
+            "\\makeatletter",
+            "\\ExplSyntaxOn",
+            "\\MakeShortVerb{\\|}",
+            "{{{",
+            "}}}",
+            "% not a comment",
+            "$ & # ^ _ ~",
+            "\\end{verbatimx}",
+            "\\begin{verbatim}",
+            "\\char`{",
+            "\\left(",
+        ];
+        /// The same, restricted to what every inline form can hold: no newline, no
+        /// `+` (the delimiter), and braces balanced (`\url`'s scan needs them).
+        const INLINE_BODIES: &[&str] = &[
+            "",
+            "x",
+            "\\makeatletter",
+            "\\ExplSyntaxOn",
+            "{}",
+            "$ & # ^ _ ~",
+            "% not a comment",
+            "\\char`",
+        ];
+        const SUFFIX: &str = "after \\my@cmd \\l_tmpa_tl |bar| \\char`{ \\left( x\n";
+
+        for (prefix, open, close, bodies) in [
+            (
+                "before x\n",
+                "\\begin{verbatim}\n",
+                "\n\\end{verbatim}\n",
+                ENV_BODIES,
+            ),
+            (
+                "before x\n",
+                "\\begin{lstlisting}[a=b]\n",
+                "\n\\end{lstlisting}\n",
+                ENV_BODIES,
+            ),
+            ("before x ", "\\verb+", "+ ", INLINE_BODIES),
+            ("before x ", "\\url{", "} ", INLINE_BODIES),
+            ("before x ", "\\lstinline+", "+ ", INLINE_BODIES),
+        ] {
+            let mut expected: Option<Vec<(SyntaxKind, String)>> = None;
+            for body in bodies {
+                let region = format!("{open}{body}{close}");
+                let doc = format!("{prefix}{region}{SUFFIX}");
+                assert_lossless(&doc);
+
+                // The premise: the region really did capture. A body that *breaks*
+                // its capture is a different case — see the test below.
+                let toks = lex(&doc);
+                assert!(
+                    toks.iter()
+                        .any(|t| matches!(t.kind, SyntaxKind::VERB | SyntaxKind::VERBATIM_BODY))
+                        || body.is_empty(),
+                    "no raw capture formed, so this case proves nothing\n  \
+                     region: {region:?}",
+                );
+
+                let from = prefix.len() + region.len();
+                let mut off = 0usize;
+                let got: Vec<(SyntaxKind, String)> = toks
+                    .into_iter()
+                    .filter(|t| {
+                        let start = off;
+                        off += t.text.len();
+                        start >= from
+                    })
+                    .map(|t| (t.kind, t.text.to_string()))
+                    .collect();
+
+                match &expected {
+                    None => expected = Some(got),
+                    Some(want) => assert_eq!(
+                        &got, want,
+                        "a raw body changed how the text after it lexes\n  \
+                         region: {region:?}",
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The other half, and the reason the reparse tier re-lexes a whole fragment
+    /// rather than trusting the body alone: a body that *breaks* its capture does
+    /// change how the rest of the file lexes.
+    ///
+    /// `\url{{}` leaves `braced_verb_content_len` unbalanced, so no `VERB` forms and
+    /// the braces are ordinary structure — which ratchets `brace_depth` and flips
+    /// the char-constant reading of a later `` \char`{ ``. Nothing about the body's
+    /// own bytes says that; only re-lexing the construct does.
+    #[test]
+    fn a_body_that_breaks_its_capture_changes_later_lexing() {
+        let captured = lex("\\url{x} \\char`{");
+        assert!(captured.iter().any(|t| t.kind == SyntaxKind::VERB));
+        assert!(
+            captured
+                .iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "`{")
+        );
+
+        let broken = lex("\\url{{} \\char`{");
+        assert!(!broken.iter().any(|t| t.kind == SyntaxKind::VERB));
+        assert!(
+            broken
+                .iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "`")
+        );
+    }
 }

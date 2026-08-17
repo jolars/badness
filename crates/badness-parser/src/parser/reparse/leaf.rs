@@ -148,15 +148,28 @@ fn head_reads_following_text(text: &str) -> bool {
 ///
 /// The enumeration is the whole point, and `tests::the_text_read_survey_is_complete`
 /// pins that it is still exhaustive. Each arm names the site it stands for.
+///
+/// Dispatched on the leaf's **kind**, not on the tier that spliced it: what the
+/// grammar may read is a property of the token. Each kind gets the argument that
+/// actually covers it, and a kind nobody has classified is refused rather than
+/// waved through — the alternative is a future tier inheriting a pass it never
+/// asked for.
 pub(super) fn text_reads_are_inert(kind: SyntaxKind, old: &str, new: &str, ctx: Context) -> bool {
-    // `COMMENT` and `WHITESPACE` are trivia. Every text comparison in the grammar
-    // runs on a token it has already established is non-trivia — `peek_meaningful`
-    // and friends skip trivia before reading — so a trivia leaf's text reaches no
-    // decision at all.
-    if kind != SyntaxKind::WORD {
-        return true;
+    match kind {
+        // Trivia. Every text comparison in the grammar runs on a token it has
+        // already established is non-trivia — `peek_meaningful` and friends skip
+        // trivia before reading — so a trivia leaf's text reaches no decision at
+        // all.
+        SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => true,
+        SyntaxKind::WORD => word_reads_are_inert(old, new, ctx),
+        SyntaxKind::VERB | SyntaxKind::VERBATIM_BODY => raw_capture_reads_are_inert(old, new),
+        _ => false,
     }
+}
 
+/// [`text_reads_are_inert`] for a `WORD`, which the grammar branches on in four
+/// places.
+fn word_reads_are_inert(old: &str, new: &str, ctx: Context) -> bool {
     // `parse_block`'s statement run loop: a top-level `;`-carrying `WORD` ends a
     // picture-body statement. Only *whether* the token carries one is read, so a
     // word that gains or loses one is what matters, not where.
@@ -195,6 +208,31 @@ pub(super) fn text_reads_are_inert(kind: SyntaxKind, old: &str, new: &str, ctx: 
     true
 }
 
+/// [`text_reads_are_inert`] for the raw-capture kinds — a `VERB` or a
+/// `VERBATIM_BODY`, which the protected-body tier splices.
+///
+/// A raw capture is opaque to the grammar in every way but one. `attach_arguments`
+/// asks, through [`peek_meaningful_text`], whether an abutting `VERB`'s text starts
+/// with a backslash: a *standalone* `\verb|…|` is self-contained and must not become
+/// the argument of the command before it, while a `\lstinline`'s bare `|…|` must.
+/// So the answer to that question has to survive the splice.
+///
+/// The read is worth spelling out because it is the one place a raw capture is
+/// visible where a `WORD` is not. `peek_meaningful_text` skips *trivia* and returns
+/// whatever it lands on; the `WORD` arm above can dismiss it (a `WORD` in a tree
+/// never starts with a backslash — that lexes as a control sequence), and a raw
+/// capture cannot.
+///
+/// Everything else the grammar does with these tokens reads their *kind*. The
+/// remaining text reads are gated to a control sequence, gated to a `WORD`, or
+/// banned by position in [`context_admits`]; the survey below carries the per-site
+/// verdicts.
+///
+/// [`peek_meaningful_text`]: crate::parser::grammar
+fn raw_capture_reads_are_inert(old: &str, new: &str) -> bool {
+    old.starts_with('\\') == new.starts_with('\\')
+}
+
 /// Diagnostics for the spliced tree: keep the prefix, shift the suffix, refuse any
 /// error that touches the leaf.
 ///
@@ -231,22 +269,38 @@ pub(super) fn shifted_errors(
 
 #[cfg(test)]
 mod tests {
+    use crate::syntax::SyntaxKind;
+
+    use super::text_reads_are_inert;
+
+    /// The surroundings a text guard is asked about when the position bans have
+    /// already passed. Spelled out rather than `use`d, because [`Verdict::Context`]
+    /// below would shadow the type.
+    fn ctx() -> super::Context {
+        super::Context { in_math: false }
+    }
+
     /// Why a text-reading site in the grammar cannot see a leaf a tier splices.
     ///
     /// The verdicts are the point of the survey below: a bare list of matched lines
     /// would prove the scan still runs, but not that anyone read what it found.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Verdict {
-        /// Kind-gated to `CONTROL_WORD`/`CONTROL_SYMBOL`, or reached only through a
-        /// `strip_prefix('\\')` that a `WORD`/`WHITESPACE`/`COMMENT` never survives.
-        /// No tier splices those kinds.
+        /// Kind-gated to `CONTROL_WORD`/`CONTROL_SYMBOL`. No tier splices those
+        /// kinds, so the read cannot see a spliced leaf at all.
+        ///
+        /// Every `strip_prefix('\\')` in the grammar sits behind such a gate, which
+        /// is load-bearing now that the protected-body tier splices a `VERB`: a
+        /// standalone `\verb|…|` *does* start with a backslash, so "no spliceable
+        /// leaf survives the strip" would no longer be a reason.
         ControlSequence,
         /// The definition of a text accessor, not a decision that branches on one.
         Accessor,
         /// Reads a length to advance an offset; the *content* reaches no decision.
         Offsets,
         /// A real read of a spliceable leaf's text, neutralized by a named guard in
-        /// [`text_reads_are_inert`].
+        /// [`text_reads_are_inert`]. A guard that is itself a kind gate says so:
+        /// `WORD`-only reads are out of the protected-body tier's reach.
         Guarded(&'static str),
         /// A real read, neutralized by a named ban in [`context_admits`] — the leaf
         /// can never be in a position where the read happens.
@@ -260,6 +314,12 @@ mod tests {
     /// set of matched lines is exactly the set of keys here. A new text read is
     /// therefore a *failing test* naming the line nobody classified, rather than a
     /// silent hole in a tier's soundness argument.
+    ///
+    /// A verdict has to hold for **every** kind some tier splices: the trivia kinds
+    /// and `WORD` (the token tier), and the raw captures `VERB` and `VERBATIM_BODY`
+    /// (the protected-body tier). Where a verdict rests on a kind gate rather than
+    /// on the guard's text test, it names the gate — those are the entries a future
+    /// tier admitting a new kind has to re-read.
     const TEXT_READS: &[(&str, Verdict)] = &[
         (
             "&& P::MATH_ANCHOR.anchors(t.text.as_str()) =>",
@@ -267,7 +327,7 @@ mod tests {
         ),
         (
             "&& let Some(pieces) = split_math_word(self.text())",
-            Guarded("the math operator split, gated on `Context::in_math`"),
+            Guarded("the math operator split, gated on `Context::in_math` and on `WORD`"),
         ),
         ("&& self.tokens[i].text == END_CMD", ControlSequence),
         (".map(|t| t.text.as_str())", Accessor),
@@ -316,7 +376,7 @@ mod tests {
         ),
         (
             r#"if self.kind() == Some(SyntaxKind::WORD) && self.text() == "*" {"#,
-            Guarded("the lone-`*` ban"),
+            Guarded("the lone-`*` ban, itself gated on `WORD`"),
         ),
         (
             "if self.tokens.get(idx).is_some_and(|t| t.text == BEGIN_CMD) {",
@@ -324,7 +384,7 @@ mod tests {
         ),
         (
             "if self.tokens.get(self.pos).map(|t| (t.kind, t.text.as_str()))",
-            Guarded("the lone-`*` ban (`at_star_variant_marker`)"),
+            Guarded("the lone-`*` ban (`at_star_variant_marker`), gated on `WORD`"),
         ),
         ("if t.text.as_str() == RIGHT_CMD {", ControlSequence),
         (
@@ -357,7 +417,10 @@ mod tests {
         ("off += t.text.len();", Offsets),
         (
             "return Some(t.text.as_str());",
-            Guarded("the leading-backslash ban (`peek_meaningful_text`)"),
+            Guarded(
+                "the leading-backslash ban (`peek_meaningful_text`) — a `WORD` may not \
+             gain one, and a raw capture may not gain or lose one",
+            ),
         ),
         (
             "self.in_def_body = saved || is_definition_body_command(self.text());",
@@ -369,7 +432,7 @@ mod tests {
         ),
         (
             r#"self.kind() == Some(SyntaxKind::WORD) && self.text().contains(';');"#,
-            Guarded("the `;` presence ban"),
+            Guarded("the `;` presence ban, gated on `WORD`"),
         ),
         (
             "self.tokens[idx].text == BEGIN_CMD && self.env_name_follows(idx)",
@@ -501,5 +564,53 @@ mod tests {
         assert!(text_reads("self.text_bracket_batch.clear();").is_empty());
         assert!(text_reads("// t.text == BEGIN_CMD").is_empty());
         assert_eq!(text_reads("if t.text == BEGIN_CMD {").len(), 1);
+    }
+
+    /// A kind nobody has classified must be refused, not waved through.
+    ///
+    /// The dispatch is exactly where a future tier widens, and a `_ => true` arm
+    /// there would hand it the trivia argument for a kind the trivia argument does
+    /// not cover — which is the mistake the `VERB`/`VERBATIM_BODY` admission had to
+    /// undo.
+    #[test]
+    fn an_unclassified_kind_is_refused() {
+        let ctx = ctx();
+        assert!(!text_reads_are_inert(
+            SyntaxKind::CONTROL_WORD,
+            "\\a",
+            "\\ab",
+            ctx
+        ));
+        assert!(!text_reads_are_inert(SyntaxKind::L_BRACE, "{", "{", ctx));
+    }
+
+    /// The one grammar read a raw capture can reach: `attach_arguments`
+    /// distinguishes a standalone `\verb|…|` from a `\lstinline`'s bare `|…|` by the
+    /// leading backslash, so a splice may not move a token across that line.
+    #[test]
+    fn a_raw_capture_may_not_gain_or_lose_its_leading_backslash() {
+        let ctx = ctx();
+        for kind in [SyntaxKind::VERB, SyntaxKind::VERBATIM_BODY] {
+            assert!(text_reads_are_inert(kind, "|a|", "|ab|", ctx));
+            assert!(text_reads_are_inert(kind, "\\verb|a|", "\\verb|ab|", ctx));
+            assert!(!text_reads_are_inert(kind, "|a|", "\\a|", ctx));
+            assert!(!text_reads_are_inert(kind, "\\verb|a|", "verb|a|", ctx));
+        }
+    }
+
+    /// The `WORD` guards are not the raw-capture guards, and admitting the second
+    /// must not have loosened the first. A `;` and a lone `*` still stop a `WORD`
+    /// and are irrelevant to a body that is opaque to the grammar.
+    #[test]
+    fn the_word_guards_did_not_follow_the_raw_captures() {
+        let ctx = ctx();
+        assert!(!text_reads_are_inert(SyntaxKind::WORD, "a", "a;", ctx));
+        assert!(!text_reads_are_inert(SyntaxKind::WORD, "*", "**", ctx));
+        assert!(text_reads_are_inert(
+            SyntaxKind::VERBATIM_BODY,
+            "a",
+            "a; *",
+            ctx
+        ));
     }
 }

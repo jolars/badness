@@ -1808,9 +1808,14 @@ leave a phase half-landed: partial work is noted in the status line with the exa
 next step. The deviation bullets are the most valuable thing here — they are where
 the plan was wrong.
 
-**Current status / next step:** Phase 1 in progress (see its box).
+**Current status / next step:** Phase 1 done. The infrastructure, both oracles, and
+the side channel are in; no tier is implemented, so every keystroke still
+full-parses and nothing has changed for anyone. Next is **Phase 2** (precise LSP
+edits), whose entry criteria are met: it is the last piece of plumbing before a tier
+can measure anything, and doing it before Phase 3 is what keeps a tier from ever
+being benchmarked against a whole-text diff.
 
-- [ ] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
+- [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
   `reparse` returns `None` for every edit, so every keystroke still full-parses
   and `task bench:keystroke` must not move. New
   `crates/badness-parser/src/parser/reparse.rs` carrying `Edit` /
@@ -1846,6 +1851,39 @@ the plan was wrong.
   has a single error source (`grammar::parse`), so fatou's five-stream
   `DIAGNOSTIC_STREAMS` machinery is not needed — but the ordering has never been
   asserted, and a splice is unsound without it.
+
+  Landed with four deviations, each a decision a later phase inherits.
+
+  - **No whole-text `diff_edit` in `parsed_document`, at all.** fatou calls it as
+    the fallback when the staged chain fails, and its own TODO then records the
+    cost as an open problem (~200 us of a ~500 us keystroke at 1 MB — more than
+    the tier it feeds). Skipping it outright loses nothing real: the shapes it
+    covers are a disk reload and a whole-buffer replace, both ~100% windows that a
+    cost guard declines anyway. `diff_edit` stays implemented and tested for
+    benches and for callers outside the query. **Consequence for Phase 2:** the
+    staged chain is the *only* incremental input, so a tier is dead until the
+    edits are plumbed, which is why Phase 2 comes before Phase 3.
+  - **The oracle has a single exit.** Rather than calling the assert at each
+    tier's return site (fatou's shape), every tier returns through one `finish`,
+    which carries both the debug oracle and the every-build length check. A tier
+    that forgets to verify is then not expressible, so it is not a thing review
+    has to catch.
+  - **`parse_with_declarations_resolved` is new API.** The scanned `ParseCtx` was
+    computed and dropped; a tier that relexes a fragment must use the same one, or
+    a `\newcommand` the scan found makes the fragment's tokens disagree with the
+    tree's. Free — both passes compute it anyway.
+  - **`ReparseTier` has three variants, not fatou's two.** The protected-body tier
+    (Phase 4) is split from the plain-leaf tier because in LaTeX they are separate
+    proofs over separate node kinds, where fatou's `STRING_CONTENT` path is a
+    branch inside its token tier.
+
+  Two things measured rather than assumed. The keystroke bench is unchanged:
+  alternating A/B against `main` on `phd_dissertation.tex` gives main 27.3/28.5 ms
+  and the branch 28.5/28.3 ms, overlapping ranges. (A first, non-alternating run
+  showed the branch 16% *faster*, which is not possible — the side channel only
+  adds work — and was machine warm-up; do not trust a bench run in one direction
+  only.) And `task gate-corpora:check` matches all eight baselines exactly, which
+  is 6205 files through the formatter and linter with identical results.
 
 - [ ] **Phase 2: precise LSP edits.** `apply_content_changes` already computes
   `(start, end, insert)` and throws it away; return `Option<Vec<Edit>>` instead,

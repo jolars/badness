@@ -7679,6 +7679,87 @@ mod tests {
         }
     }
 
+    /// An edit that lands *on* a `\r\n` is where a patched line table is most
+    /// likely to go wrong, because the two bytes are one terminator and the edit
+    /// reads across the seam: deleting the `\n` leaves a bare `\r` that still
+    /// breaks, and both directions change the line count without either byte
+    /// moving. `TODO.md` records panache losing this whole feature on
+    /// Windows-authored files, so it is worth its own case rather than trusting
+    /// the unit oracle.
+    ///
+    /// Every test in this module is a patch oracle too — tests build in debug, so
+    /// `with_replacement`'s `debug_assert` rescans on each splice — but only this
+    /// one puts a CRLF under it.
+    #[test]
+    fn apply_content_changes_edits_a_crlf_terminator() {
+        // Deleting a whole `\r\n` joins two lines. The pair can only be addressed
+        // as a whole: column 5 is the end of the visible line and `(1, 0)` is the
+        // start of the next, so there is no position *between* the `\r` and the
+        // `\n` — which is what `offset_at` promises and why the seam always moves
+        // as a unit from the client's side.
+        let (text, edits) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 5), (1, 0), "")],
+        );
+        assert_eq!(text, "alphabeta\r\n");
+        assert_eq!(
+            edits,
+            Some(vec![Edit {
+                range: 5..7,
+                insert: String::new(),
+            }])
+        );
+
+        // An insert just before the `\r` leaves the terminator whole.
+        let (text, _) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 5), (0, 5), "X")],
+        );
+        assert_eq!(text, "alphaX\r\nbeta\r\n");
+
+        // An inserted `\r` in the same place does not: it breaks on its own, so
+        // the document gains a line without either byte of the original pair
+        // moving. This is the shape a table carrying its boundary verdict across
+        // an edit gets wrong.
+        let (text, _) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 5), (0, 5), "\r")],
+        );
+        assert_eq!(text, "alpha\r\r\nbeta\r\n");
+
+        // A second change resolving against the first: line 1 is only reachable
+        // if the patched table shifted, so this fails loudly on a stale one.
+        let (text, _) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![
+                ranged((0, 5), (0, 5), "\r\nmid"),
+                ranged((2, 0), (2, 4), "BETA"),
+            ],
+        );
+        assert_eq!(text, "alpha\r\nmid\r\nBETA\r\n");
+    }
+
+    /// An edit beside an astral char that also adds a line: the wide-line flags
+    /// have to splice *and* the joined lines have to be re-derived, together. The
+    /// positions in the second change are only meaningful if both happened.
+    #[test]
+    fn apply_content_changes_edits_beside_a_wide_char() {
+        let (text, _) = assert_chain_round_trips(
+            "a𝕏b\nplain\n",
+            PositionEncoding::Utf16,
+            vec![
+                // After `a𝕏` — one UTF-16 unit for `a`, two for the astral char.
+                ranged((0, 3), (0, 3), "\nnew"),
+                ranged((2, 0), (2, 5), "PLAIN"),
+            ],
+        );
+        assert_eq!(text, "a𝕏\nnewb\nPLAIN\n");
+    }
+
     #[test]
     fn editor_settings_namespaced_and_bare() {
         let bare = serde_json::json!({ "lineWidth": 100, "indentWidth": 4 });

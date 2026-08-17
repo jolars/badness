@@ -84,19 +84,57 @@ impl TextBuffer {
     /// The buffer that results from replacing the bytes in `range` with
     /// `insert` — the `didChange` splice.
     ///
+    /// The text is rebuilt around the splice, which is the one linear cost an
+    /// edit pays and the floor for an `Arc<str>`: two copies, since it cannot
+    /// adopt the `String`'s allocation. The *table* is patched rather than
+    /// rescanned, so a keystroke costs a memmove and an add per line after the
+    /// edit instead of a pass over the document.
+    ///
+    /// Patched only when this buffer already has a table, so a document nobody
+    /// has asked a positional question about still never pays for one. That
+    /// makes the reuse structural rather than cached: on the keystroke path the
+    /// table is always there, because
+    /// [`apply_content_changes`](crate::lsp::apply_content_changes) resolves the
+    /// change's range through [`line_index`](Self::line_index) before splicing.
+    /// Nothing has to *validate* a table against the text it describes, the way
+    /// a side cache keyed by document would — the pair travels together.
+    ///
     /// Panics on a reversed range, one that is out of bounds, or one off a char
     /// boundary, as [`String::replace_range`] does.
     pub fn with_replacement(&self, range: Range<usize>, insert: &str) -> Self {
         // Slicing the removed region up front is what reproduces
         // `String::replace_range`'s panics: the arithmetic below cannot stand in
         // for it, since a reversed range measures zero and would silently
-        // duplicate `end..start` while an out-of-bounds one underflows.
+        // duplicate `end..start` while an out-of-bounds one underflows. It also
+        // has to happen before the table is patched, so a bad range can never
+        // leave a patched table over unspliced text.
         let removed = self.text[range.clone()].len();
         let mut new = String::with_capacity(self.text.len() - removed + insert.len());
         new.push_str(&self.text[..range.start]);
         new.push_str(insert);
         new.push_str(&self.text[range.end..]);
-        Self::new(new, self.encoding)
+        let text: Arc<str> = Arc::from(new);
+
+        let table = OnceLock::new();
+        if let Some(current) = self.table.get() {
+            let mut patched = current.clone();
+            patched.patch(range, insert.len(), &text);
+            // The invariant the patch upholds: the tables are always exactly what
+            // a rescan would produce. Debug-only, being linear in the document —
+            // which is the cost the patch exists to avoid — so every test in the
+            // suite that edits a buffer doubles as an oracle for it, and the
+            // keystroke gate must never be run in debug.
+            debug_assert!(
+                patched == LineTable::new(&text),
+                "the patched line table drifted from the text it indexes"
+            );
+            let _ = table.set(patched);
+        }
+        Self {
+            text,
+            encoding: self.encoding,
+            table,
+        }
     }
 }
 
@@ -152,6 +190,54 @@ mod tests {
         assert_eq!(after.text(), "ab\nxy\ncd");
         assert!(!Arc::ptr_eq(&handle, &after.text_arc()));
         assert_eq!(after.line_index().line_start(1), 3);
+    }
+
+    /// The keystroke path's whole claim: the edited buffer arrives with a table
+    /// already, patched off the one before it, so no rescan happens. Nothing a
+    /// caller can observe changes when this regresses — the next query just
+    /// rebuilds — so it is asserted on the `OnceLock` directly.
+    #[test]
+    fn an_edit_patches_the_table_onto_the_new_buffer() {
+        let before = buffer("alpha\nbeta\ngamma\n");
+        // What `apply_content_changes` does before splicing, and so what makes
+        // the table present.
+        assert_eq!(before.line_index().offset_at(1, 0), 6);
+
+        let after = before.with_replacement(6..6, "x\ny\n");
+        assert!(
+            after.table.get().is_some(),
+            "the edited buffer must arrive with a table, not rebuild one"
+        );
+        assert_eq!(after.text(), "alpha\nx\ny\nbeta\ngamma\n");
+        // The patched table has to answer for the lines the edit created, not
+        // merely exist.
+        assert_eq!(after.line_index().line_start(3), 10);
+        assert_eq!(after.line_index().offset_at(4, 2), 17);
+    }
+
+    /// The other direction, which is what keeps the patch from costing a scan on
+    /// a document nobody asks a positional question about: no table in, no table
+    /// out.
+    #[test]
+    fn an_edit_to_an_unindexed_buffer_builds_no_table() {
+        let before = buffer("alpha\nbeta\n");
+        let after = before.with_replacement(0..0, "x");
+        assert!(after.table.get().is_none());
+        assert_eq!(after.text(), "xalpha\nbeta\n");
+    }
+
+    /// A `didChange` batch chains buffers, so the second edit patches a table
+    /// that is itself patched. The `debug_assert` inside `with_replacement` is
+    /// what checks each step; this pins that the chain happens at all.
+    #[test]
+    fn a_chain_of_edits_keeps_patching() {
+        let mut buf = buffer("one\ntwo\n");
+        assert_eq!(buf.line_index().line_start(1), 4);
+        for insert in ["\r\n", "x", "\r"] {
+            buf = buf.with_replacement(4..4, insert);
+            assert!(buf.table.get().is_some());
+        }
+        assert_eq!(buf.text(), "one\n\rx\r\ntwo\n");
     }
 
     /// A malformed range must panic where [`String::replace_range`] would.

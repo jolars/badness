@@ -200,7 +200,7 @@ The output of this skill *is* a new layout rule, so the fixture is only half the
 artifact. Before committing, write the rule down where the next session will meet
 it — AGENTS.md's own upkeep rule, applied to what you just landed:
 
-- **`.claude/rules/formatter.md`** — a bullet whenever the rule is a directive
+- **`AGENTS.md`** — a bullet whenever the rule is a directive
   someone could violate later ("never route X through Y", "keep Z structural").
   Terse: the rule, the one clause that keeps it from looking arbitrary, and the
   function name that carries it. This is the common case and the easiest to skip.

@@ -114,7 +114,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   - The **gate machinery** (`WalkKey`, `GateBatch`, `VerdictSink`, the policy
     vocabulary, `trait GatePolicy`, and the nine gate policies), ~805 lines.
     Postdates the original audit note. It drags the `scan_work` linearity
-    tests along, so `.claude/rules/parser.md` ("pinned linear by the tests in
+    tests along, so `AGENTS.md` ("pinned linear by the tests in
     `grammar.rs`") needs a matching one-word update.
 
   The rest of the hygiene item is done: the shadow counters, the DOC_COMMENT
@@ -1726,7 +1726,7 @@ near-mechanical ports, the third is a project.
   is registered exactly once (and every registered slug exists on disk).
 
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
-  ongoing). Skill: `.claude/skills/formatter-fixture/`. The corpus is read as a
+  ongoing). Skill: `.agents/skills/formatter-fixture/`. The corpus is read as a
   coverage map — which constructs occur and in what shapes — and **latexindent
   itself is the taste reference we check each construct against**: 711 of its
   test files are named for the upstream issue that produced them, across 127
@@ -2181,7 +2181,7 @@ copies plus a table splice, and the remainder is the parse's own consumers.
   JSON *before* the verdict, and are off by default. `benches/sites/` holds the
   corpus table and the edit sites both benches share, so a site cannot drift in
   one and not the other. Thresholds are in the harness and deliberately not
-  restated here; the directive is now in `.claude/rules/parser.md`.
+  restated here; the directive is now in `AGENTS.md`.
 
   Six deviations, and the last two are findings rather than plan corrections.
 

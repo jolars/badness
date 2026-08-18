@@ -18,7 +18,7 @@
 //! is a pure `&self` token scan producing an [`Expl3Plan`];
 //! [`Parser::attach_expl3_arguments`] replays exactly the plan's spans and
 //! never re-decides a shape, so the scan mirrors the walk by construction
-//! (`.claude/rules/parser.md`, "a shape gate must mirror the parse it
+//! (`AGENTS.md`, "a shape gate must mirror the parse it
 //! guards"). Anything the scan cannot resolve returns `None` and the head
 //! falls back to plain greedy attachment with **no diagnostic** (a gated
 //! construct never diagnoses). A blank line instead ends the unit *early*: the

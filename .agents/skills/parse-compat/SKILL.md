@@ -18,7 +18,7 @@ task parse-compat
 ```
 
 This runs `cargo test -p badness-parser --test parse_compat -- --ignored --nocapture` and rewrites
-the report at `.claude/skills/parse-compat/PARSE_COMPAT.md` (the generated
+the report at `.agents/skills/parse-compat/PARSE_COMPAT.md` (the generated
 artifact next to this skill — do not hand-edit it).
 
 For per-file skeleton diffs when a divergence is unclear:

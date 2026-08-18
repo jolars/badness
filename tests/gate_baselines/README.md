@@ -192,7 +192,7 @@ files are a different function's answers, not a stricter or looser version of
 ours, so a divergence from them is not a failure and nothing in this directory
 compares against them. (For *fixture authoring* they are a legitimate soft
 target where our own tenets underdetermine a construct — the guards are in
-`.claude/skills/formatter-fixture/`. What neither use permits is matching them
+`.agents/skills/formatter-fixture/`. What neither use permits is matching them
 case by case, which would reverse-engineer another tool's config surface into
 badness's rules.) The corpus is GPL-3.0 to badness's MIT, which the
 fetch-don't-vendor setup (`corpora/` is gitignored) already keeps clean; a

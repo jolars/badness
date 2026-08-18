@@ -176,15 +176,12 @@ with `task docs`. The linter-rules reference and the benchmark page are
 generated; regenerate them with `task docs:rules` and `task bench` respectively
 rather than editing the rendered pages by hand.
 
-## A note on `AGENTS.md` and `.claude/rules/`
+## A note on `AGENTS.md`
 
-The repo also contains an `AGENTS.md` file and a `.claude/rules/` directory
-aimed at AI coding agents. `AGENTS.md` is the compact operational contract;
-`.claude/rules/` holds terse per-subsystem directives, path-scoped so each loads
-only when the agent touches that subsystem.
-
-Both are short on purpose and are worth skimming as a checklist of "things not
-to break." For architectural rationale and tradeoffs, read the book's
+The repo's `AGENTS.md` is the operational contract for AI coding agents. It
+includes both repository-wide and subsystem-specific directives and is kept
+under 32 KiB so agents can load it as a single checklist of things not to break.
+For architectural rationale and tradeoffs, read the book's
 [Architecture](https://badness.dev/development/architecture.html) page.
 
 ## License

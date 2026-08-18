@@ -19,7 +19,7 @@ task bib-parse-compat
 ```
 
 This runs `cargo test -p badness-parser --test bib_parse_compat -- --ignored --nocapture` and
-rewrites the report at `.claude/skills/bib-parse-compat/BIB_PARSE_COMPAT.md` (the
+rewrites the report at `.agents/skills/bib-parse-compat/BIB_PARSE_COMPAT.md` (the
 generated artifact next to this skill — do not hand-edit it).
 
 ## Analyze

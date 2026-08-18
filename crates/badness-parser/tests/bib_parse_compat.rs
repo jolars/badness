@@ -15,7 +15,7 @@
 //! cargo test --test bib_parse_compat -- --ignored --nocapture
 //! ```
 //!
-//! The result is written to `.claude/skills/bib-parse-compat/BIB_PARSE_COMPAT.md`
+//! The result is written to `.agents/skills/bib-parse-compat/BIB_PARSE_COMPAT.md`
 //! and is a triage queue, not a pass/fail signal.
 
 #[path = "support/bib_skeleton.rs"]
@@ -93,7 +93,7 @@ fn bib_parse_compat_report() {
     print!("{report}");
 
     let out_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.claude/skills/bib-parse-compat/BIB_PARSE_COMPAT.md");
+        .join("../../.agents/skills/bib-parse-compat/BIB_PARSE_COMPAT.md");
     fs::write(&out_path, &report).expect("write BIB_PARSE_COMPAT.md");
     eprintln!("bib-parse-compat: wrote {}", out_path.display());
 }

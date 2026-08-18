@@ -9,7 +9,7 @@
 //!
 //! Timing the entry point directly is also the only way a case can observe
 //! [`ReparseTier`]. Through the salsa layer the tier is computed and dropped, and
-//! the side channel may not grow an accessor for it (`.claude/rules/parser.md`:
+//! the side channel may not grow an accessor for it (`AGENTS.md`:
 //! the reparse cache is not a salsa input and may not become one).
 //!
 //! # What a case declares

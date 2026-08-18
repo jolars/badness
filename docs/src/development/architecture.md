@@ -158,11 +158,6 @@ settings.
 
 ### Declarations
 
-*Landing in stages (TODO.md § Declarations): `[environments.…]` is honored
-everywhere a document is parsed — `format`, `--check`, `lint` (report and
-`--fix`), `parse`, and the language server. `[commands.…]` is not implemented
-yet.*
-
 Most config only affects behavior after parsing. Declarations are the exception:
 they feed the parser directly.
 
@@ -592,19 +587,18 @@ chunk-plain brace set and the frame itself. Bounds that move without changing
 pairing (an alias closer) filter the answer at query time instead of
 invalidating the table.
 
-This landed through the staged migration TODO.md recorded. Mis-attachment is
-byte-invisible — a wrong tree is still lossless and idempotent — so before any
-consumer flipped, a migration oracle diffed grammar attachment against
-`semantic::expl3`'s independent consumption over the gate corpora: 67 thousand
-statement-leading heads across 265 files, triaged to zero disagreements outside
-the benign class where greed had over-attached trailing material onto a consumed
-argument. The corpus fixtures are the net since, and the expl3 regions are
-allowlisted wholesale in the texlab gauge (texlab has no argspec model).
-`semantic::expl3` remains the statement-extent resolver and the underivable-head
-fallback — its consumption is shape-agnostic, so aborted heads and their greedy
-shapes still resolve — while the formatter's reconciliation consumers (the
-conditional two-path, the grouped-sibling re-segmentation) reduced to node
-reads.
+This landed through a staged migration. Mis-attachment is byte-invisible — a
+wrong tree is still lossless and idempotent — so before any consumer flipped, a
+migration oracle diffed grammar attachment against `semantic::expl3`'s
+independent consumption over the gate corpora: 67 thousand statement-leading
+heads across 265 files, triaged to zero disagreements outside the benign class
+where greed had over-attached trailing material onto a consumed argument. The
+corpus fixtures are the net since, and the expl3 regions are allowlisted
+wholesale in the texlab gauge (texlab has no argspec model). `semantic::expl3`
+remains the statement-extent resolver and the underivable-head fallback — its
+consumption is shape-agnostic, so aborted heads and their greedy shapes still
+resolve — while the formatter's reconciliation consumers (the conditional
+two-path, the grouped-sibling re-segmentation) reduced to node reads.
 
 ### Trivia attachment
 

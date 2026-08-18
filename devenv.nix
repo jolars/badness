@@ -6,6 +6,7 @@
 {
   packages = [
     pkgs.git
+    pkgs.bashInteractive
     pkgs.perf
     pkgs.cargo-flamegraph
     pkgs.cargo-llvm-cov

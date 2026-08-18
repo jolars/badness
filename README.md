@@ -12,23 +12,27 @@ version](https://badge.fury.io/py/badness.svg?icon=si%3Apython)](https://pypi.or
 [![npm
 version](https://badge.fury.io/js/@badness%2Fbadness.svg?icon=si%3Anpm)](https://www.npmjs.com/package/badness)
 
-**Badness** is a language server, formatter, and linter for LaTeX, built on a
-lossless concrete syntax tree.
+Badness is a language server, formatter, and linter for LaTeX. It is designed to
+be fast, robust, and memory efficient. It bundles three tools in one:
 
-It parses LaTeX once and serves three tools from that tree:
+- **Formatter** (`badness format`): opinionated, deterministic, and rule-based
+  layout.
+- **Linter** (`badness lint`): syntax errors and best practices.
+- **Language server** (`badness lsp`): both of the above, plus information on
+  hovering, symbol outlines, go-to-definitions, code actions, and much more.
 
-- **Formatter** (`badness format`): deterministic, rule-based layout.
-- **Linter** (`badness lint`): diagnostics with source snippets.
-- **Language server** (`badness lsp`): both, live in your editor.
+The architecture is modeled after
+[rust-analyzer](https://rust-analyzer.github.io/), relying on a incremental
+parser that forms a full concrete syntax tree of the document, and then using
+that tree to provide formatting, linting, and language server features. It is
+designed to used both inside your editor and on the command line, and is fast
+enough to provide real-time analysis after every keystroke and formatting on
+save, even for large documents and complex projects.
 
-The architecture follows [rust-analyzer](https://rust-analyzer.github.io/): a
-generic, error-tolerant, hand-written parser produces a lossless tree, semantics
-are layered on top as a separate concern, and recomputation is incremental.
-Badness never *requires* resolving macros or catcodes to succeed. Anything it
-cannot statically recognize degrades to generic nodes rather than a crash. Two
-properties hold by construction and are enforced as tests: losslessness (the
-tree reconstructs the input byte-for-byte) and idempotence (formatting an
-already formatted file changes nothing).
+The audience for Badness is both authors who write LaTeX documents (`.tex` and
+`.bib` files) and developers who write LaTeX packages (`.sty`, `.cls`, `.dtx`,
+and `.ins` files), and provides support both for the newer LaTeX3 programming
+layer and the older LaTeX2e layer.
 
 ## Installation
 
@@ -44,13 +48,14 @@ Badness is available from several sources:
 - **VS Code/Open VSX**: the [**Badness**
   extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
   (also works in Positron and Cursor)
+- **NixOS**: the `badness` package on
+  [Nixpkgs](https://search.nixos.org/packages?channel=unstable&show=badness&from=0&size=50&sort=relevance&type=packages)
 - **From source**: `cargo install --path .` in a checkout
 
-If you prefer a one-liner installer that picks the right release artifact for
-your platform, you can use the installer scripts below. These scripts are
-fetched directly from this repository and then download the latest matching
-Badness release asset for your platform, installing to a user-local directory by
-default. If you prefer, download and inspect the script before running it.
+### Installation scripts
+
+If you prefer a one-liner installer that picks the right binary for your
+platform, you can use the installer scripts below.
 
 For macOS and Linux:
 
@@ -75,21 +80,23 @@ language server automatically when you open a `.tex` file.
 badness format paper.tex
 
 # Verify formatting without writing, showing diffs
-badness format --check paper.tex
+badness format --check bibliography.bib
 
 # Lint, reporting parse diagnostics
 badness lint paper.tex
 
-# Run the language server over stdio
-badness lsp
+# Fix lint issues in place
+badness lint --fix paper.tex
 ```
 
 Formatting is configurable via a TOML file named `badness.toml`. See the
 documentation for the full reference.
 
+## Editor Integration
+
 The language server runs over stdio (`badness lsp`); see the [editor setup
-guide](https://badness.dev/guide/editor-setup.html) for Neovim and VS Code
-wiring.
+guide](https://badness.dev/guide/editor-setup.html) for instructions on how to
+integrate with your editor.
 
 ## Pre-Commit Hook
 

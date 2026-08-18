@@ -1,9 +1,7 @@
-//! Phase 2 formatter tests. The first real rule is whitespace normalization, so
-//! the output is no longer identical to the input. Behavior is pinned by
-//! `tests/fixtures/formatter/<name>/{input,expected}.tex` pairs (a conventional
-//! fixture layout). The `AGENTS.md` invariants — idempotence and
-//! losslessness of the formatted text — are asserted on the formatted output for
-//! every case.
+//! Formatter fixtures and invariant tests.
+//!
+//! Exact output is pinned by `tests/fixtures/formatter/<name>/{input,expected}.tex`.
+//! Every case also checks idempotence and preservation of non-trivia content.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -125,9 +123,7 @@ fn check_format_invariants_with(
         |s| fmt(s).map_err(|e| e.to_string()),
     ) {
         // A dropped variant means a parser shape gate is newline-sensitive at
-        // one of the swapped gaps — a parser finding, and silently shrinking
-        // oracle coverage. Zero across the in-repo corpora today; keep it that
-        // way (an intentional exception would earn its own registry).
+        // one of the swapped gaps, silently shrinking oracle coverage.
         Ok(report) if report.dropped_unsafe > 0 => {
             return Err(format!(
                 "trivia oracle dropped {} unsafe variant(s) — a parser shape gate is \
@@ -339,9 +335,8 @@ fn sweep_corpus_file(name: &str, text: &str, config: LexConfig) {
 ///
 /// This is an **allowlist, not a ratchet** — unlike [`KNOWN_INVARIANT_FAILURES`],
 /// which asserts registered files still *fail* and so forces its own pruning,
-/// this list can only prove the shapes on it stay invariant. It cannot notice
-/// that some new shape became invariant. So it grows by hand: when a Tier-1
-/// site is retired, add the shapes it governed.
+/// this list can only prove the shapes on it stay invariant. It cannot discover
+/// newly invariant shapes, which must be added manually.
 ///
 /// The convergence oracle in [`check_format_invariants`] cannot stand in for
 /// this. It accepts deliberate authored-break preservation by construction, so
@@ -528,7 +523,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // so one statement gets one line and every continuation — a width wrap, a
     // post-comment tail, a `{label}` block — hangs one step under its head
     // (`lower_statement`). Issue #114 pinned the boundary half; the hang closes
-    // TODO.md's B′. The routing still reads the *nearest* environment ancestor,
+    // Routing reads the nearest environment ancestor,
     // so an `itemize` inside a `\node` label reflows as prose.
     ("statement_body_picture_env", WrapMode::Reflow, 80),
     // The structural boundaries and the TikZ unit model at work: two statements
@@ -1241,7 +1236,7 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // zero-width (rustfmt-style — the line may overflow, but prose length
     // never re-breaks code and the comment is never relocated), and an
     // *own-line* comment that binds leading into the next command
-    // (decision #9) renders as comment lines continuing the statement —
+    // renders as comment lines continuing the statement —
     // never an opaque block, which would strand a blank line and split the
     // statement head (issue #61, l3bigint.dtx).
     ("expl_doc_comment_statement", "sty"),
@@ -2720,7 +2715,7 @@ fn suppressed_regions_converge_under_trivia_perturbation() {
     ));
 }
 
-// --- declared environments (`badness.toml`; AGENTS.md decision #12) ----------
+// --- declared environments (`badness.toml`) ----------------------------------
 
 /// Format `input` under a project's declarations, through the same engine entry
 /// the CLI's stdin path and the language server's fallback take — not a mirror

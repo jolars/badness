@@ -1,19 +1,12 @@
 //! Formatter configuration.
 //!
-//! The LaTeX-specific [`WrapMode`] (paragraph line-break policy, modeled on the
-//! `panache` formatter) is the one field specific to badness.
-//!
 //! Under the optional `serde` feature every type here is (de)serializable, and
 //! under `schema` it also derives `schemars::JsonSchema`. Both are off by
 //! default: the CLI keeps its own serde-named mirrors in `config.rs` so the
 //! TOML spelling stays a config concern. The features exist for embedders that
-//! publish a config schema of their own — the dprint plugin borrows these
-//! schemas rather than hand-listing the accepted values a third time. The wire
-//! spellings are therefore load-bearing and must keep matching `badness.toml`:
-//! `kebab-case` throughout (`single-line`, `line-width`).
+//! publish a config schema. Serialized names are public API and use kebab case.
 
-/// How the formatter lays out the line breaks *inside* a paragraph. Modeled on
-/// panache's `WrapMode` (`crates/panache-formatter/src/config.rs`).
+/// How the formatter lays out line breaks inside a paragraph.
 ///
 /// The sentence-boundary detection behind [`WrapMode::Sentence`] and
 /// [`WrapMode::Semantic`] is a per-language abbreviation profile

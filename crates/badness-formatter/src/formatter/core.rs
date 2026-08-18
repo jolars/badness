@@ -1,50 +1,11 @@
 //! The formatter entry points and the CST → [`Ir`] lowering.
 //!
-//! Implemented rules:
-//! - **Whitespace normalization**: trailing whitespace is trimmed, runs of 2+
-//!   blank lines collapse to a single blank line, and the document ends with
-//!   exactly one newline.
-//! - **Environment indentation**: the body of `\begin{…} … \end{…}` is indented
-//!   one step, nesting recursively, with `\begin`/`\end` flush. All indentation
-//!   is computed by the printer, never preserved from input — so reformatting
-//!   re-indents idempotently.
-//! - **Group/argument indentation**: the body of a *multi-line* brace group
-//!   `{…}` or optional-argument group `[…]` is indented one step, the same way
-//!   (delimiters flush, body indented). Single-line groups are left inline;
-//!   existing line breaks are respected.
-//! - **Prose-argument reflow** (under [`WrapMode::Reflow`]): an argument the
-//!   signature DB marks `prose` (a `\footnote`/`\caption` body, a sectioning
-//!   title) is reflowed to the line width like a paragraph — joined when it fits,
-//!   wrapped when it does not (see [`lower_command`] / [`lower_prose_group`]).
-//!   Non-prose groups (`\newcommand` body, `\label`) are left as authored.
-//! - **Math** (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`): the structured `MATH` body is
-//!   formatted by [`lower_math`] — internal whitespace runs collapse to a single
-//!   space, runs at the delimiters are trimmed, `^`/`_` scripts are kept tight,
-//!   and redundant braces around a single-token script argument are stripped
-//!   where the following token would not glue onto it. A comment inside math
-//!   forces a line break. Commands keep their authored form (their arguments may
-//!   be text).
+//! Lowering normalizes whitespace and indentation, reflows prose arguments under
+//! [`WrapMode::Reflow`], formats structured math, and owns layout inside expl3
+//! regions. Protected regions remain verbatim.
 //!
-//! - **expl3 code** (inside `\ExplSyntaxOn`…`\ExplSyntaxOff`, or `\ProvidesExpl*`
-//!   to EOF): source spaces/tabs are catcode-9 (ignored) and `~` is catcode-10 (a
-//!   literal space), so the formatter owns the layout *regardless of [`WrapMode`]*.
-//!   In-region code lays out one statement per source line ([`lower_expl_code`]),
-//!   brace groups holding code indent as blocks ([`lower_expl_group`]), inter-token
-//!   whitespace collapses to a single space, and `~` is a breakable space. Region
-//!   membership is recomputed read-only by [`expl3_regions`] (the CST is untouched).
-//!
-//! Everything else is emitted verbatim: paragraph structure, intra-line spacing,
-//! and protected regions (`\verb`, verbatim bodies, comments) are preserved.
-//!
-//! The mechanism flows entirely through the Wadler [`Ir`]: each maximal run of
-//! `WHITESPACE`/`NEWLINE` trivia is replaced by a single break primitive
-//! ([`Ir::hard_line`] for one newline, [`Ir::empty_line`] for a blank line),
-//! whose printer (`super::printer`) defers indentation and so drops trailing
-//! whitespace for free, and [`Ir::indent`] raises the indent inside environment
-//! bodies.
-//!
-//! The lowering (`lower_node`) is the LaTeX-specific part; the surrounding
-//! `format`/`format_with_style` framework is generic.
+//! [`lower_node`] contains the LaTeX-specific lowering. The surrounding format
+//! entry points and the Wadler-style [`Ir`] printer are language-independent.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -156,9 +117,7 @@ pub fn format_with_style_flavored_sentence(
 }
 
 /// Like [`format_with_style_flavored_sentence`] but under a project's
-/// [declarations](crate::declarations) — the one input to the parse that
-/// is not the text (`AGENTS.md` decision #12) — and with no other signature
-/// scope.
+/// [declarations](crate::declarations), and with no other signature scope.
 ///
 /// This is the entry for content with no path to anchor local `.sty`/`.cls`
 /// resolution against: the CLI's **stdin**, the language server's
@@ -488,13 +447,12 @@ fn toggle_is_top_level(token: &SyntaxToken) -> bool {
 /// is read from [`expl_toggle`] — the same fixed set the lexer flips its `expl_syntax`
 /// flag on — but the formatter additionally applies a *positional* gate
 /// ([`toggle_is_top_level`]): only a top-level toggle opens a formatter-owned region.
-/// The name set stays shared so the two never drift; the positional layout-ownership
-/// rule is the formatter's alone (issue #69, `AGENTS.md`).
+/// The name set stays shared so the two never drift; positional layout ownership
+/// remains formatter-specific.
 ///
 /// Matches only [`SyntaxKind::CONTROL_WORD`] tokens, so a `\ExplSyntaxOn` written
 /// inside `\verb`/a comment (a `VERB`/`COMMENT` token, never a `CONTROL_WORD`) is
-/// not a toggle, exactly as in the lexer. The CST is untouched; this is a pure
-/// read-only side channel (the sanctioned byte-range pattern, `AGENTS.md` #4).
+/// not a toggle, exactly as in the lexer. The CST is untouched.
 ///
 /// `pub` so the linter (in the `badness` crate) shares the *same* region
 /// computation (the `unclosed-math-delimiter` rule suppresses inside expl3
@@ -1050,7 +1008,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // environments were routed by the arms above; this generalizes `&`-column
         // layout to the environments the signature DB cannot name, exactly as the
         // environment group-boundary gate generalizes the curated definition-body set
-        // (decision #1). Whitespace-only (the grid renderer reflows only trivia) and
+        // Whitespace-only (the grid renderer reflows only trivia) and
         // self-correcting: any shape the grid cannot lay out falls back to
         // [`lower_environment`]. Doc-margined bodies are excluded (same margin rule as
         // the arms above and below): grid padding would land before a `%` margin and
@@ -2069,7 +2027,7 @@ fn reflow_elements_checked(
                 // forbids — `\subsection{X}\nprose` and `\subsection{X} prose` are the
                 // same bytes to the next parse, so both must lay out alike. Reading
                 // `CommandSig::sectioning`/`CommandSig::block` keeps the rule in the
-                // semantic layer (decision #2) instead of a name list here.
+                // semantic layer instead of a formatter-owned name list.
                 //
                 // Two gates scope the statement treatment:
                 // - Not under `ReflowKind::Statement`, whose Tier-2 contract is the
@@ -2601,7 +2559,7 @@ fn lower_expl_code(
     // an inline (newline-free) whitespace run: a trailing comment there rides
     // the block's closing line (`}%`, the macro-code continuation idiom).
     // Stranding it would mint a fresh *own-line* comment, which the next parse
-    // binds *leading* into the following command (decision #9) — a different
+    // binds leading into the following command — a different
     // shape, so a different layout: idempotence would break.
     let mut after_block = false;
     // Whether the line in progress commits as a sticky fill (structural
@@ -2731,7 +2689,7 @@ fn lower_expl_code(
             // — zero-width, rustfmt-style: the line may overflow, but prose
             // length never re-breaks code, and relocating the comment would
             // rebind it as the next statement's leading doc comment on the
-            // second pass (decision #9), changing its attachment. An own-line
+            // second pass, changing its attachment. An own-line
             // comment stays its own line.
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
                 if after_block {
@@ -2806,7 +2764,7 @@ fn lower_expl_code(
                 after_block = false;
                 atom.push(lower_loose_token(token));
             }
-            // A command with a bound leading `DOC_COMMENT` (decision #9: an
+            // A command with a bound leading `DOC_COMMENT` (an
             // own-line comment binds forward). Rendered as an opaque block it
             // would strand a blank line after the comment (the comment's own
             // newline stacking with the block separator) and split the
@@ -3472,12 +3430,9 @@ fn is_trailing_in_statement(
 /// owning command's [`Statements::Ignore`] stream from `child` onward, so it
 /// cannot tell the two apart without this look at the earlier children.
 ///
-/// Node-local since arity attachment landed: a recognized call owns every
-/// argument its argspec consumes, so the earlier grouped material sits among
-/// `child`'s own preceding siblings — the container re-segmentation (and its
-/// per-container memo) that reconciled greedy sibling scatter retired with
-/// the migration. Statement scoping is free: a node's children are one
-/// statement by construction.
+/// A recognized call owns every argument its argspec consumes, so earlier
+/// grouped material appears among `child`'s preceding siblings. A node's
+/// children form one statement.
 fn head_command_has_grouped_sibling_arg(child: &SyntaxNode) -> bool {
     let Some(owner) = child.parent() else {
         return false;
@@ -3844,7 +3799,7 @@ fn expl_branch_lines(tail: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<Ir>
     // own-line comment on its own line. Own-line-ness is a *preserved* predicate, so
     // reading it is trivia-invariant and stable in both directions — a trailing
     // comment re-parses trailing, an own-line one re-parses own-line. Relocating
-    // either way would rebind it under decision #9.
+    // either way would change its attachment.
     let mut gap = false;
     let mut own_line = false;
     for element in tail {
@@ -3881,11 +3836,6 @@ fn expl_branch_lines(tail: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<Ir>
 /// the head's own trailing groups, so [`lower_expl_conditional`] covers every
 /// resolvable shape — including a head whose *arity* is underivable while its
 /// branch count is not (`:wTF`), when greed happened to attach the branches.
-/// The unit-scoped reconciliation that re-split greedy sibling scatter
-/// (`\seq_if_in:NnTF \l_seq {item} {T} {F}` peeled off `\l_seq`) retired with
-/// the migration: the attachment oracle measured zero recognition
-/// disagreements between the grammar and the semantic scan over the gate
-/// corpora, so a head the node-local read cannot resolve has no unit either.
 /// Returns `None` to leave the call on the width-driven path.
 fn expl_conditional_at(
     elements: &[SyntaxElement],
@@ -4486,8 +4436,8 @@ fn collapse_conditional_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) -
 /// margins off column 0 and split the closing `%␣␣␣␣\end{…}` frame — the corruption
 /// this fixes). A pure CST-shape fact: it walks back over inline whitespace from
 /// `\begin` and asks only "is the previous token a margin/guard on this line", with
-/// no signature lookup, so it stays out of the semantic layer (decision #2) and
-/// covers `macrocode` and any prose-layer environment uniformly. `DOC_MARGIN`/
+/// no signature lookup, and covers `macrocode` and prose-layer environments
+/// uniformly. `DOC_MARGIN`/
 /// `GUARD` exist only under the `.dtx` config, so this is always false elsewhere.
 fn is_margin_framed(node: &SyntaxNode) -> bool {
     let Some(begin) = Environment::cast(node.clone()).and_then(|e| e.begin()) else {
@@ -4734,13 +4684,12 @@ struct BeginParts {
 /// The arity comes from the [`Signatures`] overlay (`cx.signatures`): a document's
 /// own `\newenvironment{thm}[1]…` is honored just like a built-in `tabular`, with
 /// the scanned definition shadowing a built-in of the same name. Where an arity is
-/// declared it *overrides* the glue test, which is decision #2 doing its job: arity
-/// is a semantic fact, and it is why a newline-separated `{cc}` still joins
+/// declared it overrides the glue test. This is why a newline-separated `{cc}` joins
 /// `\begin{tabular}` while `\begin{frame}`'s undeclared `{Title}` stays on the
 /// header only because the author glued it there.
 ///
-/// Attachment past the declared arity is an accident of greed (decision #8), not an
-/// argument claim, so it must not be *rendered* as one: leaving it in the header
+/// Attachment past the declared arity is not an argument claim, so it must not be
+/// rendered as one: leaving it in the header
 /// stranded it at the `\begin` column, one level short of the body it belongs to
 /// (`\begin{center}\n{\bfseries A heading}`). Gluing it up instead would dress body
 /// content as an argument, so body is the honest destination.
@@ -4753,7 +4702,7 @@ struct BeginParts {
 ///
 /// A `%` that trailed the header on its own source line stays on it (own-line-ness
 /// is a preserved predicate, and relocating a trailing comment rebinds it as the
-/// next construct's `DOC_COMMENT` under decision #9); one the author gave its own
+/// next construct's `DOC_COMMENT`); one the author gave its own
 /// line travels to the body with the rest of the tail, which is where it already
 /// was. But a header comment *with* a declared arity keeps the whole node on the
 /// byte-faithful path, because both available moves are wrong there: gluing the
@@ -5996,7 +5945,7 @@ fn push_alignment_element(
 }
 
 /// Whether `node` is a horizontal-rule `COMMAND` (`\midrule`, `\toprule`, …) onto
-/// which the greedy parser (AGENTS.md decision #8) glued the next line's first
+/// which the greedy parser attached the next line's first
 /// cell as a spurious `{…}` argument. Booktabs rules take at most an optional
 /// `[width]`, never a mandatory brace argument, so a leading `{…}` is never a real
 /// argument — it is cell content the arity refinement peels back off.
@@ -6342,7 +6291,7 @@ fn lower_bracketed(
 /// token); a lone newline beside a `\verb` is erased though the oracle
 /// excludes VERB-adjacent gaps (a complete `VERB` token carries its
 /// delimiters); and an `\obeylines` body joins — unresolvable macro meaning is
-/// out of scope (decision #1), the stance paragraph reflow already takes.
+/// out of scope, as it is for paragraph reflow generally.
 fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     /// Resolve the gap read but not yet committed: a `" "` flat gap is a break
     /// opportunity (the fill's own separator renders it), anything else glues
@@ -6826,8 +6775,8 @@ fn command_is_sectioning(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// typesets (`\ProcessOptions\relax`), where a heading's own `\par` makes the
 /// materialized glue provably inert.
 ///
-/// Read from the semantic layer, never from a name list in the formatter
-/// (decision #2). The flag is positive and curated-only, so an un-signatured or
+/// Read from the semantic layer rather than a formatter-owned name list. The
+/// flag is positive and curated-only, so an un-signatured or
 /// scanned-definition command is *not* block here and falls back to the residual
 /// authored-break rule in [`line_is_command_only`].
 ///
@@ -6867,7 +6816,7 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// before a path operator). The enclosing [`Ir::indent`] then hangs **every**
 /// continuation line — width wraps, post-comment lines, and block segments
 /// alike — one step under the statement head, so a wrapped `\node[…] at (2,3)`
-/// / `{…};` reads as a continuation rather than a sibling (TODO.md's B′).
+/// / `{…};` reads as a continuation rather than a sibling.
 ///
 /// Fixed point (Tier 1): the hang is *emitted*, never read. Statement extent
 /// re-derives from the terminating `;` on every parse, however the emitted
@@ -7629,7 +7578,7 @@ const MATH_BINARY_COMMANDS: &[&str] = &[
 ];
 
 /// Classify a bare operator token by its literal text. The parser splits math
-/// `WORD`s at operator boundaries (`AGENTS.md`, decision #3), so an operator like
+/// `WORD`s at operator boundaries, so an operator like
 /// `+` or a coalesced relation like `<=` arrives as its own token here.
 fn classify_math_op_text(text: &str) -> MathRole {
     // A coalesced relation run (`=`, `<=`, `>=`, `==`, `<`, `>`, …): every char
@@ -8620,12 +8569,8 @@ mod expl3_region_tests {
         assert!(grouped_sibling_walk(src, "branch"));
 
         // An *aborted* call (the `F` branch is missing, so the five-slot spec
-        // never resolves and greedy scatter persists) keeps its groups on the
-        // small trailing command, whose node carries no earlier grouped
-        // argument: the walk answers `false` there now — the container
-        // re-segmentation that reconciled scatter retired with the migration,
-        // and an unresolvable call is not the multi-argument shape the
-        // suppression exists for.
+        // never resolves) keeps its groups on the small trailing command. An
+        // unresolvable call is not the multi-argument shape this suppresses.
         let src =
             "\\ExplSyntaxOn\n\\prop_get:NnNTF \\g_prop {#2} \\l_tl { branch }\n\\ExplSyntaxOff\n";
         assert!(!grouped_sibling_walk(src, "branch"));

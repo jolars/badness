@@ -1,15 +1,12 @@
 //! The built-in **signature database**: command/environment argument shapes plus
 //! the semantic metadata a formatter/linter needs (sectioning level,
-//! verbatim-ness, math-ness). This is the place where *meaning* is assigned to
-//! names, kept strictly out of the parser (AGENTS.md decision #2).
+//! verbatim-ness, math-ness). Meaning is assigned here rather than in the parser.
 //!
 //! The data is fully static, so it lives in a process-wide [`LazyLock`],
 //! consulted directly. Per-file `\newcommand`/`\newenvironment`/xparse
 //! signatures are scanned by [`super::define`] into a separate, per-document
 //! [`SignatureDb`] and overlaid via [`Signatures`] (scanned-first, built-in
-//! fallback); the greedy parser's argument attachment is unaffected either way. A
-//! salsa input only becomes necessary once that overlay must be cached across
-//! queries (a later item, when an LSP consumer appears).
+//! fallback). The greedy parser's argument attachment is unaffected either way.
 //!
 //! ## Source of truth: one granular JSON file
 //!
@@ -51,9 +48,7 @@ pub enum ArgKind {
 }
 
 /// How the formatter treats an argument's *content* — its whitespace and break
-/// policy. Exactly one kind per slot (replaces the former mutually-exclusive
-/// `prose`/`collapse` bools). Only meaningful for the formatter; the parser
-/// ignores it (AGENTS.md decision #2).
+/// policy. This metadata is for formatter consumers; the parser ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContentKind {
     /// Left exactly as authored: names, identifiers, code, or option lists

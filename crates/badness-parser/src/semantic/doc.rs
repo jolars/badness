@@ -3,10 +3,8 @@
 //! A `.dtx` brackets each documented entity with ltxdoc vocabulary — a `macro` or
 //! `environment` environment, or a `\DescribeMacro`/`\DescribeEnv` command — while
 //! the implementation lives in a (usually nested) `macrocode` block. The parser
-//! keeps these apart on purpose: a documentation margin is `DOC_MARGIN` trivia that
-//! never binds into a `DOC_COMMENT` (AGENTS.md decision #9 forbids a signature
-//! lookup in the trivia-binding decision). Connecting prose to code is therefore a
-//! *semantic*-layer job — this query.
+//! represents documentation margins as `DOC_MARGIN` trivia rather than
+//! `DOC_COMMENT` nodes, so the association is resolved in the semantic layer.
 //!
 //! It mirrors [`outline`](super::outline): a single CST walk producing LSP-agnostic
 //! [`DocAssociation`]s (byte ranges, no `lsp_types`), unit-testable without the
@@ -19,7 +17,7 @@
 //! environment, the conventional `.dtx` idiom. Descent stops at a nested `macro`/
 //! `environment` so its `macrocode` is attributed to it, not the outer construct.
 //! `\DescribeMacro`/`\DescribeEnv` carry no nested code (the definition lives
-//! elsewhere; file-wide def-site linking is a deferred follow-up).
+//! elsewhere).
 
 use rowan::TextRange;
 

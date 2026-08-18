@@ -1,47 +1,23 @@
-//! Project **declarations**: the closed vocabulary a project uses to name
-//! constructs the parser cannot see.
+//! Project declarations for constructs the parser cannot infer from source.
 //!
-//! A `\bea`/`\eea` delimiter pair defined in a sibling `.sty`, an environment
-//! that behaves like `align` but has no built-in counterpart, a verbatim
-//! environment built by machinery no definition scan can follow — these are
-//! facts about the document that its text does not carry, and the inferred
-//! environment-alias scan ([`crate::semantic::define`]) cannot reach them
-//! (issue #109). This module is the type those facts arrive in.
+//! Declarations supplement the aliases found by [`crate::semantic::define`].
+//! They can describe environments defined in another file or through constructs
+//! the definition scanner does not recognize.
 //!
-//! It is the *one* sanctioned input to the parse that is not the text
-//! (`AGENTS.md` decision #12). What keeps that admissible is the safety
-//! property that **a declaration names a spelling, never a pairing**: every
-//! shape gate still runs, so a declared `\bea` whose `\eea` is unreachable
-//! demotes to a plain command exactly as an inferred one does. Config widens
-//! what is *recognized* and can never force a tree the text does not support,
-//! which is what makes a wrong declaration a no-op rather than a corruption.
+//! A declaration names a spelling, not a pairing. Shape gates still decide
+//! whether the source supports a construct, so invalid declarations degrade to
+//! generic syntax rather than forcing a tree shape.
 //!
-//! Three shape rules, recorded here because they are what keep the vocabulary
-//! from growing into a query language:
+//! The schema follows three rules:
 //!
-//! 1. **Keyed by category, then name.** One dedicated map per syntactic
-//!    category ([`Declarations::environments`] today; commands and, if the
-//!    shortverb case is ever taken, characters later), and never a scalar knob
-//!    inside a name map — a category-wide switch would collide with a construct
-//!    of that name, so it belongs in a sibling section.
-//! 2. **`like` never crosses categories.** It means "copy the curated built-in
-//!    entry of the same kind", and a genuinely cross-category relation gets its
-//!    own key instead ([`EnvironmentDecl::begin`]/[`EnvironmentDecl::end`], the
-//!    command spellings that stand in for an environment's delimiters).
-//! 3. **Deserialization validates nothing.** Every rule is checked in one later
-//!    pass, [`Declarations::resolve`], so that a failure can be reported against
-//!    the key the user wrote (`environments.myenv.like`) rather than swallowed
-//!    by a deserializer that only knows it was handed a string.
+//! 1. Each syntactic category has its own name map.
+//! 2. `like` copies a built-in entry from the same category. Cross-category
+//!    relationships use explicit fields such as [`EnvironmentDecl::begin`].
+//! 3. [`Declarations::resolve`] performs validation after deserialization so
+//!    errors can identify the original configuration key.
 //!
-//! The type lives in this crate, not in the CLI, because the parse is what
-//! consumes it and because three front ends must be able to produce the same
-//! value: `badness.toml`, the dprint plugin's own config (sandboxed, no
-//! filesystem), and eventually a `% badness-env` comment directive. Serde is a
-//! hard dependency here (the signature database is JSON), so — unlike
-//! `badness-formatter`'s `FormatStyle` — the derives need no feature gate and
-//! the CLI can deserialize straight into these types instead of maintaining a
-//! mirror that could drift. **The wire spellings are therefore public API**,
-//! pinned by the tests at the bottom of this file.
+//! These types are shared by all parser front ends. Their serialized field names
+//! are public API.
 
 use std::collections::BTreeMap;
 use std::fmt;

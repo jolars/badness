@@ -1,6 +1,5 @@
 //! Deterministic ordering for the bib formatter: canonical field order within an
-//! entry, and cite-key order across the file (Tenet 1 — order is the formatter's
-//! call, not the author's).
+//! entry, and cite-key order across the file.
 //!
 //! Both routines reorder existing CST nodes only; they never synthesize or mutate
 //! content, so meaning is preserved and the lowering stays a pure replay of the
@@ -97,8 +96,7 @@ pub(super) fn sorted_blocks(root: &SyntaxNode) -> Vec<SyntaxNode> {
 /// The guard is the safe v1 of the cross-reference constraint (a referenced parent
 /// must stay after its children): skipping any run that contains a cross-reference
 /// *source* guarantees we never reorder a parent ahead of a child within the run, and
-/// the barrier segmentation fixes cross-run order. A precise topological sort over the
-/// key graph is a future refinement.
+/// barrier segmentation fixes cross-run order.
 fn segment_in_order(segment: &[SyntaxNode]) -> Vec<SyntaxNode> {
     let mut entries = segment.to_vec();
     if segment.iter().any(has_cross_reference) {

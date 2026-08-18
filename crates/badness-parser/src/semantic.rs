@@ -1,17 +1,10 @@
-//! Single-file semantic analysis: the per-file label/reference def-use model.
+//! Single-file semantic analysis.
 //!
-//! LaTeX labels live in one document/project-global namespace — there is no
-//! lexical scoping — so the model is a **flat** pair of vectors (defs + refs),
-//! not a scope tree. It is built in one
-//! CST walk by [`builder::build`], then a resolve pass marks each def
-//! `referenced` and each ref `resolved` by matching keys. No caching lives
-//! here; the `incremental` salsa layer (in the `badness` crate) owns that, via
-//! the `semantic_model` query.
+//! [`builder::build`] collects definitions and uses in a single CST walk, then
+//! resolves them within the file. Incremental caching belongs to the root crate.
 //!
-//! **Cross-file resolution is deferred.** A label defined in an `\input`-ed file
-//! and referenced here resolves only once a project-level query unions label
-//! sets across the include graph. This slice is per-file only — "harness + model
-//! only", like `incremental` and the project graph landed.
+//! Labels have document-wide rather than lexical scope. This model remains flat
+//! and leaves cross-file resolution to the project layer.
 
 pub mod builder;
 pub mod define;

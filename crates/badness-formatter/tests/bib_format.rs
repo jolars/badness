@@ -1,9 +1,7 @@
-//! Phase 2 BibTeX/BibLaTeX formatter tests. Exact output is pinned by
+//! BibTeX/BibLaTeX formatter fixtures and invariant tests. Exact output is pinned by
 //! `tests/fixtures/bib_format/<name>/{input,expected}.bib` pairs (mirroring the
-//! LaTeX `tests/fixtures/formatter/` layout). The `AGENTS.md` invariants —
-//! idempotence and losslessness *of the formatted text* (the formatter normalizes,
-//! so its output need not equal its input) — plus a meaning-preservation check are
-//! asserted on every fixture and every clean-parsing corpus file.
+//! LaTeX `tests/fixtures/formatter/` layout). Every fixture and clean corpus file
+//! checks idempotence and preservation of semantic content.
 
 use std::fs;
 use std::path::Path;

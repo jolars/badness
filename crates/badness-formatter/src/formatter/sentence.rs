@@ -1,17 +1,11 @@
 //! Sentence-boundary segmentation for the [`Sentence`](super::WrapMode::Sentence)
 //! and [`Semantic`](super::WrapMode::Semantic) wrap modes.
 //!
-//! Ported from the sibling **panache** formatter
-//! (`crates/panache-formatter/src/formatter/sentence_wrap.rs`). The core is a
-//! small, CST-agnostic rule engine over whitespace-split word tokens,
+//! A small, CST-agnostic rule engine operates on whitespace-separated words,
 //! parameterized by a per-language [`LanguageProfile`]. It never runs a TeX
-//! engine and reads no macro meaning — it inspects only the trailing punctuation
-//! of an atom's *text*, so it stays a pure formatter concern (`AGENTS.md` tenet
-//! #1: the formatter is the sole authority on layout).
+//! engine and assigns no macro meaning. It inspects only trailing punctuation.
 //!
-//! Document-language auto-detection (babel/polyglossia) is deliberately **not**
-//! implemented yet; the language is chosen from config only
-//! ([`sentence_language_for`]).
+//! The language is chosen from configuration by [`sentence_language_for`].
 
 use std::collections::BTreeMap;
 
@@ -77,9 +71,7 @@ const GERMAN_PROFILE: LanguageProfile = LanguageProfile {
     sentence_starters: &[],
 };
 
-// Conservative starter list; review/extend the contents as real usage surfaces
-// false splits. Entries must be lowercase (candidates are lowercased before the
-// comparison).
+// Entries must be lowercase because candidates are normalized before comparison.
 const SPANISH_PROFILE: LanguageProfile = LanguageProfile {
     no_break_abbreviations: &[
         "etc.", "p.ej.", "ej.", "vs.", "cf.", "núm.", "pág.", "págs.", "art.", "cap.", "fig.",
@@ -89,7 +81,6 @@ const SPANISH_PROFILE: LanguageProfile = LanguageProfile {
     sentence_starters: &[],
 };
 
-// Conservative starter list; review/extend as above.
 const FRENCH_PROFILE: LanguageProfile = LanguageProfile {
     no_break_abbreviations: &[
         "etc.", "cf.", "p.ex.", "ex.", "réf.", "fig.", "chap.", "éd.", "vol.",

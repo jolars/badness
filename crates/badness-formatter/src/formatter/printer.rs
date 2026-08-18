@@ -5,8 +5,7 @@
 //! ordinary greedy fills it supports source-break-aware preferred fills whose
 //! gaps are selected by a global lexicographic cost.
 
-// `print_at` is part of the engine but unused by the identity lowering;
-// keep it ready for real rules.
+// `print_at` is part of the engine but is not used by every lowering.
 #![allow(dead_code)]
 
 use super::ir::Ir;
@@ -37,27 +36,14 @@ impl LayoutCost {
     }
 }
 
-/// The layout mode a command prints under. `Flat` is an honest contract: the
-/// producer that dispatched the subtree in `Flat` has verified that the whole
-/// subtree's flat-mode rendering fits (every line, for subtrees whose
-/// structural `HardLine`s split it) — so consumers trust it, and a `Group`
-/// dispatched in `Flat` honors it instead of re-deciding. A producer that
-/// cannot verify the whole subtree (a candidate picker choosing among layouts,
-/// a fill placing atoms by plan) dispatches `Break` and lets children decide
-/// for themselves.
+/// The layout mode used to render a subtree. `Flat` means the producer has
+/// verified that the entire flat rendering fits. `Break` lets child groups make
+/// their own choices.
 ///
-/// `FlatPrefix` is the weaker claim a trailing-block hug can honestly make:
-/// its measurement ([`FlatMeasure::HugPrefix`]) stops *successfully* at the
-/// first forced break, so only the prefix up to there was verified. Trivia-level layout (`Line`, `SoftLine`,
-/// `IfBreak`, fill gaps) renders flat exactly as under `Flat` — that keeps the
-/// hug's head glued — but a `Group` or conditional group may sit *past* the
-/// break the measurement stopped at, so it re-decides for itself instead of
-/// trusting the claim (`\@@_if_key_value:VTF {T}{F}`: the hug verified up to
-/// `T`'s detonation; `F` was never measured).
+/// `FlatPrefix` is the weaker claim used by trailing-block hugs: measurement
+/// stops at the first forced break, so nested groups beyond it must re-evaluate.
 ///
-/// The remaining carve-out is an `expand` group: a subtree carrying a hard
-/// break was never a flat claim (its `HardLine`s fire in either mode), so it
-/// prints `Break` even under an incoming `Flat`.
+/// An `expand` group always renders in `Break`, even under an incoming `Flat`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Flat,

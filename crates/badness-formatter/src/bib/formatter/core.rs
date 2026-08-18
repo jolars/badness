@@ -1,21 +1,16 @@
 //! The BibTeX formatter entry points and the CST → [`Ir`] lowering.
 //!
-//! The bib analog of [`crate::formatter::core`]. It reuses the shared,
-//! language-agnostic Wadler engine ([`crate::formatter::ir`] +
-//! [`crate::formatter::printer`]) and supplies a bib-specific lowering, the only
-//! genuinely different part, exactly as on the LaTeX side.
+//! This module supplies BibTeX-specific lowering for the shared Wadler-style
+//! layout engine.
 //!
-//! The style is deterministic (Tenet 1) and currently fixed (no bib-specific
-//! options):
+//! The BibTeX-specific style is fixed:
 //! - **Case:** entry types and field names are lowercased; cite keys are preserved
 //!   verbatim (case-sensitive identifiers); `@string` macro names are preserved
 //!   (BibTeX references them case-insensitively, so changing case is cosmetic).
 //! - **Layout:** one field per line, the field block indented one `indent_width`
 //!   step, the opening delimiter trailing the header and the closing delimiter
 //!   flush; exactly one blank line between top-level blocks.
-//! - **`=` alignment:** field names are padded to the entry's longest field-name
-//!   width so the `=` signs line up. The padding is a pure function of the entry's
-//!   (lowercased) names, so it is recomputed identically on every run (idempotent).
+//! - **`=` alignment:** field names are padded to the longest field name in the entry.
 //! - **Value delimiters:** in a regular field, a top-level `"…"` value piece is
 //!   rewritten to `{…}` when safe (balanced inner braces). A bare `LITERAL` (a macro
 //!   reference or a number) is **never** wrapped — that would change its meaning —
@@ -28,17 +23,11 @@
 //!   not a preference — `line_width` alone tunes it). `Literal` prose (`title`,
 //!   `abstract`, …) reflows at any inter-word whitespace; a `Name` value
 //!   (`author`/`editor`) reflows **only** at top-level ` and ` boundaries, breaking
-//!   *after* "and" so the next name starts the continuation line, never inside a
-//!   name. `Verbatim`/`Date` values, `#`-concatenated values, and bare-`LITERAL`
-//!   macros/numbers are never reflowed, and neither is a value carrying an unescaped
-//!   `%` — that is an ordinary character to BibTeX but a comment to the LaTeX that
-//!   typesets the value, so its line breaks decide the output. Brace- and `$…$`-spanning tokens stay glued
-//!   so inner braces and math never straddle a wrap; every whitespace run collapses
-//!   to one break, so a reflowed value re-reflows identically (idempotent).
+//!   *after* "and" so the next name starts the continuation line. Verbatim, date,
+//!   concatenated, bare literal, and unescaped-`%` values are not reflowed.
 //! - **Trailing comma:** none after the last field.
 //! - **`%` comments:** a comment inside an entry binds *forward* to the field that
-//!   follows it (the bib analog of the LaTeX doc-comment rule, AGENTS.md decision
-//!   \#9) and is re-emitted, byte-exact, on its own line above that field's line —
+//!   follows it and is re-emitted byte-exact on its own line above that field —
 //!   so it travels with its field through the canonical sort. A comment with no
 //!   following field is *trailing* and prints just above the closing delimiter. A
 //!   `@string` / `@preamble` / field-less entry that carries a comment has nowhere
@@ -155,9 +144,7 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
 
 fn format_root(root: &SyntaxNode, style: FormatStyle) -> String {
     let cx = Lower { db: builtin() };
-    // Saturate like the LaTeX `format_root`: the printer's `Group` arm trusts
-    // a `propagate_breaks`-saturated tree. The bib lowering builds no groups
-    // today, so this is future-proofing, not a behavior change.
+    // The printer's `Group` arm requires a `propagate_breaks`-saturated tree.
     let ir = lower_root(root, cx).propagate_breaks();
     Printer::new(style).print(&ir)
 }
@@ -303,7 +290,7 @@ struct CommentPlacement {
 /// A comment that *shares a line* with the field before it stays a trailing comment on
 /// that field's line — the bib analog of the LaTeX rule that a trailing comment rides
 /// its line and is never relocated. Every other comment binds **forward** to the field
-/// it precedes (AGENTS.md decision #9), printing on its own line above it; one past the
+/// it precedes, printing on its own line above it; one past the
 /// last field binds to nothing and becomes `trailing`.
 ///
 /// Both rules key only on comment own-line-ness, which the formatter *preserves*

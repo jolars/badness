@@ -1,9 +1,7 @@
-//! Typed [`AstNode`] wrappers over CST *nodes*, with positional/structural
-//! accessors. These are a read-only typed view over the generic, greedy CST
-//! (AGENTS.md decision #8): a `\section` and a `\newcommand` share the `COMMAND`
-//! shape, so accessors are *positional* ([`Command::nth_group`]) and tolerate
-//! greedily over-attached groups by construction. They expose structure only, never
-//! command *meaning* (decision #2) — no signature-DB lookup lives here.
+//! Typed [`AstNode`] wrappers over the generic CST.
+//!
+//! Accessors are positional and tolerate greedily attached groups. They expose
+//! syntax without assigning command meaning or consulting the signature database.
 
 use rowan::{NodeOrToken, TextRange, TextSize};
 

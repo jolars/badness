@@ -1,5 +1,5 @@
-//! Snapshot the token stream for a few representative inputs (insta demo /
-//! Phase 0 scaffolding). Regenerate with `INSTA_UPDATE=always cargo test` or
+//! Snapshot the token stream for representative inputs. Regenerate with
+//! `INSTA_UPDATE=always cargo test` or
 //! `task snapshots`.
 
 use badness_parser::parser::lex;

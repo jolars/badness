@@ -1,8 +1,7 @@
 //! The trivia-perturbation oracle for trivia-invariant layout.
 //!
 //! Layout must be a function of non-trivia content, config, and only those
-//! trivia predicates the formatter itself *preserves* (`AGENTS.md`, and
-//! `formatter.md` § *Trivia-invariant layout*). The unsafe predicate is
+//! trivia predicates the formatter itself preserves. The unsafe predicate is
 //! "gap is a lone newline vs. a space": the formatter converts freely in both
 //! directions, so any layout decision keyed on it makes pass 1 silently edit
 //! pass 2's input — the root of the K&R↔Allman idempotency bug family.
@@ -10,30 +9,23 @@
 //! This module perturbs that predicate directly: generate TeX-identical trivia
 //! perturbations of the input (swap a lone newline for a space and back
 //! wherever the swap is meaning-preserving) and check the formatter over them.
-//! Two oracles ride on one generator:
+//! The generator supports two checks:
 //!
-//! - **Convergence** ([`check_trivia_convergence`], today's gate): every
+//! - **Convergence** ([`check_trivia_convergence`]): every
 //!   perturbed variant must format to a *fixed point* whose output upholds the
 //!   whitespace-only and losslessness invariants. This hunts exactly the
 //!   idempotency-hybrid family (K&R↔Allman): plain idempotence only ever
 //!   exercises the single trivia configuration `fmt` itself produces, so a
 //!   hybrid needs a corpus file to land on exactly the right column
 //!   arithmetic — the perturbations synthesize those configurations directly.
-//!   Deliberate authored-break *preservation* (the conservative generic path,
-//!   and every Tier-2 mode with a sound fixed-point argument) passes by
-//!   construction, so a failure is always a real bug, and the check is valid
-//!   under **every** wrap mode — it empirically validates the Tier-2
-//!   fixed-point arguments rather than exempting them.
-//! - **Strict invariance** ([`check_trivia_invariance`], the end-state gate):
+//!   Deliberate authored-break preservation passes when it reaches a fixed point.
+//! - **Strict invariance** ([`check_trivia_invariance`]):
 //!   `fmt(perturbed) == fmt(original)`. This is the full trivia-invariant
-//!   layout contract and holds only once layout no longer reads the unsafe
-//!   predicate at all (the `Gap`-enum endgame); until then it fails wherever
-//!   the formatter preserves an authored break, so it does not gate a corpus.
-//!   Its role today is the opposite one: it is the only *mechanical* way to
-//!   find a layout decision that reads the unsafe predicate, because such a
+//!   layout contract. It finds layout decisions that read the unsafe predicate,
+//!   because such a
 //!   decision is self-consistent on both spellings and therefore invisible to
-//!   idempotence and to convergence alike. [`survey_trivia_invariance`] is the
-//!   surveying form behind `--checks trivia-strict`.
+//!   idempotence and convergence. [`survey_trivia_invariance`] reports all
+//!   violations for `--checks trivia-strict`.
 //!
 //! This is a debug/test surface shared by `badness debug format --checks
 //! trivia`/`--checks trivia-strict` and the invariant tests; it carries no
@@ -364,11 +356,9 @@ pub fn check_trivia_convergence(
 
 /// Run the **strict** trivia-invariance oracle: `fmt(perturbed) ==
 /// fmt(original)` for every verified perturbation of `input`. This is the
-/// end-state trivia-invariant layout contract — until the lowering no longer
-/// reads the lone-newline-vs-space predicate at all, it fails wherever the
-/// formatter deliberately preserves an authored break, so it gates only the
-/// shapes proven invariant so far (the registry in `tests/format.rs`), never a
-/// corpus. [`survey_trivia_invariance`] is the form for surveying one.
+/// strict trivia-invariant layout contract. It fails wherever lowering preserves
+/// an authored break, so it applies only to shapes known to be invariant.
+/// [`survey_trivia_invariance`] reports all failures for an input.
 pub fn check_trivia_invariance(
     input: &str,
     config: impl Into<LexConfig>,

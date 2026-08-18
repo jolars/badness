@@ -1,17 +1,10 @@
 //! A lightweight Wadler/Prettier-style intermediate representation (IR) for the
 //! formatter.
 //!
-//! Construct formatters build an [`Ir`] tree describing *possible* layouts (with
-//! break-points), and [`super::printer::Printer`] resolves it against the
-//! configured line width into a final string. This replaces the older model
-//! where each construct rendered directly to a `String` and width was measured
-//! retrospectively.
-//!
-//! This is a language-agnostic Wadler/Prettier-style layout engine.
+//! Construct formatters build an [`Ir`] tree describing possible layouts.
+//! [`super::printer::Printer`] resolves it against the configured line width.
 
-// The IR exposes a complete primitive vocabulary. A number of builders are not
-// yet exercised by badness's identity lowering; they are kept so the engine is
-// ready for real format rules.
+// Some language-independent IR primitives are not used by every lowering.
 #![allow(dead_code)]
 
 use std::rc::Rc;
@@ -74,8 +67,7 @@ pub(crate) enum Ir {
     },
     /// Emit `flat` when the enclosing group is flat, `broken` when it is broken.
     IfBreak { flat: Rc<Ir>, broken: Rc<Ir> },
-    /// Pre-rendered text (comments, or not-yet-migrated constructs) spliced
-    /// through untouched. When `force_break` is set the enclosing group cannot
+    /// Pre-rendered text spliced through untouched. When `force_break` is set the enclosing group cannot
     /// stay flat (used for comments and for multi-line bridged renderings);
     /// otherwise it behaves as opaque inline text of its own width.
     Verbatim { text: Rc<str>, force_break: bool },

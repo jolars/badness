@@ -1,30 +1,22 @@
-//! Arity-directed argument attachment for expl3 call sites — the grammar half
-//! of `AGENTS.md` decision #8's sanctioned deviation. Landed through the
-//! staged migration `TODO.md` recorded: the token-level scan was diffed
-//! against `semantic::expl3`'s independent consumption over the gate corpora
-//! (67k statement-leading heads) before any consumer flipped.
+//! Arity-directed argument attachment for expl3 call sites.
 //!
 //! In an expl3 region `:`/`_` are letters, so a function name lexes as one
 //! `CONTROL_WORD` carrying its own argspec suffix (`\tl_set:Nn`). Attachment
-//! directed by that suffix is exactly as text-pure as greed — the arity rides
-//! in the head token itself — and greed is a systematically *wrong* guess in
+//! directed by that suffix remains text-pure because the arity is part of the
+//! head token. Greedy attachment is systematically wrong in
 //! the dialect: every single-token slot breaks the run, so
 //! `\tl_set:Nn \l_a {x}` attaches `{x}` to the definee, and the semantic
-//! layer's peel-back (`semantic::expl3::UnitCursor`) exists only to undo that
-//! after the fact. This module puts the same consumption rules in front of the
-//! event stream instead.
+//! layer would otherwise need to undo that attachment after parsing.
 //!
 //! **Shape gate and walk are one implementation.** [`Parser::scan_expl3_unit`]
 //! is a pure `&self` token scan producing an [`Expl3Plan`];
 //! [`Parser::attach_expl3_arguments`] replays exactly the plan's spans and
-//! never re-decides a shape, so the scan mirrors the walk by construction
-//! (`AGENTS.md`, "a shape gate must mirror the parse it
-//! guards"). Anything the scan cannot resolve returns `None` and the head
+//! never re-decides a shape, so the scan mirrors the walk by construction.
+//! Anything the scan cannot resolve returns `None` and the head
 //! falls back to plain greedy attachment with **no diagnostic** (a gated
 //! construct never diagnoses). A blank line instead ends the unit *early*: the
 //! plan carries the consumed prefix, the remainder parses as ordinary
-//! siblings, and the partial commit is pass-stable because blank-line presence
-//! is a preserved predicate — mirroring the semantic scan's `Stop::End`.
+//! siblings. Blank-line presence makes that partial result stable across passes.
 //!
 //! **The trigger keys on token shape alone.** A `CONTROL_WORD` whose name
 //! carries a `:` can only have lexed inside an expl3 region (out of region a
@@ -35,17 +27,15 @@
 //! a call site — the semantic layer's shape rules keep them on the fallback
 //! only by accident of greed, so the grammar excludes them explicitly — and
 //! the formatter's *positional* toggle gate stays the formatter's alone: in a
-//! false-positive region (`\def\ExplSyntaxOn{…}`) a mis-attachment is
-//! tree-only and byte-invisible, the same posture as the lexer's name-only
-//! toggle model (issue #69).
+//! false-positive region (`\def\ExplSyntaxOn{…}`) a mis-attachment changes only
+//! the tree, not the source bytes.
 //!
 //! Where the scan must refuse, it refuses **conservatively**: a candidate that
 //! *might* form a node in the walk (a gated `\begin`, a live conditional
 //! opener, a math opener whose closer is reachable, a bound `DOC_COMMENT` run)
 //! aborts the unit even where the gate would demote it to a plain, consumable
-//! token. A conservative refusal only costs recognition — the head stays
-//! greedy, never mis-attached — and the migration oracle over the gate corpora
-//! is what prices the residue before any consumer flips.
+//! token. A conservative refusal only costs recognition: the head falls back to
+//! greedy attachment.
 
 use super::Parser;
 use super::trivia::{BLANK_LINE_NEWLINES, CommentMode};

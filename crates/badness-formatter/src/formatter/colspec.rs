@@ -1,7 +1,6 @@
 //! Parsing the `{lcr}` column specification of a `tabular`/`array` environment
-//! into per-column alignments. This is a pure layout concern owned by the
-//! formatter (AGENTS.md tenet #1): it reads only the static, structural argument
-//! text and resolves no macro meaning. It is deliberately **conservative** — any
+//! into per-column alignments. It reads structural argument text without
+//! resolving macro meaning. The parser is conservative: any
 //! token it does not model collapses the whole spec to `None`, and the caller
 //! falls back to all-left rather than mis-align an exotic specification.
 

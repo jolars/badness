@@ -17,8 +17,7 @@ use crate::semantic::define::scan_definitions;
 use crate::semantic::signature::builtin;
 use crate::syntax::SyntaxNode;
 
-/// A parsed document: the green tree plus any syntax errors gathered alongside
-/// it. Errors never abort the parse (see `AGENTS.md`, Core decision #5).
+/// A green tree and the syntax errors gathered while parsing it.
 #[derive(Debug, Clone)]
 pub struct Parse {
     pub green: GreenNode,
@@ -26,8 +25,7 @@ pub struct Parse {
 }
 
 impl Parse {
-    /// Materialize a fresh red-tree cursor over the parsed document. Cheap (an
-    /// atomic clone of the green node).
+    /// Returns a red-tree cursor over the parsed document.
     pub fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green.clone())
     }
@@ -43,16 +41,16 @@ pub struct SyntaxError {
 
 /// Parse LaTeX source into a lossless CST.
 ///
-/// A bounded **two-pass** parse handles user-defined verbatim-argument commands
+/// A bounded two-pass parse handles user-defined verbatim-argument commands
 /// (`\newcommand`/xparse definitions that other a special char's catcode — see
 /// [`crate::semantic::define`]): the lexer needs to know such commands *before* it
 /// tokenizes their call sites, but they are only discoverable from the parsed tree.
 /// So pass 1 parses with built-in verbatim knowledge only, scans the result for
 /// catcode-verbatim definitions, and — *only* when it finds any — pass 2 re-parses
 /// with those commands fed into the lexer so their arguments become opaque `VERB`
-/// tokens. Two passes is the deliberate, conservative bound: a definition visible
+/// tokens. Two passes is a conservative bound: a definition visible
 /// only after the second pass's re-tokenization is a tolerated false negative. The
-/// common case (no such definition) is a single parse (AGENTS.md decisions #1, #6).
+/// common case is a single parse.
 pub fn parse(input: &str) -> Parse {
     parse_with_flavor(input, LatexFlavor::Document)
 }

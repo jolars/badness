@@ -1,27 +1,19 @@
 //! Incremental reparse: splice a small edit into the previous green tree instead
 //! of re-parsing the whole text.
 //!
-//! # The contract
+//! # Contract
 //!
-//! **A successful reparse must yield a green tree *and* a [`SyntaxError`] vector
-//! byte-identical to a full parse of the edited text.** Nothing weaker is
-//! admissible: the tree feeds the formatter, which writes the user's file, and the
-//! linter, whose fixes rewrite content. A reparse is a pure performance hint — the
-//! salsa layer above only ever sees text changes, and every miss is a full parse,
-//! never an error and never a best-effort answer.
+//! A successful reparse must produce the same green tree and [`SyntaxError`]
+//! vector as a full parse of the edited text. Incremental reparse is only a
+//! performance optimization; a failed proof falls back to a full parse.
 //!
-//! That contract is what makes the whole design safe to extend. Every guard here
-//! returns [`None`], so a new construct the guards do not understand costs speed
-//! and nothing else, and a failure of the oracle is always fixed by *adding a bail*
-//! — never by relaxing the assert.
+//! Guards return [`None`] when they cannot prove equivalence. Extend them by
+//! adding supported cases or conservative bailouts, never by weakening the oracle.
 //!
-//! It is also what makes the host's side channel sound. `parsed_document` is a
-//! salsa query that reads a mutable cache of previous parses, which would be a
-//! contradiction if the cache could change the answer. It cannot: the query's
-//! output is what `parse(text)` returns whatever the cache holds, so a cold, stale,
-//! or evicted cache costs a parse and nothing else.
+//! The previous-parse cache cannot affect the query result. A cold, stale, or
+//! evicted cache only forces a full parse.
 //!
-//! # The shape, and what it does *not* require
+//! # Design
 //!
 //! The tiers sit strictly **on top of** [`parse_with_declarations_resolved`] and
 //! [`lex_with`]. There is no incremental lexer, no token-stream reuse, no restarting
@@ -38,19 +30,8 @@
 //!   resulting children under `ROOT`, using neighbour-sized boundary parses purely
 //!   as proofs that the substring is decoupled from its context.
 //!
-//! So none of the parser's left-to-right state needs checkpointing: not the lexer's
-//! (`at_letter`, `expl_syntax`, `short_verbs`, `macrocode`, brace depth), not the
-//! grammar's prescan indices, and not the shape gates' forward scans. Those return
-//! only at the region tier, where a gate verdict for a node *before* the edit can
-//! flip because a closer *after* it appeared or vanished.
-//!
-//! # Status
-//!
-//! Phase 7. The token tier ([`token`]), protected-body tier ([`protected`]), and
-//! conservative region tier ([`region`]) are implemented. The region tier handles
-//! multi-leaf top-level prose and adjacent paragraph seams; unrestricted structural
-//! regions remain a measured-workload-dependent widening recorded in `TODO.md`.
-//! See `TODO.md` § Incremental reparse.
+//! This avoids checkpointing lexer state, prescan indices, or forward shape-gate
+//! scans. The region tier declines edits whose effects may escape the fragment.
 
 mod leaf;
 mod protected;

@@ -2,8 +2,7 @@
 //!
 //! Every byte of the input ends up in exactly one token, so concatenating all
 //! token texts reproduces the input verbatim — the losslessness invariant. The
-//! lexer is mostly context-free, with three bounded, statically-recognizable
-//! modes sanctioned by `AGENTS.md` Core decision #1:
+//! lexer is mostly context-free, with a small set of statically recognizable modes:
 //!
 //! - **`\verb` / `\verb*`** inline verbatim: the delimited argument is consumed
 //!   as a single [`SyntaxKind::VERB`] token (otherwise the delimiters glue into
@@ -47,9 +46,7 @@ pub struct Token {
 /// The LaTeX file flavor, fixing the lexer's *initial* catcode regime. A
 /// document (`.tex`) starts in the ordinary regime; a package or class
 /// (`.sty`/`.cls`) is loaded under an implicit `\makeatletter`, so `@` is a
-/// letter from the first byte (a static, extension-driven catcode fact —
-/// sanctioned exactly like the explicit `\makeatletter` mode, `AGENTS.md`
-/// decision #1). A trailing explicit `\makeatother` still applies.
+/// letter from the first byte. A trailing explicit `\makeatother` still applies.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum LatexFlavor {
     /// A `.tex` document: ordinary catcodes at the start.

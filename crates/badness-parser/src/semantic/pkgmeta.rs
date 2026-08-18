@@ -1,6 +1,5 @@
 //! Static **recognition** of the package/class authoring commands — the metadata a
-//! `.sty`/`.cls` declares about itself. We read the declared facts only; nothing is
-//! ever executed (AGENTS.md non-goals).
+//! `.sty`/`.cls` declares about itself. Definitions are inspected, not executed.
 //!
 //! Three declarations are extracted, mirroring how `\definecolor`/`\newglossaryentry`
 //! feed the [`SemanticModel`](super::SemanticModel):
@@ -16,10 +15,8 @@
 //! `\ProcessOptions`/`\ExecuteOptions` carry no extractable identity, so they get no
 //! model entry — the LSP hover renders a static note for them.
 //!
-//! The extraction helpers are `pub` and populate the [`SemanticModel`](super::SemanticModel)
-//! in the builder's single CST walk; the LSP hover then matches the cursor against the
-//! stored declarations by their control-word range, so extraction lives in one place.
-//! The forthcoming package-aware diagnostics (TODO.md) consume the same model fields.
+//! Extraction populates [`SemanticModel`](super::SemanticModel) during its CST walk.
+//! Consumers match declarations by their control-word range.
 
 use rowan::TextRange;
 use smol_str::SmolStr;

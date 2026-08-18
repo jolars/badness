@@ -1,16 +1,13 @@
 //! The built-in **BibTeX field/entry signature database**: which fields each entry
 //! type requires/allows, and a coarse category per field (name list, date,
 //! verbatim-ish, or plain literal). The bib analog of
-//! [`crate::semantic::signature`] — the place where *meaning* is assigned to entry
-//! types and field names, kept strictly out of the parser (AGENTS.md decision #2).
+//! [`crate::semantic::signature`]. Meaning is assigned here rather than in the parser.
 //!
 //! Like the LaTeX side, the data is fully static, so it lives in a process-wide
 //! [`LazyLock`] loaded from one curated JSON file (`data/bib_fields.json`,
 //! [`include_str!`]-ed, [`serde`]-deserialized). It is consulted directly; there is
-//! no per-document overlay (entry types and field names are fixed, unlike
-//! user-defined commands). Categories drive the Phase-2 formatter (name-list and
-//! verbatim handling) and the Phase-3 linter (missing-required / unknown-field);
-//! it is loaded now and consumed there.
+//! no per-document overlay because entry types and field names are fixed.
+//! Categories are shared by formatter and linter consumers.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;

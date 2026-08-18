@@ -1,8 +1,7 @@
 //! Scan a document for **user definitions** — `\newcommand`/`\newenvironment` and
 //! the xparse `\NewDocument…` family — and extract their argument *signatures* into
-//! a per-document [`SignatureDb`]. Signatures only: we read the declared argument
-//! shape, never the replacement text, and never execute anything (AGENTS.md
-//! non-goals and decision #1).
+//! a per-document [`SignatureDb`]. The scanner reads declared argument shapes,
+//! but neither interprets replacement text nor executes definitions.
 //!
 //! A single whole-tree walk (mirror of [`super::builder::build`]) collects every
 //! definition; the result overlays the built-in DB via [`Signatures`] (scanned

@@ -1,16 +1,8 @@
-//! A typed AST layer over the CST — thin, read-only wrappers ([`AstNode`] /
-//! [`AstToken`]) giving nodes a typed identity and named, *positional* accessors
-//! (reading a `COMMAND`'s name and its literal `{…}` argument text, an
-//! `ENVIRONMENT`'s `\begin`/`\end`, …).
+//! Typed, read-only wrappers over the CST.
 //!
-//! Purely syntactic: the wrappers know nothing about what any command *means*, so
-//! both the syntactic `project/` layer and the semantic layer build on them without
-//! meaning leaking downward (AGENTS.md decision #2). Because the CST is generic and
-//! greedy (decision #8), accessors are positional ([`nodes::Command::nth_group`]) and
-//! tolerate over-attached groups by construction — they never pretend arity is fixed.
+//! Accessors are positional and do not assign meaning or arity to commands.
 //!
-//! The free functions below are thin shims over the wrapper methods, kept so existing
-//! `&SyntaxNode`-based call sites compile unchanged during the migration.
+//! Free functions provide the same operations for untyped [`SyntaxNode`] callers.
 
 pub mod nodes;
 pub mod tokens;
@@ -24,8 +16,7 @@ use rowan::{NodeOrToken, TextRange};
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
-/// A typed wrapper over a CST *node* of a single [`SyntaxKind`]. Mirrors
-/// rust-analyzer's `AstNode`: `cast` succeeds iff `can_cast(node.kind())`.
+/// A typed wrapper over CST nodes of a particular [`SyntaxKind`].
 pub trait AstNode {
     fn can_cast(kind: SyntaxKind) -> bool
     where
@@ -36,7 +27,7 @@ pub trait AstNode {
     fn syntax(&self) -> &SyntaxNode;
 }
 
-/// A typed wrapper over a CST *token* of a single [`SyntaxKind`].
+/// A typed wrapper over CST tokens of a particular [`SyntaxKind`].
 pub trait AstToken {
     fn can_cast(kind: SyntaxKind) -> bool
     where
@@ -50,8 +41,7 @@ pub trait AstToken {
     }
 }
 
-/// The first child node castable to `N`. Replaces the raw
-/// `children().find(|c| c.kind() == X)` idiom at *field-extraction* sites.
+/// Returns the first child node castable to `N`.
 pub fn child<N: AstNode>(parent: &SyntaxNode) -> Option<N> {
     parent.children().find_map(N::cast)
 }

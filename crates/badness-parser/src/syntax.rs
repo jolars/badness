@@ -36,7 +36,7 @@ pub enum SyntaxKind {
     GUARD,          // a `.dtx` docstrip guard `%<…>` (`%<*t>`/`%</t>`/inline) (trivia)
     ERROR,          // lexer fallback; the lexer is total, so this is unused today
 
-    // --- Nodes (composites, produced by the Phase 1 parser) ---
+    // Nodes
     GROUP,       // { … }
     OPTIONAL,    // [ … ] optional argument
     ARGUMENT,    // an argument attached to a command

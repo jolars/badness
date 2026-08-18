@@ -1,14 +1,8 @@
-//! A typed AST layer over the BibTeX CST — the bib analog of [`crate::ast`]. Thin,
-//! read-only wrappers ([`AstNode`]) giving nodes a typed identity and syntactic
-//! accessors (an entry's type and cite key, its fields' names and values, an
-//! `@string` definition's name, the bare macro *uses* inside a value).
+//! Typed, read-only wrappers over the BibTeX CST.
 //!
-//! Purely syntactic: they know nothing about what a field or entry *means* (AGENTS.md
-//! decisions #2, #10), so the semantic layer, formatter, and linter build on them
-//! without meaning leaking downward.
+//! Accessors expose syntax without assigning meaning to fields or entries.
 //!
-//! The free functions below are thin, kind-agnostic shims over the wrapper methods,
-//! kept so existing `&SyntaxNode`-based call sites compile unchanged.
+//! Free functions provide the same operations for untyped [`SyntaxNode`] callers.
 
 pub mod nodes;
 
@@ -18,10 +12,7 @@ use rowan::TextRange;
 
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 
-/// A typed wrapper over a bib CST *node* of a single [`SyntaxKind`]. Mirrors
-/// rust-analyzer's `AstNode` (and [`crate::ast::AstNode`]): `cast` succeeds iff
-/// `can_cast(node.kind())`. Re-declared here rather than shared with the LaTeX side
-/// because the two CSTs have distinct `SyntaxKind` enums and `Language` markers.
+/// A typed wrapper over BibTeX CST nodes of a particular [`SyntaxKind`].
 pub trait AstNode {
     fn can_cast(kind: SyntaxKind) -> bool
     where

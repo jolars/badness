@@ -1,4 +1,4 @@
-//! Phase 1 parser tests: tree-shape snapshots over representative inputs, plus
+//! Tree-shape snapshots over representative inputs, plus
 //! targeted assertions on error-recovery behaviour. Every case also re-checks
 //! the losslessness invariant. Regenerate snapshots with `task snapshots`.
 

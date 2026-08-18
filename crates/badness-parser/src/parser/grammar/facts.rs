@@ -1,11 +1,7 @@
 //! Curated static facts about particular commands.
 //!
-//! Each set here is *closed and hand-maintained*, read as a lexical fact about
-//! the surface syntax and never as a claim about what the command does
-//! (`AGENTS.md` decision #2's admission test: individually vetted entries
-//! whose misapplication the text can falsify). The
-//! bodies these predicates route around are never executed, so a name that is
-//! not in a set simply degrades to the generic path.
+//! Each set is closed and hand-maintained. Entries describe text-falsifiable
+//! surface syntax rather than command behavior. Unknown names use the generic path.
 
 /// How [`Parser::attach_arguments`] treats a trailing `[…]` (issue #43).
 /// `[`/`]` are not real grouping in TeX, so bracket attachment is a heuristic;

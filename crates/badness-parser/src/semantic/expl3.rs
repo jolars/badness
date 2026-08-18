@@ -10,10 +10,8 @@
 //! wrong answer here can only produce ugly formatting downstream, never a
 //! wrong tree or a lost byte.
 //!
-//! Like [`xparse`](super::xparse), the argspec is a spec mini-language that is
-//! *parsed*, never executed (AGENTS.md decision #1): each letter names the
-//! **shape** an argument takes at the call site, a bounded, purely lexical
-//! fact — squarely decision #2's "the semantic layer assigns arity". No
+//! Like [`xparse`](super::xparse), the argspec is parsed rather than executed:
+//! each letter describes an argument's call-site shape. No
 //! signature database is involved: the name string alone carries the spec, so
 //! there is nothing to curate and nothing to drift. Only meaningful inside an
 //! expl3 region, where `:`/`_` are catcode-11 and the whole name lexes as one

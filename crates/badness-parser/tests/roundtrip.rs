@@ -1,6 +1,4 @@
 //! The losslessness invariant: `reconstruct(text) == text`, byte-for-byte.
-//! This is badness's foundational parser test (Tenet 4 / Core decision in
-//! `AGENTS.md`).
 
 use std::fs;
 use std::path::Path;

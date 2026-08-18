@@ -1,4 +1,4 @@
-//! The Phase 1 recursive-descent grammar for LaTeX surface syntax.
+//! Recursive-descent grammar for LaTeX surface syntax.
 //!
 //! The parser walks the full token stream (trivia included) and emits a flat
 //! list of [`Event`]s — `Start(kind)` / `Tok(idx)` / `Finish` — that
@@ -30,8 +30,7 @@ use prescan::PreScan;
 use smol_str::SmolStr;
 use trivia::{BLANK_LINE_NEWLINES, CommentMode};
 
-/// Re-exported at its historical path: `parser.rs`'s façade and the formatter's
-/// expl3 region gate both spell it `grammar::is_def_prefix_command`.
+/// Kept at this path for parser and formatter callers.
 pub use facts::is_def_prefix_command;
 
 /// Re-exported for [`crate::parser::reparse`]'s token tier, whose guard has to
@@ -43,15 +42,8 @@ pub(crate) const END_CMD: &str = "\\end";
 const LEFT_CMD: &str = "\\left";
 const RIGHT_CMD: &str = "\\right";
 
-/// Maximum number of consecutive cursor peeks with **no** token consumed before
-/// the parser aborts as stuck. Modeled on rust-analyzer's `PARSER_STEP_LIMIT`
-/// (`crates/parser/src/parser.rs`), a catch-all against a non-advancing loop that
-/// holds *independent of grammar correctness*. The counter resets on every cursor
-/// advance (see [`Parser::step`]), so in normal parsing only O(1) peeks accrue
-/// between two consumed tokens; this ceiling is astronomically above any real
-/// document and can only be reached by a genuine infinite loop. Unlike the
-/// module's structural "`pos` only advances through `bump`" argument, this holds
-/// even for malformed or adversarial input (fuzzing, a corrupt corpus file).
+/// Maximum number of cursor peeks without consuming a token. This catches
+/// non-advancing loops even on malformed input and resets after every advance.
 const PARSER_STEP_LIMIT: u32 = 15_000_000;
 
 /// A content region that groups its children into `PARAGRAPH` nodes separated

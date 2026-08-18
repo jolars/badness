@@ -34,8 +34,7 @@
 //! replacements — the deprecation is in the documentation, never in the
 //! behavior. A directive spelling is user-facing API; breaking one silently
 //! would be worse than carrying it. [`Directive::deprecated`] marks them, so a
-//! future lint rule reporting the retired spelling has the fact it needs
-//! without re-parsing (recorded in `TODO.md`).
+//! lint rule reporting the retired spelling can reuse the parsed fact.
 //!
 //! ## Why this lives in the parser crate
 //!

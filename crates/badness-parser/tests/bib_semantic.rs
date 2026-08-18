@@ -2,7 +2,7 @@
 //! `biblatex-examples.bib` and assert it collects every entry and produces no
 //! false-positive duplicate-key or undefined-`@string` findings on known-good data.
 //!
-//! This is the end-to-end proof for Phase 1, in the spirit of the bib parse oracle:
+//! These tests exercise the complete BibTeX semantic pipeline:
 //! the model must hold up on real biblatex input, not just hand-written fixtures.
 
 use std::fs;

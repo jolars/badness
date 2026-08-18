@@ -2,9 +2,8 @@
 //!
 //! Mirrors [`crate::semantic::builder`]: one `root.descendants()` pass collects
 //! entries, `@string` definitions, and `@string` uses; then [`resolve`] flags
-//! duplicate cite keys and marks each use resolved/undefined by name match. No
-//! diagnostics are produced here — the model exposes facts; the linter (Phase 3)
-//! turns them into diagnostics.
+//! duplicate cite keys and marks each use resolved or unresolved. The model
+//! exposes facts; consumers decide how to diagnose them.
 
 use std::collections::HashSet;
 

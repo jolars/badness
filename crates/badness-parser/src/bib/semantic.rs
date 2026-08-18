@@ -1,17 +1,10 @@
-//! Single-file BibTeX semantic analysis: the per-file entry / cite-key / `@string`
-//! model.
+//! Single-file BibTeX semantic analysis.
 //!
-//! The bib analog of [`crate::semantic`]. BibTeX has no lexical scoping — cite keys
-//! and `@string` macros live in one file-global namespace — so the model is a
-//! **flat** set of vectors (entries, `@string` defs, `@string` uses), built in one
-//! CST walk by [`builder::build`], then a resolve pass flags duplicate cite keys and
-//! marks each `@string` use resolved/undefined. No caching lives here; the salsa
-//! layer that memoizes it (`bib_semantic_model`) is a later increment (Phase 4).
+//! [`builder::build`] collects entries, `@string` definitions, and uses in one
+//! CST walk. A resolve pass then marks duplicate cite keys and unresolved uses.
 //!
-//! **Cross-file resolution is out of scope for this slice.** A `@string` defined in
-//! one `.bib` and used in another, or cite keys spanning a multi-file bibliography,
-//! resolve only once a project-level query unions the per-file models — deferred,
-//! exactly as on the LaTeX side. This is per-file only.
+//! BibTeX has file-global rather than lexical scope. Cross-file resolution and
+//! incremental caching belong to the project layer.
 
 pub mod builder;
 pub mod entry;
@@ -26,9 +19,7 @@ use crate::bib::syntax::SyntaxNode;
 
 /// A file's regular entries, `@string` definitions, and `@string` uses.
 ///
-/// `Eq` is load-bearing: the future `bib_semantic_model` salsa query will be **not**
-/// `no_eq` (like `semantic_model`), so an edit leaving this model unchanged backdates
-/// and downstream queries are not re-run.
+/// Equality lets incremental queries avoid recomputing unchanged dependents.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Model {
     pub(crate) entries: Vec<Entry>,
@@ -57,32 +48,22 @@ impl Model {
         &self.string_uses
     }
 
-    /// Entries whose cite key duplicates an earlier one (the 2nd+ occurrence).
-    ///
-    /// A per-file fact, **not** a lint signal: a `duplicate-key` diagnostic is built
-    /// on this by the linter (Phase 3), which decides severity and how to point at
-    /// each occurrence.
+    /// Returns entries whose cite key duplicates an earlier entry in this file.
     pub fn duplicate_keys(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|entry| entry.duplicate)
     }
 
     /// `@string` uses that match no in-file definition or predefined month macro.
     ///
-    /// A per-file fact, **not** a lint signal: in a multi-file bibliography the macro
-    /// may be defined elsewhere. The Phase-3 `undefined-string` lint would gate on a
-    /// cross-file resolution, mirroring `undefined-ref`.
+    /// A macro may still be defined in another bibliography file.
     pub fn undefined_string_uses(&self) -> impl Iterator<Item = &StringUse> {
         self.string_uses.iter().filter(|u| !u.resolved)
     }
 
     /// `@string` definitions never referenced by any use in this file.
     ///
-    /// A per-file fact, **not** a lint signal on its own: in a multi-file
-    /// bibliography a `@string` defined here may be referenced from another `.bib`,
-    /// so the Phase-3 `unused-string` lint that builds on this carries a single-file
-    /// false-positive caveat until cross-file resolution gates it (Phase 4), exactly
-    /// as [`undefined_string_uses`](Self::undefined_string_uses) is gated. Both
-    /// `name` fields are lowercased, so the membership test is case-correct.
+    /// A definition may still be used from another bibliography file. Names are
+    /// compared in lowercase.
     pub fn unused_string_defs(&self) -> impl Iterator<Item = &StringDef> {
         let used: std::collections::HashSet<&str> =
             self.string_uses.iter().map(|u| u.name.as_str()).collect();

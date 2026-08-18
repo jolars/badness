@@ -1,7 +1,6 @@
 //! Parser for the **xparse argument specification** mini-language — the string in
 //! the second group of `\NewDocumentCommand{\foo}{<spec>}{…}` (and the environment
-//! variants). It is *parsed*, never executed (AGENTS.md decision #1): we read the
-//! shape of each argument, not its processing.
+//! variants). It describes argument shapes; processing behavior is ignored.
 //!
 //! The full grammar is tokenized so the cursor never desyncs on a type's trailing
 //! material (delimiter tokens, `{default}` groups, embellishment sets). But our

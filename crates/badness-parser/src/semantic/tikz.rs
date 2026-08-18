@@ -7,22 +7,14 @@
 //! hang need. What extent cannot give is good breaks *inside* a statement: the
 //! interior is an undifferentiated atom stream, so a width fill would happily
 //! break a coordinate from its operation (`\draw (6,6)` / `circle (3);`) or an
-//! `at` from its coordinate. That is a *vocabulary* problem — `at`, `--`,
-//! `circle` mean something only because TikZ's own parser says so — and per
-//! AGENTS.md decision #2's admission test it is resolved here, in the semantic
-//! layer, never in the grammar: `(a)` as a coordinate versus a node-name
-//! reference versus prose has no text-shape demotion, so a wrong reading could
-//! not be gated. Held semantic-side, a wrong reading degrades to a worse break
-//! choice — layout taste, never a wrong tree. (The survey behind the break
-//! policy — pgf's own manual sources plus a user corpus, ~6000 statements —
-//! found continuation lines lead with their operator ~3:1, `at` split from its
-//! coordinate 5 times in 3103 continuation lines, and glued `;\draw` never.)
+//! `at` from its coordinate. These are vocabulary-dependent relationships, so
+//! they belong in the semantic layer rather than the grammar. A missed or
+//! incorrect relationship can affect line breaking, but never the syntax tree.
 //!
 //! The model is deliberately a **glue map, not a grammar**: for each authored
 //! gap between a statement's top-level elements, one verdict — unit-internal
 //! (render as a single space, never break) or neutral (an ordinary break
-//! opportunity, exactly as before). Everything unrecognized is neutral, so the
-//! failure mode of a vocabulary miss is today's layout, not a new one. All
+//! opportunity). Everything unrecognized is neutral. All
 //! reads are non-trivia token text, so the verdicts are Tier 1 by
 //! construction: no trivia predicate is consulted, and a width wrap re-derives
 //! the same units on every pass.

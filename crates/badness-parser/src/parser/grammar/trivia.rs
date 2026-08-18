@@ -2,8 +2,7 @@
 //!
 //! Every blank-line and comment-attachment question the grammar asks is decided
 //! from one walk of a trivia run ([`Parser::scan_trivia`]) rather than five
-//! near-identical ones. The attachment rule itself is `AGENTS.md` #9, after
-//! rust-analyzer: comments bind *forward* into the construct they annotate,
+//! near-identical ones. Comments bind forward into the construct they annotate,
 //! whitespace floats, and a blank line breaks the bind.
 
 use super::{BEGIN_CMD, END_CMD, Parser};
@@ -24,12 +23,10 @@ pub(super) enum CommentMode {
 }
 
 /// Newlines in a trivia run that make it a **blank line** — TeX's `\par`
-/// boundary, and one of the few trivia predicates layout may read (`AGENTS.md`,
-/// trivia-invariant layout). Two, because one newline only ends a line.
+/// boundary. One newline only ends the current line.
 pub(super) const BLANK_LINE_NEWLINES: usize = 2;
 
-/// The result of scanning the contiguous trivia run at a position: everything the
-/// blank-line and comment-bind rules (AGENTS.md #9) need to decide, computed once.
+/// The result of scanning a contiguous trivia run.
 pub(super) struct TriviaScan {
     /// Index of the next meaningful (non-skipped) token, or `tokens.len()` at EOF.
     pub(super) next: usize,

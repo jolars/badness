@@ -269,14 +269,14 @@ impl Base {
     }
 
     fn view(&self) -> ReparseBase<'_> {
-        ReparseBase {
-            text: &self.text,
-            green: &self.parse.green,
-            errors: &self.parse.errors,
-            ctx: &self.ctx,
-            config: self.config,
-            declared: &self.declared,
-        }
+        ReparseBase::from_parts(
+            &self.text,
+            &self.parse.green,
+            &self.parse.errors,
+            &self.ctx,
+            self.config,
+            &self.declared,
+        )
     }
 
     /// Check one edit against the invariant, recording the outcome in `tally`.

@@ -69,13 +69,10 @@
 //!
 //! Every guard returns [`None`] and the caller full-parses. The deliberate refusals:
 //!
-//! - **A `.dtx` parse, wholesale.** Phase 3 refused it because the docstrip mode lexes
-//!   by line and by column 0, and hoped a whole-node relex would lift that. It does
-//!   not. `Lexer::new` derives `implicit_expl` from a scan of the *entire input*, so
-//!   an isolated fragment can be lexed under a regime the file never had — and, worse,
-//!   can pass leg 1 anyway when the difference happens not to show in these bytes.
-//!   Faithfulness is evidence about the fragment, not about the file, and that is
-//!   exactly the gap here.
+//! - **A `.dtx` edit that changes the implicit-expl signal.** The tier carries the
+//!   base parse's full-file `implicit_expl` fact and relexes fragments under it, but
+//!   if an edit changes the signal (`%<@@=...>` / `\ProvidesExpl*`) the base regime
+//!   is stale by construction and the tier refuses.
 //! - **A leaf whose parent is not the construct that captured it** — a short-verb span
 //!   sitting loose in a `PARAGRAPH`, a body under a `\begin` some shape gate demoted.
 //!   The check is `O(1)` and it is what keeps the tier from relexing a whole paragraph
@@ -92,7 +89,7 @@
 
 use rowan::{GreenToken, NodeOrToken, TextRange, TextSize};
 
-use crate::parser::lexer::{Token, lex_with};
+use crate::parser::lexer::{Token, dtx_has_expl_signal, lex_with, lex_with_implicit_expl};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::leaf::{context_admits, shifted_errors, text_reads_are_inert};
@@ -107,7 +104,7 @@ pub(super) fn reparse_protected(
 ) -> Option<Reparsed> {
     // Cheapest first: a rejected attempt is paid *on top of* the full parse it falls
     // back to, and this tier's relex is the most expensive thing in the ladder.
-    if base.config.dtx {
+    if base.config.dtx && dtx_has_expl_signal(new_text) != base.implicit_expl {
         return None;
     }
 
@@ -201,7 +198,11 @@ fn relexes_to(
     expected: &[SyntaxToken],
     replaced: Option<(usize, &str)>,
 ) -> bool {
-    let got: Vec<Token> = lex_with(text, base.ctx, base.config);
+    let got: Vec<Token> = if base.config.dtx {
+        lex_with_implicit_expl(text, base.ctx, base.config, base.implicit_expl)
+    } else {
+        lex_with(text, base.ctx, base.config)
+    };
     if got.len() != expected.len() {
         return false;
     }
@@ -287,14 +288,31 @@ mod tests {
     fn with_base<R>(text: &str, f: impl FnOnce(&ReparseBase<'_>) -> R) -> R {
         let declared = ResolvedDeclarations::default();
         let (parse, ctx) = parse_with_declarations_resolved(text, LatexFlavor::Document, &declared);
-        f(&ReparseBase {
+        f(&ReparseBase::from_parts(
             text,
-            green: &parse.green,
-            errors: &parse.errors,
-            ctx: &ctx,
-            config: LatexFlavor::Document.into(),
-            declared: &declared,
-        })
+            &parse.green,
+            &parse.errors,
+            &ctx,
+            LatexFlavor::Document.into(),
+            &declared,
+        ))
+    }
+
+    fn with_dtx_base<R>(text: &str, f: impl FnOnce(&ReparseBase<'_>) -> R) -> R {
+        let declared = ResolvedDeclarations::default();
+        let config = LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        };
+        let (parse, ctx) = parse_with_declarations_resolved(text, config, &declared);
+        f(&ReparseBase::from_parts(
+            text,
+            &parse.green,
+            &parse.errors,
+            &ctx,
+            config,
+            &declared,
+        ))
     }
 
     fn edit(range: std::ops::Range<usize>, insert: &str) -> Edit {
@@ -414,28 +432,30 @@ mod tests {
         assert_refuses(text, after(text, "|raw", "x"));
     }
 
-    /// `.dtx` is refused wholesale: `implicit_expl` is a whole-input fact, so a
-    /// fragment can be faithful and still have been lexed under another regime.
+    /// `.dtx` is no longer refused wholesale on this tier when the implicit-expl
+    /// signal is stable.
     #[test]
-    fn refuses_every_edit_in_a_dtx_parse() {
-        let text = "% \\begin{macro}{\\foo}\n%    \\begin{macrocode}\n\\def\\foo{\\url{a_b}}\n";
-        let declared = ResolvedDeclarations::default();
-        let config = LexConfig {
-            flavor: LatexFlavor::Document,
-            dtx: true,
-        };
-        let (parse, ctx) = parse_with_declarations_resolved(text, config, &declared);
-        let base = ReparseBase {
-            text,
-            green: &parse.green,
-            errors: &parse.errors,
-            ctx: &ctx,
-            config,
-            declared: &declared,
-        };
+    fn splices_a_protected_body_edit_in_a_dtx_parse_when_signal_is_stable() {
+        let text = "% \\begin{macro}{\\foo}\n%    \\begin{macrocode}\n\\url{a_b}\n";
         let at = text.find("a_b").expect("fixture") + 1;
         let e = edit(at..at, "z");
-        assert!(reparse(&base, &e, &e.apply(text)).is_none());
+        with_dtx_base(text, |base| {
+            let out = reparse(base, &e, &e.apply(text)).expect("expected a protected dtx splice");
+            assert_eq!(out.tier, ReparseTier::Verbatim);
+        });
+    }
+
+    /// A `.dtx` edit that flips `%<@@=...>` / `\ProvidesExpl*` signal state is
+    /// refused: the base's carried implicit-expl regime is stale by construction.
+    #[test]
+    fn refuses_a_dtx_protected_edit_that_changes_implicit_expl_signal_state() {
+        let text = "% \\begin{macro}{\\foo}\n%    \\begin{macrocode}\n\\url{a_b}\n";
+        // The scanner is intentionally coarse and sees signal spellings anywhere in
+        // the file, including inside raw captures.
+        let e = after(text, "a_b", "\\ProvidesExplFile");
+        with_dtx_base(text, |base| {
+            assert!(reparse(base, &e, &e.apply(text)).is_none());
+        });
     }
 
     #[test]

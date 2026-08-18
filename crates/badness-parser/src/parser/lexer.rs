@@ -491,7 +491,7 @@ pub fn expl_toggle(text: &str) -> Option<ExplToggle> {
 /// is acceptable (`AGENTS.md` decision #1): a false positive only *joins* `_`/`:`
 /// into a control word (lossless), and reading the whole file keeps the signal
 /// order-independent, so a body *above* the declaration is flagged too.
-fn dtx_has_expl_signal(input: &str) -> bool {
+pub(crate) fn dtx_has_expl_signal(input: &str) -> bool {
     input.contains("\\ProvidesExpl")
         || input
             .lines()
@@ -513,7 +513,20 @@ pub fn lex(input: &str) -> Vec<Token> {
 /// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter) and
 /// whether to run the `.dtx` docstrip mode.
 pub fn lex_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Vec<Token> {
-    Lexer::new(input, ctx, config).run()
+    Lexer::new(input, ctx, config, None).run()
+}
+
+/// Lex `input` like [`lex_with`], forcing the `.dtx` implicit-expl regime.
+///
+/// Only for incremental reparse tiers that relex a fragment under the base parse's
+/// full-file lexer facts.
+pub(crate) fn lex_with_implicit_expl(
+    input: &str,
+    ctx: &ParseCtx,
+    config: LexConfig,
+    implicit_expl: bool,
+) -> Vec<Token> {
+    Lexer::new(input, ctx, config, Some(implicit_expl)).run()
 }
 
 /// The lexer's one-shot lookahead mode: a state the token just lexed arms, which
@@ -618,12 +631,22 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn new(input: &'a str, ctx: &'a ParseCtx, config: LexConfig) -> Self {
+    fn new(
+        input: &'a str,
+        ctx: &'a ParseCtx,
+        config: LexConfig,
+        implicit_expl_override: Option<bool>,
+    ) -> Self {
+        let implicit_expl = if config.dtx {
+            implicit_expl_override.unwrap_or_else(|| dtx_has_expl_signal(input))
+        } else {
+            false
+        };
         Self {
             input,
             ctx,
             config,
-            implicit_expl: config.dtx && dtx_has_expl_signal(input),
+            implicit_expl,
             out: Vec::new(),
             pos: 0,
             at_letter: config.flavor.letter_mode_start(),

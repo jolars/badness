@@ -2529,27 +2529,27 @@ copies plus a table splice, and the remainder is the parse's own consumers.
   refuses. So the argument to write is the allowlist's, and `implicit_expl` never
   reaches the token tier because expl3 names are control words.
 
-  Remaining, in order:
+  Landed in this step:
 
-  1. **Write that as the enumeration test**, in the shape
-     `reparse::leaf::tests::the_text_read_survey_is_complete` already has: one
-     verdict per state bit — `at_line_start`, `in_doc_line`, `at_letter`,
-     `expl_syntax`, `macrocode`, `implicit_expl`, `short_verbs` — each with a lexer
-     counterexample beside it, and each saying *which* guard refuses it. Two
-     generators finding nothing is not the proof; this is. Only then does the bail
-     come out, and the comment it leaves behind has to carry the argument.
-  2. **The protected tier is a separate question and does not inherit any of
-     this.** It relexes whole nodes, control words included, and `implicit_expl` is
-     precisely its stated objection. Its `.dtx` rows stayed at 0 through the whole
-     experiment. Carrying `implicit_expl` on `ReparseBase` (a fact the base parse
-     already computed) plus a refusal when the edit could move the signal is the
-     obvious first cut, but it is its own enumeration.
-  3. **`benches/reparse.rs` has no `.dtx` document**, so there is no number to
-     move. It needs one — with its declared tier and its floor — *before* the work
-     lands, not after.
-  4. **Re-record `tests/reparse_baselines/` in the same commit.** The rows above
-     are what the ratchet will show; a `STALE` verdict on four of them is the
-     expected outcome, not a surprise.
+  1. **State-bit enumeration test for the token tier.** Implemented as
+     `reparse::token::tests::dtx_state_bit_survey_is_complete_for_the_token_tier`,
+     with one verdict per `.dtx` state bit (`at_line_start`, `in_doc_line`,
+     `at_letter`, `expl_syntax`, `macrocode`, `implicit_expl`, `short_verbs`) and
+     an explicit counterexample for each.
+  2. **Removed the token-tier `.dtx` bail.** `reparse_token` no longer rejects
+     `base.config.dtx` wholesale; a doc-line word splice now reaches `ReparseTier::Token`.
+  3. **Added a `.dtx` row to `benches/reparse.rs`.** The bench now includes an
+     inline `.dtx` fixture case (`phase65-inline.dtx/word`) with a declared token-tier
+     outcome and a speedup floor.
+  4. **Re-recorded `tests/reparse_baselines/` in the same commit.** The expected
+     splice tallies now match the post-bail-removal sweep.
+
+  Follow-up landing:
+
+  1. **Protected-tier `.dtx` enablement landed as a separate argument.** The tier
+     now carries `implicit_expl` on `ReparseBase`, relexes `.dtx` fragments under
+     that base regime, and refuses when an edit flips the `%<@@=...>` /
+     `\ProvidesExpl*` signal state.
 
   Not negotiable: this is a speed item. A `.dtx` tier that produces a tree a full
   parse would not is worse than no tier at all, because the formatter writes the

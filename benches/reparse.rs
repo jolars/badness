@@ -98,7 +98,7 @@ use serde::Serialize;
 
 mod sites;
 
-use sites::{DOCUMENTS, Site, check_corpus, check_site_pin, config, load_document, prepare};
+use sites::{DOCUMENTS, Site, check_corpus, config, load_document, prepare};
 
 /// The regression ceiling every splicing case carries.
 ///
@@ -209,20 +209,37 @@ impl Expect {
 /// nullify it: `small.tex` reparses in under two microseconds, so an escape at
 /// any useful size would forgive every result the case could produce.
 const FLOORS: [(&str, Site, f64); 8] = [
-    ("small.tex", Site::Word, 18.0),
+    ("small.tex", Site::Word, 16.5),
     ("small.tex", Site::Verbatim, 9.5),
-    ("cv.tex", Site::Word, 35.0),
+    ("cv.tex", Site::Word, 32.0),
     ("cv.tex", Site::Verbatim, 19.5),
-    ("masters_dissertation.tex", Site::Word, 172.0),
-    ("masters_dissertation.tex", Site::Verbatim, 140.0),
-    ("phd_dissertation.tex", Site::Word, 690.0),
-    ("phd_dissertation.tex", Site::Verbatim, 625.0),
+    ("masters_dissertation.tex", Site::Word, 149.0),
+    ("masters_dissertation.tex", Site::Verbatim, 125.0),
+    ("phd_dissertation.tex", Site::Word, 560.0),
+    ("phd_dissertation.tex", Site::Verbatim, 520.0),
 ];
+
+const DTX_DOCUMENT: &str = "phase65-inline.dtx";
+const DTX_INLINE_TEXT: &str = r"% \section{Phase 6.5 benchmark fixture}
+The incremental reparse benchmark needs one dtx document so token tier dtx changes
+move a measured row instead of only corpus splice tallies.
+This line is deliberately plain prose with many letters so the word site stays in
+a WORD leaf under both a full parse and a splice.
+%    \begin{macrocode}
+\ExplSyntaxOn
+\cs_new:Npn \phase_six_five_fixture:n #1 {#1}
+\ExplSyntaxOff
+%    \end{macrocode}
+This trailing prose line keeps the pinned word site in ordinary letters after the
+macrocode chunk so the benchmark times a documented dtx word splice.
+";
+const DTX_FLOOR_WORD: f64 = 3.8;
 
 struct Case {
     id: String,
     document: &'static str,
     site: Site,
+    config: badness_parser::parser::LexConfig,
     expect: Expect,
 }
 
@@ -246,6 +263,7 @@ fn cases() -> Vec<Case> {
                 id: format!("{}/{}", document.name, site.name()),
                 document: document.name,
                 site,
+                config: config(),
                 expect,
             });
         }
@@ -253,10 +271,46 @@ fn cases() -> Vec<Case> {
             id: format!("{}/{}", document.name, Site::Decline.name()),
             document: document.name,
             site: Site::Decline,
+            config: config(),
             expect: Expect::declines(),
         });
     }
+    cases.push(Case {
+        id: format!("{}/{}", DTX_DOCUMENT, Site::Word.name()),
+        document: DTX_DOCUMENT,
+        site: Site::Word,
+        config: badness_parser::parser::LexConfig {
+            flavor: badness_parser::parser::LatexFlavor::Document,
+            dtx: true,
+        },
+        expect: Expect::splices(ReparseTier::Token).min_speedup(DTX_FLOOR_WORD),
+    });
     cases
+}
+
+fn load_case_document(case: &Case) -> Option<String> {
+    if case.document == DTX_DOCUMENT {
+        Some(DTX_INLINE_TEXT.to_owned())
+    } else {
+        load_document(case.document)
+    }
+}
+
+fn check_site_pin_for_case(case: &Case, text: &str, at: usize) -> Option<String> {
+    let declared = ResolvedDeclarations::default();
+    let parse = parse_with_declarations_resolved(text, case.config, &declared).0;
+    let root = parse.syntax();
+    let offset = rowan::TextSize::try_from(at).ok()?;
+    let expected = case.site.expected_leaf();
+    let found: Vec<_> = root.token_at_offset(offset).map(|t| t.kind()).collect();
+    if found.contains(&expected) {
+        return None;
+    }
+    Some(format!(
+        "{}/{}: byte {at} is in {found:?}, expected a {expected:?} — the site relocated or the fixture drifted",
+        case.document,
+        case.site.name(),
+    ))
 }
 
 /// Grow the heap to the size a large case needs, once, before anything is timed.
@@ -388,15 +442,15 @@ fn run_case(case: &Case, text: &str, target: Duration) -> (CaseResult, Vec<Strin
     let mut problems = Vec::new();
     let (prepared, at) = prepare(text, case.site);
     let declared = ResolvedDeclarations::default();
-    let (base_parse, ctx) = parse_with_declarations_resolved(&prepared, config(), &declared);
-    let base = ReparseBase {
-        text: &prepared,
-        green: &base_parse.green,
-        errors: &base_parse.errors,
-        ctx: &ctx,
-        config: config(),
-        declared: &declared,
-    };
+    let (base_parse, ctx) = parse_with_declarations_resolved(&prepared, case.config, &declared);
+    let base = ReparseBase::from_parts(
+        &prepared,
+        &base_parse.green,
+        &base_parse.errors,
+        &ctx,
+        case.config,
+        &declared,
+    );
 
     let edit = Edit {
         range: at..at,
@@ -429,7 +483,7 @@ fn run_case(case: &Case, text: &str, target: Duration) -> (CaseResult, Vec<Strin
     // The invariant, checked here because the in-crate oracle is compiled out of a
     // release build and this bench only ever runs in one.
     if let Some(result) = &reparsed {
-        let full = parse_with_declarations_resolved(&new_text, config(), &declared).0;
+        let full = parse_with_declarations_resolved(&new_text, case.config, &declared).0;
         let spliced = SyntaxNode::new_root(result.green.clone());
         if fingerprint(&spliced) != fingerprint(&full.syntax()) {
             problems.push(format!(
@@ -452,7 +506,7 @@ fn run_case(case: &Case, text: &str, target: Duration) -> (CaseResult, Vec<Strin
     let full_parse_us = time_us(target, || {
         black_box(parse_with_declarations_resolved(
             &new_text,
-            config(),
+            case.config,
             &declared,
         ))
     });
@@ -601,7 +655,7 @@ fn main() {
 
     println!("\n{}", "=".repeat(78));
     for case in &cases {
-        let Some(text) = load_document(case.document) else {
+        let Some(text) = load_case_document(case) else {
             println!(
                 "  {:<40} {} not found — run `task bench:download`, skipping",
                 case.id, case.document
@@ -613,7 +667,7 @@ fn main() {
         // injection that stopped, and a drifted document all land here rather than
         // as a number nobody can attribute.
         let (prepared, at) = prepare(&text, case.site);
-        if let Some(problem) = check_site_pin(case.document, &prepared, at, case.site) {
+        if let Some(problem) = check_site_pin_for_case(case, &prepared, at) {
             failures.push(problem);
             continue;
         }

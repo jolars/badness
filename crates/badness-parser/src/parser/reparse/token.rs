@@ -58,10 +58,9 @@
 //!
 //! Every guard returns [`None`] and the caller full-parses, so the cost of being
 //! wrong about a guard's *necessity* is speed. The deliberate refusals worth
-//! knowing about: a `.dtx` parse (the docstrip lexer mode is line-oriented, and an
-//! isolated fragment has no column), any edit carrying a line terminator, a leaf
-//! whose neighbour is too large to probe cheaply, and anything in math whose word
-//! splits into operator atoms.
+//! knowing about: any edit carrying a line terminator, a leaf whose neighbour is
+//! too large to probe cheaply, and anything in math whose word splits into
+//! operator atoms.
 
 use rowan::{GreenToken, NodeOrToken, TextRange, TextSize};
 
@@ -92,13 +91,6 @@ pub(super) fn reparse_token(
     // none of which a single-leaf splice can account for. Checked on both sides of
     // the edit: a `WORD` cannot contain one, but proving that here beats assuming it.
     if edit.insert.contains(['\n', '\r']) || base.text[edit.range.clone()].contains(['\n', '\r']) {
-        return None;
-    }
-
-    // The docstrip mode lexes by line and by column 0, which an isolated relex of a
-    // fragment cannot reproduce — the fragment is always at the start of its own
-    // input. Refusing the whole flavor is the honest version of that.
-    if base.config.dtx {
         return None;
     }
 
@@ -239,20 +231,37 @@ mod tests {
     use super::*;
     use crate::declarations::ResolvedDeclarations;
     use crate::parser::core::parse_with_declarations_resolved;
-    use crate::parser::lexer::{LatexFlavor, LexConfig};
+    use crate::parser::lexer::{LatexFlavor, LexConfig, lex_with};
     use crate::parser::reparse::{ReparseBase, reparse};
 
     fn with_base<R>(text: &str, f: impl FnOnce(&ReparseBase<'_>) -> R) -> R {
         let declared = ResolvedDeclarations::default();
         let (parse, ctx) = parse_with_declarations_resolved(text, LatexFlavor::Document, &declared);
-        f(&ReparseBase {
+        f(&ReparseBase::from_parts(
             text,
-            green: &parse.green,
-            errors: &parse.errors,
-            ctx: &ctx,
-            config: LatexFlavor::Document.into(),
-            declared: &declared,
-        })
+            &parse.green,
+            &parse.errors,
+            &ctx,
+            LatexFlavor::Document.into(),
+            &declared,
+        ))
+    }
+
+    fn with_dtx_base<R>(text: &str, f: impl FnOnce(&ReparseBase<'_>) -> R) -> R {
+        let declared = ResolvedDeclarations::default();
+        let config = LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        };
+        let (parse, ctx) = parse_with_declarations_resolved(text, config, &declared);
+        f(&ReparseBase::from_parts(
+            text,
+            &parse.green,
+            &parse.errors,
+            &ctx,
+            config,
+            &declared,
+        ))
     }
 
     fn edit(range: std::ops::Range<usize>, insert: &str) -> Edit {
@@ -260,6 +269,71 @@ mod tests {
             range,
             insert: insert.to_string(),
         }
+    }
+
+    fn edit_at(text: &str, needle: &str, offset: usize, insert: &str) -> Edit {
+        let start = text.find(needle).expect("fixture") + offset;
+        edit(start..start, insert)
+    }
+
+    fn replace_needle(text: &str, needle: &str, insert: &str) -> Edit {
+        let start = text.find(needle).expect("fixture");
+        edit(start..start + needle.len(), insert)
+    }
+
+    fn as_text_range(range: &std::ops::Range<usize>) -> TextRange {
+        TextRange::new(
+            TextSize::try_from(range.start).expect("range start"),
+            TextSize::try_from(range.end).expect("range end"),
+        )
+    }
+
+    fn candidate_leaf(base: &ReparseBase<'_>, e: &Edit) -> SyntaxToken {
+        let range = as_text_range(&e.range);
+        candidates(&base.syntax(), range)
+            .into_iter()
+            .find(|leaf| leaf.text_range().contains_range(range))
+            .expect("expected a covering token candidate")
+    }
+
+    fn try_leaf_without_dtx_bail(base: &ReparseBase<'_>, e: &Edit, leaf: &SyntaxToken) -> bool {
+        let next = e.apply(base.text);
+        let range = as_text_range(&e.range);
+        try_leaf(base, e, &next, leaf, range).is_some()
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum DtxLeafRefusal {
+        LeafKindAllowlist,
+        RelexNotSingleOrSameKind,
+    }
+
+    fn classify_dtx_leaf_refusal(
+        base: &ReparseBase<'_>,
+        e: &Edit,
+        leaf: &SyntaxToken,
+    ) -> DtxLeafRefusal {
+        if !matches!(
+            leaf.kind(),
+            SyntaxKind::WORD | SyntaxKind::WHITESPACE | SyntaxKind::COMMENT
+        ) {
+            return DtxLeafRefusal::LeafKindAllowlist;
+        }
+
+        let leaf_start = usize::from(leaf.text_range().start());
+        let old = leaf.text();
+        let cut = e.range.start - leaf_start..e.range.end - leaf_start;
+        let mut new_leaf = String::with_capacity(old.len() + e.insert.len());
+        new_leaf.push_str(&old[..cut.start]);
+        new_leaf.push_str(&e.insert);
+        new_leaf.push_str(&old[cut.end..]);
+
+        let relexed = lex_with(&new_leaf, base.ctx, base.config);
+        if relexed.len() != 1 || relexed[0].kind != leaf.kind() {
+            return DtxLeafRefusal::RelexNotSingleOrSameKind;
+        }
+
+        panic!("fixture no longer trips the expected guard: {e:?}");
     }
 
     /// Splices, with the tier they must reach. The oracle inside `finish` is what
@@ -354,27 +428,118 @@ mod tests {
         assert_refuses("\\foo1ab\n", edit(4..5, "a"));
     }
 
-    /// The forward probe's mirror: a `.dtx` parse is refused wholesale, since the
-    /// docstrip mode reads column 0 and an isolated fragment has no column.
+    /// Phase 6.5's `.dtx` argument, stated as a guard enumeration instead of as
+    /// "the sweep found nothing": each lexer state bit that differs from a
+    /// fragment-at-offset-0 relex has a counterexample and the guard that refuses it.
     #[test]
-    fn refuses_every_edit_in_a_dtx_parse() {
-        let text = "% \\begin{macro}{\\foo}\n%    \\begin{macrocode}\n\\def\\foo{bar}\n";
-        let declared = ResolvedDeclarations::default();
-        let config = LexConfig {
-            flavor: LatexFlavor::Document,
-            dtx: true,
-        };
-        let (parse, ctx) = parse_with_declarations_resolved(text, config, &declared);
-        let base = ReparseBase {
-            text,
-            green: &parse.green,
-            errors: &parse.errors,
-            ctx: &ctx,
-            config,
-            declared: &declared,
-        };
-        let e = edit(5..5, "z");
-        assert!(reparse(&base, &e, &e.apply(text)).is_none());
+    fn dtx_state_bit_survey_is_complete_for_the_token_tier() {
+        use DtxLeafRefusal::{LeafKindAllowlist, RelexNotSingleOrSameKind};
+
+        struct Case {
+            state_bit: &'static str,
+            text: &'static str,
+            edit: Edit,
+            expected: DtxLeafRefusal,
+        }
+
+        let cases = [
+            Case {
+                state_bit: "at_line_start",
+                text: "% alpha\n",
+                // A `%` at fragment column 0 lexes as DOC_MARGIN, not WORD.
+                edit: edit_at("% alpha\n", "alpha", 0, "%"),
+                expected: RelexNotSingleOrSameKind,
+            },
+            Case {
+                state_bit: "in_doc_line",
+                text: "% alpha\n",
+                // `^^A` in a doc line is a comment in-file, but a fragment has no
+                // doc-line context and does not relex to one WORD token.
+                edit: edit_at("% alpha\n", "alpha", 0, "^^A"),
+                expected: RelexNotSingleOrSameKind,
+            },
+            Case {
+                state_bit: "at_letter",
+                text: "%    \\begin{macrocode}\n\\foo@bar\n%    \\end{macrocode}\n",
+                // `@`-bearing command names are CONTROL_WORDs in macrocode.
+                edit: edit_at(
+                    "%    \\begin{macrocode}\n\\foo@bar\n%    \\end{macrocode}\n",
+                    "foo@bar",
+                    4,
+                    "z",
+                ),
+                expected: LeafKindAllowlist,
+            },
+            Case {
+                state_bit: "expl_syntax",
+                text: "%    \\begin{macrocode}\n\\ExplSyntaxOn\n\\foo_bar:n\n%    \\end{macrocode}\n",
+                // Colon/underscore expl3 names are CONTROL_WORDs under ExplSyntaxOn.
+                edit: edit_at(
+                    "%    \\begin{macrocode}\n\\ExplSyntaxOn\n\\foo_bar:n\n%    \\end{macrocode}\n",
+                    "foo_bar:n",
+                    3,
+                    "z",
+                ),
+                expected: LeafKindAllowlist,
+            },
+            Case {
+                state_bit: "macrocode",
+                text: "%    \\begin{macrocode}\n% comment\n%    \\end{macrocode}\n",
+                // In macrocode, line-leading `%` is COMMENT, not DOC_MARGIN.
+                edit: edit_at(
+                    "%    \\begin{macrocode}\n% comment\n%    \\end{macrocode}\n",
+                    "comment",
+                    3,
+                    "x",
+                ),
+                expected: RelexNotSingleOrSameKind,
+            },
+            Case {
+                state_bit: "implicit_expl",
+                text: "%<@@=demo>\n%    \\begin{macrocode}\n\\foo_bar:n\n%    \\end{macrocode}\n",
+                // `%<@@=...>` turns on implicit expl3 in macrocode; affected names
+                // are CONTROL_WORDs and therefore outside the leaf allowlist.
+                edit: edit_at(
+                    "%<@@=demo>\n%    \\begin{macrocode}\n\\foo_bar:n\n%    \\end{macrocode}\n",
+                    "foo_bar:n",
+                    3,
+                    "z",
+                ),
+                expected: LeafKindAllowlist,
+            },
+            Case {
+                state_bit: "short_verbs",
+                text: "% alpha\n",
+                // `.dtx` docs start with `|` as a short-verb delimiter.
+                edit: replace_needle("% alpha\n", "alpha", "|a|"),
+                expected: RelexNotSingleOrSameKind,
+            },
+        ];
+        assert_eq!(cases.len(), 7, "enumerate every dtx state bit exactly once");
+
+        for case in cases {
+            with_dtx_base(case.text, |base| {
+                let leaf = candidate_leaf(base, &case.edit);
+                assert!(
+                    !try_leaf_without_dtx_bail(base, &case.edit, &leaf),
+                    "fixture for `{}` unexpectedly spliced",
+                    case.state_bit
+                );
+                let got = classify_dtx_leaf_refusal(base, &case.edit, &leaf);
+                assert_eq!(got, case.expected, "state bit `{}`", case.state_bit);
+            });
+        }
+    }
+
+    /// `.dtx` is no longer refused wholesale: ordinary doc-line words can splice.
+    #[test]
+    fn splices_a_doc_line_word_in_a_dtx_parse() {
+        let text = "% alpha beta\n";
+        with_dtx_base(text, |base| {
+            let e = edit_at(text, "alpha", 3, "z");
+            let out = reparse(base, &e, &e.apply(text)).expect("expected dtx splice");
+            assert_eq!(out.tier, ReparseTier::Token);
+        });
     }
 
     /// Deleting a leaf outright removes a token, which this tier does not model.

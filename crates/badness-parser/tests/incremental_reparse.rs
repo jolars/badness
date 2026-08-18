@@ -343,14 +343,14 @@ fn the_harness_reaches_the_reparse_entry_point() {
     let text = "Some ordinary prose.\n";
     let declared = ResolvedDeclarations::default();
     let (base_parse, ctx) = parse_with_declarations_resolved(text, config(), &declared);
-    let base = ReparseBase {
+    let base = ReparseBase::from_parts(
         text,
-        green: &base_parse.green,
-        errors: &base_parse.errors,
-        ctx: &ctx,
-        config: config(),
-        declared: &declared,
-    };
+        &base_parse.green,
+        &base_parse.errors,
+        &ctx,
+        config(),
+        &declared,
+    );
 
     let edit = Edit {
         range: 5..5,

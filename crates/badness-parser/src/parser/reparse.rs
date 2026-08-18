@@ -59,7 +59,7 @@ use rowan::GreenNode;
 
 use crate::declarations::ResolvedDeclarations;
 use crate::parser::core::{Parse, SyntaxError, parse_with_declarations_resolved};
-use crate::parser::lexer::{LexConfig, ParseCtx};
+use crate::parser::lexer::{LexConfig, ParseCtx, dtx_has_expl_signal};
 use crate::syntax::SyntaxNode;
 
 pub use crate::parser::edit::{Edit, apply_edits, diff_edit, try_apply_edits};
@@ -104,14 +104,43 @@ pub struct ReparseBase<'a> {
     pub errors: &'a [SyntaxError],
     pub ctx: &'a ParseCtx,
     pub config: LexConfig,
+    /// The file-level `.dtx` implicit-expl signal (`%<@@=...>` / `\ProvidesExpl*`)
+    /// computed from the full base text.
+    ///
+    /// The lexer derives this before tokenizing; fragment relexes need the same
+    /// regime to be faithful.
+    pub implicit_expl: bool,
     pub declared: &'a ResolvedDeclarations,
 }
 
 impl<'a> ReparseBase<'a> {
+    pub fn from_parts(
+        text: &'a str,
+        green: &'a GreenNode,
+        errors: &'a [SyntaxError],
+        ctx: &'a ParseCtx,
+        config: LexConfig,
+        declared: &'a ResolvedDeclarations,
+    ) -> Self {
+        Self {
+            text,
+            green,
+            errors,
+            ctx,
+            config,
+            implicit_expl: implicit_expl_for(text, config),
+            declared,
+        }
+    }
+
     /// Materialize a red-tree cursor over the base. Cheap (an atomic clone).
     pub fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green.clone())
     }
+}
+
+fn implicit_expl_for(text: &str, config: LexConfig) -> bool {
+    config.dtx && dtx_has_expl_signal(text)
 }
 
 /// Attempt an incremental reparse of `base` under `edit`, which transforms
@@ -153,14 +182,14 @@ pub fn reparse_edits(base: &ReparseBase<'_>, edits: &[Edit], new_text: &str) -> 
         }
         let next = edit.apply(&text);
         let step = {
-            let step_base = ReparseBase {
-                text: &text,
-                green: &green,
-                errors: &errors,
-                ctx: base.ctx,
-                config: base.config,
-                declared: base.declared,
-            };
+            let step_base = ReparseBase::from_parts(
+                &text,
+                &green,
+                &errors,
+                base.ctx,
+                base.config,
+                base.declared,
+            );
             reparse_one(&step_base, edit, &next)?
         };
         text = next;
@@ -298,14 +327,14 @@ mod tests {
 
     fn with_base<R>(text: &str, f: impl FnOnce(&ReparseBase<'_>) -> R) -> R {
         let (parse, ctx, declared) = base_of(text);
-        f(&ReparseBase {
+        f(&ReparseBase::from_parts(
             text,
-            green: &parse.green,
-            errors: &parse.errors,
-            ctx: &ctx,
-            config: LatexFlavor::Document.into(),
-            declared: &declared,
-        })
+            &parse.green,
+            &parse.errors,
+            &ctx,
+            LatexFlavor::Document.into(),
+            &declared,
+        ))
     }
 
     fn edit(range: std::ops::Range<usize>, insert: &str) -> Edit {

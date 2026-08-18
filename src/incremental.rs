@@ -250,14 +250,14 @@ impl PrevParse {
 
     /// Borrow this base in the shape the parser's reparse entry points take.
     fn as_reparse_base<'a>(&'a self, declared: &'a ResolvedDeclarations) -> ReparseBase<'a> {
-        ReparseBase {
-            text: &self.text,
-            green: &self.green,
-            errors: &self.errors,
-            ctx: &self.ctx,
-            config: self.config,
+        ReparseBase::from_parts(
+            &self.text,
+            &self.green,
+            &self.errors,
+            &self.ctx,
+            self.config,
             declared,
-        }
+        )
     }
 }
 

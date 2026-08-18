@@ -11,7 +11,7 @@ use smol_str::SmolStr;
 
 use crate::declarations::ResolvedDeclarations;
 use crate::parser::grammar;
-use crate::parser::lexer::{LatexFlavor, LexConfig, ParseCtx, lex_with};
+use crate::parser::lexer::{LatexFlavor, LexConfig, ParseCtx, lex_with, lex_with_implicit_expl};
 use crate::parser::tree_builder::build_tree;
 use crate::semantic::define::scan_definitions;
 use crate::semantic::signature::builtin;
@@ -126,6 +126,23 @@ pub fn parse_with_declarations_resolved(
 /// Run the lex → grammar → tree-build pipeline once with a fixed scan context.
 fn parse_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Parse {
     let tokens = lex_with(input, ctx, config);
+    let (events, errors) = grammar::parse(&tokens, ctx);
+    let green = build_tree(&tokens, &events);
+    Parse { green, errors }
+}
+
+/// Parse a root fragment under the exact file-level context of an existing parse.
+///
+/// Unlike [`parse_with_declarations_resolved`], this does not rescan definitions
+/// from the fragment. Incremental tiers need the full file's context to remain the
+/// authority, including the full file's one-shot `.dtx` implicit-expl signal.
+pub(crate) fn parse_fragment_with_ctx(
+    input: &str,
+    ctx: &ParseCtx,
+    config: LexConfig,
+    implicit_expl: bool,
+) -> Parse {
+    let tokens = lex_with_implicit_expl(input, ctx, config, implicit_expl);
     let (events, errors) = grammar::parse(&tokens, ctx);
     let green = build_tree(&tokens, &events);
     Parse { green, errors }

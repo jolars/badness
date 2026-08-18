@@ -667,8 +667,9 @@ into prose now costs 0.71 ms end to end, and a line typed inside an `lstlisting`
 \~40 µs against a \~26 ms full parse — roughly 700x, and the ratio grows with
 the file, since both leaf tiers are `O(depth)` where a parse is `O(file)`. It
 arrives in phases, tracked in `TODO.md` § Incremental reparse — the token and
-protected-body tiers are live, the region tier is not, and an edit no tier
-claims still costs a full parse.
+protected-body tiers are live, the first conservative region slice handles
+multi-token edits in inert top-level prose, and an edit no tier claims still
+costs a full parse.
 
 Those numbers are held by `benches/reparse.rs` (`task bench:gate`), where every
 case declares the tier it must reach as well as the speed it claims: a floor
@@ -769,6 +770,36 @@ mid-stream. They return only at the region tier, where a shape gate's verdict
 for a node *before* the edit can flip because a closer *after* it appeared or
 vanished, which is why that tier is last and why it wants the precomputed closer
 map rather than per-opener scans.
+
+**The region tier (Phase 7).** Its two conservative slices reparse one top-level
+prose `PARAGRAPH` when an edit spans multiple direct prose leaves, and the two
+paragraphs around a blank-line seam when that seam is deleted or replaced. A
+faithfulness parse must first reproduce the old fragment under the base's exact
+`ParseCtx` and full-file `.dtx` implicit-expl signal. That admits unchanged
+commands inside a paragraph without assuming the fragment's entry state: edits
+themselves may touch only direct prose/trivia leaves and may insert no
+structural or catcode-sensitive spelling, so those commands and their state
+transitions remain unchanged. The one-paragraph case uses rowan's node splice;
+the seam case rebuilds `ROOT` from shared green children, allowing two paragraph
+nodes to become one. Diagnostics outside the fragment are shifted (and fragment
+diagnostics replaced), and the common oracle checks both results. Seam splicing
+initially refuses `.dtx`, whose column-sensitive doc layer needs its own proof.
+Single-leaf edits stay with the cheaper tiers. The direct-reparse benchmark pins
+both paths to `ReparseTier::Region` and gives each its own calibrated speedup
+floor, so a future guard change cannot silently turn either measurement into a
+full parse or another tier.
+
+Unrestricted regions would require three further proofs: *gate isolation*, every
+construct whose forward verdict could flip outside the fragment must be
+accounted for; *boundary-parse verification*, unchanged neighbours must prove
+the fragment is decoupled from its context; and *concatenation*, token-inclusive
+seams, replacement diagnostics, and untouched siblings must reproduce the full
+result. Blank lines alone reset neither every lexer mode nor every forward gate,
+so they are a candidate partition rather than a proof. The precomputed closer
+map tracked under Parser is the natural dependency for making the gate proof
+cheap enough to use in a refusal-first tier. That widening is deliberately
+deferred until a measured workload justifies the new parser infrastructure; it
+is not required for the conservative Phase 7 tier to be complete.
 
 **The salsa side channel.** `parsed_document` needs the previous text, tree,
 errors, and the edits since — none of which are salsa inputs, and none of which

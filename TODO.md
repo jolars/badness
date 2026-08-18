@@ -1139,11 +1139,12 @@ near-mechanical ports, the third is a project.
     Likely the same margin/guard column-0 pinning the reflow already backstops.
 
 - [~] **Replace the per-opener gate scans with a precomputed closer map
-  (container stack; multi-session).** *Three of six gates migrated so far —
-  conditionals, aliases, and the `\begin` brace-escape gate run the shared
-  batch driver; the math and bracket family is C2.3–C2.5, to be finished for
-  **uniformity**, since measurement has since voided the perf case for those
-  three (see C2.3).* Every shape gate today runs one forward
+  (container stack; multi-session).** *The shared batch-driver migration is
+  complete: all nine gates run through it, and C3 chose that shared driver as
+  the grammar's end-state. A genuinely precomputed per-frame reachability layer
+  never landed; the `${` brace-depth ratchet remains deliberately quadratic, and
+  any tree-derived outside-fragment summary for the region tier is new design,
+  not unfinished C2 work.* Historically every shape gate ran one forward
   token scan per live opener, each a hand transcription of the same
   bookkeeping — brace depth with `plain_braces`, `\begin`/`\end` counting,
   blank-line runs, the macrocode bound — eight copies in `grammar.rs`, growing
@@ -2555,16 +2556,32 @@ copies plus a table splice, and the remainder is the parse's own consumers.
   parse would not is worse than no tier at all, because the formatter writes the
   file.
 
-- [ ] **Phase 7: region tier.** Runs of top-level `ROOT` children, blank-line
-  decoupled, with `no_straddle` plus boundary-parse-concatenation proofs. This
-  is where the nine forward-scanning shape gates finally bite: a gate verdict
-  for a node *before* the edit can flip because a closer *after* it appeared or
-  vanished, so a fragment parse is not equivalent to the same region in a full
-  parse. Natural dependency on the precomputed closer map (the container-stack
-  item under *Parser*), which would make gate reach analyzable instead of
-  per-opener. Do not start it before Phases 3-5 have measured whether the token
-  tiers already carry the workload — fatou's token tier is 408x and its
-  top-level tier only 12x.
+- [x] **Phase 7: conservative top-level region tier.** Reparse the measured
+  multi-leaf prose workloads whose locality can be proved cheaply; refuse the
+  unrestricted structural case. A gate verdict for a node *before* an arbitrary
+  edit can flip because a closer *after* it appeared or vanished, so a generic
+  fragment parse is not equivalent to the same region in a full parse. Refusal is
+  the contract here, not an incomplete result.
+
+  **Landed slices:** edits spanning multiple direct prose leaves inside one
+  top-level `PARAGRAPH`, plus deletion/replacement of the blank-line seam between
+  two adjacent paragraphs. A faithfulness parse first reproduces the old fragment
+  under the base's exact `ParseCtx` and full-file `.dtx` implicit-expl regime;
+  unchanged commands may share a paragraph, while edits into nested structure and
+  catcode-sensitive insertions refuse. The paragraph case uses rowan's node splice;
+  the seam case rebuilds `ROOT` from shared green children and replaces diagnostics
+  for the fragment. Both return through the common oracle, and CRLF is covered
+  directly rather than inferred from a literal seam predicate. Both have named
+  `ReparseTier::Region` benchmark contracts and speedup floors in
+  `benches/reparse.rs`; the seeded corpus sweep is green.
+
+  **Deferred widening, not Phase 7 closeout:** arbitrary token-inclusive runs of
+  `ROOT` children would need mandatory boundary-parse-concatenation proofs and a
+  complete account of every forward-scanning gate whose verdict an edit can change
+  outside the fragment. The shared batch driver is not a queryable closer map, so
+  that account is new parser infrastructure rather than missing rowan manipulation.
+  Take it on only for a measured workload the landed paragraph and seam cases do not
+  cover; it owes its own corpus row and benchmark contract.
 
 - [ ] **Phase 8: closeout.** Architecture docs and dead-path pruning.
   `LineTable::patch` was the third item here and landed early, out of order,

@@ -60,6 +60,8 @@
 //!   phd/word                   36.72 us      28.261 ms    769.5x   Token
 //!   phd/verbatim               40.39 us      26.832 ms    664.4x   Verbatim
 //!   phd/decline                39.18 us      27.003 ms         —   declined
+//!   small.tex/region-words       4.63 us      71.45 us      15.4x   Region
+//!   small.tex/region-seam        6.23 us      70.04 us      11.2x   Region
 //! ```
 //!
 //! These are **not** comparable with the keystroke bench's end-to-end numbers,
@@ -234,13 +236,23 @@ This trailing prose line keeps the pinned word site in ordinary letters after th
 macrocode chunk so the benchmark times a documented dtx word splice.
 ";
 const DTX_FLOOR_WORD: f64 = 3.8;
+const REGION_FLOOR_WORDS: f64 = 14.5;
+const REGION_FLOOR_SEAM: f64 = 10.5;
 
 struct Case {
     id: String,
     document: &'static str,
     site: Site,
+    edit: CaseEdit,
     config: badness_parser::parser::LexConfig,
     expect: Expect,
+}
+
+#[derive(Clone, Copy)]
+enum CaseEdit {
+    Site,
+    RegionWords,
+    RegionSeam,
 }
 
 fn cases() -> Vec<Case> {
@@ -263,6 +275,7 @@ fn cases() -> Vec<Case> {
                 id: format!("{}/{}", document.name, site.name()),
                 document: document.name,
                 site,
+                edit: CaseEdit::Site,
                 config: config(),
                 expect,
             });
@@ -271,6 +284,7 @@ fn cases() -> Vec<Case> {
             id: format!("{}/{}", document.name, Site::Decline.name()),
             document: document.name,
             site: Site::Decline,
+            edit: CaseEdit::Site,
             config: config(),
             expect: Expect::declines(),
         });
@@ -279,13 +293,78 @@ fn cases() -> Vec<Case> {
         id: format!("{}/{}", DTX_DOCUMENT, Site::Word.name()),
         document: DTX_DOCUMENT,
         site: Site::Word,
+        edit: CaseEdit::Site,
         config: badness_parser::parser::LexConfig {
             flavor: badness_parser::parser::LatexFlavor::Document,
             dtx: true,
         },
         expect: Expect::splices(ReparseTier::Token).min_speedup(DTX_FLOOR_WORD),
     });
+    for (name, edit, floor) in [
+        ("region-words", CaseEdit::RegionWords, REGION_FLOOR_WORDS),
+        ("region-seam", CaseEdit::RegionSeam, REGION_FLOOR_SEAM),
+    ] {
+        cases.push(Case {
+            id: format!("small.tex/{name}"),
+            document: "small.tex",
+            site: Site::Word,
+            edit,
+            config: config(),
+            expect: Expect::splices(ReparseTier::Region).min_speedup(floor),
+        });
+    }
     cases
+}
+
+fn prepare_case(text: &str, case: &Case) -> (String, Edit, &'static str, usize) {
+    match case.edit {
+        CaseEdit::Site => {
+            let (prepared, at) = prepare(text, case.site);
+            let edit = Edit {
+                range: at..at,
+                insert: case.site.typed().to_owned(),
+            };
+            (prepared, edit, case.site.name(), at)
+        }
+        CaseEdit::RegionWords | CaseEdit::RegionSeam => {
+            const FIRST: &str = "First benchmark paragraph.\n\n";
+            const SECOND: &str = "alpha beta gamma delta.\n\n";
+            let anchor = FIRST.len();
+            let mut prepared = String::with_capacity(text.len() + FIRST.len() + SECOND.len());
+            prepared.push_str(FIRST);
+            prepared.push_str(SECOND);
+            prepared.push_str(text);
+            match case.edit {
+                CaseEdit::RegionWords => {
+                    let at = anchor;
+                    (
+                        prepared,
+                        Edit {
+                            range: at..at + "alpha beta".len(),
+                            insert: "better prose".to_owned(),
+                        },
+                        "region-words",
+                        at,
+                    )
+                }
+                CaseEdit::RegionSeam => {
+                    // Replace the blank line between the two injected paragraphs
+                    // with one space, merging them.
+                    let at = FIRST.len() - 2;
+                    (
+                        prepared,
+                        Edit {
+                            range: at..at + 2,
+                            insert: " ".to_owned(),
+                        },
+                        "region-seam",
+                        at,
+                    )
+                }
+                CaseEdit::Site => unreachable!(),
+            }
+        }
+    }
 }
 
 fn load_case_document(case: &Case) -> Option<String> {
@@ -440,7 +519,7 @@ fn format_us(us: f64) -> String {
 /// thing standing between the gate and certifying a fast wrong answer.
 fn run_case(case: &Case, text: &str, target: Duration) -> (CaseResult, Vec<String>) {
     let mut problems = Vec::new();
-    let (prepared, at) = prepare(text, case.site);
+    let (prepared, edit, site_name, at) = prepare_case(text, case);
     let declared = ResolvedDeclarations::default();
     let (base_parse, ctx) = parse_with_declarations_resolved(&prepared, case.config, &declared);
     let base = ReparseBase::from_parts(
@@ -452,10 +531,6 @@ fn run_case(case: &Case, text: &str, target: Duration) -> (CaseResult, Vec<Strin
         &declared,
     );
 
-    let edit = Edit {
-        range: at..at,
-        insert: case.site.typed().to_owned(),
-    };
     let new_text = edit.apply(&prepared);
 
     let reparsed = reparse(&base, &edit, &new_text);
@@ -514,7 +589,7 @@ fn run_case(case: &Case, text: &str, target: Duration) -> (CaseResult, Vec<Strin
     let result = CaseResult {
         id: case.id.clone(),
         document: case.document.to_owned(),
-        site: case.site.name(),
+        site: site_name,
         bytes: prepared.len(),
         at,
         tier: tier.map(|t| format!("{t:?}")),
@@ -666,10 +741,12 @@ fn main() {
         // The site pin, checked before the case is timed. A relocated site, an
         // injection that stopped, and a drifted document all land here rather than
         // as a number nobody can attribute.
-        let (prepared, at) = prepare(&text, case.site);
-        if let Some(problem) = check_site_pin_for_case(case, &prepared, at) {
-            failures.push(problem);
-            continue;
+        if matches!(case.edit, CaseEdit::Site) {
+            let (prepared, at) = prepare(&text, case.site);
+            if let Some(problem) = check_site_pin_for_case(case, &prepared, at) {
+                failures.push(problem);
+                continue;
+            }
         }
 
         let (result, problems) = run_case(case, &text, target);

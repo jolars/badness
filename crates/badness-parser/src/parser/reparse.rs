@@ -46,13 +46,15 @@
 //!
 //! # Status
 //!
-//! Phase 4. The token tier ([`token`]) and the protected-body tier ([`protected`])
-//! are implemented, each with its soundness argument in its own module docs; the
-//! region tier is not, so an edit outside a single leaf still costs a full parse.
+//! Phase 7. The token tier ([`token`]), protected-body tier ([`protected`]), and
+//! conservative region tier ([`region`]) are implemented. The region tier handles
+//! multi-leaf top-level prose and adjacent paragraph seams; unrestricted structural
+//! regions remain a measured-workload-dependent widening recorded in `TODO.md`.
 //! See `TODO.md` § Incremental reparse.
 
 mod leaf;
 mod protected;
+mod region;
 mod token;
 
 use rowan::GreenNode;
@@ -219,6 +221,7 @@ pub fn reparse_edits(base: &ReparseBase<'_>, edits: &[Edit], new_text: &str) -> 
 fn reparse_one(base: &ReparseBase<'_>, edit: &Edit, new_text: &str) -> Option<Reparsed> {
     token::reparse_token(base, edit, new_text)
         .or_else(|| protected::reparse_protected(base, edit, new_text))
+        .or_else(|| region::reparse_region(base, edit, new_text))
 }
 
 /// The single exit for every tier.

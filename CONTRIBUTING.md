@@ -30,19 +30,19 @@ available task. The most common ones are below, but every task maps to a plain
 
 ## Building and testing
 
-  | Task         | Equivalent                                                 | What it does                                     |
-  | ------------ | ---------------------------------------------------------- | ------------------------------------------------ |
-  | `task build` | `cargo build`                                              | Dev build.                                       |
-  | `task test`  | `cargo test`                                               | Run the whole test suite.                        |
-  | `task fmt`   | `cargo fmt`                                                | Format the code.                                 |
-  | `task lint`  | `cargo clippy --all-targets --all-features -- -D warnings` | Clippy, warnings as errors.                      |
-  | `task check` |                                                            | Everything CI runs: `fmt-check`, `lint`, `test`. |
+  | Task         | Equivalent                                                 | What it does                                             |
+  | ------------ | ---------------------------------------------------------- | -------------------------------------------------------- |
+  | `task build` | `cargo build`                                              | Dev build.                                               |
+  | `task test`  | `cargo test`                                               | Run the whole test suite.                                |
+  | `task fmt`   | `cargo fmt`                                                | Format the code.                                         |
+  | `task lint`  | `cargo clippy --all-targets --all-features -- -D warnings` | Clippy, warnings as errors.                              |
+  | `task check` |                                                            | Everything CI runs: `fmt-check`, `lint`, `test`, `wasm`. |
 
 Run `task check` before opening a pull request; it mirrors CI exactly.
 
 Badness uses [insta](https://insta.rs/) for snapshot tests. When a change
-deliberately alters formatter or parser output, review and accept the new
-snapshots with `task snapshots` (`cargo insta review`).
+deliberately alters formatter or parser output, refresh snapshots with
+`task snapshots` and review the diff before committing.
 
 Performance is first-class. Benchmark before optimizing, and never regress
 losslessness for speed.
@@ -65,10 +65,10 @@ something to explain rather than automatically fix.
 
 ## Project layout
 
-Badness parses LaTeX into a **lossless concrete syntax tree** and builds three
-tools on top of it: a **formatter** (`badness format`), a **linter**
-(`badness lint`), and a **language server** (`badness lsp`). The architecture
-follows [rust-analyzer](https://rust-analyzer.github.io/): a hand-written,
+Badness parses LaTeX into a lossless concrete syntax tree (CST) and builds three
+tools on top of it: a formatter (`badness format`), a linter (`badness lint`),
+and a language server (`badness lsp`). The architecture follows
+[rust-analyzer](https://rust-analyzer.github.io/): a hand-written,
 error-tolerant lexer and parser turn LaTeX into a flat token stream, then an
 event stream that a tree builder feeds into
 [rowan](https://github.com/rust-analyzer/rowan); a **semantic layer** assigns
@@ -96,21 +96,21 @@ Anything that needs the outside world belongs in the root crate.
 These properties are held by construction and enforced as test oracles. A change
 that breaks one is a bug, not a trade-off.
 
-- **Losslessness**: `reconstruct(text) == text`, byte for byte.
-- **Idempotence**: `format(format(x)) == format(x)`.
-- **The formatter is whitespace-only**: it changes trivia (whitespace, newlines,
+- Losslessness: `reconstruct(text) == text`, byte for byte.
+- Idempotence: `format(format(x)) == format(x)`.
+- The formatter is whitespace-only: it changes trivia (whitespace, newlines,
   comments, `.dtx` margins and guards) and nothing else. Content rewrites such
   as `x^{2}` → `x^2` are linter autofixes, not layout.
-- **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
-  `\verb`, comments) is never altered by the formatter, apart from a
-  document-wide line-terminator normalization.
+- Protected regions: verbatim-like content (`verbatim`, `lstlisting`, `\verb`,
+  comments) is never altered by the formatter, apart from a document-wide
+  line-terminator normalization.
 
 A couple of ground rules keep the design coherent:
 
-- Semantic facts reach the parser only through a narrow, curated admission test
-  (AGENTS.md decision #2); when in doubt, a fact belongs in the semantic layer.
-  Parsing is the parser's job; layout is the formatter's job. Never paper over a
-  parser mistake in the formatter.
+- Semantic facts reach the parser only through a narrow, curated admission test;
+  when in doubt, a fact belongs in the semantic layer. Parsing is the parser's
+  job; layout is the formatter's job. Never paper over a parser mistake in the
+  formatter.
 - New parser features need corpus and snapshot tests **and** a losslessness
   assertion.
 
@@ -179,14 +179,13 @@ rather than editing the rendered pages by hand.
 ## A note on `AGENTS.md` and `.claude/rules/`
 
 The repo also contains an `AGENTS.md` file and a `.claude/rules/` directory
-aimed at AI coding agents. `AGENTS.md` records the load-bearing decisions and
-invariants; `.claude/rules/` holds terse per-subsystem directives, path-scoped
-so each loads only when the agent touches that subsystem.
+aimed at AI coding agents. `AGENTS.md` is the compact operational contract;
+`.claude/rules/` holds terse per-subsystem directives, path-scoped so each loads
+only when the agent touches that subsystem.
 
 Both are short on purpose and are worth skimming as a checklist of "things not
-to break." For the reasoning behind any of it, read the book's
-[Architecture](https://badness.dev/development/architecture.html) page, which is
-the narrative version and the source of truth for design detail.
+to break." For architectural rationale and tradeoffs, read the book's
+[Architecture](https://badness.dev/development/architecture.html) page.
 
 ## License
 

@@ -491,7 +491,7 @@ pub fn expl_toggle(text: &str) -> Option<ExplToggle> {
 /// is acceptable (`AGENTS.md` decision #1): a false positive only *joins* `_`/`:`
 /// into a control word (lossless), and reading the whole file keeps the signal
 /// order-independent, so a body *above* the declaration is flagged too.
-fn dtx_has_expl_signal(input: &str) -> bool {
+pub(crate) fn dtx_has_expl_signal(input: &str) -> bool {
     input.contains("\\ProvidesExpl")
         || input
             .lines()
@@ -513,7 +513,20 @@ pub fn lex(input: &str) -> Vec<Token> {
 /// [`Package`](LatexFlavor::Package) flavor starts with `@` already a letter) and
 /// whether to run the `.dtx` docstrip mode.
 pub fn lex_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Vec<Token> {
-    Lexer::new(input, ctx, config).run()
+    Lexer::new(input, ctx, config, None).run()
+}
+
+/// Lex `input` like [`lex_with`], forcing the `.dtx` implicit-expl regime.
+///
+/// Only for incremental reparse tiers that relex a fragment under the base parse's
+/// full-file lexer facts.
+pub(crate) fn lex_with_implicit_expl(
+    input: &str,
+    ctx: &ParseCtx,
+    config: LexConfig,
+    implicit_expl: bool,
+) -> Vec<Token> {
+    Lexer::new(input, ctx, config, Some(implicit_expl)).run()
 }
 
 /// The lexer's one-shot lookahead mode: a state the token just lexed arms, which
@@ -618,12 +631,22 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn new(input: &'a str, ctx: &'a ParseCtx, config: LexConfig) -> Self {
+    fn new(
+        input: &'a str,
+        ctx: &'a ParseCtx,
+        config: LexConfig,
+        implicit_expl_override: Option<bool>,
+    ) -> Self {
+        let implicit_expl = if config.dtx {
+            implicit_expl_override.unwrap_or_else(|| dtx_has_expl_signal(input))
+        } else {
+            false
+        };
         Self {
             input,
             ctx,
             config,
-            implicit_expl: config.dtx && dtx_has_expl_signal(input),
+            implicit_expl,
             out: Vec::new(),
             pos: 0,
             at_letter: config.flavor.letter_mode_start(),
@@ -1025,6 +1048,28 @@ impl<'a> Lexer<'a> {
             }
         }
     }
+}
+
+/// Whether a control word makes the lexer read the *raw text that follows it*,
+/// beyond the ordinary token scan — so a later token's own text can decide how the
+/// rest of the file lexes.
+///
+/// Two families, and between them this is the whole set. [`apply_toggles`] reads a
+/// following argument for the short-verb and document-class toggles (the
+/// `\makeatletter` and expl3 toggles read only the control word itself, so they are
+/// not here). And [`next_pending`] arms the one-shot lookahead, which changes how
+/// the *next* token lexes; asking it rather than restating its four sets is what
+/// keeps this from drifting when a fifth is added.
+///
+/// Exists for [`crate::parser::reparse`]'s token tier, which may not splice a leaf
+/// whose text one of these reads: the tier's soundness rests on the token *kind*
+/// vector being unchanged, and these are the lexer's way of making one token's text
+/// change another token's kind.
+pub(crate) fn reads_following_text(text: &str) -> bool {
+    matches!(
+        text,
+        "\\MakeShortVerb" | "\\DeleteShortVerb" | "\\documentclass" | "\\LoadClass"
+    ) || next_pending(None, SyntaxKind::CONTROL_WORD, text).is_some()
 }
 
 /// The one-shot mode in force after lexing a token of `kind`/`text`: newly armed
@@ -2375,5 +2420,140 @@ mod tests {
                 .any(|t| t.kind == SyntaxKind::WORD && t.text == "|")
         );
         assert_lossless("\\MakeShortVerb{\\|} a|b\nc");
+    }
+
+    /// A raw capture's *content* changes nothing about how the rest of the file
+    /// lexes.
+    ///
+    /// This is a lexer property stated as one, but the reason it is pinned lives in
+    /// `parser::reparse::protected`: that tier splices a new body into an existing
+    /// tree without re-lexing anything after it, which is sound only because the
+    /// lexer leaves a raw capture in the state it entered. Structurally it holds
+    /// because `lex_verbatim_environment` / `lex_verbatim_command` /
+    /// [`Lexer::try_short_verb`] push straight to `out`, so the captured bytes never
+    /// reach [`Lexer::apply_toggles`], [`next_pending`], or
+    /// [`Lexer::sync_brace_depth`] — but that is an argument about code, and this is
+    /// the test that would notice it stop being true.
+    ///
+    /// The suffix is chosen to be sensitive to every state variable the lexer
+    /// carries: `@` in a control word (`at_letter`), `_`/`:` (`expl_syntax`), a `|`
+    /// (`short_verbs`), a `` ` `` after a `\char` (`brace_depth`), and a `\left`
+    /// delimiter (`pending`).
+    #[test]
+    fn raw_capture_content_does_not_change_later_lexing() {
+        /// Bodies that stay captured. Each would toggle a lexer mode or open a
+        /// group if it were read as code rather than swallowed as data.
+        const ENV_BODIES: &[&str] = &[
+            "",
+            "plain text",
+            "\\makeatletter",
+            "\\ExplSyntaxOn",
+            "\\MakeShortVerb{\\|}",
+            "{{{",
+            "}}}",
+            "% not a comment",
+            "$ & # ^ _ ~",
+            "\\end{verbatimx}",
+            "\\begin{verbatim}",
+            "\\char`{",
+            "\\left(",
+        ];
+        /// The same, restricted to what every inline form can hold: no newline, no
+        /// `+` (the delimiter), and braces balanced (`\url`'s scan needs them).
+        const INLINE_BODIES: &[&str] = &[
+            "",
+            "x",
+            "\\makeatletter",
+            "\\ExplSyntaxOn",
+            "{}",
+            "$ & # ^ _ ~",
+            "% not a comment",
+            "\\char`",
+        ];
+        const SUFFIX: &str = "after \\my@cmd \\l_tmpa_tl |bar| \\char`{ \\left( x\n";
+
+        for (prefix, open, close, bodies) in [
+            (
+                "before x\n",
+                "\\begin{verbatim}\n",
+                "\n\\end{verbatim}\n",
+                ENV_BODIES,
+            ),
+            (
+                "before x\n",
+                "\\begin{lstlisting}[a=b]\n",
+                "\n\\end{lstlisting}\n",
+                ENV_BODIES,
+            ),
+            ("before x ", "\\verb+", "+ ", INLINE_BODIES),
+            ("before x ", "\\url{", "} ", INLINE_BODIES),
+            ("before x ", "\\lstinline+", "+ ", INLINE_BODIES),
+        ] {
+            let mut expected: Option<Vec<(SyntaxKind, String)>> = None;
+            for body in bodies {
+                let region = format!("{open}{body}{close}");
+                let doc = format!("{prefix}{region}{SUFFIX}");
+                assert_lossless(&doc);
+
+                // The premise: the region really did capture. A body that *breaks*
+                // its capture is a different case — see the test below.
+                let toks = lex(&doc);
+                assert!(
+                    toks.iter()
+                        .any(|t| matches!(t.kind, SyntaxKind::VERB | SyntaxKind::VERBATIM_BODY))
+                        || body.is_empty(),
+                    "no raw capture formed, so this case proves nothing\n  \
+                     region: {region:?}",
+                );
+
+                let from = prefix.len() + region.len();
+                let mut off = 0usize;
+                let got: Vec<(SyntaxKind, String)> = toks
+                    .into_iter()
+                    .filter(|t| {
+                        let start = off;
+                        off += t.text.len();
+                        start >= from
+                    })
+                    .map(|t| (t.kind, t.text.to_string()))
+                    .collect();
+
+                match &expected {
+                    None => expected = Some(got),
+                    Some(want) => assert_eq!(
+                        &got, want,
+                        "a raw body changed how the text after it lexes\n  \
+                         region: {region:?}",
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The other half, and the reason the reparse tier re-lexes a whole fragment
+    /// rather than trusting the body alone: a body that *breaks* its capture does
+    /// change how the rest of the file lexes.
+    ///
+    /// `\url{{}` leaves `braced_verb_content_len` unbalanced, so no `VERB` forms and
+    /// the braces are ordinary structure — which ratchets `brace_depth` and flips
+    /// the char-constant reading of a later `` \char`{ ``. Nothing about the body's
+    /// own bytes says that; only re-lexing the construct does.
+    #[test]
+    fn a_body_that_breaks_its_capture_changes_later_lexing() {
+        let captured = lex("\\url{x} \\char`{");
+        assert!(captured.iter().any(|t| t.kind == SyntaxKind::VERB));
+        assert!(
+            captured
+                .iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "`{")
+        );
+
+        let broken = lex("\\url{{} \\char`{");
+        assert!(!broken.iter().any(|t| t.kind == SyntaxKind::VERB));
+        assert!(
+            broken
+                .iter()
+                .any(|t| t.kind == SyntaxKind::WORD && t.text == "`")
+        );
     }
 }

@@ -43,6 +43,9 @@ The dprint plugin and wasm targets must keep working.
 ## Invariants (oracles)
 
 - **Losslessness:** parser reconstruction is byte-identical to input.
+- **Reparse equivalence:** a successful incremental reparse yields the same green
+  tree and `SyntaxError` vector as a full parse. Every failed proof falls back to
+  a full parse; fix divergences by adding a bail, never by weakening the oracle.
 - **Whitespace-only formatting:** formatter changes trivia only (whitespace,
   newlines, comments, `.dtx` margin/guard trivia), never non-trivia tokens.
 - **Idempotence:** second format pass is a no-op.
@@ -82,6 +85,18 @@ comparison, not a byte-target.
   positional and meaning-free.
 - Hold parser-side semantic facts to the same admission bar used in rules:
   curated/declarative and text-falsifiable by a shape gate.
+- Keep incremental tiers on top of ordinary `parse`/`lex`; adding lexer
+  checkpoints, token-stream reuse, or grammar restart state is a new architecture
+  decision. The mutable previous-parse cache must never become a salsa input.
+- A hand-maintained incremental soundness enumeration must be backed by a test
+  that discovers unclassified sites. In particular, adding a grammar text
+  comparison means classifying it in the token tier's text-read survey.
+- Relex a mode-only leaf (`VERBATIM_BODY`, `VERB`) with its enclosing delimiters;
+  the delimiters establish the mode. Do not reproduce catcode/capture rules in
+  incremental code.
+- Incremental coverage needs both splice-rate floors (to prevent a vacuously
+  declining tier) and exact per-tier corpus tallies (to catch silent tier
+  migration). The fast and corpus suites share their generator/checker.
 - Keep formatter rules newline-safe: do not key layout on lone authored
   newlines in consumed gaps.
 - Keep parser pure with respect to text + declarations; do not let ambient

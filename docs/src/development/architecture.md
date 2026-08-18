@@ -627,12 +627,12 @@ input.
 ### Incrementality
 
 Incrementality is salsa-first. Cross-file and cross-query incrementality is the
-v1 story; intra-file reparse that reuses green subtrees is a later optimization,
-since a whole-file reparse of a typical `.tex` is sub-millisecond.
+v1 story. Intra-file reparse is layered on top of it, described under
+[Intra-file reparse](#intra-file-reparse) below.
 
 Green nodes are stored in salsa, never red ones, because red trees are not
 `Send`, `Eq`, or `salsa::Update`. `incremental.rs` stores `rowan::GreenNode`
-under `no_eq, unsafe(non_update_types)`, sound because the tree is a pure
+under `no_eq, unsafe(non_salsa_values)`, sound because the tree is a pure
 function of the text, and materializes red cursors on demand.
 
 `SourceFile.text` is an `Arc<str>`, not a `String`, and every setter takes
@@ -656,6 +656,224 @@ the first genuinely config-shaped input, and are likewise built *and written* at
 `HIGH`. Any future input promoted from config or package metadata must be
 constructed at `HIGH` or `MEDIUM`, or every keystroke's global revision bump
 will invalidate it.
+
+### Intra-file reparse
+
+A keystroke used to re-parse the whole file. On a small `.tex` that is fine; on
+a 730 KB thesis it was 27 ms, which was 97% of the keystroke. `parser::reparse`
+splices the edit into the previous green tree instead: the same keystroke typed
+into prose now costs 0.71 ms end to end, and a line typed inside an `lstlisting`
+\~0.85 ms. Timed on its own, the reparse those keystrokes pay for is \~37 µs and
+\~40 µs against a \~26 ms full parse — roughly 700x, and the ratio grows with
+the file, since both leaf tiers are `O(depth)` where a parse is `O(file)`. It
+arrives in phases, tracked in `TODO.md` § Incremental reparse — the token and
+protected-body tiers are live, the first conservative region slice handles
+multi-token edits in inert top-level prose, and an edit no tier claims still
+costs a full parse.
+
+Those numbers are held by `benches/reparse.rs` (`task bench:gate`), where every
+case declares the tier it must reach as well as the speed it claims: a floor
+alone would still pass after a case silently fell back to a full parse, because
+declining is always sound and fails nothing else. With the parse this cheap the
+keystroke's remaining cost moved to the write phase, which was mostly rebuilding
+the line table; patching it instead took that keystroke to 91 µs end to end (see
+[The live buffer](#the-live-buffer)). `task bench:keystroke-gate` watches both.
+
+**The invariant.** A successful reparse yields a green tree *and* a
+`SyntaxError` vector byte-identical to a full parse of the edited text. Nothing
+weaker is admissible, because the tree feeds the formatter — which writes the
+user's file — and the linter, whose fixes rewrite content. Every guard failure
+returns `None` and the caller full-parses: never an error, never a best-effort
+tree. That refusal-first contract is what makes the design extensible. A
+construct the guards do not understand costs speed and nothing else, so a new
+guard is always a safe change and an oracle failure is always fixed by *adding a
+bail*, never by relaxing the assert.
+
+**The shape, and what it does not require.** The tiers sit strictly on top of
+`parse` and `lex`. The token tier relexes one leaf in isolation, proves the
+relex is a single token of the same kind joining its neighbours the same way,
+and splices with rowan's `SyntaxToken::replace_with` — every green node off the
+leaf-to-root path is shared, so the cost is `O(depth)`, not `O(file)`. The
+protected-body tier makes the same splice from a different proof (below). The
+region tier re-runs the *ordinary* parser over a substring and splices the
+resulting children under `ROOT`, using neighbour-sized boundary parses purely as
+proofs that the substring is decoupled from its context, then discarding them.
+
+**What the token tier has to prove, and how.** A parse is a function of exactly
+two things: the token vector and the `ParseCtx`. Fix both and the grammar is
+deterministic — the shape gates, the prescan indices, the trivia binding, and
+the attachment walk all read tokens, never source offsets. So changing one
+leaf's text reproduces a full parse when three things hold. The token *kind*
+sequence is unchanged: the new text must relex, alone, to a single token of the
+leaf's own kind, and two join probes must show it still separates from its
+neighbours (`\foo` beside `1ab` is two tokens only because the word starts with
+a non-letter, and editing it to `aab` merges the pair). The definition scan
+cannot have moved: it walks only `COMMAND` nodes whose head names a definition
+family, so a leaf under none of them changes nothing it found. And no decision
+that reads a token's *text* can flip.
+
+That third one is the interesting one, because it has no compile-time link to
+the code it describes. It is held by a test that scans the grammar sources for
+every text comparison and fails on one nobody classified — 42 sites, each
+carrying a verdict, of which 35 are kind-gated to a control sequence and so can
+never see a spliced leaf at all. The remaining handful are the real reads: the
+`;` that ends a picture-body statement, the lone `*` of a starred variant, the
+math operator split, the expl3 argument slots, and the environment-name
+assembly. Each is neutralized either by a text guard or by a position ban, and
+the position matters as much as the text: applied everywhere rather than only in
+math, the math-split guard refuses every hyphenated word in English prose.
+
+Refusals are free, so they are generous. A `.dtx` parse is declined outright. So
+are line terminators, environment names, definition bodies, and a join probe
+against an oversized neighbour.
+
+**What the protected-body tier has to prove instead.** An edit inside an
+`lstlisting`, a `\verb`, or a `\url` is the same one-leaf splice, but the token
+tier's proof is unavailable: a raw capture is a kind the lexer only emits once
+it has seen an opener, so the body lexed on its own comes back as ordinary
+prose. Rather than restate the catcode rules — a second copy of the lexer, to be
+kept in step forever — this tier relexes the leaf's **whole enclosing node with
+its delimiters**, which puts the isolated lexer into the capturing mode for
+free. Four legs. *Faithfulness*: the unedited fragment must relex to the
+fragment's own tokens, which is the evidence that these bytes do not depend on
+the state the file arrived in, and is what rules out a short-verb span, an
+`@`-bearing name under `\makeatletter`, and a name that only lexes whole inside
+an expl3 region, without enumerating any of them. *Locality*: a raw capture's
+bytes never reach the lexer's state updates, so it leaves the fragment in the
+state it entered — a claim about lexer code, and therefore a lexer test, with a
+counterexample beside it (a body that *breaks* its capture does move later
+lexing). *Termination*: a `VERB` carries its closer in its own text, but a
+`VERBATIM_BODY`'s `\end{name}` is a sibling, and an unterminated body runs to
+EOF — so the tier requires that `\end` to be inside the fragment, or the
+isolated scan would stop where the file's does not. *The sequence check*: the
+edited fragment must relex to the same tokens with only the leaf's text changed,
+which is what catches an `\end{verbatim}` typed into a body or a brace that
+unbalances a `\url`.
+
+Newlines are allowed here, unlike on the token tier. That is the point — inside
+a raw body a line break restructures nothing, because the grammar sees one
+opaque token either way, and pressing Enter in a listing is the workload.
+
+`.dtx` stays refused on both tiers, and the whole-node relex does not lift it.
+The docstrip mode lexes by line and by column 0, but the deeper problem is that
+`implicit_expl` is derived from a scan of the *entire input*: an isolated
+fragment can be lexed under a regime the file never had, and can pass the
+faithfulness check anyway when the difference does not happen to show in those
+bytes. Faithfulness is evidence about the fragment, not about the file.
+
+So none of the parser's left-to-right state is checkpointed: not the lexer's
+(`at_letter`, `expl_syntax`, `short_verbs`, `macrocode`, brace depth), not the
+grammar's prescan indices, not the gate memo's token-keyed verdicts. This is
+worth stating because a first reading of the parser suggests the opposite —
+those look like the obstacles, and they would be for a parser that resumed
+mid-stream. They return only at the region tier, where a shape gate's verdict
+for a node *before* the edit can flip because a closer *after* it appeared or
+vanished, which is why that tier is last and why it wants the precomputed closer
+map rather than per-opener scans.
+
+**The region tier (Phase 7).** Its two conservative slices reparse one top-level
+prose `PARAGRAPH` when an edit spans multiple direct prose leaves, and the two
+paragraphs around a blank-line seam when that seam is deleted or replaced. A
+faithfulness parse must first reproduce the old fragment under the base's exact
+`ParseCtx` and full-file `.dtx` implicit-expl signal. That admits unchanged
+commands inside a paragraph without assuming the fragment's entry state: edits
+themselves may touch only direct prose/trivia leaves and may insert no
+structural or catcode-sensitive spelling, so those commands and their state
+transitions remain unchanged. The one-paragraph case uses rowan's node splice;
+the seam case rebuilds `ROOT` from shared green children, allowing two paragraph
+nodes to become one. Diagnostics outside the fragment are shifted (and fragment
+diagnostics replaced), and the common oracle checks both results. Seam splicing
+initially refuses `.dtx`, whose column-sensitive doc layer needs its own proof.
+Single-leaf edits stay with the cheaper tiers. The direct-reparse benchmark pins
+both paths to `ReparseTier::Region` and gives each its own calibrated speedup
+floor, so a future guard change cannot silently turn either measurement into a
+full parse or another tier.
+
+Unrestricted regions would require three further proofs: *gate isolation*, every
+construct whose forward verdict could flip outside the fragment must be
+accounted for; *boundary-parse verification*, unchanged neighbours must prove
+the fragment is decoupled from its context; and *concatenation*, token-inclusive
+seams, replacement diagnostics, and untouched siblings must reproduce the full
+result. Blank lines alone reset neither every lexer mode nor every forward gate,
+so they are a candidate partition rather than a proof. The precomputed closer
+map tracked under Parser is the natural dependency for making the gate proof
+cheap enough to use in a refusal-first tier. That widening is deliberately
+deferred until a measured workload justifies the new parser infrastructure; it
+is not required for the conservative Phase 7 tier to be complete.
+
+**The salsa side channel.** `parsed_document` needs the previous text, tree,
+errors, and the edits since — none of which are salsa inputs, and none of which
+may become any. A base that invalidated on write would defeat the purpose; one
+that did not would lie to the dependency graph. Instead they live beside salsa,
+reached through default `IncrementalDb` methods (`reparse_prev`,
+`reparse_stage_edits`, `reparse_pending_edits`, `reparse_store`,
+`reparse_evict`), so a database without a cache simply always full-parses.
+Reading mutable state from inside a tracked query is sound *only* because of the
+invariant above: the query returns what `parse(text)` would whatever the cache
+holds, so a cold, stale, or evicted cache costs a parse.
+
+Three details are load-bearing. The store happens **last**, after every fallible
+step, so a panic or a salsa cancellation cannot leave a base whose text and tree
+disagree. The chain is drained by **consumed prefix count** rather than cleared,
+because a stage can land between the peek and the store — and it is drained
+**unconditionally**, even when it went unused, since a chain kept back because
+it failed to verify describes a transform out of a text the base no longer holds
+and would poison every later parse. And eviction has **two classes**: an entry
+is *hot* once it has shown it benefits, and cold entries go first, because a
+`package_graph` or `scope_signatures` sweep parses every workspace member and
+stores a base it can never hit — under a plain LRU one project-wide query would
+cost every open buffer its base.
+
+There is deliberately **no whole-text `diff_edit`** in the query. The language
+server knows the range it spliced and hands it over; re-deriving it costs more
+than the reparse it feeds. A text that changed by a route carrying no edits — a
+disk reload, a whole-buffer replace — simply full-parses, and both are shapes a
+cost guard would decline anyway.
+
+**Where the chain comes from.** `apply_content_changes` (`lsp.rs`) already
+resolves each `didChange` range to byte offsets to splice the live buffer, so it
+returns that as an `Edit` chain — the clamped offsets it actually used, each
+edit against the text its predecessors produced, `None` for a range-less
+whole-buffer replacement. `WorkerJob::Edit` carries it to the worker, which
+stages it against the `SourceFile` returned by `upsert_file`, on the line after.
+Every other `upsert_file` site — `didOpen`, the push-mode re-lint sweep, sibling
+seeding, a watched-file re-read — stages `None`, so the pairing needs no
+exceptions.
+
+Two details, both about *after*. The stage follows the write because
+`upsert_file`'s `&mut db` is what proves no analyze is reading: a chain staged
+ahead of the text it describes could be peeked by an in-flight
+`parsed_document`, which would fail to verify it, full-parse, and drain it. And
+it is staged even when `upsert_file` skips its write, because the chain is
+anchored at the *base*, not at the db text — a buffer that round-trips back to
+what salsa holds still took a transform to get there.
+
+**How it is held.** A `#[cfg(debug_assertions)]` oracle compares every
+successful reparse against a full parse, and every tier returns through a single
+`finish` so it cannot skip that or the `O(1)` check that the tree spans exactly
+its text. The latter runs in *every* build and falls back rather than panicking,
+because the release binary is precisely the one the debug oracle is absent from
+and also the one whose formatter writes the file. On top sits a seeded harness
+(`crates/badness-parser/tests/incremental_reparse.rs`) over hand-written hazard
+snippets — one per sanctioned lexer mode — and the parser corpus. Both oracles
+carry should-panic self-tests, since a net nobody has watched catch something is
+not evidence that it can.
+
+Breadth comes from the **corpus sweep**
+(`crates/badness-parser/tests/reparse_corpus_sweep.rs`,
+`task reparse-corpora:check`): the same generator and the same checker, shared
+as `tests/support/reparse_harness.rs`, run over the pinned gate corpora — \~6.3k
+files against the fast suite's \~90 — with each file parsed under the
+`LexConfig` its extension would get. It asserts the invariant and a per-driver
+splice-rate **floor**, and records the exact tallies in
+`tests/reparse_baselines/` as a two-sided ratchet in the shape of
+`tests/gate_baselines/`. The floor and the record answer different questions:
+every invariant assertion is vacuously true on a refusal, so a guard that
+narrowed a tier to nothing would leave the sweep green while testing nothing
+(panache's window cutoff cost its fuzzer two thirds of its coverage with every
+assertion still passing), while the recorded tier columns catch the movement no
+floor can see — a workload changing *tier*, which keeps every rate identical
+because declining is always sound.
 
 ### Typed AST wrappers
 
@@ -1173,16 +1391,29 @@ than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
 ### The live buffer
 
 An open document is a `text::TextBuffer`: the text as an `Arc<str>`, the
-position encoding negotiated at `initialize`, and the `LineIndex` over them,
+position encoding negotiated at `initialize`, and the `LineTable` over them,
 built on first use behind a `OnceLock`. The main loop holds it as an
 `Arc<TextBuffer>` and so does every buffer-carrying `WorkerJob`, which is what
 makes a keystroke's fan-out cheap in both directions: capturing the buffer for a
-job is a refcount bump rather than a copy of the document, and the index — 1.8
-ms to build over a 1 MB file — is built once per document version rather than
-once per request, on whichever thread asks first. The handlers that index the
-*cursor* buffer take `&TextBuffer` and call `line_index()`; the ones that walk
-*other* project members still build their own index per member, since those
-texts come off the salsa snapshot and have no buffer.
+job is a refcount bump rather than a copy of the document, and the table is
+built once per document version rather than once per request, on whichever
+thread asks first. The handlers that index the *cursor* buffer take
+`&TextBuffer` and call `line_index()`; the ones that walk *other* project
+members still build their own index per member, since those texts come off the
+salsa snapshot and have no buffer.
+
+The *table* and the *queries* are separate types, and the split is what makes
+the table patchable. `LineTable` is the value — a line-start offset per line,
+plus a flag per line for "holds a non-ASCII byte" — and `LineIndex<'a>` is the
+short-lived pairing of a text with a table, borrowing one where a buffer
+maintains it and scanning otherwise. So a query reads the text: a UTF-16 column
+walks the one line concerned, and the flag is what keeps an ASCII line a plain
+byte distance. Precomputing every wide character instead, which is the shape
+this had, cost more to build than every conversion it ever answered, and it is
+the shape that *cannot* be patched — a table keyed by line number has to be
+rekeyed wholesale when the line count moves. The one hazard the split adds is
+`LineIndex::with_table`, the single place a text and a table are paired: given a
+table built for other bytes it answers wrong positions rather than panicking.
 
 The buffer is immutable: an edit yields a new one rather than mutating in place.
 That is not a cost, because an `Arc<str>` cannot be spliced in place anyway, and
@@ -1191,10 +1422,44 @@ consistent text and index with no lock. It also means the pointer identity is
 meaningful, which is what the salsa-side staleness guards trade on (see
 [Incrementality](#incrementality)).
 
-The line table is rebuilt, not patched, across an edit. Fatou and arity splice
-theirs; here a keystroke still pays a full reparse of the file, which dwarfs a
-`memchr` scan of the same buffer, so the splice would be optimizing the wrong
-row. `TextBuffer` is where it goes when that changes.
+The line table is **patched, not rebuilt**, across an edit. It was rebuilt for a
+long time, and defensibly: the rescan was dwarfed by the full reparse every
+keystroke paid, so splicing it would have been optimizing the wrong row. Once
+both leaf tiers landed and the parse fell to \~37 µs, the rebuild *was* the row
+— \~580 µs of a \~640 µs keystroke on the thesis, 52 copies of the document
+where the two linear passes a splice needs would be 2-3.
+
+`LineTable::patch` splices it instead. Line starts fall into three groups: those
+before the edit are untouched, those after it keep their verdict and shift by
+the byte delta, and those *at* its boundaries are re-derived from the edited
+text. That third group is the whole subtlety, and it is why the patch cannot be
+copied from fatou's. Badness treats a bare `\r` as a line break, so whether a
+byte ends a line depends on the byte *after* it too — meaning an edit can split
+or join a `\r\n` without touching either of its bytes. Inserting `x` into
+`"a\r\nb"` at offset 2 gives `"a\rx\nb"`, which has a line the pre-edit table
+did not. With `\n` alone the predicate reads one byte, a start at the edit
+cannot flip, and the new breaks can be read straight out of the insert; here
+both boundary positions have to be re-read out of the result.
+
+Reuse is *structural* rather than cached. The table lives in the buffer and the
+buffer is what an edit derives, so the pair travels together: nothing validates
+a table against the text it describes, and one patch serves the write phase and
+every read job off the same edit. Panache, whose index lives in a salsa memo
+that every keystroke invalidates, needs a side cache keyed by document and an
+`Arc::ptr_eq` to know whether an entry is still true — and because that cache is
+main-thread-only, its readers still rebuild once per revision. A buffer with no
+table yet stays without one, so a document nobody asks a positional question
+about never pays; on the keystroke path there is always one, because
+`apply_content_changes` resolves the change's range through `line_index()`
+before splicing.
+
+The write phase now costs **2.5 copies** of the document — 28 µs on the thesis
+against 575 µs, with the keystroke at 91 µs end to end. Two of those copies are
+the text rebuild an `Arc<str>` cannot avoid; the rest is cloning the table and
+shifting its tail. A `debug_assert` rescans after every patch, which makes every
+test in the suite that edits a buffer an oracle for it, and is also why
+`task bench:keystroke-gate` — the row that watches all of this — must never be
+run in a debug build.
 
 Environment awareness has four sources, all reading static facts only, with no
 macro meaning and no typesetting.

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet};
 
-use crate::text::LineIndex;
+use crate::text::{LineIndex, LineTable, PositionEncoding};
 
 use super::diagnostic::{Diagnostic, RelatedInfo, Severity};
 
@@ -88,7 +88,9 @@ fn render_pretty(
         // kept for the rest of this file's diagnostics: `source_for` clones the
         // whole text on every call, and a rule like `duplicate-label` reports the
         // same partner file once per finding.
-        let mut cross_sources: HashMap<PathBuf, (String, LineIndex)> = HashMap::new();
+        // The *table* rather than a whole index, since an index borrows the text
+        // it indexes and these two live in the same entry.
+        let mut cross_sources: HashMap<PathBuf, (String, LineTable)> = HashMap::new();
         for d in &diags {
             let level = severity_level(d.severity);
             // A secondary in *this* file rides the primary snippet as a context
@@ -102,15 +104,16 @@ fn render_pretty(
                 if !cross_sources.contains_key(&ri.path)
                     && let Some(src) = source_for(&ri.path)
                 {
-                    let idx = LineIndex::new(&src);
-                    cross_sources.insert(ri.path.clone(), (src, idx));
+                    let table = LineTable::new(&src);
+                    cross_sources.insert(ri.path.clone(), (src, table));
                 }
             }
             let extra: Vec<(String, &str, Window, &RelatedInfo)> = cross
                 .iter()
                 .filter_map(|ri| {
-                    let (src, idx) = cross_sources.get(&ri.path)?;
-                    let win = Window::around(src, idx, [(ri.start, ri.end)]);
+                    let (src, table) = cross_sources.get(&ri.path)?;
+                    let idx = LineIndex::with_table(src, table, PositionEncoding::Utf16);
+                    let win = Window::around(src, &idx, [(ri.start, ri.end)]);
                     Some((ri.path.display().to_string(), src.as_str(), win, *ri))
                 })
                 .collect();

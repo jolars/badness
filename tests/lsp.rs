@@ -1475,6 +1475,231 @@ fn incremental_did_change_splices_buffer() {
     shutdown(&client, server_thread);
 }
 
+/// A `didChange` may carry several changes, each expressed against the text its
+/// predecessors produced. The server has to fold them in order — and, since the
+/// incremental reparse replays exactly that fold, a batch that lands wrong here is
+/// the shape that would have it splice against the wrong text.
+#[test]
+fn incremental_did_change_folds_a_multi_change_batch() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///batch.tex".parse().unwrap();
+
+    // Deliberately messy (a doubled inter-word space), so the formatter always has
+    // an edit to return and the assertion below can never pass vacuously.
+    did_open(&client, &uri, 1, "\\section{Hi}\nab  c\n");
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    // Insert "XYZ" after "a", then replace "b" — the second range counts columns in
+    // "aXYZb", so a server folding both against the original text would land on the
+    // "Z" instead.
+    send_notification(
+        &client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![
+                TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position::new(1, 1),
+                        end: Position::new(1, 1),
+                    }),
+                    range_length: None,
+                    text: "XYZ".to_owned(),
+                },
+                TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position::new(1, 4),
+                        end: Position::new(1, 5),
+                    }),
+                    range_length: None,
+                    text: "Q".to_owned(),
+                },
+            ],
+        })
+        .unwrap(),
+    );
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty());
+
+    // Formatting reads the buffer back, so its output says which text the server
+    // holds — a mis-resolved second range would leave the `b` or eat the `Z`.
+    send_request(
+        &client,
+        2,
+        "textDocument/formatting",
+        serde_json::to_value(DocumentFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
+    assert_eq!(edits.len(), 1, "expected one whole-document edit");
+    let expected = format_with_style(
+        "\\section{Hi}\naXYZQ  c\n",
+        FormatStyle {
+            line_width: 80,
+            indent_width: 2,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(edits[0].new_text, expected);
+
+    shutdown(&client, server_thread);
+}
+
+/// One ranged content change: `(start line, start column, end line, end column,
+/// replacement)`, with columns in the negotiated encoding's units.
+type RangedChange<'a> = (u32, u32, u32, u32, &'a str);
+
+/// Send a `didChange` carrying `changes`, each expressed against the text its
+/// predecessors produced.
+fn did_change_ranged(client: &Connection, uri: &Uri, v: i32, changes: &[RangedChange<'_>]) {
+    send_notification(
+        client,
+        "textDocument/didChange",
+        serde_json::to_value(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: v,
+            },
+            content_changes: changes
+                .iter()
+                .map(|&(sl, sc, el, ec, text)| TextDocumentContentChangeEvent {
+                    range: Some(Range {
+                        start: Position::new(sl, sc),
+                        end: Position::new(el, ec),
+                    }),
+                    range_length: None,
+                    text: text.to_owned(),
+                })
+                .collect(),
+        })
+        .unwrap(),
+    );
+}
+
+/// Ask for whole-document formatting and return the single edit.
+fn one_formatting_edit(client: &Connection, uri: &Uri, id: i32) -> TextEdit {
+    send_request(
+        client,
+        id,
+        "textDocument/formatting",
+        serde_json::to_value(DocumentFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(client);
+    assert_eq!(resp.id, RequestId::from(id));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
+    assert_eq!(edits.len(), 1, "expected one whole-document edit");
+    edits.into_iter().next().unwrap()
+}
+
+fn formatted(text: &str) -> String {
+    format_with_style(
+        text,
+        FormatStyle {
+            line_width: 80,
+            indent_width: 2,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap()
+}
+
+/// A CRLF document, edited incrementally. The line table is patched across an
+/// edit rather than rescanned, and a `\r\n` is the one terminator whose verdict an
+/// edit can flip without touching either of its bytes — so a Windows-authored
+/// file is where a patch bug shows up and an LF one is not (`TODO.md` records
+/// panache losing the whole feature exactly there).
+///
+/// The batch's second change targets a line the first one created, so it can only
+/// resolve if the table shifted; and the reply's *range* is computed through the
+/// patched table too, which is what makes this more than a text assertion.
+#[test]
+fn incremental_did_change_patches_a_crlf_document() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///crlf.tex".parse().unwrap();
+
+    // Deliberately messy (a doubled inter-word space) so the formatter always has
+    // an edit to return and the assertion can never pass vacuously.
+    did_open(&client, &uri, 1, "\\section{Hi}\r\nab  c\r\n");
+    assert!(recv_diagnostics(&client).diagnostics.is_empty());
+
+    did_change_ranged(
+        &client,
+        &uri,
+        2,
+        &[
+            // Split "ab  c" after "ab", adding a CRLF-terminated line.
+            (1, 2, 1, 2, "\r\nX"),
+            // Line 2 is "X  c", which exists only because of the change above.
+            (2, 0, 2, 1, "Y"),
+        ],
+    );
+    assert!(recv_diagnostics(&client).diagnostics.is_empty());
+
+    let edit = one_formatting_edit(&client, &uri, 2);
+    let expected = "\\section{Hi}\r\nab\r\nY  c\r\n";
+    assert_eq!(edit.new_text, formatted(expected));
+    // Four lines: the terminators survived as pairs. A patch that split one would
+    // report a fifth.
+    assert_eq!(edit.range.start, Position::new(0, 0));
+    assert_eq!(edit.range.end, Position::new(3, 0));
+
+    shutdown(&client, server_thread);
+}
+
+/// The same, over non-ASCII content. An edit beside an astral character makes the
+/// wide-line flags splice *and* the lines the edit joined be re-derived, together
+/// — and the columns below are in UTF-16 units, so they only land if both did.
+#[test]
+fn incremental_did_change_patches_a_document_with_wide_chars() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///wide.tex".parse().unwrap();
+
+    did_open(&client, &uri, 1, "\\section{Hi}\na𝕏b  c\n");
+    assert!(recv_diagnostics(&client).diagnostics.is_empty());
+
+    did_change_ranged(
+        &client,
+        &uri,
+        2,
+        &[
+            // After `a𝕏`: one UTF-16 unit for the `a`, two for the astral char.
+            (1, 3, 1, 3, "\nnew"),
+            (2, 0, 2, 3, "NEW"),
+        ],
+    );
+    assert!(recv_diagnostics(&client).diagnostics.is_empty());
+
+    let edit = one_formatting_edit(&client, &uri, 2);
+    assert_eq!(edit.new_text, formatted("\\section{Hi}\na𝕏\nNEWb  c\n"));
+    assert_eq!(edit.range.end, Position::new(3, 0));
+
+    shutdown(&client, server_thread);
+}
+
 #[test]
 fn line_width_from_initialization_options() {
     // A narrow line width must reflow a long paragraph the default-80 width would

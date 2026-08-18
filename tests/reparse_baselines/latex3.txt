@@ -1,0 +1,6 @@
+latex3	corpus	files=286	bytes=9077480
+latex3	word-typing	spliced=2895/3940	token=2895	verbatim=0	region=0	files=273
+latex3	word-deleting	spliced=2834/3940	token=2830	verbatim=4	region=0	files=273
+latex3	protected-typing	spliced=415/2425	token=0	verbatim=415	region=0	files=166
+latex3	hazard-single	spliced=1173/4576	token=1119	verbatim=54	region=0	files=286
+latex3	hazard-chain	spliced=100/1430	token=94	verbatim=6	region=0	files=286

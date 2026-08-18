@@ -34,8 +34,12 @@ use trivia::{BLANK_LINE_NEWLINES, CommentMode};
 /// expl3 region gate both spell it `grammar::is_def_prefix_command`.
 pub use facts::is_def_prefix_command;
 
-const BEGIN_CMD: &str = "\\begin";
-const END_CMD: &str = "\\end";
+/// Re-exported for [`crate::parser::reparse`]'s token tier, whose guard has to
+/// name the same predicate the walk does rather than drift into a copy of it.
+pub(crate) use facts::is_definition_body_command as reads_definition_body;
+
+pub(crate) const BEGIN_CMD: &str = "\\begin";
+pub(crate) const END_CMD: &str = "\\end";
 const LEFT_CMD: &str = "\\left";
 const RIGHT_CMD: &str = "\\right";
 
@@ -3936,7 +3940,7 @@ impl<'t> Parser<'t> {
 /// - anything else: a maximal operand run.
 ///
 /// The pieces concatenate back to the input, preserving losslessness.
-fn split_math_word(text: &str) -> Option<Vec<(usize, usize)>> {
+pub(crate) fn split_math_word(text: &str) -> Option<Vec<(usize, usize)>> {
     #[derive(PartialEq, Clone, Copy)]
     enum Cls {
         Operand,

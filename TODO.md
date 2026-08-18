@@ -1099,20 +1099,14 @@ near-mechanical ports, the third is a project.
   change, which is how the entry above was retro-measured (see its numbers).
   Still pending as separate rows: a lint pass and the `.bib` pipeline.
 
-- [ ] **Incremental reparse (the elephant).** Every keystroke is a full parse:
-  `parsed_document` (`src/incremental.rs:207-222`) calls
-  `parse_with_declarations` on the whole text, salsa memoizes at whole-file
-  granularity, and there is no `reparse.rs`. LaTeX parses slowly per byte, so
-  this is proportionally worse here than it was anywhere else in the family.
-  This is a multi-session project, not a port: fatou's tiered reparse
-  (`crates/fatou-parser/src/parser/reparse.rs` + its `src/incremental.rs`
-  side channel) is the reference implementation, and panache's TODO has the
-  phased graduation protocol (oracle invariant, branch discipline, mechanized
-  bench gate) worth copying as *process*. Two notes for whenever it starts:
-  `did_change` already has the exact edit range in hand (`lsp.rs:1556-1566`)
-  and discards it after splicing — keep it plumbed through, and do not let
-  the reparse re-derive it with a whole-text diff (fatou measured that diff
-  costing more than the reparse it fed).
+- [~] **Incremental reparse (the elephant).** *In progress — see
+  § Incremental reparse below for the phased plan and the status line.*
+  Every keystroke is a full parse: `parsed_document` calls
+  `parse_with_declarations` on the whole text and salsa memoizes at whole-file
+  granularity. LaTeX parses slowly per byte, so this is proportionally worse
+  here than it was anywhere else in the family — `benches/keystroke.rs` row 4
+  prices it at 37 us / 127 us / 2.84 ms / 27.3 ms across the corpus, which at
+  730 KB is 97% of the keystroke.
 
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
   (`crates/badness-parser/src/parser/lexer.rs:42`, same in `bib/lexer.rs:29`),
@@ -1145,11 +1139,12 @@ near-mechanical ports, the third is a project.
     Likely the same margin/guard column-0 pinning the reflow already backstops.
 
 - [~] **Replace the per-opener gate scans with a precomputed closer map
-  (container stack; multi-session).** *Three of six gates migrated so far —
-  conditionals, aliases, and the `\begin` brace-escape gate run the shared
-  batch driver; the math and bracket family is C2.3–C2.5, to be finished for
-  **uniformity**, since measurement has since voided the perf case for those
-  three (see C2.3).* Every shape gate today runs one forward
+  (container stack; multi-session).** *The shared batch-driver migration is
+  complete: all nine gates run through it, and C3 chose that shared driver as
+  the grammar's end-state. A genuinely precomputed per-frame reachability layer
+  never landed; the `${` brace-depth ratchet remains deliberately quadratic, and
+  any tree-derived outside-fragment summary for the region tier is new design,
+  not unfinished C2 work.* Historically every shape gate ran one forward
   token scan per live opener, each a hand transcription of the same
   bookkeeping — brace depth with `plain_braces`, `\begin`/`\end` counting,
   blank-line runs, the macrocode bound — eight copies in `grammar.rs`, growing
@@ -1762,12 +1757,859 @@ near-mechanical ports, the third is a project.
   formatter-only rule for it, the survey already showed every such rule is
   trivia-reading, typeset-unsafe, or lopsided.
 
-- [ ] Intra-file incremental reparse (reuse green subtrees on contained edits).
+- [~] Intra-file incremental reparse (reuse green subtrees on contained edits).
+  *See § Incremental reparse below.*
 
 - [x] `wasm32` build for a web playground. Landed as the `badness-wasm` shim
   crate + the docs playground page (`docs/src/playground.md`), formatter-only;
   linting in the playground would first need the linter core extracted from the
   root crate (its logic is fs/salsa-free, but its crate is not wasm-clean).
+
+### Incremental reparse
+
+Multi-session effort to reparse intra-file edits instead of re-parsing the whole
+text on every keystroke. Reference implementations audited for this plan, all on
+disk and all rowan 0.17: `../fatou` (`crates/fatou-parser/src/parser/reparse.rs`
+plus its `src/incremental.rs` side channel) is the **primary model**; `../arity`
+(`crates/arity-parser/src/parser/reparse.rs`) is the older, simpler three-tier
+ladder that landed organically; `../panache` (its `TODO.md` § Incremental Parsing)
+contributes the **process** — the phased graduation protocol, the mechanized bench
+gate, and the record of where its own plan was wrong.
+
+**Governing invariant** (fatou's "Tenet 4 strong form"): a successful incremental
+reparse must yield a green tree **and** a `SyntaxError` vector byte-identical to a
+full parse of the edited text, enforced by a `#[cfg(debug_assertions)]` oracle on
+every reparse. Every guard failure bails to a full parse — never an error, never
+best-effort. That refusal-first contract is what makes reading mutable state from
+inside an otherwise-pure salsa query sound: the side channel is not
+memoization-visible, because the query's *output* does not depend on it.
+
+**The load-bearing discovery, which sets the whole shape:** the tiers sit *on top
+of* `parse` and `lex` and need **no parser restructuring**. Tier 1 is
+`SyntaxToken::replace_with(GreenToken)`; the region tier is a plain `parse()` over a
+substring plus `GreenNode::splice_children`, with neighbour-sized boundary parses
+used purely as *proofs* and then discarded. There is no incremental lexer state, no
+token-stream reuse, no parser-restart-at-an-offset. So the four obstacles a first
+reading suggests — the nine forward-scanning shape gates, the two-pass `ParseCtx`,
+the unbounded left-to-right lexer state (`at_letter`, `expl_syntax`, `short_verbs`,
+`macrocode`, `brace_depth`), and the absolute token indices in `Event::Tok` /
+`PreScan` / the gate memo — do **not** need solving for the token tiers. They come
+back only at the region tier (Phase 7), which is last on purpose.
+
+Work happens on the `feat/incremental-reparse` branch; the user files the PR. Do
+**not** squash it: panache's six graduation phases landed as one squash-merge and
+its phase-by-phase history is gone, leaving its TODO as the only record.
+
+**Handover protocol:** a fresh session reads this section, picks the first
+unchecked phase, verifies its entry criteria (previous phase's boxes checked,
+workspace green on the branch), and works TDD with atomic conventional commits. On
+completion it checks the phase box, updates the status line below, and records any
+deviation or discovered follow-up as an indented bullet under the phase. Never
+leave a phase half-landed: partial work is noted in the status line with the exact
+next step. The deviation bullets are the most valuable thing here — they are where
+the plan was wrong.
+
+**Gates before touching any of this:** `task bench:gate` (both bench gates,
+release, default budget — a shortened run measures sampling noise),
+`BADNESS_REPARSE_FUZZ_ITERS=10 cargo test -p badness-parser --test
+incremental_reparse`, and `task gate-corpora:check`. Run the bench gates on an
+idle machine; a floor calibrated against a loaded one fails later for no reason.
+Interleaving the write-phase ceiling's two rows removed its run-to-run spread but
+not its sensitivity to load, so this is a standing requirement, not a workaround.
+
+**Current status:** Phases 1-8 are complete. The token, protected-body, and
+conservative top-level region tiers are live, corpus-swept, and benchmark-gated;
+an edit no tier can prove safe declines to a full parse. A keystroke typed into
+prose on the 730 KB thesis costs **91 us end to end instead of 27.7 ms**; a line
+typed inside an `lstlisting` on the same file costs **~94 us**. Further widening
+starts from a measured workload and adds a refusal-first proof, not from an open
+graduation phase.
+
+Run `task bench:gate` before touching any of this. Read the gate's output for
+what the tiers are worth — the thresholds live in the harness and are
+deliberately not restated here.
+
+The number worth carrying forward has moved twice. With the parse cheap the write
+phase *was* the keystroke, at ~52 copies of the document where two linear passes
+would do; patching the line table instead of rebuilding it took that to **2.5
+copies**, 28 us on the thesis against 575. Nothing in a keystroke is now
+conspicuously the wrong shape: the parse is ~37 us, the write phase is two text
+copies plus a table splice, and the remainder is the parse's own consumers.
+
+- [x] **Phase 1: infra, oracle, and the salsa side channel.** Behavior-neutral:
+  `reparse` returns `None` for every edit, so every keystroke still full-parses
+  and `task bench:keystroke` must not move. New
+  `crates/badness-parser/src/parser/reparse.rs` carrying `Edit` /
+  `apply_edits` / `try_apply_edits` / `diff_edit`, `ReparseTier`, `Reparsed`,
+  the two entry points, `fingerprint`, and the debug-only
+  `assert_matches_full_parse`; `parse_with_declarations` grows a variant
+  returning the resolved `ParseCtx` (it computes one at `core.rs:96` and throws
+  it away, and the token tier's isolated relex must run under the same one);
+  `src/incremental.rs` grows `PrevParse`, the default-method side channel, a
+  two-class LRU `ReparseCache`, and the `parsed_document` dispatch.
+
+  Three enforcement layers, all landing here so every later phase is caught by
+  instrumentation that already exists:
+
+  1. the in-crate debug oracle at every `Some(...)` return site, with
+     `fingerprint` `#[doc(hidden)] pub` so the assert and the harness can never
+     drift;
+  2. the randomized harness (`crates/badness-parser/tests/incremental_reparse.rs`),
+     seeded LCG, LaTeX hazard alphabet, hand-written snippets per sanctioned
+     lexer mode, plus the parser corpus;
+  3. an `O(1)` **every-build** backstop that the spliced tree spans exactly its
+     text, which *falls back* rather than panicking. Panache added its
+     equivalent late, having noticed that debug-only oracles check nothing in
+     the build that writes the user's file.
+
+  The harness is trivially green while the stub refuses everything, which is why
+  this phase must also ship oracle **self-tests**: an injected wrong tree and a
+  perturbed error vector each have to trip the assert, or Phase 1 ships a net
+  with no proof it catches anything.
+
+  Also here, because every later diagnostic splice depends on it: an assertion
+  over the parser corpus that `Parse::errors` is sorted by start offset. badness
+  has a single error source (`grammar::parse`), so fatou's five-stream
+  `DIAGNOSTIC_STREAMS` machinery is not needed — but the ordering has never been
+  asserted, and a splice is unsound without it.
+
+  Landed with four deviations, each a decision a later phase inherits.
+
+  - **No whole-text `diff_edit` in `parsed_document`, at all.** fatou calls it as
+    the fallback when the staged chain fails, and its own TODO then records the
+    cost as an open problem (~200 us of a ~500 us keystroke at 1 MB — more than
+    the tier it feeds). Skipping it outright loses nothing real: the shapes it
+    covers are a disk reload and a whole-buffer replace, both ~100% windows that a
+    cost guard declines anyway. `diff_edit` stays implemented and tested for
+    benches and for callers outside the query. **Consequence for Phase 2:** the
+    staged chain is the *only* incremental input, so a tier is dead until the
+    edits are plumbed, which is why Phase 2 comes before Phase 3.
+  - **The oracle has a single exit.** Rather than calling the assert at each
+    tier's return site (fatou's shape), every tier returns through one `finish`,
+    which carries both the debug oracle and the every-build length check. A tier
+    that forgets to verify is then not expressible, so it is not a thing review
+    has to catch.
+  - **`parse_with_declarations_resolved` is new API.** The scanned `ParseCtx` was
+    computed and dropped; a tier that relexes a fragment must use the same one, or
+    a `\newcommand` the scan found makes the fragment's tokens disagree with the
+    tree's. Free — both passes compute it anyway.
+  - **`ReparseTier` has three variants, not fatou's two.** The protected-body tier
+    (Phase 4) is split from the plain-leaf tier because in LaTeX they are separate
+    proofs over separate node kinds, where fatou's `STRING_CONTENT` path is a
+    branch inside its token tier.
+
+  Two things measured rather than assumed. The keystroke bench is unchanged:
+  alternating A/B against `main` on `phd_dissertation.tex` gives main 27.3/28.5 ms
+  and the branch 28.5/28.3 ms, overlapping ranges. (A first, non-alternating run
+  showed the branch 16% *faster*, which is not possible — the side channel only
+  adds work — and was machine warm-up; do not trust a bench run in one direction
+  only.) And `task gate-corpora:check` matches all eight baselines exactly, which
+  is 6205 files through the formatter and linter with identical results.
+
+- [x] **Phase 2: precise LSP edits.** Purely LSP-side plumbing feeding the
+  receiving end Phase 1 landed. `apply_content_changes` returns
+  `Option<Vec<Edit>>` (`#[must_use]`, since a dropped chain is invisible to every
+  oracle), `WorkerJob::Edit` carries it, and the worker stages it against the
+  `SourceFile` that `upsert_file` returns. `None` is an unknown transform — a
+  range-less whole-buffer replacement anywhere in the batch.
+
+  Behavior-neutral: no tier exists, so `reparse_edits` refuses every chain and
+  every keystroke still full-parses. `task check` and `gate-corpora:check` green
+  therefore prove little; the load-bearing test is that a staged chain
+  reconstructs the buffer (`apply_edits(old, &staged) == new`), which is the
+  property the reparse's verification step leans on.
+
+  **Do not add a whole-text `diff_edit` fallback in `parsed_document`.** Phase 1
+  deliberately left it out (see its deviations); fatou has one and its own TODO
+  records the cost as an open problem. That is what makes this phase load-bearing
+  rather than an optimization: the staged chain is the *only* incremental input,
+  so no tier can do anything until it arrives.
+
+  Landed with five deviations. The first two retire hazards this plan named, and
+  the reasons are worth keeping — a later phase that adds a job kind or another
+  `upsert_file` site has to re-check exactly them.
+
+  - **The job-coalescing hazard does not exist.** This plan said a superseded
+    request's edits must be carried onto the survivor. They cannot be lost:
+    `Worker::run` drains and handles *every* `WorkerJob`, so N keystrokes are N
+    `upsert_file`+stage pairs in order, and the only coalescing is of
+    `AnalyzeRequest` (`Worker::enqueue`), which carries no text and no edits — the
+    read side re-reads the buffer off the db snapshot. The plan assumed edits
+    would ride the coalesced queue. **The invariant to preserve** is that
+    coalescing stays on the *analyze* side of the write.
+  - **`upsert_file`'s write-skip needs no special case**, and the plan's "the
+    chain must never be ahead of the buffer it describes" was the wrong reason for
+    the right rule. A chain is anchored at the reparse *base*, not at the db text,
+    so a buffer that round-trips back to what salsa holds still took a transform to
+    get there and must still stage it — `parsed_document`'s `is_current` arm
+    already returns the base and deliberately stores nothing, leaving the chain
+    anchored. The real reason to stage **after** the upsert is that its `&mut db`
+    is what proves no analyze is reading: a chain staged ahead of the write could
+    be peeked by an in-flight `parsed_document`, which would fail to verify it,
+    full-parse, and then *drain* it, losing the edit for good.
+  - **Every `upsert_file` site pairs with a stage**, `None` at the four that
+    carry no edits (`didOpen`, the push-mode re-lint sweep, sibling seeding, a
+    watched-file re-read). An exceptionless rule survives the next call site.
+  - **One change in `src/incremental.rs`**, which this plan said would need none:
+    `reparse_stage_edits`'s `None` branch cleared through `entry().or_default()`,
+    minting an empty cache entry for a file that had none. Harmless alone, but
+    sibling seeding stages `None` per file read off disk, so a large project would
+    crowd out the buffers being edited until a store swept them.
+  - **The keystroke bench's *write-phase* row rose 14-26%; end to end did not
+    move.** Alternating A/B against `f58a9d7`, row 2 goes 572 us -> 697 us on
+    `phd_dissertation.tex` (66 -> 83 us masters, 5.25 -> 5.83 us cv, 1.38 ->
+    1.57 us small) while row 3 — the keystroke a user feels — is 27.76 -> 27.71
+    ms, i.e. flat, because the full parse is still 97% of it. Reproducible across
+    six interleaved runs, so it is not machine noise.
+
+    It is **not extra work**. Bisected to `3f4c629`, and within it to the
+    *presence of a heap-allocated insert in the pushed `Edit`*: pushing only the
+    `(start, end)` spans restores 571 us exactly, while pushing the `Edit` —
+    `change.text` moved or cloned, staged or dropped immediately — costs the same
+    125 us. Time-boxed `perf stat` has the branch retiring *fewer* instructions
+    than the base for the same cycles, so the delta is stalls, not instructions;
+    `MALLOC_MMAP_THRESHOLD_` moves both arms equally, so it is not the mmap
+    threshold. Read as: interleaving one small alloc/free with the ~730 KB
+    buffer the splice allocates and frees each iteration costs the base's
+    pristine same-chunk reuse. A real session allocates constantly between
+    keystrokes anyway, so that pristine pattern is arguably the bench's artifact
+    rather than the server's property — but that reading is an inference, not a
+    measurement, and it is the one thing here nobody has verified.
+
+    Left as measured rather than optimized: the fix (an inline small-string
+    `insert`, in the parser crate's `Edit`) would be speculative work against a
+    locality effect, and the row it costs is invisible until a tier makes the
+    parse cheap. **Phase 5's gate must cover row 2**, which is exactly when this
+    stops being invisible.
+
+    *Settled later, and against this reading:* the 125 us is not a cost at all —
+    the chain measures ~50 ns, and the row is bimodal at ~575/~710 us on a mode
+    that trivial bench-side edits flip in either direction. See the closed
+    alloc-locality item below; the small-string `insert` is now a **do not
+    write**.
+  - **The `apply_edits` round-trip tests live beside the function**, in
+    `src/lsp.rs`'s `mod tests`, not in `tests/lsp.rs` as planned: that file is a
+    protocol-transcript harness over `Connection::memory()` and never calls
+    `apply_content_changes`, whose two existing tests were already in-file. It
+    gained the end-to-end multi-change-batch transcript instead, and
+    `tests/incremental.rs` — the only place the chain is observable — gained the
+    worker-sequence test that drives `apply_content_changes` + `upsert_file` +
+    `reparse_stage_edits` and asserts the chain reconstructs the buffer.
+
+- [x] **Phase 3: token tier, plain leaves.** Edit inside one `WORD` /
+  `WHITESPACE` / `COMMENT` leaf. Guards cheapest-first: newline ban →
+  construct-character ban → leaf kind allow-list → parent/ancestor ban (never a
+  `NAME_GROUP`, a definition body, or a `.dtx` margin/guard line) → isolated
+  relex under the cached `ParseCtx` yields exactly one token of the same kind →
+  forward join probe → backward join probe → no diagnostic touches the leaf.
+  Splice with `token.replace_with`, shift diagnostics at or after the leaf end
+  by delta. `O(depth)`, not `O(file)`.
+
+  The guard with no compile-time link to what it describes is the set of places
+  the grammar branches on a token's *text* — badness's analogue of fatou's
+  `CONTEXTUAL_IDENTS`. Keep it honest the way fatou does: a test that reads the
+  grammar sources, extracts every text comparison, and asserts each is covered,
+  *and* asserts a known set was found so a rewrite that hides comparisons from
+  the scan fails loudly rather than silently covering nothing.
+
+  What that scan has to cover, from the Phase 1 survey — start here rather than
+  rediscovering it. The grammar reads token *text*, not just kind, in at least:
+  `PreScan::run` (`parser/grammar/prescan.rs`), which builds name-keyed indices
+  for expl3 toggles, conditional openers, alias openers/closers, and doc-margin
+  lines; `parser::conditional`'s opener recognizer, shared with the linter's
+  `ConditionalIndex`; `semantic::define::scan_definitions`, which drives the
+  two-pass `ParseCtx` and reads command names *and* `NAME_GROUP` text; and
+  `Signatures::environment_at`, which reads a `\begin`'s `NAME_GROUP`. The
+  practical consequence is that the parent-kind ban is not optional decoration:
+  a `WORD` inside a `NAME_GROUP` is an environment *name*, and relexing it to the
+  same kind proves nothing about what the parser will do with it.
+
+  Note also that the ban list is only sound because the tier proves the whole
+  file's token-*kind* sequence is unchanged. Everything the grammar does is a
+  function of the token vector plus the `ParseCtx`; if kinds are identical and one
+  token's text changed, the only decisions that can differ are the text-reading
+  ones the scan enumerates. Write that argument down in the module docs — it is
+  the tier's soundness proof, and it is what a reviewer has to check.
+
+  Landed as `parser/reparse/token.rs`, with the argument in its module docs and
+  the survey as `the_text_read_survey_is_complete` (42 classified sites, each
+  with a verdict — `ControlSequence`, `Accessor`, `Offsets`, `Guarded`,
+  `Context` — because a bare list of matched lines proves the scan still runs but
+  not that anyone read what it found). Measured, on a prose keystroke:
+
+  | document | reparse before | after | end-to-end before → after |
+  |---|---|---|---|
+  | `small.tex` (1.2 KB) | 33 us | 2.1 us | 35 us → 3.5 us |
+  | `cv.tex` (6 KB) | 119 us | 3.5 us | 126 us → 9.4 us |
+  | `masters_dissertation.tex` (95 KB) | 2.79 ms | 14.5 us | 2.89 ms → 82 us |
+  | `phd_dissertation.tex` (730 KB) | 27.0 ms | 140 us | 27.7 ms → 0.71 ms |
+
+  Five deviations, each a decision a later phase inherits.
+
+  - **The scan the plan asked for is a *classified* survey, not a checklist.**
+    The plan wanted every text comparison extracted and asserted covered. What
+    landed also records *why* each is safe, because the four verdicts that are
+    not `Guarded`/`Context` — 35 of 42 sites are kind-gated to a control
+    sequence — are the ones a future reader would otherwise re-derive every time.
+    The test fails in both directions: an unclassified new site, and a table
+    entry whose line the grammar no longer has.
+  - **Two guards the plan implied are much narrower than stated.** The plan's
+    "parent/ancestor ban" reads as structural, but two of the reads it has to
+    stop are *not* reachable through ancestry: the lexer's `\documentclass{…}`
+    class-name scan (which decides whether `|` is a short verb for the whole
+    file) and its `\MakeShortVerb` argument scan run over **raw text**, so they
+    do not care what the tree made of them. Hence a second, token-level ban over
+    the preceding tokens on the line, and a `lexer::reads_following_text` that
+    asks `next_pending` rather than restating its four sets.
+  - **Two guards had to be *loosened* to be worth having.** Written literally,
+    "the math word split must be inert" refuses every hyphenated word (`-` is a
+    sign, so `well-known` splits) and "an expl3 `N` slot takes a one-character
+    `WORD`" refuses the second keystroke of every word. Both are gated on
+    position instead: the split guard on a `MATH` ancestor (exact — every math
+    body opens one), the expl3 guards on a colon-carrying head on an ancestor
+    `COMMAND` (sound because attachment is greedy, so a slot the expl3 scan
+    *declined* is attached to the same command anyway). Ungated, prose typing
+    spliced on 1 of 11 keystrokes; gated, 10 of 11.
+  - **`.dtx` is refused wholesale**, which the plan did not anticipate: the
+    docstrip mode lexes by line and by column 0, and an isolated fragment is
+    always at the start of its own input, so the relex cannot be faithful.
+    Phase 4 relexes whole nodes with their delimiters, which is the shape that
+    could lift this — worth trying there rather than inventing a column model.
+  - **The keystroke bench was measuring the wrong thing, in a way that hid
+    itself.** Its edit site was "80% in, snapped to a char boundary", which on
+    the thesis lands inside `\lesssim` in an `align*`. Since the rows alternate
+    insert/delete and the iteration count is calibrated, whether the previous row
+    left its synthetic `z` behind decided which workload the next row measured:
+    two runs of the same binary differed **45x**. Fixed to a word interior on a
+    structure-free line, with the buffer rewound between rows and the site
+    printed. **The consequence for Phase 5:** a tier's number is only as
+    trustworthy as its site, so the gate's cases must pin theirs and assert the
+    tier reached — and it wants a *refusing* site as a case too, since the
+    fallback path is what most edits still take.
+
+- [x] **Phase 4: protected-body tier.** `VERBATIM_BODY`, `VERB`, and comment
+  runs, via fatou's `STRING_CONTENT` trick: relex the **whole enclosing node**
+  with its `\begin{verbatim}`/`\end{verbatim}` delimiters, which puts the
+  isolated lexer into the right mode for free instead of hand-writing a catcode
+  table. Needs a *faithfulness* relex (the unedited node text must reproduce the
+  node's own tokens) to make the soundness argument an induction rather than an
+  assumption, plus a *terminated* check. Newlines are allowed on this tier —
+  that is what puts Enter inside an `lstlisting` on it, and the analogous case
+  was worth 30x in fatou.
+
+  Landed as `parser/reparse/protected.rs`, with the four-leg argument in its
+  module docs. Measured on the new `verbatim` bench site (a line typed inside an
+  injected `lstlisting`), alternating A/B against `67fd92d`:
+
+  | document | reparse before | after | end-to-end before → after |
+  |---|---|---|---|
+  | `small.tex` | 36 us | 4.4 us | 40 us → 7.9 us |
+  | `cv.tex` | 124 us | 5.4 us | 132 us → 13 us |
+  | `masters_dissertation.tex` (95 KB) | 2.85 ms | ~20 us | 2.94 ms → 0.11 ms |
+  | `phd_dissertation.tex` (730 KB) | 27-29 ms | ~30-150 us | 27.7-30.1 ms → 0.8-0.9 ms |
+
+  Splice rates over the seeded harness at 10x: single edits 2567 → 3412 of
+  19840, chains 137 → 180 of 4960, corpus 3723 → 4099 of 13920.
+
+  Six deviations, each a decision a later phase inherits.
+
+  - **Comment runs are out, and were already covered.** The plan's third kind was
+    speculative — a transposition of fatou's shape. The token tier splices a
+    `COMMENT` leaf today (`splices_inside_a_comment_and_inside_whitespace`), and
+    the only comment edits it refuses carry a **newline**, which splits one token
+    into several. That is a token-*count* change, which no leaf splice models
+    whatever proof it carries, so it belongs to the region tier and not here.
+  - **The plan's "faithfulness plus terminated" is four legs, not two**, and the
+    two it did not name are the ones a reviewer has to check. *Locality* — a raw
+    capture's bytes never reach `apply_toggles`, `next_pending`, or the
+    brace-depth fold, so the lexer leaves the fragment in the state it entered —
+    is what licenses splicing without re-lexing the tail, and it is a claim about
+    lexer *code*, so it is pinned by a lexer test rather than by the tier. Writing
+    that test immediately produced its own **counterexample**: a body that
+    *breaks* its capture (`\url{{}`) leaves ordinary braces behind, ratchets
+    `brace_depth`, and flips the char-constant reading of a later `` \char`{ ``.
+    That is now the second half of the test, and it is the concrete reason the
+    tier re-lexes a whole fragment instead of trusting the body's own bytes. The
+    fourth leg is the *sequence check* on the edited fragment, which is what
+    actually catches that case at run time.
+  - **`text_reads_are_inert` was not a kind allow-list to widen.** It
+    short-circuited `true` for every non-`WORD` kind on a *trivia* argument — the
+    grammar's text comparisons all run on tokens it has established are
+    non-trivia. `VERB` and `VERBATIM_BODY` are not trivia, so admitting them meant
+    a per-kind dispatch, with an unclassified kind **refused** rather than
+    defaulted through. The re-audit found exactly one real read: `peek_meaningful_text`
+    feeding `attach_arguments`, which distinguishes a standalone `\verb|…|` from a
+    `\lstinline`'s bare `|…|` by the leading backslash. It also found that every
+    `strip_prefix('\\')` in the grammar sits behind a `CONTROL_WORD` gate — until
+    now an incidental fact, and load-bearing from here, since a `VERB` *does* start
+    with a backslash.
+  - **`context_admits`'s line scan had to move.** It banned any spliceable leaf
+    with a text-reading command earlier on its line, and `\begin` is one — which
+    is every verbatim body, since the scan walks back through the environment's own
+    opener. The fix is not an exception for `\begin` but a change of origin: the
+    scan starts at the **first token of the relexed span**, because a reader
+    *inside* the fragment is reproduced by the relex rather than assumed inert, and
+    only a reader starting before it is unaccounted for. The token tier passes the
+    leaf for both arguments, so nothing there moved.
+  - **`.dtx` stays refused, and the whole-node relex does not lift it.** Phase 3
+    hoped it would. The blocker is not the column model it named: `Lexer::new`
+    derives `implicit_expl` from a scan of the **entire input**, so an isolated
+    fragment can be lexed under a regime the file never had — and can pass the
+    faithfulness relex anyway when the difference does not happen to show in those
+    bytes. Faithfulness is evidence about the fragment, not about the file. Lifting
+    this needs the fragment's *entry state* carried in, which is the region tier's
+    problem and a new decision either way.
+  - **The bench's derived reparse row stops being a measurement.** Row 3 minus
+    row 2 was a fine proxy while the parse was 97% of the keystroke. It is now a
+    difference of two ~800 us numbers on the thesis, and repeated runs of the same
+    binary gave 150 us, 75 us, 67 us, 30 us, and one clamped **0 ns** (row 3 came
+    out *below* row 2). The tier's real cost is not in doubt — the before/after
+    gap is three orders of magnitude — but **Phase 5 cannot gate on this row**. It
+    needs to time `reparse` directly, which is also what lets a case assert the
+    tier it reached. Also discovered: `benches/documents/` holds no verbatim
+    environment, no `\verb`, and no `\url`, so the `verbatim` site *injects* an
+    `lstlisting` block. Phase 5's corpus-presence assertion has to cover the
+    injection too — a site that silently stopped injecting would look like a
+    speedup.
+
+- [x] **Phase 5: mechanize the bench gate.** Landed as `benches/reparse.rs`
+  (twelve cases: four documents by `word`/`verbatim`/`decline`, each declaring
+  the tier it must reach and what it claims for speed), an assert mode on
+  `benches/keystroke.rs` for the write phase, and `task bench:reparse-gate` /
+  `bench:keystroke-gate` / `bench:gate`. Both gates print every check with its
+  margin, collect all failures rather than stopping at the first, write their
+  JSON *before* the verdict, and are off by default. `benches/sites/` holds the
+  corpus table and the edit sites both benches share, so a site cannot drift in
+  one and not the other. Thresholds are in the harness and deliberately not
+  restated here; the directive is now in `.claude/rules/parser.md`.
+
+  Six deviations, and the last two are findings rather than plan corrections.
+
+  - **The corpus assertion pins *sizes*, not just presence.** Presence was what
+    the plan asked for. But every floor is a function of document size, and
+    panache lost two floors when upstream grew a fixture 300 856 -> 304 665 bytes
+    and spent a session proving its parser had not regressed. `download.sh`
+    already pins release tags, so pinning the bytes those tags produce is the
+    cheap other half — and it is what makes "the corpus drifted" a named failure
+    instead of a threshold mystery.
+  - **The site pin and the injection check turned out to be one assertion.**
+    Phase 4 asked for both separately. Asserting the *kind of the leaf covering
+    the pinned offset* (`WORD`, `VERBATIM_BODY`) covers a relocated site, an
+    injection that stopped, and a drifted document at once — where grepping for
+    `lstlisting` would prove the block exists but not that the edit is inside it.
+    Verified by deleting the injection: four cases fail by name before anything
+    is timed.
+  - **The declining case types a backslash, not a newline.** The plan just said
+    "a site the tier refuses". A newline is refused by the first guard in the
+    cascade, so it would price nothing. A backslash at the *same offset as the
+    word case* clears the newline ban, the flavor ban, the kind allow-list and
+    the context scan, then relexes `wo\rd` into two tokens and refuses — so the
+    case prices the whole cascade, and the pair isolates the guard rather than
+    confounding it with position.
+  - **A speedup floor must *not* carry the absolute-microsecond escape.** The
+    plan said every ratio carries one. That is right for the regression rules,
+    where a small absolute overhead reads as a large ratio penalty on a cheap
+    baseline. Applied to a floor it nullifies it: `small.tex` reparses in under
+    two microseconds, so an escape at any useful size forgives every result the
+    case can produce. Panache has the same asymmetry; it is worth stating rather
+    than rediscovering.
+  - **The bench had to pre-warm the heap, and the reason invalidates any
+    per-case number taken without it.** The first case on a large document read
+    ~40% high (35.7 ms against 25.9 ms), and no amount of warmup *inside* the
+    measurement fixed it — 100 iterations did nothing. glibc trims the heap as
+    each iteration's tree is freed and the next faults those pages back in;
+    once a whole case has run, the heap holds chunks that are no longer
+    trimmable. `MALLOC_TRIM_THRESHOLD_=-1` collapses all three thesis cases onto
+    the same ~26 ms, which is what pinned it down. Left as a pre-warm rather
+    than a `mallopt` call: the allocator is the machine's, and a bench that
+    reconfigures it measures a program nobody runs. The consequence to keep is
+    that **case order was silently part of the measurement** — `phd/word` read
+    959x before the fix and 720x after, and the inflated number was the one that
+    looked better.
+  - **The obvious write-phase contract is unsound, and row 0 is the answer.**
+    The plan wanted "the write phase is at most N% of the end-to-end keystroke".
+    Rows 2 and 3 are separately calibrated loops whose *difference* is smaller
+    than the noise on either, so on the thesis row 2 measures **above** row 3 and
+    the share comes out at 101% — the same defect that killed the derived reparse
+    row, re-entering through the gate. Worse, a *proportional* regression like
+    Phase 2's +125 us leaves a scaling ratio almost unmoved (8.4 against 8.67),
+    so scaling alone would have missed the one regression this row exists to
+    catch. The fix is a new reference row: one allocation and one linear copy of
+    the document, with the write phase gated as a multiple of it. On the thesis
+    that ratio held to 0.8% across runs whose absolute times moved 3%.
+
+- [x] **Ratchet the write-phase ceiling, and interleave the two rows it
+  compares.** Rows 0 and 2 are now measured interleaved — a block of one, a block
+  of the other, nine times — and the ratio is the median of the per-block ratios
+  rather than the quotient of two rows timed to completion seconds apart. Every
+  row is a median of blocks now, matching `benches/reparse.rs`'s estimator. The
+  ceiling ratcheted 72 -> **58** on the thesis, and
+  `masters_dissertation.tex` — excluded outright before, for measuring bimodally
+  at 65 us and 91 us — is back in the gate at **62**. Both sit ~10% over the
+  highest of eight runs. The `copies` figure is printed under the write-phase row
+  and rides the JSON report (`write_copies`, schema 4), so it is read rather than
+  recomputed from two medians.
+
+  Three findings.
+
+  - **The interleaving fixed the variance outright.** Eight runs of one binary
+    held 51.1-53.1 copies on the thesis and 54.6-55.9 on the masters, against
+    49.8-64.4 for the sequential measurement the ceiling was first calibrated
+    against. The masters' bimodality was the same artifact and is gone.
+  - **It does not fix the *level*, and the ceiling is not machine-independent
+    after all.** Under twenty spinning threads the same binary reads 76.7-76.9 on
+    the thesis and 83.8-84.1 on the masters — each cluster tight to under 1%, and
+    half again as high — because contention costs the branchy write phase far
+    more than it costs a memcpy. A loaded run now reproduces itself *and* fails
+    the gate, which is the honest behaviour; "calibrate idle" stays a directive
+    rather than becoming unnecessary.
+  - **`small.tex` and `cv.tex` still do not gate, and the reason changed.** They
+    tightened too (12-17% run to run before, 4% and 8% after, at 36 and 71
+    copies), so noise is no longer the argument. They stay out because at those
+    sizes the ratio reads fixed costs rather than the linear passes the reference
+    measures: a `LineIndex` fix would barely move cv, and an unrelated small
+    allocation in `upsert_file` would fire it. (The first half of that was wrong
+    — cv went 76.9x to 6.9x, more in ratio than either gated document. The
+    exclusion stands on the noise; the prediction is corrected in the harness.)
+
+  Also visible, and worth not mistaking for a change: the median-of-blocks
+  estimator lowered every printed absolute (the thesis write phase reads 566 us
+  where the single mean read ~705 us on the same machine) because the mean carried
+  the run's tail. Numbers from before this commit are not comparable with numbers
+  after it.
+
+- [x] **The write phase rebuilt the whole `LineIndex` on every keystroke.** Phase
+  5's reference row put a number on it: **~52 copies of the document** where the
+  two linear passes it needs (build the spliced bytes, let the `Arc` copy them)
+  would be 2-3, the rest being `TextBuffer::new` scanning the entire text. That
+  was ~580 us of a ~640 us keystroke on the thesis. It is now **2.5 copies**, 28
+  us, with the keystroke at 91 us end to end.
+
+  Landed in two measured steps, deliberately: the tables were reshaped first
+  (still rebuilt per keystroke) and only then stopped being rebuilt, so the win
+  is attributed rather than inferred — which is the complaint the item below
+  makes about Phase 2. On the thesis: **575.28 us / 51.8x → 161.57 / 14.7x →
+  28.02 / 2.5x**, and end to end 640 → 246 → 91 us.
+
+  - **The `LineIndex` had to be reshaped before it could be patched.** Its
+    wide-character data was a `HashMap<line, Vec<WideChar>>`, so a line-count
+    change means rekeying every later line and shifting every offset in it. It is
+    now a bool per line ("holds a non-ASCII byte") with the one line concerned
+    walked on demand — panache's shape, and panache's recorded verdict that the
+    per-character table cost more to build than every conversion it answered.
+    `line_ends` went the same way: derivable from the next line's start and the
+    two bytes before it, so a parallel table was one more thing to keep in step
+    for no information. The reshape is why *every* index build got cheaper,
+    including `didOpen` and the ~14 cross-file sites that build one per project
+    member per request.
+
+  - **Fatou's `patch` boundary is wrong here, and the exhaustive oracle is what
+    says so.** It splices at `line_start <= edit_start` and reads the new breaks
+    out of the insert, which is sound only because it indexes `\n` alone: a
+    one-byte predicate cannot flip *at* the edit. Badness treats a bare `\r` as a
+    break, so the predicate reads two bytes and an edit splits or joins a `\r\n`
+    without touching either — inserting `x` into `"a\r\nb"` at 2 gives
+    `"a\rx\nb"`, one line more than the pre-edit table had. Both boundary
+    positions are re-derived from the edited text. Checked by *making* the
+    mistake: fatou's boundary fails `patching_matches_a_rescan` and three
+    integration tests.
+
+  - **The reuse needed no cache, because badness's table lives in the buffer.**
+    Panache keeps a warm index on `GlobalState`, validated by `Arc::ptr_eq`,
+    because its index lives in a salsa memo that every keystroke invalidates —
+    and since that cache is main-thread-only its *readers* still rebuild once per
+    revision (`panache/TODO.md`). Here the buffer is what an edit derives, so the
+    text and its table travel together: no cache, no validation, and one patch
+    serves the write phase and every read job off the same edit.
+
+  - **One vectorized ASCII check for the whole document is worth as much as the
+    reshape was.** A first cut recomputed the per-line flag with an `is_ascii()`
+    call per line, which is ~10 ns where the document fits in L2 and ~22 ns where
+    it does not: on the thesis that was the *entire* cost of building the table,
+    and the reshape measured **646 us — worse than the byte-at-a-time scan it
+    replaced** — while the masters improved 2.4x. Checking the whole document
+    once settles every line when it passes, which for LaTeX it nearly always
+    does, and took the thesis to 161 us. Recorded because the shape of the
+    mistake generalizes: a per-line call is not a per-line cost.
+
+  - **The write-phase *scaling* ceiling had to be re-based, and not because of a
+    regression.** It was `SCALE_BYTES * 1.33`, i.e. stated over the byte ratio.
+    One linear pass is not linear in *time* at these sizes: row 0 — one alloc and
+    one memcpy — scales 8.6-9.3x over a 7.7x byte ratio in every run including
+    the baseline, because the masters fits in L2 and the thesis does not. That
+    slack was invisible while a rescan dominated and became the binding
+    constraint the moment it went (10.3-11.6x measured against a 10.18x ceiling,
+    tight to 4% over four runs). It now sits over row 0's own scaling. Same shape
+    as panache re-basing `BATCH_FANOUT_MAX`: a check can stop meaning what it was
+    written to mean without anything getting worse.
+
+  - **`upsert_file`'s content compare is not a second full scan and wants no
+    bypassing.** Transferred from panache, established by reading rather than by
+    the clock: `**tracked == *text` bottoms out in a slice compare that checks
+    length first, so any insert or delete short-circuits and only an
+    equal-length edit (typing over a same-length selection, an equal-length
+    completion, a full resync) reaches the memcmp. Recorded so the "second
+    near-full scan per keystroke" is not re-derived.
+
+- [x] **Phase 2's alloc-locality inference, checked.** The reading holds, and the
+  conclusion is stronger than "arguably the bench's artifact": **the 125 us was
+  never a cost, in either build.** The original A/B reproduces exactly today —
+  `f58a9d7` against `3f4c629`, alternating, six runs each, 570-601 us against
+  693-750 us on the thesis — so it was not noise and not that day's machine. It
+  is also not the `Edit`.
+
+  - **The chain costs ~50 ns, flat in the document size.** A/B'd at HEAD against
+    a local `apply_content_changes` that splices identically but pushes only
+    `(start, end)` into a reused vector and stages nothing: cv 543 -> 486 ns,
+    masters 3.09 -> 3.07 us, thesis inside its own run-to-run noise (26.4-27.6 us
+    either way). Tens of nanoseconds is what one 40-byte `Vec`, one one-byte
+    `String`, and one staging lock should cost — and that is the entire
+    difference Phase 2's bisect named.
+  - **The row is bimodal at ~575/~710 us, and which mode a build lands in is
+    decided by incidental heap layout.** Three bench-side edits that cannot
+    change the work measured each moved it, with the library code untouched: one
+    `Vec`-of-256 allocated before the row took **`3f4c629`** *down* to 572-594; a
+    page-fault counter plus an address log took it down again to 566-584; an env
+    read plus a restructured closure tail took **`f58a9d7`** *up* to 694-724,
+    arm difference gone. Each build then reproduces its own mode run after run,
+    which is exactly why the original A/B looked solid.
+  - **The pristine-reuse half is the one that survives.** Give the loop a live
+    allocator set with holes — a 256-slot ring, eight allocations of 32 B-8 KB
+    per iteration, standing in for what a session leaves between keystrokes — and
+    the base's fast mode decays to 594-708 while the branch does not move
+    (701-724 pristine, 704-724 churned). The fast mode is what needs a clean
+    heap; the slow one is what survives contact with a real one.
+  - **It is none of the mechanisms worth reaching for next.** Minor faults run
+    1.1/iteration against 1.5 — half a fault is not 125 us. THP is `madvise` on
+    this machine, so the heap is not hugepage-backed. Padding the environment
+    block 0-2048 bytes moves neither build, so it is heap layout and not stack or
+    env layout. Process-level `perf stat` has the branch retiring *fewer*
+    instructions in fewer cycles for the same wall time, which is the rows being
+    time-budgeted — a dearer iteration just buys fewer of them — and matches
+    Phase 2's own reading that the delta is stalls, not work.
+  - **Every attempt to instrument the row from the inside erased the effect**,
+    which is both the signature of the diagnosis and the reason this needed a
+    bisect across builds rather than a profile.
+  - **Nothing to do, and one thing not to do.** The inline small-string `insert`
+    Phase 2 left on the table would buy ~50 ns; do not write it. And the write
+    row's *absolute* microseconds are comparable across runs of one build, never
+    across builds of the bench — which is what row 0 and the interleaved ratio
+    already exist for. The gate is not exposed: at HEAD the same class of
+    perturbation leaves the thesis at 2.42-2.49 copies against 2.42-2.44 and the
+    masters at 2.63-2.71 against 2.65-2.66, because the row is memcpy-dominated
+    now and a layout mode moves row 0 with it. The bimodality lived in the
+    byte-at-a-time rescan that `LineTable::patch` deleted.
+
+- [x] **Phase 6: corpus sweep.** Seeded edits over the pinned `corpora/` — 6,276
+  source files and 38.7 MB of them, the 312 MB this item used to quote being the
+  four checkouts with their `.git` directories — as a two-sided ratchet in the shape of
+  `scripts/check_gate_baselines.sh` + `tests/gate_baselines/`:
+  `scripts/check_reparse_baselines.sh` + `tests/reparse_baselines/`, driven by
+  `crates/badness-parser/tests/reparse_corpus_sweep.rs` (`task
+  reparse-corpora:check`, 59 s). Five drivers — `word-typing`, `word-deleting`,
+  `protected-typing`, `hazard-single`, `hazard-chain` — each with a per-corpus
+  splice-rate floor. **No divergence anywhere**: 256k generated edits, of which
+  99k spliced and were each compared against a full parse — in release, where the
+  in-crate debug oracle is absent.
+
+  The generator, the alphabet, and the checker moved into
+  `tests/support/reparse_harness.rs`, shared with `incremental_reparse.rs`: a
+  second copy of the hazard alphabet that drifted by one entry would make a sweep
+  failure unreachable from the fast suite, which is where a reduction actually
+  gets written.
+
+  Four findings.
+
+  - **The sweep must parse each file the way the CLI would, and that is not a
+    detail.** Read as plain documents, latex3 typed at 72%; under each
+    extension's real `LexConfig` it is 40%. The difference is `.dtx`, and the
+    number to record is the second one — the first measures a workload no caller
+    can ask for.
+  - **`.dtx` splices nothing at all, and it is most of the package corpora.**
+    Both leaf tiers bail on `config.dtx` in their first statement (a known
+    refusal: `implicit_expl` is a whole-input fact, so a fragment can be lexed
+    under a regime the file never had *and still pass* faithfulness). The sweep
+    puts a number on it: 4,405 word-typing attempts across latex3 and latex2e,
+    zero splices, against 85%/89% on the same corpora's `.tex` files and 99% for
+    protected typing in pgf, which holds no `.dtx`. That is the largest hole
+    either tier has, and the measurement is what makes it worth reopening rather
+    than a refusal to live with — Phase 6.5 below.
+  - **Floors are per corpus, not over the union.** A collapse confined to `.tex`
+    would hide behind pgf's volume otherwise. They sit at roughly half the lowest
+    recorded rate: a tripwire that survives an ordinary re-record, since the
+    recorded tallies are what notice ordinary movement.
+  - **The tier columns are load-bearing, not decoration.** Declining is always
+    sound, so a workload moving from one tier to another leaves every rate
+    identical and every assertion green. `token=`/`verbatim=`/`region=` is the
+    only thing in the ratchet that would see it; the check classifies a row that
+    moved that way as `CHANGED`, distinct from `REGRESSION` and `STALE`.
+
+- [x] **Phase 6.5: `.dtx` on the leaf tiers.** Phase 6 put a number on the
+  largest hole either tier has: `.dtx` splices **nothing**, 4,405 word-typing
+  attempts for zero splices, over 301 files that are half of latex3 and latex2e
+  by count and more by bytes. Every keystroke in l3 package source is a full
+  parse. Establish whether the wholesale refusal is *necessary*, and if not, what
+  the narrowest sound version is.
+
+  The refusal reads as one reason and is really two. The token tier says the
+  docstrip mode lexes by line and by column 0, which an isolated fragment cannot
+  reproduce. The protected tier says `implicit_expl` is derived from a scan of the
+  entire input, so a fragment can be lexed under a regime the file never had **and
+  still pass faithfulness** — Phase 3 hoped the whole-node relex would lift the
+  first reason and found the second underneath it. The second is the load-bearing
+  one, and it generalizes past `implicit_expl`: what a `.dtx` fragment lacks is not
+  *column* but the lexer's left-to-right state at the leaf's offset —
+  `at_line_start`, `in_doc_line`, `at_letter`/`expl_syntax` (both raised inside a
+  `macrocode` chunk), `macrocode` itself, and `implicit_expl`. Decision #6 says
+  none of that is checkpointed, and adding a checkpoint is a new decision.
+
+  **Where state *is* needed, none of it needs checkpointing: every bit is
+  derivable from the base tree or carried on the base.** (That is the route for
+  the protected tier. The token tier turned out not to need any of it — step 1
+  below.) `at_line_start` is `O(1)` from the byte before the leaf. `in_doc_line` is
+  whether the line's first leaf is a `DOC_MARGIN`, which is `O(1)` from the leaf's
+  own siblings. `macrocode`/`at_letter`/`expl_syntax` are an *ancestor* question,
+  the same shape as the protected tier's "the delimiters are the mode".
+  `implicit_expl` is a function of the base text that the base parse already
+  computed once: carry it on `ReparseBase` and refuse when the edit could move the
+  signal (`\ProvidesExpl`, a `%<@@=…>` line). None of that is a checkpoint — it is
+  the same trick the protected tier already plays, read off the tree instead of
+  saved during the walk.
+
+  **Direction is not symmetric, and that is the part to get right.** Most
+  wrong-state relexes are *conservative*: the isolated fragment defaults to fewer
+  letters than a `macrocode` body has (`at_letter: false`, `expl_syntax: false`),
+  so it splits where the file merges, the kind sequence grows, and the tier
+  refuses. The unsound direction is where the isolated default is *more*
+  permissive, and at least one such case exists — `in_doc_line: false` makes a
+  `^^A` ordinary content where the file reads it as a comment to end of line. That
+  one turns out to be blocked, but incidentally rather than deliberately (step 1),
+  which is why the work still owes an enumeration of the permissive directions:
+  assuming the sequence check catches everything is exactly the assumption the
+  protected tier's note records as having failed.
+
+  **Step 1 is done, and it says the token tier's bail is probably redundant.**
+  Deleting `reparse_token`'s `if base.config.dtx` and re-running the Phase 6 sweep
+  (release, ~256k edits) produced **zero divergences** and moved only what it
+  should:
+
+  | row                  | before  | after   | `.dtx` share of the gain |
+  | -------------------- | ------- | ------- | ------------------------ |
+  | latex3 word-typing   | 40%     | 73%     | +1305 of 2035 (64%)      |
+  | latex2e word-typing  | 45%     | 77%     | +1670 of 2370 (70%)      |
+  | latex3 hazard-single | 19%     | 25%     |                          |
+  | pgf, every row       | —       | —       | byte-identical (no `.dtx`) |
+
+  pgf holding *exactly* still is the control: the change is confined to the flavor
+  it was supposed to touch. The protected tier's rows are unchanged too, since only
+  the token tier's bail came out.
+
+  A second, sharper probe backs it up, because the sweep is structurally blind to
+  the hazard this phase predicts — its alphabet has no `^^A`, no `%<@@=`, no bare
+  `|`, and it samples offsets. An exhaustive one (every offset × a `.dtx`-aimed
+  alphabet over nine hand-written snippets: 43,623 edits, in a **debug** build, so
+  the in-crate oracle fired on every splice as well) also found nothing. Kept out
+  of the tree for now; it is step 2's raw material.
+
+  **The mechanism is the leaf-kind allowlist, not a `.dtx` argument.** Pointed
+  cases, with the bail out:
+
+  - doc-line prose word + a letter → **splices**. This is the entire win; `.dtx`
+    files are mostly documentation by word count.
+  - a bare word inside a `macrocode` body, + a letter and + `@` → **splices**
+    (`@` is catcode-12 in a `WORD` under either regime, so `at_letter` cannot bite).
+  - `^^A` into a doc-line word → refuses. Not by a guard: `^` is not `WORD`
+    material, so the isolated relex is more than one token.
+  - `%` into a doc-line word → refuses. The fragment *is* at column 0 of its own
+    input, so the isolated relex makes it a margin — a different *kind*.
+  - `@` into a control word, and an expl3 name in a `macrocode` body → refuse,
+    because `try_leaf` admits only `WORD | WHITESPACE | COMMENT` and never relexes
+    a `CONTROL_WORD` at all.
+
+  That last one is the crux: every `.dtx` state bit that changes lexing changes it
+  for control words, margins, guards, and `^^A` — and each of those changes the
+  *kind* an isolated relex yields, which the one-token-same-kind check already
+  refuses. So the argument to write is the allowlist's, and `implicit_expl` never
+  reaches the token tier because expl3 names are control words.
+
+  Landed in this step:
+
+  1. **State-bit enumeration test for the token tier.** Implemented as
+     `reparse::token::tests::dtx_state_bit_survey_is_complete_for_the_token_tier`,
+     with one verdict per `.dtx` state bit (`at_line_start`, `in_doc_line`,
+     `at_letter`, `expl_syntax`, `macrocode`, `implicit_expl`, `short_verbs`) and
+     an explicit counterexample for each.
+  2. **Removed the token-tier `.dtx` bail.** `reparse_token` no longer rejects
+     `base.config.dtx` wholesale; a doc-line word splice now reaches `ReparseTier::Token`.
+  3. **Added a `.dtx` row to `benches/reparse.rs`.** The bench now includes an
+     inline `.dtx` fixture case (`phase65-inline.dtx/word`) with a declared token-tier
+     outcome and a speedup floor.
+  4. **Re-recorded `tests/reparse_baselines/` in the same commit.** The expected
+     splice tallies now match the post-bail-removal sweep.
+
+  Follow-up landing:
+
+  1. **Protected-tier `.dtx` enablement landed as a separate argument.** The tier
+     now carries `implicit_expl` on `ReparseBase`, relexes `.dtx` fragments under
+     that base regime, and refuses when an edit flips the `%<@@=...>` /
+     `\ProvidesExpl*` signal state.
+
+  Not negotiable: this is a speed item. A `.dtx` tier that produces a tree a full
+  parse would not is worse than no tier at all, because the formatter writes the
+  file.
+
+- [x] **Phase 7: conservative top-level region tier.** Reparse the measured
+  multi-leaf prose workloads whose locality can be proved cheaply; refuse the
+  unrestricted structural case. A gate verdict for a node *before* an arbitrary
+  edit can flip because a closer *after* it appeared or vanished, so a generic
+  fragment parse is not equivalent to the same region in a full parse. Refusal is
+  the contract here, not an incomplete result.
+
+  **Landed slices:** edits spanning multiple direct prose leaves inside one
+  top-level `PARAGRAPH`, plus deletion/replacement of the blank-line seam between
+  two adjacent paragraphs. A faithfulness parse first reproduces the old fragment
+  under the base's exact `ParseCtx` and full-file `.dtx` implicit-expl regime;
+  unchanged commands may share a paragraph, while edits into nested structure and
+  catcode-sensitive insertions refuse. The paragraph case uses rowan's node splice;
+  the seam case rebuilds `ROOT` from shared green children and replaces diagnostics
+  for the fragment. Both return through the common oracle, and CRLF is covered
+  directly rather than inferred from a literal seam predicate. Both have named
+  `ReparseTier::Region` benchmark contracts and speedup floors in
+  `benches/reparse.rs`; the seeded corpus sweep is green.
+
+  **Deferred widening, not Phase 7 closeout:** arbitrary token-inclusive runs of
+  `ROOT` children would need mandatory boundary-parse-concatenation proofs and a
+  complete account of every forward-scanning gate whose verdict an edit can change
+  outside the fragment. The shared batch driver is not a queryable closer map, so
+  that account is new parser infrastructure rather than missing rowan manipulation.
+  Take it on only for a measured workload the landed paragraph and seam cases do not
+  cover; it owes its own corpus row and benchmark contract.
+
+- [x] **Phase 8: closeout.** Architecture and subsystem docs now describe all
+  three live tiers, their proofs, benchmark contracts, and deferred widenings.
+  The audit removed the stale Phase 6 handover, closed the landed Phase 6.5
+  status, and found no region skeleton or always-decline path left to prune.
+  `LineTable::patch` was the third item here and landed early, out of order,
+  because Phase 5's gate made it the largest thing left in a keystroke — see the
+  closed item above.
+
+**Deferred (explicit non-goals).** Nested-region reparse — inside environments,
+groups, or math — is unsound without a context-parameterized fragment entry point
+carrying the lexer's left-to-right state and the open-container stack. That is
+fatou's recorded lesson and panache reached it independently; regions stay
+restricted to top-level `ROOT` children until such an entry point exists.
+`SyntaxNodePtr` re-anchoring across edits (arity's `map_range_through_edits`) is
+needed only if badness starts caching node identities across edits, which the
+CST/AST section already tracks as latent.
+
+**Hazards to design against from the start**, both learned the expensive way
+elsewhere. **CRLF:** panache lost the entire feature on Windows-authored files
+because a blank-line check was a literal `"\n\n"` test — safe, and a total loss,
+since it simply never spliced. Every textual seam predicate must be line-ending
+agnostic and the fuzz corpus needs CRLF entries so the gap is measured rather than
+accidental. **Bail cost:** a rejected attempt is paid *on top of* the full parse it
+falls back to (16% of one in fatou), which bounds how much a new guard may cost
+before rejecting — a guard bails on cheap evidence, never after a fragment parse.
 
 ## Editor integration
 

@@ -53,13 +53,13 @@ pub(crate) fn code_actions_for_range(
             if !byte_ranges_overlap(d.start, d.end, req_start, req_end) {
                 return None;
             }
-            let changes = workspace_changes(fix, uri, idx, enc, resolve)?;
+            let changes = workspace_changes(fix, uri, &idx, enc, resolve)?;
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.description.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 // Link the action to the finding it fixes, so the client can dim it
                 // once the diagnostic clears.
-                diagnostics: Some(vec![lint_to_lsp(idx, d.clone(), link_docs, self_path)]),
+                diagnostics: Some(vec![lint_to_lsp(&idx, d.clone(), link_docs, self_path)]),
                 edit: Some(WorkspaceEdit {
                     changes: Some(changes),
                     ..Default::default()
@@ -84,8 +84,10 @@ fn workspace_changes(
     enc: PositionEncoding,
     resolve: &dyn Fn(&Path) -> Option<(Uri, String)>,
 ) -> Option<HashMap<Uri, Vec<TextEdit>>> {
-    // Per-request cache of resolved foreign files: path -> (uri, line index).
-    let mut foreign: HashMap<PathBuf, (Uri, LineIndex)> = HashMap::new();
+    // Per-request cache of resolved foreign files: path -> (uri, text, table).
+    // The text is kept beside its table because an index borrows what it
+    // indexes, and here that is the entry's own field.
+    let mut foreign: HashMap<PathBuf, (Uri, String, LineTable)> = HashMap::new();
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
     for e in &fix.edits {
         let (target_uri, edit) = match &e.path {
@@ -99,13 +101,15 @@ fn workspace_changes(
             Some(p) => {
                 if !foreign.contains_key(p) {
                     let (u, txt) = resolve(p)?;
-                    foreign.insert(p.clone(), (u, LineIndex::with_encoding(&txt, enc)));
+                    let table = LineTable::new(&txt);
+                    foreign.insert(p.clone(), (u, txt, table));
                 }
-                let (u, fidx) = &foreign[p];
+                let (u, txt, table) = &foreign[p];
+                let fidx = LineIndex::with_table(txt, table, enc);
                 (
                     u.clone(),
                     TextEdit {
-                        range: byte_range_to_lsp(fidx, e.start, e.end),
+                        range: byte_range_to_lsp(&fidx, e.start, e.end),
                         new_text: e.content.clone(),
                     },
                 )

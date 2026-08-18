@@ -12,13 +12,21 @@
 
 pub mod conditional;
 pub mod core;
+pub mod edit;
 pub(crate) mod events;
 pub(crate) mod grammar;
 pub mod lexer;
+pub mod reparse;
 pub(crate) mod tree_builder;
 
 pub use core::{
-    Parse, SyntaxError, parse, parse_with_declarations, parse_with_flavor, reconstruct,
+    Parse, SyntaxError, parse, parse_with_declarations, parse_with_declarations_resolved,
+    parse_with_flavor, reconstruct,
 };
+pub use edit::{Edit, apply_edits, diff_edit, try_apply_edits};
 pub use grammar::is_def_prefix_command;
-pub use lexer::{LatexFlavor, LexConfig, Token, lex};
+pub use lexer::{LatexFlavor, LexConfig, ParseCtx, Token, lex, lex_with};
+pub use reparse::{ReparseBase, ReparseTier, Reparsed, reparse, reparse_edits};
+
+#[doc(hidden)]
+pub use reparse::fingerprint;

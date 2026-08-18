@@ -114,6 +114,18 @@ tasks:
       - cargo build --release
       - ./scripts/check_gate_baselines.sh
 
+  reparse-corpora:check:
+    desc: Sweep seeded edits over the pinned corpora and diff the splice tallies against tests/reparse_baselines/ (two-sided ratchet)
+    cmds:
+      - ./scripts/check_reparse_baselines.sh
+
+  reparse-corpora:record:
+    desc: Re-record tests/reparse_baselines/ from a fresh sweep
+    env:
+      RECORD: "1"
+    cmds:
+      - ./scripts/check_reparse_baselines.sh
+
   gate-corpora:strict-survey:
     desc: "Survey strict trivia invariance over the pinned corpora and print a reproducer histogram (non-gating: strict is the end-state contract, so most files still fail)"
     cmds:
@@ -135,6 +147,38 @@ tasks:
     desc: In-process LSP keystroke bench (didChange splice -> salsa upsert -> parse)
     cmds:
       - cargo bench --bench keystroke
+
+  bench:keystroke-verbatim:
+    desc: The same, typing a line inside an injected lstlisting (protected-body tier)
+    env:
+      BADNESS_BENCH_SITE: verbatim
+    cmds:
+      - cargo bench --bench keystroke
+
+  bench:reparse:
+    desc: In-process incremental reparse bench (parser::reparse, timed directly, per tier)
+    cmds:
+      - cargo bench --bench reparse
+
+  bench:reparse-gate:
+    desc: Run the reparse bench with every case checked against its declared contract
+    env:
+      BADNESS_BENCH_ASSERT: "1"
+    cmds:
+      - cargo bench --bench reparse
+
+  bench:keystroke-gate:
+    desc: Run the keystroke bench with every row checked against its declared contract
+    env:
+      BADNESS_BENCH_ASSERT: "1"
+    cmds:
+      - cargo bench --bench keystroke
+
+  bench:gate:
+    desc: Run both incremental benchmark gates (reparse tiers + keystroke write phase)
+    cmds:
+      - task: bench:reparse-gate
+      - task: bench:keystroke-gate
 
   bench:profile:
     desc: Flamegraph the masters_dissertation per-byte hot paths (writes benches/flamegraph_masters.svg)

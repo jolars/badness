@@ -133,9 +133,9 @@ use crate::formatter::{
     format_node_range_with_signatures_sentence, format_node_with_signatures_sentence,
     format_with_declarations_sentence,
 };
-use crate::incremental::{Analysis, IncrementalDatabase};
+use crate::incremental::{Analysis, IncrementalDatabase, IncrementalDb};
 use crate::linter::{RuleSelection, Severity, lint_document};
-use crate::parser::{parse, parse_with_declarations};
+use crate::parser::{Edit, parse, parse_with_declarations};
 use crate::project::aux::AuxData;
 use crate::project::texmf::{TexmfConfig, TexmfIndex};
 use crate::project::{PackageGraph, ProjectMember, ResolvedCitations, ResolvedLabels};
@@ -144,7 +144,7 @@ use crate::semantic::{
     scan_definition_sites,
 };
 use crate::syntax::{SyntaxKind, SyntaxNode};
-use crate::text::{LineIndex, PositionEncoding, TextBuffer};
+use crate::text::{LineIndex, LineTable, PositionEncoding, TextBuffer};
 use forward_search::{ForwardSearchRequest, ForwardSearchStatus};
 use name_refs::{NameKind, NameTarget};
 
@@ -742,6 +742,16 @@ enum WorkerJob {
         /// ([`Worker::seed_dir`]). Built on the main side because the worker holds
         /// no config; exclude-nothing when no `badness.toml` governs.
         exclude: ExcludeFilter,
+        /// The exact transform from the text the db currently holds to `text`, for
+        /// the incremental reparse to splice (`AGENTS.md` decision #6). [`None`]
+        /// when the text arrived by a route carrying no edits — a `didOpen`, a
+        /// re-lint sweep — which clears the chain rather than leaving one that no
+        /// longer describes how this text was reached.
+        ///
+        /// Only ever a hint: a stale or missing chain costs a full parse and
+        /// nothing else, because [`reparse_edits`](crate::parser::reparse_edits)
+        /// rejects any chain that does not land on exactly this text.
+        edits: Option<Vec<Edit>>,
     },
     /// The project's declarations changed (or arrived): write them into the
     /// worker's salsa input, invalidating every parse that read the old ones.
@@ -1399,6 +1409,8 @@ fn on_notification(
                 kind,
                 rules: resolved.rule_selection(),
                 exclude: resolved.exclude,
+                // A whole buffer arriving fresh: no transform to describe.
+                edits: None,
             });
         }
         DidChangeTextDocument::METHOD => {
@@ -1412,7 +1424,7 @@ fn on_notification(
             let Some(doc) = state.documents.get_mut(&uri) else {
                 return;
             };
-            apply_content_changes(&mut doc.text, params.content_changes);
+            let edits = apply_content_changes(&mut doc.text, params.content_changes);
             doc.version = version;
             let text = doc.text.clone();
             let path = uri_to_path(&uri);
@@ -1426,6 +1438,7 @@ fn on_notification(
                 kind,
                 rules: resolved.rule_selection(),
                 exclude: resolved.exclude,
+                edits,
             });
         }
         DidCloseTextDocument::METHOD => {
@@ -1550,9 +1563,10 @@ fn on_watched_files_change(
     }
 }
 
-/// Apply a batch of `didChange` content changes to `buffer`, in order. A change
-/// with no range replaces the whole buffer; a ranged change splices via the
-/// buffer's (encoding-aware) [`LineIndex`].
+/// Apply a batch of `didChange` content changes to `buffer`, in order, and report
+/// the transform as a chain of [`Edit`]s. A change with no range replaces the
+/// whole buffer; a ranged change splices via the buffer's (encoding-aware)
+/// [`LineIndex`].
 ///
 /// Each change yields a *new* [`TextBuffer`], because each mutation shifts later
 /// offsets and so invalidates the index the next change resolves against —
@@ -1560,16 +1574,37 @@ fn on_watched_files_change(
 /// seeing the version it captured. The usual batch is one change, so the usual
 /// keystroke builds one index and rebuilds the text once.
 ///
+/// The returned chain is the incremental reparse's only input (`AGENTS.md`
+/// decision #6: there is deliberately no whole-text `diff_edit` fallback inside
+/// `parsed_document`), and it is expressed the way that consumer reads it — each
+/// edit against the text its predecessors produced, so
+/// `apply_edits(old, &chain)` reproduces `buffer` exactly. The offsets are the
+/// *clamped* ones the splice actually used, never the raw client positions, so
+/// the chain describes the transform the buffer took rather than the one the
+/// client asked for.
+///
+/// [`None`] means an unknown transform: a range-less whole-buffer replacement
+/// somewhere in the batch, which is a ~100% edit window a cost guard would
+/// decline anyway. The whole batch degrades, because a chain has to describe the
+/// entire step from the old text to the new one or it describes nothing.
+///
 /// `pub` so `benches/keystroke.rs` can time the real splice rather than a
 /// re-implementation of it — the write phase it measures is exactly this call
-/// plus [`upsert_file`](crate::incremental::IncrementalDatabase::upsert_file).
+/// plus [`upsert_file`](crate::incremental::IncrementalDatabase::upsert_file)
+/// and the stage that follows it.
+#[must_use = "the edit chain is the incremental reparse's only input; dropping it \
+              silently costs a full parse per keystroke"]
 pub fn apply_content_changes(
     buffer: &mut Arc<TextBuffer>,
     changes: Vec<TextDocumentContentChangeEvent>,
-) {
+) -> Option<Vec<Edit>> {
+    let mut edits = Some(Vec::with_capacity(changes.len()));
     for change in changes {
         let next = match change.range {
-            None => TextBuffer::new(change.text, buffer.encoding()),
+            None => {
+                edits = None;
+                TextBuffer::new(change.text, buffer.encoding())
+            }
             Some(range) => {
                 let idx = buffer.line_index();
                 let start = idx.offset_at(range.start.line, range.start.character);
@@ -1577,11 +1612,23 @@ pub fn apply_content_changes(
                 // Guard against a degenerate (start > end) range from a misbehaving
                 // client: clamp rather than panic on the splice.
                 let (start, end) = (start.min(end), start.max(end));
-                buffer.with_replacement(start..end, &change.text)
+                let next = buffer.with_replacement(start..end, &change.text);
+                // Recorded after the splice borrowed `change.text`, so the insert
+                // moves rather than cloning on every keystroke. `offset_at` answers
+                // in bounds and on a char boundary of this text, which is exactly
+                // `Edit::fits`, so the chain is well-formed by construction.
+                if let Some(edits) = edits.as_mut() {
+                    edits.push(Edit {
+                        range: start..end,
+                        insert: change.text,
+                    });
+                }
+                next
             }
         };
         *buffer = Arc::new(next);
     }
+    edits
 }
 
 /// `textDocument/formatting`: build a format job for the worker, or reply `null`
@@ -2732,6 +2779,10 @@ fn relint_all_open(connection: &Connection, state: &mut GlobalState, job_tx: &Se
             kind,
             rules: resolved.rule_selection(),
             exclude: resolved.exclude,
+            // The same text at the same version: nothing moved, so there is no
+            // transform to describe. Clearing costs nothing — the base already is
+            // this text, so `parsed_document` answers from it without a chain.
+            edits: None,
         });
     }
 }
@@ -2904,12 +2955,23 @@ impl Worker {
                 kind,
                 rules,
                 exclude,
+                edits,
             } => {
                 // Write-phase: push the live buffer into the db. Cheap — the parse
                 // is a lazy salsa query deferred to the analyze. Acquiring `&mut
                 // db` blocks until any outstanding read snapshot drops (single
                 // writer), which is how a fresher edit preempts an in-flight read.
-                self.db.upsert_file(&path, text.text_arc());
+                let file = self.db.upsert_file(&path, text.text_arc());
+                // Stage the transform for the incremental reparse, **after** the
+                // write and never before: that `&mut db` is what proves no analyze
+                // is reading. A chain staged ahead of the text it describes could be
+                // peeked by an in-flight `parsed_document`, which would fail to
+                // verify it, full-parse, and then drain it — losing the edit for
+                // good. Staged unconditionally, including when `upsert_file` skipped
+                // its write: the chain is anchored at the reparse *base*, not at the
+                // db text, and a buffer that round-trips back to what salsa holds
+                // still took a transform to get there.
+                self.db.reparse_stage_edits(file, edits);
                 // Lazily pull the rest of the project off disk so cross-file rules
                 // can fire. If this grows the member set, every open document's
                 // resolution may have changed — re-lint them all.
@@ -3372,7 +3434,12 @@ impl Worker {
                 continue; // open buffer or already seeded — keep its live text
             }
             if let Ok(text) = std::fs::read_to_string(&sibling) {
-                self.db.upsert_file(&sibling, text);
+                let file = self.db.upsert_file(&sibling, text);
+                // A whole file off disk: no transform to describe. Pairing every
+                // `upsert_file` with a stage is what keeps the rule exceptionless —
+                // and clearing a chain a fresh file never had is a no-op, entry
+                // included.
+                self.db.reparse_stage_edits(file, None);
                 grew = true;
             }
         }
@@ -3413,7 +3480,10 @@ impl Worker {
         if tracked.is_some_and(|file| self.db.text_is_current(file, &text)) {
             return false;
         }
-        self.db.upsert_file(path, text);
+        let file = self.db.upsert_file(path, text);
+        // A disk re-read carries no edits, so any chain this file holds describes a
+        // transform out of a text it no longer has. Drop it.
+        self.db.reparse_stage_edits(file, None);
         true
     }
 
@@ -3789,7 +3859,7 @@ fn fallback_diagnostics(
             let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(idx, err.start, err.end),
+                    range: byte_range_to_lsp(&idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3800,7 +3870,7 @@ fn fallback_diagnostics(
             let model = SemanticModel::build(&root);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(idx, d, true, path));
+                    diags.push(lint_to_lsp(&idx, d, true, path));
                 }
             }
         }
@@ -3808,7 +3878,7 @@ fn fallback_diagnostics(
             let parsed = bib_parse(text);
             for err in &parsed.errors {
                 diags.push(Diagnostic {
-                    range: byte_range_to_lsp(idx, err.start, err.end),
+                    range: byte_range_to_lsp(&idx, err.start, err.end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     source: Some("badness".to_owned()),
                     message: err.message.clone(),
@@ -3819,7 +3889,7 @@ fn fallback_diagnostics(
             let model = BibModel::build(&root);
             for d in crate::bib::linter::lint_document(path, &root, &model) {
                 if rules.is_active(d.rule) {
-                    diags.push(lint_to_lsp(idx, d, false, path));
+                    diags.push(lint_to_lsp(&idx, d, false, path));
                 }
             }
         }
@@ -4166,7 +4236,7 @@ fn compute_range_format(
         let root = snapshot.parsed_tree(file);
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, idx, sel, style, sigs, sentence,
+            &root, text, &idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -4182,7 +4252,7 @@ fn compute_range_format(
             range_edits_for_root(
                 &parsed.syntax(),
                 text,
-                idx,
+                &idx,
                 sel,
                 style,
                 &declared_scope(declared),
@@ -4293,7 +4363,7 @@ fn compute_on_type_format(
         }
         let sigs = snapshot.scope_signatures(members_of(snapshot), file);
         Some(Some(range_edits_for_root(
-            &root, text, idx, sel, style, sigs, sentence,
+            &root, text, &idx, sel, style, sigs, sentence,
         )))
     }));
 
@@ -4313,7 +4383,7 @@ fn compute_on_type_format(
             range_edits_for_root(
                 &root,
                 text,
-                idx,
+                &idx,
                 sel,
                 style,
                 &declared_scope(declared),
@@ -4427,7 +4497,7 @@ fn compute_symbols(
     let mut toc_cursor = 0;
     items
         .iter()
-        .map(|item| to_document_symbol(item, idx, aux.as_ref(), &mut toc_cursor))
+        .map(|item| to_document_symbol(item, &idx, aux.as_ref(), &mut toc_cursor))
         .collect()
 }
 
@@ -4450,7 +4520,7 @@ fn compute_bib_symbols(snapshot: &Analysis, path: &Path, text: &TextBuffer) -> V
     };
     items
         .iter()
-        .map(|item| bib_to_document_symbol(item, idx))
+        .map(|item| bib_to_document_symbol(item, &idx))
         .collect()
 }
 
@@ -4561,12 +4631,14 @@ fn compute_folding(
         if !snapshot.text_is_current(file, text) {
             return None;
         }
-        Some(folding::folding_ranges(&snapshot.parsed_tree(file), idx))
+        Some(folding::folding_ranges(&snapshot.parsed_tree(file), &idx))
     }));
     match cached {
         Ok(Some(ranges)) => ranges,
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
-        Ok(None) | Err(_) => folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), idx),
+        Ok(None) | Err(_) => {
+            folding::folding_ranges(&SyntaxNode::new_root(parse(text).green), &idx)
+        }
     }
 }
 
@@ -4616,7 +4688,7 @@ fn compute_selection_range(
         }
         Some(selection_range::selection_ranges(
             &snapshot.parsed_tree(file),
-            idx,
+            &idx,
             positions,
         ))
     }));
@@ -4625,7 +4697,7 @@ fn compute_selection_range(
         // Cache miss, stale snapshot, or a cancelled read: reparse the buffer.
         Ok(None) | Err(_) => selection_range::selection_ranges(
             &SyntaxNode::new_root(parse(text).green),
-            idx,
+            &idx,
             positions,
         ),
     }
@@ -4693,7 +4765,7 @@ fn compute_document_link(
         .into_iter()
         .filter_map(|target| {
             Some(DocumentLink {
-                range: lsp_range(idx, target.range),
+                range: lsp_range(&idx, target.range),
                 target: Some(path_to_uri(&target.target)?),
                 tooltip: None,
                 data: None,
@@ -4729,7 +4801,7 @@ fn compute_bib_document_link(
         .into_iter()
         .filter_map(|link| {
             Some(DocumentLink {
-                range: lsp_range(idx, link.range),
+                range: lsp_range(&idx, link.range),
                 target: Some(link.target.parse::<Uri>().ok()?),
                 tooltip: None,
                 data: None,
@@ -5438,7 +5510,7 @@ fn run_change_environment(
             let idx = text.line_index();
             let mut changes = HashMap::new();
             for range in ranges {
-                push_edit(&mut changes, uri, idx, range, new_name);
+                push_edit(&mut changes, uri, &idx, range, new_name);
             }
             let edit = WorkspaceEdit {
                 changes: Some(changes),
@@ -5666,7 +5738,7 @@ fn compute_references(
                 .map(|file| snapshot.file_path(file).to_path_buf())
                 .unwrap_or_else(|| path.to_path_buf());
             let decl = if include_declaration {
-                location_for(&origin, idx, key_range)
+                location_for(&origin, &idx, key_range)
             } else {
                 None
             };
@@ -5996,7 +6068,7 @@ fn compute_document_highlight(
             return Vec::new();
         }
         let highlight = |range: TextRange, kind: DocumentHighlightKind| DocumentHighlight {
-            range: lsp_range(idx, range),
+            range: lsp_range(&idx, range),
             kind: Some(kind),
         };
         let collect = |root: &SyntaxNode, model: &SemanticModel| -> Vec<DocumentHighlight> {
@@ -6061,7 +6133,7 @@ fn compute_prepare_rename(
         // `.bib` origin: the `@entry` key under the cursor.
         if file_kind_for(path) == FileKind::Bib {
             let (key, key_range) = bib_entry_under_cursor(snapshot, path, text, offset)?;
-            return Some((lsp_range(idx, key_range), key.to_string()));
+            return Some((lsp_range(&idx, key_range), key.to_string()));
         }
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
         // `root` is kept for the command/environment name fallback below.
@@ -6078,7 +6150,7 @@ fn compute_prepare_rename(
             }
         };
         if let Some(target) = target {
-            return Some((lsp_range(idx, target.span), target.placeholder.to_string()));
+            return Some((lsp_range(&idx, target.span), target.placeholder.to_string()));
         }
         // Not a key: a command or environment name, gated to user-defined names
         // (a project definition site must exist — renaming `\textbf` or
@@ -6088,7 +6160,7 @@ fn compute_prepare_rename(
         if !name_rename_allowed(snapshot, &members, path, &sites, &target) {
             return None;
         }
-        Some((lsp_range(idx, target.span), target.name.to_string()))
+        Some((lsp_range(&idx, target.span), target.name.to_string()))
     }));
     computed.ok().flatten()
 }
@@ -7389,32 +7461,303 @@ mod tests {
         assert_eq!(decide(Some((&a, 1)), &pending), DispatchAction::Wait);
     }
 
+    /// A ranged `didChange` content change, spelled the way a client sends it.
+    fn ranged(start: (u32, u32), end: (u32, u32), text: &str) -> TextDocumentContentChangeEvent {
+        TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position::new(start.0, start.1),
+                end: Position::new(end.0, end.1),
+            }),
+            range_length: None,
+            text: text.to_owned(),
+        }
+    }
+
+    /// A range-less content change: the whole-buffer replacement.
+    fn whole(text: &str) -> TextDocumentContentChangeEvent {
+        TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: text.to_owned(),
+        }
+    }
+
+    /// Apply `changes` to `old` and assert the reported chain is *exactly* the
+    /// transform that happened — the one property `parsed_document`'s replay
+    /// leans on (`reparse_edits` rejects a chain landing anywhere else, so a
+    /// violation costs a full parse per keystroke and is otherwise invisible).
+    ///
+    /// Returns the new text and the chain, for the caller's own assertions.
+    fn assert_chain_round_trips(
+        old: &str,
+        encoding: PositionEncoding,
+        changes: Vec<TextDocumentContentChangeEvent>,
+    ) -> (String, Option<Vec<Edit>>) {
+        let mut buffer = Arc::new(TextBuffer::new(old, encoding));
+        let edits = apply_content_changes(&mut buffer, changes);
+        if let Some(edits) = edits.as_deref() {
+            assert_eq!(
+                crate::parser::try_apply_edits(old, edits).as_deref(),
+                Some(buffer.text()),
+                "chain {edits:?} does not reproduce the buffer from {old:?}",
+            );
+        }
+        (buffer.text().to_owned(), edits)
+    }
+
     #[test]
     fn apply_content_changes_splices_ranged_edit() {
         // Replace "world" with "there" in "hello world".
-        let mut text = Arc::new(TextBuffer::new("hello world\n", PositionEncoding::Utf16));
-        let change = TextDocumentContentChangeEvent {
-            range: Some(Range {
-                start: Position::new(0, 6),
-                end: Position::new(0, 11),
-            }),
-            range_length: None,
-            text: "there".to_owned(),
-        };
-        apply_content_changes(&mut text, vec![change]);
-        assert_eq!(text.text(), "hello there\n");
+        let (text, edits) = assert_chain_round_trips(
+            "hello world\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 6), (0, 11), "there")],
+        );
+        assert_eq!(text, "hello there\n");
+        assert_eq!(
+            edits,
+            Some(vec![Edit {
+                range: 6..11,
+                insert: "there".to_owned(),
+            }])
+        );
     }
 
     #[test]
     fn apply_content_changes_full_replace_on_no_range() {
-        let mut text = Arc::new(TextBuffer::new("old", PositionEncoding::Utf16));
-        let change = TextDocumentContentChangeEvent {
-            range: None,
-            range_length: None,
-            text: "new".to_owned(),
-        };
-        apply_content_changes(&mut text, vec![change]);
-        assert_eq!(text.text(), "new");
+        let (text, edits) =
+            assert_chain_round_trips("old", PositionEncoding::Utf16, vec![whole("new")]);
+        assert_eq!(text, "new");
+        // A whole-buffer replacement is an unknown transform: a ~100% window the
+        // reparse would decline, so the chain degrades rather than describing it.
+        assert_eq!(edits, None);
+    }
+
+    #[test]
+    fn apply_content_changes_reports_an_insert_and_a_delete() {
+        let (text, edits) = assert_chain_round_trips(
+            "\\section{Hi}\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 10), (0, 10), "z")],
+        );
+        assert_eq!(text, "\\section{Hzi}\n");
+        assert_eq!(edits.unwrap()[0].insert, "z");
+
+        let (text, edits) = assert_chain_round_trips(
+            "\\section{Hzi}\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 10), (0, 11), "")],
+        );
+        assert_eq!(text, "\\section{Hi}\n");
+        assert_eq!(
+            edits,
+            Some(vec![Edit {
+                range: 10..11,
+                insert: String::new(),
+            }])
+        );
+    }
+
+    /// Every change after the first is expressed against the text its
+    /// predecessors produced — the shape `apply_edits` folds, and the reason the
+    /// chain is a `Vec` rather than a single spanning edit.
+    #[test]
+    fn apply_content_changes_chains_a_multi_change_batch() {
+        let (text, edits) = assert_chain_round_trips(
+            "ab\n",
+            PositionEncoding::Utf16,
+            vec![
+                ranged((0, 1), (0, 1), "XYZ"),
+                // Against "aXYZb\n", not against "ab\n".
+                ranged((0, 4), (0, 5), "-"),
+            ],
+        );
+        assert_eq!(text, "aXYZ-\n");
+        assert_eq!(
+            edits,
+            Some(vec![
+                Edit {
+                    range: 1..1,
+                    insert: "XYZ".to_owned(),
+                },
+                Edit {
+                    range: 4..5,
+                    insert: "-".to_owned(),
+                },
+            ])
+        );
+    }
+
+    /// One unknown transform poisons the whole batch: a chain has to describe the
+    /// entire step from the old text to the new one, and the ranged changes after
+    /// a full replace are expressed against a text the base never held.
+    #[test]
+    fn apply_content_changes_degrades_a_batch_mixing_a_full_replace() {
+        let (text, edits) = assert_chain_round_trips(
+            "old\n",
+            PositionEncoding::Utf16,
+            vec![whole("new\n"), ranged((0, 3), (0, 3), "!")],
+        );
+        assert_eq!(text, "new!\n");
+        assert_eq!(edits, None);
+    }
+
+    #[test]
+    fn apply_content_changes_reports_an_empty_batch_as_an_empty_chain() {
+        let (text, edits) = assert_chain_round_trips("x\n", PositionEncoding::Utf16, vec![]);
+        assert_eq!(text, "x\n");
+        // Staging this appends nothing, which is right: nothing happened.
+        assert_eq!(edits, Some(Vec::new()));
+    }
+
+    /// The chain carries the *clamped* offsets, so it describes the splice that
+    /// happened rather than the one a misbehaving client asked for.
+    #[test]
+    fn apply_content_changes_reports_the_clamped_range() {
+        let (text, edits) = assert_chain_round_trips(
+            "hello\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 4), (0, 1), "EY")],
+        );
+        assert_eq!(text, "hEYo\n");
+        assert_eq!(
+            edits,
+            Some(vec![Edit {
+                range: 1..4,
+                insert: "EY".to_owned(),
+            }])
+        );
+    }
+
+    /// CRLF is the hazard `TODO.md` records panache losing its whole feature to:
+    /// nothing here may assume a one-byte line terminator. The `\r` is a line's
+    /// content as far as byte offsets go, so a column at the line's end lands
+    /// before it.
+    #[test]
+    fn apply_content_changes_reports_offsets_across_crlf() {
+        let (text, edits) = assert_chain_round_trips(
+            "ab\r\ncd\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((1, 1), (1, 1), "X")],
+        );
+        assert_eq!(text, "ab\r\ncXd\r\n");
+        assert_eq!(
+            edits,
+            Some(vec![Edit {
+                range: 5..5,
+                insert: "X".to_owned(),
+            }])
+        );
+    }
+
+    /// `offset_at` is the only thing between the chain and a mid-codepoint slice:
+    /// a UTF-16 column counts units, and `\alpha` beside a literal astral char is
+    /// ordinary LaTeX. Checked in both negotiated encodings.
+    #[test]
+    fn apply_content_changes_reports_char_boundary_offsets() {
+        for encoding in [PositionEncoding::Utf16, PositionEncoding::Utf8] {
+            // "a𝕏b": the astral char is 4 bytes, 2 UTF-16 units.
+            let column = if encoding == PositionEncoding::Utf16 {
+                3
+            } else {
+                5
+            };
+            let (text, edits) = assert_chain_round_trips(
+                "a𝕏b\n",
+                encoding,
+                vec![ranged((0, column), (0, column), "!")],
+            );
+            assert_eq!(text, "a𝕏!b\n", "{encoding:?}");
+            assert_eq!(
+                edits,
+                Some(vec![Edit {
+                    range: 5..5,
+                    insert: "!".to_owned(),
+                }]),
+                "{encoding:?}",
+            );
+        }
+    }
+
+    /// An edit that lands *on* a `\r\n` is where a patched line table is most
+    /// likely to go wrong, because the two bytes are one terminator and the edit
+    /// reads across the seam: deleting the `\n` leaves a bare `\r` that still
+    /// breaks, and both directions change the line count without either byte
+    /// moving. `TODO.md` records panache losing this whole feature on
+    /// Windows-authored files, so it is worth its own case rather than trusting
+    /// the unit oracle.
+    ///
+    /// Every test in this module is a patch oracle too — tests build in debug, so
+    /// `with_replacement`'s `debug_assert` rescans on each splice — but only this
+    /// one puts a CRLF under it.
+    #[test]
+    fn apply_content_changes_edits_a_crlf_terminator() {
+        // Deleting a whole `\r\n` joins two lines. The pair can only be addressed
+        // as a whole: column 5 is the end of the visible line and `(1, 0)` is the
+        // start of the next, so there is no position *between* the `\r` and the
+        // `\n` — which is what `offset_at` promises and why the seam always moves
+        // as a unit from the client's side.
+        let (text, edits) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 5), (1, 0), "")],
+        );
+        assert_eq!(text, "alphabeta\r\n");
+        assert_eq!(
+            edits,
+            Some(vec![Edit {
+                range: 5..7,
+                insert: String::new(),
+            }])
+        );
+
+        // An insert just before the `\r` leaves the terminator whole.
+        let (text, _) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 5), (0, 5), "X")],
+        );
+        assert_eq!(text, "alphaX\r\nbeta\r\n");
+
+        // An inserted `\r` in the same place does not: it breaks on its own, so
+        // the document gains a line without either byte of the original pair
+        // moving. This is the shape a table carrying its boundary verdict across
+        // an edit gets wrong.
+        let (text, _) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![ranged((0, 5), (0, 5), "\r")],
+        );
+        assert_eq!(text, "alpha\r\r\nbeta\r\n");
+
+        // A second change resolving against the first: line 1 is only reachable
+        // if the patched table shifted, so this fails loudly on a stale one.
+        let (text, _) = assert_chain_round_trips(
+            "alpha\r\nbeta\r\n",
+            PositionEncoding::Utf16,
+            vec![
+                ranged((0, 5), (0, 5), "\r\nmid"),
+                ranged((2, 0), (2, 4), "BETA"),
+            ],
+        );
+        assert_eq!(text, "alpha\r\nmid\r\nBETA\r\n");
+    }
+
+    /// An edit beside an astral char that also adds a line: the wide-line flags
+    /// have to splice *and* the joined lines have to be re-derived, together. The
+    /// positions in the second change are only meaningful if both happened.
+    #[test]
+    fn apply_content_changes_edits_beside_a_wide_char() {
+        let (text, _) = assert_chain_round_trips(
+            "a𝕏b\nplain\n",
+            PositionEncoding::Utf16,
+            vec![
+                // After `a𝕏` — one UTF-16 unit for `a`, two for the astral char.
+                ranged((0, 3), (0, 3), "\nnew"),
+                ranged((2, 0), (2, 5), "PLAIN"),
+            ],
+        );
+        assert_eq!(text, "a𝕏\nnewb\nPLAIN\n");
     }
 
     #[test]

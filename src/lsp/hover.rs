@@ -65,7 +65,7 @@ pub(crate) fn compute_hover(
                 let scope = snapshot.scope_signatures(members.clone(), file);
                 let lint_path = snapshot.file_path(file).to_path_buf();
                 build_hover(
-                    snapshot, &root, model, scope, &lint_path, members, offset, idx, build,
+                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, build,
                 )
             }
             // Untracked or stale: a fresh parse + scan (no cross-package scope), like
@@ -76,7 +76,7 @@ pub(crate) fn compute_hover(
                 let model = SemanticModel::build(&root);
                 let scanned = crate::semantic::scan_definitions(&root);
                 build_hover(
-                    snapshot, &root, &model, &scanned, path, members, offset, idx, build,
+                    snapshot, &root, &model, &scanned, path, members, offset, &idx, build,
                 )
             }
         }

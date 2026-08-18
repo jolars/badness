@@ -1,0 +1,6 @@
+latex2e	corpus	files=384	bytes=12556743
+latex2e	word-typing	spliced=3965/5120	token=3945	verbatim=20	region=0	files=349
+latex2e	word-deleting	spliced=3862/5120	token=3830	verbatim=32	region=0	files=349
+latex2e	protected-typing	spliced=1190/3210	token=0	verbatim=1190	region=0	files=219
+latex2e	hazard-single	spliced=1748/6144	token=1640	verbatim=108	region=0	files=384
+latex2e	hazard-chain	spliced=122/1920	token=112	verbatim=10	region=0	files=384

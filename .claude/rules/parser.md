@@ -23,6 +23,9 @@ parser*. Keep this file operational.
 - **No parser abort:** recover and continue; make progress on malformed input.
 - **Generic degradation:** unresolved shapes become generic nodes, never crash
   and never silent corruption.
+- **Incremental reparse is refusal-first:** success must match a full parse's tree
+  and errors exactly. Every tier returns through the shared oracle/length check;
+  an unproved edit returns `None` and full-parses.
 
 ## Purity and semantic admission
 
@@ -57,6 +60,39 @@ parser*. Keep this file operational.
   safety and not overpromise closers.
 - Environment aliases from self-definition scan and declarations are allowed;
   cross-file/package inference is not.
+
+## Incremental reparse
+
+- Tiers sit on ordinary `parse`/`lex`: leaf or node splices, or fixed-context
+  fragment parses with explicit locality proofs. Do not checkpoint lexer state,
+  reuse token streams, or restart the grammar at an offset without recording a
+  new architecture decision.
+- Relex fragments under the base parse's `ParseCtx` and full-file `.dtx` facts.
+- The previous-parse side channel is not a salsa input and may not become one.
+- Forward-gate effects outside a fragment require an explicit proof; otherwise
+  decline. A debug-oracle divergence is repaired by adding a bail.
+- The token tier's text-read classification is a hand-maintained soundness
+  enumeration backed by a source-scanning test. Adding a grammar text comparison
+  means classifying it there, with a positional guard if it can observe a `WORD`.
+- Guard text reads where they are reachable, not by spelling alone; otherwise a
+  math/expl3-only read can reject ordinary prose and erase the tier's workload.
+- Lexer readers count too: keep following-text/one-shot lookahead recognition in
+  the shared lexer predicates rather than restating it in a reparse guard.
+- Protected bodies relex their enclosing construct with its delimiters; the
+  delimiters establish the real lexer mode, so never copy the catcode/capture
+  rules into the reparser. Require old-fragment faithfulness, capture locality,
+  a closer inside the fragment, and an edited token-sequence match.
+- A raw capture's bytes must not update later lexer state. Keep that claim pinned
+  by a lexer test with a state-changing counterexample beside it.
+- A new tier needs a direct-reparse benchmark case that asserts the exact tier,
+  a calibrated speedup floor, and a release-build full-parse comparison. Keep a
+  declining case to price the guard cascade; thresholds live only in the harness.
+- Measure the two sides of a gated benchmark ratio interleaved block by block and
+  take the median of block ratios. Calibrate on an idle machine; interleaving
+  removes drift variance, not load sensitivity.
+- A new tier also needs a seeded corpus-sweep row. Parse each file under its real
+  extension `LexConfig`, keep splice-rate floors per corpus, and record exact
+  per-tier tallies as a two-sided baseline ratchet in the same change.
 
 ## Data and maintenance
 

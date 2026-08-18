@@ -1,0 +1,6 @@
+pgf	corpus	files=397	bytes=7226809
+pgf	word-typing	spliced=3416/4030	token=3340	verbatim=76	region=0	files=308
+pgf	word-deleting	spliced=3361/4030	token=3265	verbatim=96	region=0	files=308
+pgf	protected-typing	spliced=1645/1665	token=0	verbatim=1645	region=0	files=118
+pgf	hazard-single	spliced=2497/6352	token=2111	verbatim=386	region=0	files=397
+pgf	hazard-chain	spliced=230/1985	token=188	verbatim=42	region=0	files=397

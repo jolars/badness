@@ -1,12 +1,13 @@
 //! Conservative top-level region reparse.
 //!
-//! The first useful region is one top-level prose paragraph. A faithfulness parse
-//! must reproduce the old paragraph under the base parse's exact [`ParseCtx`]. The
-//! edit may then touch only direct prose leaves and insert lexer-state-invariant
-//! characters, so unchanged commands and their state transitions remain unchanged.
-//! The edited fragment must still parse to exactly one paragraph. This deliberately
-//! refuses edits to commands, groups, math, comments, catcode-sensitive punctuation,
-//! and paragraph seams. Those need the later general-region proof; treating blank
+//! The admitted regions are one top-level prose paragraph, or two adjacent
+//! paragraphs plus their blank-line seam. A faithfulness parse must reproduce the
+//! old fragment under the base parse's exact [`ParseCtx`]. An in-paragraph edit may
+//! then touch only direct prose leaves; a seam edit may touch only root trivia; and
+//! both may insert only lexer-state-invariant characters. Unchanged commands and
+//! their state transitions therefore remain unchanged. This deliberately refuses
+//! edits to commands, groups, math, comments, catcode-sensitive punctuation, and
+//! arbitrary root runs. Those need a later general-region proof; treating blank
 //! lines alone as a reset would be unsound.
 
 use crate::parser::core::parse_fragment_with_ctx;

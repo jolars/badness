@@ -1817,11 +1817,13 @@ idle machine; a floor calibrated against a loaded one fails later for no reason.
 Interleaving the write-phase ceiling's two rows removed its run-to-run spread but
 not its sensitivity to load, so this is a standing requirement, not a workaround.
 
-**Current status / next step:** Phases 1-5 done, and the write phase that Phase 5
-exposed is fixed. Both leaf tiers are live and both are gated. A keystroke typed
-into prose on the 730 KB thesis costs **91 us end to end instead of 27.7 ms**; a
-line typed inside an `lstlisting` on the same file costs **~94 us**. Next is
-**Phase 6** (the corpus sweep), whose entry criteria are met.
+**Current status:** Phases 1-8 are complete. The token, protected-body, and
+conservative top-level region tiers are live, corpus-swept, and benchmark-gated;
+an edit no tier can prove safe declines to a full parse. A keystroke typed into
+prose on the 730 KB thesis costs **91 us end to end instead of 27.7 ms**; a line
+typed inside an `lstlisting` on the same file costs **~94 us**. Further widening
+starts from a measured workload and adds a refusal-first proof, not from an open
+graduation phase.
 
 Run `task bench:gate` before touching any of this. Read the gate's output for
 what the tiers are worth — the thresholds live in the harness and are
@@ -2442,7 +2444,7 @@ copies plus a table splice, and the remainder is the parse's own consumers.
     only thing in the ratchet that would see it; the check classifies a row that
     moved that way as `CHANGED`, distinct from `REGRESSION` and `STALE`.
 
-- [ ] **Phase 6.5: `.dtx` on the leaf tiers.** Phase 6 put a number on the
+- [x] **Phase 6.5: `.dtx` on the leaf tiers.** Phase 6 put a number on the
   largest hole either tier has: `.dtx` splices **nothing**, 4,405 word-typing
   attempts for zero splices, over 301 files that are half of latex3 and latex2e
   by count and more by bytes. Every keystroke in l3 package source is a full
@@ -2583,7 +2585,10 @@ copies plus a table splice, and the remainder is the parse's own consumers.
   Take it on only for a measured workload the landed paragraph and seam cases do not
   cover; it owes its own corpus row and benchmark contract.
 
-- [ ] **Phase 8: closeout.** Architecture docs and dead-path pruning.
+- [x] **Phase 8: closeout.** Architecture and subsystem docs now describe all
+  three live tiers, their proofs, benchmark contracts, and deferred widenings.
+  The audit removed the stale Phase 6 handover, closed the landed Phase 6.5
+  status, and found no region skeleton or always-decline path left to prune.
   `LineTable::patch` was the third item here and landed early, out of order,
   because Phase 5's gate made it the largest thing left in a keystroke — see the
   closed item above.

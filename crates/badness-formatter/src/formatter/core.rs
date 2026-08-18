@@ -5343,12 +5343,22 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             _ => return lower_environment(node, cx),
         }
     } else {
+        // Flatten the whole body, not only the parser's `MATH` child. Greedy
+        // `\begin` attachment can leave a detached leading group in `body`
+        // before that node (`\begin{equation}\n{\foo} : T`); selecting only
+        // `math_node` would silently delete the group. The siblings are math
+        // content too, and the display-formula lowerer handles them directly.
+        let mut elements: Vec<SyntaxElement> = Vec::new();
+        for element in &body_elements {
+            if element.as_node() == Some(math_node) {
+                elements.extend(math_node.children_with_tokens());
+            } else {
+                elements.push(element.clone());
+            }
+        }
         // Drop the lifted `\begin`-line comment (the `MATH` node's first token)
         // before the formula lowering, which would otherwise re-emit it.
-        let elements: Vec<SyntaxElement> = math_node
-            .children_with_tokens()
-            .filter(|e| !is_lifted_comment(e, lifted.as_ref()))
-            .collect();
+        elements.retain(|e| !is_lifted_comment(e, lifted.as_ref()));
         if elements.iter().all(|e| {
             e.as_token()
                 .is_some_and(|t| is_collapsible_trivia(t.kind()))

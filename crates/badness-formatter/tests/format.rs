@@ -1107,6 +1107,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // `gather` stacks its `\\` rows; an `align` grid lays its `&` columns with
     // role-aware cell spacing (`x&=a+b` normalizes to `x & = a + b`).
     ("math_env_equation", WrapMode::Preserve, 80),
+    // A leading brace group separated from `\begin{equation}` is greedy BEGIN
+    // tail content, not a header argument. The specialized math lowering must
+    // retain it alongside the following `MATH` node (issue #120).
+    ("math_env_begin_tail", WrapMode::Preserve, 80),
     ("math_env_gather", WrapMode::Preserve, 80),
     ("math_env_align_spacing", WrapMode::Preserve, 80),
     // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal

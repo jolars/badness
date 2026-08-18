@@ -8,77 +8,46 @@ paths:
 # Linter rules
 
 Narrative overview: `docs/src/development/architecture.md` § *The linter*.
-Contributor recipe for a new rule: `CONTRIBUTING.md`.
+Contributor recipe for adding rules: `CONTRIBUTING.md`.
 
-## Dispatch
+## Dispatch model
 
-- **No rule walks the tree on its own.** Join the driver's single shared
-  traversal one of three ways:
-  - **node-shape** — declare `interests()`, implement `check()`
-  - **whole-file** — empty `interests()`, implement `check_file()`, for
-    semantic-model or cross-file findings
-  - **streaming** — return a `StreamVisitor` from `stream()` when the finding
-    depends on element sequence (running toggle, previous heading level)
-- **Use the shared side indexes**, don't re-derive them per rule: `math_regions`
-  for "ignore math" tests, `conditionals` for `\if…\else…\fi` branch paths. Add
-  a new index there as soon as a second rule needs the same derived view.
-- Cross-file resolution (`resolution`, `citations`, `packages`) is `None` when
-  there is no project view. Handle that as *inert*, never as *wrong*.
+- Do not walk the tree independently per rule.
+- Plug into the shared driver via:
+  - node-shape (`interests()` + `check()`)
+  - whole-file (`check_file()`)
+  - streaming (`stream()` visitor)
+- Reuse shared indexes (`math_regions`, `conditionals`, etc.); extract a shared
+  index once two rules need the same derived view.
+- Missing project-resolution context is inert (`None`), not automatically wrong.
 
-## Rule declarations
+## Rule declaration contract
 
-- `id` is stable kebab-case; it is the `% badness-lint skip` target and the
-  reported `rule`. Renaming one is a breaking change for users.
-- **`emits_fix` must match reality** — the `--fix` fixpoint loop only runs
-  fix-emitting rules each round. A test checks this.
-- A non-empty `description` and at least one triggering `example` are required;
-  the docs tests enforce it and examples are linted live when the reference
-  renders.
-- Register in the three lockstep lists in `rules.rs`: module, re-export,
-  `all_rules()`.
-- The rules reference pages are generated (`task docs:rules`). Never hand-edit.
+- `id` is stable kebab-case and user-facing (suppression target); treat renames
+  as breaking changes.
+- `emits_fix` must match behavior; fix-loop scheduling depends on it.
+- Keep description/examples non-empty and runnable in docs generation.
+- Register new rules in all lockstep registries (`rules.rs` module/export/list).
 
-## Fixes
+## Fix contract
 
-- **A fix decides what to rewrite, never how to lay it out.** It owes
-  correctness — the result still parses, still lossless — but **not line width**.
-- **When a fix can't meet that bar for some shape, make it correct by
-  construction or withhold it for that shape, and still report the finding.** A
-  raw edit has no formatter spacing to lean on, so a rule may be strictly more
-  conservative than a layout pass would be (`redundant-script-braces` withholds
-  when a following character would re-glue).
-- **The formatter never runs inside `--fix`.** The pipeline is fix-then-format.
-- `Safe` preserves meaning and applies under `lint --fix`; `Unsafe` (anything
-  that could change typeset output) needs `--unsafe-fixes` or an explicit code
-  action.
-- **Edits within a fix are atomic**, and atomicity spans files for a cross-file
-  fix: every edit lands, or none does.
-- `apply_fixes` is a pure function over source, fixes, and the unsafe flag — it
-  must never touch the filesystem. It is shared by the CLI and the LSP
-  code-action path.
+- A fix chooses *what* to rewrite, not final layout style.
+- Preserve parseability and meaning for `Safe` fixes.
+- Withhold autofix for shapes where safety cannot be guaranteed; still report.
+- Unsafe fixes require explicit unsafe opt-in.
+- Fix edits are atomic (including cross-file fix sets).
+- `apply_fixes` remains pure over source+fixes+flags (no filesystem side effects).
 
-## Suppression
+## Suppression contract
 
-- **One grammar, in `badness_parser::directives`.** `% badness-lint <verb>
-  [<rule>]` is the lint axis, `% badness <verb>` covers lint and layout both.
-  The verb carries the scope (`skip` / `off`+`on` / `skip-file`); the rule is
-  optional and means every rule when omitted. `SuppressionMap` and
-  `BibSuppressionMap` are lookups over the resolved ranges, nothing more — don't
-  re-parse a directive in either.
-- **`% badness-ignore` / `-file` are retired but still resolve**, through the
-  same path, flagged `Directive::deprecated`. A directive spelling is
-  user-facing API, so they stay indefinitely; they are simply undocumented. The
-  `retired_ignore_family_still_suppresses` tests are the promise — deleting one
-  is how it quietly breaks.
-- A `% badness-format` directive must never suppress a diagnostic — that is the
-  whole point of having separate axes. Pinned on both carriers.
-- **The `.bib` carrier is an `@comment` entry, not a `%` comment**, because
-  BibTeX has no line-comment token between entries. Same grammar; only the
-  carrier and the sibling attachment differ. The format axis parses there and
-  deliberately does nothing (the bib formatter is a canonical re-emitter).
+- Use shared directive grammar from `badness_parser::directives`.
+- `% badness-lint <verb> [<rule>]` is lint axis; `% badness <verb>` suppresses
+  both lint + format over the same region.
+- `% badness-format ...` must not suppress lint diagnostics.
+- Retired `% badness-ignore` spellings still resolve for compatibility.
+- For `.bib`, directive carrier is `@comment{...}` (not `%` comments).
 
-## Registry
+## Registry behavior
 
-Config (`select`/`ignore`) narrows the active set as a **post-filter** through
-`RuleSelection`, so the shared driver stays config-unaware and the dispatch
-table stays identical across files.
+- `select` / `ignore` configuration is a post-filter (`RuleSelection`) over a
+  shared dispatch model; keep the driver config-agnostic.

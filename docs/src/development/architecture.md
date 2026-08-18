@@ -9,19 +9,22 @@ above it, and recomputation is incremental via
 [arity](https://github.com/jolars/arity), the same kind of tool for R, was the
 other influence.
 
-This page is the whole design in one place. It is deliberately a tour rather
-than a specification: where a decision has a long provenance of worked examples
-and issue references, that detail lives in `.claude/rules/`, which is written
-for contributors working inside a specific subsystem. If you want to build and
+This page is a practical tour of the design of Badnes. The goal is to help
+contributors understand how the pieces fit together. If you want to build and
 test the project, start with [Contributing](contributing.md).
 
-## What it does
+## What it Does
 
 Badness turns source text into a syntax tree, and the tree into diagnostics and
 formatted text. It does not typeset, it does not run TeX, and, outside the
 language server, it does not look at the machine it runs on.
 
-The pipeline is:
+The most imporant piece of Badness is the parser. It is a hand-written
+recursive-descent parser over a flat token stream, and builds a lossless
+concrete syntax tree (CST) of the document. The CST is a pure function of the
+file's text, and the formatter, linter, and language server all read that tree.
+
+Here's the pipeline from text to tree:
 
 ```
 text → lexer → token stream → parser → event stream → tree_builder → GreenNode
@@ -160,12 +163,14 @@ everywhere a document is parsed — `format`, `--check`, `lint` (report and
 `--fix`), `parse`, and the language server. `[commands.…]` is not implemented
 yet.*
 
-Two sections are different in kind from the rest, because they reach the
-*parser*: `[environments.<name>]` and `[commands.<name>]` let a project name
-constructs badness cannot see. A `\bea`/`\eea` delimiter pair, an environment
-that behaves like `align`, a verbatim environment defined by machinery no scan
-can follow — all of these are facts about the document that the text alone does
-not carry (issue #109).
+Most config only affects behavior after parsing. Declarations are the exception:
+they feed the parser directly.
+
+`[environments.<name>]` and `[commands.<name>]` let a project describe
+constructs that source text alone cannot reliably reveal (issue #109). Typical
+examples are alias delimiters like `\bea`/`\eea`, environment behavior that
+should match a built-in, or verbatim-like environments the definition scan
+cannot infer.
 
 ```toml
 # \begin{myenv} … \end{myenv}, with no built-in counterpart
@@ -187,152 +192,76 @@ end = ['\endmyenv']
 Literal strings (`'\bea'`) avoid TOML's escaping; a leading `\` is optional, and
 a control-word name can never contain one, so there is nothing to disambiguate.
 
-This is a deliberate widening of the database independence claimed under
-[argument grouping](#argument-grouping-and-bracket-policy), and it is worth
-being precise about what it does and does not admit. What reaches the parser is
-a `ResolvedDeclarations` value: a closed, hand-authored vocabulary, seeded into
-the existing `ParseCtx` for the *first* pass, so a declaring project pays no
-extra parse and the second pass still asks only whether the file's own
-definition scan found something new. That the parameter is a newtype rather than
-a bare `SignatureDb` is deliberate — a value of that type can only have come
-from a declaration block, so the entry point cannot be handed a document's
-merged scope, and the database independence above is kept by construction rather
-than by review. It lives in `badness-parser` so the dprint plugin and a future
-`% badness-env` comment directive can feed the same type. In the editor it is
-carried on a **singleton salsa input** at `Durability::HIGH`
-(`incremental::DeclarationsInput`), read by `parsed_document` and by
-`scope_signatures`, so editing `badness.toml` reparses the world and a keystroke
-does not. One cell per database rather than one per file: a declaration block is
-a property of the project, and threading it as a query parameter would push it
-through every caller of `parsed_tree_root`. The language server resolves config
-per anchor directory, so a session holding two workspaces with *different*
-blocks rewrites the cell as the active document crosses between them — the
-accepted cost, and the reason the main loop mirrors the last value it published
-and writes only on a change (`GlobalState::publish_declarations`). That crossing
-is a cost and never a wrong answer, because the republish happens in the
-**request dispatcher** rather than in each handler: nearly every request reads a
-tree, so a per-handler call would be a rule the next handler forgets, and the
-one it forgot would answer under whichever document was analyzed last. Reading
-`textDocument.uri` off the raw params covers handlers not yet written; the
-notification sites that publish ahead of an `Edit` job go through
-`GlobalState::analysis_settings`, which wants the settings anyway. Declaring
-nothing, the overwhelming default, never writes it after construction. The
-read-pool jobs that bypass the cache — a format or diagnostic that races an edit
-and falls back to reparsing its captured buffer — take the declarations off the
-snapshot (`Analysis::declarations`), so a fallback differs from the cached path
-only by the package tiers it could not reach. The ambient `SignatureDb` still
-never reaches the parser, and neither do package scopes or the CWL tier — the
-thing the original invariant protects against is data that shifts as files are
-scanned, loaded, or added, and a declaration block is none of those.
+This is a deliberate widening of parser purity, but with strict boundaries. The
+parser receives a `ResolvedDeclarations` value, not a full `SignatureDb`, so it
+can only see explicit, hand-authored declarations. That keeps parser behavior
+independent from ambient package scope and scanned runtime data.
 
-The safety property that makes config admissible at all is that **a declaration
-names a spelling, never a pairing**. Every shape gate runs unchanged: a declared
-`\bea` whose `\eea` is unreachable at the same brace, environment, and math
-level demotes to a plain command exactly as an inferred one does. Config can
-therefore widen what is *recognized*, and can never force a tree the text does
-not support, which is what keeps a typo'd declaration a no-op rather than a
-corruption.
+Implementation-wise, declarations are seeded into `ParseCtx` on the first pass.
+They live in `badness-parser` so every consumer (CLI, LSP, dprint plugin, wasm)
+can use the same model. In incremental mode, they are carried through a single
+high-durability salsa input (`incremental::DeclarationsInput`), so changing
+`badness.toml` invalidates parse results, while normal text edits do not.
 
-`like` is the workhorse, and it means one thing: copy the curated built-in entry
-of the same kind. It resolves against `builtin()` alone — never CWL, never
-scanned definitions — for the same reason the alias arm of
-`Signatures::environment_at` does, that a declaration supplies a spelling and
-behavior always comes from curated data. An unknown target is a config error
-rather than a silent no-op, because a mistyped `like = "algin"` is otherwise
-invisible. It never crosses categories: the command-standing-in-for-a-delimiter
-relation is genuinely cross-category and gets an explicit key on the environment
-side (`begin`/`end`), rather than a tagged `like` that would turn one word into
-a query language. Where `like` runs out — a construct resembling nothing built
-in — arity is spelled in xparse argspec (`args = "o m m"`), reusing a standard
-LaTeX users already know and a parser the semantic layer already has.
-`ContentKind` has no argspec spelling, which is the known limit and the reason
-`like` stays primary.
+In the LSP, declarations are republished in the request dispatcher (not ad hoc
+inside handlers). This avoids stale cross-workspace state when the active file
+moves between roots with different config.
 
-The shape generalizes by keying on **category, then name**. Everything a user
-might plausibly declare is name-keyed in one of two maps (an environment's
-behavior and delimiters; a command's arity, verbatim-ness, sectioning level, or
-ref/cite family membership), with a third map keyed by character if the
-shortverb case is ever taken. Two constraints keep that stable: a name map holds
-only entries, never scalar knobs, since a category-wide switch would collide
-with a construct of that name; and entries are keyed tables rather than an
-`[[environments]]` array, since only keyed tables merge per name once config
-layers or per-file overrides appear.
+The key safety property is simple: **a declaration names a spelling; it does not
+force pairing**. Shape gates still decide whether a match is structurally valid.
+So a wrong declaration degrades to ordinary syntax instead of corrupting the
+tree.
 
-Resolution is where the rules are enforced, and it runs when the config loads,
-so a broken declaration is an error rather than a block that parses fine and
-does nothing to the document. It projects the entries into a `SignatureDb` — the
-struct already holding exactly these three maps — so the declared tier folds
-into a document's scope with the same merge the scanned tier uses. Rejected,
-each naming the key the user wrote: an entry with no keys at all; an unknown
-`like` target; delimiters for a verbatim or argument-taking environment;
-delimiters for an environment whose behavior is unknown; a spelling two entries
-both claim (or one entry lists twice); a spelling that could never lex as a
-single control word; and a spelling the curated tier already knows as a command.
-An entry declaring behavior alone carries none of the delimiter restrictions,
-which is what makes `like = "lstlisting"` the way to name a verbatim environment
-no definition scan can find.
+`like` is the main mechanism: copy a curated built-in entry of the same kind.
+Resolution is against curated built-ins only (`builtin()`), never CWL or scanned
+definitions. Unknown `like` targets are config errors.
 
-`begin` without `end` (and the mirror) used to be on that list, on the reasoning
-that a half-declared pair could never pair. Issue #117 retired both: the literal
-`\begin{X}`/`\end{X}` is a spelling of each side, so `begin = ['\bsplit']` alone
-declares an opener the written-out `\end{split}` closes. That is the block the
-reporter needed and could not write — `end` was mandatory, and the natural way
-out, `end = ['\end{split}']`, is not a control word.
+`like` also stays category-local. Cross-category relationships (for example,
+command spellings that stand in for environment delimiters) use explicit keys
+such as `begin`/`end`. Where `like` is not enough, arity is expressed with
+xparse argspec (`args = "o m m"`).
 
-The empty-entry and known-command rules are the two that reject for *shape*
-rather than for a rule of the mechanism, and they are the two ends of the same
-concern. An empty entry is the silent no-op the whole "resolution is validation"
-posture exists to prevent, and it is exactly what a header with a typo'd body
-under it collapses to. A spelling like `'\emph'` is the opposite failure: it
-would take effect, project-wide, on a command the author never meant to touch.
-That check reads the curated tier alone — the CWL tier carries every package's
-names, so rejecting against it would refuse a spelling on the say-so of a
-package the project never loads — which leaves it partial by construction. It is
-a backstop, not the safety property; the shape gate is still what keeps a wrong
-declaration from corrupting a tree.
+The schema is keyed by **category, then name**. This keeps merging predictable
+and avoids category-wide switches that could collide with real construct names.
+Keyed tables are used instead of arrays so layered config can merge by name.
 
-Declared entries beat scanned definitions and the built-in tiers alike — a
-declaration is the user explicitly correcting an inference. They are merged into
-a document's signature scope last, as the top tier, and carry a provenance mark
-while they are there. The mark exists for one lookup: the alias arm of
-`Signatures::environment_at` resolves its target against *curated* data only, so
-it has to tell a declared `myenv` (curated) from a scanned `\newenvironment` of
-the same name (not curated, and still unable to lend an alias its behavior) —
-and once both sit in one scope, nothing else distinguishes them.
+Validation happens at config load time, so broken declarations fail loudly
+instead of being silently ignored. Rejected forms include empty entries, unknown
+`like` targets, conflicting or duplicate spellings, invalid control-word
+spellings, and delimiter declarations that violate environment constraints.
+
+`begin`-only and `end`-only declarations are allowed (issue #117), because
+literal `\begin{X}` and `\end{X}` forms can still provide the missing side.
+
+Two validation checks are especially important: disallowing empty entries
+(prevents silent no-ops) and disallowing obvious collisions with curated command
+spellings (prevents accidental global remapping). These are guardrails, not the
+primary safety mechanism; shape gates remain the ultimate protection.
+
+Declared entries override scanned and built-in tiers. That is intentional: a
+declaration is an explicit correction from the project author.
 
 ## Two layers
 
-The syntactic layer is the generic CST. It knows nothing about what a command
-means.
+The syntax layer is a generic CST. By default, it does not know command meaning.
 
-The semantic layer is a signature database: a curated built-in table, a bulk
-CWL-derived tier, and `\newcommand`/`\newenvironment` scanning. It assigns
-arity, verbatim-ness, sectioning, and per-argument content kinds.
+The semantic layer is a signature database (curated built-ins, CWL-derived data,
+and scanned definitions). It carries arity, verbatim behavior, sectioning, and
+argument content kinds.
 
-The boundary between them is an admission test, not a ban on meaning. The parser
-already reads curated semantic facts — verbatim and math routing, definition
-bodies, aliases, the conditional families — and a fact may join them only when
-two bars are met. First, every entry must be individually vetted: curated
-built-in data, or a project [declaration](#declarations). Second, its
-misapplication must be falsifiable from the text, so a shape gate can demote a
-wrong application to the generic parse. Routing and pairing facts pass both
-bars, which is why they are what the parser reads. Arity facts fail the second:
-over-attachment is byte-identical to correct attachment, so a wrong arity fails
-silently past losslessness, idempotence, and every other oracle. The bulk CWL
-tier fails both — it is harvested completion data, unvetted per entry and
-re-synced from upstream — and package scopes and scanned definitions fail for a
-different reason: they would make a parse depend on other parses and on what a
-given context can see, where the same file must parse identically under the CLI,
-stdin, the dprint plugin, and the LSP.
+The boundary is an admission test, not a hard wall. Parser-visible semantic
+facts are allowed only when both are true:
 
-One content kind is worth naming here, because it is the only place where a
-signature claim can change typeset output. `ContentKind::Keyval` asserts that a
-keyval-family processor strips spaces around entries, which is what licenses the
-formatter to break a `[…]` at a comma the author glued. Compiling both spellings
-shows the claim is real for `\usepackage`, `\includegraphics`, tikz, and
-`lstlisting`, and false for every textual optional such as `\item`, `\caption`,
-`\cite`, or a `\newcommand` default. It is held to the same curated standard as
-the math-environment routing.
+1. The source is curated or explicitly declared.
+2. A wrong fact can be falsified from text shape and demoted by a gate.
+
+Routing and pairing facts pass this test. Generic arity facts do not: wrong
+arity can still produce byte-identical attachment, which slips past syntax
+oracles. That is why arity stays in semantics for generic LaTeX.
+
+`ContentKind::Keyval` is the most sensitive semantic claim because it can affect
+typeset output. It is curated and validated conservatively, since it licenses
+splits at glued commas in key-value contexts.
 
 ## The parser
 
@@ -523,225 +452,73 @@ failure.
 
 ### Environment aliases
 
-`\newcommand{\bea}{\begin{eqnarray}}` plus `\newcommand{\eea}{\end{eqnarray}}`
-makes `\bea … \eea` a spelling of `\begin{eqnarray} … \end{eqnarray}`, and
-badness learns it by scanning the file's own definitions (issue #109). This is
-the *second pass* that already exists for user-defined verbatim commands. An
-alias defined in a sibling `.sty` deliberately does **not** pair — package scope
-reaches the formatter, never the parse — so inference stays a pure function of
-that file's text. The complex cases inference cannot reach are covered by an
-explicit [declaration](#declarations) instead, which lands in the same
-`ParseCtx` maps and is indistinguishable downstream; the rest of this section
-describes the *inferred* path.
+Badness can infer environment aliases from the file's own definitions
+(`\bea ... \eea` standing in for `\begin{eqnarray} ... \end{eqnarray}`), and it
+can also receive aliases from [declarations](#declarations) (issue #109).
 
-Admission is narrow, because a wrong pairing rewrites layout. The target must be
-a **curated built-in** environment, so an alias declares a *spelling* and never
-a *semantic* — every behavior flag still comes from curated data, exactly as
-`is_math_environment` requires. It must be **non-verbatim**, since
-`\newcommand{\bv}{\begin{verbatim}}` does not work in TeX at all (the body is
-tokenized before the macro expands). It must take **no arguments**, and so must
-the alias, since the head consumes none and attaching them from the target's
-signature would be arity-directed grouping from scanned data. What it need
-**not** be is half of a defined pair: the literal `\begin{X}`/`\end{X}` is a
-spelling of each side too, so `\def\bsplit{\begin{split}}` alone pairs
-`\bsplit … \end{split}`, and `\def\eeq{\end{equation}}` alone closes a
-written-out `\begin{equation}` (issue #117). The rule used to be that both
-halves had to be defined, on the reasoning that a lone opener could never pair —
-which was true only while the closer had to be an alias too. What that rule was
-*also* doing, keeping a file from buying a second parse for an alias nothing
-calls, is carried by the "is it called anywhere" filter in `parser::core`, which
-is where it belongs.
+Important boundaries:
 
-The two spellings stay separate indices (`alias_closers` and
-`literal_alias_closers`), read as one only by `closer_target`, because they are
-consumed differently: a literal closer emits the ordinary two-token
-`END > \end NAME_GROUP`, an alias closer the bare control word. The literal
-index is built from the pre-scan's looser `peek_end_name`, so the gate re-tests
-`env_end_at` before admitting one — a `\end` the walk would treat as a plain
-command must not become an `END` with a name group that is not there.
+- Inference is file-local. Aliases from sibling package files are not used by
+  the parser.
+- Alias admission is conservative: target behavior must come from curated
+  built-ins, and alias pairing must stay structurally safe.
+- One side is enough (issue #117): an alias opener can pair with a literal
+  closer and vice versa.
 
-Two details carry most of the risk. First, the opener index must exclude every
-*name being bound*, which is a **slot countdown** and not a test of the single
-word after the keyword (`lexer::definition_name_slots`). `command()` sets
-`in_def_body` after a `\def` head only when the definee is a control symbol, so
-in `\def\bea{\begin{eqnarray}}` the definee reaches the dispatch as an ordinary
-command at brace depth 0 — and unfiltered, the two *definition lines* pair with
-each other. `\let\oldbea\bea` is the same failure one slot over: `\let` binds
-two names, and left live the *source* operand pairs with the next stray `\eea`
-and swallows the prose between them. (The conditional recognizer subtracts the
-same `("let", 2)` slots for the same reason.) The braced `\newcommand{\bea}{…}`
-form is covered by `in_def_body` instead. Second, the gate is **positive**,
-modelled on `conditional_closer` rather than on the `\begin` gate: an alias
-opener has no `{name}` corroborating it and no unclosed-environment diagnostic
-worth preserving, so it must be refused unless its closer is located, and the
-walk is then bounded by that index. Unlike the conditional gate there is
-deliberately no paragraph-break anchor — an `itemize` alias legitimately spans
-blank lines, and reading one would key layout on a trivia predicate the
-formatter does not preserve.
+Implementation highlights:
 
-The scan is bounded twice over, because it is otherwise quadratic in a shape
-real packages have: a `.sty` that defines `\bc`/`\ec` for its users and calls
-`\bc` from macro bodies has openers that never pair, and each walks to EOF.
-Every `Some` verdict names an index in the closer index, so the walk stops at
-the *last* closer in the file (none at all, and the gate refuses outright), and
-the verdict is memoized for the one opener the caller asks about twice —
-`starts_block_env` peeks before `element` dispatches.
+- Alias closers and literal closers are indexed separately, then unified by a
+  shared target lookup.
+- Alias openers are excluded while names are being defined (`\def`, `\let`,
+  etc.), so definitions do not accidentally pair with each other.
+- Pairing is a positive gate: if no reachable closer is found, the opener is
+  demoted.
+- The gate runs on the shared batch driver to avoid per-opener quadratic scans.
 
-The gate runs on the shared batch driver (`AliasGate`), the conditional gate's
-second client, so the residual adversarial shape — thousands of openers with a
-single closer at EOF, where the last-closer bound spans the whole file and cuts
-nothing — is one linear pass rather than a scan per opener. Its two policy
-divergences from the conditional gate are the missing paragraph anchor above and
-the name match on the closer: nesting counts *any* alias opener and *any* alias
-closer, so `\bea \bce \ece \eea` pairs while the crossing `\bea \bce \eea \ece`
-refuses outright instead of letting an inner walk run past the outer bound.
+Downstream behavior is resolved from the parsed node, not raw spelling. That
+keeps `\begin{bea}` distinct from a command alias `\bea` unless the node itself
+was parsed as an alias delimiter.
 
-The node is the ordinary `ENVIRONMENT > BEGIN … END`, with the delimiters
-holding a bare `CONTROL_WORD` instead of `\begin` plus a `NAME_GROUP`, so every
-consumer downstream works unchanged. `ast::Begin::name` falls back to that
-control word. `name_range()` stays `None`, which is what makes the
-name-rewriting consumers (rename, change-environment, the `obsolete-environment`
-fix) decline cleanly rather than emit a half-edit.
+Alias openers are also recognized in math parsing paths where relevant (for
+example `split`-style environments), so literal and alias spellings converge to
+the same environment node shape.
 
-Behavior is resolved **from the node, never from the name**:
-`Signatures::environment_at` reads the alias map only for a delimiter
-`Begin::is_alias` recognizes, and the plain name-keyed `Signatures::environment`
-never reads it at all. The distinction is the whole point of keeping aliases in
-a side map rather than cloning an `EnvironmentSig` under the alias name — a
-literal `\begin{bea}` written in a file that also defines `\bea` is an unrelated
-environment that happens to spell the same word, and it must stay unknown rather
-than inherit `eqnarray`'s math and alignment. By the same token a
-`\newenvironment{bea}` and an alias `\bea` coexist, each node resolving to its
-own.
-
-The mirror direction needs no gate at all, because a spelled-out `\begin{X}`
-pairs by default and locates nothing: `at_block_end` simply also stops at a
-closer alias naming the environment innermost open, and `finish_environment`
-consumes it as the `END`. That arm is tested *before* the `\end` one, since
-`peek_end_name` would otherwise read an alias's own following group (`\eeq{…}`)
-as an environment name and report a mismatch against it. It is deliberately not
-generalized past the innermost environment — an alias closer naming some outer
-one stays a plain command, exactly as a mismatched `\end{…}` is left for the
-caller to unwind.
-
-`math_atom` dispatches alias openers too, on the same gate as the text arm. That
-was not optional: `split` — the environment issue #117 is about — is math-only,
-so an alias for it is *always* read there and nowhere else. The arm sits beside
-the `environment()` call one token earlier in the same match, which already
-pairs the literal spelling here, so the two spellings reach the same node. The
-`\end` arm in that match had to learn `end_orphans_a_demoted_begin` at the same
-time: `at_block_end` declines to end a math body at a `\end` that orphans a
-demoted `\begin` (issue #71), so that one arrives in `math_atom` and must land
-as the plain command the gate already made it, rather than as a stray closer the
-two halves of one gate would then disagree about.
-
-One asymmetry is knowingly left: the other gates' `\begin`/`\end` level counting
-does not see alias delimiters, so a literal `\begin{X}` closed by an alias and
-sitting inside a brace group can be demoted by the `\begin` gate, which finds no
-level anchor where the alias closer is. The failure mode is the standing one — a
-silent conservative demotion to a plain command — and fixing it would mean
-teaching every gate the alias maps.
-
-Accepted false negatives: `\let` chains and argument-taking aliases.
+Known conservative gaps are accepted (for example complex `\let` chains and
+argument-taking aliases) in exchange for parse safety.
 
 ### The conditional gate
 
-`\if…\else…\or…\fi` becomes a `CONDITIONAL` holding a run of
-`CONDITIONAL_BRANCH`es with the `\fi` as its last child, mirroring
-`ENVIRONMENT > BEGIN … END`. The first branch carries the opener, its test, and
-the then-body; every later one opens with its own divider, so a consumer finds
-the boundaries positionally and never by matching the name `\else`.
+The parser groups `\if … \else/\or … \fi` into a `CONDITIONAL` node with
+positional branches. This gives formatter and linter a stable structural extent
+for the construct.
 
-The `\if` *test*'s extent is not statically resolvable — `\ifnum\radius>5` scans
-⟨number⟩⟨rel⟩⟨number⟩ by TeX's own scanner, `\ifx` takes two tokens, a
-`\newif`-defined `\if@foo` takes none — so there is deliberately no head node,
-and with it no body indent. What the node buys is the construct's *extent*,
-which is what lets the formatter lay it out all-or-nothing.
+What the node intentionally does **not** model is the exact test-body boundary.
+TeX conditional tests are scanner-driven and not statically reliable enough for
+a separate head/body split.
 
-Recognition is pair-and-trust over the lowercase `if` prefix, minus two curated
-families measured over the gate corpora: the brace-argument `if*` macros
-(`\ifthenelse`, `\iftoggle`, the etoolbox test family) and the operand slots of
-`\if`/`\ifx`/`\ifcat`/`\ifdefined`/`\newif`/`\let`, where an `\ifX` is a token
-being declared or compared rather than live control flow. Subtracting the first
-is load-bearing rather than cosmetic: shape alone does not merely fail on an
-`\ifnumgreater`, it *mis-pairs*, stealing an enclosing conditional's `\fi`. The
-name sets live in `parser::conditional`, along with the small state machine that
-turns them into a positional verdict (the operand countdown, the `\ifcsname`
-body), and the linter's `ConditionalIndex` drives the same one. So branch paths
-and CST nodes can never disagree about what an opener *is*. They can still reach
-different verdicts on a token, because each consumer decides for itself which
-stream to interpret: the parser visits every token and then drops the openers
-inside an expl3 region, while the linter withholds a `\def` body's span
-altogether — a `\let` that a definition merely carries must not arm the operand
-countdown for the code after it, whereas the parser needs no such rule because
-its brace anchor already refuses to pair across the body's group.
+Recognition uses a curated opener model from `parser::conditional` (shared with
+the linter index), including exclusions for `if*` macro families and declaration
+operand slots where `\if...` text is not live control flow.
 
-The gate itself demands a reachable `\fi`, and demands it at the opener's own
-level of **every nesting the parse recognizes** — braces, environments, and math
-alike. This is the subtle part. A token scan that counts a `\fi` the recursive
-walk will consume inside some other construct promises a pairing the walk cannot
-honor, and the walk then runs on looking for a closer that is gone.
-`ltboxes.dtx` is the case that taught this: its
-`\else\@pboxswtrue $\vcenter \fi\fi\fi … \if@pboxsw \m@th$\fi` puts all three
-`\fi`s inside a `$…$`, and a brace-only gate carried the construct over 160
-lines and every `macrocode` chunk in between, stranding the cursor past the
-chunk terminator for every chunk-bounded scan downstream. So math anchors the
-scan, a `macrocode` frame is a hard boundary in both directions, and the walk is
-additionally bounded by the closer index the gate located — belt and braces,
-since the scan reads tokens while the walk reads structure.
+The gate requires a reachable `\fi` at the opener's own recognized nesting
+levels (brace/environment/math), with `macrocode` frame boundaries respected.
+This prevents the scan from promising closers the structural walk cannot
+actually consume.
 
-That bound is deliberately one-directional, and it is worth being exact about
-which direction. The walk can never run *past* the located `\fi`; it can still
-stop *before* it, because the scan counts nested openers by name while the walk
-re-gates each one and may demote it — and a demoted opener's `\fi` is then a
-closer the walk reaches first. `\ifA \begin{center} \ifB \end{center} \fi \fi`
-is the shape: the scan counts `\ifB` and picks the second `\fi`, the walk
-demotes `\ifB` and closes at the first, and the leftover `\fi` is a plain
-command. The tree is still well formed and still lossless, which is the bar; but
-it is why `ast::Conditional::closer` is fallible and why no consumer may assume
-the scan's index and the walk's agree.
+Important invariant: the walk is bounded by the located closer, but it may close
+earlier if nested openers are demoted during re-gating.
+`ast::Conditional::closer` is therefore fallible by design.
 
-The cost is one forward scan per *batch*, not per opener. The scan is bounded by
-the last `\fi`-flavored word in the file (a file with none refuses without
-scanning), and one scan settles every opener it passes in the seed's own brace
-frame: nested openers are only counted at brace depth zero, so they share the
-seed's frame exactly and `\fi` matching is pure LIFO over a pending stack. The
-batch is memoized against the walk state the scan read (`macrocode_end`,
-`in_def_body`, whether a group encloses), so a run of top-level openers costs
-one linear pass where it used to cost one scan each — the quadratic
-thousands-of-openers shape recorded here before the batch now measures in the
-tens of milliseconds. One rule in the batch is load-bearing: a refuted entry is
-settled, never removed, because the per-opener scan counts nested openers by
-name and never un-counts one — a later `\fi` must still be consumed by the
-refuted entry's slot, or the outer opener would pair where the per-opener scan
-demoted it. Every ordinary anchor still cuts a scan short, so conditional-heavy
-real packages (`biblatex.sty`, `latexrelease.sty`, `memoir.cls`) measure the
-same as they did before the node existed.
+For performance, conditional decisions run through the shared batch gate driver
+(`Parser::gate_batch`) instead of per-opener scans. Policy differences remain
+explicit per gate.
 
-The batch is not the conditional gate's own machinery. It is a **driver**
-(`Parser::gate_batch`) that the other shape gates migrate onto one at a time
-(`TODO.md`, container stack C2): the driver owns the bookkeeping they all share
-— the bound, brace depth under `plain_braces`, environment counting, the
-`macrocode` frame, the entry stack with its settled-never-removed rule, the scan
-metering, and the walk-state memo — while each gate supplies a `GatePolicy`
-naming its own bound, its openers and closers, and whether a blank line anchors
-it. The divergences between gates are deliberate, so they stay visible as policy
-methods rather than being averaged into the loop. With the bracket family
-migrated the driver serves all nine gates, and the policy surface is what the
-migration bought: every place two gates read the same token differently is a
-named axis with a documented reason, where before it was nine hand
-transcriptions in which a fix to one copy did not propagate (issue #95).
+Behavioral differences vs environment pairing are intentional:
 
-Two anchors differ from the environment gate on purpose. Running out of file
-demotes here, where the environment gate keeps the node so it can still report
-an unclosed environment; a conditional has no diagnostic to preserve. And there
-is no `.dtx` doc-margin exemption: that exists so the documentation layer keeps
-pairing `\begin{macro}` across the chunks between them, and a conditional has no
-such split-across-chunks story. A paragraph break anchors at the construct's own
-level, which keeps `CONDITIONAL` a within-paragraph construct — it can never
-straddle a `PARAGRAPH` boundary, so no paragraph nests inside one. Conditionals
-are not recognized inside expl3 regions, where the formatter owns layout through
-the expl3 statement segmentation, nor (yet) in math mode.
+- EOF without closer demotes conditionals.
+- No `.dtx` doc-margin exemption is applied.
+- Paragraph breaks anchor conditionals at their own level.
+- Conditionals are not recognized inside expl3-owned regions.
 
 ### Recursive descent, with Pratt local to math
 
@@ -1205,68 +982,32 @@ with unary signs and scripts tight.
 
 ### Conditionals
 
-A conditional the parser paired lays out all-or-nothing: flat when the whole
-construct fits, and with every divider opening a line when it does not. That is
-the only coherent form available, and the reason the construct needed a node at
-all. A per-divider rule at the layout layer has no good version of itself. Fired
-only across a gap the author already wrote, it *is* the lone-newline read. Fired
-unconditionally, it manufactures a space token at the roughly one boundary in
-four that authors glue, which TeX contributes to the horizontal list. Fired only
-where the author already broke, it breaks one divider and leaves its sibling
-glued, decided by nothing but where the author happened to type.
+When the parser can pair a conditional, formatter layout is all-or-nothing:
 
-The two forms are handed to the printer as whole candidates rather than as a
-single Wadler group of soft lines, and that distinction is load-bearing. A group
-saturates its break state from whatever forced breaks its subtree carries, and a
-branch *interior* carries one for every physical line the command-only-line rule
-keeps — so a group would end up deciding the dividers from the interior's
-authored newlines, which is exactly the predicate that must not decide them. The
-flat candidate is instead collapsed from content alone, so its width, and with
-it the choice between the two, is a function of non-trivia content and the
-config. When no flat candidate exists at all — a `%` comment in a branch, a
-nested environment — the broken form is unconditional, and both of those are
-content facts that layout may read.
+- flat if the full construct fits;
+- fully broken at dividers if it does not.
 
-One carve-out keeps the rule typeset-safe. A separator renders as a space when
-flat and a newline when broken, and TeX makes a space token of either, so
-breaking at a divider the author glued (`\ifmmode y\else z\fi`) changes what TeX
-sets — a change no CST oracle can see, since whitespace is trivia to them and
-content to TeX. A construct with any glued divider therefore keeps its authored
-bytes rather than relayout: breaking only the unglued siblings would be the
-lopsided form again.
+That keeps conditional formatting coherent and avoids newline-sensitive
+behavior. The flat vs broken choice is computed from content, not authored
+single-newline spelling.
 
-The whole relayout is confined to the modes that lay prose out at all.
-`WrapMode::Preserve` promises authored line breaks are untouched, and rejoining
-a conditional the author spread over lines is exactly what that forbids, so
-there the construct takes the byte-faithful stream. The other three rebuild
-every prose line from runs already, so the choice is theirs to make.
+There is one important safety carve-out: if any divider is glued in source
+(`\ifmmode y\else z\fi`), we preserve authored bytes. Otherwise, splitting a
+glued divider can change TeX-visible spacing even though CST trivia checks stay
+green.
 
-A branch *interior* is lowered the way the construct's enclosing context would
-lower the same elements, which is what "as anywhere else" has to mean here. It
-cannot be read off the branch: the gate keeps a conditional inside one
-paragraph, so no `PARAGRAPH` node ever nests in a branch to carry the prose
-lowering the way an environment body's does. Instead the lowering looks at the
-conditional's nearest non-conditional ancestor. In running text that is a
-paragraph, and the branch reflows with it — its words wrap and its inter-word
-spacing normalizes, just as they would outside the construct. Inside a `\def`
-body it is a group, which emits the byte-faithful stream, so the branch does too
-and package code keeps its authored lines. That second case is not a nicety:
-`pagesel.sty`'s `\ifx\\#2\\%` has the parser's `LINE_BREAK` node sitting in an
-`\ifx` operand slot, and the prose reflow's "a `\\` ends its line" rule
-oscillates on it pass over pass.
+Conditional relayout runs only in wrap modes that already own prose layout.
+`WrapMode::Preserve` keeps authored line breaks byte-faithfully.
 
-One further child can hang off a `CONDITIONAL`, and it is easy to lose. An
-own-line `%` run before the opener binds forward as a `DOC_COMMENT`, and the
-grammar reparents it *inside* the node, as a sibling of the branches. A lowering
-that walks only the branches and the closer drops it silently — and the
-non-trivia-content oracle cannot object, because a comment is trivia to the CST.
-The comment oracle in `assert_format_invariants` exists for exactly this class
-of bug, mirroring the one the `.bib` formatter has carried since it started
-reordering fields.
+Branch internals are lowered using the nearest non-conditional ancestor context
+(paragraph-like contexts reflow; group-like contexts preserve). This avoids
+oscillation in package-code patterns that depend on authored line structure.
 
-There is no body indent, because the parser cannot separate the `\if` test from
-the then-body (see § *The conditional gate*). The environment-shaped layout that
-much package code is written in is therefore not the target.
+Also note: a `DOC_COMMENT` may be reparented inside `CONDITIONAL`; lowering must
+carry it through explicitly.
+
+There is no body indent model because parser structure does not separate `\if`
+test and body boundaries with enough certainty (see § *The conditional gate*).
 
 ### expl3 code formatting
 
@@ -1330,78 +1071,33 @@ untouched.
 
 ### Comment directives
 
-`badness_parser::directives` resolves the `% badness-format` family (`skip`,
-`off`/`on`, `skip-file`) and the combined `% badness` family into sorted,
-non-overlapping byte ranges, one list per axis. The formatter takes the format
-list on `LowerCtx::suppressed` — the same shape as `expl3_regions`, owned by
-`format_root` for the lowering — and the linter folds the lint list into
-`SuppressionMap` as ranges where every rule is off.
+`badness_parser::directives` resolves suppression directives into sorted,
+non-overlapping byte ranges (one list per axis). Formatter and linter both use
+that shared resolution path.
 
-It lives in the parser crate because neither consumer can reach the other: the
-formatter is wasm-clean and is what the dprint plugin embeds, while the linter
-lives in the root crate. Resolving a directive is a pure function of the tree,
-so it sits below both, and the plugin gets suppression for free rather than
-becoming a second sanctioned divergence from `badness format`.
+The parser crate owns this logic because it is pure tree analysis needed by both
+consumers (formatter in wasm-clean crate, linter in root crate).
 
-Three decisions carry the weight.
+Design rules:
 
-**The verb carries the scope.** Rule-selective lint suppression needs a selector
-slot; layout suppression has nothing to select. A grammar putting the selector
-in second position would therefore be lint-shaped by construction, with the
-format axis forced to leave a slot nothing could fill. Splitting on the verb
-instead (`skip` / `off` / `on` / `skip-file`, the vocabulary tex-fmt, ruff, and
-black already established) lets all three axes share one grammar, keeps the
-selector optional where it means something and absent where it does not, and
-keeps every form reading as an imperative — `skip-file` is "skip this file",
-where a `-file` suffix on the subsystem name would read as a noun phrase.
+1. **Verb defines scope.** `% badness-format ...`, `% badness-lint ...`, and
+   `% badness ...` share one grammar, with `skip` / `off` / `on` / `skip-file`
+   verbs.
+2. **Legacy spellings still work.** `% badness-ignore ...` is deprecated but
+   intentionally still supported.
+3. **`.bib` uses a different carrier.** Directives are read from `@comment{...}`
+   entries because BibTeX has no `%` line-comment token between entries.
 
-The retired `% badness-ignore <rule>` and `% badness-ignore-file` spellings map
-onto `% badness-lint skip <rule>` and `% badness-lint skip-file <rule>`, and
-resolve through the same path. They are undocumented but permanent: a directive
-spelling is user-facing API in the same sense a rule id is.
-`Directive::deprecated` marks them for a future lint rule (recorded in
-`TODO.md`). What the lint axis gains in the move is the **region** scope, which
-the retired family never had.
+Suppression matching is by **containment**, not overlap. This avoids accidental
+"suppress the whole document" behavior when a region starts inside an ancestor
+node.
 
-The `.bib` side shares the grammar and differs only in carrier: BibTeX has no
-line-comment token between entries, so a directive rides an `@comment{…}` entry
-(`bib/linter/suppression.rs`). The format axis parses there and deliberately
-does nothing — the bib formatter is a canonical re-emitter rather than a
-trivia-only pass, so byte-exact reproduction is a different mechanism.
+Region anchoring follows `skip_target` semantics and is clamped to the previous
+directive boundary. This keeps adjacent `off`/`on`/`off` sequences from merging
+incorrectly.
 
-**Suppression is containment, not overlap.** An `off`/`on` region is delimited
-by comments the author placed, not by CST boundaries, so it can begin halfway
-through a construct — and every construct it begins inside is an *ancestor* of
-the content it means to cover. Testing overlap would therefore suppress the
-outermost such ancestor: one directive anywhere in a document body suppresses
-the whole `document` environment, and with it the file. Containment picks the
-outermost node fitting *within* the region, so a straddling ancestor keeps
-descending and only the enclosed blocks are reproduced.
-
-**A region anchors where a `skip` would target, clamped to the previous
-directive.** An own-line `%` binds *forward* into the following construct's
-`DOC_COMMENT` (see [Trivia attachment](#trivia-attachment)), so a region
-starting at the byte after the `off` comment begins *inside* the construct it
-means to cover, which then fails the containment test. Anchoring through
-`skip_target` instead fixes that and picks up a preceding comment run bound into
-the same `DOC_COMMENT`. The clamp is what keeps consecutive directives apart:
-`on` / `off` / block puts both directives in one comment run, so the reopening
-`off` resolves to a construct starting at the `on` and would otherwise swallow
-the closer of the region before it, fusing the two.
-
-Suppressed content is emitted as `Ir::verbatim` of the node's source text.
-`Writer::write_verbatim` flushes the pending indent on the first line and leaves
-every later line at its authored column, which is the same deliberate asymmetry
-protected regions already carry: the block lands where the formatter puts it,
-its interior is untouched. Trivia *inside* a region is emitted per token rather
-than collapsed into a `Gap`, or the seams between two suppressed blocks would
-quietly normalize while the blocks themselves stayed exact.
-
-A suppressed region is preservation-only, so it upholds the
-[trivia-perturbation](#trivia-invariant-layout) oracle by construction: every
-perturbed variant is reproduced verbatim and is therefore its own fixed point.
-The document-level trailing-edge normalization and the `line_ending` post-pass
-still run over the result — the same carve-out protected regions live under.
+Suppressed nodes are emitted as verbatim source for preservation. Indentation at
+the first line may be normalized by placement, but interior bytes remain intact.
 
 ## The linter
 

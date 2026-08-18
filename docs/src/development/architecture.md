@@ -9,20 +9,27 @@ above it, and recomputation is incremental via
 [arity](https://github.com/jolars/arity), the same kind of tool for R, was the
 other influence.
 
-This page is a practical tour of the design of Badnes. The goal is to help
+This page is a practical tour of Badness's design. Its goal is to help
 contributors understand how the pieces fit together. If you want to build and
 test the project, start with [Contributing](contributing.md).
 
-## What it Does
+The document follows data through the system. It begins with the workspace and
+its inputs, then moves from parsing to formatting, linting, and the language
+server. The parser and formatter sections are necessarily the most detailed:
+most of Badness's safety properties are established at the boundary between
+those two components.
 
-Badness turns source text into a syntax tree, and the tree into diagnostics and
-formatted text. It does not typeset, it does not run TeX, and, outside the
-language server, it does not look at the machine it runs on.
+## What it does
 
-The most imporant piece of Badness is the parser. It is a hand-written
-recursive-descent parser over a flat token stream, and builds a lossless
-concrete syntax tree (CST) of the document. The CST is a pure function of the
-file's text, and the formatter, linter, and language server all read that tree.
+At a high level, Badness turns source text into a syntax tree, then uses that
+tree to produce diagnostics, formatted text, and editor features. It does not
+typeset documents or run TeX. With the exception of a few language-server
+features, it does not inspect the machine on which it runs either.
+
+The parser is the foundation of the system. It is a hand-written,
+recursive-descent parser over a flat token stream, and it builds a lossless
+concrete syntax tree (CST) for the document. The formatter, linter, and language
+server all work from this shared representation.
 
 Here's the pipeline from text to tree:
 
@@ -30,102 +37,115 @@ Here's the pipeline from text to tree:
 text → lexer → token stream → parser → event stream → tree_builder → GreenNode
 ```
 
-The parser emits events (`Start`, `Tok(idx)`, `Finish`) instead of building a
-tree directly. Tokens are referred to by index and diagnostics travel on a side
-channel keyed by byte range, so there is no `Error` event. One extra event,
-`SubTok`, attaches a `WORD` sub-slice for the math operator split. The tree
-builder re-attaches trivia and feeds rowan's `GreenNodeBuilder`.
+Like rust-analyzer's parser, ours does not build the tree directly. It emits a
+small stream of events (`Start`, `Tok(idx)`, and `Finish`), which a separate
+tree builder feeds into rowan's `GreenNodeBuilder`. Events refer to tokens by
+index, while diagnostics travel on a side channel keyed by byte range;
+consequently, the event stream needs no `Error` variant. The only specialized
+event is `SubTok`, used when math parsing treats part of a `WORD` token as an
+operator. The tree builder also reattaches trivia before producing the final
+green tree.
 
-Everything downstream reads that tree. The formatter lowers it to a `Doc` IR and
-prints the IR, the linter walks it once and collects diagnostics, and the
-language server answers requests from salsa queries over it.
+From there, each subsystem has a different view of the same tree. The formatter
+lowers it to a `Doc` intermediate representation and prints that representation.
+The linter makes one shared traversal and collects diagnostics. The language
+server answers requests through salsa queries over the tree.
 
-The tree is a pure function of the file's text. Config, the signature database,
-and the filesystem take no part in producing it. Determinism, error tolerance,
-and incremental recomputation all rest on that.
+With the explicit declarations described below as its only additional input, the
+tree is a pure function of source text. Ambient configuration, the signature
+database, and the filesystem do not influence its shape. This boundary is what
+makes deterministic parsing and reliable incremental recomputation possible.
 
 ## The crates
 
-Badness is a four-crate Cargo workspace on edition 2024. The root package is the
-CLI, LSP, and linter crate `badness`; two publishable library crates and one
-unpublished wasm shim live under `crates/`.
+Badness is an edition-2024 Cargo workspace with four crates. The root package,
+`badness`, contains the CLI, language server, and linter. Two publishable
+libraries and an unpublished WebAssembly shim live under `crates/`.
 
-`badness-parser` holds the syntax layer (`syntax`, `ast`), the parser, the
-semantic layer, the BibTeX parsing and semantic layers, the `data/` signature
-artifacts, and the `build.rs` that bakes them into phf tables.
+`badness-parser` contains the syntax layer (`syntax` and `ast`), the parser, and
+the semantic model. The corresponding BibTeX layers live here too, alongside the
+generated signature artifacts in `data/` and the `build.rs` script that turns
+them into PHF tables.
 
-`badness-formatter` holds the layout engine (`core`, `ir`, `printer`, `style`,
-`context`, `colspec`, `sentence`, `perturb`) and the `.bib` formatter. It
-depends on `badness-parser`.
+`badness-formatter` depends on `badness-parser` and contains the layout engine
+(`core`, `ir`, `printer`, `style`, `context`, `colspec`, `sentence`, and
+`perturb`) as well as the `.bib` formatter.
 
 `badness-wasm` is a `publish = false` wasm-bindgen shim over the two library
 crates. It powers the [playground](../playground/index.html) and is built with
 `wasm-pack` through `task playground:wasm`.
 
-Both library crates build for `wasm32-unknown-unknown`, so nothing in them may
-touch the filesystem, threads, or processes. The formatter is embedded by the
-[dprint plugin](https://github.com/jolars/dprint-plugin-badness), and a CI job
-guards the target. The plugin is sandboxed with no filesystem, so it passes an
-empty signature database where the CLI folds in signatures scanned from sibling
-`.sty` and `.cls` files. That is the one sanctioned divergence from
-`badness format`.
+Both library crates target `wasm32-unknown-unknown`. As a result, code in those
+crates cannot depend on the filesystem, threads, or child processes. The
+formatter is also embedded by the [dprint
+plugin](https://github.com/jolars/dprint-plugin-badness), and a CI job checks
+that this target continues to build. Because the plugin runs in a filesystem
+sandbox, it uses an empty runtime signature database; the CLI, by contrast, can
+include signatures scanned from neighboring `.sty` and `.cls` files. This is the
+one intentional difference from `badness format`.
 
-The root crate keeps `linter/`, `lsp/`, `project/`, `text/`, plus
+The root crate owns `linter/`, `lsp/`, `project/`, and `text/`, together with
 `incremental.rs` (salsa), `config.rs`, `cli.rs`, `completion.rs`, and
 `file_discovery.rs`. It re-exports the member crates at their old module paths
-through shim modules, so `src/parser.rs` is one
-`pub use badness_parser::parser::*;` line and callers keep writing
-`crate::parser::…`. Two modules are real bridges rather than shims:
+through small shim modules. For example, `src/parser.rs` is just
+`pub use badness_parser::parser::*;`, which lets existing callers continue to
+use `crate::parser::…`. Two modules are genuine bridges rather than shims:
 `src/formatter.rs` holds the `check` batch driver and the disk-backed
 `format_file_with_packages` entries, and `src/semantic.rs` holds `load`.
 
 ## The BibTeX side
 
-`.bib` files get their own pipeline in `bib/`, a sibling of `parser/` rather
-than a mode of it. It is built on the same lossless rowan CST and the same flat
-event stream, but has its own grammar, `SyntaxKind`, `BibLang` marker, lexer,
-parser, tree builder, typed AST, formatter, linter, semantic layer, completion,
-and outline. The invariants below apply to it unchanged.
+BibTeX is not implemented as a mode of the LaTeX parser. Instead, `.bib` files
+have a parallel pipeline in `bib/`. It uses the same basic architecture—a
+lossless rowan CST built from a flat event stream—but defines its own grammar,
+`SyntaxKind`, `BibLang` marker, lexer, parser, tree builder, typed AST,
+formatter, linter, semantic layer, completion, and outline support. Unless a
+section says otherwise, the invariants in this document apply equally to both
+pipelines.
 
 ### `%` comments in `.bib`
 
-BibTeX's two readers disagree about `%`, so we had to pick one. Classic `bibtex`
-(0.99d) has no comment syntax at all and rejects a `%` inside an entry;
-**biber**'s reader (btparse) ends a comment at the newline and resumes parsing.
-Badness follows biber, as the rest of the bib layer does (`bib_fields.json`
-tracks biblatex's `blx-dm.def`) — verified by compiling both readings.
+There are two plausible ways to interpret `%` in a bibliography, and the major
+BibTeX implementations disagree. Classic `bibtex` 0.99d has no comment syntax
+and rejects `%` inside an entry. Biber's btparse reader, on the other hand,
+treats it as a comment that ends at the next newline and then resumes parsing.
+Badness follows biber, consistently with the rest of its BibLaTeX-oriented
+support (`bib_fields.json`, for example, tracks `blx-dm.def`). We verified the
+difference by compiling examples with both tools.
 
-The context-dependence is the interesting part: `%` is a comment between a value
-and the following `,`, but ordinary text inside a braced or quoted value
-(`title = {50% off}` keeps the `%`). So the **lexer stays context-free** — `%`
-is a bare `PERCENT` token wherever it appears — and the **grammar** decides,
-wrapping `%` … end-of-line in a `COMMENT` node at exactly the positions where it
-skips trivia inside an entry (before a field name, `=`, `#`, `,`, the closer). A
-`BRACE_GROUP`, a `QUOTED` string, an `@comment` body, and top-level junk never
-call that skip, so a `%` there stays an ordinary token. This mirrors the LaTeX
-side's split, where brace *structure* is likewise the grammar's job, not the
-lexer's.
+The difficulty is that the meaning of `%` depends on context. It begins a
+comment between a value and the following comma, but remains ordinary text
+inside a braced or quoted value: `title = {50% off}` keeps the percent sign. The
+lexer therefore stays context-free and always emits a bare `PERCENT` token. The
+grammar decides whether that token begins a comment. At positions where it skips
+trivia inside an entry—before a field name, `=`, `#`, `,`, or the closing
+delimiter—it wraps `%` through the end of the line in a `COMMENT` node. Braced
+groups, quoted strings, `@comment` bodies, and top-level junk never take that
+path, so `%` remains an ordinary token there. This is the same division of
+responsibility used by the LaTeX parser, where the grammar rather than the lexer
+recognizes brace structure.
 
 texlab's bib parser models no comment at all, so this is a recorded deliberate
 deviation in `bib_parse_compat_allowlist.toml`, not a gauge regression.
 
-A `%` *inside* a value is where the two languages collide: BibTeX passes it
-through as an ordinary character, and the LaTeX that finally typesets the value
-reads it as a comment. So the value's line breaks are content, and value reflow
-refuses any value carrying an unescaped `%` (guard 5 in `lower_value_reflowed`)
-and emits it byte-exact. No CST oracle can catch this — joining two lines there
-is byte-legal and typeset-wrong.
+A `%` inside a value exposes an awkward boundary between the two languages.
+BibTeX passes it through as an ordinary character, but LaTeX later interprets it
+as a comment while typesetting the value. Line breaks in such a value are
+therefore significant. `lower_value_reflowed` refuses to reflow any value with
+an unescaped `%` and emits it byte for byte. A CST oracle cannot detect this
+mistake: joining the lines is syntactically lossless, yet changes the typeset
+result.
 
-The formatter re-emits every comment: one that **shares a line** with the field
-before it rides that field's line (the bib analog of the LaTeX rule that a
-trailing comment is never relocated), and every other one binds **forward** to
-the field it precedes (decision #9) and prints on its own line above it. Binding
-to a *field* rather than an offset is what keeps a comment attached through the
-canonical field sort. A comment past the last field prints above the closing
-delimiter; a `@string`/`@preamble`/field-less entry carrying one has no line to
-put it on, so that whole block is emitted verbatim rather than losing it. Both
-rules read only comment own-line-ness, which the formatter preserves, so the
-placement is a fixed point.
+The formatter always re-emits comments. A comment sharing a line with the
+previous field stays on that line, just as a trailing LaTeX comment is never
+relocated. Other comments bind forward to the field they precede and appear on
+their own line above it. Binding to a field rather than a byte offset keeps the
+comment attached when fields are sorted canonically. A comment after the final
+field appears above the closing delimiter. If an `@string`, `@preamble`, or
+field-less entry has no suitable line on which to place a comment, the formatter
+preserves the whole block verbatim instead of risking data loss. These rules
+inspect only whether a comment is on its own line, a property the formatter
+itself preserves, so a second formatting pass makes the same decision.
 
 ## Inputs and configuration
 
@@ -236,23 +256,26 @@ primary safety mechanism; shape gates remain the ultimate protection.
 Declared entries override scanned and built-in tiers. That is intentional: a
 declaration is an explicit correction from the project author.
 
-## Two layers
+## Syntax and semantics
 
-The syntax layer is a generic CST. By default, it does not know command meaning.
-
-The semantic layer is a signature database (curated built-ins, CWL-derived data,
-and scanned definitions). It carries arity, verbatim behavior, sectioning, and
+Badness deliberately separates syntax from semantics. The syntax layer is a
+generic CST and, by default, knows nothing about what a command means. The
+semantic layer enriches that tree with a signature database assembled from
+curated built-ins, CWL-derived data, and definitions scanned from source. This
+layer describes properties such as arity, verbatim behavior, sectioning, and
 argument content kinds.
 
-The boundary is an admission test, not a hard wall. Parser-visible semantic
-facts are allowed only when both are true:
+This is not an absolute wall: a small number of semantic facts may influence
+parsing when they satisfy both of the following conditions:
 
 1. The source is curated or explicitly declared.
 2. A wrong fact can be falsified from text shape and demoted by a gate.
 
-Routing and pairing facts pass this test. Generic arity facts do not: wrong
-arity can still produce byte-identical attachment, which slips past syntax
-oracles. That is why arity stays in semantics for generic LaTeX.
+Routing and pairing facts meet this test because the source can disprove them.
+Generic arity does not. An incorrect arity can produce a different attachment
+while remaining byte-for-byte lossless, so the usual syntax oracles cannot
+detect the mistake. For generic LaTeX, arity therefore belongs in the semantic
+layer.
 
 `ContentKind::Keyval` is the most sensitive semantic claim because it can affect
 typeset output. It is curated and validated conservatively, since it licenses
@@ -270,9 +293,10 @@ output.
 
 ### Sanctioned lexer modes
 
-What we do handle is a bounded, growing set of patterns recognizable from static
-shape alone. They are deliberately conservative: when in doubt, a construct
-stays generic. The catalog:
+Badness does recognize a bounded, gradually growing set of patterns from static
+source shape. Recognition is deliberately conservative: when the evidence is
+insufficient, the parser leaves the construct generic. The supported patterns
+fall into the following categories:
 
 - **Letter modes.** `\makeatletter` makes `@` a letter; `\ExplSyntaxOn` and the
   `\ProvidesExpl*` declarations open expl3, where `_` and `:` are letters. The
@@ -337,34 +361,37 @@ environment alias pairs only when its closer is positively located. All four
 degrade to a plain token with no diagnostic, because parser diagnostics gate the
 formatter and so must be high precision.
 
-The `\begin` gate runs on the shared batch driver as `EnvGate`, and it is the
-first *demotion* gate there, so its policy reads inverted: the located "closer"
-is the escaping `}`, `Some` demotes the environment and `None` keeps it, and
-running out of file is not an escape — that is what keeps the
-unclosed-environment diagnostic firing on a forgotten `\end`. Two consequences
-follow. A stray `}` closes rather than refutes, the same token event the
-positive gates read as a refusal. And a math delimiter is not an anchor at all:
-for a positive gate, declining behind one is the conservative direction, while
-here it would *keep* an environment the scan cannot vouch for. The gate's two
-per-opener pre-checks — the enclosing `group_depth`, and the `.dtx` doc-margin
-exemption — are walk state rather than scan state, so they are applied per query
-and never stored in a batch.
+The `\begin` gate runs on the shared batch driver as `EnvGate`. Unlike the
+positive pairing gates, it is a *demotion* gate, so its answers have the
+opposite sense: finding an escaping `}` demotes the environment, while finding
+none keeps it. Reaching end of file does not count as an escape, which preserves
+the useful unclosed-environment diagnostic when an author forgets `\end`.
 
-The two **math** gates (`DollarGate`, `DelimMathGate`) run on the same driver,
-and for the uniformity rather than for speed: they are *single-entry*, opening
-no nested entry, so a batch settles its seed and nothing else. That is not a
-limitation but the shape of the problem — a delimiter whose closer is reachable
-swallows every opener up to it, so there is never a same-frame neighbor left to
-settle. Four policies invert with them. A `}` refuses unconditionally, where the
-pairing gates refuse only when a group actually encloses the opener, because the
-parse they guard bails at any unbalanced `}`. A foreign math delimiter is
-ordinary content — for the `$` gate it *is* the closer. Environments count at
-every brace depth, since a math body descends into a group and keeps parsing
-environments there. And the closer needs no environment balance, since a
-delimiter ends the body wherever it sits. The `$` gate is also the one gate that
-runs *unmemoized*: a demoted `$$` re-enters on its second `$`, asking a
-different question about the same token index under the same walk state, which a
-slot keyed on the walk state alone would answer from the first query's verdict.
+This inversion has two practical consequences. A stray `}` closes the scan
+instead of refuting it, even though positive gates treat the same event as a
+reason to decline. Math delimiters are not anchors either. A positive gate can
+safely decline when it encounters one, but doing so here would retain an
+environment that the scan cannot justify. Finally, the enclosing `group_depth`
+and the `.dtx` documentation-margin exemption belong to the parser's walk state,
+not the scan state. They are checked separately for each opener rather than
+stored in the batch.
+
+The two math gates, `DollarGate` and `DelimMathGate`, use the same driver for
+consistency rather than speed. They are *single-entry* gates: a batch settles
+only its seed and opens no nested entry. This follows naturally from the
+grammar. Once a reachable delimiter claims its closer, it also consumes every
+potential opener before that closer, leaving no neighboring opener in the same
+frame to settle.
+
+Their policies differ from the pairing gates in four ways. An unbalanced `}`
+always causes refusal, matching the parser walk they guard. A different kind of
+math delimiter is ordinary content (and, for `DollarGate`, another `$` may be
+the closer). Environments are counted at every brace depth because math parsing
+continues to recognize them inside groups. The closing delimiter itself does not
+require balanced environments, since it ends the math body wherever it appears.
+`DollarGate` is also the only gate that is not memoized: after a `$$` is
+demoted, parsing resumes at its second `$` and asks a genuinely different
+question at the same token index and walk state.
 
 The `\left…\right` gate (`LeftRightGate`) is the last to join, and the only one
 whose entries **stack** rather than count. Every other gate models its nesting
@@ -402,26 +429,27 @@ model. A per-opener bracket scan counts the `]`s *owed* to the command-abutting
 that claim countdown **is** the driver's nested-opener stack once an opener is
 defined as a command-abutting `[`, since closer matching is LIFO either way.
 
-What is new is that both of the family's anchors are depth-**blind**: a
-`\begin`/`\end` refuses rather than counts (an optional never legitimately spans
-an environment, so either half means a runaway `[`), and it and the paragraph
-break fire at any brace depth. Both follow from the walk they guard: `optional`
-bails wherever the cursor stands, and a gate stricter *or* looser than its parse
-is a bug.
+The distinctive feature of this family is that both anchors are depth-**blind**:
+a `\begin`/`\end` refuses rather than counts (an optional never legitimately
+spans an environment, so either half means a runaway `[`), and it and the
+paragraph break fire at any brace depth. Both follow from the walk they guard:
+`optional` bails wherever the cursor stands, and a gate stricter *or* looser
+than its parse is a bug.
 
-Two things are the in-math gate's own. A `$` there is read from the enclosing
-math's *flavor*, which is walk state and so rides the batch's memo key: inside
-`\[…\]` a `$` opens a genuine nested inline region, so a balanced `$…$` in the
-bracket is **transparent** — the entries' own openers and closers stop counting
-until the matching `$`, and everything else reads on — while inside `$…$` TeX
-cannot nest one, so the first `$` at the bracket's own level is that math's
-closer and refuses. And the gate is stricter than the `optional` bail in two
-preserved respects: its `\begin`/`\end` anchor carries no `in_macro_code`
-filter, and a chunk-unmatched brace is group structure to it rather than a plain
-token. Both only ever decline to attach. The second is arguably the *faithful*
-reading — `optional` itself bails at any `R_BRACE` without consulting
-`plain_braces`, so its two siblings, which do consult it, are the loose ones —
-but unifying either way moves verdicts and is its own commit.
+The in-math gate adds two rules of its own. First, it interprets `$` according
+to the enclosing math's *flavor*, which belongs to the walk state and therefore
+forms part of the batch's memoization key. Inside `\[…\]` a `$` opens a genuine
+nested inline region, so a balanced `$…$` in the bracket is **transparent** —
+the entries' own openers and closers stop counting until the matching `$`, and
+everything else reads on — while inside `$…$` TeX cannot nest one, so the first
+`$` at the bracket's own level is that math's closer and refuses. And the gate
+is stricter than the `optional` bail in two preserved respects: its
+`\begin`/`\end` anchor carries no `in_macro_code` filter, and a chunk-unmatched
+brace is group structure to it rather than a plain token. Both only ever decline
+to attach. The second is arguably the *faithful* reading — `optional` itself
+bails at any `R_BRACE` without consulting `plain_braces`, so its two siblings,
+which do consult it, are the loose ones — but unifying either way moves verdicts
+and is its own commit.
 
 The `macrocode` gate keeps one divergence of its own: it is the one bracket gate
 the batch cannot make linear, single-entry by policy, so a chunk of `\cmd[`
@@ -447,28 +475,24 @@ failure.
 
 ### Environment aliases
 
-Badness can infer environment aliases from the file's own definitions
-(`\bea ... \eea` standing in for `\begin{eqnarray} ... \end{eqnarray}`), and it
-can also receive aliases from [declarations](#declarations) (issue #109).
+Badness can infer environment aliases from definitions in the current file. For
+example, it can recognize `\bea ... \eea` as shorthand for
+`\begin{eqnarray} ... \end{eqnarray}`. Projects may also provide aliases
+explicitly through [declarations](#declarations).
 
-Important boundaries:
+Inference remains deliberately local and conservative. The parser does not
+import aliases from neighboring package files, and the target environment's
+behavior must come from the curated built-ins. An alias for only one delimiter
+is still useful: an alias opener may pair with a literal closer, and a literal
+opener may pair with an alias closer.
 
-- Inference is file-local. Aliases from sibling package files are not used by
-  the parser.
-- Alias admission is conservative: target behavior must come from curated
-  built-ins, and alias pairing must stay structurally safe.
-- One side is enough (issue #117): an alias opener can pair with a literal
-  closer and vice versa.
-
-Implementation highlights:
-
-- Alias closers and literal closers are indexed separately, then unified by a
-  shared target lookup.
-- Alias openers are excluded while names are being defined (`\def`, `\let`,
-  etc.), so definitions do not accidentally pair with each other.
-- Pairing is a positive gate: if no reachable closer is found, the opener is
-  demoted.
-- The gate runs on the shared batch driver to avoid per-opener quadratic scans.
+Internally, alias and literal closers have separate indexes but share a target
+lookup. The parser ignores potential alias openers while processing definitions
+such as `\def` and `\let`, preventing the definitions themselves from pairing
+with one another. Actual pairing uses a positive shape gate: if the scan cannot
+find a reachable closer, the opener falls back to an ordinary command. As with
+the other gates, the shared batch driver avoids a separate, potentially
+quadratic scan for every opener.
 
 Downstream behavior is resolved from the parsed node, not raw spelling. That
 keeps `\begin{bea}` distinct from a command alias `\bea` unless the node itself
@@ -483,13 +507,12 @@ argument-taking aliases) in exchange for parse safety.
 
 ### The conditional gate
 
-The parser groups `\if … \else/\or … \fi` into a `CONDITIONAL` node with
-positional branches. This gives formatter and linter a stable structural extent
-for the construct.
-
-What the node intentionally does **not** model is the exact test-body boundary.
-TeX conditional tests are scanner-driven and not statically reliable enough for
-a separate head/body split.
+When it can locate a complete conditional, the parser groups
+`\if … \else/\or … \fi` into a `CONDITIONAL` node with positional branches. This
+gives the formatter and linter a stable extent for the construct. The node does
+not try to identify an exact boundary between the test and its body: TeX's
+conditional tests are scanner-driven, and static analysis cannot locate that
+boundary reliably enough to put it in the syntax tree.
 
 Recognition uses a curated opener model from `parser::conditional` (shared with
 the linter index), including exclusions for `if*` macro families and declaration
@@ -500,15 +523,16 @@ levels (brace/environment/math), with `macrocode` frame boundaries respected.
 This prevents the scan from promising closers the structural walk cannot
 actually consume.
 
-Important invariant: the walk is bounded by the located closer, but it may close
-earlier if nested openers are demoted during re-gating.
-`ast::Conditional::closer` is therefore fallible by design.
+The located closer bounds the parser walk, but nested openers may be demoted
+when the parser applies their gates again. In that case the walk can finish
+earlier than the initial scan predicted. For this reason,
+`ast::Conditional::closer` is intentionally fallible.
 
 For performance, conditional decisions run through the shared batch gate driver
 (`Parser::gate_batch`) instead of per-opener scans. Policy differences remain
 explicit per gate.
 
-Behavioral differences vs environment pairing are intentional:
+Conditionals differ from environment pairing in a few important respects:
 
 - EOF without closer demotes conditionals.
 - No `.dtx` doc-margin exemption is applied.
@@ -587,18 +611,21 @@ chunk-plain brace set and the frame itself. Bounds that move without changing
 pairing (an alias closer) filter the answer at query time instead of
 invalidating the table.
 
-This landed through a staged migration. Mis-attachment is byte-invisible — a
-wrong tree is still lossless and idempotent — so before any consumer flipped, a
-migration oracle diffed grammar attachment against `semantic::expl3`'s
-independent consumption over the gate corpora: 67 thousand statement-leading
-heads across 265 files, triaged to zero disagreements outside the benign class
-where greed had over-attached trailing material onto a consumed argument. The
-corpus fixtures are the net since, and the expl3 regions are allowlisted
-wholesale in the texlab gauge (texlab has no argspec model). `semantic::expl3`
-remains the statement-extent resolver and the underivable-head fallback — its
-consumption is shape-agnostic, so aborted heads and their greedy shapes still
-resolve — while the formatter's reconciliation consumers (the conditional
-two-path, the grouped-sibling re-segmentation) reduced to node reads.
+Mis-attachment is unusually hard to detect because it is invisible at the byte
+level: an incorrect tree can still be lossless and format idempotently. To
+validate this design, an independent oracle compared grammar attachment with
+`semantic::expl3` consumption across the gate corpora. It covered 67,000
+statement-leading heads in 265 files and found no unexplained disagreement; the
+remaining differences were cases where greedy parsing had harmlessly attached
+trailing material to an already consumed argument. Corpus fixtures now preserve
+that coverage. Expl3 regions are allowlisted in the texlab gauge because texlab
+has no argspec model.
+
+`semantic::expl3` still resolves statement extent and handles heads whose shape
+cannot be derived. Its consumption is independent of CST shape, so it also works
+for scans that abort and fall back to greedy attachment. Formatter code that
+once reconciled those two interpretations can now read the attached nodes
+directly.
 
 ### Trivia attachment
 
@@ -626,8 +653,8 @@ input.
 
 ### Incrementality
 
-Incrementality is salsa-first. Cross-file and cross-query incrementality is the
-v1 story. Intra-file reparse is layered on top of it, described under
+Salsa provides the first level of incrementality across files and queries.
+Intra-file reparsing is a separate optimization layered on top, described in
 [Intra-file reparse](#intra-file-reparse) below.
 
 Green nodes are stored in salsa, never red ones, because red trees are not
@@ -734,15 +761,15 @@ it has seen an opener, so the body lexed on its own comes back as ordinary
 prose. Rather than restate the catcode rules — a second copy of the lexer, to be
 kept in step forever — this tier relexes the leaf's **whole enclosing node with
 its delimiters**, which puts the isolated lexer into the capturing mode for
-free. Four legs. *Faithfulness*: the unedited fragment must relex to the
-fragment's own tokens, which is the evidence that these bytes do not depend on
-the state the file arrived in, and is what rules out a short-verb span, an
-`@`-bearing name under `\makeatletter`, and a name that only lexes whole inside
-an expl3 region, without enumerating any of them. *Locality*: a raw capture's
-bytes never reach the lexer's state updates, so it leaves the fragment in the
-state it entered — a claim about lexer code, and therefore a lexer test, with a
-counterexample beside it (a body that *breaks* its capture does move later
-lexing). *Termination*: a `VERB` carries its closer in its own text, but a
+free. This proof has four parts. First, *faithfulness*: the unedited fragment
+must relex to its original tokens. This demonstrates that the bytes do not
+depend on the state the file arrived in, and is what rules out a short-verb
+span, an `@`-bearing name under `\makeatletter`, and a name that only lexes
+whole inside an expl3 region, without enumerating any of them. *Locality*: a raw
+capture's bytes never reach the lexer's state updates, so it leaves the fragment
+in the state it entered — a claim about lexer code, and therefore a lexer test,
+with a counterexample beside it (a body that *breaks* its capture does move
+later lexing). *Termination*: a `VERB` carries its closer in its own text, but a
 `VERBATIM_BODY`'s `\end{name}` is a sibling, and an unterminated body runs to
 EOF — so the tier requires that `\end` to be inside the fragment, or the
 isolated scan would stop where the file's does not. *The sequence check*: the
@@ -771,8 +798,8 @@ for a node *before* the edit can flip because a closer *after* it appeared or
 vanished, which is why that tier is last and why it wants the precomputed closer
 map rather than per-opener scans.
 
-**The region tier (Phase 7).** Its two conservative slices reparse one top-level
-prose `PARAGRAPH` when an edit spans multiple direct prose leaves, and the two
+**The region tier.** Its two conservative slices reparse one top-level prose
+`PARAGRAPH` when an edit spans multiple direct prose leaves, and the two
 paragraphs around a blank-line seam when that seam is deleted or replaced. A
 faithfulness parse must first reproduce the old fragment under the base's exact
 `ParseCtx` and full-file `.dtx` implicit-expl signal. That admits unchanged
@@ -799,7 +826,7 @@ so they are a candidate partition rather than a proof. The precomputed closer
 map tracked under Parser is the natural dependency for making the gate proof
 cheap enough to use in a refusal-first tier. That widening is deliberately
 deferred until a measured workload justifies the new parser infrastructure; it
-is not required for the conservative Phase 7 tier to be complete.
+is not required for the current conservative region tier to be complete.
 
 **The salsa side channel.** `parsed_document` needs the previous text, tree,
 errors, and the edits since — none of which are salsa inputs, and none of which
@@ -812,17 +839,17 @@ Reading mutable state from inside a tracked query is sound *only* because of the
 invariant above: the query returns what `parse(text)` would whatever the cache
 holds, so a cold, stale, or evicted cache costs a parse.
 
-Three details are load-bearing. The store happens **last**, after every fallible
-step, so a panic or a salsa cancellation cannot leave a base whose text and tree
-disagree. The chain is drained by **consumed prefix count** rather than cleared,
-because a stage can land between the peek and the store — and it is drained
-**unconditionally**, even when it went unused, since a chain kept back because
-it failed to verify describes a transform out of a text the base no longer holds
-and would poison every later parse. And eviction has **two classes**: an entry
-is *hot* once it has shown it benefits, and cold entries go first, because a
-`package_graph` or `scope_signatures` sweep parses every workspace member and
-stores a base it can never hit — under a plain LRU one project-wide query would
-cost every open buffer its base.
+Three details are essential to this arrangement. The store happens **last**,
+after every fallible step, so a panic or salsa cancellation cannot leave a base
+whose text and tree disagree. The chain is drained by **consumed prefix count**
+rather than cleared, because a stage can land between the peek and the store —
+and it is drained **unconditionally**, even when it went unused, since a chain
+kept back because it failed to verify describes a transform out of a text the
+base no longer holds and would poison every later parse. And eviction has **two
+classes**: an entry is *hot* once it has shown it benefits, and cold entries go
+first, because a `package_graph` or `scope_signatures` sweep parses every
+workspace member and stores a base it can never hit — under a plain LRU one
+project-wide query would cost every open buffer its base.
 
 There is deliberately **no whole-text `diff_edit`** in the query. The language
 server knows the range it spliced and hands it over; re-deriving it costs more
@@ -840,13 +867,13 @@ Every other `upsert_file` site — `didOpen`, the push-mode re-lint sweep, sibli
 seeding, a watched-file re-read — stages `None`, so the pairing needs no
 exceptions.
 
-Two details, both about *after*. The stage follows the write because
+The ordering matters in two places. First, staging follows the write because
 `upsert_file`'s `&mut db` is what proves no analyze is reading: a chain staged
 ahead of the text it describes could be peeked by an in-flight
-`parsed_document`, which would fail to verify it, full-parse, and drain it. And
-it is staged even when `upsert_file` skips its write, because the chain is
-anchored at the *base*, not at the db text — a buffer that round-trips back to
-what salsa holds still took a transform to get there.
+`parsed_document`, which would fail to verify it, perform a full parse, and
+drain it. Second, the chain is staged even when `upsert_file` skips its write,
+because it is anchored at the *base*, not at the db text — a buffer that
+round-trips back to what salsa holds still took a transform to get there.
 
 **How it is held.** A `#[cfg(debug_assertions)]` oracle compares every
 successful reparse against a full parse, and every tier returns through a single
@@ -891,16 +918,19 @@ wrappers would only obscure. It adopts wrappers for field access alone.
 
 ## The formatter
 
-The formatter is the sole authority on layout. It lowers the CST into a
-Wadler/Prettier-style `Doc` IR, and a printer lays that IR out under a
-flat-or-break fit model.
+The formatter alone decides how a document should be laid out. It first lowers
+the CST into a Wadler/Prettier-style `Doc` intermediate representation. A
+separate printer then chooses between flat and broken forms according to the
+available width. Keeping these steps separate lets lowering describe the
+possible layouts without committing to a particular line break too early.
 
 ### It is whitespace-only
 
-The layout engine changes trivia and nothing else: whitespace, newlines,
-comments, and `.dtx` margins and guards. It never inserts, deletes, or rewrites
-a non-trivia token. Mechanically, each maximal run of whitespace and newline
-trivia is replaced by a break primitive, and the printer computes indentation.
+The layout engine may change trivia—whitespace, newlines, comments, and `.dtx`
+margins and guards—but it never inserts, removes, or rewrites a non-trivia
+token. In the usual case, lowering replaces each maximal run of whitespace and
+newline trivia with a break primitive, leaving the printer to choose the line
+break and indentation.
 
 Meaning-preserving content rewrites therefore do not live here. Stripping
 redundant braces around a single-token script (`x^{2}` → `x^2`) and rewriting
@@ -954,27 +984,26 @@ delimited-group block residue on `spans_multiple_lines` — would take a widened
 gap, and each owes a written fixed-point argument showing that every layout it
 can emit re-reads to itself.
 
-The command-only-line residue is the newest of those, and the only one living
-inside the default `Reflow`. Curated block commands carry a positive
-`CommandSig::block` property and are laid out as block-level statements without
-consulting trivia, so what the rule still decides is the authored break around a
-command whose block-ness no signature tier can know — an un-signatured or
-scanned-definition `\mymacro` on its own line — plus block commands glued to
-adjacent content. Retiring that would glue every such authored line into the
-paragraph fill: a policy change, not a fix. So the residue is sanctioned as Tier
-2 on the argument written at `line_is_command_only`: the rule is
-preservation-only, hardening gaps that already hold a newline and never writing
-or moving a break, so a kept break re-reads to itself in place, and a fill break
-it hardens on the next pass — a width wrap that stranded a command alone on a
-printed line — coincides with the break the first-fit fill chose, which refills
-identically around a hard stop. The cost is by design: `--checks trivia-strict`
-still reports these shapes, because preserving the authored break *is* the
-information the rule reads. One scope limit keeps the residue honest: it does
-not fire inside a signature-proven prose *argument* body
-(`ReflowKind::ProseArg`), where width alone owns the layout — preserving a
-command-only line there mints a forced break only pass 2 can see, and that bit
-leaks upward through every `contains_forced_break` reader, flipping the
-enclosing group between its inline and block forms across passes.
+The command-only-line rule is the only such exception inside the default
+`Reflow` mode. Curated block commands carry a positive `CommandSig::block`
+property and are laid out as block-level statements without consulting trivia,
+so what the rule still decides is the authored break around a command whose
+block-ness no signature tier can know — an un-signatured or scanned-definition
+`\mymacro` on its own line — plus block commands glued to adjacent content.
+Retiring that would glue every such authored line into the paragraph fill: a
+policy change, not a fix. So the residue is sanctioned as Tier 2 on the argument
+written at `line_is_command_only`: the rule is preservation-only, hardening gaps
+that already hold a newline and never writing or moving a break, so a kept break
+re-reads to itself in place, and a fill break it hardens on the next pass — a
+width wrap that stranded a command alone on a printed line — coincides with the
+break the first-fit fill chose, which refills identically around a hard stop.
+The cost is by design: `--checks trivia-strict` still reports these shapes,
+because preserving the authored break *is* the information the rule reads. One
+scope limit keeps the residue honest: it does not fire inside a signature-proven
+prose *argument* body (`ReflowKind::ProseArg`), where width alone owns the
+layout — preserving a command-only line there mints a forced break only pass 2
+can see, and that bit leaks upward through every `contains_forced_break` reader,
+flipping the enclosing group between its inline and block forms across passes.
 
 The last Tier-1 reader — the `Opaque`-group `spans_multiple_lines` choice, with
 `lower_optional`'s fallbacks to the same — is retired. Under `Reflow` a brace
@@ -1097,22 +1126,22 @@ byte-identically to the pre-statement layout.
 
 Breaks *inside* a statement come from the **TikZ unit model**
 (`semantic::tikz::statement_glue`) — the vocabulary the extent node cannot
-carry, held semantic-side per decision #2's admission test: `(a)` as a
-coordinate versus a node-name reference versus prose has no text-shape demotion,
-so a wrong reading could not be gated in the grammar, while here it degrades to
-a worse break choice, never a wrong tree (the same staging expl3 went through
-before its attachment migration). The model is a glue map, not a grammar: for
-each authored gap between a statement's top-level elements, one verdict —
-unit-internal (a single space, never a break) or neutral. Its curated rules,
-each backed by a survey of \~6000 statements across pgf's own manual sources and
-a user corpus: a path operator binds forward (breaks land *before* operators,
-the \~3:1 idiom), `at` binds both sides (split from its coordinate 5 times in
-3103 continuation lines), a coordinate binds its operation and an operation its
-argument (`(6,6) circle (3)` never splits), a loose `[…]` options run glues
-except after a comma (the keyval entry convention: `edge [loop above]` never
-splits an option mid-phrase, while a long keyval run still breaks per entry),
-and a comment suppresses every rule. Everything unrecognized — library verbs,
-axis prose — is neutral, i.e. today's layout. The wrap policy over the resulting
+carry. It remains in the semantic layer because `(a)` as a coordinate versus a
+node-name reference versus prose has no text-shape demotion, so a wrong reading
+could not be gated in the grammar, while here it degrades to a worse break
+choice, never a wrong tree (the same staging expl3 went through before its
+attachment migration). The model is a glue map, not a grammar: for each authored
+gap between a statement's top-level elements, one verdict — unit-internal (a
+single space, never a break) or neutral. Its curated rules, each backed by a
+survey of \~6000 statements across pgf's own manual sources and a user corpus: a
+path operator binds forward (breaks land *before* operators, the \~3:1 idiom),
+`at` binds both sides (split from its coordinate 5 times in 3103 continuation
+lines), a coordinate binds its operation and an operation its argument
+(`(6,6) circle (3)` never splits), a loose `[…]` options run glues except after
+a comma (the keyval entry convention: `edge [loop above]` never splits an option
+mid-phrase, while a long keyval run still breaks per entry), and a comment
+suppresses every rule. Everything unrecognized — library verbs, axis prose—is
+neutral and retains the ordinary layout. The wrap policy over the resulting
 units is a plain greedy fill (the user-corpus lean; Tantau mixes styles).
 
 One more claim rides the `statementBody` flag: whitespace *between* a picture
@@ -1141,11 +1170,12 @@ coordinate arithmetic. Merging the two waits on a signature DB reaching
 
 ### Reflow is safe by construction
 
-`WrapMode` used to be resolved per file extension, with `.tex` reflowing while
-`.sty`, `.cls`, and `.dtx` fell back to `Preserve`. That default is gone.
-Whether content is safe to reflow is a property of the content, not of the file
-name, and answering it by extension left `--wrap reflow` on a `.dtx` free to
-corrupt the document.
+Reflow safety cannot be inferred from a file extension. A `.sty` file may
+contain ordinary prose that is safe to reflow, while a `.tex` or `.dtx` file may
+contain structures whose whitespace is significant. Older versions selected
+`Reflow` for `.tex` and `Preserve` for `.sty`, `.cls`, and `.dtx`; that merely
+hid unsafe paths and still allowed an explicit `--wrap reflow` to corrupt a
+document.
 
 The safety is now structural, and every gate is independent of the wrap mode, so
 an explicit `--wrap reflow` is exactly as safe as any other mode. Every relayout
@@ -1313,11 +1343,11 @@ the first line may be normalized by placement, but interior bytes remain intact.
 
 ## The linter
 
-The linter reports diagnostics over the same lossless CST the formatter
-consumes, and like the formatter it is a pure function of the input plus shipped
-data. The user-facing catalog of shipped rules lives in the reference section
-([Linter Rules](../reference/linter-rules.md), [BibTeX Linter
-Rules](../reference/bib-linter-rules.md)), generated from each rule's own
+The linter reads the same lossless CST as the formatter. Like the formatter, it
+is a pure function of the input and data shipped with Badness; it does not
+depend on ambient machine state. The user-facing catalog of built-in rules lives
+in the reference section ([Linter Rules](../reference/linter-rules.md), [BibTeX
+Linter Rules](../reference/bib-linter-rules.md)), generated from each rule's own
 description and examples.
 
 ### Rules and dispatch
@@ -1377,11 +1407,11 @@ directives](#comment-directives) for the shared grammar.
 
 ## The language server
 
-The formatter is hermetic: its output is a function of the input plus shipped
-data. The language server is allowed more latitude, because navigation is
-inherently about the local environment. A runtime query of the TeX distribution
-feeding the *formatter* stays a non-goal; a read-only index or metadata feeding
-LSP navigation is sanctioned.
+The language server has a slightly different boundary from the formatter. The
+formatter is hermetic, but navigation necessarily depends on the user's local
+project and TeX installation. The LSP may therefore consult read-only indexes
+and metadata for editor features. That information must never flow back into
+formatting or change the syntax tree.
 
 The LSP is built on `lsp-server` and `lsp-types`, rust-analyzer's stack, rather
 than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
@@ -1534,25 +1564,30 @@ formatting and diffs the typeset output.
 
 ## Technology choices
 
-rowan for the CST, salsa for incremental queries,
-[smol_str](https://docs.rs/smol_str) for token text, [insta](https://insta.rs/)
-for snapshot tests, [annotate-snippets](https://docs.rs/annotate-snippets) for
-diagnostic rendering, and [`clap`](https://docs.rs/clap) for the CLI, with
-`build.rs` generating man pages, completions, and markdown.
+The main dependencies follow directly from the architecture. Rowan provides the
+lossless CST, while salsa manages incremental queries. Token text uses
+[smol_str](https://docs.rs/smol_str), and [insta](https://insta.rs/) supplies
+snapshot testing. Diagnostics are rendered with
+[annotate-snippets](https://docs.rs/annotate-snippets), and the CLI is built
+with [`clap`](https://docs.rs/clap). The root `build.rs` uses the clap model to
+generate manual pages, shell completions, and Markdown documentation.
 
 ## Non-goals
 
-No macro expansion, no TeX evaluator, no execution of primitives or `\def`
-semantics. Common `\newcommand`, `\newenvironment`, and xparse *signatures* may
-feed the semantic database, but they are extracted, never executed.
+Badness is not a TeX interpreter. It does not expand macros, execute primitives,
+or implement `\def` semantics. It may extract common `\newcommand`,
+`\newenvironment`, and xparse *signatures* into the semantic database, but it
+never executes those definitions.
 
-No general `\catcode` handling beyond the bounded patterns listed under
+For the same reason, Badness does not attempt general `\catcode` evaluation. It
+supports only the bounded, statically recognizable patterns listed under
 [sanctioned lexer modes](#sanctioned-lexer-modes).
 
-No typesetting. Badness never runs `latexmk`, `pdflatex`, or any other engine,
-and it never parses a `.synctex.gz`. Forward search *launches* a viewer, which
-is an outbound side effect but not a build: it is an explicit user action, and
-nothing it touches feeds back into the formatter or linter.
+Badness does not typeset documents. It never runs `latexmk`, `pdflatex`, or any
+other TeX engine, and it does not parse `.synctex.gz` files. Forward search is a
+narrow exception in the language server: in response to an explicit user action,
+it launches a viewer. That process is not a build step, and none of the
+information it touches flows back into the formatter or linter.
 
 The formatter never reads the environment. Its output is a function of the input
 plus shipped data, and it resolves local `.sty` and `.cls` files sitting next to

@@ -359,6 +359,7 @@ fn format_root(
         range,
         dtx_reflow_cache: &dtx_reflow_cache,
         dtx_margin_probe: false,
+        preserve_dtx_nested_layout: false,
         is_dtx: root
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -758,6 +759,9 @@ struct LowerCtx<'a> {
     /// floated margin is an emission detail that cannot change whether the reflow
     /// escapes the margin, so the probe simply keeps it.
     dtx_margin_probe: bool,
+    /// A structured `.dtx` documentation paragraph may normalize its margin
+    /// frames, but nested inline constructs must not synthesize unmargined lines.
+    preserve_dtx_nested_layout: bool,
     /// Whether the document carries any `.dtx` documentation margin at all — the
     /// cheap short-circuit for the no-`.dtx` majority, so gates that would
     /// otherwise walk back to the start of a physical line
@@ -853,6 +857,19 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     // the same directive reaches every *child* instead, and both the full and the
     // ranged path fall out of the one mechanism.
     if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
+        return Ir::verbatim(node.text().to_string());
+    }
+    if cx.preserve_dtx_nested_layout
+        && matches!(
+            node.kind(),
+            SyntaxKind::COMMAND
+                | SyntaxKind::GROUP
+                | SyntaxKind::OPTIONAL
+                | SyntaxKind::INLINE_MATH
+                | SyntaxKind::DISPLAY_MATH
+                | SyntaxKind::MATH
+        )
+    {
         return Ir::verbatim(node.text().to_string());
     }
     // A `.dtx` command that opens on a docstrip guard and absorbs later guard
@@ -1328,7 +1345,13 @@ fn lower_dtx_doc_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if dtx_doc_paragraph_reflows_safely(node, cx) {
         reflow_elements(node.children_with_tokens(), cx, ReflowKind::DtxProse)
     } else {
-        Ir::concat(lower_element_stream(node.children_with_tokens(), cx))
+        // Margin frames still normalize, but nested inline constructs stay
+        // opaque: a width break inside one would create an unmargined line.
+        let preserve = LowerCtx {
+            preserve_dtx_nested_layout: true,
+            ..cx
+        };
+        Ir::concat(lower_element_stream(node.children_with_tokens(), preserve))
     }
 }
 
@@ -1607,9 +1630,19 @@ impl<'a> LineBuilder<'a> {
     /// Commit the atom in progress (if any) as one atom of the current run.
     fn flush_atom(&mut self) {
         if !self.atom.is_empty() {
+            let text = std::mem::take(&mut self.atom_text);
+            // DTX prose owns wrapping only between atoms. Letting a nested group
+            // break inside one can split macro-like documentation at an arbitrary
+            // brace and synthesize margins that change the next pass's lowering.
+            let ir = if self.margin.is_some() {
+                self.atom.clear();
+                Ir::verbatim(text.clone())
+            } else {
+                Ir::concat(self.atom.drain(..))
+            };
             self.run.push(RunAtom {
-                ir: Ir::concat(self.atom.drain(..)),
-                text: std::mem::take(&mut self.atom_text),
+                ir,
+                text,
                 preferred_break_before: std::mem::take(&mut self.preferred_break_before_next),
             });
         }
@@ -1699,7 +1732,16 @@ impl<'a> LineBuilder<'a> {
             return;
         }
         let run = std::mem::take(&mut self.run);
-        let body = match self.render {
+        let body = self.render_run(run);
+        let segment = match self.margin {
+            Some(m) => Ir::margin_prefix(m, body),
+            None => body,
+        };
+        self.push_segment(segment);
+    }
+
+    fn render_run(&self, run: Vec<RunAtom>) -> Ir {
+        match self.render {
             RunRender::Fill => Ir::fill(run.into_iter().map(|a| a.ir)),
             RunRender::Stable { target } => {
                 let preferred: Vec<bool> = run
@@ -1710,12 +1752,7 @@ impl<'a> LineBuilder<'a> {
                 Ir::preferred_fill(run.into_iter().map(|a| a.ir), preferred, target)
             }
             RunRender::Sentence(profile) => render_sentences(run, profile),
-        };
-        let segment = match self.margin {
-            Some(m) => Ir::margin_prefix(m, body),
-            None => body,
-        };
-        self.push_segment(segment);
+        }
     }
 
     /// Emit the accumulated lines, interleaving the recorded separators.
@@ -8475,6 +8512,9 @@ fn line_is_command_only(elements: &[SyntaxElement], start: usize, cx: LowerCtx<'
         match element {
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::NEWLINE => break,
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => break,
+            SyntaxElement::Token(t) if cx.is_dtx && t.kind() == SyntaxKind::DOC_MARGIN => {
+                continue;
+            }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::WHITESPACE => continue,
             SyntaxElement::Node(n)
                 if n.kind() == SyntaxKind::COMMAND && !command_is_inline(n, cx) =>

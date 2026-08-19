@@ -31,6 +31,10 @@ const TEXLAB_KNOWN_DIVERGENT: &[&str] = &[
     // are plain data for badness, an unclosed math opener and an unmatched brace
     // for texlab.
     "char_constant.tex",
+    // A `$` in `\def` parameter text delimits an argument; it does not open math.
+    // Badness models that TeX syntax, while texlab lets the apparent math span
+    // swallow the replacement body and following definition (issue #129).
+    "def_dollar_delimiter.tex",
     // ltxdockit's `ltxexample`/`ltxcode` are curated verbatim-body envs (issue
     // #98); their bodies quote whole documents, so the `\begin{document}` and
     // stray `}` inside are data for badness, an unclosed env and an unmatched

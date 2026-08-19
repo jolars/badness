@@ -869,7 +869,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         && !inside_macrocode(node)
         && contains_indented_dtx_comment(node)
     {
-        return Ir::verbatim(node.text().to_string());
+        let padding = leading_indented_dtx_comment_padding(node)
+            .map(Ir::verbatim)
+            .unwrap_or(Ir::Nil);
+        return Ir::concat([padding, Ir::verbatim(node.text().to_string())]);
     }
     if dtx_doc_region(node, cx) {
         let virtual_doc = LowerCtx {
@@ -1083,6 +1086,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && is_alignment_env(node, cx)
+                && (!cx.in_dtx_doc_region || is_math_env(node, cx))
                 && !contains_doc_margin(node, cx) =>
         {
             return lower_aligned_environment(node, cx);
@@ -1115,6 +1119,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && !contains_doc_margin(node, cx)
+                && (!cx.in_dtx_doc_region || is_math_env(node, cx))
                 && body_has_top_level_ampersand(node) =>
         {
             return lower_aligned_environment(node, cx);
@@ -1431,26 +1436,37 @@ fn margin_starts_dtx_doc_region(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
         .is_some_and(|child| dtx_doc_region(&child, cx))
 }
 
-/// Whether `node` contains an ordinary own-line comment kept out of column zero
-/// by authored indentation. In `.dtx`, removing that indentation changes the
-/// token from `COMMENT` to `DOC_MARGIN`, so the enclosing layout unit is opaque.
+/// Whether `comment` is an ordinary own-line comment kept out of column zero by
+/// authored indentation. In `.dtx`, removing that indentation changes even a
+/// bare `%` from `COMMENT` to `DOC_MARGIN`, so the enclosing layout unit is
+/// opaque.
+fn is_indented_dtx_comment(comment: &SyntaxToken) -> bool {
+    comment.kind() == SyntaxKind::COMMENT
+        && comment
+            .prev_token()
+            .filter(|previous| previous.kind() == SyntaxKind::WHITESPACE)
+            .and_then(|whitespace| whitespace.prev_token())
+            .is_some_and(|previous| previous.kind() == SyntaxKind::NEWLINE)
+}
+
 fn contains_indented_dtx_comment(node: &SyntaxNode) -> bool {
     node.descendants_with_tokens()
         .filter_map(SyntaxElement::into_token)
-        .filter(|token| {
-            token.kind() == SyntaxKind::COMMENT
-                && token.text().strip_prefix('%').is_some_and(|body| {
-                    let body = body.trim_start();
-                    !body.is_empty() && !body.starts_with('%')
-                })
-        })
-        .any(|comment| {
-            comment
-                .prev_token()
-                .filter(|previous| previous.kind() == SyntaxKind::WHITESPACE)
-                .and_then(|whitespace| whitespace.prev_token())
-                .is_some_and(|previous| previous.kind() == SyntaxKind::NEWLINE)
-        })
+        .any(|comment| is_indented_dtx_comment(&comment))
+}
+
+/// Recover the indentation token that sits just outside an opaque node beginning
+/// with an indented `.dtx` comment. Generic gap lowering owns that token and would
+/// otherwise erase it before the node's verbatim bytes are emitted.
+fn leading_indented_dtx_comment_padding(node: &SyntaxNode) -> Option<String> {
+    let comment = node.first_token()?;
+    if !is_indented_dtx_comment(&comment) {
+        return None;
+    }
+    comment
+        .prev_token()
+        .filter(|previous| previous.kind() == SyntaxKind::WHITESPACE)
+        .map(|whitespace| whitespace.text().to_string())
 }
 
 fn inside_macrocode(node: &SyntaxNode) -> bool {
@@ -2002,6 +2018,37 @@ impl<'a> LineBuilder<'a> {
         self.push_segment(segment);
     }
 
+    /// Commit a reflow run as a hugging fill. A final inline construct whose IR
+    /// contains hard breaks can then keep its fitting first line beside the
+    /// preceding prose; the construct's remaining lines still break internally.
+    fn end_hug_line(&mut self) {
+        self.flush_atom();
+        if self.run.is_empty() {
+            return;
+        }
+        let atoms: Vec<Ir> = std::mem::take(&mut self.run)
+            .into_iter()
+            .map(|atom| atom.ir)
+            .collect();
+        let body = if atoms.len() == 1 {
+            atoms.into_iter().next().unwrap()
+        } else {
+            let mut parts = Vec::with_capacity(atoms.len() * 2 - 1);
+            for (index, atom) in atoms.into_iter().enumerate() {
+                if index > 0 {
+                    parts.push(Ir::Line);
+                }
+                parts.push(atom);
+            }
+            Ir::HugFill(parts.into())
+        };
+        let segment = match self.margin {
+            Some(margin) => Ir::margin_prefix(margin, body),
+            None => body,
+        };
+        self.push_segment(segment);
+    }
+
     fn render_run(&self, run: Vec<RunAtom>) -> Ir {
         match self.render {
             RunRender::Fill => Ir::fill(run.into_iter().map(|a| a.ir)),
@@ -2294,16 +2341,13 @@ fn reflow_elements_checked(
                     idx += 1;
                 }
             }
-            // A `GUARD` (`%<…>`) pins to column 0, so its line can never sit under
-            // the re-emitted `% ` margin: the two would collide (`%<package>% \def…`
-            // comments the guarded code out). Commit the guard's whole physical
-            // line as its own unmargined segment instead: the guard keeps its
-            // column-0 pin, and the margin resumes on the next margined line. When
-            // the line cannot be isolated (an element on it spans lines or forces a
-            // break), record the escape so the caller abandons the reflow.
-            SyntaxElement::Token(token)
-                if margin.is_some() && token.kind() == SyntaxKind::GUARD =>
-            {
+            // A `GUARD` (`%<…>`) pins its whole physical line to column 0. Commit
+            // that line as one segment under every reflow kind; otherwise two
+            // adjacent guarded commands can join, and the second `%<…>` becomes a
+            // trailing comment that swallows its command on the next parse. Under
+            // a `.dtx` prose margin the isolated segment is deliberately
+            // unmargined—the margin and guard would collide.
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::GUARD => {
                 if let Some(line) = collect_guard_line(&elements, &mut idx, cx) {
                     b.end_line();
                     b.push_segment(line);
@@ -2311,7 +2355,9 @@ fn reflow_elements_checked(
                     line_has_content = false;
                     continue;
                 }
-                b.note_margin_escape();
+                if margin.is_some() {
+                    b.note_margin_escape();
+                }
                 b.push_atom_piece(lower_loose_token(token, cx), token.text());
                 line_has_content = true;
                 line_all_commands = false;
@@ -2442,20 +2488,30 @@ fn reflow_elements_checked(
                         && is_margin_framed_macrocode(child))
                     .then(|| dtx_env_line_lead(child))
                     .flatten();
-                    if margin.is_none() && !b.atom.is_empty() {
-                        // The block is glued directly to the atom in progress
-                        // (`\newcommand\cls@hook{%`) — no whitespace, so the source
-                        // offered no break opportunity here, and this engine's own
-                        // rule is that adjacent non-whitespace elements form one
-                        // unbreakable atom. Extend that atom with the block instead
-                        // of breaking the run off onto a line of its own, then end
-                        // the line the block's own break already opened. Keyed on
-                        // adjacency alone — never on the line's composition, which
-                        // resets at every source newline and so would not survive a
-                        // trivia perturbation. Skipped under a `.dtx` margin, where
-                        // the escape route below applies instead.
+                    let hugs_preceding_prose = margin.is_none()
+                        && child.kind() == SyntaxKind::INLINE_MATH
+                        && line_has_content
+                        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg)
+                        && matches!(b.render, RunRender::Fill);
+                    if margin.is_none() && (!b.atom.is_empty() || hugs_preceding_prose) {
+                        // A directly glued block (`\newcommand\cls@hook{%`) had no
+                        // source break opportunity, so it extends the unbreakable
+                        // atom in progress. The one spaced admission is inline math
+                        // in running prose, whose opening fragment remains inline
+                        // through the explicit hugging-fill rule below. Both paths
+                        // are skipped under a `.dtx` margin, where a generated line
+                        // also needs physical framing.
                         b.push_atom_piece(ir, &child.text().to_string());
-                        b.end_line();
+                        if hugs_preceding_prose {
+                            // Inline math remains inline at its opening edge even
+                            // when protected comments force later lines. A hugging
+                            // fill measures only the math node's first line here,
+                            // moving it to the next line only when that prefix does
+                            // not fit beside the preceding prose.
+                            b.end_hug_line();
+                        } else {
+                            b.end_line();
+                        }
                     } else if let Some(lead) = frame_lead {
                         b.end_line();
                         b.push_segment(Ir::concat([lead, ir]));
@@ -2664,6 +2720,18 @@ fn is_margin_framed_macrocode(node: &SyntaxNode) -> bool {
         && is_margin_framed(node)
 }
 
+/// Whether an element is the explicit toggle that closes an expl3 region.
+fn is_expl_syntax_off_command(element: &SyntaxElement) -> bool {
+    let SyntaxElement::Node(command) = element else {
+        return false;
+    };
+    command.kind() == SyntaxKind::COMMAND
+        && command.first_token().is_some_and(|token| {
+            token.kind() == SyntaxKind::CONTROL_WORD
+                && expl_toggle(token.text()) == Some(ExplToggle::Off)
+        })
+}
+
 /// The byte-exact line lead of a margin-framed block opening a fresh source
 /// line: its preceding siblings walked backward are optional inline
 /// `WHITESPACE` then the line's `DOC_MARGIN`. Returns the lead re-lowered as
@@ -2726,6 +2794,32 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             && cx.in_expl3_region(elements[i].text_range().start()) == in_region
         {
             i += 1;
+        }
+        // The region ends at the `\ExplSyntaxOff` token, but a comment after
+        // inline whitespace still belongs to that physical line. Lend the
+        // comment to the expl3 run for layout only; the parser's region remains
+        // catcode-exact, while `lower_expl_code` keeps the comment trailing and
+        // prevents it from rebinding to the next command on the following pass.
+        if in_region
+            && elements[start..i]
+                .iter()
+                .rev()
+                .find(|element| !is_collapsible_trivia_element(element))
+                .is_some_and(is_expl_syntax_off_command)
+        {
+            let mut comment = i;
+            while let Some(SyntaxElement::Token(token)) = elements.get(comment)
+                && token.kind() == SyntaxKind::WHITESPACE
+                && !token.text().contains(['\r', '\n'])
+            {
+                comment += 1;
+            }
+            if matches!(
+                elements.get(comment),
+                Some(SyntaxElement::Token(token)) if token.kind() == SyntaxKind::COMMENT
+            ) {
+                i = comment + 1;
+            }
         }
         // The trailing half of the boundary-trivia rule above: trivia at the end
         // of a run also feeds the separator. Left inside the run, a preserved
@@ -6698,7 +6792,7 @@ fn lower_bracketed(
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
-    for element in node.children_with_tokens() {
+    for element in strip_virtual_dtx_framing(node.children_with_tokens(), cx) {
         match &element {
             SyntaxElement::Token(t) if t.kind() == open && matches!(open_ir, Ir::Nil) => {
                 open_ir = Ir::verbatim(t.text());
@@ -6756,6 +6850,18 @@ fn lower_bracketed(
             .and_then(SyntaxElement::as_token)
             .is_none_or(|t| !is_collapsible_trivia(t.kind()));
 
+    // Mirror the opener rule at the other edge. If the final body element was
+    // glued to a meaningful closer, inserting a line break before that closer
+    // would add a space token to the group. This is observable in ordinary text
+    // and in a `\def` replacement body. Proven keyval processors are exempt: the
+    // signature guarantees that surrounding entry whitespace is insignificant.
+    let close_glued = !keyval
+        && body_elements.last().is_some_and(|element| {
+            element
+                .as_token()
+                .is_none_or(|token| !is_collapsible_trivia(token.kind()))
+        });
+
     // A brace-group body under reflow is laid out as code-like statements: each
     // source line stays its own logical line, but an over-long one wraps to the
     // width instead of forcing the printer to break the innermost nested prose
@@ -6784,10 +6890,15 @@ fn lower_bracketed(
         // `Ir::indent` still indents the body's *interior* breaks one step, so
         // only the first line rides the opener (`{\aaa` / `␣␣\bbb`).
         let lead = if open_glued { Ir::Nil } else { Ir::hard_line() };
+        let trail = if close_glued {
+            Ir::Nil
+        } else {
+            Ir::hard_line()
+        };
         Ir::concat([
             open_ir,
             Ir::indent(Ir::concat([lead, body])),
-            Ir::hard_line(),
+            trail,
             close_ir,
         ])
     }
@@ -7019,7 +7130,10 @@ fn lower_segmented_group(
     // land unmargined — silently promoting documentation to live code. The old
     // lowering was safe by accident (it only ever broke an already-multi-line
     // bracket); a width-driven group has to say so.
-    if !cx.wraps_prose() || contains_doc_margin(node, cx) || doc_margin_opens_line(node, cx) {
+    if !cx.wraps_prose()
+        || (!cx.in_dtx_doc_region
+            && (contains_doc_margin(node, cx) || doc_margin_opens_line(node, cx)))
+    {
         // Tier-2 residue: under a mode that does not wrap prose (or on a `.dtx`
         // doc line) the pre-existing behaviour is kept byte for byte — block
         // form when the author broke the line, generic inline path otherwise.
@@ -7132,7 +7246,9 @@ fn segment_delimited_body(
     // tells [`push_entry_word`] a leading comma closes a real entry rather than an
     // empty one.
     let mut entry_open = false;
-    let mut iter = node.children_with_tokens().peekable();
+    let mut iter = strip_virtual_dtx_framing(node.children_with_tokens(), cx)
+        .into_iter()
+        .peekable();
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Token(t) if t.kind() == open_kind && matches!(open, Ir::Nil) => {
@@ -8452,9 +8568,10 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
 /// detection so a `+`/`-` with no left operand stays glued to its operand
 /// (`-x`, `2^{-5}`). Plain operand juxtaposition keeps its authored spacing (a
 /// gap collapses to one space, no gap stays tight). A `%` comment forces a hard
-/// line break; a trailing break (a comment at the body's end) is emitted rather
-/// than trimmed so the caller's closing delimiter lands on its own line, while a
-/// trailing space is dropped.
+/// line break, and an authored own-line comment remains own-line under every wrap
+/// mode so its association cannot change. A trailing break (a comment at the
+/// body's end) is emitted rather than trimmed so the caller's closing delimiter
+/// lands on its own line, while a trailing space is dropped.
 ///
 /// With `preserve_newlines` ([`MathWrap::Preserve`]) a trivia run spanning at
 /// least one newline becomes a hard break instead of a space — the author's
@@ -8476,6 +8593,7 @@ fn lower_math_seq(
     let mut pending_space = false; // authored whitespace since the last atom
     let mut pending_break = false; // a comment forced a hard line break
     let mut pending_newline = false; // a preserved authored line break
+    let mut pending_comment_own_line = false; // the next comment must retain its association
     let mut iter = strip_virtual_dtx_framing(elements, cx)
         .into_iter()
         .peekable();
@@ -8489,10 +8607,11 @@ fn lower_math_seq(
                 if started {
                     pending_space = true;
                     pending_newline = preserve_newlines && gap.newlines > 0;
+                    pending_comment_own_line = gap.newlines > 0;
                 }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => {
-                if pending_newline {
+                if pending_break || pending_newline || pending_comment_own_line {
                     out.push(Ir::hard_line());
                 } else if pending_space {
                     out.push(Ir::verbatim(" "));
@@ -8501,6 +8620,7 @@ fn lower_math_seq(
                 started = true;
                 pending_space = false;
                 pending_newline = false;
+                pending_comment_own_line = false;
                 pending_break = true;
             }
             other => {
@@ -8531,6 +8651,7 @@ fn lower_math_seq(
                 started = true;
                 pending_space = false;
                 pending_newline = false;
+                pending_comment_own_line = false;
                 pending_break = is_line_break;
                 prev_role = role;
             }

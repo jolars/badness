@@ -52,14 +52,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     recorded deferral reason — a `CONDITIONAL` node would contend with the
     segmentation's layout ownership — is retired.
 
-- [ ] **Trailing comment after `\ExplSyntaxOff` relocates and rebinds**
-  (pre-existing, surfaced by the migration triage): formatting
-  `\ExplSyntaxOff % comment` moves the comment to its own line, where the next
-  parse binds it as the following construct's `DOC_COMMENT` and changes that
-  construct's layout — an idempotency break at default settings. Reduced from
-  `array-2024-06-01.sty` lines 380–392; reproduces identically on the
-  pre-migration tree, so it is the trailing-comment-never-relocates rule
-  failing at the region boundary, not an attachment fact.
+- [x] ~~**Trailing comment after `\ExplSyntaxOff` relocates and rebinds.**~~
+  **Landed.** The region splitter now lends a same-line comment after an explicit
+  `\ExplSyntaxOff` to the preceding expl3 run for layout without expanding the
+  parser's catcode region. The expl3 comment rule therefore keeps it trailing,
+  rather than moving it to its own line and rebinding it as the following
+  construct's `DOC_COMMENT`. Reduced from `array-2024-06-01.sty` lines 380–392
+  and covered by `issue_132_expl_off_comment_definition`.
 
 - [x] ~~**Conditional block structure (`\if…\else…\or…\fi`): a gated `CONDITIONAL`
   node.**~~ **Landed.** The `latexindent` corpus's largest uncovered construct
@@ -152,25 +151,27 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   split only after the issue fixtures, mathtools smoke scan, and `.dtx` invariant
   corpus prove whitespace-only output and idempotence.
 
-- [ ] **The block form's closer break lacks the `open_glued` mirror.**
-  `lower_bracketed` guards the *open* side — no break after a glued `{`, because
-  the synthesized end-of-line reads as a space token TeX typesets — but emits an
-  unconditional hard line before the *close* delimiter, so an author-glued
-  `beta}` comes out `beta\n}`: a space token before the group closes (a trailing
-  interword space in horizontal mode, a trailing space in a `\def` replacement
-  text). Same on the bracket side for a textual optional's block form (`}]` →
-  `}\n]`, visible in `optional_block_decline_deterministic`). Invisible to every
-  oracle by construction: trivia to the CST checks, and the perturbation
-  generator never touches a glued junction because there is no gap there.
-  Surfaced reviewing `group_blank_line_keeps_block`. The fix is a `close_glued`
-  mirror (last body element not collapsible trivia ⇒ keep `}` glued to the last
-  body line), but it reshapes every multi-line block group corpus-wide — every
-  `…}`-glued definition body — so it needs its own baseline re-record, a
-  `tests/typeset/` case pinning the space-token claim, and a check that the
-  Tier-2 fixed-point argument on `spans_multiple_lines` still holds (a glued
-  closer's block form no longer ends with a newline before the closer, so the
-  "output re-reads multi-line" clause must rest on the *lead* break or the body
-  instead).
+- [ ] **Restore source-column alignment for tables in virtual `.dtx`
+  documentation.** Issue #132 conservatively keeps non-math alignment
+  environments on the generic path: physical `DOC_MARGIN` framing made pass one
+  decline the grid, while the normalized second pass admitted it and introduced
+  large padding, breaking idempotence. Make `build_alignment_grid` consume the
+  same recursively margin-stripped virtual stream on every pass, measure in the
+  correct margin-prefixed column context, and reapply documentation margins only
+  after grid layout. The `issue_132_dtx_tabular` fixture should then gain aligned
+  source columns while remaining whitespace-only and idempotent; retain the
+  virtual math-grid coverage from issue #138 and rerun the full `.dtx` invariant
+  corpus plus the pinned latex2e smoke scan.
+
+- [x] ~~**The block form's closer break lacks the `open_glued` mirror.**~~
+  **Landed.** `lower_bracketed` now preserves a source-glued meaningful closer,
+  mirroring the opener rule: `beta}` remains glued instead of becoming
+  `beta\n}` and gaining a space token. The same rule covers textual optionals,
+  while signature-proven keyval bodies retain their whitespace-insensitive
+  license. Re-recorded the affected block-group fixtures, including the two
+  distinct closer junctions in `optional_block_decline_deterministic`, and
+  added `tests/typeset/opaque_groups.tex` coverage for a `\def` replacement
+  whose trailing space would be visible after expansion.
 
 - [ ] **The paragraph reflow's forced-break rule splits glued sibling atoms.**
   A third member of the glued-divider family, and the one that lives in
@@ -466,6 +467,18 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   fixable gap; noted for completeness.
 
 ### Rules
+
+- [ ] **Lint malformed `.dtx` `macrocode` closing frames.** The `doc` package
+  terminates a code chunk by scanning for the literal physical line
+  `%    \end{macrocode}` (or its starred form), with exactly four spaces after
+  the column-one `%`; Badness currently parses near misses with a different
+  space count as ordinary, clean `ENVIRONMENT` nodes. Add a `.dtx`-only
+  `invalid-macrocode-frame` file check that reports such near matches as errors.
+  The opener's four-space spelling is conventional rather than the critical
+  delimiter, so do not report it at error severity. Start without an autofix,
+  or restrict a `Safe` fix to a column-one `%` whose horizontal space is the
+  only malformed part. A related, separate candidate is an indented `%<...>`
+  marker: docstrip recognizes a guard only at column zero.
 
 - [x] **Blank line inside a `ContentKind::Keyval` argument.** Shipped as
   `blank-line-in-keyval` (`Error`, node-shape, `Safe` fix). A blank line is a

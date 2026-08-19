@@ -1,6 +1,8 @@
 \documentclass{article}
 \newcommand{\pad}[1]{<#1>}
 \newcommand{\optpad}[2][def]{<#1|#2>}
+\def\gluedcloser#1{a%
+  b}
 \begin{document}
 \section{S}
 
@@ -18,4 +20,6 @@ b} tail.
 
 Rows keep their breaks when a group joins: \parbox{3cm}{one two \\ three
 four} done.
+
+A glued block closer adds no replacement-text space: x\gluedcloser{}y.
 \end{document}

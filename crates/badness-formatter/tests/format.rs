@@ -884,10 +884,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         80,
     ),
     // A bracket that declines segmentation (here: a nested group whose comment
-    // forces a break) takes the indented block form *unconditionally*, so the
-    // single-line and multi-line spellings of the same content format
-    // identically — the decline reads content and preserved predicates, never
-    // `spans_multiple_lines`.
+    // forces a break) takes the indented block form unconditionally. Delimiter
+    // junctions still preserve gluedness: `d}]` cannot converge with `d}\n]`,
+    // because the latter carries a trailing space token inside the optional.
     ("optional_block_decline_deterministic", WrapMode::Reflow, 80),
     // Opaque brace groups under `Reflow` are width-driven (`lower_opaque_group`):
     // block-vs-inline reads width, content, and preserved predicates, never the
@@ -964,6 +963,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_keep_braces_before_operator", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),
+    // Multiline inline math keeps its fitting opening fragment beside prose,
+    // while consecutive own-line comments retain their line association and
+    // distinct protected-comment boundaries.
+    ("issue_132_math_consecutive_comments", WrapMode::Reflow, 80),
     // Display math (`\[…\]`, `$$…$$`) is a block: the delimiters land on their own
     // lines with the body collapsed and indented one level, so `\[ F \]` never
     // stays cramped on a single line the way inline `$ x $` does.
@@ -1170,6 +1173,9 @@ fn fixture_path(name: &str, file: &str) -> PathBuf {
 const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     ("package_at_letter_command", "sty"),
     ("class_provides_preserve", "cls"),
+    // A trailing comment on the explicit region-ending `\ExplSyntaxOff` remains
+    // on that line instead of binding forward into the following definition.
+    ("issue_132_expl_off_comment_definition", "sty"),
     // A glued keyval comma must lower to the same flat separator that its broken
     // rendering reparses as. Otherwise pass one can expand the bracket, while
     // pass two sees the inserted newline as a space and collapses it (issue #121).
@@ -1460,6 +1466,15 @@ const DTX_FIXTURES: &[&str] = &[
     // Inline math in a virtual doc environment must treat physical margins as
     // framing; a literal `%` would comment out the rest of the formula.
     "issue_126_dtx_inline_math_margin",
+    // Every docstrip guard owns its physical line. Reflow must not join adjacent
+    // guarded commands and turn the later guard into a `%` comment.
+    "issue_132_dtx_adjacent_guards",
+    // Physical margins inside a virtual documentation environment are framing,
+    // including at an optional argument's closing edge.
+    "issue_132_dtx_optional_argument",
+    // A prose-layer tabular environment must choose the same generic/grid path
+    // before and after its physical documentation margins are normalized.
+    "issue_132_dtx_tabular",
     // A documentation-layer environment whose `\begin` shares its line with
     // body content is not a frame. Splitting after the header would move that
     // content off the `%` margin (smoke-test issue #127, mathtools).
@@ -1562,6 +1577,17 @@ fn dtx_fixtures_match_expected() {
         let formatted = format_with_style_flavored(&input, style, dtx_config())
             .unwrap_or_else(|e| panic!("format {name}: {e}"));
         assert_eq!(formatted, expected, "fixture {name} output mismatch");
+
+        assert_eq!(
+            perturb::nontrivia_content(&formatted, dtx_config()),
+            perturb::nontrivia_content(&format!("{input}\n"), dtx_config()),
+            "fixture {name} changed non-trivia content"
+        );
+        assert_eq!(
+            comment_texts(&formatted, dtx_config()),
+            comment_texts(&input, dtx_config()),
+            "fixture {name} changed protected comments"
+        );
 
         // Idempotent (same config + style), clean, and lossless.
         assert_eq!(
@@ -2249,7 +2275,8 @@ fn cite_key_list_layout_is_deterministic() {
 /// old unconditional break silently injected a space the author never wrote — a
 /// meaning change in horizontal mode (TODO's issue #57 review item). A whitespace
 /// boundary after `{` is TeX-identical to a newline, so it still breaks. Only the
-/// first line rides the opener; the interior still indents one step.
+/// first line rides the opener; the interior still indents one step. The same
+/// safety rule keeps a source-glued closing brace on the body's final line.
 #[test]
 fn glued_brace_opener_keeps_first_body_token_on_its_line() {
     // `Preserve` keeps `\def\x{` on one line so the assertion isolates the
@@ -2262,7 +2289,7 @@ fn glued_brace_opener_keeps_first_body_token_on_its_line() {
     let glued = "\\def\\x{\\aaa\\bbb\n\\ccc}\n";
     assert_eq!(
         format_with_style_flavored(glued, style, LatexFlavor::Package).expect("formats"),
-        "\\def\\x{\\aaa\\bbb\n  \\ccc\n}\n",
+        "\\def\\x{\\aaa\\bbb\n  \\ccc}\n",
         "a glued opener must not gain a break (and space token) after `{{`"
     );
 
@@ -2271,7 +2298,7 @@ fn glued_brace_opener_keeps_first_body_token_on_its_line() {
     let spaced = "\\def\\x{ \\aaa\\bbb\n\\ccc}\n";
     assert_eq!(
         format_with_style_flavored(spaced, style, LatexFlavor::Package).expect("formats"),
-        "\\def\\x{\n  \\aaa\\bbb\n  \\ccc\n}\n",
+        "\\def\\x{\n  \\aaa\\bbb\n  \\ccc}\n",
         "whitespace after the opener keeps the Allman break"
     );
 }

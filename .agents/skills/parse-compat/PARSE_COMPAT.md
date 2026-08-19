@@ -7,17 +7,9 @@ This is a **soft gauge, not a quality gate.** It projects badness's generic CST 
 - **Corpus:** corpus (`tests/corpus/*.tex`)
 - **Skeleton similarity:** 64.1%  _(Dice coefficient over skeleton lines)_
 - **File concordance:** 17.0%  (8/47 files identical after projection)
-- **Intentional deviations:** 38  ·  **Unexplained divergences:** 1
+- **Intentional deviations:** 39  ·  **Unexplained divergences:** 0
 - **Skipped:** 1 (badness could not parse cleanly)
 - **texlab parse errors:** 4 (badness-clean inputs texlab flagged — see the gate, `parse_oracle.rs`)
-
-## Unexplained divergences (triage queue)
-
-Each is **either a parser modeling gap to fix** or a **deliberate deviation to record** (add it to `tests/parse_compat_allowlist.toml` with a reason). Leaving it here is the tension: diverging from texlab should be a conscious choice.
-
-| File | Skeleton similarity |
-|---|---|
-| `verbatim_env_defined_by_package.tex` | 71.8% |
 
 ## Recorded intentional deviations
 
@@ -61,6 +53,7 @@ Listed in `tests/parse_compat_allowlist.toml`. These diverge from texlab on purp
 | `verbatim_braced_only.tex` | 54.7% | The braced-only capture cases (`$\\code:A+B$`, TikZ `\\path (0,0)`, issue #53) are concordant — both parsers read plain commands. The residual divergence is the same deliberate family as verbatim_cmd.tex: badness keeps the *braced* `\\code{…}`/`\\url{…}`/`\\lstinline|…|` bodies opaque (VERB→`(verbatim)`) where texlab parses into them (`(group)`, and math inside the jss `\\code{$ …}` body). |
 | `verbatim_cmd.tex` | 42.1% | The verbatim argument now attaches as a *child* of the command (matching texlab's structure); the residual divergence is deliberate: badness keeps `\\url`/`\\lstinline` bodies opaque (VERB→`(verbatim)`) where texlab parses them as a `(group)`, and `\\verb`/`\\verb*` is one opaque VERB token vs texlab's command + verbatim split. |
 | `verbatim_env.tex` | 40.0% | badness protects `verbatim`/`lstlisting` bodies as a single opaque VERBATIM_BODY (built-in signature DB); texlab under its default config parses *into* the body (`{braces}`→group, `\\commands`→command). badness is the more faithful reading; texlab is the one diverging. |
+| `verbatim_env_defined_by_package.tex` | 71.8% | Package-defined verbatim environments are a bounded text-derived fact: badness recognizes `\\lstnewenvironment`/`\\DefineVerbatimEnvironment` definitions in the file and captures each defined environment's body as opaque `VERBATIM_BODY`. texlab does not apply those definitions, so it parses literal listing content (`\\begin{table}`, an unmatched `\\end{oops}`, math, and `%`) as live structure. badness is the faithful reading. |
 | `verbatim_filecontents.tex` | 28.6% | The kernel's `filecontents` writes its body byte-for-byte (it `\\@makeother`s `\\dospecials`, `%` included), so badness curates it verbatim-body: the `%` inside a date literal is data and the `}` after it still closes its field group. texlab has no `filecontents` signature and parses into the body, reading the `%` as a comment that swallows the closing brace. Same deliberate family as verbatim_env.tex (smoke-test issue #98). |
 | `verbatim_ltxexample.tex` | 21.1% | ltxdockit's `ltxcode`/`ltxexample` are `\\lstnewenvironment`-defined example environments curated verbatim-body (smoke-test issue #98, same mechanism as pgfmanual's `codeexample` and ltxdoc's `oldcomments`): their bodies quote whole documents, so a `\\begin{document}` with no closer and a stray `}` are data. texlab has no signature for either name and parses into the body, manufacturing an unclosed `(env)` and an unmatched brace. badness is the more faithful reading; the file is also on the parse_oracle exception list. |
 

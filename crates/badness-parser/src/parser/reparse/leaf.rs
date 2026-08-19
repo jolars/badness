@@ -334,6 +334,7 @@ mod tests {
             "&& P::MATH_ANCHOR.anchors(t.text.as_str()) =>",
             ControlSequence,
         ),
+        ("&& super::is_def_prefix_command(&t.text)", ControlSequence),
         (
             "&& let Some(pieces) = split_math_word(self.text())",
             Guarded("the math operator split, gated on `Context::in_math` and on `WORD`"),

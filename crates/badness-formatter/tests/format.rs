@@ -1448,6 +1448,9 @@ const DTX_FIXTURES: &[&str] = &[
     "dtx_guards",
     "dtx_driver",
     "dtx_margin_blank_line",
+    // A virtual documentation region owns its leading `%`; generic trivia
+    // consumption must not retain it and let the region wrapper add a second one.
+    "issue_125_dtx_empty_documentation",
     // A documentation-layer environment whose `\begin` shares its line with
     // body content is not a frame. Splitting after the header would move that
     // content off the `%` margin (smoke-test issue #127, mathtools).

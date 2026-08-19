@@ -864,6 +864,13 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
         return Ir::verbatim(node.text().to_string());
     }
+    if cx.is_dtx
+        && node.kind() != SyntaxKind::ROOT
+        && !inside_macrocode(node)
+        && contains_indented_dtx_comment(node)
+    {
+        return Ir::verbatim(node.text().to_string());
+    }
     if dtx_doc_region(node, cx) {
         let virtual_doc = LowerCtx {
             in_dtx_doc_region: true,
@@ -1394,7 +1401,64 @@ fn margin_starts_dtx_doc_region(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
             break;
         }
     }
-    matches!(next, Some(SyntaxElement::Node(node)) if dtx_doc_region(&node, cx))
+    let Some(SyntaxElement::Node(node)) = next else {
+        return false;
+    };
+    if dtx_doc_region(&node, cx) {
+        return true;
+    }
+    // A blank doc line ends the preceding paragraph, so the margin can be a
+    // root sibling of a paragraph whose sole structural child is the virtual
+    // environment. Look through that transparent wrapper as well.
+    if node.kind() != SyntaxKind::PARAGRAPH {
+        return false;
+    }
+    if node.children_with_tokens().any(|element| match element {
+        SyntaxElement::Node(_) => false,
+        SyntaxElement::Token(token) => {
+            !is_collapsible_trivia(token.kind()) && token.kind() != SyntaxKind::DOC_MARGIN
+        }
+    }) {
+        return false;
+    }
+    let mut children = node.children();
+    children
+        .next()
+        .is_some_and(|child| dtx_doc_region(&child, cx))
+        && children.next().is_none()
+}
+
+/// Whether `node` contains an ordinary own-line comment kept out of column zero
+/// by authored indentation. In `.dtx`, removing that indentation changes the
+/// token from `COMMENT` to `DOC_MARGIN`, so the enclosing layout unit is opaque.
+fn contains_indented_dtx_comment(node: &SyntaxNode) -> bool {
+    node.descendants_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .filter(|token| {
+            token.kind() == SyntaxKind::COMMENT
+                && token.text().strip_prefix('%').is_some_and(|body| {
+                    let body = body.trim_start();
+                    !body.is_empty() && !body.starts_with('%')
+                })
+        })
+        .any(|comment| {
+            comment
+                .prev_token()
+                .filter(|previous| previous.kind() == SyntaxKind::WHITESPACE)
+                .and_then(|whitespace| whitespace.prev_token())
+                .is_some_and(|previous| previous.kind() == SyntaxKind::NEWLINE)
+        })
+}
+
+fn inside_macrocode(node: &SyntaxNode) -> bool {
+    node.ancestors()
+        .filter_map(Environment::cast)
+        .any(|environment| {
+            matches!(
+                environment.name().as_deref(),
+                Some("macrocode" | "macrocode*")
+            )
+        })
 }
 
 /// Whether the physical line `node` starts on opens with a `.dtx` documentation
@@ -4159,6 +4223,19 @@ fn lower_element_stream(
                     }
                 }
             }
+            // The floated leading `%` of a virtual `.dtx` documentation region
+            // belongs to the region wrapper. Drop it and its padding before the
+            // generic trivia arm can consume it as an ordinary gap; otherwise the
+            // wrapper emits a second margin and comments out the region's `\begin`.
+            SyntaxElement::Token(token) if margin_starts_dtx_doc_region(&token, cx) => {
+                while let Some(SyntaxElement::Token(t)) = iter.peek() {
+                    if t.kind() == SyntaxKind::WHITESPACE {
+                        iter.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
             // Trivia inside a suppressed span is reproduced too, one token at a
             // time rather than collapsed into a `Gap`. Without this the *gaps
             // between* two suppressed siblings would still normalize, so an
@@ -4171,19 +4248,6 @@ fn lower_element_stream(
             }
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
-            }
-            // The floated leading `%` of a reflowable `.dtx` doc paragraph (one that
-            // follows a `%` blank line): drop it and the inline whitespace after it,
-            // since the paragraph's own [`Ir::margin_prefix`] re-emits a canonical
-            // `% ` on every reflowed line. Without this the margin would double up.
-            SyntaxElement::Token(token) if margin_starts_dtx_doc_region(&token, cx) => {
-                while let Some(SyntaxElement::Token(t)) = iter.peek() {
-                    if t.kind() == SyntaxKind::WHITESPACE {
-                        iter.next();
-                    } else {
-                        break;
-                    }
-                }
             }
             SyntaxElement::Token(token)
                 if cx.wraps_prose()

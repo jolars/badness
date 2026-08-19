@@ -1755,13 +1755,11 @@ fn run_format_paths(
 //
 // The output strings below are load-bearing: the smoke-test workflow
 // (`.github/workflows/smoke-test.yml`) classifies failures by grepping logs and
-// reports for `idempotency`/`losslessness`/`format-error` and extracts
+// reports for the labels in [`CheckKind::label`] and extracts
 // `Approx. diff start line: N` from the report. Keep them stable, and keep the
 // `format-error` wording free of the substrings `idempot` and `lossless` so a
 // formatter refusal is never misclassified as an invariant regression. Both
-// trivia checks are deliberately excluded from `--checks all` (the workflow's
-// failure classes stay as they are), and their labels must likewise stay free
-// of the other three substrings.
+// perturbation-based trivia checks are deliberately excluded from `--checks all`.
 
 /// One invariant (or the failure to even run it) checked per file.
 #[derive(Clone, Copy, PartialEq, Eq)]

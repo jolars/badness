@@ -872,6 +872,37 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     {
         return Ir::verbatim(node.text().to_string());
     }
+    // A guard-led paragraph can carry later guards as children while the first
+    // guard remains a sibling. Reflowing that mixed shape treats the first
+    // command as ordinary prose, then emits the next column-zero guard without
+    // first closing the line, joining two docstrip variants. Preserve the whole
+    // paragraph whenever its opening line and a continuation are guarded.
+    if node.kind() == SyntaxKind::PARAGRAPH
+        && doc_margin_opens_line(node, cx)
+        && node
+            .first_token()
+            .is_some_and(|token| token.kind() == SyntaxKind::CONTROL_WORD)
+        && node
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::GUARD)
+    {
+        return Ir::verbatim(node.text().to_string());
+    }
+    // A fully docstrip-guarded paragraph is the whole hole cut out of an
+    // expl3 region. With no byte of the paragraph left in-region it never
+    // reaches `lower_expl_paragraph`; the generic Preserve paragraph path
+    // would otherwise normalize its whitespace and move guards off column 0.
+    if node.kind() == SyntaxKind::PARAGRAPH {
+        let text = node.text().to_string();
+        if text_is_fully_guarded(&text) {
+            // The surrounding environment owns the body-leading break; keeping
+            // the paragraph's leading newline inside an opaque IR would give
+            // the printer two competing boundary breaks and float the first
+            // guard onto the frame line.
+            return Ir::verbatim(text.trim_start_matches(['\r', '\n']));
+        }
+    }
     // Range-formatting emission filter: at the document root, lower only the
     // children (top-level blocks plus the trivia between them) overlapping the
     // requested range; skip the rest entirely. The filter lives at `ROOT` so each
@@ -2400,7 +2431,19 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             }
         }
         let run = &elements[start..i];
-        let ir = if in_region {
+        let guarded_text = (!in_region).then(|| {
+            let text = run.iter().map(ToString::to_string).collect::<String>();
+            text_is_fully_guarded(&text).then_some(text)
+        });
+        let ir = if let Some(text) = guarded_text.flatten() {
+            // Region subtraction deliberately hands fully guarded `.dtx` lines
+            // to the non-expl3 side. They remain byte-faithful there: generic
+            // lowering would still collapse gaps when a guard is nested inside
+            // a command/group rather than exposed as a direct paragraph token.
+            // The leading boundary newline belongs to the separator that opened
+            // this run, so reproduce from the first guard-bearing element.
+            Ir::verbatim(text.trim_start_matches(['\r', '\n']))
+        } else if in_region {
             lower_expl_code(run.iter().cloned(), cx, Statements::Structural)
         } else if cx.wraps_prose() && !run_carries_doc_margin(run, cx) {
             reflow_elements(run.iter().cloned(), cx, ReflowKind::Prose)
@@ -2439,6 +2482,17 @@ fn lower_expl_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         result.push(seg);
     }
     Ir::concat(result)
+}
+
+/// Whether every nonempty physical line in `text` begins with a docstrip guard.
+/// Guards are recognized only at column zero, so the spelling is the structural
+/// fact the `.dtx` lexer exposes as `GUARD` before any formatter pass can move it.
+fn text_is_fully_guarded(text: &str) -> bool {
+    let mut content_lines = text.lines().filter(|line| !line.is_empty());
+    content_lines
+        .next()
+        .is_some_and(|line| line.starts_with("%<"))
+        && content_lines.all(|line| line.starts_with("%<"))
 }
 
 /// How [`lower_expl_code`] finds statement boundaries: **structurally**, from

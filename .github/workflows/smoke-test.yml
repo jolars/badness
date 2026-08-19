@@ -343,10 +343,16 @@ jobs:
                 if grep -Eiq 'format-error' "$log_path" "$report_path" 2>/dev/null; then
                   add_failure_type "format-error"
                 fi
+                if grep -Eiq 'content-change' "$log_path" "$report_path" 2>/dev/null; then
+                  add_failure_type "content-change"
+                fi
+                if grep -Eiq 'comment-change' "$log_path" "$report_path" 2>/dev/null; then
+                  add_failure_type "comment-change"
+                fi
                 if [ -f "$report_path" ]; then
                   while IFS= read -r parsed_type; do
                     [ -n "$parsed_type" ] && add_failure_type "$parsed_type"
-                  done < <(grep -Eo '\((idempotency|losslessness|format-error)\)' "$report_path" | tr -d '()' | sort -u)
+                  done < <(grep -Eo '\((idempotency|losslessness|format-error|content-change|comment-change)\)' "$report_path" | tr -d '()' | sort -u)
                 fi
 
                 if [ -n "$failure_types" ]; then
@@ -692,6 +698,8 @@ jobs:
                 idempotency) failure_color="B60205" ;;
                 losslessness) failure_color="D93F0B" ;;
                 format-error) failure_color="FBCA04" ;;
+                content-change) failure_color="B60205" ;;
+                comment-change) failure_color="D93F0B" ;;
                 timeout) failure_color="1D76DB" ;;
                 unknown) failure_color="6E7781" ;;
                 *) failure_color="6E7781" ;;

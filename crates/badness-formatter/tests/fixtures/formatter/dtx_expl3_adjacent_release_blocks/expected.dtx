@@ -14,6 +14,8 @@
 %<latexrelease>  {
 %<latexrelease>    \exp_args:Nc \__hook_patch_cmd_or_delay:Nnn {#2} {#2} {#3}
 %<latexrelease>  }
+%<latexrelease>\cs_undefine:N \foo:n
+%<latexrelease>\cs_gset_eq:NN \foo:n \bar:n
 %<latexrelease>\EndIncludeInRelease
 \ExplSyntaxOff
 % \end{macrocode}

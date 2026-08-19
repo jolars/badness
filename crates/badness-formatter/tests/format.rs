@@ -842,8 +842,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // argument keyval (`ContentKind::Keyval`; `axis` via the CWL `%keyvals` mark).
     // The lexer ends a `WORD` at every control sequence, so `width=\figurewidth`
     // hands the splitter a word that *opens* with the comma closing that entry —
-    // it must still break there. A fitting bracket stays byte-identical to the
-    // source, glued commas and all, because the separator is a `SoftLine`.
+    // it must still break there. A fitting bracket canonicalizes a glued comma
+    // to one space, matching the flat spelling of the newline emitted when it
+    // breaks; this keeps both spellings on the same width decision.
     ("optional_keyval_splits_glued", WrapMode::Reflow, 80),
     // The mirror: a *textual* optional never gains a space, at any width. Compiling
     // both spellings shows `\item[red,green]`, a `\newcommand` default, and a
@@ -1169,6 +1170,10 @@ fn fixture_path(name: &str, file: &str) -> PathBuf {
 const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     ("package_at_letter_command", "sty"),
     ("class_provides_preserve", "cls"),
+    // A glued keyval comma must lower to the same flat separator that its broken
+    // rendering reparses as. Otherwise pass one can expand the bracket, while
+    // pass two sees the inserted newline as a space and collapses it (issue #121).
+    ("issue_121_keyval_glued_fixed_point", "sty"),
     // expl3 code formatting, which the wrap mode never reaches:
     // inside an expl3 region (catcode-9 whitespace / catcode-10 `~`) the formatter
     // owns layout regardless of wrap mode — messy indentation is normalized, a

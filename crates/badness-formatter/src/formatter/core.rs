@@ -6678,7 +6678,11 @@ fn segment_delimited_body(
 /// a `WORD` at every control sequence, so a key list routinely hands us a word that
 /// opens with the comma closing the previous token's entry
 /// (`width=` `\figurewidth` `,xmin=-5,…`). Hence `entry_open`: whether the caller
-/// has already emitted content for the entry this word continues.
+/// has already emitted content for the entry this word continues. A glued comma
+/// uses `Line`, not `SoftLine`: the broken spelling necessarily reparses its
+/// newline as a space gap, so using the same flat spelling before and after the
+/// break keeps width decisions at a fixed point (issue #121). The keyval proof is
+/// what licenses introducing that otherwise-significant flat space.
 fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bool) -> usize {
     if !keyval || !text.contains(',') {
         parts.push(Ir::verbatim(text));
@@ -6694,7 +6698,7 @@ fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bo
             continue; // an empty entry: let the comma ride on the next piece
         }
         if pushed > 0 {
-            parts.push(Gap::Glued.separator());
+            parts.push(Ir::line());
             splits += 1;
         }
         parts.push(Ir::verbatim(piece));
@@ -6704,7 +6708,7 @@ fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bo
     }
     if start < text.len() {
         if pushed > 0 {
-            parts.push(Gap::Glued.separator());
+            parts.push(Ir::line());
             splits += 1;
         }
         parts.push(Ir::verbatim(&text[start..]));

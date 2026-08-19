@@ -1488,6 +1488,10 @@ const DTX_FIXTURES: &[&str] = &[
     // collapses and gains l3 brace spacing), proving the region subtraction is
     // surgical.
     "dtx_expl3_guarded_release_block",
+    // Adjacent release blocks where a fully guarded expl3 definition has a
+    // multi-line parameter text. The parser attaches the continuation guards
+    // inside the command, but every physical line must remain byte-faithful.
+    "dtx_expl3_adjacent_release_blocks",
     // An *indented* `macrocode` begin frame (smoke-test issue #71, multicol.dtx /
     // latex-lab-block.dtx): `\DocInput` runs the documentation part under
     // `\MakePercentIgnore`, so a `%` there is catcode 9 at any column and the

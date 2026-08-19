@@ -1,0 +1,22 @@
+% \begin{macrocode}
+\ExplSyntaxOn
+%<latexrelease>\IncludeInRelease{2024/12/22}{\foo:n}%
+%<latexrelease>                 {New~behaviour}
+\cs_new_protected:Npn \foo:n #1
+  {
+    \bar:n {#1}
+  }
+%<latexrelease>\EndIncludeInRelease
+% \end{macrocode}
+%
+% \begin{macrocode}
+%<latexrelease>\IncludeInRelease{2021/06/01}{\foo:n}%
+%<latexrelease>                 {Old~behaviour}
+%<latexrelease>\cs_new_protected:Npn \@@_try_put_cmd_hook:w
+%<latexrelease>    #1 / #2 / #3 / #4 \s_@@_mark #5
+%<latexrelease>  {
+%<latexrelease>    \exp_args:Nc \__hook_patch_cmd_or_delay:Nnn {#2} {#2} {#3}
+%<latexrelease>  }
+%<latexrelease>\EndIncludeInRelease
+\ExplSyntaxOff
+% \end{macrocode}

@@ -855,6 +855,23 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
         return Ir::verbatim(node.text().to_string());
     }
+    // A `.dtx` command that opens on a docstrip guard and absorbs later guard
+    // tokens is one fully guarded physical-line construct.  Its first guard is
+    // a sibling (the command range starts at the control sequence), while the
+    // continuation guards are children attached by the parser.  Relaying the
+    // node would therefore join those child guards to the preceding tokens and
+    // strand the continuations on unguarded lines.  Preserve the command as one
+    // opaque slice; an unguarded command with guarded arguments still takes the
+    // ordinary expl3 path and keeps its width-driven layout.
+    if node.kind() == SyntaxKind::COMMAND
+        && doc_margin_opens_line(node, cx)
+        && node
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::GUARD)
+    {
+        return Ir::verbatim(node.text().to_string());
+    }
     // Range-formatting emission filter: at the document root, lower only the
     // children (top-level blocks plus the trivia between them) overlapping the
     // requested range; skip the rest entirely. The filter lives at `ROOT` so each

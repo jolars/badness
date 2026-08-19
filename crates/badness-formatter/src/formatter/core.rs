@@ -1152,16 +1152,21 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             return lower_command(node, cx);
         }
-        // Like the multi-line group below, math continuing across `.dtx`
-        // doc-margined lines is never re-laid: math relayout indents its body,
-        // which would push a `%` margin off column 0 (a meaning change — only a
-        // column-0 `%` is a margin). The generic stream keeps margins pinned.
+        // Like the multi-line group below, math continuing across ordinary `.dtx`
+        // doc-margined lines is never re-laid: math relayout would move a `%`
+        // margin off column 0. A virtual doc region is different—its shared CST
+        // view strips physical framing before specialized math lowering, and the
+        // region wrapper regenerates the margins afterward.
         SyntaxKind::INLINE_MATH if !contains_doc_margin(node, cx) => {
             return lower_math(node, cx);
         }
         SyntaxKind::DISPLAY_MATH if !contains_doc_margin(node, cx) => {
             return lower_display_math(node, cx);
         }
+        // A bare `MATH` node inside a virtual environment may be a grid cell;
+        // its enclosing grid owns separators and row boundaries. Complete
+        // inline/display nodes enter their math lowerers through the two arms
+        // above and do not need this fallback.
         SyntaxKind::MATH if !cx.in_dtx_doc_region && !contains_doc_margin(node, cx) => {
             return lower_math_body(node, cx);
         }
@@ -1409,24 +1414,21 @@ fn margin_starts_dtx_doc_region(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
         return true;
     }
     // A blank doc line ends the preceding paragraph, so the margin can be a
-    // root sibling of a paragraph whose sole structural child is the virtual
-    // environment. Look through that transparent wrapper as well.
+    // root sibling of a paragraph that starts with the virtual environment.
+    // The same paragraph may continue with prose after `\end{...}`; that later
+    // content does not change ownership of the opener's physical margin.
     if node.kind() != SyntaxKind::PARAGRAPH {
         return false;
     }
-    if node.children_with_tokens().any(|element| match element {
-        SyntaxElement::Node(_) => false,
-        SyntaxElement::Token(token) => {
-            !is_collapsible_trivia(token.kind()) && token.kind() != SyntaxKind::DOC_MARGIN
-        }
-    }) {
-        return false;
-    }
-    let mut children = node.children();
-    children
-        .next()
+    node.children_with_tokens()
+        .find(|element| {
+            !matches!(
+                element,
+                SyntaxElement::Token(token) if is_collapsible_trivia(token.kind())
+            )
+        })
+        .and_then(SyntaxElement::into_node)
         .is_some_and(|child| dtx_doc_region(&child, cx))
-        && children.next().is_none()
 }
 
 /// Whether `node` contains an ordinary own-line comment kept out of column zero
@@ -1534,8 +1536,10 @@ fn margin_floats_into_paragraph(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
 /// on every reflowed line (see [`Ir::margin_prefix`]). When it instead contains or
 /// sits inside an environment (a `% \begin{itemize}` list, a `macrocode` block, a
 /// `macro`/`environment` doc block) it is lowered *preserve-style* so frame margins
-/// and item lines round-trip byte-for-byte; reflowing structured doc content is out
-/// of scope for the first cut.
+/// and item lines round-trip byte-for-byte. One narrow mixed shape is split: a
+/// complete virtual documentation environment followed by an independently safe
+/// prose tail. The environment keeps its structural layout, while the tail reflows
+/// under the canonical margin.
 ///
 /// [`dtx_paragraph_reflows`] is a cheap up-front gate; the exact one is the reflow
 /// itself. A forced-break block whose interior lines ride their own margins is
@@ -1552,6 +1556,8 @@ fn margin_floats_into_paragraph(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
 fn lower_dtx_doc_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if dtx_doc_paragraph_reflows_safely(node, cx) {
         reflow_elements(node.children_with_tokens(), cx, ReflowKind::DtxProse)
+    } else if let Some(ir) = lower_dtx_region_then_prose(node, cx) {
+        ir
     } else {
         // Margin frames still normalize, but nested inline constructs stay
         // opaque: a width break inside one would create an unmargined line.
@@ -1561,6 +1567,54 @@ fn lower_dtx_doc_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         };
         Ir::concat(lower_element_stream(node.children_with_tokens(), preserve))
     }
+}
+
+/// Split the parser's mixed paragraph shape where a complete virtual documentation
+/// environment is followed by ordinary margined prose. The environment must be the
+/// paragraph's first content and end on its own physical line; the remainder must
+/// pass the same exact margin-safety probe as any other `.dtx` prose run. This keeps
+/// authored frame layout opaque while still canonicalizing `%  Text` to `% Text`.
+fn lower_dtx_region_then_prose(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Ir> {
+    let elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
+    let region = elements
+        .iter()
+        .position(|element| !is_collapsible_trivia_element(element))?;
+    let SyntaxElement::Node(region_node) = &elements[region] else {
+        return None;
+    };
+    if !dtx_doc_region(region_node, cx) {
+        return None;
+    }
+
+    let mut tail_start = region + 1;
+    let mut boundary_newlines = 0;
+    while let Some(SyntaxElement::Token(token)) = elements.get(tail_start) {
+        if !is_collapsible_trivia(token.kind()) {
+            break;
+        }
+        boundary_newlines += token.text().matches('\n').count();
+        tail_start += 1;
+    }
+    let tail = elements.get(tail_start..)?;
+    if boundary_newlines == 0 || tail.is_empty() || !dtx_run_reflows_safely(tail, cx) {
+        return None;
+    }
+
+    let preserve = LowerCtx {
+        preserve_dtx_nested_layout: true,
+        ..cx
+    };
+    let head = Ir::concat(lower_element_stream(
+        elements[..=region].iter().cloned(),
+        preserve,
+    ));
+    let separator = if boundary_newlines >= 2 {
+        Ir::empty_line()
+    } else {
+        Ir::hard_line()
+    };
+    let tail = reflow_elements(tail.iter().cloned(), cx, ReflowKind::DtxProse);
+    Some(Ir::concat([head, separator, tail]))
 }
 
 /// Whether a `.dtx` documentation paragraph may be reflowed: it is unstructured
@@ -7728,15 +7782,49 @@ fn collapse_arg_group(
     Some(Ir::concat([open_ir, body, close_ir]))
 }
 
+/// Present a specialized lowerer with the virtual document's LaTeX stream rather
+/// than the physical `.dtx` framing stored in the lossless CST. A documentation
+/// margin and its following padding belong to the region wrapper; every other
+/// element, including the preceding newline, remains available to the layout.
+fn strip_virtual_dtx_framing(
+    elements: impl IntoIterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+) -> Vec<SyntaxElement> {
+    if !cx.in_dtx_doc_region {
+        return elements.into_iter().collect();
+    }
+
+    let mut stripped = Vec::new();
+    let mut after_margin = false;
+    for element in elements {
+        match &element {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::DOC_MARGIN => {
+                after_margin = true;
+            }
+            SyntaxElement::Token(token)
+                if after_margin && token.kind() == SyntaxKind::WHITESPACE => {}
+            _ => {
+                after_margin = false;
+                stripped.push(element);
+            }
+        }
+    }
+    stripped
+}
+
 /// Lower inline `$…$`/`\(…\)` or display `$$…$$`/`\[…\]` math. The delimiter
 /// tokens are direct children of the math node and are emitted verbatim; the
 /// `MATH` child (the body) is formatted by [`lower_math_body`].
 fn lower_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    Ir::concat(node.children_with_tokens().map(|el| match el {
-        SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => lower_math_body(&n, cx),
-        SyntaxElement::Node(n) => lower_node(&n, cx),
-        SyntaxElement::Token(t) => Ir::verbatim(t.text()),
-    }))
+    Ir::concat(
+        strip_virtual_dtx_framing(node.children_with_tokens(), cx)
+            .into_iter()
+            .map(|el| match el {
+                SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => lower_math_body(&n, cx),
+                SyntaxElement::Node(n) => lower_node(&n, cx),
+                SyntaxElement::Token(t) => Ir::verbatim(t.text()),
+            }),
+    )
 }
 
 /// Lower display math (`$$…$$` or `\[…\]`) as a block: the delimiters land on
@@ -7754,7 +7842,7 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     let mut body_empty = true;
     let mut seen_body = false;
     let mut open_has_comment = false;
-    for element in node.children_with_tokens() {
+    for element in strip_virtual_dtx_framing(node.children_with_tokens(), cx) {
         match element {
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::MATH => {
                 // A `%` trailing the opening delimiter on the same source line
@@ -8181,7 +8269,9 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
     let mut prev_role = MathRole::Relation;
     let mut prev_opener = false;
     let mut pending_space = false;
-    let mut iter = elements.iter().cloned().peekable();
+    let mut iter = strip_virtual_dtx_framing(elements.iter().cloned(), cx)
+        .into_iter()
+        .peekable();
     while let Some(el) = iter.next() {
         match el {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
@@ -8386,7 +8476,9 @@ fn lower_math_seq(
     let mut pending_space = false; // authored whitespace since the last atom
     let mut pending_break = false; // a comment forced a hard line break
     let mut pending_newline = false; // a preserved authored line break
-    let mut iter = elements.peekable();
+    let mut iter = strip_virtual_dtx_framing(elements, cx)
+        .into_iter()
+        .peekable();
     while let Some(el) = iter.next() {
         match el {
             // Tier 2 under `preserve_newlines` ([`MathWrap::Preserve`]) only: that
@@ -8542,15 +8634,19 @@ fn math_body_is_empty(node: &SyntaxNode) -> bool {
 /// Lower a `SCRIPTED` atom: the base then its `^`/`_` scripts, all tight (the
 /// trivia the parser kept inside the node for losslessness is dropped here).
 fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    Ir::concat(node.children_with_tokens().filter_map(|el| match el {
-        SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
-        SyntaxElement::Node(n)
-            if matches!(n.kind(), SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT) =>
-        {
-            Some(lower_script(&n, cx))
-        }
-        other => Some(lower_math_element(other, cx)),
-    }))
+    Ir::concat(
+        strip_virtual_dtx_framing(node.children_with_tokens(), cx)
+            .into_iter()
+            .filter_map(|el| match el {
+                SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
+                SyntaxElement::Node(n)
+                    if matches!(n.kind(), SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT) =>
+                {
+                    Some(lower_script(&n, cx))
+                }
+                other => Some(lower_math_element(other, cx)),
+            }),
+    )
 }
 
 /// Lower a `SUBSCRIPT`/`SUPERSCRIPT`: the `_`/`^` glued tightly to its argument.
@@ -8558,15 +8654,19 @@ fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// `x^2`) is a *content* rewrite, not layout, so it lives in the linter's
 /// `redundant-script-braces` autofix, keeping this layout engine whitespace-only.
 fn lower_script(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    Ir::concat(node.children_with_tokens().filter_map(|el| match el {
-        SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
-        SyntaxElement::Token(t)
-            if matches!(t.kind(), SyntaxKind::CARET | SyntaxKind::UNDERSCORE) =>
-        {
-            Some(Ir::verbatim(t.text()))
-        }
-        other => Some(lower_math_element(other, cx)),
-    }))
+    Ir::concat(
+        strip_virtual_dtx_framing(node.children_with_tokens(), cx)
+            .into_iter()
+            .filter_map(|el| match el {
+                SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => None,
+                SyntaxElement::Token(t)
+                    if matches!(t.kind(), SyntaxKind::CARET | SyntaxKind::UNDERSCORE) =>
+                {
+                    Some(Ir::verbatim(t.text()))
+                }
+                other => Some(lower_math_element(other, cx)),
+            }),
+    )
 }
 
 /// True if `node` directly contains a `NEWLINE` token — **the unsafe

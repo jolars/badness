@@ -1454,6 +1454,12 @@ const DTX_FIXTURES: &[&str] = &[
     // The mathtools smoke-test reproducer: command-only doc lines must remain a
     // fixed point after their `%  ` margins normalize (issue #126).
     "issue_126_dtx_command_lines",
+    // A virtual environment at the start of a doc paragraph owns the floated
+    // leading margin even when ordinary prose follows it in the same paragraph.
+    "issue_126_dtx_environment_then_prose",
+    // Inline math in a virtual doc environment must treat physical margins as
+    // framing; a literal `%` would comment out the rest of the formula.
+    "issue_126_dtx_inline_math_margin",
     // A documentation-layer environment whose `\begin` shares its line with
     // body content is not a frame. Splitting after the header would move that
     // content off the `%` margin (smoke-test issue #127, mathtools).

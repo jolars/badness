@@ -139,6 +139,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
+- [ ] **Unify `.dtx` documentation-margin ownership in CST lowering.** The
+  issue-#126 fix handles a mixed paragraph by projecting its leading documentation
+  environment into virtual LaTeX, then separately reflowing a safe prose tail
+  (`lower_dtx_region_then_prose`). That split is a narrow compensation for two
+  layout owners meeting at one CST boundary. Replace it with one formatter-side
+  classification of CST lines—canonical documentation prose versus literal
+  docstrip frames, guards, and protected content—and lower the whole mixed
+  paragraph through one margin-aware printer path. The printer must prefix every
+  generated documentation line with `% ` while preserving byte-sensitive lines
+  such as `%    \begin{macrocode}` exactly. Retire the special environment/tail
+  split only after the issue fixtures, mathtools smoke scan, and `.dtx` invariant
+  corpus prove whitespace-only output and idempotence.
+
 - [ ] **The block form's closer break lacks the `open_glued` mirror.**
   `lower_bracketed` guards the *open* side — no break after a glued `{`, because
   the synthesized end-of-line reads as a space token TeX typesets — but emits an

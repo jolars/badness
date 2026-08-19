@@ -23,6 +23,7 @@ pub(super) struct PreScan {
     pub(super) expl_toggles: Vec<(usize, bool)>,
     pub(super) doc_margin_lines: Vec<(usize, usize)>,
     pub(super) conditional_openers: HashSet<usize>,
+    pub(super) def_parameter_dollars: HashSet<usize>,
     pub(super) alias_openers: HashMap<usize, SmolStr>,
     pub(super) alias_closers: HashMap<usize, SmolStr>,
     pub(super) literal_alias_closers: HashMap<usize, SmolStr>,
@@ -41,6 +42,7 @@ impl PreScan {
         let mut off = 0;
         let mut expl_toggles = Vec::new();
         let mut conditional_openers = HashSet::new();
+        let mut def_parameter_dollars = HashSet::new();
         let mut alias_openers = HashMap::new();
         let mut alias_closers = HashMap::new();
         let mut literal_alias_closers = HashMap::new();
@@ -62,6 +64,11 @@ impl PreScan {
         // keyword rather than calls — a countdown, since `\let\a\b` binds two. See
         // [`super::Parser::alias_openers`] for why this filter is mandatory.
         let mut def_name_slots = 0u8;
+        // `\def` parameter text runs from the definee through the token before
+        // the replacement body's first `{`. A `$` there is a literal delimiter,
+        // never a math opener; record it before the recursive walk can mistake a
+        // later delimiter for its mate (issue #129).
+        let mut def_parameter_state = 0u8;
         let mut last_r_bracket = None;
         let mut last_display_math_closer = None;
         let mut last_inline_math_closer = None;
@@ -111,6 +118,28 @@ impl PreScan {
                     }
                 }
                 _ => {}
+            }
+            match def_parameter_state {
+                1 if super::Parser::is_trivia(t.kind) => {}
+                1 if matches!(
+                    t.kind,
+                    SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL
+                ) =>
+                {
+                    def_parameter_state = 2;
+                }
+                1 => def_parameter_state = 0,
+                2 if t.kind == SyntaxKind::L_BRACE => def_parameter_state = 0,
+                2 if t.kind == SyntaxKind::DOLLAR => {
+                    def_parameter_dollars.insert(i);
+                }
+                _ => {}
+            }
+            if def_parameter_state == 0
+                && t.kind == SyntaxKind::CONTROL_WORD
+                && super::is_def_prefix_command(&t.text)
+            {
+                def_parameter_state = 1;
             }
             if t.kind != SyntaxKind::CONTROL_WORD {
                 // Trivia carries the definition-keyword state across (`\def  \bea`);
@@ -183,6 +212,7 @@ impl PreScan {
             expl_toggles,
             doc_margin_lines,
             conditional_openers,
+            def_parameter_dollars,
             alias_openers,
             alias_closers,
             literal_alias_closers,

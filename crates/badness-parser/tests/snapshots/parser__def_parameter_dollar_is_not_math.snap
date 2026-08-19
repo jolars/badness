@@ -1,0 +1,39 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(\"\\\\def\\\\take#1] ${%\\n% comment\\n  body\\n}%\\n\\\\def\\\\next#1${next}\\n\",)"
+---
+ROOT@0..56
+  PARAGRAPH@0..55
+    COMMAND@0..4
+      CONTROL_WORD@0..4 "\\def"
+    COMMAND@4..9
+      CONTROL_WORD@4..9 "\\take"
+    HASH@9..10 "#"
+    WORD@10..11 "1"
+    R_BRACKET@11..12 "]"
+    WHITESPACE@12..13 " "
+    DOLLAR@13..14 "$"
+    GROUP@14..35
+      L_BRACE@14..15 "{"
+      COMMENT@15..16 "%"
+      NEWLINE@16..17 "\n"
+      COMMENT@17..26 "% comment"
+      NEWLINE@26..27 "\n"
+      WHITESPACE@27..29 "  "
+      WORD@29..33 "body"
+      NEWLINE@33..34 "\n"
+      R_BRACE@34..35 "}"
+    COMMENT@35..36 "%"
+    NEWLINE@36..37 "\n"
+    COMMAND@37..41
+      CONTROL_WORD@37..41 "\\def"
+    COMMAND@41..46
+      CONTROL_WORD@41..46 "\\next"
+    HASH@46..47 "#"
+    WORD@47..48 "1"
+    DOLLAR@48..49 "$"
+    GROUP@49..55
+      L_BRACE@49..50 "{"
+      WORD@50..54 "next"
+      R_BRACE@54..55 "}"
+  NEWLINE@55..56 "\n"

@@ -1030,6 +1030,11 @@ struct Parser<'t> {
     /// spellings out of scope. Recognition itself is shared with the linter's
     /// `ConditionalIndex` ([`conditional::OpenerScan`]) so the two cannot drift.
     conditional_openers: std::collections::HashSet<usize>,
+    /// Dollar tokens in a `\def`-family parameter text. TeX reads these as
+    /// literal delimiters before the replacement body, so they cannot open math.
+    /// Pre-scanned once because a false opener can otherwise pair with a later
+    /// definition's delimiter and swallow both bodies (issue #129).
+    def_parameter_dollars: std::collections::HashSet<usize>,
     /// Token indices of *environment-alias openers* — bare control words whose
     /// definition body is exactly `\begin{X}` — mapped to the target environment
     /// `X` (issue #109). Pre-scanned in [`Self::new`] for the same reason as
@@ -1195,6 +1200,7 @@ impl<'t> Parser<'t> {
             expl_toggles: pre.expl_toggles,
             doc_margin_lines: pre.doc_margin_lines,
             conditional_openers: pre.conditional_openers,
+            def_parameter_dollars: pre.def_parameter_dollars,
             last_alias_closer: pre
                 .alias_closers
                 .keys()
@@ -1897,6 +1903,10 @@ impl<'t> Parser<'t> {
                 self.bump();
             }
             SyntaxKind::DOLLAR => {
+                if self.def_parameter_dollars.contains(&self.pos) {
+                    self.bump();
+                    return;
+                }
                 let display = self.nth_kind(1) == Some(SyntaxKind::DOLLAR);
                 if self.dollar_closes(self.pos, display) {
                     self.dollar_math();

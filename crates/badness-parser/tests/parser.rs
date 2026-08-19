@@ -90,6 +90,13 @@ fn display_math_dollars() {
 }
 
 #[test]
+fn def_parameter_dollar_is_not_math() {
+    insta::assert_snapshot!(tree(
+        "\\def\\take#1] ${%\n% comment\n  body\n}%\n\\def\\next#1${next}\n",
+    ));
+}
+
+#[test]
 fn math_scripts_bind_to_base() {
     // Sub/superscripts in either order, a bare-group base, a command script
     // argument, and a nested script inside a `{…}` group. Atoms are separated by

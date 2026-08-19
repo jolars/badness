@@ -1451,6 +1451,9 @@ const DTX_FIXTURES: &[&str] = &[
     // A virtual documentation region owns its leading `%`; generic trivia
     // consumption must not retain it and let the region wrapper add a second one.
     "issue_125_dtx_empty_documentation",
+    // The mathtools smoke-test reproducer: command-only doc lines must remain a
+    // fixed point after their `%  ` margins normalize (issue #126).
+    "issue_126_dtx_command_lines",
     // A documentation-layer environment whose `\begin` shares its line with
     // body content is not a frame. Splitting after the header would move that
     // content off the `%` margin (smoke-test issue #127, mathtools).

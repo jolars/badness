@@ -2819,8 +2819,9 @@ not re-proposed.
 
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
 
-- [ ] `.dtx` two-layer model: a preprocessor that splits doc/code layers, or a
-  single lexer mode with margin-aware tokens? *(Package infrastructure)*
+- [x] Model `.dtx` as one lossless CST with margin-aware tokens; project safe,
+  fully margined documentation environments into virtual LaTeX in the formatter.
+  *(Package infrastructure)*
 
 - [ ] Math preview on hover: skip (LaTeX Workshop covers it), render in the
   VS Code extension, or a server-side Rust renderer? *(Language server; see

@@ -100,6 +100,13 @@ enum CommentFit {
     SharesLine,
 }
 
+/// A physical line prefix active while rendering a virtual document layer.
+#[derive(Clone, Copy)]
+struct ActivePrefix<'a> {
+    line: &'a str,
+    blank: Option<&'a str>,
+}
+
 /// A unit of pending work on the printer's layout stack. Most IR nodes are a
 /// plain [`Cmd::Node`]; [`Ir::Fill`] is processed incrementally as a
 /// [`Cmd::Fill`], while [`Ir::PreferredFill`] carries the globally selected break
@@ -112,13 +119,13 @@ enum Cmd<'a> {
         /// The active margin prefix (see [`Ir::MarginPrefix`]), re-emitted at
         /// column 0 on every line break this command's subtree produces.
         /// Inherited by child commands; `None` outside any `MarginPrefix`.
-        prefix: Option<&'a str>,
+        prefix: Option<ActivePrefix<'a>>,
     },
     Fill {
         indent: usize,
         mode: Mode,
         parts: &'a [Ir],
-        prefix: Option<&'a str>,
+        prefix: Option<ActivePrefix<'a>>,
         /// A [`Ir::StickyFill`]: once an atom has broken, the rest break too.
         sticky: bool,
         /// A [`Ir::HugFill`]: an atom carrying a forced break is measured by
@@ -135,7 +142,7 @@ enum Cmd<'a> {
         atoms: &'a [Ir],
         breaks: Rc<[bool]>,
         index: usize,
-        prefix: Option<&'a str>,
+        prefix: Option<ActivePrefix<'a>>,
     },
 }
 
@@ -199,7 +206,7 @@ impl Writer {
     /// columns (the default path). With a `prefix` (a [`Ir::MarginPrefix`] margin),
     /// the prefix is written eagerly flush at column 0 right after the newline and
     /// no indent is queued, so the prefix re-appears on every wrapped line.
-    fn newline(&mut self, indent: usize, prefix: Option<&str>) {
+    fn newline(&mut self, indent: usize, prefix: Option<ActivePrefix<'_>>) {
         self.out.push('\n');
         self.col = 0;
         self.start_line(indent, prefix);
@@ -207,8 +214,11 @@ impl Writer {
 
     /// Emit a blank line, then position on a fresh line. The empty middle line
     /// never carries the `prefix` (no trailing whitespace); the fresh line does.
-    fn empty_line(&mut self, indent: usize, prefix: Option<&str>) {
+    fn empty_line(&mut self, indent: usize, prefix: Option<ActivePrefix<'_>>) {
         self.out.push('\n');
+        if let Some(blank) = prefix.and_then(|active| active.blank) {
+            self.out.push_str(blank);
+        }
         self.out.push('\n');
         self.col = 0;
         self.start_line(indent, prefix);
@@ -216,13 +226,13 @@ impl Writer {
 
     /// Position at the start of a fresh line: write an eager margin `prefix` at
     /// column 0 if active, else queue `indent` spaces (deferred until content).
-    fn start_line(&mut self, indent: usize, prefix: Option<&str>) {
+    fn start_line(&mut self, indent: usize, prefix: Option<ActivePrefix<'_>>) {
         match prefix {
             Some(p) => {
-                self.out.push_str(p);
-                self.col = p.chars().count();
-                self.pending_indent = 0;
-                self.needs_indent = false;
+                self.out.push_str(p.line);
+                self.col = p.line.chars().count();
+                self.pending_indent = indent;
+                self.needs_indent = indent > 0;
             }
             None => {
                 self.pending_indent = indent;
@@ -473,6 +483,7 @@ impl Printer {
                 // `inner` with the prefix active so every later break re-emits it.
                 Ir::MarginPrefix {
                     prefix: margin,
+                    blank_prefix,
                     inner,
                 } => {
                     w.write_column_zero(margin);
@@ -480,7 +491,10 @@ impl Printer {
                         indent,
                         mode,
                         node: inner,
-                        prefix: Some(margin),
+                        prefix: Some(ActivePrefix {
+                            line: margin,
+                            blank: blank_prefix.as_deref(),
+                        }),
                     });
                 }
                 Ir::Line => match mode {
@@ -596,7 +610,7 @@ impl Printer {
         &self,
         first_col: usize,
         indent: usize,
-        prefix: Option<&str>,
+        prefix: Option<ActivePrefix<'_>>,
         atoms: &[Ir],
         preferred: &[bool],
         target: usize,
@@ -629,7 +643,7 @@ impl Printer {
             .enumerate()
             .filter_map(|(i, &is_authored)| is_authored.then_some(gap_positions[i]))
             .collect();
-        let continuation_col = prefix.map_or(indent, |p| p.chars().count());
+        let continuation_col = prefix.map_or(indent, |p| p.line.chars().count());
         let target = target.clamp(1, self.line_width.max(1));
 
         let mut costs: Vec<Option<LayoutCost>> = vec![None; n + 1];
@@ -744,7 +758,7 @@ impl Printer {
         indent: usize,
         mode: Mode,
         parts: &'a [Ir],
-        prefix: Option<&'a str>,
+        prefix: Option<ActivePrefix<'a>>,
         sticky: bool,
         hug: bool,
         broken: bool,
@@ -1820,5 +1834,16 @@ mod tests {
         )
         .propagate_breaks();
         assert_eq!(printer.print(&ir), "head\ncommand{\n  body\n}");
+    }
+
+    #[test]
+    fn doc_margin_uses_a_bare_percent_on_blank_lines() {
+        let printer = Printer::new(FormatStyle::default());
+        let ir = Ir::doc_margin(Ir::concat([
+            Ir::text("first"),
+            Ir::empty_line(),
+            Ir::text("second"),
+        ]));
+        assert_eq!(printer.print(&ir), "% first\n%\n% second");
     }
 }

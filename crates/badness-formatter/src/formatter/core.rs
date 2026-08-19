@@ -360,6 +360,7 @@ fn format_root(
         dtx_reflow_cache: &dtx_reflow_cache,
         dtx_margin_probe: false,
         preserve_dtx_nested_layout: false,
+        in_dtx_doc_region: false,
         is_dtx: root
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -762,6 +763,10 @@ struct LowerCtx<'a> {
     /// A structured `.dtx` documentation paragraph may normalize its margin
     /// frames, but nested inline constructs must not synthesize unmargined lines.
     preserve_dtx_nested_layout: bool,
+    /// The current node is being lowered as virtual LaTeX from a fully margined
+    /// `.dtx` documentation region. Its physical `DOC_MARGIN` tokens are omitted;
+    /// one canonical margin is re-applied by the enclosing IR.
+    in_dtx_doc_region: bool,
     /// Whether the document carries any `.dtx` documentation margin at all — the
     /// cheap short-circuit for the no-`.dtx` majority, so gates that would
     /// otherwise walk back to the start of a physical line
@@ -859,10 +864,26 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
         return Ir::verbatim(node.text().to_string());
     }
+    if dtx_doc_region(node, cx) {
+        let virtual_doc = LowerCtx {
+            in_dtx_doc_region: true,
+            preserve_dtx_nested_layout: false,
+            ..cx
+        };
+        return Ir::doc_margin(lower_node(node, virtual_doc));
+    }
+    if cx.is_dtx
+        && node.kind() == SyntaxKind::ENVIRONMENT
+        && doc_margin_opens_line(node, cx)
+        && (environment_begin_has_newline(node) || !is_margin_framed(node))
+    {
+        return Ir::verbatim(node.text().to_string());
+    }
     if cx.preserve_dtx_nested_layout
         && matches!(
             node.kind(),
             SyntaxKind::COMMAND
+                | SyntaxKind::ENVIRONMENT
                 | SyntaxKind::GROUP
                 | SyntaxKind::OPTIONAL
                 | SyntaxKind::INLINE_MATH
@@ -990,7 +1011,9 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // a `DOC_MARGIN`): reflow the bare prose and re-emit a `% ` margin on each
         // wrapped line. Checked before the generic paragraph reflow so the margin
         // is stripped and re-synthesized rather than glued into the fill.
-        SyntaxKind::PARAGRAPH if cx.wraps_prose() && is_dtx_doc_paragraph(node) => {
+        SyntaxKind::PARAGRAPH
+            if !cx.in_dtx_doc_region && cx.wraps_prose() && is_dtx_doc_paragraph(node) =>
+        {
             return lower_dtx_doc_paragraph(node, cx);
         }
         SyntaxKind::PARAGRAPH if cx.wraps_prose() => {
@@ -1023,7 +1046,10 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // which keeps the authored margins verbatim (same margin rule as the math /
         // group / optional arms below).
         SyntaxKind::ENVIRONMENT
-            if !has_verbatim_body(node) && is_margin_framed(node) && !is_math_env(node, cx) =>
+            if !cx.in_dtx_doc_region
+                && !has_verbatim_body(node)
+                && is_margin_framed(node)
+                && !is_math_env(node, cx) =>
         {
             return lower_margin_framed_environment(node, cx);
         }
@@ -1254,6 +1280,123 @@ fn dtx_paragraph_starts_margined(node: &SyntaxNode) -> bool {
         .is_some_and(|t| t.kind() == SyntaxKind::DOC_MARGIN || margin_precedes_on_line(&t))
 }
 
+/// Whether `node` is a complete, fully margined `.dtx` documentation block that
+/// can be formatted as ordinary virtual LaTeX. The physical `%` prefixes are
+/// trivia in the CST, but every generated line must regain one; admitting only a
+/// line-owning block makes that prefix scope exact.
+fn dtx_doc_region(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    if !cx.is_dtx
+        || cx.in_dtx_doc_region
+        || node.kind() != SyntaxKind::ENVIRONMENT
+        || has_verbatim_body(node)
+        || node
+            .descendants()
+            .filter_map(Environment::cast)
+            .any(|env| matches!(env.name().as_deref(), Some("verbatim" | "verbatim*")))
+        || node.text().to_string().contains("\\begin{verbatim")
+        || node
+            .descendants()
+            .filter(|child| child.kind() == SyntaxKind::BEGIN)
+            .any(|begin| {
+                begin.descendants_with_tokens().any(|element| {
+                    element
+                        .into_token()
+                        .is_some_and(|token| token.kind() == SyntaxKind::NEWLINE)
+                })
+            })
+        || node.descendants_with_tokens().any(|element| {
+            element.into_token().is_some_and(|token| {
+                matches!(token.kind(), SyntaxKind::GUARD | SyntaxKind::COMMENT)
+            })
+        })
+        || Environment::cast(node.clone()).is_some_and(|environment| {
+            matches!(
+                environment.name().as_deref(),
+                Some("macrocode" | "macrocode*")
+            )
+        })
+    {
+        return false;
+    }
+
+    let Some(first) = node.first_token() else {
+        return false;
+    };
+    let first_is_margined =
+        first.kind() == SyntaxKind::DOC_MARGIN || line_prefix_is_doc_margin(first.prev_token());
+    if !first_is_margined {
+        return false;
+    }
+
+    // The node must own the rest of its closing line. Otherwise a break inside
+    // the region could leave following documentation outside the prefix scope.
+    let mut next = node.last_token().and_then(|token| token.next_token());
+    while let Some(token) = next {
+        match token.kind() {
+            SyntaxKind::WHITESPACE => next = token.next_token(),
+            SyntaxKind::NEWLINE => break,
+            _ => return false,
+        }
+    }
+
+    // Every continuation line must carry its own physical margin in the source.
+    // This excludes mixed doc/code constructs and macrocode bodies without
+    // needing a semantic guess about where their layers change.
+    let tokens: Vec<SyntaxToken> = node
+        .descendants_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .collect();
+    tokens.iter().enumerate().all(|(index, token)| {
+        token.kind() != SyntaxKind::NEWLINE
+            || tokens
+                .get(index + 1)
+                .is_some_and(|next| next.kind() == SyntaxKind::DOC_MARGIN)
+    })
+}
+
+fn environment_begin_has_newline(node: &SyntaxNode) -> bool {
+    Environment::cast(node.clone())
+        .and_then(|environment| environment.begin())
+        .is_some_and(|begin| {
+            begin.syntax().descendants_with_tokens().any(|element| {
+                element
+                    .into_token()
+                    .is_some_and(|token| token.kind() == SyntaxKind::NEWLINE)
+            })
+        })
+}
+
+/// Whether the start of the current physical line, walking backward over only
+/// source padding, is a documentation margin.
+fn line_prefix_is_doc_margin(mut token: Option<SyntaxToken>) -> bool {
+    while let Some(current) = token {
+        match current.kind() {
+            SyntaxKind::WHITESPACE => token = current.prev_token(),
+            SyntaxKind::DOC_MARGIN => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Whether `margin` is the prefix immediately preceding a virtual documentation
+/// region. The region IR re-emits the canonical margin, so this source prefix and
+/// its padding must be omitted.
+fn margin_starts_dtx_doc_region(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool {
+    if margin.kind() != SyntaxKind::DOC_MARGIN || cx.in_dtx_doc_region {
+        return false;
+    }
+    let mut next = margin.next_sibling_or_token();
+    while let Some(SyntaxElement::Token(token)) = &next {
+        if token.kind() == SyntaxKind::WHITESPACE {
+            next = token.next_sibling_or_token();
+        } else {
+            break;
+        }
+    }
+    matches!(next, Some(SyntaxElement::Node(node)) if dtx_doc_region(&node, cx))
+}
+
 /// Whether the physical line `node` starts on opens with a `.dtx` documentation
 /// margin or docstrip guard — i.e. everything on it is documentation (or guarded
 /// code) that docstrip anchors at column 0.
@@ -1265,7 +1408,7 @@ fn dtx_paragraph_starts_margined(node: &SyntaxNode) -> bool {
 /// never margined — turning documentation into live code. [`contains_doc_margin`]
 /// cannot see this: the margin sits *outside* the node, before it on the line.
 fn doc_margin_opens_line(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    if !cx.is_dtx {
+    if !cx.is_dtx || cx.in_dtx_doc_region {
         return false;
     }
     let mut prev = node.first_token().and_then(|t| t.prev_token());
@@ -2020,6 +2163,18 @@ fn reflow_elements_checked(
             {
                 line_margined = true;
             }
+            // The enclosing virtual-document region re-emits one canonical
+            // margin per generated line. Discard the physical marker and its
+            // authored padding before ordinary structural lowering continues.
+            SyntaxElement::Token(token)
+                if cx.in_dtx_doc_region && token.kind() == SyntaxKind::DOC_MARGIN =>
+            {
+                while elements.get(idx + 1).is_some_and(|element| {
+                    matches!(element, SyntaxElement::Token(next) if next.kind() == SyntaxKind::WHITESPACE)
+                }) {
+                    idx += 1;
+                }
+            }
             // A `GUARD` (`%<…>`) pins to column 0, so its line can never sit under
             // the re-emitted `% ` margin: the two would collide (`%<package>% \def…`
             // comments the guarded code out). Commit the guard's whole physical
@@ -2038,7 +2193,7 @@ fn reflow_elements_checked(
                     continue;
                 }
                 b.note_margin_escape();
-                b.push_atom_piece(lower_loose_token(token), token.text());
+                b.push_atom_piece(lower_loose_token(token, cx), token.text());
                 line_has_content = true;
                 line_all_commands = false;
             }
@@ -2056,12 +2211,12 @@ fn reflow_elements_checked(
                     // rides too. A block that *closes* its line (a heading) is
                     // excluded — content after it starts a fresh line.
                     b.append_to_last_line(ride_after_block(
-                        lower_loose_token(token),
+                        lower_loose_token(token, cx),
                         after_block_gap,
                     ));
                     prev_was_block = true;
                 } else {
-                    b.push_atom_piece(lower_loose_token(token), token.text());
+                    b.push_atom_piece(lower_loose_token(token, cx), token.text());
                 }
                 line_has_content = true;
                 line_all_commands = false;
@@ -2866,11 +3021,11 @@ fn lower_expl_code(
                     &mut pending_sep,
                     &mut line_sticky,
                 );
-                atom.push(lower_loose_token(token));
+                atom.push(lower_loose_token(token, cx));
             }
             SyntaxElement::Token(token) => {
                 after_block = false;
-                atom.push(lower_loose_token(token));
+                atom.push(lower_loose_token(token, cx));
             }
             // A command with a bound leading `DOC_COMMENT` (an
             // own-line comment binds forward). Rendered as an opaque block it
@@ -3964,7 +4119,10 @@ fn expl_conditional_at(
 /// to column 0 via [`Ir::column_zero`] so docstrip's left-margin anchor survives
 /// any surrounding LaTeX nesting; every other token splices verbatim. These tokens
 /// only exist under the `.dtx` lexer config, so non-`.dtx` lowering is unaffected.
-fn lower_loose_token(token: &SyntaxToken) -> Ir {
+fn lower_loose_token(token: &SyntaxToken, cx: LowerCtx<'_>) -> Ir {
+    if cx.in_dtx_doc_region && token.kind() == SyntaxKind::DOC_MARGIN {
+        return Ir::Nil;
+    }
     if matches!(token.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD) {
         Ir::column_zero(token.text())
     } else {
@@ -3987,6 +4145,20 @@ fn lower_element_stream(
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            // A virtual documentation region owns its physical margins. Drop
+            // each one together with the source padding after it; ordinary
+            // lowering will regenerate indentation in virtual coordinates.
+            SyntaxElement::Token(token)
+                if cx.in_dtx_doc_region && token.kind() == SyntaxKind::DOC_MARGIN =>
+            {
+                while let Some(SyntaxElement::Token(next)) = iter.peek() {
+                    if next.kind() == SyntaxKind::WHITESPACE {
+                        iter.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
             // Trivia inside a suppressed span is reproduced too, one token at a
             // time rather than collapsed into a `Gap`. Without this the *gaps
             // between* two suppressed siblings would still normalize, so an
@@ -4004,6 +4176,15 @@ fn lower_element_stream(
             // follows a `%` blank line): drop it and the inline whitespace after it,
             // since the paragraph's own [`Ir::margin_prefix`] re-emits a canonical
             // `% ` on every reflowed line. Without this the margin would double up.
+            SyntaxElement::Token(token) if margin_starts_dtx_doc_region(&token, cx) => {
+                while let Some(SyntaxElement::Token(t)) = iter.peek() {
+                    if t.kind() == SyntaxKind::WHITESPACE {
+                        iter.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
             SyntaxElement::Token(token)
                 if cx.wraps_prose()
                     && !cx.dtx_margin_probe
@@ -4018,7 +4199,7 @@ fn lower_element_stream(
                     }
                 }
             }
-            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token, cx)),
         }
     }
     out
@@ -4054,7 +4235,7 @@ fn lower_prose_stream(elements: impl Iterator<Item = SyntaxElement>, cx: LowerCt
                     _ => Ir::empty_line(),
                 });
             }
-            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token, cx)),
         }
     }
     out
@@ -4115,6 +4296,10 @@ struct EnvParts {
     /// They are *in* `body` so no consumer can drop them; the count is what lets
     /// [`lower_env_body`] splice them into the body's first paragraph.
     tail_len: usize,
+    /// A shape-proved, unbraced argument that the grammar represents as the
+    /// first body token. At present this is the parenthesized size tuple of the
+    /// standard `picture` environment.
+    body_header_token: Option<SyntaxToken>,
 }
 
 fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
@@ -4148,6 +4333,10 @@ fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
     if let Some(comment) = &lifted {
         begin = Ir::concat([begin, Ir::verbatim(comment.text())]);
     }
+    let body_header_token = picture_header_token(node, &body);
+    if let Some(token) = &body_header_token {
+        begin = Ir::concat([begin, lower_loose_token(token, cx)]);
+    }
     EnvParts {
         leading,
         begin,
@@ -4155,7 +4344,55 @@ fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
         end,
         lifted,
         tail_len,
+        body_header_token,
     }
+}
+
+/// Return the standard `picture` environment's glued `(width,height)` token.
+/// TeX gives this environment an unbraced begin argument, so the generic grammar
+/// necessarily places it in the body. The name, adjacency, and tuple shape make
+/// the relocation text-falsifiable without claiming that arbitrary body text is
+/// an environment argument.
+fn picture_header_token(node: &SyntaxNode, body: &[SyntaxElement]) -> Option<SyntaxToken> {
+    let environment = Environment::cast(node.clone())?;
+    if environment.name().as_deref() != Some("picture") {
+        return None;
+    }
+    let begin = environment.begin()?;
+    let paragraph = body.first()?.as_node()?;
+    if paragraph.kind() != SyntaxKind::PARAGRAPH {
+        return None;
+    }
+    let token = paragraph.first_token()?;
+    (token.kind() == SyntaxKind::WORD
+        && begin.syntax().text_range().end() == token.text_range().start()
+        && is_picture_tuple(token.text()))
+    .then_some(token)
+}
+
+fn is_picture_tuple(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    let mut groups = 0usize;
+    while chars.peek().is_some() {
+        if chars.next() != Some('(') {
+            return false;
+        }
+        let mut comma = false;
+        let mut content = false;
+        loop {
+            match chars.next() {
+                Some(',') if !comma && content => {
+                    comma = true;
+                    content = false;
+                }
+                Some(')') if comma && content => break,
+                Some('(' | ')') | None => return false,
+                Some(_) => content = true,
+            }
+        }
+        groups += 1;
+    }
+    matches!(groups, 1 | 2)
 }
 
 /// Whether `el` is the [`EnvParts::lifted`] `\begin`-line comment, compared by
@@ -4194,7 +4431,28 @@ fn paragraph_reflows_as_prose(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// so `{\bfseries A}` and `more` would run together. That is a space TeX typesets,
 /// silently deleted — and invisible to every CST oracle, since whitespace is trivia
 /// to them and content to TeX.
-fn lower_env_body(body: Vec<SyntaxElement>, tail_len: usize, lifted: bool, cx: LowerCtx<'_>) -> Ir {
+fn lower_env_body(
+    body: Vec<SyntaxElement>,
+    tail_len: usize,
+    lifted: bool,
+    body_header_token: Option<&SyntaxToken>,
+    cx: LowerCtx<'_>,
+) -> Ir {
+    if let Some(header_token) = body_header_token
+        && let Some(SyntaxElement::Node(paragraph)) = body.first()
+    {
+        let elements = paragraph
+            .children_with_tokens()
+            .filter(|element| element.as_token() != Some(header_token));
+        let first = if cx.wraps_prose() {
+            reflow_elements(elements, cx, paragraph_reflow_kind(paragraph, cx))
+        } else {
+            Ir::concat(lower_element_stream(elements, cx))
+        };
+        return Ir::concat(
+            std::iter::once(first).chain(lower_element_stream(body[1..].iter().cloned(), cx)),
+        );
+    }
     if tail_len > 0
         && let Some(SyntaxElement::Node(para)) = body.get(tail_len)
         && para.kind() == SyntaxKind::PARAGRAPH
@@ -4226,8 +4484,15 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         end,
         lifted,
         tail_len,
+        body_header_token,
     } = split_environment(node, cx);
-    let body = lower_env_body(body, tail_len, lifted.is_some(), cx);
+    let body = lower_env_body(
+        body,
+        tail_len,
+        lifted.is_some(),
+        body_header_token.as_ref(),
+        cx,
+    );
     // Trim the body's own edge breaks (the indenter re-supplies them), but if the
     // author left a blank line touching `\begin`/`\end`, preserve it as a single
     // blank line — LaTeX blank lines are deliberate visual spacing, so we keep one
@@ -4551,6 +4816,17 @@ fn is_margin_framed(node: &SyntaxNode) -> bool {
     let Some(begin) = Environment::cast(node.clone()).and_then(|e| e.begin()) else {
         return false;
     };
+    // A frame header occupies its physical line. If body content follows the
+    // `\begin` inline, the generic stream must keep it behind the existing `%`;
+    // the framed layout would insert a break and turn it into live package code.
+    if begin
+        .syntax()
+        .last_token()
+        .and_then(|token| token.next_token())
+        .is_some_and(|token| token.kind() != SyntaxKind::NEWLINE)
+    {
+        return false;
+    }
     let mut tok = begin.syntax().first_token().and_then(|t| t.prev_token());
     while let Some(t) = tok {
         match t.kind() {
@@ -4607,6 +4883,7 @@ fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         end,
         lifted,
         tail_len,
+        body_header_token: _,
     } = split_environment(node, cx);
 
     // Pull the `%␣␣␣␣` that frames `\end` onto the `\end` line; what remains is the
@@ -4616,7 +4893,7 @@ fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .map(|f| Ir::concat(lower_element_stream(f.into_iter(), cx)))
         .filter(|ir| !matches!(ir, Ir::Nil));
 
-    let body = lower_env_body(body, tail_len, lifted.is_some(), cx);
+    let body = lower_env_body(body, tail_len, lifted.is_some(), None, cx);
     let (lead_blank, body) = peel_leading_break(body);
     let (trail_blank, body) = peel_trailing_break(body);
     let lead = if lead_blank {
@@ -4697,7 +4974,7 @@ fn lower_body_dropping_leading_comment(body_elements: Vec<SyntaxElement>, cx: Lo
             }
             // Unreachable given `leading_inline_comment` matched, but stay lossless.
             SyntaxElement::Token(token) => {
-                out.push(lower_loose_token(&token));
+                out.push(lower_loose_token(&token, cx));
                 break;
             }
         }
@@ -4833,7 +5110,8 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     {
         match token.kind() {
             SyntaxKind::COMMENT => has_comment = true,
-            SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => has_margin = true,
+            SyntaxKind::DOC_MARGIN if !cx.in_dtx_doc_region => has_margin = true,
+            SyntaxKind::GUARD => has_margin = true,
             _ => {}
         }
     }
@@ -4852,6 +5130,19 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     let mut i = 0usize;
     while let Some(element) = elements.get(i) {
         match element {
+            SyntaxElement::Token(token)
+                if cx.in_dtx_doc_region && token.kind() == SyntaxKind::DOC_MARGIN =>
+            {
+                // The region wrapper owns the canonical margin. Its source
+                // padding is not a gap in the virtual LaTeX header.
+                i += 1;
+                while matches!(
+                    elements.get(i),
+                    Some(SyntaxElement::Token(next)) if next.kind() == SyntaxKind::WHITESPACE
+                ) {
+                    i += 1;
+                }
+            }
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 // Measure the run in place rather than consuming it: when it turns
                 // out to be the split point it must travel to the body, so that
@@ -4916,7 +5207,7 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                 i += 1;
             }
             SyntaxElement::Token(token) => {
-                head.push(lower_loose_token(token));
+                head.push(lower_loose_token(token, cx));
                 i += 1;
             }
         }
@@ -4986,6 +5277,7 @@ fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // The `BEGIN` tail (see [`lower_begin`]) rides `body` as ordinary leading
         // elements: this path flattens the body itself, so it needs no splice.
         tail_len: _,
+        body_header_token: _,
     } = split_environment(node, cx);
 
     let Some(body) = lower_list_body(&body, cx, lifted.as_ref()) else {
@@ -5371,6 +5663,7 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // The `BEGIN` tail (see [`lower_begin`]) rides `body` as ordinary leading
         // elements: this path flattens the body itself, so it needs no splice.
         tail_len: _,
+        body_header_token: _,
     } = split_environment(node, cx);
 
     let Some(items) = build_alignment_grid(&body, cx, false, lifted.as_ref()) else {
@@ -5419,6 +5712,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // The `BEGIN` tail (see [`lower_begin`]) rides `body` as ordinary leading
         // elements: this path flattens the body itself, so it needs no splice.
         tail_len: _,
+        body_header_token: _,
     } = split_environment(node, cx);
 
     let Some(math_node) = body_elements
@@ -6467,7 +6761,7 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                     return block(); // an interior blank line: preserved predicate
                 }
                 commit_gap(&mut atoms, &mut atom, &mut pending);
-                atom.push(lower_loose_token(&t));
+                atom.push(lower_loose_token(&t, cx));
             }
             SyntaxElement::Node(child) => {
                 let ir = lower_node(&child, cx);
@@ -6738,7 +7032,7 @@ fn segment_delimited_body(
                 entry_open = !open_entry;
             }
             SyntaxElement::Token(t) => {
-                parts.push(lower_loose_token(&t));
+                parts.push(lower_loose_token(&t, cx));
                 open_entry = false;
                 entry_open = true;
             }
@@ -7155,7 +7449,7 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
             }
-            SyntaxElement::Token(token) => out.push(lower_loose_token(&token)),
+            SyntaxElement::Token(token) => out.push(lower_loose_token(&token, cx)),
         }
     }
     Ir::concat(out)
@@ -8230,7 +8524,7 @@ fn spans_multiple_lines(node: &SyntaxNode) -> bool {
 /// level. Ungated it was ~52% of the run on `{{{…}}}` nested 4000 deep, and made
 /// lowering quadratic in nesting depth for every file, `.dtx` or not.
 fn contains_doc_margin(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    if !cx.is_dtx {
+    if !cx.is_dtx || cx.in_dtx_doc_region {
         return false;
     }
     node.descendants_with_tokens()

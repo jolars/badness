@@ -1448,6 +1448,10 @@ const DTX_FIXTURES: &[&str] = &[
     "dtx_guards",
     "dtx_driver",
     "dtx_margin_blank_line",
+    // A documentation-layer environment whose `\begin` shares its line with
+    // body content is not a frame. Splitting after the header would move that
+    // content off the `%` margin (smoke-test issue #127, mathtools).
+    "issue_127_dtx_inline_environment_body",
     "dtx_expl3_chunks",
     // A statement-leading expl3 conditional inside a `macrocode` body lays out
     // byte-identically to the same code under the `.sty`/`.tex` flavor
@@ -1558,6 +1562,41 @@ fn dtx_fixtures_match_expected() {
             reparsed.syntax().to_string(),
             formatted,
             "fixture {name} formatted output must round-trip losslessly"
+        );
+    }
+}
+
+#[test]
+fn dtx_document_environment_is_structural_in_every_wrap_mode() {
+    let input = fs::read_to_string(fixture_path(
+        "issue_127_dtx_inline_environment_body",
+        "input.dtx",
+    ))
+    .expect("read issue #127 input");
+    for wrap in [
+        WrapMode::Reflow,
+        WrapMode::Stable,
+        WrapMode::Sentence,
+        WrapMode::Semantic,
+        WrapMode::Preserve,
+    ] {
+        let style = FormatStyle {
+            wrap,
+            ..FormatStyle::default()
+        };
+        let formatted = format_with_style_flavored(&input, style, dtx_config()).expect("format");
+        assert!(
+            formatted.contains("%   \\begin{picture}(90,30)(-30,40)"),
+            "picture header split under {wrap:?}:\n{formatted}"
+        );
+        assert!(
+            formatted.lines().all(|line| line.starts_with('%')),
+            "documentation line lost its margin under {wrap:?}:\n{formatted}"
+        );
+        assert_eq!(
+            format_with_style_flavored(&formatted, style, dtx_config()).expect("reformat"),
+            formatted,
+            "document environment is not idempotent under {wrap:?}"
         );
     }
 }

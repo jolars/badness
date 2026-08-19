@@ -1178,9 +1178,14 @@ hid unsafe paths and still allowed an explicit `--wrap reflow` to corrupt a
 document.
 
 The safety is now structural, and every gate is independent of the wrap mode, so
-an explicit `--wrap reflow` is exactly as safe as any other mode. Every relayout
-arm refuses a node whose subtree carries a `.dtx` margin or guard, because
-reflowing one drops the `%` margin and on an unmargined line a `^^A` doc comment
+an explicit `--wrap reflow` is exactly as safe as any other mode. A fully
+margined, line-owning documentation environment is lowered as virtual LaTeX: its
+`DOC_MARGIN` tokens remain in the CST, the formatter omits them while laying out
+the environment, then applies `% ` to each generated content line and `%` to an
+empty line. Guards, `macrocode`, protected bodies, mixed-margin regions, and
+nodes that do not own their closing line refuse this path. Other relayout arms
+refuse a node whose subtree carries a `.dtx` margin or guard, because reflowing
+one can drop the `%` margin and on an unmargined line a `^^A` doc comment
 re-lexes as content. A residual margin-escape detector backs that up: when a
 probe-gated reflow would commit content outside the margin, the paragraph
 re-lowers on the byte-faithful preserve path. Never re-introduce a file-kind

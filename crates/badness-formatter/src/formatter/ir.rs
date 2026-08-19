@@ -163,7 +163,11 @@ pub(crate) enum Ir {
     /// lowering uses `"% "` to re-emit a documentation margin on each *wrapped*
     /// line); it must never contain a newline. A blank line never carries the
     /// prefix on its empty line. Build via [`Ir::margin_prefix`].
-    MarginPrefix { prefix: Rc<str>, inner: Rc<Ir> },
+    MarginPrefix {
+        prefix: Rc<str>,
+        blank_prefix: Option<Rc<str>>,
+        inner: Rc<Ir>,
+    },
     /// Nothing.
     Nil,
 }
@@ -382,6 +386,20 @@ impl Ir {
         }
         Ir::MarginPrefix {
             prefix: prefix.into(),
+            blank_prefix: None,
+            inner: Rc::new(inner),
+        }
+    }
+
+    /// Re-emit the canonical `.dtx` documentation margin on every generated
+    /// line, using a bare `%` for a virtual blank line.
+    pub(crate) fn doc_margin(inner: Ir) -> Ir {
+        if matches!(inner, Ir::Nil) {
+            return Ir::Nil;
+        }
+        Ir::MarginPrefix {
+            prefix: "% ".into(),
+            blank_prefix: Some("%".into()),
             inner: Rc::new(inner),
         }
     }
@@ -541,12 +559,17 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
             let (forced, rewritten) = saturate(inner);
             (forced, rewritten.map(|ir| Ir::Align(*width, Rc::new(ir))))
         }
-        Ir::MarginPrefix { prefix, inner } => {
+        Ir::MarginPrefix {
+            prefix,
+            blank_prefix,
+            inner,
+        } => {
             let (forced, rewritten) = saturate(inner);
             (
                 forced,
                 rewritten.map(|ir| Ir::MarginPrefix {
                     prefix: prefix.clone(),
+                    blank_prefix: blank_prefix.clone(),
                     inner: Rc::new(ir),
                 }),
             )

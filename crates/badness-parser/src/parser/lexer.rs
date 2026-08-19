@@ -849,7 +849,13 @@ impl<'a> Lexer<'a> {
             return false;
         }
         let (rest, ctx) = (self.rest(), self.ctx);
-        let Some(consumed) = lex_verbatim_command(rest, word_len, ctx, &mut self.out) else {
+        let Some(consumed) = lex_verbatim_command(
+            rest,
+            word_len,
+            ctx,
+            self.config.dtx && self.in_doc_line,
+            &mut self.out,
+        ) else {
             return false;
         };
         self.consume(consumed);
@@ -1543,6 +1549,7 @@ fn lex_verbatim_command(
     rest: &str,
     word_len: Option<usize>,
     ctx: &ParseCtx,
+    on_dtx_doc_line: bool,
     out: &mut Vec<Token>,
 ) -> Option<usize> {
     let word_len = word_len?;
@@ -1572,9 +1579,20 @@ fn lex_verbatim_command(
     let after_word = &rest[word_len..];
     let args_len = scan_verbatim_args(after_word, leading);
 
-    // Skip inline whitespace to reach the verbatim argument's opening delimiter.
+    // A braced-only argument is an ordinary TeX argument and may begin on the
+    // next line. Delimiter-style verbatim remains same-line: its closing delimiter
+    // cannot cross a line break.
     let region = &after_word[args_len..];
-    let ws_len = inline_ws_len(region);
+    let dtx_gap = (!delimited && on_dtx_doc_line)
+        .then(|| dtx_doc_argument_gap_len(region))
+        .flatten();
+    let ws_len = if let Some(len) = dtx_gap {
+        len
+    } else if delimited {
+        inline_ws_len(region)
+    } else {
+        tex_whitespace_len(region)
+    };
     let arg_region = &region[ws_len..];
     let arg_len = match arg_region.bytes().next() {
         Some(b'{') => balanced_group_len(arg_region, b'}')?,
@@ -1590,10 +1608,14 @@ fn lex_verbatim_command(
     });
     lex_into(&after_word[..args_len], out);
     if ws_len > 0 {
-        out.push(Token {
-            kind: SyntaxKind::WHITESPACE,
-            text: SmolStr::new(&region[..ws_len]),
-        });
+        if dtx_gap.is_some() {
+            lex_dtx_doc_argument_gap(&region[..ws_len], out);
+        } else {
+            out.push(Token {
+                kind: SyntaxKind::WHITESPACE,
+                text: SmolStr::new(&region[..ws_len]),
+            });
+        }
     }
     out.push(Token {
         kind: SyntaxKind::VERB,
@@ -1716,6 +1738,57 @@ fn push_env_delimiter(out: &mut Vec<Token>, control: &str, name: &str) {
 /// over blanks means exactly this.
 fn inline_ws_len(s: &str) -> usize {
     s.bytes().take_while(|&b| b == b' ' || b == b'\t').count()
+}
+
+/// Number of leading ASCII whitespace bytes TeX may skip before a braced argument.
+fn tex_whitespace_len(s: &str) -> usize {
+    s.bytes()
+        .take_while(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        .count()
+}
+
+/// A verbatim command on a `.dtx` documentation line may take its braced argument
+/// on the next margined line. Return the gap through that line's indentation.
+fn dtx_doc_argument_gap_len(s: &str) -> Option<usize> {
+    let inline = inline_ws_len(s);
+    let rest = &s[inline..];
+    let newline = if rest.starts_with("\r\n") {
+        2
+    } else if rest.starts_with(['\n', '\r']) {
+        1
+    } else {
+        return None;
+    };
+    let after_newline = &rest[newline..];
+    let after_margin = after_newline.strip_prefix('%')?;
+    Some(inline + newline + 1 + inline_ws_len(after_margin))
+}
+
+fn lex_dtx_doc_argument_gap(gap: &str, out: &mut Vec<Token>) {
+    let inline = inline_ws_len(gap);
+    if inline > 0 {
+        out.push(Token {
+            kind: SyntaxKind::WHITESPACE,
+            text: SmolStr::new(&gap[..inline]),
+        });
+    }
+    let rest = &gap[inline..];
+    let newline = if rest.starts_with("\r\n") { 2 } else { 1 };
+    out.push(Token {
+        kind: SyntaxKind::NEWLINE,
+        text: SmolStr::new(&rest[..newline]),
+    });
+    out.push(Token {
+        kind: SyntaxKind::DOC_MARGIN,
+        text: SmolStr::new("%"),
+    });
+    let trailing = &rest[newline + 1..];
+    if !trailing.is_empty() {
+        out.push(Token {
+            kind: SyntaxKind::WHITESPACE,
+            text: SmolStr::new(trailing),
+        });
+    }
 }
 
 /// `s` past its leading [`inline_ws_len`].

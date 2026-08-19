@@ -1458,6 +1458,10 @@ const DTX_FIXTURES: &[&str] = &[
     // body content is not a frame. Splitting after the header would move that
     // content off the `%` margin (smoke-test issue #127, mathtools).
     "issue_127_dtx_inline_environment_body",
+    // A math grid inside virtual `.dtx` documentation owns physical `%` margins
+    // only as framing. They must not survive as grid-cell text and become a
+    // second `%` that comments out each row (smoke-test issue #138, xcolor).
+    "issue_138_dtx_doc_math_grid",
     "dtx_expl3_chunks",
     // A statement-leading expl3 conditional inside a `macrocode` body lays out
     // byte-identically to the same code under the `.sty`/`.tex` flavor

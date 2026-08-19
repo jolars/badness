@@ -650,6 +650,13 @@ fn brace_verbatim_command_is_opaque() {
 }
 
 #[test]
+fn braced_verbatim_command_argument_may_start_on_next_line() {
+    let out = tree("\\code\n{$ pip install x_y}");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(out.contains(r#"VERB@6..25 "{$ pip install x_y}""#), "{out}");
+}
+
+#[test]
 fn braced_only_verbatim_command_without_brace_lexes_normally() {
     // The delimiter form is opt-in per signature. `\code` is braced-only (jss),
     // so a non-brace follower means this `\code` is some unrelated user macro —

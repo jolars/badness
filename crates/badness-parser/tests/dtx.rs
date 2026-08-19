@@ -309,6 +309,23 @@ fn meta_comment_header_parses_as_documentation() {
 }
 
 #[test]
+fn character_table_argument_is_opaque() {
+    // `doc` compares this payload token-for-token under a private character-table
+    // regime. In particular, `\(` and `\)` name literal control symbols here;
+    // they must not become math delimiters whose interior whitespace is mutable.
+    let root = parse_dtx(
+        "% \\CharacterTable\n\
+         %  {Left paren \\(     Right paren   \\)}\n",
+    );
+    let toks = tokens(&root);
+    assert!(toks.contains(&(
+        SyntaxKind::VERB,
+        "{Left paren \\(     Right paren   \\)}".to_string()
+    )));
+    assert_eq!(count(&root, SyntaxKind::INLINE_MATH), 0);
+}
+
+#[test]
 fn full_self_extracting_dtx_needs_no_driver_machinery() {
     // The whole self-extracting shape in one file: a `% \iffalse … % \fi` meta
     // comment wrapping a `%<*driver> … %</driver>` block of real driver code, then

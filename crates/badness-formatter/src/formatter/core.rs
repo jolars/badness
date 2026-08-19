@@ -1071,6 +1071,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // off column 0 and the block's closing `\]` is unparseable on pass 2.
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
+                && !cx.in_dtx_doc_region
                 && is_math_env(node, cx)
                 && !contains_doc_margin(node, cx) =>
         {
@@ -1161,7 +1162,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::DISPLAY_MATH if !contains_doc_margin(node, cx) => {
             return lower_display_math(node, cx);
         }
-        SyntaxKind::MATH if !contains_doc_margin(node, cx) => {
+        SyntaxKind::MATH if !cx.in_dtx_doc_region && !contains_doc_margin(node, cx) => {
             return lower_math_body(node, cx);
         }
         // A `.dtx` doc-layer group continuing across margined lines
@@ -6411,6 +6412,14 @@ fn push_alignment_element(
     element: SyntaxElement,
     cx: LowerCtx<'_>,
 ) {
+    // The enclosing virtual `.dtx` documentation region re-emits one canonical
+    // margin per rendered line. Keeping the physical margin in a grid cell emits
+    // a second `%`, which comments out the row on the next parse.
+    if cx.in_dtx_doc_region
+        && matches!(&element, SyntaxElement::Token(token) if token.kind() == SyntaxKind::DOC_MARGIN)
+    {
+        return;
+    }
     if let SyntaxElement::Node(node) = &element
         && rule_overattaches_cell(node, cx)
     {
@@ -6807,6 +6816,19 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::R_BRACE => {
                 close = Ir::verbatim(t.text());
+            }
+            SyntaxElement::Token(t)
+                if cx.in_dtx_doc_region && t.kind() == SyntaxKind::DOC_MARGIN =>
+            {
+                // The virtual region owns both the physical margin and its source
+                // padding. Retaining the padding makes a wrapped group add its
+                // indentation again on every pass.
+                while matches!(
+                    iter.peek(),
+                    Some(SyntaxElement::Token(next)) if next.kind() == SyntaxKind::WHITESPACE
+                ) {
+                    iter.next();
+                }
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
                 let gap = consume_gap(&t, &mut iter);

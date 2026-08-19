@@ -55,6 +55,7 @@
     "LoadClassWithOptions": { "args": ["req"], "block": true },
     "PassOptionsToPackage": { "args": ["req", "req"], "block": true },
     "PassOptionsToClass": { "args": ["req", "req"], "block": true },
+    "CharacterTable": { "verbatim": true },
 
     "newcommand": { "args": ["req", "opt", "req"], "block": true },
     "renewcommand": { "args": ["req", "opt", "req"], "block": true },

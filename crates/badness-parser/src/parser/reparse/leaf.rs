@@ -402,7 +402,7 @@ mod tests {
             ControlSequence,
         ),
         (
-            "let def_prefix = is_def_prefix_command(self.text());",
+            "is_def_prefix_command(self.text()) || is_command_definition_command(self.text());",
             ControlSequence,
         ),
         (

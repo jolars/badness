@@ -1,0 +1,37 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: out
+---
+ROOT@0..97
+  PARAGRAPH@0..97
+    COMMAND@0..57
+      CONTROL_WORD@0..21 "\\DeclareRobustCommand"
+      CONTROL_SYMBOL@21..23 "\\["
+      GROUP@23..57
+        L_BRACE@23..24 "{"
+        COMMENT@24..25 "%"
+        NEWLINE@25..26 "\n"
+        WHITESPACE@26..28 "  "
+        DOLLAR@28..29 "$"
+        DOLLAR@29..30 "$"
+        COMMENT@30..40 "% trailing"
+        NEWLINE@40..41 "\n"
+        WHITESPACE@41..45 "    "
+        COMMENT@45..55 "% own line"
+        NEWLINE@55..56 "\n"
+        R_BRACE@56..57 "}"
+    COMMENT@57..58 "%"
+    NEWLINE@58..59 "\n"
+    COMMAND@59..88
+      CONTROL_WORD@59..80 "\\DeclareRobustCommand"
+      CONTROL_SYMBOL@80..82 "\\]"
+      GROUP@82..88
+        L_BRACE@82..83 "{"
+        WORD@83..87 "body"
+        R_BRACE@87..88 "}"
+    NEWLINE@88..89 "\n"
+    DISPLAY_MATH@89..97
+      CONTROL_SYMBOL@89..91 "\\["
+      MATH@91..95
+        WORD@91..95 "live"
+      CONTROL_SYMBOL@95..97 "\\]"

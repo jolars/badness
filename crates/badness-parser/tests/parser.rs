@@ -1671,6 +1671,17 @@ fn def_control_symbol_name_is_plain() {
 }
 
 #[test]
+fn latex_command_definition_control_symbol_name_is_plain() {
+    // A LaTeX command-definition name is data just like a `\def` name. The
+    // `\[` and `\]` declarations must not pair across their replacement bodies.
+    let out = tree(
+        "\\DeclareRobustCommand\\[{%\n  $$% trailing\n    % own line\n}%\n\\DeclareRobustCommand\\]{body}\n\\[live\\]",
+    );
+    assert_eq!(out.matches("DISPLAY_MATH@").count(), 1, "{out}");
+    insta::assert_snapshot!(out);
+}
+
+#[test]
 fn display_math_without_reachable_closer_stays_plain() {
     // The `\[` shape gate (smoke-test issue #65), mirroring the `$` gate:
     // macro code passes `\[` around as a data token

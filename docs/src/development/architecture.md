@@ -317,7 +317,9 @@ fall into the following categories:
 - **Definition bodies.** Inside the argument groups of the curated definer set
   (`\newcommand` and `\newenvironment` families, xparse, the LaTeX2e hooks),
   `\begin` and `\end` parse as plain commands, because TeX does not require them
-  to balance within one group.
+  to balance within one group. An unbraced control-symbol name after a command
+  definer is likewise consumed as definition data, so declarations such as
+  `\DeclareRobustCommand\[` cannot open live display math.
 - **Macrocode chunks.** A frame-lexed `macrocode` body is macro code terminated
   only by the literal frame line, a line-oriented docstrip fact. Unmatched
   braces inside a chunk are plain tokens, since a `\def` regularly opens `{` in

@@ -66,7 +66,21 @@ pub(crate) fn is_definition_body_command(text: &str) -> bool {
             | "\\RenewDocumentEnvironment"
             | "\\ProvideDocumentEnvironment"
             | "\\DeclareDocumentEnvironment"
-            | "\\newcommand"
+            | "\\AtBeginDocument"
+            | "\\AtEndDocument"
+            | "\\AtEndOfClass"
+            | "\\AtEndOfPackage"
+            | "\\AddToHook"
+    ) || is_command_definition_command(text)
+}
+
+/// The LaTeX2e and xparse command-definition families. Unlike environment
+/// definitions and hooks, these consume a control sequence as their name, so a
+/// control-symbol name must remain data rather than opening live syntax.
+pub(super) fn is_command_definition_command(text: &str) -> bool {
+    matches!(
+        text,
+        "\\newcommand"
             | "\\renewcommand"
             | "\\providecommand"
             | "\\DeclareRobustCommand"
@@ -74,11 +88,6 @@ pub(crate) fn is_definition_body_command(text: &str) -> bool {
             | "\\RenewDocumentCommand"
             | "\\ProvideDocumentCommand"
             | "\\DeclareDocumentCommand"
-            | "\\AtBeginDocument"
-            | "\\AtEndDocument"
-            | "\\AtEndOfClass"
-            | "\\AtEndOfPackage"
-            | "\\AddToHook"
     )
 }
 

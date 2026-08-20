@@ -25,7 +25,10 @@ use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
 use crate::parser::lexer::{ParseCtx, Token};
 use crate::syntax::SyntaxKind;
-use facts::{BracketPolicy, is_big_delimiter_command, is_definition_body_command};
+use facts::{
+    BracketPolicy, is_big_delimiter_command, is_command_definition_command,
+    is_definition_body_command,
+};
 use prescan::PreScan;
 use smol_str::SmolStr;
 use trivia::{BLANK_LINE_NEWLINES, CommentMode};
@@ -1944,7 +1947,8 @@ impl<'t> Parser<'t> {
         // arguments so following siblings are unaffected.
         let saved = self.in_def_body;
         self.in_def_body = saved || is_definition_body_command(self.text());
-        let def_prefix = is_def_prefix_command(self.text());
+        let consumes_control_symbol_name =
+            is_def_prefix_command(self.text()) || is_command_definition_command(self.text());
         // Arity-directed expl3 attachment (decision #8's sanctioned
         // deviation): resolve the head's argspec and scan the whole unit
         // *before* any event is emitted; the replay below consumes exactly
@@ -1956,14 +1960,15 @@ impl<'t> Parser<'t> {
             .and_then(|slots| self.scan_expl3_unit(&slots));
         self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
-        // A `\def`-family primitive's next token is the control sequence being
-        // defined ([`is_def_prefix_command`]). A control-symbol name is
-        // consumed here as a plain token so it is never misparsed as syntax
-        // (`\def\[{…}` is not a math opener), and the attached body is then a
-        // macro-code body: the stacks-project redefinition opens `trivlist` in
-        // `\def\[`'s body and closes it in `\def\]`'s (issue #65), the same
-        // no-balance fact as `is_definition_body_command`.
-        if def_prefix {
+        // A command definer may take its name as the next unbraced control
+        // sequence. Consume a control-symbol name here as a plain token so it
+        // is never misparsed as live syntax (`\def\[{…}` and
+        // `\DeclareRobustCommand\[{…}` are not math openers). The attached
+        // replacement group is then a macro-code body: the stacks-project
+        // redefinition opens `trivlist` in `\def\[`'s body and closes it in
+        // `\def\]`'s (issue #65), the same no-balance fact as
+        // `is_definition_body_command`.
+        if consumes_control_symbol_name {
             let scan = self.scan_trivia(self.pos, CommentMode::Skip);
             if scan.next_kind == Some(SyntaxKind::CONTROL_SYMBOL) && !scan.saw_blank_line {
                 self.skip_trivia();

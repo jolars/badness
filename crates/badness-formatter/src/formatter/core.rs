@@ -7120,6 +7120,18 @@ fn lower_segmented_group(
     cx: LowerCtx<'_>,
     keyval: bool,
 ) -> Option<Ir> {
+    // A captured xparse `v` argument is same-line by construction. Breaking a
+    // preceding optional makes the next parse lose the VERB capture and exposes
+    // raw name bytes as ordinary LaTeX syntax.
+    if node.next_sibling().is_some_and(|sibling| {
+        sibling.kind() == SyntaxKind::GROUP
+            && sibling
+                .descendants_with_tokens()
+                .filter_map(SyntaxElement::into_token)
+                .any(|token| token.kind() == SyntaxKind::VERB)
+    }) {
+        return None;
+    }
     // A `[…]` continuing across `.dtx` doc-margined lines keeps its authored
     // margins: `lower_node` already gates on this, but the signature-aware callers
     // reach here directly, and relaying such a body would move content off its `%`.

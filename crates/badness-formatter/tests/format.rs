@@ -1697,14 +1697,10 @@ const DTX_REFLOW_FIXTURES: &[(&str, usize, WidthBound)] = &[
     // (an out-of-region expl3 run): the prose rewraps under `% ` while each
     // chunk commits raw behind its byte-exact `%    ` frame lead.
     ("dtx_reflow_expl3_doc_run", 50, WidthBound::Enforced),
-    // An over-width `[…]` *on* a doc-margin line must not expand: it carries no
-    // margin token of its own, so only `doc_margin_opens_line` sees that every
-    // line the break would create lands unmargined — promoting documentation to
-    // live code. The keyval `axis` bracket is held back for the same reason. The
-    // `\documentclass` inside the `%<*driver>` region *does* expand, glued commas
-    // and all: that line is ordinary code, not column-0-pinned documentation.
-    // Declining that break is exactly what leaves the `\begin{function}` and
-    // `\begin{axis}` lines over the width, so this fixture opts out of the bound.
+    // A `function` environment's xparse `v` name argument is a same-line VERB
+    // capture, so its preceding optional must not break. The ordinary `axis`
+    // optional can expand with synthesized doc margins, and `\documentclass`
+    // inside the `%<*driver>` region expands as ordinary code.
     (
         "dtx_reflow_optional_on_doc_line",
         50,
@@ -1734,6 +1730,10 @@ fn dtx_reflow_fixtures_match_expected() {
         let formatted = format_with_style_flavored(&input, style, dtx_config())
             .unwrap_or_else(|e| panic!("format {name}: {e}"));
         assert_eq!(formatted, expected, "fixture {name} output mismatch");
+        check_format_invariants_with(&input, dtx_config(), |text| {
+            format_with_style_flavored(text, style, dtx_config())
+        })
+        .unwrap_or_else(|error| panic!("fixture {name} broke an invariant: {error}"));
 
         // No reflowed line exceeds the width (a fill never overflows except an
         // unbreakable atom wider than the line, which these fixtures avoid) —

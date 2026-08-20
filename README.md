@@ -52,7 +52,7 @@ Badness is available from several sources:
   [Nixpkgs](https://search.nixos.org/packages?channel=unstable&show=badness&from=0&size=50&sort=relevance&type=packages)
 - **From source**: `cargo install --path .` in a checkout
 
-### Installation scripts
+### Installation Scripts
 
 If you prefer a one-liner installer that picks the right binary for your
 platform, you can use the installer scripts below.

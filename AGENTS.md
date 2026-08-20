@@ -1,305 +1,286 @@
 # AGENTS.md
 
-Guidance for AI agents working with Badness (parser, formatter, linter, and
-LSP for LaTeX).
+Operational guidance for AI agents working on Badness, a parser, formatter,
+linter, and language server for LaTeX.
 
-## Scope and file ownership
+This file is organized by architectural responsibility, not filesystem path.
+Follow the section for the behavior being changed, including when its code lives
+in another crate or at a cross-subsystem call site.
 
-This file is the always-loaded operational contract, including subsystem rules.
+## Project architecture
 
-- Keep this file action-oriented and below 32 KiB.
-- Do **not** use it as a decision log, issue log, or tutorial.
-- Put rationale and history in `docs/src/development/architecture.md`.
-- Put active roadmap/debug notes in `TODO.md`.
-- Keep contributor process in `CONTRIBUTING.md`.
+Badness follows a rust-analyzer-style architecture:
 
-## What this project is
-
-Badness follows a rust-analyzer style architecture:
-
-- Lossless, error-tolerant parser producing a CST.
-- Semantics layered separately from syntax.
-- Incremental recomputation via salsa.
-- Formatter, linter, and LSP built on top of the CST.
+- A lossless, error-tolerant parser produces a CST.
+- Semantics are layered separately from syntax.
+- Salsa provides incremental recomputation.
+- The formatter, linter, and language server build on the CST.
 
 Workspace layout:
 
-- `badness` (root crate): CLI, linter, LSP, project/config/file discovery.
-- `badness-parser`: syntax/ast/parser/semantic core + generated parser data.
-- `badness-formatter`: formatter engine + `.bib` formatter.
-- `badness-wasm`: wasm shim for the docs playground (not published).
+- `badness` (root crate): CLI, linter, language server, project/configuration,
+  and file discovery.
+- `badness-parser`: syntax, AST, parser, semantic core, and generated parser
+  data.
+- `badness-formatter`: LaTeX and BibTeX formatting.
+- `badness-wasm`: wasm shim for the documentation playground; it is not
+  published.
 
-The dprint plugin and wasm targets must keep working.
+Keep these boundaries intact:
 
-## Tenets
+- Fix parser mistakes in the parser; do not compensate for them in the formatter
+  or linter.
+- Keep formatter layout deterministic and formatter-owned.
+- Put content rewrites in linter fixes, not formatter rules.
+- Keep parser and formatter runtime code wasm-clean: do not use the filesystem,
+  threads, or child processes there. Code that needs the outside world belongs
+  in the root crate; build scripts and tests are outside this boundary.
+- Keep the dprint plugin and wasm targets working.
 
-1. **Deterministic formatting.** Layout is rule-based and formatter-owned.
-2. **Incremental parsing matters.** Keep salsa/incremental architecture viable.
-3. **Parsing belongs in parser.** Do not patch parser mistakes in formatter.
-4. **Losslessness is non-negotiable.** `reconstruct(text) == text`.
-5. **Formatting is idempotent.** `fmt(fmt(x)) == fmt(x)`.
+## Development workflow
 
-## Invariants (oracles)
+- Prefer test-driven development.
+- Rust edition 2024 is used throughout; the toolchain is pinned in
+  `rust-toolchain.toml`.
+- Use `go-task` through `Taskfile.yml` for project tasks.
+- Run targeted tests while developing and `cargo fmt` before committing.
+- Keep Clippy warning-free. Run `task check` before handing off a substantial
+  change; it mirrors CI, including the wasm build.
+- Keep fixture line endings aligned with `.gitattributes`, especially on
+  Windows.
 
-- **Losslessness:** parser reconstruction is byte-identical to input.
-- **Reparse equivalence:** a successful incremental reparse yields the same green
-  tree and `SyntaxError` vector as a full parse. Every failed proof falls back to
-  a full parse; fix divergences by adding a bail, never by weakening the oracle.
-- **Whitespace-only formatting:** formatter changes trivia only (whitespace,
-  newlines, comments, `.dtx` margin/guard trivia), never non-trivia tokens.
-- **Idempotence:** second format pass is a no-op.
-- **Protected regions untouched:** `verbatim`/`lstlisting`/`\verb`/comments are
-  preserved, except configured line-ending normalization.
-- **Reflow safety is structural:** no file-kind default workaround; safety comes
-  from content-aware gates.
-- **Trivia-invariant layout:** layout must not depend on “single newline vs
-  space” in a consumed gap.
-- **No parse-stability invariant:** CST shape may change across formatting as
-  long as non-trivia content invariants hold.
+## Parser
 
-Use texlab as a differential parse oracle over corpora; it is a reference for
-comparison, not a byte-target.
+### Core contract
 
-## Repo conventions
-
-- Rust edition 2024; toolchain pinned in `rust-toolchain.toml`.
-- Run `cargo fmt` before commit.
-- `clippy` is warning-free policy:
-  `cargo clippy --all-targets --all-features -- -D warnings`.
-- Task runner is `go-task` (`Taskfile.yml`).
-- New parser features need corpus + snapshot coverage and explicit losslessness
-  assertions.
-- Run `task typeset:check` when changing keyval signature behavior or optional
-  argument lowering (typeset-safety oracle; not CI-default).
-- `CHANGELOG.md` is autogenerated by versionary; do not hand-edit.
-- Generated parser data under `crates/badness-parser/data/` must be refreshed
-  via existing `task *:sync` generators, not hand-edited.
-- Windows gotchas:
-  - Keep fixture line endings aligned with `.gitattributes`.
-  - Use `uri_to_fs_path` / `path_to_uri` for LSP URI-path conversion.
-
-## Working agreements for agents
-
-- Prefer typed AST wrappers for structural reads where available; keep wrappers
-  positional and meaning-free.
-- Hold parser-side semantic facts to the same admission bar used in rules:
-  curated/declarative and text-falsifiable by a shape gate.
-- Keep incremental tiers on top of ordinary `parse`/`lex`; adding lexer
-  checkpoints, token-stream reuse, or grammar restart state is a new architecture
-  decision. The mutable previous-parse cache must never become a salsa input.
-- A hand-maintained incremental soundness enumeration must be backed by a test
-  that discovers unclassified sites. In particular, adding a grammar text
-  comparison means classifying it in the token tier's text-read survey.
-- Relex a mode-only leaf (`VERBATIM_BODY`, `VERB`) with its enclosing delimiters;
-  the delimiters establish the mode. Do not reproduce catcode/capture rules in
-  incremental code.
-- Incremental coverage needs both splice-rate floors (to prevent a vacuously
-  declining tier) and exact per-tier corpus tallies (to catch silent tier
-  migration). The fast and corpus suites share their generator/checker.
-- Keep formatter rules newline-safe: do not key layout on lone authored
-  newlines in consumed gaps.
-- Keep parser pure with respect to text + declarations; do not let ambient
-  signature/package scope drive attachment.
-- Preserve wasm compatibility for parser/formatter crates.
-
-## Maintenance policy for instruction files
-
-- If a new instruction needs long rationale, add a short rule here and link to
-  architecture docs for detail.
-- Edit in place; avoid append-only growth.
-
-## Parser rules
-
-Applies to `crates/badness-parser/**`, generated parser data, and parser,
-semantic, incremental, syntax, and AST code in the root crate. Narrative
-rationale lives in `docs/src/development/architecture.md` under *The parser*.
-
-### Hard invariants
-
-- **Lossless always:** `reconstruct(text) == text` byte-for-byte.
+- **Losslessness:** `reconstruct(text) == text` byte-for-byte.
 - **Tree purity:** parse shape is a function of source text plus explicit
   project declarations only.
-- **No parser abort:** recover and continue; make progress on malformed input.
-- **Generic degradation:** unresolved shapes become generic nodes, never crash
-  and never silent corruption.
-- **Incremental reparse is refusal-first:** success must match a full parse's
-  tree and errors exactly. Every tier returns through the shared oracle/length
-  check; an unproved edit returns `None` and full-parses.
+- **Error tolerance:** never abort; recover, make progress on malformed input,
+  and degrade unresolved shapes to generic nodes without silent corruption.
+- **Reparse equivalence:** a successful incremental reparse produces the same
+  green tree and `SyntaxError` vector as a full parse. Every failed proof falls
+  back to a full parse. Route every tier through the shared oracle and length
+  check; return `None` for an unproved edit, and add a bail instead of weakening
+  the oracle.
 
-### Purity, gates, and grouping
+Use texlab as a differential parse oracle over corpora. It is a reference for
+comparison, not a byte target.
 
-- Do not use ambient package scope/CWL/signature DB to direct attachment. The
-  only non-text parser input is explicit declarations (`badness.toml` through
-  `Declarations` in `ParseCtx`).
+### Syntax, semantics, and grouping
+
+- Badness is not a TeX interpreter. Do not execute or generally expand macros.
+- Do not implement general `\catcode` evaluation. Support only bounded,
+  statically recognizable lexer modes.
+- Prefer typed AST wrappers for structural reads where available; keep wrappers
+  positional and meaning-free.
+- Keep the parser pure with respect to text and declarations. Do not use ambient
+  package scope, CWL data, or the signature database to direct attachment.
+- The only non-text parser input is explicit declarations from `badness.toml`
+  through `Declarations` in `ParseCtx`.
 - A declaration names a spelling; it must not force impossible pairing.
-- Parser-side semantic facts must be curated/declarative and falsifiable by
-  source shape (demotable by a gate when wrong).
-- Gate mismatches demote to generic syntax; do not emit low-confidence parser
+- Parser-side semantic facts must be curated or declarative and falsifiable by
+  source shape, so that a failed gate can demote them to generic syntax.
+- Gate mismatches demote to generic syntax. Do not emit low-confidence parser
   diagnostics for routine macro patterns.
-- A shape gate must mirror the parse path it guards; test both permissive and
+- A shape gate must mirror the parse path it guards. Test both permissive and
   rejecting directions when changing a gate.
 - Prefer false negatives over false positives in lexer-mode and gate admission.
-- Greedy grouping is the default where text carries no arity protocol. Do not
-  use signature arity to attach parser arguments.
-- Keep bracket/optional attachment shape-driven, not meaning-driven.
+- Use greedy grouping where text carries no arity protocol. Do not use signature
+  arity to attach parser arguments.
+- Keep bracket and optional-argument attachment shape-driven, not
+  meaning-driven.
 - expl3 argspec-driven grouping is a sanctioned dialect-specific exception;
-  keep fallback to greedy for underivable heads.
+  retain greedy fallback for underivable heads.
 
-### Cross-subsystem contracts
+### Cross-subsystem parser contracts
 
-- Keep expl3 toggle name recognition shared with formatter
-  (`parser::lexer::expl_toggle`); formatter owns positional layout gating.
-- Environment, conditional, and math pairing rules must preserve formatter
-  safety and not overpromise closers.
-- Environment aliases from self-definition scan and declarations are allowed;
-  cross-file/package inference is not.
+- Share expl3 toggle-name recognition with the formatter through
+  `parser::lexer::expl_toggle`; the formatter owns positional layout gating.
+- Environment, conditional, and math pairing must preserve formatter safety and
+  must not overpromise closers.
+- Environment aliases may come from the self-definition scan and declarations,
+  but not cross-file or package inference.
 
 ### Incremental reparse
 
-- Tiers sit on ordinary `parse`/`lex`: leaf or node splices, or fixed-context
-  fragment parses with explicit locality proofs. Do not checkpoint lexer state,
-  reuse token streams, or restart grammar at an offset without a new
+- Build incremental tiers on ordinary `parse` and `lex`: use leaf or node
+  splices, or fixed-context fragment parses with explicit locality proofs. Lexer
+  checkpoints, token-stream reuse, or grammar restart state require a new
   architecture decision.
 - Relex fragments under the base parse's `ParseCtx` and full-file `.dtx` facts.
-- The previous-parse side channel is not a salsa input and may not become one.
-- Forward-gate effects outside a fragment require an explicit proof; otherwise
-  decline. Repair a debug-oracle divergence by adding a bail.
-- The token tier's text-read classification is a hand-maintained soundness
-  enumeration backed by a source-scanning test. Classify every new grammar text
-  comparison, with a positional guard if it can observe a `WORD`.
-- Guard text reads where reachable, not by spelling alone; otherwise a
-  math/expl3-only read can reject ordinary prose and erase the tier's workload.
-- Lexer readers count too: keep following-text/one-shot lookahead recognition
-  in shared lexer predicates rather than restating it in a reparse guard.
-- Protected bodies relex their enclosing construct with delimiters; delimiters
-  establish lexer mode, so never copy catcode/capture rules into the reparser.
-  Require old-fragment faithfulness, capture locality, a closer in the fragment,
-  and an edited token-sequence match.
-- Raw-capture bytes must not update later lexer state. Pin this with a lexer
-  test containing a state-changing counterexample.
-- A new tier needs a direct-reparse benchmark asserting the exact tier, a
-  calibrated speedup floor, and a release-build full-parse comparison. Keep a
-  declining case to price the guard cascade; thresholds live in the harness.
-- Measure gated benchmark sides interleaved block by block and take the median
-  of block ratios. Calibrate on an idle machine.
-- A new tier also needs a seeded corpus-sweep row. Parse each file under its
-  real-extension `LexConfig`, keep splice-rate floors per corpus, and record
-  exact per-tier tallies as a two-sided baseline ratchet in the same change.
+  Keep the mutable previous-parse side channel out of salsa inputs.
+- Decline when effects outside a fragment lack an explicit locality proof. Fix
+  debug-oracle divergences by adding a bail.
+- Keep the token tier's text-read classification complete and backed by its
+  source-scanning test. Guard text reads where they are reachable, including
+  reads performed by lexer predicates.
+- Relex protected and mode-only bodies with their enclosing delimiters, which
+  establish lexer mode. Do not reproduce catcode or capture rules in the
+  reparser; admit a splice only when locality and token-sequence checks pass.
+- A new tier needs a direct-reparse benchmark that asserts the exact tier, a
+  speedup floor, a release full-parse comparison, and a seeded corpus baseline
+  with splice-rate floors and exact per-tier tallies. Keep protocol details in
+  the architecture documentation and harness.
 
-### Parser data and maintenance
+### Parser validation and data
 
-- Regenerate `crates/badness-parser/data/` with existing sync tasks/scripts;
-  never hand-edit it.
-- When parser behavior changes, update tests/snapshots and losslessness checks,
-  this operational contract when necessary, and architecture rationale.
+- New parser features need corpus and snapshot coverage with explicit
+  losslessness assertions.
+- Regenerate mechanical data with `task cwl:sync`, `task pkg-names:sync`, or
+  `task bib-fields:sync`, as appropriate; do not edit generated artifacts by
+  hand. `signatures.json`, `colors.json`, and `tikz_libraries.json` are curated
+  data and may be edited directly.
+- When parser behavior changes, update tests, snapshots, losslessness checks,
+  these operational instructions when needed, and the parser rationale in
+  `docs/src/development/architecture.md`.
 
-## Formatter rules
+## Formatter
 
-Applies to `crates/badness-formatter/**` and root formatter code. Narrative
-rationale lives in the architecture documentation under *The formatter*.
+### Core contract
 
-### Formatter contract
+- **Trivia only:** change whitespace, newlines, comments, and `.dtx`
+  margin/guard trivia, never non-trivia tokens.
+- **Idempotence:** `fmt(fmt(x)) == fmt(x)`.
+- **Protected regions:** preserve `verbatim`, `lstlisting`, `\verb`, and
+  comments, except configured line-ending normalization.
+- CST shape may change during formatting as long as non-trivia content
+  invariants hold; parse stability is not an invariant.
+- `Mode::Flat` is a verified claim, not a preference. Measure it using the
+  correct current-column context, and keep measurement logic centralized.
 
-- Formatter edits trivia only, never non-trivia tokens, and is idempotent.
-- Protected regions are preserved except configured line-ending normalization.
-- Fix parser bugs in the parser. Content rewrites belong to linter fixes.
-- Formatter alone owns layout policy. Layout is deterministic from content,
-  config, and permitted preserved-trivia predicates; do not add hard-coded
-  content-meaning expansion heuristics.
-- Never branch on “single newline vs space” for consumed gaps. Permitted
-  predicates are blank-line presence, comment presence/own-line status, and
-  `.dtx` margin/guard structure. Use normalized `Gap` APIs for width paths.
-- Intentional newline-shape reads are Tier-2 and require an explicit fixed-point
+### Layout and trivia
+
+- Derive layout deterministically from content, configuration, and permitted
+  preserved-trivia predicates. Do not add hard-coded content-meaning expansion
+  heuristics.
+- Never branch on “single newline versus space” for consumed gaps. Permitted
+  predicates are blank-line presence, comment presence or own-line status, and
+  `.dtx` margin/guard structure.
+- Use normalized `Gap` APIs for width paths.
+- Intentional newline-shape reads are Tier 2 and require an explicit fixed-point
   argument and tests.
-- `Mode::Flat` is a verified claim, not a preference. Measure using the correct
-  current-column context and keep measurement logic centralized.
-- Reflow safety is structural and gate-driven, never a file-kind default hack.
-  `.dtx` margin/guard escapes must safely fall back to preservation, and
-  required `macrocode` framing bytes stay literal.
-- Structural statement boundaries (including statementBody/TikZ paths) derive
-  from parse structure under Reflow. Interior wrapping stays unit-aware and
-  meaning-safe. Underivable fallbacks may preserve authored lines but must be
-  idempotent.
+
+### Reflow and structural safety
+
+- Make reflow safety structural and gate-driven; never use a file-kind default
+  workaround.
+- `.dtx` margin and guard escapes must fall back safely to preservation, and
+  required `macrocode` framing bytes must remain literal.
+- Derive structural statement boundaries from parse structure under reflow.
+- Keep interior statement wrapping unit-aware and meaning-safe. Underivable
+  fallbacks may preserve authored lines but must remain idempotent.
+
+### Formatter validation and linter boundary
+
+- Run `task typeset:check` when changing keyval signature behavior or optional
+  argument lowering. This typeset-safety oracle is not part of default CI.
 - `lint --fix` is fix-first; formatting does not run inside fix application.
   Never rely on formatter output to make a potentially unsafe fix safe.
 
-## Linter rules
+## Linter
 
-Applies to root linter and BibTeX linter code. See the architecture documentation
-under *The linter* and `CONTRIBUTING.md` for the rule-authoring recipe.
-
-### Dispatch and declarations
+### Dispatch and rule declarations
 
 - Do not walk the tree independently per rule. Use shared node-shape
-  (`interests()` + `check()`), whole-file (`check_file()`), or streaming
+  (`interests()` plus `check()`), whole-file (`check_file()`), or streaming
   (`stream()`) dispatch.
-- Reuse shared indexes such as `math_regions` and `conditionals`; extract an
+- Reuse shared indexes such as `math_regions` and `conditionals`. Extract an
   index once two rules need the same derived view.
-- Missing project-resolution context is inert (`None`), not automatically wrong.
-- Rule `id` is stable user-facing kebab-case; a rename is breaking.
-- `emits_fix` must match behavior because fix-loop scheduling depends on it.
-- Descriptions/examples stay non-empty and runnable in docs generation.
+- Treat missing project-resolution context as inert (`None`), not automatically
+  wrong.
+- Keep each user-facing rule `id` stable and kebab-case; a rename is breaking.
+- Ensure `emits_fix` matches behavior because fix-loop scheduling depends on it.
+- Keep descriptions and examples non-empty and runnable in documentation
+  generation.
 - Register rules in every lockstep registry in `rules.rs`.
-- `select`/`ignore` is a `RuleSelection` post-filter over shared dispatch; keep
-  the driver config-agnostic.
+- Apply `select` and `ignore` as a `RuleSelection` post-filter over shared
+  dispatch; keep the driver configuration-agnostic.
 
 ### Fixes and suppression
 
-- A fix chooses what to rewrite, not final layout. A `Safe` fix preserves
-  parseability and meaning; withhold autofix for unproved shapes but still
-  report. Unsafe fixes require explicit opt-in.
-- Fix edits are atomic, including cross-file sets. `apply_fixes` remains pure
-  over source, fixes, and flags, with no filesystem effects.
+- A fix chooses what to rewrite, not final layout.
+- A `Safe` fix preserves parseability and meaning. Withhold autofix for unproved
+  shapes, but still report the diagnostic. Unsafe fixes require explicit opt-in.
+- Keep fix edits atomic, including cross-file sets.
+- Keep `apply_fixes` pure over source, fixes, and flags, with no filesystem
+  effects.
 - Use `badness_parser::directives`: `% badness-lint <verb> [<rule>]` is the lint
-  axis; `% badness <verb>` suppresses lint and format over the same region;
-  `% badness-format` does not suppress lint. Retired `% badness-ignore`
-  spellings remain compatible. BibTeX directives use `@comment{...}`.
+  axis; `% badness <verb>` suppresses lint and formatting over the same region;
+  `% badness-format` does not suppress lint.
+- Preserve compatibility with retired `% badness-ignore` spellings. BibTeX
+  directives use `@comment{...}`.
 
-## Language server rules
+## CLI, configuration, and project discovery
 
-Applies to LSP, project, completion, and text-buffer code in the root crate.
-See the architecture documentation under *The language server*.
+- Treat CLI flags, output streams, output formats, exit codes, and configuration
+  keys as user-facing compatibility surfaces.
+- Keep configuration and filesystem discovery centralized in the root crate.
+  Runtime parser and formatter APIs receive resolved configuration and
+  declarations; they do not discover `badness.toml` or inspect the environment.
+- Keep per-command behavior on the shared discovery path instead of
+  reimplementing directory walking, excludes, or file-kind dispatch.
+- Put project behavior in `badness.toml` and machine-specific settings, such as
+  TeX installation and viewer paths, in editor configuration.
+- Update the CLI and configuration references, generated command documentation,
+  and starter configuration when their public behavior changes.
+
+## Language server
 
 ### Boundaries and configuration
 
-- LSP may use local environment data for navigation; formatter/linter remain
-  hermetic. Launching a configured PDF viewer for forward search is the sole
-  sanctioned outbound effect. Do not run TeX engines or parse `.synctex.gz`.
+- The language server may use local environment data for navigation; the
+  formatter and linter remain hermetic.
+- Launching a configured PDF viewer for forward search is the sole sanctioned
+  outbound effect. Do not run TeX engines or parse `.synctex.gz`.
 - Keep the TEXMF index disconnected from formatter signature resolution.
-- Machine settings such as TeX install and viewer path belong in editor
-  configuration; project build outputs/settings belong in project config.
-- Keep declaration publishing centralized in dispatcher/request flow.
-- Parse `.aux` with its line scanner, not the LaTeX parser. Discover TEXMF roots
-  with `kpsewhich -var-value`. Keep aux freshness caching lightweight (mtime +
-  length).
+- Keep declaration publishing centralized in dispatcher and request flow.
+- Parse `.aux` with its line scanner, not the LaTeX parser.
+- Discover TEXMF roots with `kpsewhich -var-value`.
 
 ### Live buffers and reparse staging
 
 - Carry text as `Arc<TextBuffer>` through the main loop and jobs. Use its
   `line_index()`; do not rebuild indexes or pass a separate encoding source.
-- Staleness uses `text_is_current` (pointer-aware, then content fallback).
-- Patch initialized line tables with `LineTable::patch`; leave uninitialized
-  tables lazy. Text and table stay paired in one `TextBuffer`, including edits
-  splitting/joining CRLF. `LineIndex::with_table` may only combine exact bytes
-  with their derived table.
-- Every `upsert_file` call pairs with `reparse_stage_edits`: use the chain from
-  `apply_content_changes` where available and `None` for routes without edits
-  (`didOpen`, re-lint sweep, sibling seed, watched-file reread).
-- Stage after the upsert, never before. The mutable DB borrow proves analysis is
-  not reading; early staging can be drained by an in-flight full parse.
-- Stage even when the upsert skipped its write: the chain is anchored at the
-  reparse base, not the current DB text.
-- Stage the clamped offsets actually used by the splice, never raw client
-  positions.
-- Coalescing stays on the analysis side of writes. `Worker::run` processes each
-  write job in order; only text-free `AnalyzeRequest` coalesces. A future batched
-  write must carry the superseded chain forward.
+- Use `text_is_current` for staleness checks: pointer-aware first, then content
+  fallback.
+- Keep text and its line table paired in one `TextBuffer`. Patch initialized
+  tables with `LineTable::patch`, leave uninitialized tables lazy, and never
+  combine text with a table derived from different bytes.
+- Pair every `upsert_file` call with `reparse_stage_edits`: pass the chain from
+  `apply_content_changes` when available and `None` otherwise.
+- Stage after the upsert, even when it skipped its write, and use the clamped
+  offsets actually applied by the splice.
+- Keep coalescing on the analysis side of writes. `Worker::run` processes every
+  write job in order; only text-free `AnalyzeRequest` coalesces.
 
 ### Concurrency, completion, and paths
 
-- Never block read-pool threads waiting for viewer processes. Spawn directly;
-  do not shell-split a misconfigured executable string.
-- Do not prefix-filter citations server-side. Use client `filterText` matching
-  and keep `isIncomplete: true`.
-- Convert paths/URIs only with `uri_to_fs_path` and `path_to_uri`, preserving
-  Windows drive handling.
+- Never block read-pool threads while waiting for viewer processes. Spawn them
+  directly; do not shell-split a misconfigured executable string.
+- Convert paths and URIs only with `uri_to_fs_path` and `path_to_uri`,
+  preserving Windows drive handling.
+
+## Documentation and generated files
+
+- Keep architectural rationale and history in
+  `docs/src/development/architecture.md`.
+- Keep active roadmap and debugging notes in `TODO.md`.
+- Keep contributor processes and rule-authoring instructions in
+  `CONTRIBUTING.md`.
+- `CHANGELOG.md` is generated by versionary; do not edit it by hand.
+- Regenerate the linter-rules reference with `task docs:rules` rather than
+  editing generated output.
+- Regenerate the benchmark page with `task bench` rather than editing its data
+  by hand.
+- Update user-facing documentation when CLI or configuration behavior changes.
+  Run `task docs` when generated documentation or the playground changes.
+
+## Maintaining agent instructions
+
+- Keep this file action-oriented and below the 32 KiB project-instruction limit.
+- Do not turn it into a decision log, issue log, tutorial, or substitute for
+  architecture documentation.
+- If a rule needs extended rationale, state the operational rule briefly here
+  and link to the relevant architecture section.
+- Edit instructions in place; avoid append-only growth and duplicate rules.

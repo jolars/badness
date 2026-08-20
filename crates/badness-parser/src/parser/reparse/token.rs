@@ -369,8 +369,8 @@ mod tests {
         assert_splices("a   b\n", edit(2..2, " "));
     }
 
-    /// A hyphen makes `split_math_word` fire, but only math ever calls it — and
-    /// hyphenated words are most of English prose.
+    /// Math's `WORD` slicing never runs in prose, so hyphenated words retain the
+    /// ordinary token-tier fast path.
     #[test]
     fn splices_a_hyphenated_word_outside_math() {
         assert_splices("a well-known result\n", edit(6..6, "l"));
@@ -403,9 +403,12 @@ mod tests {
         assert_refuses("\\documentclass{ltxdoc}\n", edit(16..16, "z"));
     }
 
-    /// In math a word is cut into operator atoms, so its text is structure.
+    /// In math every word may be cut into operator or script-boundary atoms, so
+    /// its text and adjacency are structural. Refuse even an ordinary letter edit;
+    /// the shared driver will try a wider tier or a full parse.
     #[test]
-    fn refuses_a_word_that_splits_into_math_atoms() {
+    fn refuses_every_math_word() {
+        assert_refuses("$ab$\n", edit(2..2, "c"));
         assert_refuses("$a b$\n", edit(3..3, "+"));
         assert_refuses("\\begin{align}\n  a b\n\\end{align}\n", edit(17..17, "+"));
     }

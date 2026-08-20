@@ -21,7 +21,7 @@ use rowan::TextRange;
 
 use crate::parser::core::SyntaxError;
 use crate::parser::grammar::is_def_prefix_command;
-use crate::parser::grammar::{BEGIN_CMD, END_CMD, reads_definition_body, split_math_word};
+use crate::parser::grammar::{BEGIN_CMD, END_CMD, reads_definition_body};
 use crate::parser::lexer::reads_following_text;
 use crate::semantic::define::is_definition_command;
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
@@ -191,16 +191,13 @@ fn word_reads_are_inert(old: &str, new: &str, ctx: Context) -> bool {
         return false;
     }
 
-    // The math operator split (`math_atom` → `split_math_word`), which cuts a word
-    // into `SubTok` atoms. Equal splits are not enough: the pieces are offsets into
-    // *this* text, so two words split the same way still carry different atoms.
-    // Both sides must therefore split into nothing.
-    //
-    // Gated on being in math because that is the only place the call happens, and
-    // an ungated version would refuse every hyphenated word in prose — `-` is a
-    // sign, so `well-known` splits — which is most of the workload this tier is
-    // for.
-    if ctx.in_math && (split_math_word(old).is_some() || split_math_word(new).is_some()) {
+    // Math parsing can split any `WORD`: operators become sibling atoms, and a
+    // script next to the token isolates a one-character base or argument. A leaf
+    // splice cannot prove that those boundaries remain unchanged from the leaf
+    // text alone because script adjacency lives outside it. Decline every math
+    // `WORD`; the shared reparse oracle routes the edit to a wider tier or a full
+    // parse. Prose words retain the token-tier fast path.
+    if ctx.in_math {
         return false;
     }
 
@@ -336,8 +333,20 @@ mod tests {
         ),
         ("&& super::is_def_prefix_command(&t.text)", ControlSequence),
         (
-            "&& let Some(pieces) = split_math_word(self.text())",
-            Guarded("the math operator split, gated on `Context::in_math` and on `WORD`"),
+            "let end = self.text().len();",
+            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
+        ),
+        (
+            "let text = &self.tokens[idx].text[start..end];",
+            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
+        ),
+        (
+            "let last = self.tokens[idx].text[piece_start..piece_end]",
+            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
+        ),
+        (
+            "let text = &self.tokens[idx].text;",
+            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
         ),
         ("&& self.tokens[i].text == END_CMD", ControlSequence),
         (".map(|t| t.text.as_str())", Accessor),

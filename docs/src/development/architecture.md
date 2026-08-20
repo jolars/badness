@@ -547,14 +547,16 @@ Hand-written recursive descent is the spine. Precedence climbing is used only
 for sub- and superscript binding and for `\left…\right` matching; the text-level
 parser has no precedence.
 
-Arithmetic operators are catcode-12 "other" characters, so a faithful lexer
-globs them into `WORD` runs and `a+2*1` is one token. Operator-ness is a
-math-semantic fact assigned after catcode lexing, which makes it the parser's
-job: inside math a `WORD` is split at operator boundaries into flat sibling
-atoms, by byte range rather than by re-lexing. Only the trailing operand is the
-scriptable base, so `a+2*1^5` binds `^5` to `1`, matching TeX. Operators become
-atoms so the formatter can space them and the display breaker can break long
-chains. There is no arithmetic-precedence expression tree.
+Arithmetic operators are catcode-12 "other" characters, so the lossless lexer
+globs them into `WORD` runs and `a+2*1` is one token. Math parsing refines that
+run with byte-range sub-tokens rather than re-lexing it. Operators become flat
+sibling atoms so the formatter can space them and break long chains. When a
+script follows a run, the final input character is isolated as its base, so
+`a,b^2` scripts only `b`. When an unbraced script argument starts with a `WORD`
+run, it likewise consumes one input character; any remainder returns to the
+enclosing math list, so `x^23_i` parses as `x^2` followed by `3_i`. These are
+TeX token boundaries, not arithmetic precedence. There is no
+arithmetic-precedence expression tree.
 
 ### Argument grouping and bracket policy
 

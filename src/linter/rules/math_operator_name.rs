@@ -166,18 +166,35 @@ impl Rule for MathOperatorName {
             return;
         }
 
-        let Some(name) = match_operator_prefix(tok.text()) else {
+        // A script after a lexer `WORD` binds only its final input character, so
+        // `lim_{n}` parses as the sibling `li` followed by a `SCRIPTED` node whose
+        // base is `m`. Rejoin that source-glued prefix for this lexical lint; the
+        // CST split is the exact TeX structure, while the operator spelling still
+        // spans both leaves.
+        let mut spelling = tok.text().to_owned();
+        let mut start = usize::from(tok.text_range().start());
+        if let Some(parent) = tok.parent()
+            && parent.kind() == SyntaxKind::SCRIPTED
+            && parent.first_token().as_ref() == Some(tok)
+            && let Some(prev) = parent
+                .prev_sibling_or_token()
+                .and_then(|el| el.into_token())
+            && prev.kind() == SyntaxKind::WORD
+            && prev.text_range().end() == tok.text_range().start()
+        {
+            spelling.insert_str(0, prev.text());
+            start = usize::from(prev.text_range().start());
+        }
+        let Some(name) = match_operator_prefix(&spelling) else {
             return;
         };
         // A pgfmath function call inside a TikZ `calc` coordinate `($sin(x)$)`:
         // the `$` is not math shift there and the `\sin` rewrite would break the
         // pgfmath parser.
-        if in_calc_coordinate(tok, name) {
+        if in_calc_coordinate(tok, &spelling, name) {
             return;
         }
-        let base = usize::from(tok.text_range().start());
-        let start = base;
-        let end = base + name.len();
+        let end = start + name.len();
         let content = format!("\\{name}");
 
         sink.push(Diagnostic {
@@ -223,9 +240,9 @@ fn follows_script_operator(mut prev: Option<SyntaxElement>) -> bool {
 ///   - the enclosing inline math is a parenthesized coordinate — a `(` directly
 ///     before the opening `$` and a `)` directly after the closing `$` — so
 ///     ordinary inline math (`$lim(x)$`) still flags.
-fn in_calc_coordinate(tok: &SyntaxToken, name: &str) -> bool {
+fn in_calc_coordinate(tok: &SyntaxToken, spelling: &str, name: &str) -> bool {
     // A glued pgfmath call: the byte right after the operator name is `(`.
-    if tok.text().as_bytes().get(name.len()) != Some(&b'(') {
+    if spelling.as_bytes().get(name.len()) != Some(&b'(') {
         return false;
     }
     let Some(math) = tok
@@ -468,8 +485,15 @@ mod tests {
     #[test]
     fn lim_base_before_subscript_is_flagged() {
         // The `lim` base sits outside the subscript, so it still fires.
-        let out = findings("$lim_{n} a_n$\n");
+        let src = "$lim_{n} a_n$\n";
+        let out = findings(src);
         assert_eq!(out.len(), 1);
         assert!(out[0].message.contains("lim"));
+        assert_eq!((out[0].start, out[0].end), (1, 4));
+        let fix = out[0].fix.as_ref().expect("a fix");
+        assert_eq!(
+            apply_fixes(src, std::slice::from_ref(fix), true).output,
+            "$\\lim_{n} a_n$\n"
+        );
     }
 }

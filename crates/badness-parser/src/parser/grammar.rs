@@ -2562,32 +2562,69 @@ impl<'t> Parser<'t> {
     /// event in front of it — the event-stream analog of rust-analyzer's
     /// `precede`, done locally without touching the event layer.
     fn math_scripted(&mut self) {
-        // A math `WORD` glued around operators (`a+2*1`) splits into separate
-        // operand/operator atoms (`AGENTS.md`, decision #3). Only the trailing
-        // piece is the scriptable base, so `a+2*1^5` binds `^5` to `1` (matching
-        // TeX); the leading pieces are flat sibling atoms of the math body. This
-        // is a byte-range split of the WORD's text, not a re-lex — see
-        // [`split_math_word`].
-        if self.kind() == Some(SyntaxKind::WORD)
-            && let Some(pieces) = split_math_word(self.text())
-        {
+        // The lexer keeps catcode-12 characters in coarse `WORD` runs. Math needs
+        // a finer view for operator atoms and, when a script follows, for TeX's
+        // one-token base. Emit byte slices without changing the lexer: ordinary
+        // unscripted runs stay compact, while `a+2*1^5` and `a,b^2` expose only
+        // their final character as the scripted base.
+        if self.kind() == Some(SyntaxKind::WORD) {
             let idx = self.pos;
-            let (last, lead) = pieces.split_last().expect("split yields >= 2 pieces");
-            for &(start, end) in lead {
-                self.events.push(Event::SubTok { idx, start, end });
-            }
-            let checkpoint = self.events.len();
-            self.events.push(Event::SubTok {
-                idx,
-                start: last.0,
-                end: last.1,
-            });
-            self.pos += 1; // the whole WORD is consumed by its pieces
-            self.math_scripts(checkpoint);
+            let end = self.text().len();
+            self.pos += 1; // `math_word_fragment` emits slices for the whole token.
+            self.math_word_fragment(idx, 0, end);
             return;
         }
         let checkpoint = self.events.len();
         self.math_atom();
+        self.math_scripts(checkpoint);
+    }
+
+    /// Emit one unconsumed byte range of a lexer `WORD` as math atoms. Operator
+    /// boundaries are always exposed. If a script follows, the final Unicode
+    /// scalar is isolated as its base; TeX tokenizes an ordinary input character
+    /// separately even though the lossless lexer coalesces such characters.
+    ///
+    /// A fragment can be the remainder of a bare script argument (`x^23_i` leaves
+    /// `3` after the `2`). In that case `self.pos` already points beyond the lexer
+    /// token, so a following script correctly binds to the fragment's final atom.
+    fn math_word_fragment(&mut self, idx: usize, start: usize, end: usize) {
+        debug_assert!(start < end, "math WORD fragment must be non-empty");
+        let text = &self.tokens[idx].text[start..end];
+        let mut pieces: Vec<(usize, usize)> = split_math_word(text)
+            .unwrap_or_else(|| vec![(0, text.len())])
+            .into_iter()
+            .map(|(piece_start, piece_end)| (start + piece_start, start + piece_end))
+            .collect();
+
+        if self.at_script() {
+            let (piece_start, piece_end) = pieces.pop().expect("a non-empty WORD has a piece");
+            let last = self.tokens[idx].text[piece_start..piece_end]
+                .char_indices()
+                .next_back()
+                .map(|(offset, _)| piece_start + offset)
+                .expect("a WORD piece is non-empty");
+            if piece_start < last {
+                pieces.push((piece_start, last));
+            }
+            pieces.push((last, piece_end));
+        }
+
+        let (last, lead) = pieces
+            .split_last()
+            .expect("a non-empty WORD fragment has a final piece");
+        for &(piece_start, piece_end) in lead {
+            self.events.push(Event::SubTok {
+                idx,
+                start: piece_start,
+                end: piece_end,
+            });
+        }
+        let checkpoint = self.events.len();
+        self.events.push(Event::SubTok {
+            idx,
+            start: last.0,
+            end: last.1,
+        });
         self.math_scripts(checkpoint);
     }
 
@@ -2599,6 +2636,7 @@ impl<'t> Parser<'t> {
             return; // bare atom, no wrapper
         }
         self.precede(checkpoint, SyntaxKind::SCRIPTED);
+        let mut remainder = None;
         while self.at_script() {
             self.skip_trivia(); // trivia between base/scripts rides inside SCRIPTED
             let sub = self.kind() == Some(SyntaxKind::UNDERSCORE);
@@ -2608,10 +2646,18 @@ impl<'t> Parser<'t> {
                 SyntaxKind::SUPERSCRIPT
             });
             self.bump(); // `_` or `^`
-            self.math_script_arg();
+            remainder = self.math_script_arg();
             self.close();
+            // The rest of a coalesced WORD is outer math content. Any next script
+            // belongs to its final atom, not to the base we just closed.
+            if remainder.is_some() {
+                break;
+            }
         }
         self.close(); // SCRIPTED
+        if let Some((idx, start, end)) = remainder {
+            self.math_word_fragment(idx, start, end);
+        }
     }
 
     /// True if a `^`/`_` script operator directly follows, skipping only
@@ -2699,13 +2745,15 @@ impl<'t> Parser<'t> {
     }
 
     /// One script argument: a single atom (a `{…}` group, a command with its
-    /// args, or one token). A missing argument (the next meaningful token is a
-    /// closer, `\end`, a paragraph break, or EOF) is reported, not consumed —
-    /// the closer must stay for the enclosing math loop.
-    fn math_script_arg(&mut self) {
+    /// args, or one input character from a lexer `WORD`). The remainder of a
+    /// `WORD` is returned to [`Self::math_scripts`] so it can become outer math
+    /// content after the `SCRIPTED` node closes. A missing argument (the next
+    /// meaningful token is a closer, `\end`, a paragraph break, or EOF) is
+    /// reported, not consumed — the closer must stay for the enclosing math loop.
+    fn math_script_arg(&mut self) -> Option<(usize, usize, usize)> {
         if self.at_paragraph_break() {
             self.error("missing argument after `^`/`_`");
-            return;
+            return None;
         }
         self.skip_trivia();
         let missing = match self.kind() {
@@ -2716,9 +2764,23 @@ impl<'t> Parser<'t> {
         };
         if missing {
             self.error("missing argument after `^`/`_`");
-            return;
+            return None;
+        }
+        if self.kind() == Some(SyntaxKind::WORD) {
+            let idx = self.pos;
+            let text = &self.tokens[idx].text;
+            let end = text.len();
+            let first_end = text.char_indices().nth(1).map_or(end, |(offset, _)| offset);
+            self.events.push(Event::SubTok {
+                idx,
+                start: 0,
+                end: first_end,
+            });
+            self.pos += 1;
+            return (first_end < end).then_some((idx, first_end, end));
         }
         self.math_atom();
+        None
     }
 
     /// A brace group `{ … }` whose body is parsed in math mode (so `x^{a_b}`

@@ -108,6 +108,16 @@ fn math_scripts_bind_to_base() {
 }
 
 #[test]
+fn math_scripts_bind_to_exact_word_atoms() {
+    // The lexer coalesces ordinary characters into WORD runs, but TeX scripts bind
+    // to one math atom. Only `b` is the base in `a,b^2`; a bare script consumes
+    // only `2` in `x^2;`; and the leftover `3` in `x^23_i` returns to the outer
+    // math list, where the following subscript binds to it. The same byte slicing
+    // must hold for multibyte input characters.
+    insta::assert_snapshot!(tree(r"$a,b^2 \, x^2; \, x^23_i \, abc_i \, x^αβ_γ$"));
+}
+
+#[test]
 fn left_right_pair() {
     // `\left( … \right)`: the `\left`/`\right` and their delimiter tokens are
     // direct children, the enclosed atoms wrapped in a `MATH` body.

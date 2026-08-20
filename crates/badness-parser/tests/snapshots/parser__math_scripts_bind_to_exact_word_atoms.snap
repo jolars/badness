@@ -1,0 +1,60 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(r\"$a,b^2 \\, x^2; \\, x^23_i \\, abc_i \\, x^αβ_γ$\")"
+---
+ROOT@0..47
+  PARAGRAPH@0..47
+    INLINE_MATH@0..47
+      DOLLAR@0..1 "$"
+      MATH@1..46
+        WORD@1..3 "a,"
+        SCRIPTED@3..6
+          WORD@3..4 "b"
+          SUPERSCRIPT@4..6
+            CARET@4..5 "^"
+            WORD@5..6 "2"
+        WHITESPACE@6..7 " "
+        CONTROL_SYMBOL@7..9 "\\,"
+        WHITESPACE@9..10 " "
+        SCRIPTED@10..13
+          WORD@10..11 "x"
+          SUPERSCRIPT@11..13
+            CARET@11..12 "^"
+            WORD@12..13 "2"
+        WORD@13..14 ";"
+        WHITESPACE@14..15 " "
+        CONTROL_SYMBOL@15..17 "\\,"
+        WHITESPACE@17..18 " "
+        SCRIPTED@18..21
+          WORD@18..19 "x"
+          SUPERSCRIPT@19..21
+            CARET@19..20 "^"
+            WORD@20..21 "2"
+        SCRIPTED@21..24
+          WORD@21..22 "3"
+          SUBSCRIPT@22..24
+            UNDERSCORE@22..23 "_"
+            WORD@23..24 "i"
+        WHITESPACE@24..25 " "
+        CONTROL_SYMBOL@25..27 "\\,"
+        WHITESPACE@27..28 " "
+        WORD@28..30 "ab"
+        SCRIPTED@30..33
+          WORD@30..31 "c"
+          SUBSCRIPT@31..33
+            UNDERSCORE@31..32 "_"
+            WORD@32..33 "i"
+        WHITESPACE@33..34 " "
+        CONTROL_SYMBOL@34..36 "\\,"
+        WHITESPACE@36..37 " "
+        SCRIPTED@37..41
+          WORD@37..38 "x"
+          SUPERSCRIPT@38..41
+            CARET@38..39 "^"
+            WORD@39..41 "α"
+        SCRIPTED@41..46
+          WORD@41..43 "β"
+          SUBSCRIPT@43..46
+            UNDERSCORE@43..44 "_"
+            WORD@44..46 "γ"
+      DOLLAR@46..47 "$"

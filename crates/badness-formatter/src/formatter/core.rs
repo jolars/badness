@@ -8439,7 +8439,10 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 /// it stays on a single line whenever it fits — degrading to [`lower_math_body`]
 /// otherwise. Each segment's right-hand side is its own nested group: breaking
 /// the body at its relations does not also break a segment at its binary
-/// operators unless that segment overflows its own line.
+/// operators unless that segment overflows its own line. If the LHS-derived
+/// relation column would make a continuation overflow, the printer breaks before
+/// the first relation and hangs the relation stack at the display body's base
+/// indent instead.
 fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let Some(pieces) = collect_math_pieces(elements, cx) else {
         return lower_math_seq(elements.iter().cloned(), cx, false);
@@ -8507,13 +8510,13 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
         return Ir::group(Ir::concat(parts));
     };
 
-    let mut parts: Vec<Ir> = Vec::new();
+    let mut lhs: Vec<Ir> = Vec::new();
     // Left-hand side, flat on the opening line.
     for (i, piece) in pieces[..anchor].iter().enumerate() {
         if i > 0 {
-            parts.push(space_sep(i));
+            lhs.push(space_sep(i));
         }
-        parts.push(piece.ir.clone());
+        lhs.push(piece.ir.clone());
     }
     // A multi-line left-hand side (a nested matrix/`aligned`/`cases` environment)
     // has no meaningful flat width — using it as the relation column would push
@@ -8529,51 +8532,66 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let rel_col = if anchor == 0 || lhs_multiline {
         0
     } else {
-        flat_width(&Ir::concat(parts.clone())) + 1
+        flat_width(&Ir::concat(lhs.clone())) + 1
     };
 
-    // Each relation opens a segment running to the next relation. The first
-    // segment's relation stays on the opening line (one space after the LHS);
-    // every later relation starts a fresh continuation line at `rel_col`. Inside a
-    // segment, a break before a binary operator hangs one relation-width deeper,
-    // under the first right-hand-side term.
-    let mut i = anchor;
-    let mut first_segment = true;
-    while i < pieces.len() {
-        if first_segment {
-            if lhs_multiline {
-                parts.push(Ir::hard_line());
-            } else if anchor > 0 {
-                parts.push(space_sep(anchor));
-            }
-        } else {
-            parts.push(Ir::line());
-        }
-        parts.push(pieces[i].ir.clone());
-        let relw = flat_width(&pieces[i].ir);
-
-        let start = i + 1;
-        let mut j = start;
-        while j < pieces.len() && !is_anchor(j) {
-            j += 1;
-        }
-        let mut rhs: Vec<Ir> = Vec::with_capacity((j - start) * 2);
-        for (offset, piece) in pieces[start..j].iter().enumerate() {
-            let k = start + offset;
-            rhs.push(if breakable(k) {
-                Ir::line()
+    let build_relation_layout = |relation_indent: usize, break_before_first: bool| {
+        let mut parts = lhs.clone();
+        // Each relation opens a segment running to the next relation. In the
+        // aligned layout, the first relation stays beside the LHS and later
+        // relations return to `relation_indent`. The base-indent fallback also
+        // breaks before the first relation, so an over-deep LHS cannot dictate
+        // the width of every continuation line.
+        let mut i = anchor;
+        let mut first_segment = true;
+        while i < pieces.len() {
+            if first_segment {
+                if lhs_multiline {
+                    parts.push(Ir::hard_line());
+                } else if break_before_first {
+                    parts.push(Ir::line());
+                } else if anchor > 0 {
+                    parts.push(space_sep(anchor));
+                }
             } else {
-                space_sep(k)
-            });
-            rhs.push(piece.ir.clone());
+                parts.push(Ir::line());
+            }
+            parts.push(pieces[i].ir.clone());
+            let relw = flat_width(&pieces[i].ir);
+
+            let start = i + 1;
+            let mut j = start;
+            while j < pieces.len() && !is_anchor(j) {
+                j += 1;
+            }
+            let mut rhs: Vec<Ir> = Vec::with_capacity((j - start) * 2);
+            for (offset, piece) in pieces[start..j].iter().enumerate() {
+                let k = start + offset;
+                rhs.push(if breakable(k) {
+                    Ir::line()
+                } else {
+                    space_sep(k)
+                });
+                rhs.push(piece.ir.clone());
+            }
+            parts.push(Ir::group(Ir::align(relw + 1, Ir::concat(rhs))));
+
+            first_segment = false;
+            i = j;
         }
-        parts.push(Ir::group(Ir::align(relw + 1, Ir::concat(rhs))));
 
-        first_segment = false;
-        i = j;
-    }
+        Ir::align(relation_indent, Ir::concat(parts))
+    };
 
-    Ir::group(Ir::align(rel_col, Ir::concat(parts)))
+    let body = if rel_col == 0 {
+        build_relation_layout(0, lhs_multiline)
+    } else {
+        Ir::bounded_align(
+            build_relation_layout(rel_col, false),
+            build_relation_layout(0, true),
+        )
+    };
+    Ir::group(body)
 }
 
 /// The shared math-atom sequencer (see [`lower_math_body`]). Spacing is

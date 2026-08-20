@@ -33,10 +33,12 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
      `math_display_explicit_line_break` fixture pins `\[ a \\ b \]` as two
      rows; the operator breaker can learn mandatory row dividers later if a
      real formatting need justifies the added layout state.
-   - [ ] **Clamp `rel_col`.** The relation column is the flat LHS width plus
-     one, unclamped, so `math_display_break_relations`' expected output is
-     ~150 columns at `line-width: 80`. Cap it against the body width available
-     in the current-column context, and fall back to the indent hang.
+   - [x] **Clamp `rel_col`.** A `BoundedAlign` IR choice probes the aligned
+     layout from the display body's actual column. If alignment would make a
+     continuation overflow, the first relation breaks after the LHS and the
+     relation stack falls back to the base indent. The long-LHS fixture now has
+     only its intrinsically unbreakable 86-column RHS over the 80-column target;
+     `math_display_break_segment_fits` still keeps an alignment that fits.
    - [ ] **Unify `in_math`.** `space_before_command.rs` carries a private
      ancestor climb that also reads the signature DB's `env.math` flag,
      against the shared-index rule in `AGENTS.md`. Fold it into

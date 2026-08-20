@@ -322,13 +322,24 @@ impl Printer {
     }
 
     fn run_with_mode(&self, ir: &Ir, base_indent: usize, init_col: usize, mode: Mode) -> String {
+        self.run_with_mode_prefix(ir, base_indent, init_col, mode, None)
+    }
+
+    fn run_with_mode_prefix<'a>(
+        &self,
+        ir: &'a Ir,
+        base_indent: usize,
+        init_col: usize,
+        mode: Mode,
+        initial_prefix: Option<ActivePrefix<'a>>,
+    ) -> String {
         let mut w = Writer::new();
         w.col = init_col;
         let mut stack: Vec<Cmd<'_>> = vec![Cmd::Node {
             indent: base_indent,
             mode,
             node: ir,
-            prefix: None,
+            prefix: initial_prefix,
         }];
         while let Some(cmd) = stack.pop() {
             let (indent, mode, node, prefix) = match cmd {
@@ -474,6 +485,21 @@ impl Printer {
                         indent: indent + width,
                         mode,
                         node: inner,
+                        prefix,
+                    });
+                }
+                Ir::BoundedAlign { aligned, fallback } => {
+                    let node = if mode != Mode::Break
+                        || self.bounded_align_fits(w.current_col(), indent, aligned, prefix)
+                    {
+                        aligned
+                    } else {
+                        fallback
+                    };
+                    stack.push(Cmd::Node {
+                        indent,
+                        mode,
+                        node,
                         prefix,
                     });
                 }
@@ -954,6 +980,7 @@ impl Printer {
                 }
                 Ir::Concat(items) => stack.extend(items.iter().rev()),
                 Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
+                Ir::BoundedAlign { aligned, .. } => stack.push(aligned),
                 Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
                 // `Fits` trusts the saturated `expand` flag; `Footprint` and
@@ -1009,6 +1036,24 @@ impl Printer {
             } if width >= self.line_width => AtomStep::Excused,
             _ => AtomStep::Overflow,
         }
+    }
+
+    /// Whether an aligned candidate's broken continuation lines fit from the
+    /// actual current column and indentation. Its first line is deliberately
+    /// excluded: alignment does not indent that line, so an intrinsically long
+    /// first segment remains an honest overflow. The fallback need not fit—it is
+    /// the honest least-indented rendering when alignment causes overflow.
+    fn bounded_align_fits<'a>(
+        &self,
+        start_col: usize,
+        indent: usize,
+        aligned: &'a Ir,
+        prefix: Option<ActivePrefix<'a>>,
+    ) -> bool {
+        let rendered = self.run_with_mode_prefix(aligned, indent, start_col, Mode::Break, prefix);
+        let mut lines = rendered.split('\n');
+        let _ = lines.next();
+        lines.all(|line| line.chars().count() <= self.line_width)
     }
 
     /// Flat layout of an [`Ir::PreferredFill`] from `col`: its atoms joined by
@@ -1241,6 +1286,20 @@ impl Printer {
                     }
                 }
                 Ir::Indent(inner) | Ir::Align(_, inner) => work.push((mode, verified, inner)),
+                Ir::BoundedAlign { aligned, fallback } => {
+                    // This primitive is emitted at a line's base indentation;
+                    // `line_fits` tracks columns but not indentation because an
+                    // ordinary break ends its query. Using `col` for both keeps
+                    // this branch identical to the run loop at that boundary.
+                    let chosen = if mode != Mode::Break
+                        || self.bounded_align_fits(col, col, aligned, None)
+                    {
+                        aligned
+                    } else {
+                        fallback
+                    };
+                    work.push((mode, verified, chosen));
+                }
                 Ir::MarginPrefix { inner, .. } => work.push((mode, verified, inner)),
                 Ir::IfBreak { flat, broken } => {
                     work.push((
@@ -1765,6 +1824,33 @@ mod tests {
             ..FormatStyle::default()
         });
         assert_eq!(narrow.print(&ir), "* aa bbbb\n  cc");
+    }
+
+    #[test]
+    fn bounded_align_measures_continuations_from_the_current_column() {
+        let printer = Printer::new(FormatStyle {
+            line_width: 10,
+            ..FormatStyle::default()
+        });
+        let aligned = Ir::align(6, Ir::concat([Ir::text("lhs"), Ir::line(), Ir::text("r")]));
+        let fallback = Ir::concat([Ir::text("lhs"), Ir::line(), Ir::text("r")]);
+        let ir = Ir::bounded_align(aligned, fallback);
+
+        assert_eq!(
+            printer.run_with_mode(&ir, 0, 0, Mode::Break),
+            "lhs\n      r"
+        );
+        assert_eq!(printer.run_with_mode(&ir, 4, 4, Mode::Break), "lhs\n    r");
+
+        // A virtual-document margin contributes to every continuation's real
+        // column. Without the active prefix, the six-column hang would appear
+        // to fit at width 8; `% ` makes it overflow, selecting the fallback.
+        let prefixed = Ir::margin_prefix("% ", ir);
+        let narrow = Printer::new(FormatStyle {
+            line_width: 8,
+            ..FormatStyle::default()
+        });
+        assert_eq!(narrow.print(&prefixed), "% lhs\n% r");
     }
 
     #[test]

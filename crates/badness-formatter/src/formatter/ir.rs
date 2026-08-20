@@ -34,6 +34,12 @@ pub(crate) enum Ir {
     /// width, e.g. a list item's wrapped lines aligning under the text after
     /// `\item `. Build via [`Ir::align`].
     Align(usize, Rc<Ir>),
+    /// A current-column-aware choice between an aligned layout and its base-indent
+    /// fallback. In break mode, the aligned branch is used only when every
+    /// continuation line it would render fits the configured width from the
+    /// actual current column. Flat mode always uses `aligned`, since no
+    /// continuation indentation is emitted. Build via [`Ir::bounded_align`].
+    BoundedAlign { aligned: Rc<Ir>, fallback: Rc<Ir> },
     /// A break-decision boundary. The printer measures the flat rendering of
     /// `inner`; if it fits and contains no forced break, it prints flat,
     /// otherwise broken. `expand` forces broken unconditionally. After
@@ -342,6 +348,15 @@ impl Ir {
         Ir::Align(width, Rc::new(inner))
     }
 
+    /// Choose `aligned` only when its broken continuation lines fit at the
+    /// current column; see [`Ir::BoundedAlign`].
+    pub(crate) fn bounded_align(aligned: Ir, fallback: Ir) -> Ir {
+        Ir::BoundedAlign {
+            aligned: Rc::new(aligned),
+            fallback: Rc::new(fallback),
+        }
+    }
+
     pub(crate) fn if_break(flat: Ir, broken: Ir) -> Ir {
         Ir::IfBreak {
             flat: Rc::new(flat),
@@ -425,6 +440,9 @@ impl Ir {
             }
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_group),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
+            Ir::BoundedAlign {
+                aligned, fallback, ..
+            } => aligned.contains_group() || fallback.contains_group(),
             Ir::MarginPrefix { inner, .. } => inner.contains_group(),
             Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
             Ir::Text(_)
@@ -469,6 +487,10 @@ impl Ir {
             }
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_forced_break),
             Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
+            // Flat mode always chooses the aligned branch, so only that branch
+            // can force an enclosing group open. The fallback is selected only
+            // after the enclosing layout is already in break mode.
+            Ir::BoundedAlign { aligned, .. } => aligned.contains_forced_break(),
             Ir::MarginPrefix { inner, .. } => inner.contains_forced_break(),
             Ir::Group { inner, expand, .. } => *expand || inner.contains_forced_break(),
             // The flat-most candidate decides: if even it forces a break, the
@@ -558,6 +580,21 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
         Ir::Align(width, inner) => {
             let (forced, rewritten) = saturate(inner);
             (forced, rewritten.map(|ir| Ir::Align(*width, Rc::new(ir))))
+        }
+        Ir::BoundedAlign { aligned, fallback } => {
+            let (forced, aligned_rw) = saturate(aligned);
+            let (_, fallback_rw) = saturate(fallback);
+            if aligned_rw.is_none() && fallback_rw.is_none() {
+                (forced, None)
+            } else {
+                (
+                    forced,
+                    Some(Ir::BoundedAlign {
+                        aligned: aligned_rw.map(Rc::new).unwrap_or_else(|| aligned.clone()),
+                        fallback: fallback_rw.map(Rc::new).unwrap_or_else(|| fallback.clone()),
+                    }),
+                )
+            }
         }
         Ir::MarginPrefix {
             prefix,
@@ -704,6 +741,12 @@ mod tests {
             | Ir::Align(_, inner)
             | Ir::Group { inner, .. }
             | Ir::MarginPrefix { inner, .. } => assert_saturated(inner),
+            Ir::BoundedAlign {
+                aligned, fallback, ..
+            } => {
+                assert_saturated(aligned);
+                assert_saturated(fallback);
+            }
             Ir::IfBreak { flat, broken } => {
                 assert_saturated(flat);
                 assert_saturated(broken);

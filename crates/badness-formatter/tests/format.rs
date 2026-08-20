@@ -985,7 +985,8 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // A chain of relations aligns in a column: the second `=` starts a fresh
     // continuation line under the first `=`, not under the first right-hand-side
     // term (the two-level rule — relations align, binaries hang one relation-width
-    // deeper).
+    // deeper). When an LHS-derived column would make a continuation overflow,
+    // both relations fall back to the display body's base indent.
     ("math_display_break_relations", WrapMode::Preserve, 80),
     // Breaking at a relation does not drag the segment's binary operators along:
     // each segment's right-hand side is its own group, so a segment that fits on

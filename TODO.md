@@ -11,16 +11,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 ## Math roadmap
 
 Outcome of the ground-up math review (2026-08). Verdict: the model is right and
-stays — flat TeX math lists with one-character script binding (`e6131b6`), no
-arithmetic-precedence tree, no atom classes in the CST, meaning resolved at the
-edges. That is TeX's own mlist model and the correct target for a lossless,
-error-tolerant tool. Math reflow also stays: TeX discards space tokens in math
-mode, so relayout inside a correctly identified math region is
-typeset-invariant, and identification is what the shape gates already do well.
-The one structural defect is the mode asymmetry: brace groups inside math parse
-in text mode, and most remaining math friction (the spacing inconsistency
-below, the issue #37 gate class, the formatter's verbatim-`COMMAND` arm) is
-downstream of it. Stages 2–4 are ordered; stage 1 items are independent.
+stays—flat, lossless surface math lists with one-character script binding
+(`e6131b6`), no arithmetic-precedence tree, no atom classes in the CST, and
+meaning resolved at the edges. This is the useful surface analogue of TeX's
+post-expansion mlist, not the mlist itself. Math reflow also stays, but under a
+narrow license: ordinary catcode-10 whitespace delivered directly to the math
+list is insignificant; whitespace in text islands, arbitrary macro argument
+token lists, code, keys, comments, and explicit spacing commands is not.
+
+Direct brace groups in a math list already use `math_group`. The structural gap
+is narrower: groups greedily attached by `command` → `attach_arguments` still
+take the generic group path. A macro argument does not acquire math semantics
+merely because its spelling occurs inside math; expansion determines the
+effective domain. Stages 2–4 are ordered; stage 1 items are independent.
 
 1. **Mechanical defects.**
 
@@ -28,81 +31,96 @@ downstream of it. Stages 2–4 are ordered; stage 1 items are independent.
      resolution outside `wrap = "preserve"`). `collect_math_pieces` takes a
      `LINE_BREAK` node as an ordinary operand atom, so `\[ a \\ b \]` collapses
      onto one line, while the `preserve` and `single-line` paths honor
-     `lower_math_seq`'s hard-break contract for the same input. Make a
-     top-level `\\` a mandatory row divider on the breaker path (or bail to
-     `lower_math_seq`), and add the missing fixture.
+     `lower_math_seq`'s hard-break contract for the same input. Initially bail
+     to `lower_math_seq` when the breaker sees a top-level `\\`; add the missing
+     fixture before teaching the breaker about mandatory row dividers.
    - [ ] **Clamp `rel_col`.** The relation column is the flat LHS width plus
      one, unclamped, so `math_display_break_relations`' expected output is
-     ~150 columns at `line-width: 80`. Cap it at a fraction of the width and
-     fall back to the indent hang.
+     ~150 columns at `line-width: 80`. Cap it against the body width available
+     in the current-column context, and fall back to the indent hang.
    - [ ] **Unify `in_math`.** `space_before_command.rs` carries a private
      ancestor climb that also reads the signature DB's `env.math` flag,
      against the shared-index rule in `AGENTS.md`. Fold it into
-     `ctx.in_math`, deciding deliberately whether the `\begin{equation}`
-     delimiter line counts as in-math (the shared index says no).
-   - [ ] **Check `array`'s flags.** Whether `array` is `math`+`align` or
-     `align` only decides whether its `{rc}` spec is honored inside `\[…\]`
-     (math grids skip `column_alignments`). Verify `signatures.json` and pin
-     the intended behavior with a fixture.
+     `ctx.in_math`; keep the `\begin{equation}` header outside and the
+     environment body inside the effective math region.
+   - [x] **`array` is already `math`+`align`.** `signatures.json` has both
+     flags, the math-grid formatter calls `column_alignments`, and the
+     `array_columns` fixture pins the column specification. Remove the stale
+     formatter comment that lists `array` as a non-math grid when nearby code
+     is next touched.
    - [ ] **Decide `&=` gluing.** The grid renders `x&=a` as `x & = a`,
      splitting the near-universal `&=` idiom. Consider gluing `&` to an
      immediately following relation, since the `&` marks that relation's
      alignment point. Taste call; whitespace-safe either way.
 
-2. - [ ] **Math-mode groups (the one CST-shape change).** Any group
-     encountered while parsing a math list parses in math mode; a curated
-     `textArg` flag exempts the known text islands (`\text`, `\mbox`,
-     `\intertext`, …) — the same list the linter already curates as
-     `in_upright_or_text_math_argument`. This mirrors the curated `math`
-     environment flag: curated tier only, falsifiable, and attachment stays
-     greedy and text-pure (whether a trailing group is an argument or a
-     juxtaposed group is harmless in math, since both are math groups).
-     Consumers simplify in its wake: `math-operator-name`'s raw-script-shape
-     gate (issue #37) retires, `redundant-script-braces` reaches scripts
-     inside command arguments, and the formatter's `COMMAND`-is-verbatim arm
-     in `lower_math_element` retires. Budget the snapshot churn; the
-     grammar-carving item's math-sublanguage extraction (§ *Parser*) can ride
-     along.
+2. [ ] **Positional argument domains and a shared mode index.** Add an
+   argument-domain field orthogonal to formatter `ContentKind`, with
+   `Unknown` as the default and curated `Math` and `Text` values. The parser
+   may read only curated built-ins—not scanned definitions, package scope, or
+   CWL data—and greedy attachment remains unchanged. Known `Math` slots use
+   the math-group path; `Text` and `Unknown` slots retain generic parsing. Do
+   not reuse `in_upright_or_text_math_argument`: it combines true text islands
+   such as `\text`, `\mbox`, and `\intertext` with math alphabets such as
+   `\mathrm` and `\mathbf`, plus `\operatorname`.
 
-3. - [ ] **One spacing policy.** With both paths on the math seq, resolve the
-     script-arg vs command-arg inconsistency (§ *Formatter*, issue #42's
-     examples) by deciding once: tight `/` everywhere (Knuth), no operator
-     spacing inside script-size content, single space around top-level binary
-     and relation atoms. Apply uniformly; `task typeset:check` guards the
-     text-island exemptions.
+   Build a shared semantic mode index with `Math`, `Text`, and `Unknown`
+   regions. Math-aware lints consume it and retire local ancestor/name
+   carve-outs where the index proves the mode. This should fix issue #37 under
+   known math-taking commands and let `redundant-script-braces` see known math
+   slots. Preserve the formatter's whole-`COMMAND` fallback; recursively lower
+   only slots known to be `Math`. Budget the snapshots and grammar extraction
+   as the one intended CST-shape change.
 
-4. - [ ] **Atom classification as semantic data.** The formatter's
-     `MATH_RELATION_COMMANDS`/`MATH_BINARY_COMMANDS` (~90 curated entries in
-     `core.rs`) are the sole classifier for command atoms; anything unlisted
-     is silently an operand, which is exactly how issue #42 happened
-     (`\coloneq`). unicode-math's symbol table maps thousands of commands to
-     `\mathbin`/`\mathrel`/`\mathord`/`\mathopen`/`\mathclose`, a mechanical
-     sync source in the `task cwl:sync` genre. Move classification into the
-     semantic layer as generated-plus-curated data with a sync task; the
-     formatter, `ellipsis`'s private `math_command()` classifier, and the
-     Open/Close sets behind `bracket_delta` and `mismatched-delimiter` all
-     consume the one query.
+3. [ ] **Atom classification as semantic data.** Replace the formatter's
+   `MATH_RELATION_COMMANDS`/`MATH_BINARY_COMMANDS` and the linter's parallel
+   command sets with one semantic query. Generate the baseline from a pinned
+   unicode-math revision—roughly 2,400 symbols and commands—with a sync/check
+   task, record its LPPL provenance, and layer curated overrides on top. Model
+   the useful TeX class family (`Ord`, `Op`, `Bin`, `Rel`, `Open`, `Close`,
+   `Punct`, `Fence`, and `Inner`-like cases), not only binary and relation.
 
-5. - [ ] **Record the licenses.** Write the math-whitespace-insignificance
-     claim into `docs/src/development/architecture.md` as the curated
-     whitespace-safety license for math relayout (the statement-seam genre,
-     provable by `task typeset:check`), and settle the hover-preview decision
-     as (a) skip, recording it in `AGENTS.md` (§ *Hover*, § *Open decisions
-     to revisit*).
+   Expose virtual atoms with source spans over both commands and characters
+   inside coalesced `WORD` tokens, so `a<=b` and `a≤b` classify without forcing
+   token-per-character CST churn. A newly classified symbol must not by itself
+   change CST shape; retain only the one-character isolation needed for
+   structural script binding. The formatter, ellipsis rule, bracket
+   accounting, and mismatched-delimiter rule share the classifier but retain
+   their own policies. Unknown commands fall back to `Ord`.
 
-6. - [ ] **Math fragment reparse tier** *(later, perf-driven)*. `e6131b6`
-     made `word_reads_are_inert` decline every math `WORD`, so math-heavy
-     documents full-parse on most in-formula keystrokes. The protected-body
-     tier's pattern — relex the enclosing node with its delimiters — extends
-     to the enclosing `SCRIPTED`/`MATH` fragment, which carries mode and
-     script adjacency for free. Needs the full tier protocol: direct-reparse
-     benchmark asserting the tier, speedup floor, seeded corpus baseline.
+4. [ ] **One spacing policy.** Once positional modes and atom classification
+   exist, resolve the script-argument versus command-argument inconsistency
+   (§ *Formatter*, issue #42's examples) once: tight ordinary `/`, no operator
+   spacing inside script-size content, and one space around top-level binary
+   and relation atoms. Apply it only to direct math content and known `Math`
+   slots; preserve `Text` and `Unknown` arguments. Add mixed-domain structural
+   tests. `task typeset:check` is an extra regression oracle, not the proof of
+   safety.
+
+5. [ ] **Record the licenses.** State the narrow math-whitespace license in
+   `docs/src/development/architecture.md`: it covers ordinary catcode-10
+   whitespace delivered directly to a math list, not text islands, arbitrary
+   macro argument token lists, code, keys, comments, or explicit spacing
+   commands. Add adversarial typeset cases for macros that inspect or preserve
+   argument-space tokens. Keep the hover-preview choice as an open roadmap
+   decision; do not turn `AGENTS.md` into its decision log.
+
+6. [ ] **Math fragment reparse tier** *(later, perf-driven)*. `e6131b6` made
+   `word_reads_are_inert` decline every math `WORD`, so math-heavy documents
+   full-parse on most in-formula keystrokes. First attempt a cheap specialized
+   leaf proof: reconstruct the coalesced word, relex it, and compare the
+   virtual-atom partition plus adjacent script structure. A shape-changing
+   fragment tier must target a delimiter-bearing `INLINE_MATH`, `DISPLAY_MATH`,
+   or math `ENVIRONMENT`; `SCRIPTED` and `MATH` do not carry the delimiters that
+   establish mode. Any smaller target needs an explicit fixed-math fragment
+   parser and a locality proof. Keep the full tier protocol: direct-reparse
+   benchmark asserting the tier, speedup floor, release full-parse comparison,
+   and seeded corpus baseline with exact per-tier tallies.
 
 Non-goals, reaffirmed: no arithmetic-precedence trees, no atom classes in the
-CST, no lexer math state, no automated breaking of grid bodies (`align`,
-matrices) or inline math (breaking inline math at top-level operator gaps is
-TeX-faithful and may become an opt-in, but overflow is honest), and no math
-rendering engine.
+CST, no lexer math state, no default-math inference for unknown command
+arguments, no automated breaking of grid bodies (`align`, matrices) or inline
+math (breaking inline math at top-level operator gaps is TeX-faithful and may
+become an opt-in, but overflow is honest), and no math rendering engine.
 
 ## Parser
 

@@ -8,6 +8,102 @@ Single-crate package (not a workspace). Parser and formatter are **intentionally
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
+## Math roadmap
+
+Outcome of the ground-up math review (2026-08). Verdict: the model is right and
+stays — flat TeX math lists with one-character script binding (`e6131b6`), no
+arithmetic-precedence tree, no atom classes in the CST, meaning resolved at the
+edges. That is TeX's own mlist model and the correct target for a lossless,
+error-tolerant tool. Math reflow also stays: TeX discards space tokens in math
+mode, so relayout inside a correctly identified math region is
+typeset-invariant, and identification is what the shape gates already do well.
+The one structural defect is the mode asymmetry: brace groups inside math parse
+in text mode, and most remaining math friction (the spacing inconsistency
+below, the issue #37 gate class, the formatter's verbatim-`COMMAND` arm) is
+downstream of it. Stages 2–4 are ordered; stage 1 items are independent.
+
+1. **Mechanical defects.**
+
+   - [ ] **`\\` is lost under `MathWrap::Break`** (the default `Auto`
+     resolution outside `wrap = "preserve"`). `collect_math_pieces` takes a
+     `LINE_BREAK` node as an ordinary operand atom, so `\[ a \\ b \]` collapses
+     onto one line, while the `preserve` and `single-line` paths honor
+     `lower_math_seq`'s hard-break contract for the same input. Make a
+     top-level `\\` a mandatory row divider on the breaker path (or bail to
+     `lower_math_seq`), and add the missing fixture.
+   - [ ] **Clamp `rel_col`.** The relation column is the flat LHS width plus
+     one, unclamped, so `math_display_break_relations`' expected output is
+     ~150 columns at `line-width: 80`. Cap it at a fraction of the width and
+     fall back to the indent hang.
+   - [ ] **Unify `in_math`.** `space_before_command.rs` carries a private
+     ancestor climb that also reads the signature DB's `env.math` flag,
+     against the shared-index rule in `AGENTS.md`. Fold it into
+     `ctx.in_math`, deciding deliberately whether the `\begin{equation}`
+     delimiter line counts as in-math (the shared index says no).
+   - [ ] **Check `array`'s flags.** Whether `array` is `math`+`align` or
+     `align` only decides whether its `{rc}` spec is honored inside `\[…\]`
+     (math grids skip `column_alignments`). Verify `signatures.json` and pin
+     the intended behavior with a fixture.
+   - [ ] **Decide `&=` gluing.** The grid renders `x&=a` as `x & = a`,
+     splitting the near-universal `&=` idiom. Consider gluing `&` to an
+     immediately following relation, since the `&` marks that relation's
+     alignment point. Taste call; whitespace-safe either way.
+
+2. - [ ] **Math-mode groups (the one CST-shape change).** Any group
+     encountered while parsing a math list parses in math mode; a curated
+     `textArg` flag exempts the known text islands (`\text`, `\mbox`,
+     `\intertext`, …) — the same list the linter already curates as
+     `in_upright_or_text_math_argument`. This mirrors the curated `math`
+     environment flag: curated tier only, falsifiable, and attachment stays
+     greedy and text-pure (whether a trailing group is an argument or a
+     juxtaposed group is harmless in math, since both are math groups).
+     Consumers simplify in its wake: `math-operator-name`'s raw-script-shape
+     gate (issue #37) retires, `redundant-script-braces` reaches scripts
+     inside command arguments, and the formatter's `COMMAND`-is-verbatim arm
+     in `lower_math_element` retires. Budget the snapshot churn; the
+     grammar-carving item's math-sublanguage extraction (§ *Parser*) can ride
+     along.
+
+3. - [ ] **One spacing policy.** With both paths on the math seq, resolve the
+     script-arg vs command-arg inconsistency (§ *Formatter*, issue #42's
+     examples) by deciding once: tight `/` everywhere (Knuth), no operator
+     spacing inside script-size content, single space around top-level binary
+     and relation atoms. Apply uniformly; `task typeset:check` guards the
+     text-island exemptions.
+
+4. - [ ] **Atom classification as semantic data.** The formatter's
+     `MATH_RELATION_COMMANDS`/`MATH_BINARY_COMMANDS` (~90 curated entries in
+     `core.rs`) are the sole classifier for command atoms; anything unlisted
+     is silently an operand, which is exactly how issue #42 happened
+     (`\coloneq`). unicode-math's symbol table maps thousands of commands to
+     `\mathbin`/`\mathrel`/`\mathord`/`\mathopen`/`\mathclose`, a mechanical
+     sync source in the `task cwl:sync` genre. Move classification into the
+     semantic layer as generated-plus-curated data with a sync task; the
+     formatter, `ellipsis`'s private `math_command()` classifier, and the
+     Open/Close sets behind `bracket_delta` and `mismatched-delimiter` all
+     consume the one query.
+
+5. - [ ] **Record the licenses.** Write the math-whitespace-insignificance
+     claim into `docs/src/development/architecture.md` as the curated
+     whitespace-safety license for math relayout (the statement-seam genre,
+     provable by `task typeset:check`), and settle the hover-preview decision
+     as (a) skip, recording it in `AGENTS.md` (§ *Hover*, § *Open decisions
+     to revisit*).
+
+6. - [ ] **Math fragment reparse tier** *(later, perf-driven)*. `e6131b6`
+     made `word_reads_are_inert` decline every math `WORD`, so math-heavy
+     documents full-parse on most in-formula keystrokes. The protected-body
+     tier's pattern — relex the enclosing node with its delimiters — extends
+     to the enclosing `SCRIPTED`/`MATH` fragment, which carries mode and
+     script adjacency for free. Needs the full tier protocol: direct-reparse
+     benchmark asserting the tier, speedup floor, seeded corpus baseline.
+
+Non-goals, reaffirmed: no arithmetic-precedence trees, no atom classes in the
+CST, no lexer math state, no automated breaking of grid bodies (`align`,
+matrices) or inline math (breaking inline math at top-level operator gaps is
+TeX-faithful and may become an opt-in, but overflow is honest), and no math
+rendering engine.
+
 ## Parser
 
 - [x] ~~**Arity-directed expl3 attachment (decision #8's sanctioned deviation —
@@ -201,6 +297,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   tight (`1/2`, per Knuth), and script-size content is conventionally tight
   overall, so the likely resolution is tight `/` everywhere and no operator
   spacing inside `^`/`_` arguments — decide, then make both paths agree.
+  *Staged as step 3 of the math roadmap; the mode-asymmetry fix (step 2) is
+  what lets both paths agree structurally rather than by patching the
+  verbatim arm.*
 
 - [x] **Opaque-group layout non-determinism (the last Tier-1 read) is retired.**
   Under `Reflow` a brace group is width-driven (`lower_opaque_group`): flat when
@@ -1039,7 +1138,7 @@ sources below are missing.
   a data-URI image in hover markdown—editor-agnostic, but ships a math layout
   engine, which is typesetting in all but name (pressure on the AGENTS.md
   non-goal). Lean (a) for now; whichever way, record the decision in
-  AGENTS.md.
+  AGENTS.md. *The math roadmap (step 5) settles this as (a).*
 
 ### Code actions
 

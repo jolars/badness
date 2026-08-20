@@ -25,8 +25,9 @@
 //! `{`, or after another command's `}` is left alone (a false negative, the
 //! conservative direction). Math is skipped -- an inter-token space is
 //! insignificant there, so a space before an in-math `\label` types nothing extra
-//! -- covering both `$…$`/`\[…\]` (a `MATH` ancestor) and math environments like
-//! `equation`/`align` (read off the built-in signature DB's `math` flag).
+//! -- covering both `$…$`/`\[…\]` and parser-recognized math-environment bodies
+//! through [`RuleContext::in_math`]. The environment's `\begin` header stays
+//! outside that shared `MATH`-range index.
 //!
 //! For the zero-width `\index`/`\label` there is a mirror gate on the *other*
 //! side: because they type no glyph, the leading space is a real interword space
@@ -42,9 +43,8 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{AstNode, AstToken, ControlWord, Environment, child_token, command_name};
+use crate::ast::{AstToken, ControlWord, child_token, command_name};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
-use crate::semantic::signature::builtin;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Example, Rule, RuleContext};
@@ -105,7 +105,7 @@ impl Rule for SpaceBeforeCommand {
         &[SyntaxKind::COMMAND]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(command) = el.as_node() else {
             return;
         };
@@ -117,7 +117,7 @@ impl Rule for SpaceBeforeCommand {
         }
         // In math the inter-token space is insignificant, so nothing extra is
         // typeset: stay quiet. Covers `$…$`/`\[…\]` and math environments.
-        if in_math(command) {
+        if ctx.in_math(usize::from(command.text_range().start())) {
             return;
         }
         // The `CONTROL_WORD` is the command's leading token; the token directly
@@ -186,22 +186,6 @@ fn followed_by_break(command: &SyntaxNode) -> bool {
         None => true, // end of input == paragraph/document end
         Some(t) => matches!(t.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE),
     }
-}
-
-/// Whether `node` sits in math mode: inside a `MATH` node (`$…$`, `\[…\]`,
-/// `\left…\right`) or an environment the built-in signature DB marks `math`
-/// (`equation`, `align`, …). A space before an in-math command types nothing
-/// extra, so such a finding would be noise.
-fn in_math(node: &SyntaxNode) -> bool {
-    node.ancestors().any(|anc| match anc.kind() {
-        SyntaxKind::MATH => true,
-        SyntaxKind::ENVIRONMENT => Environment::cast(anc.clone())
-            .and_then(|e| e.begin())
-            .and_then(|begin| begin.name())
-            .and_then(|name| builtin().environment(&name).map(|env| env.math))
-            .unwrap_or(false),
-        _ => false,
-    })
 }
 
 #[cfg(test)]
@@ -314,6 +298,15 @@ mod tests {
         // space before `\label` is insignificant.
         let src = "\\begin{equation}\n  a = b \\label{eq:1}\n\\end{equation}\n";
         assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn math_environment_header_is_not_math() {
+        // `array`'s column specification belongs to its `\begin` header, not
+        // the effective math body. The deliberately prose-shaped content pins
+        // that boundary without claiming the header is valid column syntax.
+        let src = "\\begin{array}{word \\footnote{x}}\n  a = b\n\\end{array}\n";
+        assert_eq!(findings(src).len(), 1);
     }
 
     #[test]

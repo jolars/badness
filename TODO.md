@@ -39,20 +39,21 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
      relation stack falls back to the base indent. The long-LHS fixture now has
      only its intrinsically unbreakable 86-column RHS over the 80-column target;
      `math_display_break_segment_fits` still keeps an alignment that fits.
-   - [ ] **Unify `in_math`.** `space_before_command.rs` carries a private
-     ancestor climb that also reads the signature DB's `env.math` flag,
-     against the shared-index rule in `AGENTS.md`. Fold it into
-     `ctx.in_math`; keep the `\begin{equation}` header outside and the
-     environment body inside the effective math region.
+   - [x] **Unify `in_math`.** `space-before-command` now consumes
+     `RuleContext::in_math` like the other math-sensitive rules. The parser's
+     `MATH` body supplies the environment coverage, so the rule-local ancestor
+     climb and signature lookup are gone. A regression test pins an `array`
+     header outside math while its body remains inside the shared region.
    - [x] **`array` is already `math`+`align`.** `signatures.json` has both
      flags, the math-grid formatter calls `column_alignments`, and the
      `array_columns` fixture pins the column specification. Remove the stale
      formatter comment that lists `array` as a non-math grid when nearby code
      is next touched.
-   - [ ] **Decide `&=` gluing.** The grid renders `x&=a` as `x & = a`,
-     splitting the near-universal `&=` idiom. Consider gluing `&` to an
-     immediately following relation, since the `&` marks that relation's
-     alignment point. Taste call; whitespace-safe either way.
+   - [x] **Keep spaces around `&`.** Although `&=` is common, `&` is a column
+     separator rather than part of the following atom. The uniform `x & = a`,
+     `x & < y`, and `x & \mathrm{text}` rule is clearer than gluing only a
+     curated subset of following content, and it does not depend on atom
+     classification.
 
 2. [ ] **Positional argument domains and a shared mode index.** Add an
    argument-domain field orthogonal to formatter `ContentKind`, with

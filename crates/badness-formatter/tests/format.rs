@@ -978,6 +978,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // continuation line aligned under the first term after `=`. Whatever fits
     // still stays on one line.
     ("math_display_break_operators", WrapMode::Preserve, 80),
+    // An explicit top-level `\\` is a mandatory row divider. The operator
+    // breaker declines this shape so the shared math sequencer preserves the
+    // command and emits a hard break before the next row.
+    ("math_display_explicit_line_break", WrapMode::Preserve, 80),
     // A chain of relations aligns in a column: the second `=` starts a fresh
     // continuation line under the first `=`, not under the first right-hand-side
     // term (the two-level rule — relations align, binaries hang one relation-width

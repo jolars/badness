@@ -8388,8 +8388,9 @@ fn math_atom_role(el: &SyntaxElement, prev: MathRole, prev_opener: bool) -> Math
 /// Collect the top-level atoms of a display-math `MATH` body as [`MathPiece`]s,
 /// collapsing trivia runs exactly as [`lower_math_seq`] does. Returns `None` —
 /// signalling the caller to take the plain non-breaking path — when the body
-/// holds a comment (a comment forces its own break, which does not compose with
-/// the operator-break layout) or has fewer than two atoms (nothing to break).
+/// holds a comment or explicit line break (either forces its own break, which
+/// does not compose with the operator-break layout), or has fewer than two atoms
+/// (nothing to break).
 fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<MathPiece>> {
     let mut pieces: Vec<MathPiece> = Vec::new();
     // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
@@ -8409,6 +8410,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                 }
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
+            SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK => return None,
             other => {
                 let role = math_atom_role(&other, prev_role, prev_opener);
                 prev_role = role;

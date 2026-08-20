@@ -27,13 +27,12 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
 
 1. **Mechanical defects.**
 
-   - [ ] **`\\` is lost under `MathWrap::Break`** (the default `Auto`
-     resolution outside `wrap = "preserve"`). `collect_math_pieces` takes a
-     `LINE_BREAK` node as an ordinary operand atom, so `\[ a \\ b \]` collapses
-     onto one line, while the `preserve` and `single-line` paths honor
-     `lower_math_seq`'s hard-break contract for the same input. Initially bail
-     to `lower_math_seq` when the breaker sees a top-level `\\`; add the missing
-     fixture before teaching the breaker about mandatory row dividers.
+   - [x] **Preserve `\\` under `MathWrap::Break`.** `collect_math_pieces`
+     declines a top-level `LINE_BREAK`, routing the body through
+     `lower_math_seq`'s hard-break contract. The
+     `math_display_explicit_line_break` fixture pins `\[ a \\ b \]` as two
+     rows; the operator breaker can learn mandatory row dividers later if a
+     real formatting need justifies the added layout state.
    - [ ] **Clamp `rel_col`.** The relation column is the flat LHS width plus
      one, unclamped, so `math_display_break_relations`' expected output is
      ~150 columns at `line-width: 80`. Cap it against the body width available

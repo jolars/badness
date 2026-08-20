@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.17.0](https://github.com/jolars/badness/compare/v0.16.0...v0.17.0) (2026-08-20)
+
+### Breaking changes
+- **parser:** pair one-sided environment aliases ([`d757cdc`](https://github.com/jolars/badness/commit/d757cdca2dd65809ebd7f08f0e3e288e5036c45c)), closes [#117](https://github.com/jolars/badness/issues/117)
+- **parser:** arity-directed expl3 attachment (#119) ([`5f2f9d8`](https://github.com/jolars/badness/commit/5f2f9d8d7d1abd93b054616e34ed07aa121da662))
+
+### Features
+- **formatter:** format DTX doc environments ([`ac98c95`](https://github.com/jolars/badness/commit/ac98c9564f4e7a4082cc7fe2be0fa3a3c3e678a3)), fixes [#127](https://github.com/jolars/badness/issues/127)
+- **parser:** intra-file incremental reparse (#130) ([`393e0c3`](https://github.com/jolars/badness/commit/393e0c3e85b10226e58afb7b37f78cfe535dd9fd))
+- **bench:** time the keystroke pipeline ([`b1b2b0e`](https://github.com/jolars/badness/commit/b1b2b0e1edf3d8952248e25c41c113047bcd7a97))
+- **parser:** pair one-sided environment aliases ([`d757cdc`](https://github.com/jolars/badness/commit/d757cdca2dd65809ebd7f08f0e3e288e5036c45c)), closes [#117](https://github.com/jolars/badness/issues/117)
+- **parser:** arity-directed expl3 attachment (#119) ([`5f2f9d8`](https://github.com/jolars/badness/commit/5f2f9d8d7d1abd93b054616e34ed07aa121da662))
+- **formatter:** wrap picture statements at TikZ unit boundaries ([`5079f96`](https://github.com/jolars/badness/commit/5079f9607c5c8fcc9d021ba5b270347f7c6af524))
+- **formatter:** hang statement continuations in picture bodies ([`5266aba`](https://github.com/jolars/badness/commit/5266aba65c4f0caa2cf5deebe8925ef70c9b9689))
+
+### Bug Fixes
+- **parser:** isolate command definition names ([`8d6e274`](https://github.com/jolars/badness/commit/8d6e274957da4781668e25d9f2cd8261ee87cd34)), fixes [#133](https://github.com/jolars/badness/issues/133)
+- **formatter:** preserve TeX line semantics ([`f16188b`](https://github.com/jolars/badness/commit/f16188b5adb7b0132a58dbc05fcd435456843c3b)), fixes [#132](https://github.com/jolars/badness/issues/132)
+- **formatter:** handle mixed dtx doc regions ([`6edfd81`](https://github.com/jolars/badness/commit/6edfd81f713baa6118838e23d79edbce0653fa76)), fixes [#126](https://github.com/jolars/badness/issues/126)
+- preserve dtx documentation math ([`de0c54c`](https://github.com/jolars/badness/commit/de0c54cbedb2ae7cea6ab55204278fdd5bf2a49f)), fixes [#138](https://github.com/jolars/badness/issues/138)
+- **formatter:** preserve guarded dtx paragraphs ([`0373420`](https://github.com/jolars/badness/commit/03734200431df441c48c706444633df287e26542)), fixes [#123](https://github.com/jolars/badness/issues/123)
+
+### Performance Improvements
+- **lsp:** share document text and line index ([`3d4a5f8`](https://github.com/jolars/badness/commit/3d4a5f89e89cb371e6648b7a6226eb633c97af8e))
+
+### Dependencies
+- updated crates/badness-formatter to v0.4.0
+- updated crates/badness-parser to v0.3.0
+
 ## [0.16.0](https://github.com/jolars/badness/compare/v0.15.0...v0.16.0) (2026-08-14)
 
 ### Features

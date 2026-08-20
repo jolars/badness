@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0](https://github.com/jolars/badness/compare/badness-parser-v0.2.0...badness-parser-v0.3.0) (2026-08-20)
+
+### Breaking changes
+- **parser:** pair one-sided environment aliases ([`d757cdc`](https://github.com/jolars/badness/commit/d757cdca2dd65809ebd7f08f0e3e288e5036c45c)), closes [#117](https://github.com/jolars/badness/issues/117)
+- **parser:** arity-directed expl3 attachment (#119) ([`5f2f9d8`](https://github.com/jolars/badness/commit/5f2f9d8d7d1abd93b054616e34ed07aa121da662))
+
+### Features
+- **parser:** intra-file incremental reparse (#130) ([`393e0c3`](https://github.com/jolars/badness/commit/393e0c3e85b10226e58afb7b37f78cfe535dd9fd))
+- **parser:** pair one-sided environment aliases ([`d757cdc`](https://github.com/jolars/badness/commit/d757cdca2dd65809ebd7f08f0e3e288e5036c45c)), closes [#117](https://github.com/jolars/badness/issues/117)
+- **parser:** arity-directed expl3 attachment (#119) ([`5f2f9d8`](https://github.com/jolars/badness/commit/5f2f9d8d7d1abd93b054616e34ed07aa121da662))
+- **formatter:** wrap picture statements at TikZ unit boundaries ([`5079f96`](https://github.com/jolars/badness/commit/5079f9607c5c8fcc9d021ba5b270347f7c6af524))
+- **formatter:** hang statement continuations in picture bodies ([`5266aba`](https://github.com/jolars/badness/commit/5266aba65c4f0caa2cf5deebe8925ef70c9b9689))
+- **parser:** wrap picture-body statements in STATEMENT nodes ([`abb16f4`](https://github.com/jolars/badness/commit/abb16f4948aea7e275cdba622ab4571701cd7682))
+
+### Bug Fixes
+- **parser:** isolate command definition names ([`8d6e274`](https://github.com/jolars/badness/commit/8d6e274957da4781668e25d9f2cd8261ee87cd34)), fixes [#133](https://github.com/jolars/badness/issues/133)
+- preserve dtx documentation math ([`de0c54c`](https://github.com/jolars/badness/commit/de0c54cbedb2ae7cea6ab55204278fdd5bf2a49f)), fixes [#138](https://github.com/jolars/badness/issues/138)
+- add ControlSequence ([`c2fb13d`](https://github.com/jolars/badness/commit/c2fb13d1190ff9aa7da5eca94e531059a751da21))
+- **parser:** preserve def dollar delimiters ([`2381bc5`](https://github.com/jolars/badness/commit/2381bc56a3ff38ee9284e50ce33a962fc5881eae)), fixes [#129](https://github.com/jolars/badness/issues/129)
+
 ## [0.2.0](https://github.com/jolars/badness/compare/badness-parser-v0.1.1...badness-parser-v0.2.0) (2026-08-14)
 
 ### Features

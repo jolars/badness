@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.0](https://github.com/jolars/badness/compare/badness-formatter-v0.3.0...badness-formatter-v0.4.0) (2026-08-20)
+
+### Breaking changes
+- **parser:** arity-directed expl3 attachment (#119) ([`5f2f9d8`](https://github.com/jolars/badness/commit/5f2f9d8d7d1abd93b054616e34ed07aa121da662))
+
+### Features
+- **formatter:** format DTX doc environments ([`ac98c95`](https://github.com/jolars/badness/commit/ac98c9564f4e7a4082cc7fe2be0fa3a3c3e678a3)), fixes [#127](https://github.com/jolars/badness/issues/127)
+- **parser:** arity-directed expl3 attachment (#119) ([`5f2f9d8`](https://github.com/jolars/badness/commit/5f2f9d8d7d1abd93b054616e34ed07aa121da662))
+- **formatter:** wrap picture statements at TikZ unit boundaries ([`5079f96`](https://github.com/jolars/badness/commit/5079f9607c5c8fcc9d021ba5b270347f7c6af524))
+- **formatter:** hang statement continuations in picture bodies ([`5266aba`](https://github.com/jolars/badness/commit/5266aba65c4f0caa2cf5deebe8925ef70c9b9689))
+- **parser:** wrap picture-body statements in STATEMENT nodes ([`abb16f4`](https://github.com/jolars/badness/commit/abb16f4948aea7e275cdba622ab4571701cd7682))
+
+### Bug Fixes
+- **formatter:** preserve verbatim arguments ([`7d39e61`](https://github.com/jolars/badness/commit/7d39e61cd3854c41c43ef7c4cee938c968259a2b)), fixes [#134](https://github.com/jolars/badness/issues/134)
+- **formatter:** preserve TeX line semantics ([`f16188b`](https://github.com/jolars/badness/commit/f16188b5adb7b0132a58dbc05fcd435456843c3b)), fixes [#132](https://github.com/jolars/badness/issues/132)
+- **formatter:** handle mixed dtx doc regions ([`6edfd81`](https://github.com/jolars/badness/commit/6edfd81f713baa6118838e23d79edbce0653fa76)), fixes [#126](https://github.com/jolars/badness/issues/126)
+- preserve dtx documentation math ([`de0c54c`](https://github.com/jolars/badness/commit/de0c54cbedb2ae7cea6ab55204278fdd5bf2a49f)), fixes [#138](https://github.com/jolars/badness/issues/138)
+- **formatter:** preserve DTX margin semantics ([`5dc60ec`](https://github.com/jolars/badness/commit/5dc60ecf24ab42152a2ae052c9f4fd615a966c5f)), fixes [#125](https://github.com/jolars/badness/issues/125)
+- **formatter:** stabilize DTX prose atoms ([`35164ab`](https://github.com/jolars/badness/commit/35164ab7e008df1ead9c54886d4cf3bc74e35fbf)), fixes [#128](https://github.com/jolars/badness/issues/128)
+- **formatter:** preserve guarded dtx paragraphs ([`0373420`](https://github.com/jolars/badness/commit/03734200431df441c48c706444633df287e26542)), fixes [#123](https://github.com/jolars/badness/issues/123)
+- **formatter:** preserve guarded dtx commands ([`3d5d7ea`](https://github.com/jolars/badness/commit/3d5d7eaf2eac254bcff86b91bfe6103e36b548fd)), ref [#122](https://github.com/jolars/badness/issues/122)
+- fix formatter keyval separator idempotency ([`3d6ffa7`](https://github.com/jolars/badness/commit/3d6ffa7398053783709456c6f467ca3ec2873a81)), closes [#121](https://github.com/jolars/badness/issues/121)
+- **formatter:** retain math environment begin tails ([`2af7cb1`](https://github.com/jolars/badness/commit/2af7cb1aa5b1f6524a7274ed5eacdbac89197e94))
+
+### Dependencies
+- updated crates/badness-parser to v0.3.0
+
 ## [0.3.0](https://github.com/jolars/badness/compare/badness-formatter-v0.2.0...badness-formatter-v0.3.0) (2026-08-14)
 
 ### Features

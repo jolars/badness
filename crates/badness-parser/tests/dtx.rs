@@ -380,6 +380,40 @@ fn parse_dtx_with_errors(input: &str) -> (SyntaxNode, usize) {
 }
 
 #[test]
+fn chunk_plain_closing_brace_does_not_part_an_optional() {
+    let (root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         \\cmd[a } b]\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count(&root, SyntaxKind::OPTIONAL), 1);
+}
+
+#[test]
+fn structural_closing_brace_still_parts_an_optional() {
+    let (root, errors) = parse_dtx_with_errors(
+        "%    \\begin{macrocode}\n\
+         {\\cmd[a } b]\n\
+         %    \\end{macrocode}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(count(&root, SyntaxKind::OPTIONAL), 0);
+}
+
+#[test]
+fn chunk_plain_braces_do_not_part_math_optionals() {
+    // Both unmatched brace directions are ordinary tokens within a macrocode
+    // chunk because the groups they belong to may span chunk boundaries.
+    for body in [r"$\cmd[a } b]$", r"$\cmd[a { b]$"] {
+        let input = format!("%    \\begin{{macrocode}}\n{body}\n%    \\end{{macrocode}}\n");
+        let (root, errors) = parse_dtx_with_errors(&input);
+        assert_eq!(errors, 0, "{body}");
+        assert_eq!(count(&root, SyntaxKind::OPTIONAL), 1, "{body}");
+    }
+}
+
+#[test]
 fn definition_split_across_macrocode_chunks_parses_cleanly() {
     // A `macrocode` chunk is macro code (issue #57): a `\def` regularly opens a
     // brace in one chunk and closes it several chunks later. The chunk-unmatched

@@ -367,17 +367,6 @@ trait GatePolicy {
     /// *positive* gates' reading; see [`StrayBrace`].
     const STRAY_BRACE: StrayBrace = StrayBrace::RefutesInGroup;
 
-    /// Whether a brace with no match inside the current `macrocode` chunk
-    /// ([`Parser::plain_braces`]) is an ordinary token rather than group
-    /// structure. True everywhere but [`MathBracketGate`], whose pre-batch scan
-    /// tracked every brace alike — preserved, not chosen, and one-directional:
-    /// a chunk-unmatched `}` can only occur at chunk brace depth 0, so the scan
-    /// meets it at its own depth 0 and refuses, while a chunk-unmatched `{` only
-    /// adds depth. The unfiltered reading therefore refuses a bracket the
-    /// filtered one would attach and never the reverse (`TODO.md`, container
-    /// stack C2.5).
-    const PLAIN_BRACES_ARE_TOKENS: bool = true;
-
     /// Which math delimiters at the entries' own level refute them, if any.
     ///
     /// Defaults to the text-dwelling positive gates' reading — math *starting*
@@ -786,9 +775,9 @@ impl GatePolicy for LeftRightGate {
 ///   because `optional`'s own bail is: it bails wherever the cursor stands, and
 ///   a gate stricter *or* looser than the parse it guards is a bug.
 ///
-/// A `}` refutes unconditionally ([`StrayBrace::RefutesAlways`]) for the reason
-/// the math gates give: `optional` bails at any unbalanced `}`, group behind it
-/// or not.
+/// A structural `}` refutes unconditionally ([`StrayBrace::RefutesAlways`]) for
+/// the reason the math gates give: `optional` bails at any unbalanced `}`, group
+/// behind it or not. A chunk-unmatched macrocode brace is a plain token instead.
 ///
 /// [`Parser::bracket_closes_in_text`]'s own policy is this and nothing else — it
 /// is the text-mode gate, and macro code's freely-passed lone brackets
@@ -833,10 +822,9 @@ impl GatePolicy for TextBracketGate {
 /// - **`\]`/`\)` refute** ([`MathAnchor::Closing`]): inside math they mean the
 ///   bracket is not an argument at all, e.g. the open-interval `$]0;\num{0.5}[$`.
 /// - **The `\begin`/`\end` anchor fires inside macro code too**
-///   ([`GatePolicy::ENV_ANCHOR_IN_MACRO_CODE`]), and chunk-unmatched braces are
-///   not plain tokens ([`GatePolicy::PLAIN_BRACES_ARE_TOKENS`]). Both make it
-///   stricter than the [`Parser::optional`] bail it mirrors, in the direction
-///   that only ever declines to attach.
+///   ([`GatePolicy::ENV_ANCHOR_IN_MACRO_CODE`]). This makes it stricter than the
+///   [`Parser::optional`] bail it mirrors, in the direction that only ever
+///   declines to attach.
 ///
 /// This is also the one gate whose `macrocode` bound is not the C0 argument.
 /// Every other gate's pre-batch scan already stopped at [`Parser::macrocode_end`];
@@ -859,8 +847,6 @@ impl GatePolicy for MathBracketGate {
     const ANCHORS_AT_ANY_DEPTH: bool = true;
     const ENV_ANCHOR: EnvAnchor = EnvAnchor::Refutes;
     const ENV_ANCHOR_IN_MACRO_CODE: bool = true;
-    const PLAIN_BRACES_ARE_TOKENS: bool = false;
-
     fn dollar_anchor(&self) -> DollarAnchor {
         if self.enclosing_is_dollar {
             DollarAnchor::Refutes
@@ -2207,7 +2193,8 @@ impl<'t> Parser<'t> {
     ///
     /// `[` and `]` are not real grouping in TeX, so this is heuristic: it ends
     /// at the first `]`, and bails defensively (rather than swallowing the
-    /// document) on a `}`, a `\begin`/`\end`, a paragraph break, or EOF.
+    /// document) on a structural `}`, a `\begin`/`\end`, a paragraph break, or
+    /// EOF. A chunk-unmatched macrocode `}` is an ordinary token.
     fn optional(&mut self) {
         self.argument_optional(ArgumentDomain::Unknown);
     }
@@ -2219,7 +2206,11 @@ impl<'t> Parser<'t> {
         self.bump(); // [
         loop {
             match self.kind() {
-                None | Some(SyntaxKind::R_BRACE) => {
+                None => {
+                    self.error_at(opener, "unclosed `[`");
+                    break;
+                }
+                Some(SyntaxKind::R_BRACE) if !self.plain_braces.contains(&self.pos) => {
                     self.error_at(opener, "unclosed `[`");
                     break;
                 }
@@ -3360,14 +3351,8 @@ impl<'t> Parser<'t> {
                 {
                     break;
                 }
-                SyntaxKind::L_BRACE
-                    if !P::PLAIN_BRACES_ARE_TOKENS || !self.plain_braces.contains(&i) =>
-                {
-                    depth += 1
-                }
-                SyntaxKind::R_BRACE
-                    if !P::PLAIN_BRACES_ARE_TOKENS || !self.plain_braces.contains(&i) =>
-                {
+                SyntaxKind::L_BRACE if !self.plain_braces.contains(&i) => depth += 1,
+                SyntaxKind::R_BRACE if !self.plain_braces.contains(&i) => {
                     if depth == 0 {
                         // A `}` closing a group opened before the opener always
                         // wins: braces are catcode structure while the gated

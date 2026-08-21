@@ -448,13 +448,11 @@ nested inline region, so a balanced `$…$` in the bracket is **transparent** �
 the entries' own openers and closers stop counting until the matching `$`, and
 everything else reads on — while inside `$…$` TeX cannot nest one, so the first
 `$` at the bracket's own level is that math's closer and refuses. And the gate
-is stricter than the `optional` bail in two preserved respects: its
-`\begin`/`\end` anchor carries no `in_macro_code` filter, and a chunk-unmatched
-brace is group structure to it rather than a plain token. Both only ever decline
-to attach. The second is arguably the *faithful* reading — `optional` itself
-bails at any `R_BRACE` without consulting `plain_braces`, so its two siblings,
-which do consult it, are the loose ones — but unifying either way moves verdicts
-and is its own commit.
+is stricter than the `optional` bail in one preserved respect: its
+`\begin`/`\end` anchor carries no `in_macro_code` filter, which can only decline
+to attach. All three bracket gates ignore chunk-unmatched braces, matching the
+walk they guard: `optional` treats such braces as ordinary macrocode tokens but
+still bails at a structural `R_BRACE`.
 
 The `macrocode` gate keeps one divergence of its own: it is the one bracket gate
 the batch cannot make linear, single-entry by policy, so a chunk of `\cmd[`

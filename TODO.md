@@ -1587,18 +1587,11 @@ near-mechanical ports, the third is a project.
         since entering a `$` inside `\[…\]` changes no brace, group, or frame
         state.
 
-      - **The missing `plain_braces` filter is not a latent macrocode bug — it
-        is arguably the *faithful* reading.** `Parser::optional` bails at any
-        `R_BRACE` without consulting `plain_braces`, so the in-math gate mirrors
-        the walk and its two siblings are the loose ones: an optional they let
-        attach over a chunk-plain `}` still reports "unclosed `[`" and blocks
-        the file for the formatter. It is also one-directional (a chunk-unmatched
-        `}` can only occur at chunk brace depth 0, so the scan meets it at its
-        own depth 0 and refuses, while a chunk-unmatched `{` only adds depth), so
-        the unfiltered reading refuses a bracket the filtered one attaches and
-        never the reverse. Preserved as `PLAIN_BRACES_ARE_TOKENS`; unifying is
-        its own commit, and the pre-existing gate/walk looseness above is the
-        thing to fix first.
+      - **The missing `plain_braces` filter was preserved for separate
+        resolution.** At this stage `Parser::optional` still bailed at every
+        `R_BRACE`, while two gates treated chunk-unmatched braces as ordinary
+        macrocode tokens. The follow-up below unified the walk and all three
+        gates on the macrocode reading.
 
       What the family did need is **two anchors read depth-blind**
       (`EnvAnchor::Refutes`, `ParagraphAnchor::AnyDepth`), because `optional`'s
@@ -1714,15 +1707,10 @@ near-mechanical ports, the third is a project.
     each with a real-blank-line and a margin-only-line control so both halves of
     the trivia split are discriminated.
 
-  - [ ] **`optional` bails at a chunk-plain `}` its own gates skip.** Two of the
-    three bracket gates filter `plain_braces`; `Parser::optional` does not
-    consult it at all, so an optional they let attach over a chunk-unmatched `}`
-    is then reported "unclosed `[`" — a diagnostic that blocks the whole file
-    for the formatter, from a brace the macrocode model says is an ordinary
-    token. A gate must mirror the parse it guards, so the fix is in `optional`
-    (skip a `plain_brace` `}` as `element` already does), not in the gates; the
-    in-math gate's unfiltered reading then becomes the odd one out and
-    `PLAIN_BRACES_ARE_TOKENS` can go. Pre-existing, not introduced by C2.5.
+  - [x] **`optional` now passes chunk-plain braces as ordinary tokens.** Its
+    `R_BRACE` bail filters `plain_braces`, matching `element`, and every bracket
+    gate applies the same filter. Text and math `.dtx` tests cover both plain
+    brace directions and retain a structural-`}` rejection control.
 
 - [x] **Four quadratics behind the "formatter and linter are superlinear"
   entry — none of them where that entry said.** The original note read the two

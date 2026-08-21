@@ -3,10 +3,9 @@
 //! Exact output is pinned by `tests/fixtures/formatter/<name>/{input,expected}.tex`.
 //! Every case also checks idempotence and preservation of non-trivia content.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use std::collections::BTreeMap;
 
 use badness_formatter::declarations::{Declarations, ResolvedDeclarations};
 use badness_formatter::formatter::{
@@ -521,6 +520,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // Locally defined delimiter aliases inherit the target environment's list
+    // and math-grid layout, nest structurally, and stay ordinary commands when
+    // no closer proves the pair.
+    ("env_alias_list_items", WrapMode::Reflow, 80),
+    ("env_alias_math_grid", WrapMode::Reflow, 80),
+    ("env_alias_nested_in_environment", WrapMode::Reflow, 80),
+    ("env_alias_unpaired_unchanged", WrapMode::Reflow, 80),
     // A `statementBody` environment (the TikZ/pgf picture family) holds
     // `;`-terminated path statements, not prose. Boundaries are *structural*
     // (the parser's `STATEMENT` node, re-derived from the `;` on every parse),
@@ -1182,10 +1188,78 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
 ];
 
 fn fixture_path(name: &str, file: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/formatter")
-        .join(name)
-        .join(file)
+    fixture_root().join(name).join(file)
+}
+
+fn fixture_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/formatter")
+}
+
+#[test]
+fn every_formatter_fixture_is_registered_once() {
+    let mut registered: BTreeMap<&'static str, &'static str> = BTreeMap::new();
+    let mut register = |name, family| {
+        if let Some(previous) = registered.insert(name, family) {
+            panic!("fixture {name} is registered in both {previous} and {family}");
+        }
+    };
+
+    for &(name, _, _) in FIXTURES {
+        register(name, "FIXTURES");
+    }
+    for &(name, _) in PACKAGE_FIXTURES {
+        register(name, "PACKAGE_FIXTURES");
+    }
+    for &name in DTX_FIXTURES {
+        register(name, "DTX_FIXTURES");
+    }
+    for &(name, _, _) in DTX_REFLOW_FIXTURES {
+        register(name, "DTX_REFLOW_FIXTURES");
+    }
+    for &name in INS_FIXTURES {
+        register(name, "INS_FIXTURES");
+    }
+    for &(name, _, _, _) in MATH_WRAP_FIXTURES {
+        register(name, "MATH_WRAP_FIXTURES");
+    }
+
+    let mut on_disk = BTreeSet::new();
+    for entry in fs::read_dir(fixture_root()).expect("read formatter fixture directory") {
+        let entry = entry.expect("read formatter fixture entry");
+        assert!(
+            entry.file_type().expect("read fixture entry type").is_dir(),
+            "unexpected non-directory in formatter fixtures: {}",
+            entry.path().display()
+        );
+        // Git cannot carry an empty directory. Ignore local rename residue so
+        // the guard describes the fixture corpus that can actually be committed.
+        if fs::read_dir(entry.path())
+            .expect("read formatter fixture")
+            .next()
+            .is_none()
+        {
+            continue;
+        }
+        on_disk.insert(
+            entry
+                .file_name()
+                .into_string()
+                .expect("formatter fixture name must be UTF-8"),
+        );
+    }
+
+    for name in registered.keys() {
+        assert!(
+            on_disk.contains(*name),
+            "registered formatter fixture {name} does not exist on disk"
+        );
+    }
+    for name in &on_disk {
+        assert!(
+            registered.contains_key(name.as_str()),
+            "formatter fixture {name} is not registered"
+        );
+    }
 }
 
 /// Package/class fixtures under `tests/fixtures/formatter/<name>/`, each an

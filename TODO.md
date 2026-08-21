@@ -503,14 +503,6 @@ sources below are missing.
   inline comments in the rendered source, make the generated code
   self-checking.
 
-- [ ] **No orphan guard on formatter fixtures.** A directory under
-  `crates/badness-formatter/tests/fixtures/formatter/` that appears in none of
-  `FIXTURES`/`MATH_WRAP_FIXTURES`/`DTX_*`/`PACKAGE_FIXTURES`/`INS_FIXTURES`
-  silently never runs — `expl_relation_slot_statement` shipped that way. Since
-  each table is one looping test, a slug is not a test name, so filtering cannot
-  detect it either. Add a test that walks the fixture dir and asserts every slug
-  is registered exactly once (and every registered slug exists on disk).
-
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
   ongoing). Skill: `.agents/skills/formatter-fixture/`. The corpus is read as a
   coverage map — which constructs occur and in what shapes — and **latexindent

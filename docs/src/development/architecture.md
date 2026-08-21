@@ -563,13 +563,19 @@ arithmetic-precedence expression tree.
 The CST greedily attaches trailing `{…}` and `[…]` groups as argument nodes,
 texlab-style. Arity is unknown at parse time; the semantic layer refines it.
 
-The load-bearing claim is database independence. Attachment reads the input text
-plus compiled-in data, never mutable signature inputs such as package scopes,
-scanned definitions, or the CWL tier. Consulting the signature database during
-grouping would make the tree a function of something other than the text, and
-every signature edit would invalidate every parse. For generic LaTeX that forces
-greed: `\foo{a}{b}` is either a two-argument call or a zero-argument command
-followed by two groups, and nothing in the text says which.
+One positional refinement is admitted during parsing: curated built-in slots may
+declare an `ArgumentDomain` of `Math` or `Text`, independently of formatter
+`ContentKind`. A shared matcher aligns groups with slots while skipping omitted
+optionals. A matched `Math` group uses the ordinary math-element parser, while
+`Text`, `Unknown`, unmatched, and over-attached groups use generic parsing.
+Attachment itself remains greedy.
+
+The load-bearing claim is independence from mutable signature data. Positional
+domain parsing reads only the hand-curated built-in tier—never package scopes,
+scanned definitions, declarations, or CWL signatures. The latter sources assign
+`Unknown` to every slot. For generic LaTeX that forces greed: `\foo{a}{b}` is
+either a two-argument call or a zero-argument command followed by two groups,
+and nothing in the text says which.
 
 Project [declarations](#declarations) are the one sanctioned input that is not
 the text. They are admissible precisely because they do not touch this: a
@@ -1228,6 +1234,14 @@ center, or right. Routing to the grid is primarily semantic, through the curated
 body carries a top-level `&`, since a `&` at catcode 4 is a column tab and the
 signature database cannot name a user-defined alignment.
 
+Commands are otherwise opaque to math lowering. A resolved signature containing
+a positional `Math` domain opens only those matched brace or bracket groups to
+recursive math formatting; the control word, trivia, `Text` and `Unknown` slots,
+unmatched groups, and groups beyond declared arity remain byte-for-byte as
+authored. Formatter signature precedence still applies, so a scanned
+redefinition shadows the curated built-in with `Unknown` domains and restores
+whole-command preservation.
+
 Math operator spacing is a single space around each binary and relation atom,
 with unary signs and scripts tight.
 
@@ -1378,9 +1392,15 @@ Each rule reads a `RuleContext` assembled once per file. Besides the syntax root
 and the semantic model it carries the cross-file resolution a project view
 provides (labels, cite keys, and package options), each `None` when there is no
 project view, which makes the corresponding rules inert rather than wrong. It
-also precomputes two shared side indexes, one of math byte ranges and one of
-`\if…\else…\fi` branch paths, so the many rules that need them share one
-membership test instead of each climbing the ancestor chain per token.
+also precomputes two shared side indexes, one of effective mode and one of
+`\if…\else…\fi` branch paths. The mode index partitions token ranges into
+`Math`, `Text`, and `Unknown`: document content begins as text, explicit `MATH`
+bodies override it, and command or environment arguments override their ambient
+mode with the matched curated positional domain. Unknown commands, unmatched or
+over-attached groups, and uncurated slots are `Unknown`; direct groups inherit.
+Nested explicit math may in turn override a text island. Math-only rules require
+`Math`, text-only rules require `Text`, and rules whose fix differs by mode skip
+`Unknown`.
 
 The registry compiles the rule list into a dispatch table indexed by
 `SyntaxKind`, so node dispatch is a slice index, and it is cached across files

@@ -58,6 +58,10 @@ const HAZARD_SNIPPETS: &[&str] = &[
     "Text $x^2 + y_1$ and \\[ \\int_0^1 f \\] and \\(a\\).\n",
     "\\begin{align}\n  a &= b \\\\\n  c &= d\n\\end{align}\n",
     "$\\left( \\frac{a}{b} \\right)$\n",
+    // Curated positional domains outside explicit math, plus text and unknown
+    // overrides inside it.
+    "Before \\frac{x_i+1}{n} and \\sqrt[3^n]{y_j}.\n",
+    "$\\text{text_i} + \\unknown{opaque_i} + \\mathrm{math_i}$\n",
     // Environments, including one whose closer the gate can lose.
     "\\begin{itemize}\n  \\item one\n  \\item two\n\\end{itemize}\n",
     "{\\begin{itemize}\\item x}\n",

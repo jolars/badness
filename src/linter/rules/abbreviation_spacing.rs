@@ -128,7 +128,7 @@ impl StreamVisitor for AbbreviationSpacingVisitor {
             },
             SyntaxKind::WORD if !self.french => {
                 // A `.` in math is not sentence punctuation; skip.
-                if ctx.in_math(usize::from(tok.text_range().start())) {
+                if !ctx.in_text(usize::from(tok.text_range().start())) {
                     return;
                 }
                 check_word(tok, sink);

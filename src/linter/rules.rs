@@ -13,9 +13,9 @@ use rowan::{TextRange, TextSize};
 
 use crate::ast::{AstNode, AstToken, ControlWord, Environment, child_token};
 use crate::project::{ResolvedCitations, ResolvedLabels, ResolvedPackageOptions};
-use crate::semantic::SemanticModel;
 use crate::semantic::define::scan_definitions;
 use crate::semantic::signature::SignatureDb;
+use crate::semantic::{Mode, ModeIndex, SemanticModel};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::diagnostic::{Diagnostic, Severity};
@@ -104,13 +104,9 @@ pub struct RuleContext<'a> {
     /// statically-declared options), or `None` when there is no project view.
     /// Gates `unknown-option`, the load-graph analog of `resolution`.
     pub packages: Option<&'a ResolvedPackageOptions>,
-    /// Disjoint byte ranges covered by `MATH` nodes, sorted by start. Computed
-    /// once per file so the many rules that must ignore math (`e.g.` inside `$…$`
-    /// is not sentence punctuation, a `-` there is not a dash, …) share one
-    /// membership test ([`RuleContext::in_math`]) instead of each climbing the
-    /// ancestor chain per token. Mirrors the formatter's `expl3_regions` side
-    /// channel: a read-only, precomputed range set derived purely from the tree.
-    math_regions: Vec<TextRange>,
+    /// Effective text/math/unknown mode, computed once for all mode-sensitive
+    /// rules.
+    mode_index: ModeIndex,
     /// The `\if…\else…\fi` branch path per byte offset, precomputed once so the
     /// duplicate-detection rules share one conditional tracker instead of each
     /// interpreting `\else`/`\fi` tokens themselves (see
@@ -152,7 +148,7 @@ impl<'a> RuleContext<'a> {
             resolution,
             citations,
             packages,
-            math_regions: math_regions(root),
+            mode_index: ModeIndex::build(root),
             conditionals: super::conditional::ConditionalIndex::compute(root),
             expl3_regions: OnceLock::new(),
             user_definitions: OnceLock::new(),
@@ -167,21 +163,18 @@ impl<'a> RuleContext<'a> {
         self.conditionals.path_at(offset)
     }
 
-    /// Whether byte `offset` falls inside a `MATH` node. `O(log n)` over the
-    /// precomputed disjoint regions — the shared replacement for the ad-hoc
-    /// `parent_ancestors().any(MATH)` climbs the math-sensitive rules used to do.
+    pub fn mode_at(&self, offset: usize) -> Mode {
+        self.mode_index.mode_at(offset)
+    }
+
+    /// Whether byte `offset` is proven math.
     pub fn in_math(&self, offset: usize) -> bool {
-        let offset = TextSize::from(offset as u32);
-        // Find the last region starting at or before `offset`; it is the only one
-        // that can contain it (regions are disjoint and sorted).
-        match self
-            .math_regions
-            .binary_search_by(|r| r.start().cmp(&offset))
-        {
-            Ok(_) => true, // a region starts exactly here
-            Err(0) => false,
-            Err(i) => self.math_regions[i - 1].contains(offset),
-        }
+        self.mode_at(offset) == Mode::Math
+    }
+
+    /// Whether byte `offset` is proven text.
+    pub fn in_text(&self, offset: usize) -> bool {
+        self.mode_at(offset) == Mode::Text
     }
 
     /// Whether byte `offset` falls inside an expl3 code region (`\ExplSyntaxOn`…
@@ -262,28 +255,6 @@ pub(crate) fn in_reference_position(command: &SyntaxNode) -> bool {
         token = current.prev_token();
     }
     false
-}
-
-/// Collect the disjoint byte ranges covered by `MATH` nodes, sorted by start.
-/// Nested/adjacent `MATH` spans are coalesced so [`RuleContext::in_math`] can
-/// binary-search a clean interval set.
-fn math_regions(root: &SyntaxNode) -> Vec<TextRange> {
-    let mut ranges: Vec<TextRange> = root
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::MATH)
-        .map(|node| node.text_range())
-        .collect();
-    ranges.sort_by_key(|r| r.start());
-    let mut merged: Vec<TextRange> = Vec::with_capacity(ranges.len());
-    for r in ranges {
-        match merged.last_mut() {
-            Some(last) if r.start() <= last.end() => {
-                *last = TextRange::new(last.start(), last.end().max(r.end()));
-            }
-            _ => merged.push(r),
-        }
-    }
-    merged
 }
 
 /// Whether `tok` sits inside an argument of a key-argument command — `\label`,
@@ -616,49 +587,30 @@ pub(crate) fn in_pgfmath_argument(tok: &crate::syntax::SyntaxToken) -> bool {
     false
 }
 
-/// The curated set of commands that set their argument *upright* (a math-alphabet
-/// font) or as *text*, so a log-like name inside is a deliberate glyph, not a bare
-/// operator missing its backslash: the math-font alphabets (`\mathrm`, `\mathbf`,
-/// …), the amsmath text escapes (`\text`, `\mbox`, `\intertext`), and the explicit
-/// operator builder (`\operatorname`). `math-operator-name` uses this to stay off
-/// `\mathrm{exp}` (already upright — flagging it, and the `\mathrm{\exp}` rewrite,
-/// is wrong) and prose in `\text{the gcd is}`. Curated and small; a wrong entry is
-/// a false negative.
-fn is_upright_or_text_math_command(name: &str) -> bool {
-    matches!(
-        name,
-        "mathrm"
-            | "mathsf"
-            | "mathbf"
-            | "mathit"
-            | "mathtt"
-            | "mathnormal"
-            | "mathcal"
-            | "mathbb"
-            | "mathfrak"
-            | "mathscr"
-            | "text"
-            | "textrm"
-            | "textnormal"
-            | "mbox"
-            | "intertext"
-            | "operatorname"
-    )
-}
-
-/// Whether `tok` sits inside an upright/text math command argument
-/// ([`is_upright_or_text_math_command`]). `math-operator-name` uses this to skip a
-/// name that is already upright (`\mathrm{exp}`) or plain text
-/// (`\text{the gcd is}`), where flagging it is wrong. Same greedy-attachment
-/// posture as [`in_key_argument`]: *all* argument groups are skipped, since arity
-/// is unknown at parse time (decision #8) and a false negative is preferred.
-pub(crate) fn in_upright_or_text_math_argument(tok: &crate::syntax::SyntaxToken) -> bool {
+/// Whether `tok` sits inside a math alphabet or `\operatorname` argument, where
+/// an operator-like spelling is intentionally upright rather than missing a
+/// control sequence.
+pub(crate) fn in_math_alphabet_or_operator_argument(tok: &crate::syntax::SyntaxToken) -> bool {
     tok.parent_ancestors().any(|node| {
         matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
             && node.parent().is_some_and(|cmd| {
                 cmd.kind() == SyntaxKind::COMMAND
-                    && crate::ast::command_name(&cmd)
-                        .is_some_and(|name| is_upright_or_text_math_command(&name))
+                    && crate::ast::command_name(&cmd).is_some_and(|name| {
+                        matches!(
+                            name.as_str(),
+                            "mathrm"
+                                | "mathsf"
+                                | "mathbf"
+                                | "mathit"
+                                | "mathtt"
+                                | "mathnormal"
+                                | "mathcal"
+                                | "mathbb"
+                                | "mathfrak"
+                                | "mathscr"
+                                | "operatorname"
+                        )
+                    })
             })
     })
 }

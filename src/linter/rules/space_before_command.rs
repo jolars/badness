@@ -117,7 +117,7 @@ impl Rule for SpaceBeforeCommand {
         }
         // In math the inter-token space is insignificant, so nothing extra is
         // typeset: stay quiet. Covers `$…$`/`\[…\]` and math environments.
-        if ctx.in_math(usize::from(command.text_range().start())) {
+        if !ctx.in_text(usize::from(command.text_range().start())) {
             return;
         }
         // The `CONTROL_WORD` is the command's leading token; the token directly
@@ -301,12 +301,11 @@ mod tests {
     }
 
     #[test]
-    fn math_environment_header_is_not_math() {
-        // `array`'s column specification belongs to its `\begin` header, not
-        // the effective math body. The deliberately prose-shaped content pins
-        // that boundary without claiming the header is valid column syntax.
+    fn math_environment_header_is_unknown() {
+        // `array`'s column specification belongs to its `\begin` header, but no
+        // positional text-domain claim exists for it.
         let src = "\\begin{array}{word \\footnote{x}}\n  a = b\n\\end{array}\n";
-        assert_eq!(findings(src).len(), 1);
+        assert!(findings(src).is_empty());
     }
 
     #[test]

@@ -17,23 +17,14 @@
 //!   - Only inside math mode (an ancestor `MATH`); a bare `sin` in text is just
 //!     the English word.
 //!   - Never in script position, where a name like `max` in `x_{max}` is almost
-//!     always a *label* ("the maximum"), not the operator. That means no
-//!     `SUBSCRIPT`/`SUPERSCRIPT` ancestor, and also not the *raw* script shape —
-//!     a word or group directly preceded by a `_`/`^` token — which is what a
-//!     command's argument body produces (`\frac{x_{exp}}{n}`, issue #37):
-//!     argument mode is macro meaning the parser never resolves, so those bodies
-//!     parse in text mode and build no script nodes. The base of `\lim_{n}` is
-//!     still flagged: `lim` there is the WORD base, not inside the script.
-//!   - Never inside a key argument (`super::in_key_argument`): the `max` in
-//!     `$\label{eq:thing_max}$` or `\eqref{eq:max}` is part of an opaque
-//!     identifier, not typeset math. Math-content arguments (`\frac{sin x}{2}`)
-//!     are still in scope — the gate is a curated name-family list
-//!     (`semantic::builder::key_argument_command`), not a blanket
-//!     argument skip.
-//!   - Never inside an upright font or text escape
-//!     (`super::in_upright_or_text_math_argument`): `\mathrm{exp}` already sets
-//!     `exp` upright, so flagging it (and the broken `\mathrm{\exp}` rewrite) is
-//!     wrong, and `\text{the gcd is}` is prose, not math.
+//!     always a *label* ("the maximum"), not the operator. Curated math-domain
+//!     arguments build the same `SUBSCRIPT`/`SUPERSCRIPT` structure as explicit
+//!     math, which covers `\frac{x_{exp}}{n}` (issue #37).
+//!   - Never in an argument whose positional domain is text or unknown. This
+//!     covers keys, prose islands, and uncurated commands without name carve-outs.
+//!   - Never inside a math alphabet or `\operatorname`: `\mathrm{exp}` already
+//!     sets `exp` upright, so flagging it is wrong. Text escapes are excluded by
+//!     the shared mode index.
 //!   - Never a pgfmath function call inside a TikZ `calc` coordinate
 //!     ([`in_calc_coordinate`]): in `\draw ($sin(x)$)` the `calc` library
 //!     repurposes `$…$` as coordinate arithmetic where `sin` is a
@@ -104,12 +95,8 @@ impl Rule for MathOperatorName {
          the glued `$sin(x)$`, while leaving words that merely begin with one \
          (`since`) alone and preferring the longest match (`sinh` over `sin`). To \
          stay conservative it only fires inside math mode, never in a subscript \
-         or superscript, where `max` in `x_{max}` is almost always a label \
-         rather than the operator (including inside a command argument such as \
-         `\\frac{x_{max}}{n}`, whose body carries no script nodes), and never \
-         inside a key argument such as \
-         `\\label{eq:thing_max}` or `\\eqref{eq:max}`, whose content is an opaque \
-         identifier rather than typeset math. The fix inserts the backslash \
+         or superscript, where `max` in `x_{max}` is almost always a label, and \
+         never inside a text-domain or unknown argument. The fix inserts the backslash \
          (`sin` -> `\\sin`); it is **unsafe** because it changes the typeset output \
          (upright glyph and operator spacing) and a bare `sin` is occasionally a \
          real product, so `--fix` leaves it alone while `--unsafe-fixes` and the \
@@ -124,45 +111,22 @@ impl Rule for MathOperatorName {
         &[SyntaxKind::WORD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(tok) = el.as_token() else {
             return;
         };
-        // Only in math mode, and never inside a sub/superscript (label position).
-        // Inside a command's argument group (`\frac{x_{exp}}{n}`) the body is
-        // parsed in text mode — argument mode is macro meaning the parser never
-        // resolves — so a `_`/`^` there never builds a `SUBSCRIPT` node (issue
-        // #37). Recognize the raw script shape too: the word itself, or an
-        // enclosing `GROUP`, directly preceded by a `_`/`^` token.
-        if follows_script_operator(tok.prev_sibling_or_token()) {
+        if !ctx.in_math(usize::from(tok.text_range().start())) {
             return;
         }
-        let mut in_math = false;
         for node in tok.parent_ancestors() {
             match node.kind() {
                 SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT => return,
-                SyntaxKind::GROUP if follows_script_operator(node.prev_sibling_or_token()) => {
-                    return;
-                }
-                SyntaxKind::MATH => {
-                    in_math = true;
-                    break;
-                }
                 _ => {}
             }
         }
-        if !in_math {
-            return;
-        }
-        // A key argument (`\label{eq:thing_max}`, `\eqref`, `\cite`, …) holds an
-        // opaque identifier, not typeset math.
-        if super::in_key_argument(tok) {
-            return;
-        }
-        // An upright font (`\mathrm{exp}`) or a text escape (`\text{the gcd is}`)
-        // is a deliberate glyph, not a bare operator: flagging it is wrong and the
-        // `\mathrm{\exp}` rewrite is broken.
-        if super::in_upright_or_text_math_argument(tok) {
+        // Math alphabets and `\operatorname` remain mathematical, but already
+        // establish the intentional upright/letter treatment this rule asks for.
+        if super::in_math_alphabet_or_operator_argument(tok) {
             return;
         }
 
@@ -213,20 +177,6 @@ impl Rule for MathOperatorName {
             related: Vec::new(),
         });
     }
-}
-
-/// True when the element at `prev` (skipping whitespace and newlines, never a
-/// comment) is a `_`/`^` token — the raw script shape left by a text-mode parse,
-/// where no `SUBSCRIPT`/`SUPERSCRIPT` node wraps the script argument.
-fn follows_script_operator(mut prev: Option<SyntaxElement>) -> bool {
-    while let Some(el) = prev {
-        match el.kind() {
-            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE => prev = el.prev_sibling_or_token(),
-            SyntaxKind::UNDERSCORE | SyntaxKind::CARET => return true,
-            _ => return false,
-        }
-    }
-    false
 }
 
 /// True when the matched operator is a pgfmath function call inside a TikZ `calc`
@@ -426,24 +376,27 @@ mod tests {
 
     #[test]
     fn subscript_label_inside_argument_group_is_left_alone() {
-        // Issue #37: `\frac`'s argument body parses in text mode, so `x_{exp}`
-        // there has no SUBSCRIPT node — the raw `_`-before-group shape must
-        // still read as script position.
+        // Issue #37: `\frac`'s curated math domain builds the same structural
+        // subscript nodes as explicit math.
         assert!(findings("$\\frac{x_{exp}}{n}$\n").is_empty());
         assert!(findings("$\\frac{x^{max}}{n}$\n").is_empty());
     }
 
     #[test]
     fn bare_subscript_inside_argument_group_is_left_alone() {
-        // The unbraced form: `exp` directly follows the `_` token.
+        // The unbraced form is structurally a subscript too.
         assert!(findings("$\\frac{x_exp}{n}$\n").is_empty());
     }
 
     #[test]
     fn argument_group_after_operator_word_is_still_flagged() {
-        // The raw-shape guard keys on `_`/`^` only: a bare operator elsewhere
-        // in the same argument still fires.
+        // A bare operator elsewhere in the same math argument still fires.
         assert_eq!(findings("$\\frac{x_{a} exp y}{n}$\n").len(), 1);
+    }
+
+    #[test]
+    fn unknown_arguments_inside_math_are_left_alone() {
+        assert!(findings("$\\unknown{sin x}$\n").is_empty());
     }
 
     #[test]

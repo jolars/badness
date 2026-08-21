@@ -23,7 +23,8 @@ use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
-    ArgKind, ArgSpec, ContentKind, SignatureDb, Signatures, expl3, scan_definitions,
+    ArgKind, ArgumentDomain, ContentKind, SignatureDb, Signatures, expl3, match_arg_slot,
+    scan_definitions,
 };
 use crate::syntax::{
     SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
@@ -1066,7 +1067,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // A named math environment (`equation`, `align`, `gather`, matrix, …) — its
         // body is a `MATH` node (the parser entered math mode). Checked before the
         // generic alignment arm so a math *grid* (`align`/`pmatrix`, both `math` and
-        // `align`) takes the math-aware path; a non-math grid (`tabular`/`array`,
+        // `align`) takes the math-aware path; a non-math grid (`tabular`,
         // `align` but not `math`) still falls through to `lower_aligned_environment`.
         // The `contains_doc_margin` gate is the same margin rule as the generic
         // arm below: a `bmatrix` nested in a `% \[…\]` doc-math block (l3backend-draw.dtx)
@@ -1151,8 +1152,8 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // stops being whitespace-only and pass 2 no longer parses. The generic
         // stream keeps the authored margins verbatim.
         SyntaxKind::COMMAND
-            if cx.wraps_prose()
-                && command_has_managed_arg(node, cx)
+            if (command_has_math_arg(node, cx)
+                || cx.wraps_prose() && command_has_managed_arg(node, cx))
                 && !contains_doc_margin(node, cx) =>
         {
             return lower_command(node, cx);
@@ -5398,7 +5399,12 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                     && matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
                 let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
-                let keyval = match_arg_slot(args, &mut slot, is_bracket)
+                let kind = if is_bracket {
+                    ArgKind::Bracket
+                } else {
+                    ArgKind::Brace
+                };
+                let keyval = match_arg_slot(args, &mut slot, kind)
                     .is_some_and(|spec| spec.content == ContentKind::Keyval);
                 // A *mandatory* keyval group is deliberately not wired here, unlike
                 // on the command path ([`lower_command`]): no environment is curated
@@ -6027,7 +6033,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// `math` is `true` for math grids (`align`, `pmatrix`, …) whose body the parser
 /// wrapped in a `MATH` node: the flattener descends that node and each cell lowers
 /// through the role-aware math sequencer ([`lower_math_seq`]) so operator spacing
-/// and tight scripts apply. It is `false` for a non-math grid (`tabular`/`array`),
+/// and tight scripts apply. It is `false` for a non-math grid (`tabular`),
 /// where the body is a prose block and cells lower through [`lower_element_stream`]
 /// exactly as before.
 fn build_alignment_grid(
@@ -7402,6 +7408,16 @@ fn command_has_managed_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         })
 }
 
+fn command_has_math_arg(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .is_some_and(|sig| {
+            sig.args
+                .iter()
+                .any(|spec| spec.domain == ArgumentDomain::Math)
+        })
+}
+
 /// Whether `command` is an *inline* prose command — one whose prose argument sits
 /// in running text (`\footnote`, `\emph`, `\textbf`, …) rather than heading its own
 /// line. Such a command is flattened into the surrounding reflow stream (see
@@ -7580,7 +7596,12 @@ fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<Syntax
                 if matches!(group.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
                 let is_bracket = group.kind() == SyntaxKind::OPTIONAL;
-                let prose = match_arg_slot(&sig.args, &mut slot, is_bracket)
+                let kind = if is_bracket {
+                    ArgKind::Bracket
+                } else {
+                    ArgKind::Brace
+                };
+                let prose = match_arg_slot(&sig.args, &mut slot, kind)
                     .is_some_and(|spec| spec.content == ContentKind::Prose);
                 if prose {
                     let (open, close) = if is_bracket {
@@ -7670,6 +7691,10 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // Defensive: the guard already proved a prose signature exists.
         return Ir::concat(lower_element_stream(node.children_with_tokens(), cx));
     };
+    let math_only = sig
+        .args
+        .iter()
+        .any(|spec| spec.domain == ArgumentDomain::Math);
 
     let mut out: Vec<Ir> = Vec::new();
     let mut slot = 0usize;
@@ -7685,7 +7710,20 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 } else {
                     (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
                 };
-                let spec = match_arg_slot(&sig.args, &mut slot, is_bracket);
+                let kind = if is_bracket {
+                    ArgKind::Bracket
+                } else {
+                    ArgKind::Brace
+                };
+                let spec = match_arg_slot(&sig.args, &mut slot, kind);
+                if math_only {
+                    if spec.is_some_and(|spec| spec.domain == ArgumentDomain::Math) {
+                        out.push(lower_math_argument_group(&child, cx));
+                    } else {
+                        out.push(Ir::verbatim(child.text().to_string()));
+                    }
+                    continue;
+                }
                 match spec.map(|s| s.content) {
                     Some(ContentKind::Prose) => {
                         out.push(lower_prose_group(&child, open, close, cx));
@@ -7713,7 +7751,11 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                     _ => out.push(lower_node(&child, cx)),
                 }
             }
+            SyntaxElement::Node(child) if math_only => {
+                out.push(Ir::verbatim(child.text().to_string()))
+            }
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            SyntaxElement::Token(token) if math_only => out.push(Ir::verbatim(token.text())),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
             }
@@ -7721,33 +7763,6 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
     }
     Ir::concat(out)
-}
-
-/// Match the next attached argument group (a brace group, or a bracket group when
-/// `is_bracket`) to a signature slot, advancing `slot` past it. Skips leading
-/// optional (`[…]`) slots the document omitted, so a mandatory prose slot still
-/// binds when an optional before it is absent. Returns the matched [`ArgSpec`], or
-/// `None` when the group has no matching slot (e.g. an unexpected `[…]` the greedy
-/// parser over-attached, or a group past the declared arity), in which case `slot`
-/// is left untouched so later groups still match.
-fn match_arg_slot(args: &[ArgSpec], slot: &mut usize, is_bracket: bool) -> Option<ArgSpec> {
-    while *slot < args.len() {
-        let spec = args[*slot];
-        let spec_bracket = matches!(spec.kind, ArgKind::Bracket);
-        if spec_bracket == is_bracket {
-            *slot += 1;
-            return Some(spec);
-        }
-        if spec_bracket {
-            // A declared optional the document omitted: skip it and keep matching.
-            *slot += 1;
-            continue;
-        }
-        // A required `{…}` slot but the group is a `[…]`: not this slot. Leave the
-        // slot intact for a later brace group and treat this group as non-prose.
-        return None;
-    }
-    None
 }
 
 /// Lower a prose argument group: like [`lower_bracketed`], but the body is reflowed
@@ -8703,9 +8718,10 @@ fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>) -> Ir {
             SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT => lower_script(&n, cx),
             SyntaxKind::GROUP => lower_math_group(&n, cx),
             SyntaxKind::LEFT_RIGHT => lower_left_right(&n, cx),
-            // A command keeps its authored form: its arguments may be text
-            // (`\text{…}`, `\operatorname{…}`), so Stage A does not reformat
-            // inside commands. Verbatim is lossless on a clean parse.
+            // Only signature-proven math slots recurse. A scanned redefinition
+            // shadows the built-in with unknown domains and restores the
+            // whole-command preservation fallback.
+            SyntaxKind::COMMAND if command_has_math_arg(&n, cx) => lower_command(&n, cx),
             SyntaxKind::COMMAND => Ir::verbatim(n.text().to_string()),
             // Environments, or anything unexpected: defer to generic lowering.
             _ => lower_node(&n, cx),
@@ -8726,6 +8742,24 @@ fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         Ir::verbatim("{"),
         Ir::align(1, lower_math_seq(inner, cx, false)),
         Ir::verbatim("}"),
+    ])
+}
+
+/// Lower a signature-proven math argument while retaining its authored brace or
+/// bracket delimiters. Only the body enters recursive math lowering.
+fn lower_math_argument_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let (open_kind, close_kind, open, close) = match node.kind() {
+        SyntaxKind::GROUP => (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, "{", "}"),
+        SyntaxKind::OPTIONAL => (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, "[", "]"),
+        _ => return Ir::verbatim(node.text().to_string()),
+    };
+    let inner = node.children_with_tokens().filter(
+        |element| !matches!(element.kind(), kind if kind == open_kind || kind == close_kind),
+    );
+    Ir::concat([
+        Ir::verbatim(open),
+        Ir::align(1, lower_math_seq(inner, cx, false)),
+        Ir::verbatim(close),
     ])
 }
 

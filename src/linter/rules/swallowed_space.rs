@@ -108,7 +108,7 @@ impl Rule for SwallowedSpace {
         }
         // In math the inter-token space is insignificant, so a swallowed space
         // changes nothing visible: stay quiet.
-        if ctx.in_math(usize::from(command.text_range().start())) {
+        if !ctx.in_text(usize::from(command.text_range().start())) {
             return;
         }
         // The `CONTROL_WORD` token is the command's first token; the token

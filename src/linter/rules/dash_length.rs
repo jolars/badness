@@ -112,7 +112,7 @@ impl Rule for DashLength {
             return;
         }
         // A `-` in math is a minus, not a dash; leave it alone.
-        if ctx.in_math(usize::from(tok.text_range().start())) {
+        if !ctx.in_text(usize::from(tok.text_range().start())) {
             return;
         }
         let Some((run_start, run_end)) = lone_internal_dash_run(text) else {
@@ -424,9 +424,9 @@ mod tests {
     }
 
     #[test]
-    fn multicolumn_content_is_still_flagged() {
-        // The gate is the signature DB's `rule` flag, not a blanket argument
-        // skip: `\multicolumn`'s content argument is typeset text.
-        assert_eq!(findings("\\multicolumn{2}{c}{pages 5-10}\n").len(), 1);
+    fn uncurated_multicolumn_content_is_unknown() {
+        // No positional text-domain claim has been curated for `\multicolumn`,
+        // so text-only diagnostics stay out of all of its arguments.
+        assert!(findings("\\multicolumn{2}{c}{pages 5-10}\n").is_empty());
     }
 }

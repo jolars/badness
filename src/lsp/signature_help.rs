@@ -26,7 +26,7 @@
 use super::*;
 use crate::ast::{command_name, environment_name};
 use crate::lsp::hover::{arg_summary, lookup_command, lookup_environment, provenance_label};
-use crate::semantic::signature::{ArgKind, ArgSpec};
+use crate::semantic::signature::{ArgKind, ArgSpec, match_arg_slot_index};
 use crate::syntax::{SyntaxKind, SyntaxToken};
 use lsp_types::{
     Documentation, ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation,
@@ -210,19 +210,7 @@ fn active_parameter(specs: &[ArgSpec], owner: &SyntaxNode, cursor: &SyntaxNode) 
             SyntaxKind::GROUP => ArgKind::Brace,
             _ => ArgKind::Bracket,
         };
-        let mut slot = None;
-        let mut j = next;
-        while j < specs.len() {
-            if specs[j].kind == kind {
-                slot = Some(j);
-                next = j + 1;
-                break;
-            }
-            if specs[j].required {
-                break;
-            }
-            j += 1;
-        }
+        let slot = match_arg_slot_index(specs, &mut next, kind);
         if &node == cursor {
             return slot.map(|s| s as u32);
         }

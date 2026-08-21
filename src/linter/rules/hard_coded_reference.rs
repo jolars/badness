@@ -129,7 +129,7 @@ impl Rule for HardCodedReference {
         }
         // A `.` in math is not sentence punctuation, and a reference word there is
         // not prose; skip math entirely.
-        if ctx.in_math(usize::from(word.text_range().start())) {
+        if !ctx.in_text(usize::from(word.text_range().start())) {
             return;
         }
         // The separator between the word and the number: either a tie `~`, or a

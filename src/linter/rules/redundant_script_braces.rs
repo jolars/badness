@@ -75,10 +75,13 @@ impl Rule for RedundantScriptBraces {
         &[SyntaxKind::SUBSCRIPT, SyntaxKind::SUPERSCRIPT]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(script) = el.as_node() else {
             return;
         };
+        if !ctx.in_math(usize::from(script.text_range().start())) {
+            return;
+        }
         let Some(group) = script
             .children()
             .find(|n| n.kind() == SyntaxKind::GROUP)
@@ -277,5 +280,15 @@ mod tests {
     #[test]
     fn safe_before_math_close_and_command() {
         assert_eq!(fixed("$x^{2}\\cdot y$\n"), "$x^2\\cdot y$\n");
+    }
+
+    #[test]
+    fn works_in_known_math_slots_outside_explicit_math() {
+        assert_eq!(fixed("\\frac{x^{2}}{y_{i}}\n"), "\\frac{x^2}{y_i}\n");
+    }
+
+    #[test]
+    fn stays_out_of_text_and_unknown_arguments() {
+        assert!(findings("$\\text{x^{2}} + \\unknown{y_{i}}$\n").is_empty());
     }
 }

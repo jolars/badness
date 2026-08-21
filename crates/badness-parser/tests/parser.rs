@@ -60,6 +60,47 @@ fn command_with_required_and_optional_args() {
 }
 
 #[test]
+fn curated_argument_domains_control_only_argument_body_parsing() {
+    let cases = [
+        (r"\frac{x_{exp}}{n}", 1),
+        (r"\sqrt[3^n]{x_i}", 2),
+        (r"\ensuremath{x_i}", 1),
+        (r"$\text{x_i}\mathrm{x_i}$", 1),
+        (r"\frac{\text{x_i}}{\mathrm{x_i}}", 1),
+        (r"$\unknown{x_i}$", 0),
+        (r"\frac{x}{y}{z_i}", 0),
+    ];
+    for (source, scripts) in cases {
+        let parsed = parse(source);
+        assert_eq!(
+            parsed.syntax().to_string(),
+            source,
+            "losslessness for {source:?}"
+        );
+        assert_eq!(
+            parsed
+                .syntax()
+                .descendants()
+                .filter(|node| {
+                    matches!(node.kind(), SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT)
+                })
+                .count(),
+            scripts,
+            "script structure for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn malformed_curated_math_arguments_recover_losslessly() {
+    for source in [r"\frac{x_i}{n", r"\sqrt[3^n}{x_i}"] {
+        let parsed = parse(source);
+        assert_eq!(parsed.syntax().to_string(), source);
+        assert!(!parsed.errors.is_empty() || source.contains('['));
+    }
+}
+
+#[test]
 fn nested_groups() {
     insta::assert_snapshot!(tree(r"{a {b} c}"));
 }

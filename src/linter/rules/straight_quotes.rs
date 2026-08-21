@@ -141,7 +141,7 @@ impl StreamVisitor for StraightQuotesVisitor {
             return;
         }
         // A straight `"` in math is not a quotation mark; leave it alone.
-        if ctx.in_math(usize::from(tok.text_range().start())) {
+        if !ctx.in_text(usize::from(tok.text_range().start())) {
             return;
         }
         // Inside `\directlua{…}` and kin the body is Lua source, so a `"` is a

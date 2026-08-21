@@ -938,12 +938,14 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
                     required: false,
                     kind: ArgKind::Bracket,
                     content: ContentKind::Opaque,
+                    domain: crate::semantic::ArgumentDomain::Unknown,
                 }
             } else {
                 ArgSpec {
                     required: true,
                     kind: ArgKind::Brace,
                     content: ContentKind::Opaque,
+                    domain: crate::semantic::ArgumentDomain::Unknown,
                 }
             }
         })
@@ -1002,6 +1004,11 @@ mod tests {
         let sig = db.command("foo").expect("foo defined");
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace, ArgKind::Brace]);
         assert!(sig.args.iter().all(|a| a.required));
+        assert!(
+            sig.args
+                .iter()
+                .all(|arg| arg.domain == crate::semantic::ArgumentDomain::Unknown)
+        );
     }
 
     #[test]
@@ -1090,6 +1097,11 @@ mod tests {
             arg_kinds(&sig.args),
             vec![ArgKind::Brace, ArgKind::Bracket, ArgKind::Brace]
         );
+        assert!(
+            sig.args
+                .iter()
+                .all(|arg| arg.domain == crate::semantic::ArgumentDomain::Unknown)
+        );
     }
 
     #[test]
@@ -1097,6 +1109,11 @@ mod tests {
         let db = db_of("\\NewDocumentEnvironment{env}{O{x} m}{a}{b}\n");
         let sig = db.environment("env").expect("env defined");
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket, ArgKind::Brace]);
+        assert!(
+            sig.args
+                .iter()
+                .all(|arg| arg.domain == crate::semantic::ArgumentDomain::Unknown)
+        );
     }
 
     #[test]

@@ -47,6 +47,18 @@ pub enum ArgKind {
     Bracket,
 }
 
+/// The TeX mode a command or environment argument is proven to establish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArgumentDomain {
+    /// No safe text-or-math claim is available.
+    #[default]
+    Unknown,
+    /// The argument is parsed and interpreted as math.
+    Math,
+    /// The argument is parsed and interpreted as text.
+    Text,
+}
+
 /// How the formatter treats an argument's *content* — its whitespace and break
 /// policy. This metadata is for formatter consumers; the parser ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -96,6 +108,36 @@ pub struct ArgSpec {
     pub kind: ArgKind,
     /// How the formatter treats this argument's content. See [`ContentKind`].
     pub content: ContentKind,
+    /// The mode established by this positional argument, independently of
+    /// [`ContentKind`].
+    pub domain: ArgumentDomain,
+}
+
+/// Match an attached group to the next positional signature slot.
+///
+/// Omitted optional slots are skipped for a brace group. A bracket group never
+/// consumes a pending required slot, and an unmatched group leaves `slot`
+/// unchanged.
+pub fn match_arg_slot(args: &[ArgSpec], slot: &mut usize, kind: ArgKind) -> Option<ArgSpec> {
+    match_arg_slot_index(args, slot, kind).map(|index| args[index])
+}
+
+/// The index-returning form of [`match_arg_slot`], used by signature help.
+pub fn match_arg_slot_index(args: &[ArgSpec], slot: &mut usize, kind: ArgKind) -> Option<usize> {
+    while *slot < args.len() {
+        let index = *slot;
+        let spec = args[index];
+        if spec.kind == kind {
+            *slot += 1;
+            return Some(index);
+        }
+        if spec.kind == ArgKind::Bracket {
+            *slot += 1;
+            continue;
+        }
+        return None;
+    }
+    None
 }
 
 /// The signature of a control sequence.
@@ -292,6 +334,7 @@ pub(crate) const fn arg(required: bool, kind: ArgKind, content: ContentKind) -> 
         required,
         kind,
         content,
+        domain: ArgumentDomain::Unknown,
     }
 }
 
@@ -990,6 +1033,25 @@ enum RawContentKind {
     Keyval,
 }
 
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "lowercase")]
+enum RawArgumentDomain {
+    #[default]
+    Unknown,
+    Math,
+    Text,
+}
+
+impl From<RawArgumentDomain> for ArgumentDomain {
+    fn from(raw: RawArgumentDomain) -> Self {
+        match raw {
+            RawArgumentDomain::Unknown => ArgumentDomain::Unknown,
+            RawArgumentDomain::Math => ArgumentDomain::Math,
+            RawArgumentDomain::Text => ArgumentDomain::Text,
+        }
+    }
+}
+
 impl From<RawContentKind> for ContentKind {
     fn from(raw: RawContentKind) -> Self {
         match raw {
@@ -1014,6 +1076,8 @@ enum RawArg {
         kind: RawArgKind,
         #[serde(default)]
         content: RawContentKind,
+        #[serde(default)]
+        domain: RawArgumentDomain,
     },
 }
 
@@ -1024,11 +1088,17 @@ impl From<RawArg> for ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
                 content: ContentKind::Opaque,
+                domain: ArgumentDomain::Unknown,
             },
-            RawArg::Full { kind, content } => ArgSpec {
+            RawArg::Full {
+                kind,
+                content,
+                domain,
+            } => ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
                 content: content.into(),
+                domain: domain.into(),
             },
         }
     }
@@ -1336,6 +1406,76 @@ mod tests {
         assert_eq!(kv[1].content, ContentKind::Opaque);
         let list = &db.command("list").unwrap().args;
         assert_eq!(list[0].content, ContentKind::TokenList);
+    }
+
+    #[test]
+    fn argument_domain_defaults_and_json_values_are_independent_of_content() {
+        let db = parse(
+            r#"{ "commands": {
+                "short": { "args": ["req"] },
+                "math": { "args": [{ "kind": "req", "content": "prose", "domain": "math" }] },
+                "text": { "args": [{ "kind": "opt", "domain": "text" }] }
+            } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            db.command("short").unwrap().args[0].domain,
+            ArgumentDomain::Unknown
+        );
+        assert_eq!(
+            db.command("math").unwrap().args[0].domain,
+            ArgumentDomain::Math
+        );
+        assert_eq!(
+            db.command("math").unwrap().args[0].content,
+            ContentKind::Prose
+        );
+        assert_eq!(
+            db.command("text").unwrap().args[0].domain,
+            ArgumentDomain::Text
+        );
+        assert!(
+            cwl()
+                .command("multicolumn")
+                .unwrap()
+                .args
+                .iter()
+                .all(|arg| arg.domain == ArgumentDomain::Unknown)
+        );
+    }
+
+    #[test]
+    fn positional_matching_skips_only_omitted_optionals() {
+        let args = &builtin().command("sqrt").unwrap().args;
+        let mut slot = 0;
+        assert_eq!(
+            match_arg_slot_index(args, &mut slot, ArgKind::Brace),
+            Some(1)
+        );
+        assert_eq!(slot, 2);
+
+        let mut slot = 0;
+        assert_eq!(
+            match_arg_slot_index(args, &mut slot, ArgKind::Bracket),
+            Some(0)
+        );
+        assert_eq!(
+            match_arg_slot_index(args, &mut slot, ArgKind::Brace),
+            Some(1)
+        );
+        assert_eq!(match_arg_slot_index(args, &mut slot, ArgKind::Brace), None);
+
+        let frac = &builtin().command("frac").unwrap().args;
+        let mut slot = 0;
+        assert_eq!(
+            match_arg_slot_index(frac, &mut slot, ArgKind::Bracket),
+            None
+        );
+        assert_eq!(slot, 0);
+        assert_eq!(
+            match_arg_slot_index(frac, &mut slot, ArgKind::Brace),
+            Some(0)
+        );
     }
 
     #[test]

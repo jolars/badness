@@ -100,7 +100,11 @@ impl Rule for Ellipsis {
             return;
         }
         let base = usize::from(tok.text_range().start());
-        let in_math = ctx.in_math(base);
+        let in_math = match ctx.mode_at(base) {
+            crate::semantic::Mode::Math => true,
+            crate::semantic::Mode::Text => false,
+            crate::semantic::Mode::Unknown => return,
+        };
         let bytes = text.as_bytes();
 
         let mut i = 0;

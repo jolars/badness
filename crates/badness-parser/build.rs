@@ -43,6 +43,13 @@ enum RawContentKind {
     Keyval,
 }
 
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "lowercase")]
+enum RawArgumentDomain {
+    #[default]
+    Unknown,
+}
+
 impl RawContentKind {
     fn variant(self) -> &'static str {
         match self {
@@ -63,6 +70,9 @@ enum RawArg {
         kind: RawArgKind,
         #[serde(default)]
         content: RawContentKind,
+        #[serde(default)]
+        #[serde(rename = "domain")]
+        _domain: RawArgumentDomain,
     },
 }
 
@@ -71,7 +81,11 @@ impl RawArg {
     fn render(&self) -> String {
         let (kind, content) = match self {
             RawArg::Short(kind) => (*kind, RawContentKind::Opaque),
-            RawArg::Full { kind, content } => (*kind, *content),
+            RawArg::Full {
+                kind,
+                content,
+                _domain: _,
+            } => (*kind, *content),
         };
         let (required, kind) = match kind {
             RawArgKind::Req => (true, "ArgKind::Brace"),

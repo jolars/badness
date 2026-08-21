@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use crate::ast::command_name;
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::semantic::signature;
-use crate::semantic::signature::{ArgKind, ArgSpec, ContentKind};
+use crate::semantic::signature::{ArgKind, ArgSpec, ContentKind, match_arg_slot};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use super::{Example, Rule, RuleContext};
@@ -119,7 +119,12 @@ impl Rule for BlankLineInKeyval {
                 SyntaxKind::OPTIONAL => true,
                 _ => continue,
             };
-            let Some(spec) = match_arg_slot(&sig.args, &mut slot, is_bracket) else {
+            let kind = if is_bracket {
+                ArgKind::Bracket
+            } else {
+                ArgKind::Brace
+            };
+            let Some(spec) = match_arg_slot(&sig.args, &mut slot, kind) else {
                 continue;
             };
             if !is_keyval_brace(&spec) || !is_closed(&child) {
@@ -152,27 +157,6 @@ impl Rule for BlankLineInKeyval {
 /// Whether `spec` is a mandatory `{…}` slot carrying the keyval claim.
 fn is_keyval_brace(spec: &ArgSpec) -> bool {
     spec.required && spec.kind == ArgKind::Brace && spec.content == ContentKind::Keyval
-}
-
-/// Match the next attached group to a signature slot, advancing `slot` past it.
-/// Skips leading optional slots the document omitted, so a mandatory keyval slot
-/// still binds when an optional before it is absent (`\setlist{…}` without its
-/// `[…]`). Mirrors the formatter's `match_arg_slot`; returns `None` for a group
-/// past the declared arity, leaving `slot` untouched so later groups still match.
-fn match_arg_slot(args: &[ArgSpec], slot: &mut usize, is_bracket: bool) -> Option<ArgSpec> {
-    while *slot < args.len() {
-        let spec = args[*slot];
-        if (spec.kind == ArgKind::Bracket) == is_bracket {
-            *slot += 1;
-            return Some(spec);
-        }
-        if is_bracket {
-            // A `[…]` never consumes a mandatory slot.
-            return None;
-        }
-        *slot += 1; // an omitted optional
-    }
-    None
 }
 
 /// Whether the group carries its closing delimiter. An unclosed `{` already

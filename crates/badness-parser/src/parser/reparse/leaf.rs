@@ -81,6 +81,11 @@ pub(super) fn context_admits(leaf: &SyntaxToken, relex_from: &SyntaxToken) -> Op
             _ => {}
         }
     }
+    if !in_math {
+        in_math = leaf.parent_ancestors().any(|node| {
+            crate::semantic::argument_domain(&node) == crate::semantic::ArgumentDomain::Math
+        });
+    }
 
     let mut prev = relex_from.prev_token();
     while let Some(token) = prev {
@@ -408,6 +413,10 @@ mod tests {
         ("if t.text.as_str() == RIGHT_CMD {", ControlSequence),
         (
             "let bracket = if is_big_delimiter_command(self.text()) {",
+            ControlSequence,
+        ),
+        (
+            "let builtin_args = builtin_command_args(self.text());",
             ControlSequence,
         ),
         (

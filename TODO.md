@@ -47,15 +47,14 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
    - [x] **`array` is already `math`+`align`.** `signatures.json` has both
      flags, the math-grid formatter calls `column_alignments`, and the
      `array_columns` fixture pins the column specification. Remove the stale
-     formatter comment that lists `array` as a non-math grid when nearby code
-     is next touched.
+     stale formatter comments now list only `tabular` as the non-math grid.
    - [x] **Keep spaces around `&`.** Although `&=` is common, `&` is a column
      separator rather than part of the following atom. The uniform `x & = a`,
      `x & < y`, and `x & \mathrm{text}` rule is clearer than gluing only a
      curated subset of following content, and it does not depend on atom
      classification.
 
-2. [ ] **Positional argument domains and a shared mode index.** Add an
+2. [x] **Positional argument domains and a shared mode index.** Add an
    argument-domain field orthogonal to formatter `ContentKind`, with
    `Unknown` as the default and curated `Math` and `Text` values. The parser
    may read only curated built-ins—not scanned definitions, package scope, or

@@ -108,7 +108,11 @@ impl Rule for TimesVariable {
         // `\times` is only valid in math mode; wrap it in inline math otherwise so
         // the fixed text still compiles. Both are a single contiguous splice, so
         // the result re-parses and stays lossless.
-        let in_math = ctx.in_math(base);
+        let in_math = match ctx.mode_at(base) {
+            crate::semantic::Mode::Math => true,
+            crate::semantic::Mode::Text => false,
+            crate::semantic::Mode::Unknown => return,
+        };
         let content = if in_math { "\\times" } else { "$\\times$" };
 
         sink.push(Diagnostic {

@@ -24,6 +24,7 @@ use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
 use crate::parser::lexer::{ParseCtx, Token};
+use crate::semantic::signature::{ArgKind, ArgSpec, ArgumentDomain, builtin, match_arg_slot};
 use crate::syntax::SyntaxKind;
 use facts::{
     BracketPolicy, is_big_delimiter_command, is_command_definition_command,
@@ -100,6 +101,12 @@ fn debug_assert_balanced(events: &[Event]) {
         depth, 0,
         "parser left {depth} node(s) unclosed at end of parse"
     );
+}
+
+fn builtin_command_args(head: &str) -> Option<&'static [ArgSpec]> {
+    head.strip_prefix('\\')
+        .and_then(|name| builtin().command(name))
+        .map(|sig| sig.args.as_ref())
 }
 
 /// The walk state a gate batch's scan reads, and therefore the key its
@@ -1935,6 +1942,7 @@ impl<'t> Parser<'t> {
     /// `[…]` argument — its `[` is the delimiter it sizes (`\Big[ x \Big]`),
     /// mirroring the `\left`/`\right` special case.
     fn command(&mut self) {
+        let builtin_args = builtin_command_args(self.text());
         let bracket = if is_big_delimiter_command(self.text()) {
             BracketPolicy::Forbid
         } else {
@@ -1978,7 +1986,7 @@ impl<'t> Parser<'t> {
         }
         match &expl3_plan {
             Some(plan) => self.attach_expl3_arguments(plan),
-            None => self.attach_arguments(bracket),
+            None => self.attach_arguments(bracket, builtin_args),
         }
         self.in_def_body = saved;
         self.close();
@@ -2040,7 +2048,8 @@ impl<'t> Parser<'t> {
     ///   attachment, which the semantic layer legitimizes downstream (the
     ///   xparse-signature glue relies on a next-line `[Warning]` still
     ///   attaching to `\begin{note}`).
-    fn attach_arguments(&mut self, bracket: BracketPolicy) {
+    fn attach_arguments(&mut self, bracket: BracketPolicy, args: Option<&[ArgSpec]>) {
+        let mut slot = 0usize;
         loop {
             let (next, paragraph_break) = self.peek_meaningful();
             if paragraph_break {
@@ -2055,7 +2064,10 @@ impl<'t> Parser<'t> {
                         break;
                     }
                     self.skip_trivia();
-                    self.group();
+                    let domain = args
+                        .and_then(|args| match_arg_slot(args, &mut slot, ArgKind::Brace))
+                        .map_or(ArgumentDomain::Unknown, |spec| spec.domain);
+                    self.argument_group(domain);
                 }
                 Some(SyntaxKind::L_BRACKET) => {
                     if bracket == BracketPolicy::Forbid {
@@ -2090,7 +2102,10 @@ impl<'t> Parser<'t> {
                         break;
                     }
                     self.skip_trivia();
-                    self.optional();
+                    let domain = args
+                        .and_then(|args| match_arg_slot(args, &mut slot, ArgKind::Bracket))
+                        .map_or(ArgumentDomain::Unknown, |spec| spec.domain);
+                    self.argument_optional(domain);
                 }
                 // A verbatim-argument command's body (`\url{…}`, `\lstinline|…|`,
                 // the final arg of `\mintinline{lang}{code}`) is lexed as a single
@@ -2150,6 +2165,10 @@ impl<'t> Parser<'t> {
 
     /// A brace group `{ … }`.
     fn group(&mut self) {
+        self.argument_group(ArgumentDomain::Unknown);
+    }
+
+    fn argument_group(&mut self, domain: ArgumentDomain) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACE));
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::GROUP);
@@ -2165,7 +2184,10 @@ impl<'t> Parser<'t> {
                     self.bump();
                     break;
                 }
-                _ => self.element(),
+                _ => match domain {
+                    ArgumentDomain::Math => self.math_element(),
+                    ArgumentDomain::Text | ArgumentDomain::Unknown => self.element(),
+                },
             }
         }
         self.group_opens.pop();
@@ -2178,6 +2200,10 @@ impl<'t> Parser<'t> {
     /// at the first `]`, and bails defensively (rather than swallowing the
     /// document) on a `}`, a `\begin`/`\end`, a paragraph break, or EOF.
     fn optional(&mut self) {
+        self.argument_optional(ArgumentDomain::Unknown);
+    }
+
+    fn argument_optional(&mut self, domain: ArgumentDomain) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACKET));
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::OPTIONAL);
@@ -2211,7 +2237,10 @@ impl<'t> Parser<'t> {
                         self.error_at(opener, "unclosed `[`");
                         break;
                     }
-                    self.element();
+                    match domain {
+                        ArgumentDomain::Math => self.math_element(),
+                        ArgumentDomain::Text | ArgumentDomain::Unknown => self.element(),
+                    }
                 }
             }
         }
@@ -2786,26 +2815,7 @@ impl<'t> Parser<'t> {
     /// A brace group `{ … }` whose body is parsed in math mode (so `x^{a_b}`
     /// nests). Recovery mirrors [`Self::group`].
     fn math_group(&mut self) {
-        debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACE));
-        let opener = self.token_span(self.pos);
-        self.open(SyntaxKind::GROUP);
-        self.bump(); // {
-        self.group_opens.push(self.pos - 1);
-        loop {
-            match self.kind() {
-                None => {
-                    self.error_at(opener, "unclosed `{`");
-                    break;
-                }
-                Some(SyntaxKind::R_BRACE) => {
-                    self.bump();
-                    break;
-                }
-                _ => self.math_element(),
-            }
-        }
-        self.group_opens.pop();
-        self.close();
+        self.argument_group(ArgumentDomain::Math);
     }
 
     /// A `\left<delim> … \right<delim>` matched delimiter pair (`AGENTS.md`,
@@ -3748,7 +3758,11 @@ impl<'t> Parser<'t> {
             BracketPolicy::Greedy
         };
         if !macrocode_frame {
-            self.attach_arguments(bracket);
+            let builtin_args = name
+                .as_deref()
+                .and_then(|name| builtin().environment(name))
+                .map(|sig| sig.args.as_ref());
+            self.attach_arguments(bracket, builtin_args);
         }
         self.close(); // BEGIN
 

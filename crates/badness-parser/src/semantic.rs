@@ -11,6 +11,7 @@ pub mod define;
 pub mod doc;
 pub mod expl3;
 pub mod label;
+pub mod mode;
 pub mod outline;
 pub mod pkgmeta;
 pub mod signature;
@@ -23,10 +24,12 @@ pub use label::{
     CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelId, LabelRef,
     RefCommand, RefId,
 };
+pub use mode::{Mode, ModeIndex, argument_domain};
 pub use outline::{LabelContext, OutlineItem, OutlineSymbol, label_context, outline};
 pub use pkgmeta::{NeedsFormatDecl, OptionDecl, ProvidesDecl, ProvidesKind};
 pub use signature::{
-    ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, Signatures,
+    ArgKind, ArgSpec, ArgumentDomain, CommandSig, ContentKind, EnvironmentSig, SignatureDb,
+    Signatures, match_arg_slot, match_arg_slot_index,
 };
 
 use crate::syntax::SyntaxNode;

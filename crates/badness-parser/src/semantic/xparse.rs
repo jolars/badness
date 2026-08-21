@@ -60,6 +60,7 @@ pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
                         required,
                         kind,
                         content: ContentKind::Opaque,
+                        domain: crate::semantic::ArgumentDomain::Unknown,
                     });
                 }
             }
@@ -88,6 +89,7 @@ fn brace(required: bool) -> ArgSpec {
         required,
         kind: ArgKind::Brace,
         content: ContentKind::Opaque,
+        domain: crate::semantic::ArgumentDomain::Unknown,
     }
 }
 
@@ -96,6 +98,7 @@ fn bracket(required: bool) -> ArgSpec {
         required,
         kind: ArgKind::Bracket,
         content: ContentKind::Opaque,
+        domain: crate::semantic::ArgumentDomain::Unknown,
     }
 }
 

@@ -300,15 +300,6 @@ scope limits recorded at implementation time, not regressions.
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
   decision)*
 
-- [ ] **`catcode_signal` does not meet its own bar** (`semantic/define.rs`).
-  It requires `body.contains("\\catcode") && body.contains("12")` with no
-  adjacency, so a body carrying `\catcode…=\active` and an unrelated `12pt`
-  matches — while the comment claims the two-token requirement is what keeps
-  it strict. The failure direction is the bad one: a false positive here
-  suppresses real diagnostics, exactly what the verbatim scan is documented
-  to avoid. Require the `12` in assignment position after `\catcode` (or at
-  least within a bounded window); add the `12pt` counterexample as a test.
-
 - [ ] **Make `EnvironmentSig::reflow`/`block` computed, not stored.** Both
   are derivations of other fields, and mutation sites must hand-sync them —
   `define.rs` writes `sig.reflow = false` manually after setting

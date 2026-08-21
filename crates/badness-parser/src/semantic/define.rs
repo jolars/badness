@@ -463,9 +463,35 @@ fn catcode_signal(body: &str) -> bool {
     body.contains("\\@makeother")
         || body.contains("\\@sanitize")
         || body.contains("\\dospecials")
-        // `\catcode`<char>`=12` others a char; the literal `12` is the "other"
-        // category. Require both tokens so an unrelated `\catcode…=11` does not match.
-        || (body.contains("\\catcode") && body.contains("12"))
+        || body
+            .match_indices("\\catcode")
+            .any(|(start, _)| catcode_assigns_other(&body[start + "\\catcode".len()..]))
+}
+
+/// Recognize the bounded surface shape `\catcode`…`=12` after the primitive.
+///
+/// TeX's number scanner is broader than this deliberately conservative check.
+/// Verbatim inference may miss an exotic assignment, but it must not combine an
+/// unrelated `12` with a different catcode assignment and silence diagnostics.
+fn catcode_assigns_other(tail: &str) -> bool {
+    let mut chars = tail.chars();
+    if chars
+        .clone()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '@' | '_' | ':'))
+    {
+        return false;
+    }
+
+    let mut after_equals = chars
+        .by_ref()
+        .take(64)
+        .skip_while(|&c| c != '=')
+        .skip(1)
+        .skip_while(|c| c.is_whitespace());
+    after_equals.next() == Some('1')
+        && after_equals.next() == Some('2')
+        && !after_equals.next().is_some_and(|c| c.is_ascii_digit())
 }
 
 /// The control-word names (leading `\` stripped) the body invokes, for chained-helper
@@ -1215,6 +1241,14 @@ mod tests {
         // A `\catcode … 12` ("other") assignment is the same signal.
         let db = db_of("\\newcommand\\shellcmd[1]{\\catcode 36=12 #1}\n");
         assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
+    }
+
+    #[test]
+    fn unrelated_twelve_does_not_flag_catcode_assignment() {
+        // The category and the unrelated dimension must not combine into a
+        // catcode-othering signal.
+        let db = db_of("\\newcommand\\ordinary[1]{\\catcode 36=\\active \\hspace{12pt}#1}\n");
+        assert!(!db.command("ordinary").expect("ordinary defined").verbatim);
     }
 
     #[test]

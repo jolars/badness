@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use salsa::Setter;
@@ -859,6 +859,10 @@ impl ReparseCache {
 #[salsa::db]
 pub struct IncrementalDatabase {
     storage: salsa::Storage<Self>,
+    /// Query execution is recorded only while a test or benchmark is observing
+    /// it. Production sessions never clear the log, so eagerly recording every
+    /// execution would retain one entry per invalidated query indefinitely.
+    query_log_enabled: Arc<AtomicBool>,
     query_log: Arc<Mutex<Vec<QueryLogEntry>>>,
     /// Path → input mapping, so repeated edits to the same path reuse the same
     /// `SourceFile` input (and thus its cached queries) instead of creating a
@@ -875,6 +879,7 @@ impl Default for IncrementalDatabase {
     fn default() -> Self {
         let db = Self {
             storage: salsa::Storage::new(None),
+            query_log_enabled: Arc::new(AtomicBool::new(false)),
             query_log: Arc::new(Mutex::new(Vec::new())),
             files: Arc::new(Mutex::new(HashMap::new())),
             reparse_cache: Arc::new(Mutex::new(ReparseCache::default())),
@@ -905,6 +910,7 @@ impl Clone for IncrementalDatabase {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
+            query_log_enabled: Arc::clone(&self.query_log_enabled),
             query_log: Arc::clone(&self.query_log),
             files: Arc::clone(&self.files),
             reparse_cache: Arc::clone(&self.reparse_cache),
@@ -1216,6 +1222,7 @@ impl IncrementalDatabase {
     }
 
     pub fn clear_query_log(&self) {
+        self.query_log_enabled.store(true, Ordering::Relaxed);
         self.query_log.lock().unwrap_or_else(recover_poison).clear();
     }
 
@@ -1386,6 +1393,9 @@ impl salsa::Database for IncrementalDatabase {}
 #[salsa::db]
 impl IncrementalDb for IncrementalDatabase {
     fn record_query(&self, entry: QueryLogEntry) {
+        if !self.query_log_enabled.load(Ordering::Relaxed) {
+            return;
+        }
         self.query_log
             .lock()
             .unwrap_or_else(recover_poison)

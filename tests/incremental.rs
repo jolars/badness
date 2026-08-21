@@ -77,6 +77,7 @@ fn scanned_commands(
 fn parsed_document_is_memoized() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("\\section{Hi}\n");
+    db.clear_query_log();
 
     // Many reads — including two distinct consumers of the cached parse — but
     // the parse itself runs exactly once.
@@ -88,9 +89,24 @@ fn parsed_document_is_memoized() {
 }
 
 #[test]
+fn query_log_records_only_after_an_observation_window_opens() {
+    let db = IncrementalDatabase::default();
+    let file = db.add_file("\\label{a}\n");
+
+    let _ = db.parsed_tree(file);
+    assert!(db.query_log().is_empty());
+
+    db.clear_query_log();
+    let _ = db.semantic_model(file);
+    assert_eq!(db.query_log().len(), 1);
+    assert_eq!(db.query_log()[0].kind, QueryKind::SemanticModel);
+}
+
+#[test]
 fn editing_text_reparses() {
     let mut db = IncrementalDatabase::default();
     let file = db.add_file("a\n");
+    db.clear_query_log();
 
     let _ = db.parsed_tree(file);
     assert_eq!(parse_count(&db), 1);
@@ -106,6 +122,7 @@ fn upsert_unchanged_text_does_not_reparse() {
     let path = std::path::Path::new("/tmp/doc.tex");
 
     let file = db.upsert_file(path, "x\n".to_string());
+    db.clear_query_log();
     let _ = db.parsed_tree(file);
     assert_eq!(parse_count(&db), 1);
 
@@ -137,6 +154,7 @@ fn a_shared_text_handle_is_recognized_without_a_content_compare() {
 
     let held: Arc<str> = Arc::from("x\n");
     let file = db.upsert_file(path, Arc::clone(&held));
+    db.clear_query_log();
     let _ = db.parsed_tree(file);
     assert_eq!(parse_count(&db), 1);
 
@@ -201,6 +219,7 @@ fn snapshot_reads_cached_parse() {
 fn document_signatures_is_memoized() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("\\newcommand{\\foo}{x}\n");
+    db.clear_query_log();
 
     // Many reads, but the scan runs exactly once.
     let _ = db.document_signatures(file);
@@ -215,6 +234,7 @@ fn document_signatures_is_memoized() {
 fn editing_definitions_rebuilds_signatures() {
     let mut db = IncrementalDatabase::default();
     let file = db.add_file("\\newcommand{\\foo}{x}\n");
+    db.clear_query_log();
 
     assert_eq!(scanned_commands(&db, file), vec!["foo".to_string()]);
     assert_eq!(signatures_count(&db), 1);
@@ -237,6 +257,7 @@ fn doc_associations_is_memoized() {
         Path::new("doc.dtx"),
         "% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n".to_string(),
     );
+    db.clear_query_log();
 
     let _ = db.doc_associations(file);
     let _ = db.doc_associations(file);
@@ -255,6 +276,7 @@ fn editing_dtx_rebuilds_doc_associations() {
         Path::new("doc.dtx"),
         "% \\begin{macro}{\\foo}\n% docs.\n% \\end{macro}\n".to_string(),
     );
+    db.clear_query_log();
 
     assert_eq!(db.doc_associations(file).len(), 1);
     assert_eq!(doc_assoc_count(&db), 1);
@@ -295,6 +317,7 @@ fn prose_edit_yields_equal_signatures() {
 fn parsed_bib_document_is_memoized() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("@article{k, title = {Hi}}\n");
+    db.clear_query_log();
 
     // Several consumers of the cached bib parse, but the parse runs once.
     let _ = db.parsed_bib_tree(file);
@@ -309,6 +332,7 @@ fn parsed_bib_document_is_memoized() {
 fn editing_bib_text_reparses() {
     let mut db = IncrementalDatabase::default();
     let file = db.add_file("@misc{a}\n");
+    db.clear_query_log();
 
     let _ = db.parsed_bib_tree(file);
     assert_eq!(bib_parse_count(&db), 1);
@@ -331,6 +355,7 @@ fn cached_bib_tree_is_lossless() {
 fn bib_semantic_model_is_memoized() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("@book{k, publisher = cup}\n@string{cup = {C}}\n");
+    db.clear_query_log();
 
     let _ = db.bib_semantic_model(file);
     let _ = db.bib_semantic_model(file);
@@ -359,6 +384,7 @@ fn equal_bib_edit_yields_equal_model() {
 fn clone_shares_storage() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("\\emph{hi}\n");
+    db.clear_query_log();
     let _ = db.parsed_tree(file);
     assert_eq!(parse_count(&db), 1);
 
@@ -399,6 +425,7 @@ fn has_verbatim_body(db: &IncrementalDatabase, file: badness::incremental::Sourc
 fn declaring_an_environment_reparses_the_file() {
     let mut db = IncrementalDatabase::default();
     let file = db.upsert_file(Path::new("main.tex"), MYCODE_DOC.to_owned());
+    db.clear_query_log();
 
     // Declaration-blind, `mycode` is an unknown environment with an ordinary body.
     assert!(!has_verbatim_body(&db, file));

@@ -44,6 +44,7 @@ fn project(model: &SemanticModel) -> Snapshot {
 fn semantic_model_is_memoized() {
     let db = IncrementalDatabase::default();
     let file = db.add_file("\\label{a}\\ref{a}\n");
+    db.clear_query_log();
 
     // Many reads, but the model is built exactly once.
     let _ = db.semantic_model(file);
@@ -57,6 +58,7 @@ fn semantic_model_is_memoized() {
 fn editing_labels_rebuilds_model() {
     let mut db = IncrementalDatabase::default();
     let file = db.add_file("\\label{a}\n");
+    db.clear_query_log();
 
     let _ = db.semantic_model(file);
     assert_eq!(model_count(&db), 1);

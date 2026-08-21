@@ -1,7 +1,7 @@
 pgf	corpus	files=397	bytes=7226809
 pgf	word-typing	spliced=3416/4030	token=3340	verbatim=76	math=0	region=0	files=308
 pgf	word-deleting	spliced=3361/4030	token=3265	verbatim=96	math=0	region=0	files=308
-pgf	protected-typing	spliced=1640/1665	token=0	verbatim=1640	math=0	region=0	files=118
+pgf	protected-typing	spliced=1650/1675	token=0	verbatim=1650	math=0	region=0	files=120
 pgf	math-word-typing	spliced=335/370	token=335	verbatim=0	math=0	region=0	files=30
 pgf	math-shape-typing	spliced=375/450	token=0	verbatim=0	math=375	region=0	files=37
 pgf	hazard-single	spliced=2499/6352	token=2110	verbatim=386	math=3	region=0	files=397

@@ -24,7 +24,7 @@ use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
     ArgKind, ArgumentDomain, ContentKind, DelimiterRole, MathClass, SignatureDb, Signatures, expl3,
-    match_arg_slot, math_atoms, scan_definitions,
+    match_arg_slot, match_verbatim_arg_slot, math_atoms, scan_definitions,
 };
 use crate::syntax::{
     SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
@@ -7741,6 +7741,12 @@ fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<Syntax
                     out.push(SyntaxElement::Node(group));
                 }
             }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
+                if token.text().starts_with('{') {
+                    match_verbatim_arg_slot(&sig.args, &mut slot);
+                }
+                out.push(SyntaxElement::Token(token));
+            }
             other => out.push(other),
         }
     }
@@ -7892,6 +7898,12 @@ fn lower_command_with_math_spacing(
                 out.push(Ir::verbatim(child.text().to_string()))
             }
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
+                if token.text().starts_with('{') {
+                    match_verbatim_arg_slot(&sig.args, &mut slot);
+                }
+                out.push(lower_loose_token(&token, cx));
+            }
             SyntaxElement::Token(token) if math_only => out.push(Ir::verbatim(token.text())),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
                 out.push(classify_trivia(

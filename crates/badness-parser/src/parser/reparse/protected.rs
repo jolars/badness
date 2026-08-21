@@ -393,6 +393,10 @@ mod tests {
             "See \\url{https://x/a_b} now.\n",
             after("See \\url{https://x/a_", "a_", "z"),
         );
+        assert_splices(
+            "See \\href{https://x/a%20b}{the link} now.\n",
+            after("See \\href{https://x/a%20", "%20", "z"),
+        );
     }
 
     /// Leg 4. Typing the closer into the body ends the environment early, which is a
@@ -411,6 +415,10 @@ mod tests {
         assert_refuses(
             "A \\lstinline|xy| here.\n",
             after("A \\lstinline|x", "x", "|"),
+        );
+        assert_refuses(
+            "See \\href{https://x/a%20b}{the link}.\n",
+            after("See \\href{https://x/a", "a", "{"),
         );
     }
 

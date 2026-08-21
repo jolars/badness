@@ -128,7 +128,7 @@
     "vref": { "args": ["req"], "inline": true },
     "Vref": { "args": ["req"], "inline": true },
     "labelcref": { "args": ["req"], "inline": true },
-    "href": { "args": ["req", "req"] },
+    "href": { "args": [{ "kind": "opt", "content": "keyval" }, { "kind": "req", "verbatim": true }, "req"] },
 
     "newglossaryentry": { "args": ["req", "req"] },
     "longnewglossaryentry": { "args": ["req", "req", "req"] },

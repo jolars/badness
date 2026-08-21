@@ -1,0 +1,14 @@
+\documentclass{article}
+\usepackage{hyperref}
+\usepackage{listings}
+\begin{document}
+Before   \href{https://example.test/a%20b}{plain href}   after.
+
+Before   \href[page=2]{file:a%20b.pdf}{option href}   after.
+
+Before   \url{https://example.test/a%20b}   after.
+
+Before   \path{/tmp/a%20b}   after.
+
+Before   \lstinline|a%20b|   after.
+\end{document}

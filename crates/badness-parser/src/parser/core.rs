@@ -153,7 +153,7 @@ pub(crate) fn parse_fragment_with_ctx(
 /// shapes the lexer needs.
 ///
 /// The inverse case also feeds the context: a command the file redefines *non-verbatim*
-/// whose name collides with a built-in braced-verbatim command (`\code`, `\url`, …) is
+/// whose name collides with a built-in raw-argument command (`\code`, `\href`, …) is
 /// recorded as *suppressed*, so the local definition shadows the built-in and pass 2
 /// lexes `\code{…}` as an ordinary group (follow-up to issue #53).
 ///
@@ -170,9 +170,13 @@ fn parse_ctx(root: &SyntaxNode) -> ParseCtx {
     for name in db.command_names() {
         match db.command(name) {
             Some(sig) if sig.verbatim => ctx.insert(SmolStr::new(name), sig.args.to_vec()),
-            // Redefined non-verbatim but shadowing a built-in verbatim command: suppress
-            // the built-in capture.
-            Some(_) if builtin().command(name).is_some_and(|sig| sig.verbatim) => {
+            // Redefined non-verbatim but shadowing a built-in raw-argument command:
+            // suppress the built-in capture.
+            Some(_)
+                if builtin()
+                    .command(name)
+                    .is_some_and(|sig| sig.verbatim || sig.args.iter().any(|arg| arg.verbatim)) =>
+            {
                 ctx.suppress(SmolStr::new(name));
             }
             _ => {}

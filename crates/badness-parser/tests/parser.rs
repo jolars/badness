@@ -745,6 +745,58 @@ fn brace_verbatim_command_argument_is_a_child() {
 }
 
 #[test]
+fn href_url_is_verbatim_but_visible_text_is_parsed() {
+    let out = tree(r"\href{https://example.test/a%20b}{visible \emph{text}}");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(
+        out.contains(r#"VERB@5..33 "{https://example.test/a%20b}""#),
+        "{out}"
+    );
+    assert!(out.contains(r#"CONTROL_WORD@42..47 "\\emph""#), "{out}");
+    assert!(out.contains("COMMAND@0..54"), "{out}");
+}
+
+#[test]
+fn href_options_do_not_misalign_the_verbatim_url() {
+    let out = tree(r"\href[page=2]{file:a%20b.pdf}{page two}");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(out.contains(r#"OPTIONAL@5..13"#), "{out}");
+    assert!(out.contains(r#"VERB@13..29 "{file:a%20b.pdf}""#), "{out}");
+    assert!(out.contains(r#"GROUP@29..39"#), "{out}");
+}
+
+#[test]
+fn malformed_href_url_declines_verbatim_capture_losslessly() {
+    let input = "\\href{https://example.test/a%20b\n";
+    let out = tree(input);
+    assert!(!out.contains("VERB@"), "{out}");
+    assert!(out.contains("error @"), "{out}");
+}
+
+#[test]
+fn redefined_href_lexes_its_arguments_normally() {
+    let out = tree("\\renewcommand{\\href}[2]{#2}\\n\\href{ordinary_a}{visible}\\n");
+    assert!(!out.contains("error @"), "{out}");
+    assert!(!out.contains("VERB@"), "{out}");
+    assert!(out.contains("UNDERSCORE@"), "{out}");
+}
+
+#[test]
+fn curated_verbatim_command_families_keep_literal_percent_opaque() {
+    for input in [
+        r"\url{a%20b}",
+        r"\path{a%20b}",
+        r"\lstinline{a%20b}",
+        r"\lstinline|a%20b|",
+    ] {
+        let out = tree(input);
+        assert!(!out.contains("error @"), "{input:?}\n{out}");
+        assert!(out.contains("VERB@"), "{input:?}\n{out}");
+        assert!(!out.contains("COMMENT@"), "{input:?}\n{out}");
+    }
+}
+
+#[test]
 fn verbatim_command_skips_leading_args() {
     // `\mintinline{lang}{code}`: the language is an ordinary group, only the
     // trailing argument is verbatim. Both the group and the `VERB` body nest

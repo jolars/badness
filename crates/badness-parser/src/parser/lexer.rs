@@ -114,8 +114,8 @@ impl From<LatexFlavor> for LexConfig {
 /// presence in `environments` means the environment is verbatim.
 ///
 /// `suppressed` names the inverse case: commands the current file *redefines* to an
-/// ordinary (non-verbatim) macro whose name collides with a built-in braced-verbatim
-/// command (`\code`, `\url`, `\path`, …). A local definition shadows the built-in, so
+/// ordinary (non-verbatim) macro whose name collides with a built-in raw-argument
+/// command (`\code`, `\url`, `\href`, …). A local definition shadows the built-in, so
 /// [`lex_verbatim_command`] must lex `\code{…}` as an ordinary group rather than capture
 /// the built-in `VERB` (follow-up to issue #53). We read only static definition facts (a
 /// visible `\newcommand`/`\def` with no catcode signal), never macro meaning.
@@ -199,7 +199,7 @@ impl ParseCtx {
         self.commands.insert(name, leading);
     }
 
-    /// Record that `name` — a built-in braced-verbatim command — is redefined
+    /// Record that `name` — a built-in raw-argument command — is redefined
     /// non-verbatim in this file, so its built-in verbatim capture is suppressed.
     pub(crate) fn suppress(&mut self, name: SmolStr) {
         self.suppressed.insert(name);
@@ -1521,12 +1521,12 @@ fn lex_macrocode_frame(rest: &str, want_begin: bool, out: &mut Vec<Token>) -> Op
     Some(indent + 1 + ws_len + control.len() + 1 + name.len() + 1)
 }
 
-/// If `rest` starts with a verbatim-argument command (`\url`, `\code`,
-/// `\lstinline`, …), emit its control word, any leading non-verbatim arguments
-/// (as ordinary tokens), and finally a single raw [`SyntaxKind::VERB`] token for
-/// the verbatim argument; return the bytes consumed. Returns `None` when `rest`
-/// is not such a command or no verbatim argument follows (so the caller lexes it
-/// normally and losslessness is preserved either way).
+/// If `rest` starts with a verbatim-argument command (`\url`, `\href`,
+/// `\lstinline`, …), emit its control word, any leading ordinary arguments, and
+/// one raw [`SyntaxKind::VERB`] token; return the bytes consumed. A whole-command
+/// capture treats the raw argument as an implicit final slot, while a positional
+/// capture stops at its marked slot and leaves later arguments for the ordinary
+/// lexer. Returns `None` when no complete raw argument follows.
 ///
 /// The verbatim argument's form is decided by its first non-blank character,
 /// matching how these commands actually parse: a brace introduces a balanced
@@ -1558,10 +1558,10 @@ fn lex_verbatim_command(
     if name == "verb" {
         return None;
     }
-    // A user-defined catcode-verbatim command (from `ctx`) wins over the built-in DB;
-    // either way we read only the static leading-argument shape, never macro meaning.
-    // Discovered commands are `\newcommand`-style braced definitions, so they never
-    // get the delimiter form.
+    // A user-defined catcode-verbatim command (from `ctx`) wins over the built-in DB.
+    // Otherwise only the curated tier may establish either the legacy implicit-final
+    // capture or a positional raw slot. Discovered commands are `\newcommand`-style
+    // braced definitions, so they never get the delimiter form.
     let (leading, delimited): (&[ArgSpec], bool) = match ctx.leading_args(name) {
         Some(args) => (args, false),
         None => {
@@ -1570,8 +1570,19 @@ fn lex_verbatim_command(
             if ctx.is_suppressed(name) {
                 return None;
             }
-            let sig = builtin().command(name).filter(|c| c.verbatim)?;
-            (&sig.args, sig.verbatim_delimited)
+            let sig = builtin().command(name)?;
+            if sig.verbatim {
+                (&sig.args, sig.verbatim_delimited)
+            } else {
+                let raw = sig.args.iter().position(|arg| arg.verbatim)?;
+                // Positional raw arguments are brace-delimited. Delimiter runs remain
+                // the legacy implicit-final command facet because they have no GROUP
+                // slot in the CST or signature model.
+                if sig.args[raw].kind != ArgKind::Brace {
+                    return None;
+                }
+                (&sig.args[..raw], false)
+            }
         }
     };
 
@@ -2557,6 +2568,7 @@ mod tests {
             ),
             ("before x ", "\\verb+", "+ ", INLINE_BODIES),
             ("before x ", "\\url{", "} ", INLINE_BODIES),
+            ("before x ", "\\href{", "}{visible} ", INLINE_BODIES),
             ("before x ", "\\lstinline+", "+ ", INLINE_BODIES),
         ] {
             let mut expected: Option<Vec<(SyntaxKind, String)>> = None;

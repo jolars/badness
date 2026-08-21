@@ -1,7 +1,3 @@
-./documentation/demonstrations/finetuning4-mod1.tex	format-error	format-error
-./documentation/demonstrations/finetuning4-mod2.tex	format-error	format-error
-./documentation/demonstrations/finetuning4-mod3.tex	format-error	format-error
-./documentation/demonstrations/finetuning4.tex	format-error	format-error
 ./documentation/demonstrations/pstricks-default.tex	format-error	format-error
 ./documentation/demonstrations/pstricks.tex	format-error	format-error
 ./test-cases/alignment/issue-207-mod0.tex	format-error	format-error
@@ -15,9 +11,6 @@
 ./test-cases/broken/broken1.tex	format-error	format-error
 ./test-cases/broken/broken4-mod1.tex	format-error	format-error
 ./test-cases/broken/broken4.tex	format-error	format-error
-./test-cases/fine-tuning/href-mod1.tex	format-error	format-error
-./test-cases/fine-tuning/href-mod2.tex	format-error	format-error
-./test-cases/fine-tuning/href.tex	format-error	format-error
 ./test-cases/headings/headings-single-line-many-mod8.tex	format-error	format-error
 ./test-cases/headings/headings-single-line-many-mod9.tex	format-error	format-error
 ./test-cases/keyEqualsValueBraces/dodge-double-back-slash-default.tex	format-error	format-error
@@ -137,9 +130,3 @@
 ./test-cases/text-wrap/multi-object5.tex	format-error	format-error
 ./test-cases/text-wrap/multi-object7.tex	format-error	format-error
 ./test-cases/text-wrap/multi-object9.tex	format-error	format-error
-./test-cases/verbatim/href-mod1.tex	format-error	format-error
-./test-cases/verbatim/href-mod3.tex	format-error	format-error
-./test-cases/verbatim/href-mod4.tex	format-error	format-error
-./test-cases/verbatim/href-mod5.tex	format-error	format-error
-./test-cases/verbatim/href-mod6.tex	format-error	format-error
-./test-cases/verbatim/href.tex	format-error	format-error

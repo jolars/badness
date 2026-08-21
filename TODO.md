@@ -620,17 +620,11 @@ scope limits recorded at implementation time, not regressions.
 
 ## Semantic layer & signatures
 
-- [ ] **Verbatim-ish command arguments: `\href` with a literal `%` in its URL.**
-  `\href{https://…/Chang_1983_Handbook%20for%30Spoken%40Mathematics.pdf}{…}`
-  fails to parse (`unclosed {`) because the `%` lexes as a comment start.
-  hyperref reads `\href`'s first argument under a modified catcode regime, so the
-  `%` is literal there — this is a `ContentKind`-adjacent claim the signature DB
-  does not currently carry (a *verbatim argument*, distinct from `Opaque`). 18
-  `format-error` entries in the `latexindent` gate corpus, dominated by the
-  `href` family in `test-cases/verbatim` and `test-cases/fine-tuning` — which is
-  exactly what that corpus's `verbatim/` directory exists to probe. Scope the
-  claim like the `Keyval` one: curated, compile-verified per command, never
-  inferred. Check `\url`, `\path`, and `\lstinline` in the same pass.
+- [x] **Verbatim-ish command arguments.** Positional curated `ArgSpec::verbatim`
+  now captures `\href`'s URL as raw text while its visible-text group remains
+  parsed. The optional keyval slot is modeled too, local redefinitions suppress
+  the built-in mode, and compile-backed coverage pins literal `%` for `\href`,
+  `\url`, `\path`, and `\lstinline`.
 
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
   decision)*

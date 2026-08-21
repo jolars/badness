@@ -307,7 +307,10 @@ fall into the following categories:
   commands capture their body as a single token. Built-ins are curated;
   user-defined ones are found by a bounded two-pass definition scan that
   fingerprints catcode-othering signals and recognizes definer identities such
-  as `\lstnewenvironment`.
+  as `\lstnewenvironment`. A curated command may instead mark one positional
+  braced argument as verbatim—`\href` uses this for its URL while leaving the
+  visible-text argument parsed. The capture forms only when the marked balanced
+  group is present; local definitions suppress a colliding built-in mode.
 - **Delimiter isolation.** The token after `\left` or `\right` is emitted on its
   own, so the parser can build the `LEFT_RIGHT` pair.
 - **Math environments.** An environment the curated table flags `math` has its
@@ -580,6 +583,14 @@ declare an `ArgumentDomain` of `Math` or `Text`, independently of formatter
 optionals. A matched `Math` group uses the ordinary math-element parser, while
 `Text`, `Unknown`, unmatched, and over-attached groups use generic parsing.
 Attachment itself remains greedy.
+
+The same curated slot data may mark a braced argument `verbatim`. The lexer then
+captures that balanced group as one `VERB` token, and a companion slot matcher
+advances past the raw token so later parsed groups keep their positional domains
+and content policies. This is a bounded catcode claim, not formatter opacity:
+`ContentKind::Opaque` preserves whitespace in an already parsed group, whereas a
+verbatim slot prevents characters such as `%` from becoming syntax at all.
+Mechanical CWL signatures and scanned definitions cannot establish this mode.
 
 The load-bearing claim is independence from mutable signature data. Positional
 domain parsing reads only the hand-curated built-in tier—never package scopes,

@@ -3,3 +3,6 @@ Inline verbatim with \verb|raw {code}| and a starred \verb*|spaced  text|.
 A URL command \url{https://example.com/path?q=1&r=2} stays opaque.
 
 Listings inline: \lstinline{int x = 0;} keeps its body protected.
+
+Only the URL argument of \href{https://example.test/a%20b}{an \emph{href}}
+stays opaque; its visible text remains ordinary LaTeX.

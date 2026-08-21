@@ -111,6 +111,10 @@ pub struct ArgSpec {
     /// The mode established by this positional argument, independently of
     /// [`ContentKind`].
     pub domain: ArgumentDomain,
+    /// Whether this braced argument is read under a curated raw-text lexer mode.
+    /// Independent of formatter [`ContentKind`] and text-or-math
+    /// [`ArgumentDomain`].
+    pub verbatim: bool,
 }
 
 /// Match an attached group to the next positional signature slot.
@@ -130,6 +134,25 @@ pub fn match_arg_slot_index(args: &[ArgSpec], slot: &mut usize, kind: ArgKind) -
         if spec.kind == kind {
             *slot += 1;
             return Some(index);
+        }
+        if !spec.required {
+            *slot += 1;
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
+/// Match an attached raw `VERB` token to the next positional verbatim slot.
+/// Existing whole-command captures (`\url`, `\lstinline`, …) are implicit and
+/// therefore match no slot.
+pub fn match_verbatim_arg_slot(args: &[ArgSpec], slot: &mut usize) -> Option<ArgSpec> {
+    while *slot < args.len() {
+        let spec = args[*slot];
+        if spec.verbatim {
+            *slot += 1;
+            return Some(spec);
         }
         if !spec.required {
             *slot += 1;
@@ -335,6 +358,7 @@ pub(crate) const fn arg(required: bool, kind: ArgKind, content: ContentKind) -> 
         kind,
         content,
         domain: ArgumentDomain::Unknown,
+        verbatim: false,
     }
 }
 
@@ -1078,6 +1102,8 @@ enum RawArg {
         content: RawContentKind,
         #[serde(default)]
         domain: RawArgumentDomain,
+        #[serde(default)]
+        verbatim: bool,
     },
 }
 
@@ -1089,16 +1115,19 @@ impl From<RawArg> for ArgSpec {
                 kind: kind.kind(),
                 content: ContentKind::Opaque,
                 domain: ArgumentDomain::Unknown,
+                verbatim: false,
             },
             RawArg::Full {
                 kind,
                 content,
                 domain,
+                verbatim,
             } => ArgSpec {
                 required: kind.required(),
                 kind: kind.kind(),
                 content: content.into(),
                 domain: domain.into(),
+                verbatim,
             },
         }
     }
@@ -1406,6 +1435,38 @@ mod tests {
         assert_eq!(kv[1].content, ContentKind::Opaque);
         let list = &db.command("list").unwrap().args;
         assert_eq!(list[0].content, ContentKind::TokenList);
+    }
+
+    #[test]
+    fn positional_verbatim_defaults_off_and_parses_from_full_form() {
+        let db = parse(
+            r#"{ "commands": {
+                "short": { "args": ["req"] },
+                "raw": { "args": [{ "kind": "req", "verbatim": true }, "req"] }
+            } }"#,
+        )
+        .expect("valid positional verbatim schema");
+
+        assert!(!db.command("short").unwrap().args[0].verbatim);
+        let raw = &db.command("raw").unwrap().args;
+        assert!(raw[0].verbatim);
+        assert!(!raw[1].verbatim);
+    }
+
+    #[test]
+    fn positional_verbatim_slot_keeps_later_groups_aligned() {
+        let args = &builtin().command("href").unwrap().args;
+        let mut slot = 0;
+
+        assert_eq!(
+            match_arg_slot_index(args, &mut slot, ArgKind::Bracket),
+            Some(0)
+        );
+        assert!(match_verbatim_arg_slot(args, &mut slot).is_some());
+        assert_eq!(
+            match_arg_slot_index(args, &mut slot, ArgKind::Brace),
+            Some(2)
+        );
     }
 
     #[test]

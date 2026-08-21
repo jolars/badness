@@ -139,6 +139,10 @@ enum RawArg {
         #[serde(default)]
         #[serde(rename = "domain")]
         _domain: RawArgumentDomain,
+        /// Accepted for schema parity, but behavior facts never enter the
+        /// arity-only CWL tier.
+        #[serde(default, rename = "verbatim")]
+        _verbatim: bool,
     },
 }
 
@@ -151,6 +155,7 @@ impl RawArg {
                 kind,
                 content,
                 _domain: _,
+                _verbatim: _,
             } => (*kind, *content),
         };
         let (required, kind) = match kind {

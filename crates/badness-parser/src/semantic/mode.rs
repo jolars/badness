@@ -4,7 +4,9 @@ use rowan::{TextRange, TextSize};
 
 use crate::ast::command_name;
 use crate::semantic::define::scan_definitions;
-use crate::semantic::signature::{ArgKind, ArgumentDomain, Signatures, match_arg_slot};
+use crate::semantic::signature::{
+    ArgKind, ArgumentDomain, Signatures, match_arg_slot, match_verbatim_arg_slot,
+};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 /// The effective mode at a source position.
@@ -61,20 +63,31 @@ pub fn argument_domain(group: &SyntaxNode) -> ArgumentDomain {
         _ => None,
     };
     let mut slot = 0usize;
-    for candidate in owner
-        .children()
-        .filter(|child| matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
-    {
-        let kind = if candidate.kind() == SyntaxKind::OPTIONAL {
-            ArgKind::Bracket
-        } else {
-            ArgKind::Brace
-        };
-        let domain = args
-            .and_then(|args| match_arg_slot(args, &mut slot, kind))
-            .map_or(ArgumentDomain::Unknown, |spec| spec.domain);
-        if candidate == *group {
-            return domain;
+    for candidate in owner.children_with_tokens() {
+        match candidate {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
+                if let Some(args) = args
+                    && token.text().starts_with('{')
+                {
+                    match_verbatim_arg_slot(args, &mut slot);
+                }
+            }
+            SyntaxElement::Node(candidate)
+                if matches!(candidate.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                let kind = if candidate.kind() == SyntaxKind::OPTIONAL {
+                    ArgKind::Bracket
+                } else {
+                    ArgKind::Brace
+                };
+                let domain = args
+                    .and_then(|args| match_arg_slot(args, &mut slot, kind))
+                    .map_or(ArgumentDomain::Unknown, |spec| spec.domain);
+                if candidate == *group {
+                    return domain;
+                }
+            }
+            _ => {}
         }
     }
     ArgumentDomain::Unknown
@@ -184,22 +197,38 @@ fn match_groups(
 ) -> Vec<Mode> {
     let mut slot = 0usize;
     let mut first = skip_first;
-    node.children()
-        .filter(|child| matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
-        .map(|group| {
-            if first {
-                first = false;
-                return Mode::Unknown;
+    let mut modes = Vec::new();
+    for child in node.children_with_tokens() {
+        match child {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
+                if let Some(args) = args
+                    && token.text().starts_with('{')
+                {
+                    match_verbatim_arg_slot(args, &mut slot);
+                }
             }
-            let kind = if group.kind() == SyntaxKind::OPTIONAL {
-                ArgKind::Bracket
-            } else {
-                ArgKind::Brace
-            };
-            args.and_then(|args| match_arg_slot(args, &mut slot, kind))
-                .map_or(Mode::Unknown, |spec| spec.domain.into())
-        })
-        .collect()
+            SyntaxElement::Node(group)
+                if matches!(group.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                if first {
+                    first = false;
+                    modes.push(Mode::Unknown);
+                    continue;
+                }
+                let kind = if group.kind() == SyntaxKind::OPTIONAL {
+                    ArgKind::Bracket
+                } else {
+                    ArgKind::Brace
+                };
+                modes.push(
+                    args.and_then(|args| match_arg_slot(args, &mut slot, kind))
+                        .map_or(Mode::Unknown, |spec| spec.domain.into()),
+                );
+            }
+            _ => {}
+        }
+    }
+    modes
 }
 
 fn push_range(ranges: &mut Vec<ModeRange>, range: TextRange, mode: Mode) {

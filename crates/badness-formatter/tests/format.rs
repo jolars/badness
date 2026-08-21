@@ -215,6 +215,8 @@ const CLEAN_CASES: &[&str] = &[
     // must be emitted whole (not truncated at its newline).
     r"see \url{http://x.com/a_b} and \code{$x_y$} inline",
     r"\lstinline|a_$b$_c| then \mintinline{python}{x = $1}",
+    r"see \href{https://example.test/a%20b}{visible \emph{text}} inline",
+    r"see \href[page=2]{file:a%20b.pdf}{page two} inline",
     "given by \\code{\nmulti-line $verbatim$ body with a_b} and more text here\n",
     // A comment-only line inside an alignment is kept as a passthrough line between
     // the grid rows (not a cell, not counted toward column widths); the invariants

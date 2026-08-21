@@ -939,6 +939,7 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
                     kind: ArgKind::Bracket,
                     content: ContentKind::Opaque,
                     domain: crate::semantic::ArgumentDomain::Unknown,
+                    verbatim: false,
                 }
             } else {
                 ArgSpec {
@@ -946,6 +947,7 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
                     kind: ArgKind::Brace,
                     content: ContentKind::Opaque,
                     domain: crate::semantic::ArgumentDomain::Unknown,
+                    verbatim: false,
                 }
             }
         })

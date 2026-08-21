@@ -24,7 +24,9 @@ use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
 use crate::parser::events::Event;
 use crate::parser::lexer::{ParseCtx, Token};
-use crate::semantic::signature::{ArgKind, ArgSpec, ArgumentDomain, builtin, match_arg_slot};
+use crate::semantic::signature::{
+    ArgKind, ArgSpec, ArgumentDomain, builtin, match_arg_slot, match_verbatim_arg_slot,
+};
 use crate::syntax::SyntaxKind;
 use facts::{
     BracketPolicy, is_big_delimiter_command, is_command_definition_command,
@@ -2124,6 +2126,13 @@ impl<'t> Parser<'t> {
                             .peek_meaningful_text()
                             .is_some_and(|t| t.starts_with('\\')) =>
                 {
+                    if let Some(args) = args
+                        && self
+                            .peek_meaningful_text()
+                            .is_some_and(|text| text.starts_with('{'))
+                    {
+                        match_verbatim_arg_slot(args, &mut slot);
+                    }
                     self.bump(); // the VERB argument
                 }
                 // A starred-variant marker `*` folds into the invocation so the

@@ -1,0 +1,11 @@
+% A comment forces each group into block layout, but the source glues the groups
+% together. The comment consumes its newline, so TeX sees `AB`. Inserting a line
+% break between the groups would materialize a visible space token.
+\documentclass{article}
+\begin{document}
+
+Before:{A%
+    }{B%
+    }:after.
+
+\end{document}

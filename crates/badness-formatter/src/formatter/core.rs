@@ -2462,7 +2462,18 @@ fn reflow_elements_checked(
                         && line_has_content
                         && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg)
                         && matches!(b.render, RunRender::Fill);
-                    if margin.is_none() && (!b.atom.is_empty() || hugs_preceding_prose) {
+                    let rides_preceding_block = after_block
+                        && !after_block_gap
+                        && !after_block_closed
+                        && !is_sectioning;
+                    if rides_preceding_block {
+                        // A forced-break node can itself be glued to the forced
+                        // block before it (`{a%\n}{b%\n}`). Keep their shared
+                        // boundary on one physical line just as the token and
+                        // ordinary-node arms do below. Splitting it would create
+                        // a TeX space token where the source had no gap.
+                        b.append_to_last_line(ir);
+                    } else if margin.is_none() && (!b.atom.is_empty() || hugs_preceding_prose) {
                         // A directly glued block (`\newcommand\cls@hook{%`) had no
                         // source break opportunity, so it extends the unbreakable
                         // atom in progress. The one spaced admission is inline math

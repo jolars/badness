@@ -905,6 +905,15 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // predicates) keeps today's indented block form even under `Reflow`.
     ("group_blank_line_keeps_block", WrapMode::Reflow, 80),
     ("group_comment_keeps_block", WrapMode::Reflow, 80),
+    // Forced-break siblings still obey the glued-divider rule. Each group's `%`
+    // forces its own block layout, but the absent gap between `}` and `{` means
+    // the formatter must not insert a line break—and therefore a TeX space token—
+    // at their shared boundary.
+    (
+        "reflow_forced_break_keeps_glued_siblings",
+        WrapMode::Reflow,
+        80,
+    ),
     // An empty group's padding survives flat in both spellings (`{ }` ≡ `{\n}`):
     // collapsing `{\n}` to `{}` would delete a space token TeX typesets.
     ("group_empty_keeps_space", WrapMode::Reflow, 80),

@@ -277,24 +277,13 @@ become an opt-in, but overflow is honest), and no math rendering engine.
   added `tests/typeset/opaque_groups.tex` coverage for a `\def` replacement
   whose trailing space would be visible after expansion.
 
-- [ ] **The paragraph reflow's forced-break rule splits glued sibling atoms.**
-  A third member of the glued-divider family, and the one that lives in
-  `reflow_elements` rather than in a delimiter lowering. Its block-statement arm
-  ends the line at any element whose IR carries a forced break, without asking
-  whether the *next* element is glued to it, so `{a%\n}{b%\n}` — two brace
-  groups the author abutted, each forced open by its own `%` — comes out
-  `{a%\n}\n{b%\n}`. The `%` eats the source newline, so TeX saw `{a}{b}` and now
-  sees `{a} {b}`: an interword space materialized at a junction with no gap,
-  exactly what the glued-divider principle forbids. Invisible to every oracle for
-  the usual reason — trivia to the CST checks, and the perturbation generator
-  cannot reach a junction that has no trivia to perturb. Pre-existing and
-  independent of who routes content into the paragraph; surfaced by the A/B space
-  sweep for `begin_tail_is_body`, which moved one corpus file
-  (`mand-args/env-third-mand-args-percent-after-body`) into the body where it
-  already applied. The fix is the same `close_glued` shape as the entry above —
-  suppress the line end when the following element abuts — and it wants a
-  `tests/typeset/` case pinning the space-token claim before it lands, since the
-  ratchet cannot see the difference either way.
+- [x] ~~**The paragraph reflow's forced-break rule splits glued sibling atoms.**~~
+  **Landed.** A forced-break node glued to a preceding forced-break block now
+  rides that block's last line, matching the existing token and ordinary-node
+  paths; section headings retain their licensed unconditional split. The focused
+  formatter fixture pins `{a%\n}{b%\n}` without an invented divider, and the
+  typeset-stability case proves that the junction still produces `AB`, not
+  `A B`.
 
 - [x] **Math operator spacing is inconsistent between script args and command
   args** (surfaced by issue #42's examples). Direct math and known `Math` slots

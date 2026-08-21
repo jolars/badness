@@ -407,17 +407,6 @@ become an opt-in, but overflow is honest), and no math rendering engine.
   branch list no longer splits across two indents), leaving only the
   continuation indent itself.
 
-- [ ] **Revisit tight braces for 2e-named commands inside expl3
-  (`expl_group_is_spaced`).** The rule gives an expl3 function's argument
-  canonical `{ value }` spacing (documented l3 style, per the l3styleguide) but
-  tightens a 2e-*named* command's argument to `{tight}`, so
-  `\@ifpackageloaded { textcomp }` becomes `\@ifpackageloaded {textcomp}`. The
-  spaced form for expl3 functions is genuinely idiomatic l3; the tight form for
-  2e commands is badness's own extrapolation (the style guide is silent on 2e
-  code embedded in a region), chosen for determinism. Whether tightening — vs.
-  preserving, or spacing — is the right default for a 2e command in an expl3
-  region is an open call; the tightening can read as worse than the input.
-
 - [x] **Hanging continuation indent for wrapped statements (B') — shipped via
   the sanctioned picture-statement mode.** The entry's own charter: a node that
   owns the whole statement, so layout derives from structure and the hang is

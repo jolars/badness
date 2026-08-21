@@ -362,6 +362,7 @@ fn format_root(
         dtx_margin_probe: false,
         preserve_dtx_nested_layout: false,
         in_dtx_doc_region: false,
+        in_alignment_cell: false,
         is_dtx: root
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -768,6 +769,11 @@ struct LowerCtx<'a> {
     /// `.dtx` documentation region. Its physical `DOC_MARGIN` tokens are omitted;
     /// one canonical margin is re-applied by the enclosing IR.
     in_dtx_doc_region: bool,
+    /// The current node is part of a non-math alignment cell that must collapse
+    /// to one source line. Lone trivia newlines soften to spaces even when parser
+    /// attachment nests them inside a command; blank lines and structural block
+    /// breaks remain forced and make the grid decline.
+    in_alignment_cell: bool,
     /// Whether the document carries any `.dtx` documentation margin at all — the
     /// cheap short-circuit for the no-`.dtx` majority, so gates that would
     /// otherwise walk back to the start of a physical line
@@ -1081,13 +1087,14 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         {
             return lower_math_environment(node, cx);
         }
-        // A doc-layer grid rides `%` margins (`% 10 & 1.0pt \\`): column padding
-        // would land before the margins and push them off column 0, so a
-        // margin-carrying grid keeps the generic environment layout instead.
+        // A grid inside a fully owned virtual `.dtx` documentation region lays
+        // out after its physical margins have been stripped. The enclosing
+        // `Ir::doc_margin` then restores the prefix at column zero, outside the
+        // grid's padding. Other margin-carrying grids still decline through
+        // `contains_doc_margin`.
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && is_alignment_env(node, cx)
-                && (!cx.in_dtx_doc_region || is_math_env(node, cx))
                 && !contains_doc_margin(node, cx) =>
         {
             return lower_aligned_environment(node, cx);
@@ -1115,12 +1122,12 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // Whitespace-only (the grid renderer reflows only trivia) and
         // self-correcting: any shape the grid cannot lay out falls back to
         // [`lower_environment`]. Doc-margined bodies are excluded (same margin rule as
-        // the arms above and below): grid padding would land before a `%` margin and
-        // push it off column 0.
+        // the arms above and below), except inside a fully owned virtual region,
+        // where `contains_doc_margin` is false and framing is stripped before grid
+        // layout.
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && !contains_doc_margin(node, cx)
-                && (!cx.in_dtx_doc_region || is_math_env(node, cx))
                 && body_has_top_level_ampersand(node) =>
         {
             return lower_aligned_environment(node, cx);
@@ -4361,7 +4368,10 @@ fn lower_element_stream(
                 out.push(Ir::verbatim(token.text().to_string()));
             }
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
+                out.push(classify_trivia(
+                    consume_gap_widened(&token, &mut iter),
+                    cx.in_alignment_cell,
+                ));
             }
             SyntaxElement::Token(token)
                 if cx.wraps_prose()
@@ -5849,7 +5859,10 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body_header_token: _,
     } = split_environment(node, cx);
 
-    let Some(items) = build_alignment_grid(&body, cx, false, lifted.as_ref()) else {
+    let soften_nested_newlines = cx.in_dtx_doc_region && !is_math_env(node, cx);
+    let Some(items) =
+        build_alignment_grid(&body, cx, false, soften_nested_newlines, lifted.as_ref())
+    else {
         return lower_environment(node, cx);
     };
     if !items.iter().any(|item| matches!(item, GridItem::Row(_))) {
@@ -5915,7 +5928,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .any(|e| matches!(e.kind(), SyntaxKind::AMPERSAND | SyntaxKind::LINE_BREAK));
 
     let body = if is_grid {
-        match build_alignment_grid(&body_elements, cx, true, lifted.as_ref()) {
+        match build_alignment_grid(&body_elements, cx, true, false, lifted.as_ref()) {
             Some(items) if items.iter().any(|item| matches!(item, GridItem::Row(_))) => {
                 let aligns = column_alignments(node, cx).unwrap_or_default();
                 render_alignment_rows(&items, &aligns)
@@ -5999,11 +6012,16 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// through the role-aware math sequencer ([`lower_math_seq`]) so operator spacing
 /// and tight scripts apply. It is `false` for a non-math grid (`tabular`),
 /// where the body is a prose block and cells lower through [`lower_element_stream`]
-/// exactly as before.
+/// exactly as before. `soften_nested_newlines` is restricted to non-math cells in
+/// fully owned virtual `.dtx` regions: it makes a margin-framed continuation inside
+/// a parser-attached command behave like the same continuation after margin
+/// normalization, while ordinary tables and math-grid fallbacks retain their
+/// existing forced-break gates.
 fn build_alignment_grid(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
     math: bool,
+    soften_nested_newlines: bool,
     lifted: Option<&SyntaxToken>,
 ) -> Option<Vec<GridItem>> {
     let mut inline = flatten_alignment_body(body_elements, cx, math)?;
@@ -6012,6 +6030,10 @@ fn build_alignment_grid(
     // passthrough line of its own.
     inline.retain(|e| !is_lifted_comment(e, lifted));
     let printer = Printer::new(FormatStyle::default());
+    let cell_cx = LowerCtx {
+        in_alignment_cell: soften_nested_newlines,
+        ..cx
+    };
 
     /// Render the accumulated cell elements flat and trimmed, pushing the result
     /// onto `cells`. Returns `None` on a cell that cannot collapse to one line.
@@ -6216,7 +6238,7 @@ fn build_alignment_grid(
 
         match &inline[idx] {
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::AMPERSAND => {
-                finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
+                finish_cell(&mut cell, &mut cells, &printer, cell_cx, math)?;
                 // A block cell may only end its row: a `&` after one would need
                 // the next cell to align past the block's last line, which the
                 // grid cannot lay out — fall back.
@@ -6225,7 +6247,7 @@ fn build_alignment_grid(
                 }
             }
             SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
-                finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
+                finish_cell(&mut cell, &mut cells, &printer, cell_cx, math)?;
                 let line_break = printer
                     .print_flat(&lower_node(child, cx))
                     .trim()
@@ -6247,7 +6269,7 @@ fn build_alignment_grid(
                     return None;
                 }
                 let text = token.text().trim_end().to_string();
-                finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
+                finish_cell(&mut cell, &mut cells, &printer, cell_cx, math)?;
                 items.push(GridItem::Row(AlignRow {
                     cells: std::mem::take(&mut cells),
                     line_break: None,
@@ -6263,7 +6285,7 @@ fn build_alignment_grid(
     // when it is a single empty cell — the "body ended in `\\`" (or in a
     // trailing-comment row) case — so the trailing break stays on the prior row
     // without adding a blank line; otherwise it is a real last row.
-    finish_cell(&mut cell, &mut cells, &printer, cx, math)?;
+    finish_cell(&mut cell, &mut cells, &printer, cell_cx, math)?;
     let final_is_empty = cells.len() == 1
         && cells[0].text.is_empty()
         && cells[0].block.is_none()
@@ -6507,22 +6529,34 @@ fn flatten_alignment_body(
     };
     let mut inline: Vec<SyntaxElement> = Vec::new();
     let mut paragraphs = 0;
-    for element in body_elements {
+    for element in strip_virtual_dtx_framing(body_elements.iter().cloned(), cx) {
         match element {
             SyntaxElement::Node(child) if child.kind() == wrapper => {
                 paragraphs += 1;
                 if paragraphs > 1 {
                     return None;
                 }
-                for grandchild in child.children_with_tokens() {
-                    push_alignment_element(&mut inline, grandchild, cx);
-                }
+                extend_alignment_elements(&mut inline, child.children_with_tokens(), cx);
             }
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
-            other => push_alignment_element(&mut inline, other.clone(), cx),
+            other => push_alignment_element(&mut inline, other, cx),
         }
     }
     Some(inline)
+}
+
+/// Extend a flattened grid stream through the virtual-document framing adapter.
+/// The adapter is applied at every level the grid flattener descends, so a source
+/// margin and its padding cannot become cell content merely because the parser
+/// attached that physical line inside a wrapper or an over-attaching rule node.
+fn extend_alignment_elements(
+    inline: &mut Vec<SyntaxElement>,
+    elements: impl IntoIterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+) {
+    for element in strip_virtual_dtx_framing(elements, cx) {
+        push_alignment_element(inline, element, cx);
+    }
 }
 
 /// Push one flattened-body element, expanding an over-attaching rule command
@@ -6533,18 +6567,10 @@ fn push_alignment_element(
     element: SyntaxElement,
     cx: LowerCtx<'_>,
 ) {
-    // The enclosing virtual `.dtx` documentation region re-emits one canonical
-    // margin per rendered line. Keeping the physical margin in a grid cell emits
-    // a second `%`, which comments out the row on the next parse.
-    if cx.in_dtx_doc_region
-        && matches!(&element, SyntaxElement::Token(token) if token.kind() == SyntaxKind::DOC_MARGIN)
-    {
-        return;
-    }
     if let SyntaxElement::Node(node) = &element
         && rule_overattaches_cell(node, cx)
     {
-        inline.extend(node.children_with_tokens());
+        extend_alignment_elements(inline, node.children_with_tokens(), cx);
     } else {
         inline.push(element);
     }
@@ -6944,7 +6970,9 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     // latexindent `poly-switch-blank-line` family). An edge blank erases to
     // padding, exactly the deletion the block form already performed.
     let mut pending: Option<(String, bool)> = None;
-    let mut iter = node.children_with_tokens().peekable();
+    let mut iter = alignment_cell_elements(node.children_with_tokens(), cx)
+        .into_iter()
+        .peekable();
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Token(t)
@@ -7673,7 +7701,9 @@ fn lower_command_with_math_spacing(
 
     let mut out: Vec<Ir> = Vec::new();
     let mut slot = 0usize;
-    let mut iter = node.children_with_tokens().peekable();
+    let mut iter = alignment_cell_elements(node.children_with_tokens(), cx)
+        .into_iter()
+        .peekable();
     while let Some(element) = iter.next() {
         match element {
             SyntaxElement::Node(child)
@@ -7732,7 +7762,10 @@ fn lower_command_with_math_spacing(
             SyntaxElement::Node(child) => out.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) if math_only => out.push(Ir::verbatim(token.text())),
             SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
-                out.push(classify_trivia(consume_gap_widened(&token, &mut iter)));
+                out.push(classify_trivia(
+                    consume_gap_widened(&token, &mut iter),
+                    cx.in_alignment_cell,
+                ));
             }
             SyntaxElement::Token(token) => out.push(lower_loose_token(&token, cx)),
         }
@@ -7770,7 +7803,7 @@ fn lower_prose_group(
     let mut open_ir = Ir::Nil;
     let mut close_ir = Ir::Nil;
     let mut body_elements: Vec<SyntaxElement> = Vec::new();
-    for element in node.children_with_tokens() {
+    for element in alignment_cell_elements(node.children_with_tokens(), cx) {
         match &element {
             SyntaxElement::Token(t) if t.kind() == open && matches!(open_ir, Ir::Nil) => {
                 open_ir = Ir::verbatim(t.text());
@@ -7928,6 +7961,20 @@ fn strip_virtual_dtx_framing(
         }
     }
     stripped
+}
+
+/// Present a nested non-math alignment-cell lowerer with the same virtual stream
+/// as the grid itself. Outside that narrow context, retain the node's ordinary
+/// stream so enabling virtual grids does not alter unrelated document lowering.
+fn alignment_cell_elements(
+    elements: impl IntoIterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+) -> Vec<SyntaxElement> {
+    if cx.in_alignment_cell {
+        strip_virtual_dtx_framing(elements, cx)
+    } else {
+        elements.into_iter().collect()
+    }
 }
 
 /// Lower inline `$…$`/`\(…\)` or display `$$…$$`/`\[…\]` math. The delimiter
@@ -9135,22 +9182,25 @@ fn absorb(tok: &SyntaxToken, newlines: &mut usize, trailing_ws: &mut String) {
 
 /// Map a trivia run to a single IR primitive: no newline → the inline whitespace
 /// (a genuine inter-word space) kept verbatim; one newline → a [`Ir::hard_line`];
-/// two or more → a single [`Ir::empty_line`] (one blank line). Whitespace that
-/// followed the last newline is *indentation*, which the printer owns and
+/// two or more → a single [`Ir::empty_line`] (one blank line). A non-math grid
+/// cell softens the one-newline case to [`Ir::line`] so continuation lines join
+/// even when parser attachment nests the trivia inside a command. Whitespace
+/// that followed the last newline is *indentation*, which the printer owns and
 /// recreates, so it is dropped by [`Gap::from_run`] — keeping it would
 /// double-indent on reformat.
 ///
-/// This is the byte-faithful stream's boundary, and the reason it takes a
+/// This is normally the byte-faithful stream's boundary, and the reason it takes a
 /// [`WideGap`]: reproducing the author's line structure is its entire contract, so
 /// it reads the newline count by definition. **Tier 2**, with the trivial
-/// fixed-point argument — the rule is preservation-only and its own output is its
-/// own input: a `hard_line` prints one newline, which re-reads as one newline and
-/// classifies to a `hard_line` again; an `empty_line` prints a blank line, which
-/// re-reads as two; and the verbatim whitespace re-reads as itself. Nothing here
-/// ever *converts* between the two spellings, which is what a Tier-1 read would do.
-fn classify_trivia(gap: WideGap) -> Ir {
+/// fixed-point argument — a `hard_line` re-reads as one newline, an `empty_line`
+/// re-reads as two, and verbatim whitespace re-reads as itself. The alignment-cell
+/// exception inherits the grid's existing continuation rule: it emits the cell on
+/// one line, which reparses without the softened newline and remains on that same
+/// flat path; a blank line is never softened.
+fn classify_trivia(gap: WideGap, soften_newline: bool) -> Ir {
     match gap.newlines {
         0 => Ir::verbatim(gap.gap.flat()),
+        1 if soften_newline => Ir::line(),
         1 => Ir::hard_line(),
         _ => Ir::empty_line(),
     }

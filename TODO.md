@@ -258,17 +258,14 @@ become an opt-in, but overflow is honest), and no math rendering engine.
   conservative paths. The issue fixtures, mixed-region composition fixture,
   `.dtx` invariant corpus, and pinned mathtools scan cover the boundary.
 
-- [ ] **Restore source-column alignment for tables in virtual `.dtx`
-  documentation.** Issue #132 conservatively keeps non-math alignment
-  environments on the generic path: physical `DOC_MARGIN` framing made pass one
-  decline the grid, while the normalized second pass admitted it and introduced
-  large padding, breaking idempotence. Make `build_alignment_grid` consume the
-  same recursively margin-stripped virtual stream on every pass, measure in the
-  correct margin-prefixed column context, and reapply documentation margins only
-  after grid layout. The `issue_132_dtx_tabular` fixture should then gain aligned
-  source columns while remaining whitespace-only and idempotent; retain the
-  virtual math-grid coverage from issue #138 and rerun the full `.dtx` invariant
-  corpus plus the pinned latex2e smoke scan.
+- [x] ~~**Restore source-column alignment for tables in virtual `.dtx`
+  documentation.**~~ **Landed.** Non-math grids inside a fully owned virtual
+  documentation region now flatten through the shared margin-stripping stream at
+  every descended layer. Nested continuation newlines soften inside those cells,
+  so parser attachment cannot make pass one decline a grid that pass two admits;
+  the enclosing prefix-aware IR restores one canonical margin after the source
+  columns are laid out. `issue_132_dtx_tabular` now aligns its columns and remains
+  whitespace-only and idempotent, while the issue #138 math-grid path is unchanged.
 
 - [x] ~~**The block form's closer break lacks the `open_glued` mirror.**~~
   **Landed.** `lower_bracketed` now preserves a source-glued meaningful closer,

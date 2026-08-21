@@ -34,10 +34,10 @@ use crate::project::labels::{
 };
 use crate::project::options::resolved_package_options;
 use crate::project::{
-    BibTarget, IncludeEdgeKey, PackageEdgeKey, PackageOptionFacts, Project, ProjectMember,
+    BibTarget, IncludeEdgeKey, PackageEdgeKey, PackageOptionFacts, ProjectMember,
     ResolvedCitations, ResolvedLabels, ResolvedPackageOptions, collect_bib_resource_targets,
     collect_include_edge_keys, collect_package_edge_keys, package_graph, package_option_facts,
-    resolved_citations, resolved_labels,
+    resolved_citations, resolved_labels, workspace_project,
 };
 use crate::semantic::{
     DocAssociation, SemanticModel, SignatureDb, doc_associations as build_doc_associations,
@@ -98,6 +98,19 @@ pub struct DeclarationsInput {
     pub declarations: ResolvedDeclarations,
 }
 
+/// The explicit workspace membership as a salsa singleton input.
+///
+/// Paths live on the immutable [`SourceFile`] inputs, so the file handles are
+/// sufficient to derive the complete, canonically ordered [`ProjectMember`]
+/// snapshot. Membership changes much less often than buffer text and is always
+/// written at [`Durability::MEDIUM`](salsa::Durability::MEDIUM), preserving the
+/// per-file firewalls across ordinary edits.
+#[salsa::input(singleton)]
+pub struct ProjectFiles {
+    #[returns(ref)]
+    pub files: Vec<SourceFile>,
+}
+
 /// The project's declarations as seen from inside a query, registering the salsa
 /// dependency that makes an edit to `badness.toml` invalidate this parse.
 ///
@@ -137,6 +150,9 @@ pub enum QueryKind {
     /// The cross-file inclusion graph ([`crate::project::project_graph`]); a
     /// project-level query, not keyed on a single file.
     ProjectGraph,
+    /// The plain, value-comparable project membership derived from
+    /// [`ProjectFiles`] ([`crate::project::workspace_project`]).
+    WorkspaceProject,
     /// The cross-file package-load graph ([`crate::project::package_graph`]); a
     /// project-level query, not keyed on a single file.
     PackageGraph,
@@ -507,20 +523,17 @@ pub fn document_signatures(db: &dyn IncrementalDb, file: SourceFile) -> Signatur
 /// and completion. A name like `amsmath` with no sibling `amsmath.sty` simply
 /// contributes nothing — resolution is local-only.
 #[salsa::tracked(returns(ref))]
-pub fn scope_signatures<'db>(
-    db: &'db dyn IncrementalDb,
-    project: Project<'db>,
-    file: SourceFile,
-) -> SignatureDb {
+pub fn scope_signatures(db: &dyn IncrementalDb, file: SourceFile) -> SignatureDb {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ScopeSignatures,
         file: Some(file),
     });
 
-    let graph = package_graph(db, project);
+    let project = workspace_project(db);
+    let graph = package_graph(db);
     // Map each member's path back to its tracked input, to fetch its scan.
     let by_path: HashMap<&Path, SourceFile> = project
-        .members(db)
+        .members
         .iter()
         .map(|member| (member.path.as_path(), member.file))
         .collect();
@@ -894,6 +907,11 @@ impl Default for IncrementalDatabase {
         let _ = DeclarationsInput::builder(ResolvedDeclarations::default())
             .declarations_durability(salsa::Durability::HIGH)
             .new(&db);
+        // Project queries likewise read their membership unconditionally; the
+        // explicit empty value is the workspace before its first path arrives.
+        let _ = ProjectFiles::builder(Vec::new())
+            .files_durability(salsa::Durability::MEDIUM)
+            .new(&db);
         db
     }
 }
@@ -1057,13 +1075,13 @@ impl IncrementalDatabase {
                     .lock()
                     .unwrap_or_else(recover_poison)
                     .insert(key, file);
+                self.sync_project_files();
                 file
             }
         }
     }
 
-    /// Every currently-tracked `(normalized path, input)` pair, sorted by path —
-    /// the membership snapshot the language server interns a `Project` from.
+    /// Every currently-tracked `(normalized path, input)` pair, sorted by path.
     pub fn tracked_files(&self) -> Vec<(PathBuf, SourceFile)> {
         let mut files: Vec<(PathBuf, SourceFile)> = self
             .files
@@ -1074,6 +1092,26 @@ impl IncrementalDatabase {
             .collect();
         files.sort_by(|a, b| a.0.cmp(&b.0));
         files
+    }
+
+    /// Publish the path map's membership as one value-comparable salsa input.
+    /// Text edits never call this method; adding or removing a path replaces the
+    /// singleton value, which leaves downstream project queries with one memo
+    /// generation instead of minting an immortal interned project id.
+    fn sync_project_files(&mut self) {
+        let files: Vec<SourceFile> = self
+            .tracked_files()
+            .into_iter()
+            .map(|(_, file)| file)
+            .collect();
+        let input = ProjectFiles::get(self);
+        if input.files(self) == &files {
+            return;
+        }
+        input
+            .set_files(self)
+            .with_durability(salsa::Durability::MEDIUM)
+            .to(files);
     }
 
     /// The `SourceFile` input currently tracked for `path`, if any. Read-only:
@@ -1109,6 +1147,7 @@ impl IncrementalDatabase {
         // `didOpen` mints a fresh input anyway, so the entry could never be hit
         // again — it would just occupy a slot until the LRU noticed.
         if let Some(file) = removed {
+            self.sync_project_files();
             self.reparse_evict(file);
         }
         removed
@@ -1331,59 +1370,33 @@ impl Analysis {
         self.0.bib_semantic_model(file)
     }
 
-    /// Intern `members` as a `Project`, normalizing the key first so an
-    /// unchanged membership always re-interns to the same id regardless of the
-    /// order the caller assembled it in (see
-    /// [`normalize_members`](crate::project::graph::normalize_members)). Every
-    /// interning method below routes through this, keeping memo survival correct
-    /// by construction.
-    fn intern_project(&self, mut members: Vec<ProjectMember>) -> Project<'_> {
-        crate::project::graph::normalize_members(&mut members);
-        Project::new(&self.0, members)
+    /// The current canonically ordered project membership.
+    pub fn project_members(&self) -> &[ProjectMember] {
+        &workspace_project(&self.0).members
     }
 
-    /// Intern `members` as a `Project` against this snapshot and resolve its
-    /// cross-file label and citation models (the inputs the cross-file lint rules
-    /// consume). The returned references borrow the snapshot's salsa storage, so
-    /// they live as long as this `Analysis`. Interning takes `&db` and is safe on a
-    /// read snapshot.
-    pub fn resolve_project(
-        &self,
-        members: Vec<ProjectMember>,
-    ) -> (&ResolvedLabels, &ResolvedCitations) {
-        let project = self.intern_project(members);
-        (
-            resolved_labels(&self.0, project),
-            resolved_citations(&self.0, project),
-        )
+    /// Resolve the current project's cross-file label and citation models (the
+    /// inputs the cross-file lint rules consume). The returned references borrow
+    /// the snapshot's salsa storage, so they live as long as this `Analysis`.
+    pub fn resolve_project(&self) -> (&ResolvedLabels, &ResolvedCitations) {
+        (resolved_labels(&self.0), resolved_citations(&self.0))
     }
 
-    /// Intern `members` as a `Project` and compute `file`'s merged signature scope
-    /// ([`scope_signatures`]): its own scanned definitions plus those of every
-    /// package it transitively loads from the local member set. The formatter and
-    /// completion consume this. Borrows the snapshot's storage.
-    pub fn scope_signatures(&self, members: Vec<ProjectMember>, file: SourceFile) -> &SignatureDb {
-        let project = self.intern_project(members);
-        scope_signatures(&self.0, project, file)
+    /// Compute `file`'s merged signature scope ([`scope_signatures`]): its own
+    /// scanned definitions plus those of every package it transitively loads
+    /// from the current project. The formatter and completion consume this.
+    pub fn scope_signatures(&self, file: SourceFile) -> &SignatureDb {
+        scope_signatures(&self.0, file)
     }
 
-    /// Intern `members` as a `Project` and resolve its package-load graph
-    /// ([`package_graph`]): the `\usepackage`/`\documentclass` edges into local
-    /// `.sty`/`.cls` members. Name-based references/rename walk it (in both
-    /// directions) to extend the macro namespace past the include component.
-    /// Borrows the snapshot's storage.
-    pub fn package_graph(&self, members: Vec<ProjectMember>) -> &crate::project::PackageGraph {
-        let project = self.intern_project(members);
-        package_graph(&self.0, project)
+    /// Resolve the current project's package-load graph ([`package_graph`]).
+    pub fn package_graph(&self) -> &crate::project::PackageGraph {
+        package_graph(&self.0)
     }
 
-    /// Intern `members` as a `Project` and resolve its package-option model
-    /// ([`resolved_package_options`]): which options each analyzed `.sty`
-    /// member statically declares. The `unknown-option` lint consumes this
-    /// through `RuleContext`. Borrows the snapshot's storage.
-    pub fn resolve_package_options(&self, members: Vec<ProjectMember>) -> &ResolvedPackageOptions {
-        let project = self.intern_project(members);
-        resolved_package_options(&self.0, project)
+    /// Resolve the current project's package-option model.
+    pub fn resolve_package_options(&self) -> &ResolvedPackageOptions {
+        resolved_package_options(&self.0)
     }
 }
 

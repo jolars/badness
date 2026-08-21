@@ -138,7 +138,7 @@ use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{Edit, parse, parse_with_declarations};
 use crate::project::aux::AuxData;
 use crate::project::texmf::{TexmfConfig, TexmfIndex};
-use crate::project::{PackageGraph, ProjectMember, ResolvedCitations, ResolvedLabels};
+use crate::project::{PackageGraph, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{
     DefSiteKind, OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline,
     scan_definition_sites,
@@ -1061,21 +1061,6 @@ fn uri_to_path(uri: &Uri) -> PathBuf {
 /// `--stdin-filepath`.
 fn file_kind_for(path: &Path) -> FileKind {
     file_kind_or_tex(path)
-}
-
-/// The current project membership of a read snapshot, as sorted-by-caller
-/// [`ProjectMember`]s — the snapshot-side counterpart of
-/// [`GlobalState`]'s `project_members`, used by a format read to intern a
-/// `Project` for [`Analysis::scope_signatures`].
-fn members_of(snapshot: &Analysis) -> Vec<ProjectMember> {
-    snapshot
-        .tracked_files()
-        .into_iter()
-        .map(|(path, file)| {
-            let kind = file_kind_for(&path);
-            ProjectMember { file, path, kind }
-        })
-        .collect()
 }
 
 /// Read the client's diagnostic capabilities from the `initialize` params, as
@@ -3070,25 +3055,18 @@ impl Worker {
                 build,
             } => {
                 // Symbol reads, like formatting, run on the read pool against a
-                // snapshot (id-bound responses, not coalesced). The membership
-                // snapshot only feeds the `.aux` number enrichment.
+                // snapshot (id-bound responses, not coalesced).
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
-                self.read_spawner.spawn(move || {
-                    run_symbols(&snapshot, id, &path, &text, kind, members, &build, &out_tx)
-                });
+                self.read_spawner
+                    .spawn(move || run_symbols(&snapshot, id, &path, &text, kind, &build, &out_tx));
             }
             WorkerJob::WorkspaceSymbols { id, query } => {
-                // Workspace symbols scan every tracked file, so — like
-                // find-references — capture the membership snapshot on the write
-                // side before the read job runs.
+                // Workspace symbols scan every file in the database snapshot.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
-                self.read_spawner.spawn(move || {
-                    run_workspace_symbols(&snapshot, id, &query, members, enc, &out_tx)
-                });
+                self.read_spawner
+                    .spawn(move || run_workspace_symbols(&snapshot, id, &query, enc, &out_tx));
             }
             WorkerJob::FoldingRange {
                 id,
@@ -3143,27 +3121,19 @@ impl Worker {
                 texmf,
             } => {
                 // Completion reads run on the read pool against a snapshot, like
-                // formatting/symbols (id-bound responses, not coalesced). Cite-key
-                // completion is cross-file, so — like go-to-def — we snapshot project
-                // membership here on the write side. The TEXMF index (installed-set
-                // tier) is built/consulted on the read pool, off the main loop.
+                // formatting/symbols (id-bound responses, not coalesced). The TEXMF
+                // index is built/consulted on the read pool, off the main loop.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_completion(
-                        &snapshot, id, &uri, &text, position, members, &texmf, &out_tx,
-                    )
+                    run_completion(&snapshot, id, &uri, &text, position, &texmf, &out_tx)
                 });
             }
             WorkerJob::ResolveCompletion { id, item } => {
-                // Resolve is cross-file (signature scope, project bibliography),
-                // so — like hover — snapshot project membership on the write side.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner
-                    .spawn(move || run_completion_resolve(&snapshot, id, *item, members, &out_tx));
+                    .spawn(move || run_completion_resolve(&snapshot, id, *item, &out_tx));
             }
             WorkerJob::Hover {
                 id,
@@ -3172,16 +3142,10 @@ impl Worker {
                 position,
                 build,
             } => {
-                // Hover's signature scope and `\cite`/`\ref` resolution are all
-                // cross-file, so — like go-to-def — snapshot project membership on
-                // the write side.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_hover(
-                        &snapshot, id, &path, &text, position, members, &build, &out_tx,
-                    )
+                    run_hover(&snapshot, id, &path, &text, position, &build, &out_tx)
                 });
             }
             WorkerJob::ForwardSearch {
@@ -3192,10 +3156,7 @@ impl Worker {
                 executable,
                 args,
             } => {
-                // The root-document scan walks the label namespace, so — like
-                // hover — snapshot project membership on the write side.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_forward_search(
@@ -3203,7 +3164,6 @@ impl Worker {
                         id,
                         &path,
                         line,
-                        members,
                         &build,
                         &executable,
                         &args,
@@ -3217,13 +3177,10 @@ impl Worker {
                 text,
                 position,
             } => {
-                // The signature scope folds in loaded packages, so — like hover —
-                // snapshot project membership on the write side.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_signature_help(&snapshot, id, &path, &text, position, members, enc, &out_tx)
+                    run_signature_help(&snapshot, id, &path, &text, position, enc, &out_tx)
                 });
             }
             WorkerJob::GotoDefinition {
@@ -3233,16 +3190,10 @@ impl Worker {
                 position,
                 texmf,
             } => {
-                // Go-to-def is cross-file, so it needs the same membership snapshot
-                // an analyze captures (open buffers plus seeded on-disk siblings),
-                // taken on the write side so the read job interns the latest project.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_goto_definition(
-                        &snapshot, id, &path, &text, position, members, &texmf, enc, &out_tx,
-                    )
+                    run_goto_definition(&snapshot, id, &path, &text, position, &texmf, enc, &out_tx)
                 });
             }
             WorkerJob::References {
@@ -3252,10 +3203,7 @@ impl Worker {
                 position,
                 include_declaration,
             } => {
-                // Find-references is cross-file like go-to-def, so it captures the
-                // same membership snapshot on the write side before the read job runs.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_references(
@@ -3264,7 +3212,6 @@ impl Worker {
                         &path,
                         &text,
                         position,
-                        members,
                         include_declaration,
                         enc,
                         &out_tx,
@@ -3291,15 +3238,10 @@ impl Worker {
                 text,
                 position,
             } => {
-                // prepareRename resolves the key against the cursor buffer, but the
-                // user-defined gate for command/environment names looks across the
-                // project, so it captures the same membership snapshot on the write
-                // side as References/Rename.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
-                    run_prepare_rename(&snapshot, id, &path, &text, position, members, &out_tx)
+                    run_prepare_rename(&snapshot, id, &path, &text, position, &out_tx)
                 });
             }
             WorkerJob::Rename {
@@ -3309,14 +3251,11 @@ impl Worker {
                 position,
                 new_name,
             } => {
-                // Rename is cross-file like find-references, so it captures the same
-                // membership snapshot on the write side before the read job runs.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_rename(
-                        &snapshot, id, &path, &text, position, &new_name, members, enc, &out_tx,
+                        &snapshot, id, &path, &text, position, &new_name, enc, &out_tx,
                     )
                 });
             }
@@ -3346,12 +3285,9 @@ impl Worker {
                 previous_result_id,
                 rules,
             } => {
-                // On-demand pull: snapshot the db + membership on the write side
-                // (like an analyze) so the read job interns the latest project. This
-                // is a free, id-bound read — not the coalesced analyze slot — so it
-                // never blocks or supersedes the push analyze.
+                // On-demand pull is a free, id-bound read—not the coalesced analyze
+                // slot—so it never blocks or supersedes the push analyze.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_document_diagnostic(
@@ -3360,7 +3296,6 @@ impl Worker {
                         &path,
                         &text,
                         kind,
-                        members,
                         previous_result_id,
                         &rules,
                         enc,
@@ -3377,16 +3312,13 @@ impl Worker {
                 range,
                 rules,
             } => {
-                // On-demand re-lint, like the pull-diagnostics path: snapshot the db
-                // + membership on the write side so the read job interns the latest
-                // project, then build quick-fixes off the read pool.
+                // On-demand re-lint, like the pull-diagnostics path, runs against a
+                // snapshot on the read pool.
                 let snapshot = self.db.snapshot();
-                let members = self.project_members();
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_code_action(
-                        &snapshot, id, &uri, &path, &text, kind, range, members, &rules, enc,
-                        &out_tx,
+                        &snapshot, id, &uri, &path, &text, kind, range, &rules, enc, &out_tx,
                     )
                 });
             }
@@ -3487,19 +3419,6 @@ impl Worker {
         true
     }
 
-    /// Snapshot the current project membership as sorted [`ProjectMember`]s, so a
-    /// read job can intern a `Project` against its db snapshot.
-    fn project_members(&self) -> Vec<ProjectMember> {
-        self.db
-            .tracked_files()
-            .into_iter()
-            .map(|(path, file)| {
-                let kind = file_kind_for(&path);
-                ProjectMember { file, path, kind }
-            })
-            .collect()
-    }
-
     /// Add `req` to the pending queue, keeping the highest version per URI.
     fn enqueue(&mut self, req: AnalyzeRequest) {
         match self.pending.get(&req.uri) {
@@ -3543,9 +3462,6 @@ impl Worker {
     fn start_analyze(&mut self, req: AnalyzeRequest) {
         let enc = self.encoding;
         let snapshot = self.db.snapshot();
-        // Snapshot membership now (write side) so the read job interns the same
-        // `Project` the latest edit produced.
-        let members = self.project_members();
         let out_tx = self.out_tx.clone();
         let done_tx = self.done_tx.clone();
         let AnalyzeRequest {
@@ -3566,7 +3482,7 @@ impl Worker {
                 | FileKind::Sty
                 | FileKind::Cls
                 | FileKind::Dtx
-                | FileKind::Ins => analyze_tex(&snapshot, &path, members, &rules, enc),
+                | FileKind::Ins => analyze_tex(&snapshot, &path, &rules, enc),
                 FileKind::Bib => analyze_bib(&snapshot, &path, &rules, enc),
             }));
             if let Ok(Some(diags)) = result {
@@ -3587,23 +3503,18 @@ impl Worker {
 
 /// Compute diagnostics for a `.tex` file off the snapshot: parse diagnostics plus
 /// lint-rule findings over the same salsa-cached tree + model, with cross-file
-/// resolution from the `members` snapshot.
-///
-/// The `Project` is interned from the membership the worker captured (open buffers
-/// plus lazily-read on-disk siblings); `resolved_labels` / `resolved_citations`
-/// then drive `undefined-ref`, the cross-file branch of `duplicate-label`, and
-/// `undefined-citation`. Their gates (closed, rooted namespace) keep a bare
-/// fragment opened alone from being flagged.
+/// resolution from the project membership carried by the snapshot.
+/// `resolved_labels` / `resolved_citations` drive `undefined-ref`, the cross-file
+/// branch of `duplicate-label`, and `undefined-citation`. Their gates (closed,
+/// rooted namespace) keep a bare fragment opened alone from being flagged.
 fn analyze_tex(
     snapshot: &Analysis,
     path: &Path,
-    members: Vec<ProjectMember>,
     rules: &RuleSelection,
     enc: PositionEncoding,
 ) -> Option<Vec<Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
-    // The file's normalized identity, which keys the cross-file resolvers (it
-    // equals this file's `ProjectMember::path`).
+    // The file's normalized identity, which keys the cross-file resolvers.
     let lint_path = snapshot.file_path(file).to_path_buf();
     let idx = LineIndex::with_encoding(snapshot.file_text(file), enc);
     let mut diags: Vec<Diagnostic> = snapshot
@@ -3619,8 +3530,8 @@ fn analyze_tex(
         .collect();
     let root = snapshot.parsed_tree(file);
     let model = snapshot.semantic_model(file);
-    let packages = snapshot.resolve_package_options(members.clone());
-    let (resolution, citations) = snapshot.resolve_project(members);
+    let packages = snapshot.resolve_package_options();
+    let (resolution, citations) = snapshot.resolve_project();
     for d in lint_document(
         &lint_path,
         &root,
@@ -3775,13 +3686,12 @@ fn run_document_diagnostic(
     path: &Path,
     text: &TextBuffer,
     kind: FileKind,
-    members: Vec<ProjectMember>,
     previous_result_id: Option<String>,
     rules: &RuleSelection,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let items = compute_diagnostics(snapshot, path, text, kind, members, rules, enc);
+    let items = compute_diagnostics(snapshot, path, text, kind, rules, enc);
     let result_id = result_id_for(&items);
     let report = if previous_result_id.as_deref() == Some(result_id.as_str()) {
         DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
@@ -3815,7 +3725,6 @@ fn compute_diagnostics(
     path: &Path,
     text: &TextBuffer,
     kind: FileKind,
-    members: Vec<ProjectMember>,
     rules: &RuleSelection,
     enc: PositionEncoding,
 ) -> Vec<Diagnostic> {
@@ -3825,7 +3734,7 @@ fn compute_diagnostics(
         | FileKind::Sty
         | FileKind::Cls
         | FileKind::Dtx
-        | FileKind::Ins => analyze_tex(snapshot, path, members, rules, enc),
+        | FileKind::Ins => analyze_tex(snapshot, path, rules, enc),
         FileKind::Bib => analyze_bib(snapshot, path, rules, enc),
     }));
     match cached {
@@ -3912,12 +3821,11 @@ fn run_code_action(
     text: &TextBuffer,
     kind: FileKind,
     range: Range,
-    members: Vec<ProjectMember>,
     rules: &RuleSelection,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let findings = compute_lint_findings(snapshot, path, text, kind, members, rules);
+    let findings = compute_lint_findings(snapshot, path, text, kind, rules);
     // Only the LaTeX rules are catalogued in the published reference, so the
     // echoed diagnostic on a bib quick-fix carries no doc link (mirrors
     // `analyze_bib`/`lint_to_lsp`).
@@ -3944,11 +3852,10 @@ fn compute_lint_findings(
     path: &Path,
     text: &str,
     kind: FileKind,
-    members: Vec<ProjectMember>,
     rules: &RuleSelection,
 ) -> Vec<crate::linter::Diagnostic> {
     let cached = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        lint_findings(snapshot, path, kind, members, rules)
+        lint_findings(snapshot, path, kind, rules)
     }));
     match cached {
         Ok(Some(items)) => items,
@@ -3965,7 +3872,6 @@ fn lint_findings(
     snapshot: &Analysis,
     path: &Path,
     kind: FileKind,
-    members: Vec<ProjectMember>,
     rules: &RuleSelection,
 ) -> Option<Vec<crate::linter::Diagnostic>> {
     let file = snapshot.lookup_file(path)?;
@@ -3979,8 +3885,8 @@ fn lint_findings(
             let lint_path = snapshot.file_path(file).to_path_buf();
             let root = snapshot.parsed_tree(file);
             let model = snapshot.semantic_model(file);
-            let packages = snapshot.resolve_package_options(members.clone());
-            let (resolution, citations) = snapshot.resolve_project(members);
+            let packages = snapshot.resolve_package_options();
+            let (resolution, citations) = snapshot.resolve_project();
             lint_document(
                 &lint_path,
                 &root,
@@ -4114,7 +4020,7 @@ fn compute_format(
                 // flavor. The merged signature scope folds in the file's loaded
                 // local packages (those tracked as project members).
                 let root = snapshot.parsed_tree(file);
-                let sigs = snapshot.scope_signatures(members_of(snapshot), file);
+                let sigs = snapshot.scope_signatures(file);
                 Some(format_node_with_signatures_sentence(&root, style, sigs, sentence).ok())
             }
             FileKind::Bib => {
@@ -4234,7 +4140,7 @@ fn compute_range_format(
             return Some(None);
         }
         let root = snapshot.parsed_tree(file);
-        let sigs = snapshot.scope_signatures(members_of(snapshot), file);
+        let sigs = snapshot.scope_signatures(file);
         Some(Some(range_edits_for_root(
             &root, text, &idx, sel, style, sigs, sentence,
         )))
@@ -4361,7 +4267,7 @@ fn compute_on_type_format(
         if !closes_multiline_construct(&root, text, off) {
             return Some(Some(Some(Vec::new())));
         }
-        let sigs = snapshot.scope_signatures(members_of(snapshot), file);
+        let sigs = snapshot.scope_signatures(file);
         Some(Some(range_edits_for_root(
             &root, text, &idx, sel, style, sigs, sentence,
         )))
@@ -4441,7 +4347,6 @@ fn run_symbols(
     path: &Path,
     text: &TextBuffer,
     kind: FileKind,
-    members: Vec<ProjectMember>,
     build: &BuildConfig,
     out_tx: &Sender<Outbound>,
 ) {
@@ -4451,7 +4356,7 @@ fn run_symbols(
         | FileKind::Sty
         | FileKind::Cls
         | FileKind::Dtx
-        | FileKind::Ins => compute_symbols(snapshot, path, text, kind, members, build),
+        | FileKind::Ins => compute_symbols(snapshot, path, text, kind, build),
         FileKind::Bib => compute_bib_symbols(snapshot, path, text),
     };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
@@ -4468,7 +4373,6 @@ fn compute_symbols(
     path: &Path,
     text: &TextBuffer,
     kind: FileKind,
-    members: Vec<ProjectMember>,
     build: &BuildConfig,
 ) -> Vec<DocumentSymbol> {
     let idx = text.line_index();
@@ -4489,7 +4393,7 @@ fn compute_symbols(
         )),
     };
     let aux = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        let (resolution, _) = snapshot.resolve_project(members);
+        let (resolution, _) = snapshot.resolve_project();
         document_aux(snapshot, resolution, path, build)
     }))
     // A cancelled read degrades to the numberless outline this round.
@@ -4533,13 +4437,12 @@ fn run_workspace_symbols(
     snapshot: &Analysis,
     id: RequestId,
     query: &str,
-    members: Vec<ProjectMember>,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
     let needle = query.to_ascii_lowercase();
     let mut symbols = Vec::new();
-    for member in members {
+    for member in snapshot.project_members() {
         if member.kind == FileKind::Bib {
             continue;
         }
@@ -4989,7 +4892,6 @@ fn run_completion(
     uri: &Uri,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
     out_tx: &Sender<Outbound>,
 ) {
@@ -4998,7 +4900,7 @@ fn run_completion(
     // The `[texmf]` config is threaded down; the installed-tree index is resolved
     // *only* when the cursor is in a package/class argument (see
     // `build_completion_items`), so a command/label completion never pays the walk.
-    let items = compute_completion(snapshot, uri, &path, text, position, members, texmf);
+    let items = compute_completion(snapshot, uri, &path, text, position, texmf);
     // `is_incomplete`: command/label/key universes are prefix-filtered server-side, so
     // the client re-queries as the typed prefix narrows.
     let result = serde_json::to_value(CompletionResponse::List(CompletionList {
@@ -5017,11 +4919,10 @@ fn run_completion_resolve(
     snapshot: &Analysis,
     id: RequestId,
     item: CompletionItem,
-    members: Vec<ProjectMember>,
     out_tx: &Sender<Outbound>,
 ) {
     let resolved = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        completion_resolve::resolve(snapshot, item.clone(), members)
+        completion_resolve::resolve(snapshot, item.clone())
     }))
     .unwrap_or(item);
     let result = serde_json::to_value(resolved).unwrap_or(serde_json::Value::Null);
@@ -5038,7 +4939,6 @@ fn compute_completion(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
     let idx = text.line_index();
@@ -5047,7 +4947,7 @@ fn compute_completion(
     if file_kind_for(path) == FileKind::Bib {
         return compute_bib_completion(text, offset);
     }
-    compute_tex_completion(snapshot, uri, path, text, offset, members, texmf)
+    compute_tex_completion(snapshot, uri, path, text, offset, texmf)
 }
 
 /// Bib completion: a fresh parse + model (sub-ms, and there is no cached bib tree
@@ -5080,11 +4980,10 @@ fn compute_tex_completion(
     path: &Path,
     text: &str,
     offset: usize,
-    members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
     // Classify off the cached tree when current; reparse on stale/miss. A cancelled
-    // read also falls back to a reparse (`unwrap_or_else`) — neither touches `members`.
+    // read also falls back to a reparse (`unwrap_or_else`).
     let resolved = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         if let Some(file) = snapshot.lookup_file(path)
             && snapshot.text_is_current(file, text)
@@ -5104,9 +5003,8 @@ fn compute_tex_completion(
                 },
                 _ => TexCompletion::Items(build_completion_items(
                     &ctx,
-                    // The merged scope folds in loaded local packages' macros; the
-                    // `members` clone leaves the original for the cite branch below.
-                    snapshot.scope_signatures(members.clone(), file),
+                    // The merged scope folds in loaded local packages' macros.
+                    snapshot.scope_signatures(file),
                     snapshot.semantic_model(file),
                     uri,
                     texmf,
@@ -5122,7 +5020,7 @@ fn compute_tex_completion(
         TexCompletion::Cite { lint_path } => {
             // Cross-file resolve against the db snapshot; a racing write yields none.
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
-                let (_, citations) = snapshot.resolve_project(members);
+                let (_, citations) = snapshot.resolve_project();
                 cite_completion_items(snapshot, citations, &lint_path)
             }))
             .unwrap_or_default()
@@ -5131,7 +5029,7 @@ fn compute_tex_completion(
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
                 // The glossary key namespace is the same include-graph component
                 // the label resolver computes; only membership is consumed here.
-                let (labels, _) = snapshot.resolve_project(members);
+                let (labels, _) = snapshot.resolve_project();
                 glossary_completion_items(snapshot, labels, &lint_path, &prefix)
             }))
             .unwrap_or_default()
@@ -5291,11 +5189,10 @@ fn run_hover(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     build: &BuildConfig,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = hover::compute_hover(snapshot, path, text, position, members, build)
+    let result = hover::compute_hover(snapshot, path, text, position, build)
         .and_then(|hover| serde_json::to_value(hover).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -5321,7 +5218,6 @@ fn run_forward_search(
     id: RequestId,
     path: &Path,
     line: u32,
-    members: Vec<ProjectMember>,
     build: &BuildConfig,
     executable: &str,
     args: &[String],
@@ -5331,7 +5227,7 @@ fn run_forward_search(
     // file rather than failing the request, since a single-file project resolves
     // to exactly that anyway.
     let root = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        let (resolution, _) = snapshot.resolve_project(members);
+        let (resolution, _) = snapshot.resolve_project();
         root_document_of(snapshot, &namespace_of(resolution, path)).map(Path::to_path_buf)
     }))
     .ok()
@@ -5373,14 +5269,12 @@ fn run_signature_help(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result =
-        signature_help::compute_signature_help(snapshot, path, text, position, members, enc)
-            .and_then(|help| serde_json::to_value(help).ok())
-            .unwrap_or(serde_json::Value::Null);
+    let result = signature_help::compute_signature_help(snapshot, path, text, position, enc)
+        .and_then(|help| serde_json::to_value(help).ok())
+        .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
 
@@ -5393,12 +5287,11 @@ fn run_goto_definition(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let locations = compute_goto_definition(snapshot, path, text, position, members, texmf, enc);
+    let locations = compute_goto_definition(snapshot, path, text, position, texmf, enc);
     let result = serde_json::to_value(GotoDefinitionResponse::Array(locations))
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -5413,20 +5306,11 @@ fn run_references(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     include_declaration: bool,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let locations = compute_references(
-        snapshot,
-        path,
-        text,
-        position,
-        members,
-        include_declaration,
-        enc,
-    );
+    let locations = compute_references(snapshot, path, text, position, include_declaration, enc);
     let result = serde_json::to_value(locations).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
 }
@@ -5457,10 +5341,9 @@ fn run_prepare_rename(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = compute_prepare_rename(snapshot, path, text, position, members)
+    let result = compute_prepare_rename(snapshot, path, text, position)
         .map(|(range, placeholder)| {
             serde_json::to_value(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder })
                 .unwrap_or(serde_json::Value::Null)
@@ -5480,11 +5363,10 @@ fn run_rename(
     text: &TextBuffer,
     position: Position,
     new_name: &str,
-    members: Vec<ProjectMember>,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
 ) {
-    let result = compute_rename(snapshot, path, text, position, new_name, members, enc)
+    let result = compute_rename(snapshot, path, text, position, new_name, enc)
         .and_then(|edit| serde_json::to_value(edit).ok())
         .unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
@@ -5580,13 +5462,12 @@ struct RenameTarget {
 /// Compute the definition locations for a go-to-definition at `position`, preferring
 /// the snapshot's cached model and falling back to a fresh parse when it is stale or
 /// uncached. Cross-file resolution always runs against the db snapshot's resolvers
-/// (`resolved_labels`/`resolved_citations`), interned from `members`.
+/// (`resolved_labels`/`resolved_citations`).
 fn compute_goto_definition(
     snapshot: &Analysis,
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     texmf: &TexmfConfig,
     enc: PositionEncoding,
 ) -> Vec<Location> {
@@ -5612,7 +5493,7 @@ fn compute_goto_definition(
             }
         };
         if let Some(target) = target {
-            let (resolution, citations) = snapshot.resolve_project(members);
+            let (resolution, citations) = snapshot.resolve_project();
             return match target {
                 CursorTarget::Labels(names) => {
                     resolve_label_locations(snapshot, resolution, &lint_path, &names, enc)
@@ -5628,8 +5509,8 @@ fn compute_goto_definition(
         // through to the file-target tier below.
         let sites = scan_definition_sites(&root);
         if let Some(target) = name_refs::name_target_under_cursor(&root, offset, &sites) {
-            let (resolution, _) = snapshot.resolve_project(members.clone());
-            let packages = snapshot.package_graph(members);
+            let (resolution, _) = snapshot.resolve_project();
+            let packages = snapshot.package_graph();
             let defs = name_definition_sites(snapshot, resolution, packages, &lint_path, &target);
             if !defs.is_empty() {
                 return defs
@@ -5714,7 +5595,6 @@ fn compute_references(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     include_declaration: bool,
     enc: PositionEncoding,
 ) -> Vec<Location> {
@@ -5722,8 +5602,7 @@ fn compute_references(
     let offset = idx.offset_at(position.line, position.character);
 
     let computed = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        let package_members = members.clone();
-        let (resolution, citations) = snapshot.resolve_project(members);
+        let (resolution, citations) = snapshot.resolve_project();
 
         // `.bib` origin: the `@entry` key under the cursor → its `\cite` uses. A
         // `.bib` path is not keyed in the citation `component_of`, so resolution
@@ -5798,7 +5677,7 @@ fn compute_references(
         let Some(target) = name_refs::name_target_under_cursor(&root, offset, &sites) else {
             return Vec::new();
         };
-        let packages = snapshot.package_graph(package_members);
+        let packages = snapshot.package_graph();
         name_reference_locations(
             snapshot,
             resolution,
@@ -6124,7 +6003,6 @@ fn compute_prepare_rename(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
 ) -> Option<(Range, String)> {
     let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
@@ -6157,7 +6035,7 @@ fn compute_prepare_rename(
         // `verbatim` over a partial namespace view is a footgun).
         let sites = scan_definition_sites(&root);
         let target = name_refs::name_target_under_cursor(&root, offset, &sites)?;
-        if !name_rename_allowed(snapshot, &members, path, &sites, &target) {
+        if !name_rename_allowed(snapshot, path, &sites, &target) {
             return None;
         }
         Some((lsp_range(&idx, target.span), target.name.to_string()))
@@ -6173,7 +6051,6 @@ fn compute_prepare_rename(
 /// `\alpha` and `verbatim` decline. References stay ungated.
 fn name_rename_allowed(
     snapshot: &Analysis,
-    members: &[ProjectMember],
     origin: &Path,
     own_sites: &[crate::semantic::DefSite],
     target: &NameTarget,
@@ -6188,8 +6065,8 @@ fn name_rename_allowed(
     {
         return true;
     }
-    let (resolution, _) = snapshot.resolve_project(members.to_vec());
-    let packages = snapshot.package_graph(members.to_vec());
+    let (resolution, _) = snapshot.resolve_project();
+    let packages = snapshot.package_graph();
     !name_definition_sites(snapshot, resolution, packages, origin, target).is_empty()
 }
 
@@ -6208,16 +6085,13 @@ fn compute_rename(
     text: &TextBuffer,
     position: Position,
     new_name: &str,
-    members: Vec<ProjectMember>,
     enc: PositionEncoding,
 ) -> Option<WorkspaceEdit> {
     let idx = text.line_index();
     let offset = idx.offset_at(position.line, position.character);
 
     let changes = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        let package_members = members.clone();
-        let gate_members = members.clone();
-        let (resolution, citations) = snapshot.resolve_project(members);
+        let (resolution, citations) = snapshot.resolve_project();
 
         // `.bib` origin: the `@entry` key under the cursor → its `\cite` uses + the
         // entry itself.
@@ -6283,10 +6157,10 @@ fn compute_rename(
         let Some(target) = name_refs::name_target_under_cursor(&root, offset, &sites) else {
             return HashMap::new();
         };
-        if !name_rename_allowed(snapshot, &gate_members, path, &sites, &target) {
+        if !name_rename_allowed(snapshot, path, &sites, &target) {
             return HashMap::new();
         }
-        let packages = snapshot.package_graph(package_members);
+        let packages = snapshot.package_graph();
         match target.kind {
             NameKind::Command => {
                 // The placeholder is the bare name, but a typed `\newname` is

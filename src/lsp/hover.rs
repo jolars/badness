@@ -44,14 +44,13 @@ use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 /// Build hover contents for the construct at `position`, preferring the snapshot's
 /// cached model and falling back to a fresh parse when it is stale or uncached. The
-/// signature scope and `\cite` resolution both interne `members` against the db
-/// snapshot, like [`super::compute_goto_definition`].
+/// Signature scope and `\cite` resolution both use the membership carried by the
+/// database snapshot, like [`super::compute_goto_definition`].
 pub(crate) fn compute_hover(
     snapshot: &Analysis,
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     build: &BuildConfig,
 ) -> Option<Hover> {
     let idx = text.line_index();
@@ -62,10 +61,10 @@ pub(crate) fn compute_hover(
             Some(file) if snapshot.text_is_current(file, text) => {
                 let root = snapshot.parsed_tree(file);
                 let model = snapshot.semantic_model(file);
-                let scope = snapshot.scope_signatures(members.clone(), file);
+                let scope = snapshot.scope_signatures(file);
                 let lint_path = snapshot.file_path(file).to_path_buf();
                 build_hover(
-                    snapshot, &root, model, scope, &lint_path, members, offset, &idx, build,
+                    snapshot, &root, model, scope, &lint_path, offset, &idx, build,
                 )
             }
             // Untracked or stale: a fresh parse + scan (no cross-package scope), like
@@ -75,9 +74,7 @@ pub(crate) fn compute_hover(
                 let root = SyntaxNode::new_root(parse(text).green);
                 let model = SemanticModel::build(&root);
                 let scanned = crate::semantic::scan_definitions(&root);
-                build_hover(
-                    snapshot, &root, &model, &scanned, path, members, offset, &idx, build,
-                )
+                build_hover(snapshot, &root, &model, &scanned, path, offset, &idx, build)
             }
         }
     }));
@@ -93,7 +90,6 @@ fn build_hover(
     model: &SemanticModel,
     scope: &SignatureDb,
     lint_path: &Path,
-    members: Vec<ProjectMember>,
     offset: usize,
     idx: &LineIndex,
     build: &BuildConfig,
@@ -123,13 +119,13 @@ fn build_hover(
     }
 
     if let Some((name, key_range)) = citation_at(model, offset) {
-        let (_, citations) = snapshot.resolve_project(members);
+        let (_, citations) = snapshot.resolve_project();
         let value = render_citation(snapshot, citations, lint_path, &name)?;
         return Some(markup_hover(value, key_range, idx));
     }
 
     if let Some((name, key_range)) = label_target_at(model, offset) {
-        let (resolution, _) = snapshot.resolve_project(members);
+        let (resolution, _) = snapshot.resolve_project();
         let value = render_label(snapshot, resolution, lint_path, root, model, &name, build)?;
         return Some(markup_hover(value, key_range, idx));
     }
@@ -829,7 +825,7 @@ mod tests {
         markdown_at(&db, path, src, offset)
     }
 
-    /// Build the snapshot's members and render the hover markdown at `offset`.
+    /// Render the hover markdown at `offset` against a database snapshot.
     fn markdown_at(
         db: &IncrementalDatabase,
         path: &Path,
@@ -837,14 +833,12 @@ mod tests {
         offset: usize,
     ) -> Option<String> {
         let snapshot = db.snapshot();
-        let members = super::members_of(&snapshot);
         let position = byte_to_position(src, offset);
         let hover = compute_hover(
             &snapshot,
             path,
             &TextBuffer::new(src, PositionEncoding::Utf16),
             position,
-            members,
             &BuildConfig::default(),
         )?;
         match hover.contents {

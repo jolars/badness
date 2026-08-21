@@ -52,11 +52,7 @@ impl CompletionResolveData {
 
 /// Enrich `item` with `detail`/`documentation` from its `data`, or return it
 /// unchanged when there is no (recognized) payload.
-pub(crate) fn resolve(
-    snapshot: &Analysis,
-    mut item: CompletionItem,
-    members: Vec<ProjectMember>,
-) -> CompletionItem {
+pub(crate) fn resolve(snapshot: &Analysis, mut item: CompletionItem) -> CompletionItem {
     let Some(data) = item
         .data
         .clone()
@@ -67,13 +63,11 @@ pub(crate) fn resolve(
 
     let detail_doc = match data {
         CompletionResolveData::Citation { lint_path, key } => {
-            citation_detail(snapshot, members, &lint_path, &key)
+            citation_detail(snapshot, &lint_path, &key)
         }
-        CompletionResolveData::Command { name, file } => {
-            command_detail(snapshot, members, &file, &name)
-        }
+        CompletionResolveData::Command { name, file } => command_detail(snapshot, &file, &name),
         CompletionResolveData::Environment { name, file } => {
-            environment_detail(snapshot, members, &file, &name)
+            environment_detail(snapshot, &file, &name)
         }
     };
 
@@ -93,13 +87,8 @@ pub(crate) fn resolve(
 /// and render `(detail, documentation)`: a compact `author (year)` line and the
 /// full hover-style card. Mirrors hover's `render_citation` walk, but keeps the
 /// entry node so it can build the inline detail too.
-fn citation_detail(
-    snapshot: &Analysis,
-    members: Vec<ProjectMember>,
-    lint_path: &Path,
-    key: &str,
-) -> Option<(String, String)> {
-    let (_, citations) = snapshot.resolve_project(members);
+fn citation_detail(snapshot: &Analysis, lint_path: &Path, key: &str) -> Option<(String, String)> {
+    let (_, citations) = snapshot.resolve_project();
     for bib_path in citations.bib_definers(lint_path) {
         let Some(file) = snapshot.lookup_file(bib_path) else {
             continue;
@@ -172,13 +161,8 @@ fn first_author(authors: &str) -> String {
 /// `(detail, documentation)` for a command: the synthesized prototype as the
 /// inline detail and the full hover card as the documentation. Scope-first lookup
 /// (tracked-document scope, else built-in/CWL only).
-fn command_detail(
-    snapshot: &Analysis,
-    members: Vec<ProjectMember>,
-    file: &Path,
-    name: &str,
-) -> Option<(String, String)> {
-    let scope = scope_for(snapshot, members, file);
+fn command_detail(snapshot: &Analysis, file: &Path, name: &str) -> Option<(String, String)> {
+    let scope = scope_for(snapshot, file);
     let (sig, provenance) = super::hover::lookup_command(&scope, name)?;
     let mut detail = format!("\\{name}");
     for arg in sig.args.iter() {
@@ -189,13 +173,8 @@ fn command_detail(
 
 /// `(detail, documentation)` for an environment, like [`command_detail`] but with a
 /// `\begin{name}…` prototype.
-fn environment_detail(
-    snapshot: &Analysis,
-    members: Vec<ProjectMember>,
-    file: &Path,
-    name: &str,
-) -> Option<(String, String)> {
-    let scope = scope_for(snapshot, members, file);
+fn environment_detail(snapshot: &Analysis, file: &Path, name: &str) -> Option<(String, String)> {
+    let scope = scope_for(snapshot, file);
     let (sig, provenance) = super::hover::lookup_environment(&scope, name)?;
     let detail = format!("\\begin{{{name}}}{}", arg_slots(&sig.args));
     Some((
@@ -207,9 +186,9 @@ fn environment_detail(
 /// The merged signature scope for `file` when it is a tracked document, else an
 /// empty scope (lookup falls back to the built-in/CWL tiers). Cloned because
 /// resolve does not hold the snapshot borrow past this point.
-fn scope_for(snapshot: &Analysis, members: Vec<ProjectMember>, file: &Path) -> SignatureDb {
+fn scope_for(snapshot: &Analysis, file: &Path) -> SignatureDb {
     match snapshot.lookup_file(file) {
-        Some(source) => snapshot.scope_signatures(members, source).clone(),
+        Some(source) => snapshot.scope_signatures(source).clone(),
         None => SignatureDb::default(),
     }
 }
@@ -235,7 +214,6 @@ mod tests {
         needle: &str,
     ) -> Vec<CompletionItem> {
         let snapshot = db.snapshot();
-        let members = super::members_of(&snapshot);
         let offset = src.find(needle).expect("needle present") + needle.len();
         let idx = LineIndex::new(src);
         let (line, character) = idx.position(offset);
@@ -252,7 +230,6 @@ mod tests {
             path,
             &TextBuffer::new(src, PositionEncoding::Utf16),
             Position { line, character },
-            members,
             &texmf,
         )
     }
@@ -260,8 +237,7 @@ mod tests {
     /// Resolve `item` against a fresh snapshot of `db`.
     fn resolve_item(db: &IncrementalDatabase, item: CompletionItem) -> CompletionItem {
         let snapshot = db.snapshot();
-        let members = super::members_of(&snapshot);
-        resolve(&snapshot, item, members)
+        resolve(&snapshot, item)
     }
 
     fn documentation(item: &CompletionItem) -> String {

@@ -34,14 +34,13 @@ use lsp_types::{
 
 /// Build signature help for the argument at `position`, preferring the snapshot's
 /// cached model and falling back to a fresh parse when it is stale or uncached.
-/// The signature scope interns `members` against the db snapshot, like
-/// [`super::hover::compute_hover`].
+/// The signature scope uses the membership carried by the database snapshot,
+/// like [`super::hover::compute_hover`].
 pub(crate) fn compute_signature_help(
     snapshot: &Analysis,
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    members: Vec<ProjectMember>,
     enc: PositionEncoding,
 ) -> Option<SignatureHelp> {
     let idx = text.line_index();
@@ -50,7 +49,7 @@ pub(crate) fn compute_signature_help(
     let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match snapshot.lookup_file(path) {
         Some(file) if snapshot.text_is_current(file, text) => {
             let root = snapshot.parsed_tree(file);
-            let scope = snapshot.scope_signatures(members, file);
+            let scope = snapshot.scope_signatures(file);
             signature_help_at(&root, scope, offset, enc)
         }
         // Untracked or stale: a fresh parse + scan (no cross-package scope),
@@ -281,7 +280,6 @@ mod tests {
         let mut db = IncrementalDatabase::default();
         db.upsert_file(path, src.to_string());
         let snapshot = db.snapshot();
-        let members = super::members_of(&snapshot);
         let idx = LineIndex::new(src);
         let (line, character) = idx.position(offset);
         compute_signature_help(
@@ -289,7 +287,6 @@ mod tests {
             path,
             &TextBuffer::new(src, PositionEncoding::Utf16),
             Position { line, character },
-            members,
             PositionEncoding::Utf16,
         )
     }

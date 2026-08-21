@@ -29,7 +29,7 @@ use crate::incremental::{
     IncrementalDb, QueryKind, QueryLogEntry, file_cite_facts, file_cite_names,
     file_is_document_root,
 };
-use crate::project::graph::{IncludeGraph, Project, project_graph};
+use crate::project::graph::{IncludeGraph, project_graph};
 use crate::project::include::BibTarget;
 
 /// The distinct cite keys defined in a `.bib` `model`, sorted and deduped — the
@@ -272,26 +272,24 @@ impl ResolvedCitations {
 /// `no_eq` + `unsafe(non_salsa_values)` for the same reason as
 /// [`resolved_labels`](crate::project::resolved_labels): [`ResolvedCitations`]
 /// holds `HashMap`s/`HashSet`s (not `Eq`/`salsa::SalsaValue`) and is a pure function
-/// of the interned [`Project`] plus the backdated per-file facts, so it carries no
+/// of the backdated [`Project`] plus the backdated per-file facts, so it carries no
 /// salsa references. The firewall pays off here: a prose or `\cite` edit leaves
 /// `file_cite_names`, `file_cite_facts`, `file_is_document_root`, and
 /// `include_edges` all backdated, so neither [`project_graph`] nor this query
 /// re-executes.
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
-pub fn resolved_citations<'db>(
-    db: &'db dyn IncrementalDb,
-    project: Project<'db>,
-) -> ResolvedCitations {
+pub fn resolved_citations(db: &dyn IncrementalDb) -> ResolvedCitations {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ResolvedCitations,
         file: None,
     });
 
-    let graph = project_graph(db, project);
+    let project = crate::project::workspace_project(db);
+    let graph = project_graph(db);
     let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
     // Cite keys per analyzed `.bib` path, feeding [`ResolvedCitations::build`].
     let mut bib_keys: HashMap<PathBuf, Vec<SmolStr>> = HashMap::new();
-    for member in project.members(db) {
+    for member in &project.members {
         match member.kind {
             FileKind::Tex
             | FileKind::CodeTex

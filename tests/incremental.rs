@@ -5,10 +5,8 @@
 use std::path::Path;
 
 use badness::declarations::{Declarations, ResolvedDeclarations};
-use badness::file_discovery::FileKind;
 use badness::incremental::{IncrementalDatabase, IncrementalDb, QueryKind};
 use badness::parser::Edit;
-use badness::project::ProjectMember;
 use badness::syntax::SyntaxKind;
 
 /// A byte-range edit, the currency the reparse side channel stages.
@@ -187,10 +185,12 @@ fn remove_file_stops_tracking() {
 
     let file = db.upsert_file(path, "x\n".to_string());
     assert!(db.lookup_file(path) == Some(file));
+    assert_eq!(db.snapshot().project_members().len(), 1);
 
     // Eviction returns the dropped handle and makes the path untracked.
     assert!(db.remove_file(path) == Some(file));
     assert!(db.lookup_file(path).is_none());
+    assert!(db.snapshot().project_members().is_empty());
     assert!(db.remove_file(path).is_none());
 
     // Re-opening the same path mints a *fresh* input, not the evicted one.
@@ -466,15 +466,9 @@ fn declarations_are_the_top_tier_of_the_signature_scope() {
         Path::new("main.tex"),
         "\\newenvironment{mycode}[1]{#1}{}\n".to_owned(),
     );
-    let members = vec![ProjectMember {
-        file: main,
-        path: db.file_path(main).to_path_buf(),
-        kind: FileKind::Tex,
-    }];
-
     let scanned = db
         .snapshot()
-        .scope_signatures(members.clone(), main)
+        .scope_signatures(main)
         .environment("mycode")
         .expect("scanned environment")
         .clone();
@@ -484,7 +478,7 @@ fn declarations_are_the_top_tier_of_the_signature_scope() {
     db.set_declarations(declared(MYCODE_VERBATIM));
     let scope = db.snapshot();
     let declared_sig = scope
-        .scope_signatures(members, main)
+        .scope_signatures(main)
         .environment("mycode")
         .expect("declared environment");
     assert!(

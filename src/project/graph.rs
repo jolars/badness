@@ -7,8 +7,8 @@
 //! - [`crate::incremental::include_edges`] — a per-file projection (range-free
 //!   [`IncludeEdgeKey`]s) that stays *equal* across a body edit (salsa backdates).
 //! - [`project_graph`] — assembles those into the cross-file [`IncludeGraph`],
-//!   keyed on the interned [`Project`] membership snapshot, so an unchanged
-//!   project + backdated per-file facts means its memo is reused.
+//!   built on the backdated [`workspace_project`] membership snapshot, so an
+//!   unchanged project + backdated per-file facts means its memo is reused.
 //!
 //! [`IncludeGraph::build`] is the **pure** algorithm (no salsa, no disk); the
 //! salsa query is a thin wrapper. The pure layer is where the future consumers
@@ -19,9 +19,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::file_discovery::FileKind;
+use crate::file_discovery::{FileKind, file_kind_or_tex};
 use crate::incremental::{
-    IncrementalDb, QueryKind, QueryLogEntry, SourceFile, include_edges, package_edges,
+    IncrementalDb, ProjectFiles, QueryKind, QueryLogEntry, SourceFile, include_edges, package_edges,
 };
 use crate::project::include::{IncludeEdgeKey, IncludeKind, IncludeTarget};
 use crate::project::package::{PackageEdgeKey, PackageKind, PackageTarget, dtx_source_of};
@@ -427,8 +427,7 @@ impl PackageGraph {
 }
 
 /// One member of a project: its tracked input, on-disk path, and which pipeline
-/// it feeds. Plain-derived (no `salsa::SalsaValue`) so it can key the interned
-/// [`Project`]. No `Debug`: `SourceFile` is a salsa input id without a standalone
+/// it feeds. No `Debug`: `SourceFile` is a salsa input id without a standalone
 /// `Debug` impl.
 ///
 /// `kind` lets the project-level queries split `.tex` from `.bib` members
@@ -441,37 +440,48 @@ pub struct ProjectMember {
     pub kind: FileKind,
 }
 
-/// A project as an interned membership snapshot. Interning dedups by value, so
-/// an unchanged membership yields the same id across runs (a body edit doesn't
-/// change the set) and the [`project_graph`] memo survives. This holds only for
-/// a canonically ordered key: the `Analysis` interning path normalizes every
-/// membership through [`normalize_members`], so no caller can silently churn the
-/// id by reordering. Direct `Project::new` callers (only test helpers today)
-/// must pass an already-normalized `members`.
-#[salsa::interned]
-pub struct Project<'db> {
-    #[returns(ref)]
+/// A project membership snapshot derived by [`workspace_project`].
+///
+/// This is plain `Eq` data rather than a `#[salsa::interned]` value. Salsa keeps
+/// interned values for the database lifetime, so each membership generation
+/// would otherwise retain its id and every project-level memo keyed by it. A
+/// keyless tracked query replaces its prior value and backdates on equality,
+/// preserving the incremental firewall without retaining history.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct Project {
     pub members: Vec<ProjectMember>,
 }
 
-/// Canonicalize an interning key: sort members by path and drop exact
-/// duplicates. This is the single source of truth for the ordering the
-/// [`Project`] interned id depends on — the interning path routes every
-/// membership snapshot through it so an unchanged set always re-interns to the
-/// same id (preserving every downstream memo). Paths are unique per project, so
-/// plain `dedup()` (consecutive equal *values* after the path sort) suffices; a
-/// same-path/different-value pair would be an upstream bug we deliberately don't
-/// mask with a path-keyed dedup.
-pub(crate) fn normalize_members(members: &mut Vec<ProjectMember>) {
-    members.sort_by(|a, b| a.path.cmp(&b.path));
-    members.dedup();
+/// Derive the current membership from the explicit [`ProjectFiles`] input.
+///
+/// The writer publishes files in normalized path order. The query remains pure:
+/// paths are immutable `HIGH`-durability input fields, and file kinds are a
+/// deterministic function of those paths.
+#[salsa::tracked(returns(ref))]
+pub fn workspace_project(db: &dyn IncrementalDb) -> Project {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::WorkspaceProject,
+        file: None,
+    });
+    Project {
+        members: ProjectFiles::get(db)
+            .files(db)
+            .iter()
+            .map(|&file| {
+                let path = file.path(db).clone();
+                let kind = file_kind_or_tex(&path);
+                ProjectMember { file, path, kind }
+            })
+            .collect(),
+    }
 }
 
-/// The inclusion graph for `project`, built from the per-file firewall query.
+/// The inclusion graph for the current project, built from the per-file firewall
+/// query.
 ///
 /// `no_eq` because its output ([`IncludeGraph`]) holds `HashMap`s that aren't
 /// `salsa::SalsaValue`/`Eq`-comparable here; `unsafe(non_salsa_values)` asserts it
-/// carries no salsa references (the graph is a pure function of the interned
+/// carries no salsa references (the graph is a pure function of the backdated
 /// membership plus the backdated per-file edges). This costs nothing for the
 /// firewall: a body edit leaves the per-file inputs backdated, so this query
 /// simply isn't re-executed.
@@ -481,7 +491,7 @@ pub(crate) fn normalize_members(members: &mut Vec<ProjectMember>) {
 /// reverse map, unresolved targets, and cycles are all order-independent and
 /// populated regardless.
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
-pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> IncludeGraph {
+pub fn project_graph(db: &dyn IncrementalDb) -> IncludeGraph {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ProjectGraph,
         file: None,
@@ -489,8 +499,8 @@ pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
 
     // Only LaTeX members (`.tex`/`.sty`/`.cls`) are inclusion-graph nodes; `.bib`
     // members carry no `\input` edges and feed the citation resolver instead.
-    let facts: Vec<FileFacts> = project
-        .members(db)
+    let facts: Vec<FileFacts> = workspace_project(db)
+        .members
         .iter()
         .filter(|member| member.kind.is_latex())
         .map(|member| FileFacts {
@@ -502,13 +512,13 @@ pub fn project_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
     IncludeGraph::build(&facts, None)
 }
 
-/// The package-load graph for `project`, built from the per-file
+/// The package-load graph for the current project, built from the per-file
 /// [`package_edges`] firewall. The load-graph analog of [`project_graph`]:
 /// `no_eq`/`unsafe(non_salsa_values)` for the same reason (its [`PackageGraph`]
 /// output holds `HashMap`s and carries no salsa references), so a body edit that
 /// leaves the per-file load edges backdated never re-executes it.
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
-pub fn package_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> PackageGraph {
+pub fn package_graph(db: &dyn IncrementalDb) -> PackageGraph {
     db.record_query(QueryLogEntry {
         kind: QueryKind::PackageGraph,
         file: None,
@@ -516,8 +526,8 @@ pub fn package_graph<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> 
 
     // Only LaTeX members (`.tex`/`.sty`/`.cls`) declare load edges; `.bib` members
     // feed the citation resolver instead.
-    let facts: Vec<PackageFileFacts> = project
-        .members(db)
+    let facts: Vec<PackageFileFacts> = workspace_project(db)
+        .members
         .iter()
         .filter(|member| member.kind.is_latex())
         .map(|member| PackageFileFacts {
@@ -534,40 +544,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_members_is_order_independent_and_dedups() {
-        use crate::file_discovery::FileKind;
+    fn workspace_project_is_ordered_by_normalized_path() {
         use crate::incremental::IncrementalDatabase;
 
         let mut db = IncrementalDatabase::default();
+        let b = db.upsert_file(Path::new("/p/b.bib"), String::new());
         let a = db.upsert_file(Path::new("/p/a.tex"), String::new());
-        let b = db.upsert_file(Path::new("/p/b.tex"), String::new());
-        let (pa, pb) = (db.file_path(a).to_path_buf(), db.file_path(b).to_path_buf());
-        let mem = |file, path: &PathBuf| ProjectMember {
-            file,
-            path: path.clone(),
-            kind: FileKind::Tex,
-        };
 
-        // Different insertion orders normalize to the same key (`ProjectMember`
-        // has no `Debug`, so compare with `==`).
-        let mut sorted = vec![mem(a, &pa), mem(b, &pb)];
-        let mut reversed = vec![mem(b, &pb), mem(a, &pa)];
-        normalize_members(&mut sorted);
-        normalize_members(&mut reversed);
-        assert!(
-            sorted == reversed,
-            "member order must not affect the normalized interning key"
-        );
-        assert_eq!(sorted.len(), 2);
-        assert!(
-            sorted[0].path < sorted[1].path,
-            "normalized key is path-sorted"
-        );
-
-        // An exact duplicate collapses to the same key.
-        let mut dup = vec![mem(a, &pa), mem(a, &pa), mem(b, &pb)];
-        normalize_members(&mut dup);
-        assert!(dup == sorted, "exact duplicate members are dropped");
+        let project = workspace_project(&db);
+        assert_eq!(project.members.len(), 2);
+        assert!(project.members[0].file == a);
+        assert_eq!(project.members[0].kind, FileKind::Tex);
+        assert!(project.members[1].file == b);
+        assert_eq!(project.members[1].kind, FileKind::Bib);
+        assert!(project.members[0].path < project.members[1].path);
     }
 
     fn facts(path: &str, edges: &[(IncludeKind, &str)]) -> FileFacts {

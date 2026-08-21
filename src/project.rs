@@ -26,6 +26,7 @@ pub use citations::{CiteFileFacts, ResolvedCitations, document_cite_names, resol
 pub use graph::{
     FileFacts, IncludeGraph, PackageFileFacts, PackageGraph, Project, ProjectMember,
     ResolvedInclude, ResolvedLoad, UnresolvedInclude, UnresolvedLoad, package_graph, project_graph,
+    workspace_project,
 };
 pub use include::{
     BibTarget, IncludeEdge, IncludeEdgeKey, IncludeKind, IncludeTarget,

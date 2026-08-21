@@ -10,14 +10,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use badness::file_discovery::FileKind;
 use badness::incremental::{
     IncrementalDatabase, QueryKind, QueryLogEntry, SourceFile, scope_signatures,
 };
 use badness::linter::lint_document;
-use badness::project::{
-    PackageKind, Project, ProjectMember, package_graph, resolved_package_options,
-};
+use badness::project::{PackageKind, package_graph, resolved_package_options};
 
 fn count_by_kind(entries: &[QueryLogEntry]) -> HashMap<QueryKind, usize> {
     let mut counts = HashMap::new();
@@ -31,29 +28,6 @@ fn fpath(db: &IncrementalDatabase, file: SourceFile) -> PathBuf {
     db.file_path(file).to_path_buf()
 }
 
-/// Intern the membership `{main.tex, mypkg.sty}` under `/proj`. Re-interns from a
-/// fresh sorted snapshot on each call, as a real consumer would.
-fn project_main_pkg<'db>(
-    db: &'db IncrementalDatabase,
-    main: SourceFile,
-    pkg: SourceFile,
-) -> Project<'db> {
-    let mut members = vec![
-        ProjectMember {
-            file: main,
-            path: fpath(db, main),
-            kind: FileKind::Tex,
-        },
-        ProjectMember {
-            file: pkg,
-            path: fpath(db, pkg),
-            kind: FileKind::Sty,
-        },
-    ];
-    members.sort_by(|a, b| a.path.cmp(&b.path));
-    Project::new(db, members)
-}
-
 fn main_pkg(main_text: &str, pkg_text: &str) -> (IncrementalDatabase, SourceFile, SourceFile) {
     let mut db = IncrementalDatabase::default();
     let main = db.upsert_file(Path::new("/proj/main.tex"), main_text.to_string());
@@ -64,7 +38,7 @@ fn main_pkg(main_text: &str, pkg_text: &str) -> (IncrementalDatabase, SourceFile
 #[test]
 fn graph_resolves_a_local_load() {
     let (db, main, pkg) = main_pkg("\\usepackage{mypkg}\n", "code\n");
-    let graph = package_graph(&db, project_main_pkg(&db, main, pkg));
+    let graph = package_graph(&db);
 
     let loads = graph.loads(&fpath(&db, main));
     assert_eq!(loads.len(), 1);
@@ -77,8 +51,8 @@ fn graph_resolves_a_local_load() {
 #[test]
 fn non_local_package_is_unresolved() {
     // `amsmath` has no sibling member, so it stays unresolved (local-only).
-    let (db, main, pkg) = main_pkg("\\usepackage{amsmath}\n", "code\n");
-    let graph = package_graph(&db, project_main_pkg(&db, main, pkg));
+    let (db, main, _pkg) = main_pkg("\\usepackage{amsmath}\n", "code\n");
+    let graph = package_graph(&db);
     assert!(graph.loads(&fpath(&db, main)).is_empty());
     assert_eq!(graph.unresolved().len(), 1);
 }
@@ -87,12 +61,12 @@ fn non_local_package_is_unresolved() {
 fn body_edit_does_not_rebuild_package_graph() {
     // The firewall: editing the package's body changes its parse but not its load
     // edges (it has none), so `package_edges` backdates and the graph memo holds.
-    let (mut db, main, pkg) = main_pkg("\\usepackage{mypkg}\n", "code\n");
-    let _ = package_graph(&db, project_main_pkg(&db, main, pkg));
+    let (mut db, _main, pkg) = main_pkg("\\usepackage{mypkg}\n", "code\n");
+    let _ = package_graph(&db);
 
     db.clear_query_log();
     db.set_file_text(pkg, "more code\n");
-    let _ = package_graph(&db, project_main_pkg(&db, main, pkg));
+    let _ = package_graph(&db);
 
     let counts = count_by_kind(&db.query_log());
     assert_eq!(counts.get(&QueryKind::PackageEdges), Some(&1));
@@ -105,12 +79,12 @@ fn body_edit_does_not_rebuild_package_graph() {
 
 #[test]
 fn load_change_rebuilds_package_graph() {
-    let (mut db, main, pkg) = main_pkg("\\usepackage{mypkg}\n", "code\n");
-    let _ = package_graph(&db, project_main_pkg(&db, main, pkg));
+    let (mut db, main, _pkg) = main_pkg("\\usepackage{mypkg}\n", "code\n");
+    let _ = package_graph(&db);
 
     db.clear_query_log();
     db.set_file_text(main, "\\usepackage{mypkg}\n\\usepackage{extra}\n");
-    let graph = package_graph(&db, project_main_pkg(&db, main, pkg));
+    let graph = package_graph(&db);
 
     let counts = count_by_kind(&db.query_log());
     assert_eq!(
@@ -124,11 +98,11 @@ fn load_change_rebuilds_package_graph() {
 
 #[test]
 fn scope_signatures_pulls_in_local_package_definition() {
-    let (db, main, pkg) = main_pkg(
+    let (db, main, _pkg) = main_pkg(
         "\\usepackage{mypkg}\n\\myfoo{a}{b}\n",
         "\\newcommand{\\myfoo}[2]{#1#2}\n",
     );
-    let scope = scope_signatures(&db, project_main_pkg(&db, main, pkg), main);
+    let scope = scope_signatures(&db, main);
     let sig = scope.command("myfoo").expect("package command in scope");
     assert_eq!(sig.args.len(), 2);
     // Provenance: the scope remembers which package supplied the signature.
@@ -137,33 +111,15 @@ fn scope_signatures_pulls_in_local_package_definition() {
 
 #[test]
 fn scope_signatures_document_definition_wins() {
-    let (db, main, pkg) = main_pkg(
+    let (db, main, _pkg) = main_pkg(
         "\\usepackage{mypkg}\n\\newcommand{\\dup}[2]{#1#2}\n",
         "\\newcommand{\\dup}[1]{#1}\n",
     );
-    let scope = scope_signatures(&db, project_main_pkg(&db, main, pkg), main);
+    let scope = scope_signatures(&db, main);
     // The document's 2-arg \dup overrides the package's 1-arg one, and the
     // package origin is cleared with it.
     assert_eq!(scope.command("dup").unwrap().args.len(), 2);
     assert_eq!(scope.command_origin("dup"), None);
-}
-
-/// Intern a project from an explicit `(SourceFile, FileKind)` membership, sorting
-/// by path as a real consumer would.
-fn project_of<'db>(
-    db: &'db IncrementalDatabase,
-    members: &[(SourceFile, FileKind)],
-) -> Project<'db> {
-    let mut members: Vec<ProjectMember> = members
-        .iter()
-        .map(|&(file, kind)| ProjectMember {
-            file,
-            path: fpath(db, file),
-            kind,
-        })
-        .collect();
-    members.sort_by(|a, b| a.path.cmp(&b.path));
-    Project::new(db, members)
 }
 
 #[test]
@@ -180,14 +136,12 @@ fn scope_signatures_falls_back_to_dtx_source() {
         "%    \\begin{macrocode}\n\\newcommand{\\myfoo}[2]{#1#2}\n%    \\end{macrocode}\n"
             .to_string(),
     );
-    let project = project_of(&db, &[(main, FileKind::Tex), (dtx, FileKind::Dtx)]);
-
     // The load graph resolves to the `.dtx`.
-    let graph = package_graph(&db, project);
+    let graph = package_graph(&db);
     assert_eq!(graph.loads(&fpath(&db, main))[0].to, fpath(&db, dtx));
 
     // ...and its definition lands in the document scope.
-    let scope = scope_signatures(&db, project, main);
+    let scope = scope_signatures(&db, main);
     assert_eq!(scope.command("myfoo").unwrap().args.len(), 2);
 }
 
@@ -204,25 +158,16 @@ fn scope_signatures_prefers_sty_over_dtx() {
         Path::new("/proj/mypkg.sty"),
         "\\newcommand{\\myfoo}[1]{#1}\n".to_string(),
     );
-    let dtx = db.upsert_file(
+    let _dtx = db.upsert_file(
         Path::new("/proj/mypkg.dtx"),
         "%    \\begin{macrocode}\n\\newcommand{\\myfoo}[2]{#1#2}\n%    \\end{macrocode}\n"
             .to_string(),
     );
-    let project = project_of(
-        &db,
-        &[
-            (main, FileKind::Tex),
-            (sty, FileKind::Sty),
-            (dtx, FileKind::Dtx),
-        ],
-    );
-
     assert_eq!(
-        package_graph(&db, project).loads(&fpath(&db, main))[0].to,
+        package_graph(&db).loads(&fpath(&db, main))[0].to,
         fpath(&db, sty)
     );
-    let scope = scope_signatures(&db, project, main);
+    let scope = scope_signatures(&db, main);
     assert_eq!(scope.command("myfoo").unwrap().args.len(), 1);
 }
 
@@ -231,15 +176,15 @@ fn scope_signatures_backdates_on_prose_edit() {
     // Editing main's prose changes neither its loads nor its definitions, so
     // `scope_signatures` backdates: the package-defined macro stays in scope and
     // the merged query is not re-executed.
-    let (mut db, main, pkg) = main_pkg(
+    let (mut db, main, _pkg) = main_pkg(
         "\\usepackage{mypkg}\nhello\n",
         "\\newcommand{\\myfoo}[2]{#1#2}\n",
     );
-    let _ = scope_signatures(&db, project_main_pkg(&db, main, pkg), main);
+    let _ = scope_signatures(&db, main);
 
     db.clear_query_log();
     db.set_file_text(main, "\\usepackage{mypkg}\nhello world\n");
-    let scope = scope_signatures(&db, project_main_pkg(&db, main, pkg), main);
+    let scope = scope_signatures(&db, main);
 
     assert!(scope.command("myfoo").is_some());
     let counts = count_by_kind(&db.query_log());
@@ -252,11 +197,11 @@ fn scope_signatures_backdates_on_prose_edit() {
 
 #[test]
 fn resolved_package_options_maps_a_member_sty() {
-    let (db, main, pkg) = main_pkg(
+    let (db, _main, pkg) = main_pkg(
         "\\usepackage[typo]{mypkg}\n",
         "\\ProvidesPackage{mypkg}\n\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
     );
-    let resolved = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let resolved = resolved_package_options(&db);
     let facts = resolved
         .get(&fpath(&db, pkg))
         .expect("member sty in the option model");
@@ -269,11 +214,11 @@ fn resolved_package_options_maps_a_member_sty() {
 fn unknown_option_fires_through_the_salsa_path() {
     // The LSP lint path: salsa-cached tree + model, the resolved option model
     // passed into the shared driver.
-    let (db, main, pkg) = main_pkg(
+    let (db, main, _pkg) = main_pkg(
         "\\usepackage[typo]{mypkg}\n",
         "\\ProvidesPackage{mypkg}\n\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
     );
-    let resolved = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let resolved = resolved_package_options(&db);
     let root = db.parsed_tree(main);
     let model = badness::semantic::SemanticModel::build(&root);
     let findings = lint_document(&fpath(&db, main), &root, &model, None, None, Some(resolved));
@@ -288,18 +233,18 @@ fn package_option_model_backdates_on_body_edit() {
     // The firewall: a package body edit that leaves the option surface
     // unchanged backdates `file_package_option_facts`, so the project-level
     // option model is not rebuilt.
-    let (mut db, main, pkg) = main_pkg(
+    let (mut db, _main, pkg) = main_pkg(
         "\\usepackage[draft]{mypkg}\n",
         "\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
     );
-    let _ = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let _ = resolved_package_options(&db);
 
     db.clear_query_log();
     db.set_file_text(
         pkg,
         "\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\nmore code\n",
     );
-    let _ = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let _ = resolved_package_options(&db);
 
     let counts = count_by_kind(&db.query_log());
     assert_eq!(counts.get(&QueryKind::FilePackageOptionFacts), Some(&1));
@@ -312,18 +257,18 @@ fn package_option_model_backdates_on_body_edit() {
 
 #[test]
 fn package_option_model_rebuilds_on_option_change() {
-    let (mut db, main, pkg) = main_pkg(
+    let (mut db, _main, pkg) = main_pkg(
         "\\usepackage[draft]{mypkg}\n",
         "\\DeclareOption{draft}{}\n\\ProcessOptions\\relax\n",
     );
-    let _ = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let _ = resolved_package_options(&db);
 
     db.clear_query_log();
     db.set_file_text(
         pkg,
         "\\DeclareOption{draft}{}\n\\DeclareOption{final}{}\n\\ProcessOptions\\relax\n",
     );
-    let resolved = resolved_package_options(&db, project_main_pkg(&db, main, pkg));
+    let resolved = resolved_package_options(&db);
 
     let counts = count_by_kind(&db.query_log());
     assert_eq!(

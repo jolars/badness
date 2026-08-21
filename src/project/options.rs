@@ -22,7 +22,6 @@ use smol_str::SmolStr;
 
 use crate::ast::command_name;
 use crate::incremental::{IncrementalDb, QueryKind, QueryLogEntry, file_package_option_facts};
-use crate::project::graph::Project;
 use crate::project::include::collect_include_edge_keys;
 use crate::project::package::{PackageTarget, collect_package_edges};
 use crate::semantic::SemanticModel;
@@ -179,22 +178,19 @@ impl ResolvedPackageOptions {
 ///
 /// `no_eq` + `unsafe(non_salsa_values)` for the same reason as
 /// [`super::resolved_labels`]: [`ResolvedPackageOptions`] holds a `HashMap`
-/// (not `Eq`/`salsa::SalsaValue`) and is a pure function of the interned
+/// (not `Eq`/`salsa::SalsaValue`) and is a pure function of the backdated
 /// [`Project`] plus the backdated per-file facts. A body edit that leaves a
 /// `.sty`'s option surface unchanged backdates the firewall and this query is
 /// not re-run.
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
-pub fn resolved_package_options<'db>(
-    db: &'db dyn IncrementalDb,
-    project: Project<'db>,
-) -> ResolvedPackageOptions {
+pub fn resolved_package_options(db: &dyn IncrementalDb) -> ResolvedPackageOptions {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ResolvedPackageOptions,
         file: None,
     });
     ResolvedPackageOptions::build(
-        project
-            .members(db)
+        crate::project::workspace_project(db)
+            .members
             .iter()
             .filter(|member| member.kind.is_latex())
             .filter_map(|member| file_package_option_facts(db, member.file).clone()),

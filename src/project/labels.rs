@@ -27,7 +27,7 @@ use crate::ast::{command_name, environment_name};
 use crate::incremental::{
     IncrementalDb, QueryKind, QueryLogEntry, file_is_document_root, file_labels, file_refs,
 };
-use crate::project::graph::{IncludeGraph, Project, project_graph};
+use crate::project::graph::{IncludeGraph, project_graph};
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -275,7 +275,7 @@ impl ResolvedLabels {
 ///
 /// `no_eq` + `unsafe(non_salsa_values)` for the same reason as [`project_graph`]:
 /// [`ResolvedLabels`] holds `HashMap`s (not `Eq`/`salsa::SalsaValue`) and is a pure
-/// function of the interned [`Project`] plus the backdated per-file facts, so it
+/// function of the backdated [`Project`] plus the backdated per-file facts, so it
 /// carries no salsa references. The firewall pays off here: a prose edit leaves
 /// `file_labels`, `file_refs`, `file_is_document_root`, and `include_edges` all
 /// backdated, so neither [`project_graph`] nor this query re-executes. A `\ref`
@@ -283,17 +283,18 @@ impl ResolvedLabels {
 /// `unreferenced-label` depends on the cross-file reference union — but a pure
 /// prose edit still backdates both firewalls.
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
-pub fn resolved_labels<'db>(db: &'db dyn IncrementalDb, project: Project<'db>) -> ResolvedLabels {
+pub fn resolved_labels(db: &dyn IncrementalDb) -> ResolvedLabels {
     db.record_query(QueryLogEntry {
         kind: QueryKind::ResolvedLabels,
         file: None,
     });
 
-    let graph = project_graph(db, project);
+    let project = crate::project::workspace_project(db);
+    let graph = project_graph(db);
     // Labels live in LaTeX files (`.tex`/`.sty`/`.cls`); `.bib` members carry none
     // and are not part of the include-graph namespace.
     let files: Vec<(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)> = project
-        .members(db)
+        .members
         .iter()
         .filter(|member| member.kind.is_latex())
         .map(|member| {

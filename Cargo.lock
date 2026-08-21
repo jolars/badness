@@ -92,7 +92,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "badness"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "annotate-snippets",
  "badness-formatter",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "badness-formatter"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "badness-parser",
  "insta",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "badness-parser"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "insta",
  "parser",
@@ -414,9 +414,9 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "either"
-version = "1.17.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "encode_unicode"

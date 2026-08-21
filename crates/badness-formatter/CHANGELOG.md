@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/jolars/badness/compare/badness-formatter-v0.4.0...badness-formatter-v0.5.0) (2026-08-21)
+
+### Features
+- **formatter:** glue item overlays ([`e7b3efe`](https://github.com/jolars/badness/commit/e7b3efe42595e9c8f060b4700c79579981d90fc5))
+- **formatter:** unify math spacing ([`170da11`](https://github.com/jolars/badness/commit/170da11a42e15a730e8d5606ea2f4e7f87297185))
+- add semantic math atom classification ([`3889311`](https://github.com/jolars/badness/commit/388931180fec563d358aef9d2d20f8d6993ddaf1))
+- **parser:** add argument domains ([`f7f4b01`](https://github.com/jolars/badness/commit/f7f4b011661f0106028c5e75896096b9b310f4d4))
+
+### Bug Fixes
+- **parser:** parse href URLs verbatim ([`03ad84f`](https://github.com/jolars/badness/commit/03ad84f6d78307d155a543b52047e6fc33591d51))
+- **formatter:** preserve glued forced blocks ([`4938f6c`](https://github.com/jolars/badness/commit/4938f6c1a93cedf8ca6a5bfac592b839d5a28226))
+- **formatter:** align virtual dtx tables ([`e0a2cde`](https://github.com/jolars/badness/commit/e0a2cde90da208f5f7b8cad42987ee0ec8bd8099))
+- **formatter:** bound relation alignment ([`a560698`](https://github.com/jolars/badness/commit/a5606989918276da0d9579e7df9abddf2d4180e7))
+- **formatter:** preserve math line breaks ([`a1ad967`](https://github.com/jolars/badness/commit/a1ad9676f609c6664371e18365833280cda20018))
+
+### Dependencies
+- updated crates/badness-parser to v0.4.0
+
 ## [0.4.0](https://github.com/jolars/badness/compare/badness-formatter-v0.3.0...badness-formatter-v0.4.0) (2026-08-20)
 
 ### Breaking changes

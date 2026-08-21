@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/jolars/badness/compare/badness-parser-v0.3.0...badness-parser-v0.4.0) (2026-08-21)
+
+### Features
+- add LSP memory benchmark ([`9a975d7`](https://github.com/jolars/badness/commit/9a975d7dcee69bc143a90ecff041b36d5de356c2))
+- **parser:** reparse math fragments ([`4638eb5`](https://github.com/jolars/badness/commit/4638eb5a644019235ef976420e58f47834354fc2))
+- add semantic math atom classification ([`3889311`](https://github.com/jolars/badness/commit/388931180fec563d358aef9d2d20f8d6993ddaf1))
+- **parser:** add argument domains ([`f7f4b01`](https://github.com/jolars/badness/commit/f7f4b011661f0106028c5e75896096b9b310f4d4))
+
+### Bug Fixes
+- **parser:** unwind environment gate mismatches ([`6398829`](https://github.com/jolars/badness/commit/6398829dde0e22ed7680ca270f846fffd30c5d8d))
+- **parser:** gate math environments in groups ([`b221ccd`](https://github.com/jolars/badness/commit/b221ccda0f983ad3ce512d59d8152f63b667a2ad))
+- **parser:** tighten catcode signal ([`834c7b6`](https://github.com/jolars/badness/commit/834c7b65b6ab319430e1ed86fdb62582f3b61812))
+- **parser:** pass plain braces through optionals ([`82b30f1`](https://github.com/jolars/badness/commit/82b30f17190f935432c3df59fc6428ed33003562))
+- **parser:** parse href URLs verbatim ([`03ad84f`](https://github.com/jolars/badness/commit/03ad84f6d78307d155a543b52047e6fc33591d51))
+- **parser:** preserve argument mode semantics ([`63aefa8`](https://github.com/jolars/badness/commit/63aefa8e626f9e7e1012ca02ab0370440441c5b2))
+- **parser:** honor TeX script atom boundaries ([`e6131b6`](https://github.com/jolars/badness/commit/e6131b69e1df9f3fed25af772fce803655b3e88d))
+
 ## [0.3.0](https://github.com/jolars/badness/compare/badness-parser-v0.2.0...badness-parser-v0.3.0) (2026-08-20)
 
 ### Breaking changes

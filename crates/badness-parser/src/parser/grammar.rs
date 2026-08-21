@@ -2714,7 +2714,17 @@ impl<'t> Parser<'t> {
                 // Same definition-body/expl3-region and brace-less gates as
                 // [`Self::element`] (issues #45/#60).
                 if !self.in_macro_code(self.pos) && self.at_env_begin() {
-                    self.environment();
+                    // The group-escape gate is mode-independent: braces remain
+                    // TeX structure inside math, so an environment macro cannot
+                    // consume the closing brace of the group that contains it.
+                    if self.environment_escapes_group(self.pos) {
+                        if let Some(name) = peek_end_name(self.tokens, self.pos) {
+                            self.demoted_envs.insert(name.into_owned());
+                        }
+                        self.command();
+                    } else {
+                        self.environment();
+                    }
                 } else if !self.in_macro_code(self.pos) && self.at_env_end() {
                     // [`Self::at_block_end`] declines to end a math body at a
                     // `\end` that orphans a `\begin` the brace-group gate demoted

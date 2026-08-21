@@ -68,6 +68,25 @@ fn roundtrip_units() {
     }
 }
 
+/// Reduced by the property harness: the expl3 unit scanner sees a group span
+/// whose replay encounters a different structural boundary after the unmatched
+/// inner group. Recovery must demote or stop without panicking in every flavor.
+#[test]
+fn malformed_expl3_group_recovers_in_every_flavor() {
+    let input = "\\ExplSyntaxOn\\tl_set:Nn \\l_tmpa_tl {{#}\\ExplSyntaxOff$[\\begin{itemize}$%$\\end{itemize}\\foo{\\foo{%<*package>\n}}";
+    for config in [
+        LexConfig::from(LatexFlavor::Document),
+        LexConfig::from(LatexFlavor::Package),
+        LexConfig {
+            flavor: LatexFlavor::Document,
+            dtx: true,
+        },
+    ] {
+        let parsed = parse_with_flavor(input, config);
+        assert_eq!(parsed.syntax().to_string(), input, "losslessness");
+    }
+}
+
 #[test]
 fn roundtrip_dtx_units() {
     // Realistic `.dtx` surface shapes: a meta-comment header, a guarded driver

@@ -3,7 +3,8 @@
 use rowan::{TextRange, TextSize};
 
 use crate::ast::command_name;
-use crate::semantic::signature::{ArgKind, ArgumentDomain, builtin, match_arg_slot};
+use crate::semantic::define::scan_definitions;
+use crate::semantic::signature::{ArgKind, ArgumentDomain, Signatures, match_arg_slot};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 /// The effective mode at a source position.
@@ -46,13 +47,16 @@ pub fn argument_domain(group: &SyntaxNode) -> ArgumentDomain {
     let Some(owner) = group.parent() else {
         return ArgumentDomain::Unknown;
     };
+    let root = owner.ancestors().last().unwrap_or_else(|| owner.clone());
+    let user = scan_definitions(&root);
+    let signatures = Signatures::new(&user);
     let args = match owner.kind() {
         SyntaxKind::COMMAND => command_name(&owner)
-            .and_then(|name| builtin().command(&name))
+            .and_then(|name| signatures.command(&name))
             .map(|sig| sig.args.as_ref()),
         SyntaxKind::BEGIN => environment_name(&owner)
             .as_deref()
-            .and_then(|name| builtin().environment(name))
+            .and_then(|name| signatures.environment(name))
             .map(|sig| sig.args.as_ref()),
         _ => None,
     };
@@ -79,7 +83,9 @@ pub fn argument_domain(group: &SyntaxNode) -> ArgumentDomain {
 impl ModeIndex {
     pub fn build(root: &SyntaxNode) -> Self {
         let mut ranges = Vec::new();
-        walk(root, Mode::Text, &mut ranges);
+        let user = scan_definitions(root);
+        let signatures = Signatures::new(&user);
+        walk(root, Mode::Text, &signatures, &mut ranges);
         Self { ranges }
     }
 
@@ -106,7 +112,12 @@ impl ModeIndex {
     }
 }
 
-fn walk(node: &SyntaxNode, inherited: Mode, ranges: &mut Vec<ModeRange>) {
+fn walk(
+    node: &SyntaxNode,
+    inherited: Mode,
+    signatures: &Signatures<'_>,
+    ranges: &mut Vec<ModeRange>,
+) {
     let mode = match node.kind() {
         SyntaxKind::MATH => Mode::Math,
         SyntaxKind::NAME_GROUP => Mode::Unknown,
@@ -114,8 +125,8 @@ fn walk(node: &SyntaxNode, inherited: Mode, ranges: &mut Vec<ModeRange>) {
     };
 
     let argument_modes = match node.kind() {
-        SyntaxKind::COMMAND => command_argument_modes(node),
-        SyntaxKind::BEGIN => environment_argument_modes(node),
+        SyntaxKind::COMMAND => command_argument_modes(node, signatures),
+        SyntaxKind::BEGIN => environment_argument_modes(node, signatures),
         _ => Vec::new(),
     };
     let mut argument = 0usize;
@@ -136,24 +147,24 @@ fn walk(node: &SyntaxNode, inherited: Mode, ranges: &mut Vec<ModeRange>) {
                 } else {
                     mode
                 };
-                walk(&child, child_mode, ranges);
+                walk(&child, child_mode, signatures, ranges);
             }
         }
     }
 }
 
-fn command_argument_modes(node: &SyntaxNode) -> Vec<Mode> {
+fn command_argument_modes(node: &SyntaxNode, signatures: &Signatures<'_>) -> Vec<Mode> {
     let args = command_name(node)
-        .and_then(|name| builtin().command(&name))
+        .and_then(|name| signatures.command(&name))
         .map(|sig| sig.args.as_ref());
     match_groups(node, args, false)
 }
 
-fn environment_argument_modes(begin: &SyntaxNode) -> Vec<Mode> {
+fn environment_argument_modes(begin: &SyntaxNode, signatures: &Signatures<'_>) -> Vec<Mode> {
     let name = environment_name(begin);
     let args = name
         .as_deref()
-        .and_then(|name| builtin().environment(name))
+        .and_then(|name| signatures.environment(name))
         .map(|sig| sig.args.as_ref());
     match_groups(begin, args, false)
 }
@@ -256,6 +267,28 @@ mod tests {
                 &["before", "x_i", "x_i"]
             ),
             vec![Mode::Text, Mode::Math, Mode::Unknown]
+        );
+    }
+
+    #[test]
+    fn redefined_builtin_arguments_are_unknown() {
+        assert_eq!(
+            modes(
+                r"\renewcommand{\text}[1]{\ensuremath{#1}} $\text{5-10}$",
+                &["5-10"]
+            ),
+            vec![Mode::Unknown]
+        );
+    }
+
+    #[test]
+    fn prose_arguments_establish_text_mode() {
+        assert_eq!(
+            modes(
+                r"$\textbf{pages 5-10} \section[short 5-10]{pages 5-10} \footnote{pages 5-10}$",
+                &["pages 5-10", "short 5-10", "pages 5-10", "pages 5-10"]
+            ),
+            vec![Mode::Text; 4]
         );
     }
 

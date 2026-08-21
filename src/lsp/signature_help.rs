@@ -340,6 +340,16 @@ mod tests {
     }
 
     #[test]
+    fn requiredness_controls_cross_delimiter_matching() {
+        let optional_brace = "\\NewDocumentCommand{\\foo}{d{} r[] m}{#1#2#3}\n\\foo[x]{y}\n";
+        assert_eq!(active_at(optional_brace, "[x", 2).expect("help").1, 1);
+        assert_eq!(active_at(optional_brace, "{y", 2).expect("help").1, 2);
+
+        let required_bracket = "\\NewDocumentCommand{\\foo}{r[] m}{#1#2}\n\\foo{x}\n";
+        assert_eq!(active_at(required_bracket, "{x", 2), None);
+    }
+
+    #[test]
     fn includegraphics_optional_is_first_slot() {
         let src = "\\includegraphics[width=2cm]{fig}\n";
         assert_eq!(active_at(src, "[width", 6).expect("help").1, 0);

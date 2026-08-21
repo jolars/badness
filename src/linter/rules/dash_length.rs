@@ -358,6 +358,18 @@ mod tests {
     }
 
     #[test]
+    fn prose_argument_ranges_are_checked() {
+        let src = "\\textbf{pages 5-10}\\section{pages 5-10}\\footnote{pages 5-10}\n";
+        assert_eq!(findings(src).len(), 3);
+    }
+
+    #[test]
+    fn a_redefined_text_command_does_not_inherit_its_builtin_domain() {
+        let src = "\\renewcommand{\\text}[1]{\\ensuremath{#1}} $\\text{5-10}$\n";
+        assert!(findings(src).is_empty());
+    }
+
+    #[test]
     fn cline_span_is_left_alone() {
         // Issue #34: `1-3` in `\cline` is a column span, not a number range.
         assert!(findings("\\cline{1-3}\n").is_empty());

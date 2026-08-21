@@ -41,9 +41,9 @@ use crate::syntax::{SyntaxKind, SyntaxNode};
 /// the surface level the formatter cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgKind {
-    /// A mandatory `{…}` argument.
+    /// An argument delimited by `{…}`.
     Brace,
-    /// An optional `[…]` argument.
+    /// An argument delimited by `[…]`.
     Bracket,
 }
 
@@ -103,7 +103,7 @@ pub enum ContentKind {
 /// One argument slot in a command/environment signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArgSpec {
-    /// `true` for a mandatory `{…}` argument, `false` for an optional `[…]` one.
+    /// Whether the argument must be present, independently of its delimiter kind.
     pub required: bool,
     pub kind: ArgKind,
     /// How the formatter treats this argument's content. See [`ContentKind`].
@@ -115,9 +115,9 @@ pub struct ArgSpec {
 
 /// Match an attached group to the next positional signature slot.
 ///
-/// Omitted optional slots are skipped for a brace group. A bracket group never
-/// consumes a pending required slot, and an unmatched group leaves `slot`
-/// unchanged.
+/// Omitted optional slots are skipped regardless of their delimiter kind. A
+/// mismatched group never consumes a pending required slot, and an unmatched
+/// group leaves `slot` at that required slot.
 pub fn match_arg_slot(args: &[ArgSpec], slot: &mut usize, kind: ArgKind) -> Option<ArgSpec> {
     match_arg_slot_index(args, slot, kind).map(|index| args[index])
 }
@@ -131,7 +131,7 @@ pub fn match_arg_slot_index(args: &[ArgSpec], slot: &mut usize, kind: ArgKind) -
             *slot += 1;
             return Some(index);
         }
-        if spec.kind == ArgKind::Bracket {
+        if !spec.required {
             *slot += 1;
             continue;
         }
@@ -1476,14 +1476,50 @@ mod tests {
             match_arg_slot_index(frac, &mut slot, ArgKind::Brace),
             Some(0)
         );
+
+        let optional_brace_then_required_bracket = crate::semantic::xparse::parse_spec("d{} r[]");
+        let mut slot = 0;
+        assert_eq!(
+            match_arg_slot_index(
+                &optional_brace_then_required_bracket,
+                &mut slot,
+                ArgKind::Bracket,
+            ),
+            Some(1)
+        );
+
+        let required_bracket_then_brace = crate::semantic::xparse::parse_spec("r[] m");
+        let mut slot = 0;
+        assert_eq!(
+            match_arg_slot_index(&required_bracket_then_brace, &mut slot, ArgKind::Brace),
+            None
+        );
+        assert_eq!(slot, 0);
+        assert_eq!(
+            match_arg_slot_index(&required_bracket_then_brace, &mut slot, ArgKind::Bracket),
+            Some(0)
+        );
     }
 
     #[test]
     fn bundled_prose_args_flagged() {
-        // A representative prose-bearing command marks its mandatory body slot,
-        // while a name-bearing command leaves every slot opaque.
+        // Prose content is also a positive text-domain claim, while a name-bearing
+        // command leaves every slot opaque and unknown.
+        for name in builtin().command_names() {
+            for argument in builtin().command(name).unwrap().args.iter() {
+                if argument.content == ContentKind::Prose {
+                    assert_eq!(argument.domain, ArgumentDomain::Text, "\\{name}");
+                }
+            }
+        }
         let footnote = &builtin().command("footnote").unwrap().args;
         assert!(footnote.iter().any(|a| a.content == ContentKind::Prose));
+        let section = &builtin().command("section").unwrap().args;
+        assert!(
+            section
+                .iter()
+                .all(|argument| argument.domain == ArgumentDomain::Text)
+        );
         let label = &builtin().command("label").unwrap().args;
         assert!(label.iter().all(|a| a.content == ContentKind::Opaque));
     }

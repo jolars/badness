@@ -387,6 +387,11 @@ trait GatePolicy {
     /// that environment either.
     const OPENER_IS_ENV_BEGIN: bool = false;
 
+    /// Whether an environment closer unwinds nested gate entries by name.
+    /// Only [`EnvGate`] needs this: parser mismatch recovery unwinds nested
+    /// environments until the named opener, so its scan must do the same.
+    const ENV_END_UNWINDS_OPENERS: bool = false;
+
     /// Whether the `\begin`/`\end` and math-*delimiter* anchors apply at any
     /// brace depth, rather than only at the entries' own. (A `$` is read at the
     /// entries' own level whatever this says — every gate's pre-batch scan did,
@@ -571,6 +576,7 @@ impl GatePolicy for EnvGate {
     const STRAY_BRACE: StrayBrace = StrayBrace::ClosesInGroup;
     const MATH_ANCHOR: MathAnchor = MathAnchor::None;
     const OPENER_IS_ENV_BEGIN: bool = true;
+    const ENV_END_UNWINDS_OPENERS: bool = true;
 
     fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
         p.last_r_brace
@@ -3486,6 +3492,36 @@ impl<'t> Parser<'t> {
                         } else if self.env_end_at(i) {
                             if P::ENV_ANCHOR == EnvAnchor::Refutes {
                                 break;
+                            }
+                            if P::ENV_END_UNWINDS_OPENERS {
+                                let end_name = peek_end_name(self.tokens, i);
+                                let mut matched = false;
+                                while let Some(entry) = pending.pop() {
+                                    envs = entry.envs_at_push;
+                                    if !entry.settled {
+                                        debug_assert_eq!(live.pop(), Some(pending.len()));
+                                        verdicts.insert(entry.opener, None);
+                                    }
+                                    if peek_begin_name(self.tokens, entry.opener).as_deref()
+                                        == end_name.as_deref()
+                                    {
+                                        matched = true;
+                                        break;
+                                    }
+                                }
+                                // A mismatched closer is the same recovery
+                                // anchor every per-opener scan used. A named
+                                // match may unwind several nested environments,
+                                // exactly as `finish_environment` does.
+                                if !matched || live.is_empty() {
+                                    for &idx in &live {
+                                        verdicts.insert(pending[idx].opener, None);
+                                    }
+                                    return;
+                                }
+                                i += 1;
+                                newlines = 0;
+                                continue;
                             }
                             match P::NESTING {
                                 // The `\end` must find an environment innermost.

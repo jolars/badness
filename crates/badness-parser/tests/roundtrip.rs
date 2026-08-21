@@ -87,6 +87,15 @@ fn malformed_expl3_group_recovers_in_every_flavor() {
     }
 }
 
+/// Reduced by the property harness: mismatched nested environments must not
+/// make expl3 group replay consume the following malformed group.
+#[test]
+fn malformed_environments_stay_inside_an_expl3_group() {
+    let input = "\\ExplSyntaxOn\\tl_set:Nn \\l_tmpa_tl {{[}\\ExplSyntaxOff\\ifx\\foo\\bar \\begin{itemize}\\begin{fuzzverb}\\end{itemize}\\else \\\\fi}{\\}";
+    let parsed = parse_with_flavor(input, LexConfig::from(LatexFlavor::Document));
+    assert_eq!(parsed.syntax().to_string(), input, "losslessness");
+}
+
 #[test]
 fn roundtrip_dtx_units() {
     // Realistic `.dtx` surface shapes: a meta-comment header, a guarded driver

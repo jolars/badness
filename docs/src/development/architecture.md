@@ -722,6 +722,24 @@ the first genuinely config-shaped input, and are likewise built *and written* at
 constructed at `HIGH` or `MEDIUM`, or every keystroke's global revision bump
 will invalidate it.
 
+Project membership is an explicit `ProjectFiles` singleton input at `MEDIUM`
+durability. The single writer synchronizes it whenever a normalized path enters
+or leaves the tracked-file map; text edits do not touch it. The keyless
+`workspace_project` query derives a canonical `Project` as plain `Eq` data, and
+the include graph, package graph, label and citation resolvers, package-option
+model, and per-file signature scopes are keyless queries over that value. This
+shape is deliberate: Salsa retains interned values for the database lifetime, so
+an interned `Project` retained every historical membership and all memos keyed
+by it as the language server discovered files. A tracked value instead backdates
+when membership is equal and replaces its one memo when membership changes. Read
+jobs need no parallel membership vector—their database snapshot already contains
+the matching input revision.
+
+The query-execution log is also dormant by default. `clear_query_log` opens an
+observation window for incremental tests; production language-server sessions
+never enable recording and therefore cannot retain one log entry per query
+execution.
+
 ### Intra-file reparse
 
 A keystroke used to re-parse the whole file. On a small `.tex` that is fine; on

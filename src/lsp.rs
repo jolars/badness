@@ -811,9 +811,9 @@ enum WorkerJob {
         sentence_no_break: Vec<String>,
     },
     /// A document-symbol request: build the outline on the read pool and reply to
-    /// `id`. Cross-file only for the `.aux` enrichment (resolved numbers), so the
-    /// worker snapshots project membership when it dispatches; `build` locates the
-    /// aux files.
+    /// `id`. Cross-file only for the `.aux` enrichment (resolved numbers); the
+    /// database snapshot carries project membership, and `build` locates the aux
+    /// files.
     Symbols {
         id: RequestId,
         path: PathBuf,
@@ -822,9 +822,8 @@ enum WorkerJob {
         build: BuildConfig,
     },
     /// A `workspace/symbol` request: aggregate every tracked file's outline on the
-    /// read pool and reply to `id` with the matches for `query`. Cross-file (it
-    /// scans the whole project), so the worker snapshots project membership when it
-    /// dispatches, like [`References`](Self::References).
+    /// read pool and reply to `id` with the matches for `query`. The database
+    /// snapshot supplies the whole project's membership.
     WorkspaceSymbols { id: RequestId, query: String },
     /// A folding-range request: compute foldable regions on the read pool and reply
     /// to `id`. Single-file like [`Symbols`](Self::Symbols), with no project snapshot.
@@ -871,9 +870,8 @@ enum WorkerJob {
     },
     /// A completion-resolve request: attach lazy signature/citation detail to a
     /// highlighted item on the read pool and reply to `id`. The item's `data`
-    /// payload is self-contained, so no document buffer is needed; but the lookup
-    /// is cross-file (signature scope, project bibliography), so the worker
-    /// snapshots project membership when it dispatches, like [`Hover`](Self::Hover).
+    /// payload is self-contained, so no document buffer is needed; the cross-file
+    /// lookup reads membership from the database snapshot.
     ResolveCompletion {
         id: RequestId,
         // Boxed: a `CompletionItem` is large and would bloat every `WorkerJob`.
@@ -882,8 +880,7 @@ enum WorkerJob {
     /// A hover request: describe the command/environment signature or `\cite` entry
     /// under the cursor on the read pool and reply to `id`. Cross-file (the signature
     /// scope folds in loaded packages, and a `\cite` resolves against the project
-    /// bibliography), so the worker snapshots project membership when it dispatches,
-    /// like [`GotoDefinition`](Self::GotoDefinition).
+    /// bibliography) through the membership in the database snapshot.
     Hover {
         id: RequestId,
         path: PathBuf,
@@ -896,9 +893,8 @@ enum WorkerJob {
     /// A `textDocument/forwardSearch` request: resolve the cursor file's document
     /// root and that root's compiled PDF, then hand `(%f, %p, %l)` to the
     /// configured viewer. Cross-file — the root scan runs the salsa
-    /// `file_is_document_root` query over the label namespace — so the worker
-    /// snapshots project membership when it dispatches, like [`Hover`](Self::Hover),
-    /// and none of it can run on the main loop, which holds no database.
+    /// `file_is_document_root` query over the label namespace—and none of it can
+    /// run on the main loop, which holds no database.
     ForwardSearch {
         id: RequestId,
         path: PathBuf,
@@ -910,9 +906,8 @@ enum WorkerJob {
         args: Vec<String>,
     },
     /// A signature-help request: describe the command/environment whose argument
-    /// the cursor is typing in on the read pool and reply to `id`. Cross-file
-    /// (the signature scope folds in loaded packages), so the worker snapshots
-    /// project membership when it dispatches, like [`Hover`](Self::Hover).
+    /// the cursor is typing in on the read pool and reply to `id`. The signature
+    /// scope folds in loaded packages from the database snapshot's project.
     SignatureHelp {
         id: RequestId,
         path: PathBuf,
@@ -920,10 +915,9 @@ enum WorkerJob {
         position: Position,
     },
     /// A go-to-definition request: resolve the `\ref`/`\cite` under the cursor to
-    /// its `\label`/bib entry on the read pool and reply to `id`. Cross-file, so
-    /// the worker snapshots project membership when it dispatches (like an analyze).
-    /// `texmf` gates the file-target fallback (an include/package argument jumps to
-    /// its resolved source, installed-tree-aware).
+    /// its `\label`/bib entry on the read pool and reply to `id`. `texmf` gates the
+    /// file-target fallback (an include/package argument jumps to its resolved
+    /// source, installed-tree-aware).
     GotoDefinition {
         id: RequestId,
         path: PathBuf,
@@ -932,9 +926,8 @@ enum WorkerJob {
         texmf: TexmfConfig,
     },
     /// A find-references request: enumerate every `\ref`/`\cite` use of the
-    /// label/key under the cursor on the read pool and reply to `id`. Cross-file
-    /// (and invokable from a definition site), so the worker snapshots project
-    /// membership when it dispatches, like [`GotoDefinition`](Self::GotoDefinition).
+    /// label/key under the cursor on the read pool and reply to `id`. It is
+    /// cross-file and invokable from a definition site.
     References {
         id: RequestId,
         path: PathBuf,
@@ -953,9 +946,9 @@ enum WorkerJob {
         position: Position,
     },
     /// A `prepareRename` request: confirm the cursor sits on a renameable label/cite
-    /// key and reply with that key's range + placeholder. Resolved off a single
-    /// parse of the cursor buffer; no cross-file work, but dispatched to the read
-    /// pool like the others to keep the threading model uniform.
+    /// key and reply with that key's range + placeholder. The cursor target comes
+    /// from one parse; command/environment names additionally use the project-wide
+    /// user-definition gate.
     PrepareRename {
         id: RequestId,
         path: PathBuf,
@@ -963,9 +956,8 @@ enum WorkerJob {
         position: Position,
     },
     /// A `rename` request: build the project-wide [`WorkspaceEdit`] renaming the
-    /// label/cite key under the cursor and every referencing command. Cross-file,
-    /// so the worker snapshots project membership when it dispatches, like
-    /// [`References`](Self::References).
+    /// label/cite key under the cursor and every referencing command. Cross-file
+    /// scope comes from the database snapshot.
     Rename {
         id: RequestId,
         path: PathBuf,
@@ -988,9 +980,8 @@ enum WorkerJob {
         new_name: String,
     },
     /// A `textDocument/diagnostic` pull request: compute diagnostics **on demand**
-    /// off a fresh snapshot and reply to `id`. Cross-file (like an analyze), so the
-    /// worker snapshots project membership when it dispatches. Carries the live
-    /// `text` only as the cancellation fallback's source — currency comes from the
+    /// off a fresh snapshot and reply to `id`. Carries the live `text` only as the
+    /// cancellation fallback's source—currency comes from the
     /// FIFO `job_tx`: the preceding `didChange`'s `Edit` upserts before this job is
     /// handled, so the snapshot is already current (no debounce, no staleness).
     Diagnostic {
@@ -1004,9 +995,8 @@ enum WorkerJob {
     },
     /// A `textDocument/codeAction` request: re-lint the buffer off a fresh snapshot
     /// and reply with a quick-fix per fix-carrying finding overlapping `range`.
-    /// Cross-file (like a [`Diagnostic`](Self::Diagnostic) pull), so the worker
-    /// snapshots project membership when it dispatches; `uri` is needed to key the
-    /// resulting [`WorkspaceEdit`].
+    /// Cross-file state comes from the database snapshot; `uri` is needed to key
+    /// the resulting [`WorkspaceEdit`].
     CodeAction {
         id: RequestId,
         uri: Uri,

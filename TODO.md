@@ -1845,9 +1845,10 @@ near-mechanical ports, the third is a project.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 239 existing
-  slugs: `items` (157 files) and bare/named brace groups are no longer thin (11
-  and 33 slugs); re-measure before trusting any gap list here. `mand-args` /
+  judgment. Measured gaps against the 265 existing
+  slugs: `items` (157 files) and bare/named brace groups are no longer thin (12
+  and 33 slugs); re-measure before trusting any gap list here. Beamer item
+  overlays are covered by `list_item_overlay_prefix`. `mand-args` /
   `opt-and-mand-args` / `environments` yielded `begin_tail_is_body` — content the
   greedy parser attaches to `BEGIN` past the declared arity is body, not header —
   which closed a Tier-1 lone-newline read *and* a column-0 indentation bug, and

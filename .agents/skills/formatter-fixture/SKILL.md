@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 241 existing fixture slugs. **Re-measure before trusting
+Measured against the 265 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -229,10 +229,9 @@ family is about what its directory name suggests.
 
 Candidates not yet checked against a fresh count:
 
-1. **`items`** (157 corpus files) — 7 `reflow_list_*` slugs plus
-   `list_item_continuation_hang`, `sentence_list_items`, `env_alias_list_items`,
-   `dtx_prose_itemize`, `dtx_reflow_itemize`. Decent but not deep; the corpus
-   family is much larger than the coverage.
+1. **`items`** (157 corpus files) — 12 `list`/`item`-matching slugs after
+   `list_item_overlay_prefix`. Decent but not deep; the corpus family is much
+   larger than the coverage.
 2. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` under Done); 24 and 19 slugs already
    match `env`/`arg`, so verify against current slugs before picking.
@@ -307,6 +306,14 @@ the wrong scope. Prefer that shape over a new rule.
 oracle that sees a space token, and on the first run it failed — on an invalid
 key in the *test document* rather than a formatter bug. Compile a new
 `tests/typeset/` input on its own before trusting a diff from it.
+
+Done: Beamer item overlays (`list_item_overlay_prefix`) — a complete
+`<overlay>` prefix and its optional `[label]` are marker syntax and remain glued
+to `\item`; ordinary body continuation still hangs from the bare `\item `
+column. The current Beamer manual settled the spelling after the first proposal
+treated the overlay as body text: its grammar and every example use
+`\item<2->`, so latexindent preserving that glue was meaningful evidence, not
+merely no opinion about intra-line whitespace.
 
 Skip constructs whose corpus family is currently a known failure until the
 underlying bug lands (`oneSentencePerLine` and `commands/figureValign` both wait

@@ -165,6 +165,9 @@ comparison, not a byte target.
 
 - Make reflow safety structural and gate-driven; never use a file-kind default
   workaround.
+- Keep a complete Beamer `<overlay>` prefix glued to a list item's structural
+  marker in `item_overlay_marker_suffix`; the ordinary body still hangs from the
+  bare `\item ` column.
 - `.dtx` margin and guard escapes must fall back safely to preservation, and
   required `macrocode` framing bytes must remain literal.
 - Derive structural statement boundaries from parse structure under reflow.

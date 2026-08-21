@@ -5432,13 +5432,13 @@ fn is_list_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.list)
 }
 
-/// One `\item` of a list environment: the rendered marker (`\item`, or
-/// `\item[label]`), the width to hang continuation lines at (the rendered width of
-/// the control word plus a space — `\item `, *not* the label, so a wide
-/// `description` label does not push the body's left edge around), and the item's
-/// body split into paragraph *chunks* (a blank line in the source starts a new
-/// chunk). `blank_before` records whether a blank line separated this item from the
-/// previous one, so it is reproduced.
+/// One `\item` of a list environment: the rendered marker (`\item`, an optional
+/// `[label]`, and a bounded Beamer `<overlay>` suffix), the width to hang
+/// continuation lines at (the rendered width of the control word plus a space —
+/// `\item `, *not* the label or overlay, so a wide marker does not push the body's
+/// left edge around), and the item's body split into paragraph *chunks* (a blank
+/// line in the source starts a new chunk). `blank_before` records whether a blank
+/// line separated this item from the previous one, so it is reproduced.
 struct ListItem {
     /// The comment lines of a `DOC_COMMENT` bound leading into the `\item`
     /// (`% note` on its own line directly above), rendered one per line above
@@ -5446,6 +5446,7 @@ struct ListItem {
     doc_lines: Vec<String>,
     marker: String,
     hang: usize,
+    glue_body: bool,
     chunks: Vec<Vec<SyntaxElement>>,
     blank_before: bool,
 }
@@ -5497,8 +5498,9 @@ fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 }
 
 /// Build the body IR of a list environment: split into items at each top-level
-/// `\item` and render each as `\item` + a hanging-indented reflow of its content.
-/// Returns `None` (caller falls back) when the body carries no `\item`.
+/// `\item`, collect a bounded Beamer overlay suffix into the marker, and render a
+/// hanging-indented reflow of the content. Returns `None` (caller falls back) when
+/// the body carries no `\item`.
 fn lower_list_body(
     body_elements: &[SyntaxElement],
     cx: LowerCtx<'_>,
@@ -5511,8 +5513,9 @@ fn lower_list_body(
     let mut preamble: Vec<Vec<SyntaxElement>> = vec![Vec::new()];
     let mut items: Vec<ListItem> = Vec::new();
     let mut blank_pending = false;
-    for fi in flat {
-        match fi {
+    let mut index = 0;
+    while index < flat.len() {
+        match &flat[index] {
             FlatItem::Blank => {
                 // A paragraph boundary: it separates items (recorded on the next
                 // item) and, within an item, starts a fresh content chunk.
@@ -5521,19 +5524,29 @@ fn lower_list_body(
                     Some(item) => item.chunks.push(Vec::new()),
                     None => preamble.push(Vec::new()),
                 }
+                index += 1;
             }
-            FlatItem::El(el) if is_item_command(&el) => {
-                let mut item = split_item_marker(&el, cx);
+            FlatItem::El(el) if is_item_command(el) => {
+                let mut item = split_item_marker(el, cx);
+                index += 1;
+                if let Some((suffix, end)) = item_overlay_marker_suffix(&flat, index) {
+                    item.marker.push_str(&suffix);
+                    item.glue_body = flat.get(end).is_some_and(
+                        |next| matches!(next, FlatItem::El(el) if el.kind() == SyntaxKind::COMMENT),
+                    );
+                    index = end;
+                }
                 item.blank_before = blank_pending;
                 items.push(item);
                 blank_pending = false;
             }
             FlatItem::El(el) => {
                 match items.last_mut() {
-                    Some(item) => item.chunks.last_mut().unwrap().push(el),
-                    None => preamble.last_mut().unwrap().push(el),
+                    Some(item) => item.chunks.last_mut().unwrap().push(el.clone()),
+                    None => preamble.last_mut().unwrap().push(el.clone()),
                 }
                 blank_pending = false;
+                index += 1;
             }
         }
     }
@@ -5572,15 +5585,21 @@ fn lower_list_body(
 /// then the marker, then a space and the item's body reflowed inside an
 /// [`Ir::align`] whose width is the item's `hang` (the control word plus the
 /// separating space — `\item `), so wrapped lines hang under where the body would
-/// start after a bare `\item`, regardless of how wide the `[label]` is. An empty
-/// item (marker with no body) renders as the bare marker.
+/// start after a bare `\item`, regardless of how wide the label or overlay is. A
+/// comment glued to an overlay receives no separating space; an empty item (marker
+/// with no body) renders as the bare marker.
 fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
     let content = lower_item_chunks(&item.chunks, cx);
     let marker = Ir::verbatim(item.marker.clone());
     let body = if matches!(content, Ir::Nil) {
         marker
     } else {
-        Ir::concat([marker, Ir::verbatim(" "), Ir::align(item.hang, content)])
+        let separator = if item.glue_body {
+            Ir::Nil
+        } else {
+            Ir::verbatim(" ")
+        };
+        Ir::concat([marker, separator, Ir::align(item.hang, content)])
     };
     if item.doc_lines.is_empty() {
         return body;
@@ -5698,6 +5717,107 @@ fn is_item_command(el: &SyntaxElement) -> bool {
     })
 }
 
+/// Read Beamer's bounded `\item<overlay>[label]<overlay>` suffix from the flat
+/// list stream. The parser deliberately leaves angle-delimited syntax generic,
+/// so list lowering recognizes only the complete, immediately following shape;
+/// incomplete angle text remains ordinary item content.
+fn item_overlay_marker_suffix(flat: &[FlatItem], start: usize) -> Option<(String, usize)> {
+    let (mut suffix, mut end) = angle_suffix(flat, start)?;
+    if let Some((label, label_end)) = bracket_suffix(flat, end) {
+        suffix.push_str(&label);
+        end = label_end;
+        if let Some((overlay, overlay_end)) = angle_suffix(flat, end) {
+            suffix.push_str(&overlay);
+            end = overlay_end;
+        }
+    }
+    Some((suffix, end))
+}
+
+fn angle_suffix(flat: &[FlatItem], start: usize) -> Option<(String, usize)> {
+    let mut index = skip_flat_trivia(flat, start);
+    let first = flat_element(flat.get(index)?)?;
+    let first_text = element_source_text(first);
+    if !first_text.starts_with('<') {
+        return None;
+    }
+
+    let mut suffix = String::new();
+    loop {
+        let element = flat_element(flat.get(index)?)?;
+        if element.kind() == SyntaxKind::COMMENT {
+            return None;
+        }
+        if is_collapsible_trivia(element.kind()) {
+            if !suffix.ends_with(' ') {
+                suffix.push(' ');
+            }
+        } else {
+            let text = element_source_text(element);
+            suffix.push_str(&text);
+            if text.ends_with('>') {
+                return Some((suffix, index + 1));
+            }
+        }
+        index += 1;
+    }
+}
+
+fn bracket_suffix(flat: &[FlatItem], start: usize) -> Option<(String, usize)> {
+    let mut index = skip_flat_trivia(flat, start);
+    let first = flat_element(flat.get(index)?)?;
+    if first.kind() != SyntaxKind::L_BRACKET {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut suffix = String::new();
+    loop {
+        let element = flat_element(flat.get(index)?)?;
+        match element.kind() {
+            SyntaxKind::L_BRACKET => depth += 1,
+            SyntaxKind::R_BRACKET => depth = depth.checked_sub(1)?,
+            SyntaxKind::COMMENT => return None,
+            _ => {}
+        }
+        if is_collapsible_trivia(element.kind()) {
+            if !suffix.ends_with(' ') {
+                suffix.push(' ');
+            }
+        } else {
+            suffix.push_str(&element_source_text(element));
+        }
+        index += 1;
+        if depth == 0 {
+            return Some((suffix, index));
+        }
+    }
+}
+
+fn skip_flat_trivia(flat: &[FlatItem], mut index: usize) -> usize {
+    while let Some(FlatItem::El(element)) = flat.get(index) {
+        if !is_collapsible_trivia(element.kind()) {
+            break;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn flat_element(item: &FlatItem) -> Option<&SyntaxElement> {
+    match item {
+        FlatItem::El(element) => Some(element),
+        FlatItem::Blank => None,
+    }
+}
+
+fn element_source_text(element: &SyntaxElement) -> String {
+    match element {
+        SyntaxElement::Node(node) => node.text().to_string(),
+        SyntaxElement::Token(token) => token.text().to_string(),
+    }
+}
+
 /// Split a `\item` command node into a [`ListItem`] (`blank_before` is the
 /// caller's to set): the rendered marker string (the control word plus any leading
 /// optional `[label]`, the only argument an item marker takes), the *hang* width
@@ -5750,6 +5870,7 @@ fn split_item_marker(el: &SyntaxElement, cx: LowerCtx<'_>) -> ListItem {
         doc_lines,
         marker,
         hang,
+        glue_body: false,
         chunks: vec![content],
         blank_before: false,
     }

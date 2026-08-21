@@ -186,6 +186,9 @@ const CLEAN_CASES: &[&str] = &[
     // the bytes, this pins that `check_format_invariants` itself catches the loss.
     "% why\n\\ifnum1>0 a \\else b \\fi\n",
     r"\begin{itemize}\item one\end{itemize}",
+    // Beamer overlay syntax belongs to the item marker; include the action form,
+    // a following label, and a glued comment in the full trivia-convergence oracle.
+    "\\begin{itemize}\n\\item<2-| alert@3>[Note]%\nLater.\n\\end{itemize}\n",
     // Own-line `%`s in a list body (issue #48): a multi-line comment run bound
     // leading into the next `\item`, and a floating comment isolated between
     // blank lines — neither may glue onto neighbouring content, and both must
@@ -751,6 +754,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // both reproduced).
     ("reflow_list_hanging_indent", WrapMode::Reflow, 72),
     ("reflow_list_item_label", WrapMode::Reflow, 60),
+    ("list_item_overlay_prefix", WrapMode::Reflow, 52),
     ("reflow_list_nested", WrapMode::Reflow, 50),
     ("reflow_list_blank_between_items", WrapMode::Reflow, 80),
     // An own-line `%` in a list body stays on its own line (at the item body's

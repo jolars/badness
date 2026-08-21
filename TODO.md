@@ -444,6 +444,36 @@ sources below are missing.
 
 ## Performance & hardening
 
+- [ ] **Gate the query log behind an observation window.** `record_query`
+  (`src/incremental.rs:1388`) pushes an entry per executed tracked query for the
+  life of the process, and nothing outside tests ever reads or clears the log —
+  the long-running language server grows it without bound. Arity had the same
+  leak (jolars/arity#116) and fixed it by making `clear_query_log` the "start
+  observing" switch: recording is off until the first call, and every test
+  already clears before asserting, so no test changes. Port that commit
+  (`fix(lsp): record query log only during observation`, arity `9959129`)
+  essentially verbatim.
+
+- [ ] **Stop leaking interned `Project` snapshots.** `Project`
+  (`src/project/graph.rs:451`) is a `#[salsa::interned]` struct, and salsa never
+  collects an interned value created above `Durability::LOW` — every distinct
+  membership interns an immortal snapshot plus the project-level memos keyed on
+  its id (`project_graph`, `package_graph`, `resolved_labels`,
+  `resolved_citations` with the whole bibliography, `resolved_package_options`,
+  and per-`(project, file)` `scope_signatures` `SignatureDb`s, the
+  generations-times-members multiplier). The key is
+  `members_of(snapshot) = snapshot.tracked_files()` (`src/lsp.rs:1070`), which
+  grows on every first touch of a file — opening one, or a sibling seeded by
+  `seed_disk_file` for cross-file resolution — and the intern sites are the hot
+  read paths (hover, signature help, completion resolve, the diagnostics
+  passes). Progressively navigating a large project therefore ratchets memory
+  for the whole session. Arity's fix (jolars/arity#116, commit `8cf322f`) is the
+  template: seed membership as a salsa input in the write phase, return the
+  snapshot as plain `Eq` data from a keyless tracked query so it backdates
+  instead of interning, and make the project-level queries keyless — each then
+  keeps exactly one replaced memo. Measured there: about 1.3 MB leaked per
+  membership/metadata change in a 180-file workspace, flat after the fix.
+
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
   (`crates/badness-parser/src/parser/lexer.rs:42`, same in `bib/lexer.rs:29`),
   so short tokens are already allocation-free and the fatou-sized win (-60%

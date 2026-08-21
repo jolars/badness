@@ -1,6 +1,8 @@
 Binary operators get one surrounding space, unary signs and scripts stay tight:
 $a+2*1^5$, $f(x)=x+1$, $a/b+c$, $a=b=c$, and $a<=b$.
 
+Slash adjacency is symmetric: $a/b$, $c / d$, $e/ f$, and $g /h$.
+
 Unary is glued: $-x+1$, $x=-b$, $2*-1$, and $2^{-5}$.
 
 A sign after an opening delimiter is unary: $(-1)^n$, $[-x]$, $f(-1)$, and
@@ -11,6 +13,8 @@ Command operators are spaced too: $a\cdot b$, $a\times b$, and $x\leq y$.
 Generated Unicode and command classes use the same policy: $a≤b$, $a⊕b$, and
 $x\nleq y$.
 
-Group bodies are normalized: $x^{a+b}$ and $\sum_{i=1}^n a_i$.
+Script punctuation stays tight while control-word operators stay readable: $x^{a + b}$,
+$\sum_{i = 1}^{n / 2} a_i$, $x_{a \in A}$, and
+$x_{\frac{a + b}{c \leq d}}$.
 
 A number in scientific notation is not special-cased: $1e-5$.

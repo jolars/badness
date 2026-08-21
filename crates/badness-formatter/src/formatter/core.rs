@@ -6112,7 +6112,9 @@ fn build_alignment_grid(
         // subtree, or a blank line of the cell's own, still falls back.
         let first_block = if math {
             cell.iter().position(|e| {
-                e.as_node().is_some() && lower_math_element(e.clone(), cx).contains_forced_break()
+                e.as_node().is_some()
+                    && lower_math_element(e.clone(), cx, MathSpacing::Normal)
+                        .contains_forced_break()
             })
         } else {
             None
@@ -6132,13 +6134,14 @@ fn build_alignment_grid(
         let hang = match first_block.filter(|_| block_eligible) {
             None | Some(0) => 0,
             Some(i) => {
-                let prefix = lower_math_seq(cell[..i].iter().cloned(), cx, false);
+                let prefix =
+                    lower_math_seq(cell[..i].iter().cloned(), cx, MathSpacing::Normal, false);
                 let width = printer.print_flat(&prefix).trim().chars().count();
                 if width == 0 { 0 } else { width + 1 }
             }
         };
         let ir = if math {
-            lower_math_seq(cell.drain(..), cx, false)
+            lower_math_seq(cell.drain(..), cx, MathSpacing::Normal, false)
         } else {
             let joined = lower_element_stream(cell.drain(..), cx)
                 .into_iter()
@@ -7687,6 +7690,14 @@ fn is_collapsible_trivia_element(element: &SyntaxElement) -> bool {
 /// arity that the greedy parser over-attached, trivia) lowers exactly as the generic
 /// path would.
 fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    lower_command_with_math_spacing(node, cx, MathSpacing::Normal)
+}
+
+fn lower_command_with_math_spacing(
+    node: &SyntaxNode,
+    cx: LowerCtx<'_>,
+    math_spacing: MathSpacing,
+) -> Ir {
     let Some(sig) = command_name(node).and_then(|name| cx.signatures.command(&name)) else {
         // Defensive: the guard already proved a prose signature exists.
         return Ir::concat(lower_element_stream(node.children_with_tokens(), cx));
@@ -7718,7 +7729,7 @@ fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 let spec = match_arg_slot(&sig.args, &mut slot, kind);
                 if math_only {
                     if spec.is_some_and(|spec| spec.domain == ArgumentDomain::Math) {
-                        out.push(lower_math_argument_group(&child, cx));
+                        out.push(lower_math_argument_group(&child, cx, math_spacing));
                     } else {
                         out.push(Ir::verbatim(child.text().to_string()));
                     }
@@ -8044,7 +8055,7 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// let a `%` comment force a line break (so a trailing comment never swallows the
 /// closing delimiter).
 fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    lower_math_seq(node.children_with_tokens(), cx, false)
+    lower_math_seq(node.children_with_tokens(), cx, MathSpacing::Normal, false)
 }
 
 /// Lower a single-formula display-math body per the resolved [`MathWrap`]
@@ -8063,15 +8074,19 @@ fn lower_display_formula_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) 
     // peels one label per level).
     if let Some((label, rest)) = split_leading_label(elements) {
         return Ir::concat([
-            lower_math_element(label, cx),
+            lower_math_element(label, cx, MathSpacing::Normal),
             Ir::hard_line(),
             lower_display_formula_elements(rest, cx),
         ]);
     }
     match cx.math_wrap {
         MathWrap::Auto | MathWrap::Break => lower_display_math_body(elements, cx),
-        MathWrap::SingleLine => lower_math_seq(elements.iter().cloned(), cx, false),
-        MathWrap::Preserve => lower_math_seq(elements.iter().cloned(), cx, true),
+        MathWrap::SingleLine => {
+            lower_math_seq(elements.iter().cloned(), cx, MathSpacing::Normal, false)
+        }
+        MathWrap::Preserve => {
+            lower_math_seq(elements.iter().cloned(), cx, MathSpacing::Normal, true)
+        }
     }
 }
 
@@ -8111,10 +8126,19 @@ enum MathRole {
     Relation,
 }
 
+/// Source-spacing policy for a math list. Script arguments use TeX's compact
+/// convention, while ordinary math lists receive explicit binary/relation padding.
+#[derive(Clone, Copy, PartialEq)]
+enum MathSpacing {
+    Normal,
+    Script,
+}
+
 /// One top-level atom of a display-math body, paired with its [`MathRole`].
 struct MathPiece {
     ir: Ir,
     role: MathRole,
+    spaced_slash: bool,
     /// Whether authored whitespace preceded this atom. Drives operand-operand
     /// spacing exactly as [`lower_math_seq`] does, so a tight command boundary
     /// (`\gamma)`, `}.`) stays tight rather than gaining a spurious space.
@@ -8130,34 +8154,62 @@ struct MathSurfaceAtom {
     ir: Ir,
     class: MathClass,
     delimiter: Option<DelimiterRole>,
+    spaced_slash: bool,
+    control_word_operator: bool,
+    starts_control_word_letter: bool,
+    ends_control_word: bool,
 }
 
 /// Lower one CST element into the semantic atoms that its source surface
 /// contains. Structural nodes stay indivisible; a coalesced `WORD` is sliced at
 /// Unicode scalar boundaries. Consecutive relation scalars remain one surface
 /// atom so authored compound spellings such as `<=` are not separated.
-fn lower_math_atoms(el: SyntaxElement, cx: LowerCtx<'_>) -> Vec<MathSurfaceAtom> {
+fn lower_math_atoms(
+    el: SyntaxElement,
+    cx: LowerCtx<'_>,
+    spacing: MathSpacing,
+) -> Vec<MathSurfaceAtom> {
     let atoms: Vec<_> = math_atoms(&el).collect();
     let SyntaxElement::Token(token) = &el else {
+        let starts_control_word_letter = element_starts_control_word_letter(&el);
+        let ends_control_word = element_ends_control_word(&el);
         let atom = atoms
             .into_iter()
             .next()
             .expect("a structural math element has one semantic atom");
+        let control_word_operator =
+            ends_control_word && matches!(atom.class, MathClass::Bin | MathClass::Rel);
         return vec![MathSurfaceAtom {
-            ir: lower_math_element(el, cx),
+            ir: lower_math_element(el, cx, spacing),
             class: atom.class,
             delimiter: atom.delimiter,
+            spaced_slash: false,
+            control_word_operator,
+            starts_control_word_letter,
+            ends_control_word,
         }];
     };
     if token.kind() != SyntaxKind::WORD {
+        let starts_control_word_letter = token
+            .text()
+            .chars()
+            .next()
+            .is_some_and(is_control_word_letter);
+        let ends_control_word = token.kind() == SyntaxKind::CONTROL_WORD;
         let atom = atoms
             .into_iter()
             .next()
             .expect("a math token has one semantic atom");
+        let control_word_operator =
+            ends_control_word && matches!(atom.class, MathClass::Bin | MathClass::Rel);
         return vec![MathSurfaceAtom {
-            ir: lower_math_element(el, cx),
+            ir: lower_math_element(el, cx, spacing),
             class: atom.class,
             delimiter: atom.delimiter,
+            spaced_slash: false,
+            control_word_operator,
+            starts_control_word_letter,
+            ends_control_word,
         }];
     }
 
@@ -8178,9 +8230,52 @@ fn lower_math_atoms(el: SyntaxElement, cx: LowerCtx<'_>) -> Vec<MathSurfaceAtom>
             ir: Ir::verbatim(text),
             class: atom.class,
             delimiter: atom.delimiter,
+            spaced_slash: atom.class == MathClass::Ord
+                && text == "/"
+                && (start == 0
+                    && token
+                        .prev_token()
+                        .is_some_and(|token| is_collapsible_trivia(token.kind()))
+                    || end == token.text().len()
+                        && token
+                            .next_token()
+                            .is_some_and(|token| is_collapsible_trivia(token.kind()))),
+            control_word_operator: false,
+            starts_control_word_letter: text.chars().next().is_some_and(is_control_word_letter),
+            ends_control_word: false,
         });
     }
     surface
+}
+
+fn is_control_word_letter(character: char) -> bool {
+    character.is_alphabetic() || matches!(character, '@' | '_' | ':')
+}
+
+fn element_starts_control_word_letter(element: &SyntaxElement) -> bool {
+    let first = match element {
+        SyntaxElement::Node(node) => node
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| !is_collapsible_trivia(token.kind())),
+        SyntaxElement::Token(token) => Some(token.clone()),
+    };
+    first
+        .as_ref()
+        .and_then(|token| token.text().chars().next())
+        .is_some_and(is_control_word_letter)
+}
+
+fn element_ends_control_word(element: &SyntaxElement) -> bool {
+    let last = match element {
+        SyntaxElement::Node(node) => node
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| !is_collapsible_trivia(token.kind()))
+            .last(),
+        SyntaxElement::Token(token) => Some(token.clone()),
+    };
+    last.is_some_and(|token| token.kind() == SyntaxKind::CONTROL_WORD)
 }
 
 /// The [`MathRole`] of a top-level math atom. `prev` is the effective role of the
@@ -8229,7 +8324,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK => return None,
             other => {
-                for atom in lower_math_atoms(other, cx) {
+                for atom in lower_math_atoms(other, cx, MathSpacing::Normal) {
                     let role = math_atom_role(atom.class, prev_role, prev_opener);
                     prev_role = role;
                     prev_opener = atom.delimiter == Some(DelimiterRole::Open);
@@ -8241,6 +8336,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                     pieces.push(MathPiece {
                         ir: atom.ir,
                         role,
+                        spaced_slash: atom.spaced_slash,
                         space_before: pending_space,
                         bracket_delta,
                     });
@@ -8268,7 +8364,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 /// indent instead.
 fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let Some(pieces) = collect_math_pieces(elements, cx) else {
-        return lower_math_seq(elements.iter().cloned(), cx, false);
+        return lower_math_seq(elements.iter().cloned(), cx, MathSpacing::Normal, false);
     };
 
     let flat_width = |ir: &Ir| {
@@ -8295,7 +8391,9 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     // [`lower_math_seq`]: a space around any operator (either side) or across an
     // authored gap, nothing between two operands authored tight.
     let space_sep = |k: usize| -> Ir {
-        if pieces[k].role != MathRole::Operand
+        if pieces[k].spaced_slash || pieces[k - 1].spaced_slash {
+            Ir::verbatim(" ")
+        } else if pieces[k].role != MathRole::Operand
             || pieces[k - 1].role != MathRole::Operand
             || pieces[k].space_before
         {
@@ -8417,16 +8515,22 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     Ir::group(body)
 }
 
-/// The shared math-atom sequencer (see [`lower_math_body`]). Spacing is
-/// *role-aware*: a single space is placed around every binary/relation operator
+/// The shared math-atom sequencer (see [`lower_math_body`]). Ordinary math spacing
+/// is *role-aware*: a single space is placed around every binary/relation operator
 /// (`a+b` → `a + b`, `x=-b` → `x = -b`), reusing [`math_atom_role`]'s unary
 /// detection so a `+`/`-` with no left operand stays glued to its operand
-/// (`-x`, `2^{-5}`). Plain operand juxtaposition keeps its authored spacing (a
-/// gap collapses to one space, no gap stays tight). A `%` comment forces a hard
-/// line break, and an authored own-line comment remains own-line under every wrap
-/// mode so its association cannot change. A trailing break (a comment at the
-/// body's end) is emitted rather than trimmed so the caller's closing delimiter
-/// lands on its own line, while a trailing space is dropped.
+/// (`-x`, `2^{-5}`). Script-size lists suppress padding around punctuation
+/// operators recursively, but retain spaces around control-word operators such as
+/// `\in`; function application remains tight to its opener (`\Gamma(x)`). Both
+/// modes preserve a fully glued slash but symmetrize a gap on either side, and
+/// retain any separator required to avoid merging a control word with a following
+/// letter. Plain operand juxtaposition keeps its authored spacing (a gap collapses
+/// to one space, no gap stays tight). A `%`
+/// comment forces a hard line break, and an authored own-line comment remains
+/// own-line under every wrap mode so its association cannot change. A trailing
+/// break (a comment at the body's end) is emitted rather than trimmed so the
+/// caller's closing delimiter lands on its own line, while a trailing space is
+/// dropped.
 ///
 /// With `preserve_newlines` ([`MathWrap::Preserve`]) a trivia run spanning at
 /// least one newline becomes a hard break instead of a space — the author's
@@ -8437,6 +8541,7 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
 fn lower_math_seq(
     elements: impl Iterator<Item = SyntaxElement>,
     cx: LowerCtx<'_>,
+    spacing: MathSpacing,
     preserve_newlines: bool,
 ) -> Ir {
     let mut out: Vec<Ir> = Vec::new();
@@ -8445,6 +8550,10 @@ fn lower_math_seq(
     // [`collect_math_pieces`]).
     let mut prev_role = MathRole::Relation;
     let mut prev_opener = false; // the previous atom ended with an opening delimiter
+    let mut prev_delimiter_edge = false;
+    let mut prev_spaced_slash = false;
+    let mut prev_control_word_operator = false;
+    let mut prev_ends_control_word = false;
     let mut pending_space = false; // authored whitespace since the last atom
     let mut pending_break = false; // a comment forced a hard line break
     let mut pending_newline = false; // a preserved authored line break
@@ -8488,21 +8597,47 @@ fn lower_math_seq(
                     &other,
                     SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK
                 );
-                for atom in lower_math_atoms(other, cx) {
+                for atom in lower_math_atoms(other, cx, spacing) {
                     let role = math_atom_role(atom.class, prev_role, prev_opener);
+                    let touches_spaced_slash = prev_spaced_slash || atom.spaced_slash;
+                    let delimiter_edge = matches!(
+                        atom.delimiter,
+                        Some(DelimiterRole::Open | DelimiterRole::Close)
+                    );
+                    let touches_delimiter = prev_delimiter_edge || delimiter_edge;
+                    let spaced_operands = role == MathRole::Operand
+                        && prev_role == MathRole::Operand
+                        && pending_space
+                        && !touches_delimiter;
+                    let script_operator_spacing =
+                        atom.control_word_operator || prev_control_word_operator;
+                    let normal_spacing = spacing == MathSpacing::Normal
+                        && (role != MathRole::Operand
+                            || prev_role != MathRole::Operand
+                            || pending_space);
                     if !started {
                         // no separator before the first atom
                     } else if pending_break || pending_newline {
                         out.push(Ir::hard_line());
-                    } else if role != MathRole::Operand
-                        || prev_role != MathRole::Operand
-                        || pending_space
+                    } else if prev_ends_control_word && atom.starts_control_word_letter {
+                        // Tight script spacing must not merge `\in A` into the
+                        // distinct control word `\inA`.
+                        out.push(Ir::verbatim(" "));
+                    } else if touches_spaced_slash
+                        || normal_spacing
+                        || spacing == MathSpacing::Script
+                            && (script_operator_spacing || spaced_operands)
                     {
                         // Space around a binary/relation operator (either side), or a
-                        // collapsed authored gap between operands.
+                        // collapsed authored gap between ordinary operands. Script-size
+                        // lists suppress incidental gaps around operators.
                         out.push(Ir::verbatim(" "));
                     }
                     prev_opener = atom.delimiter == Some(DelimiterRole::Open);
+                    prev_delimiter_edge = delimiter_edge;
+                    prev_spaced_slash = atom.spaced_slash;
+                    prev_control_word_operator = atom.control_word_operator;
+                    prev_ends_control_word = atom.ends_control_word;
                     out.push(atom.ir);
                     started = true;
                     pending_space = false;
@@ -8521,17 +8656,19 @@ fn lower_math_seq(
 }
 
 /// Lower one math atom (a non-trivia element of a math body).
-fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>) -> Ir {
+fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>, spacing: MathSpacing) -> Ir {
     match el {
         SyntaxElement::Node(n) => match n.kind() {
-            SyntaxKind::SCRIPTED => lower_scripted(&n, cx),
+            SyntaxKind::SCRIPTED => lower_scripted(&n, cx, spacing),
             SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT => lower_script(&n, cx),
-            SyntaxKind::GROUP => lower_math_group(&n, cx),
-            SyntaxKind::LEFT_RIGHT => lower_left_right(&n, cx),
+            SyntaxKind::GROUP => lower_math_group(&n, cx, spacing),
+            SyntaxKind::LEFT_RIGHT => lower_left_right(&n, cx, spacing),
             // Only signature-proven math slots recurse. A scanned redefinition
             // shadows the built-in with unknown domains and restores the
             // whole-command preservation fallback.
-            SyntaxKind::COMMAND if command_has_math_arg(&n, cx) => lower_command(&n, cx),
+            SyntaxKind::COMMAND if command_has_math_arg(&n, cx) => {
+                lower_command_with_math_spacing(&n, cx, spacing)
+            }
             SyntaxKind::COMMAND => Ir::verbatim(n.text().to_string()),
             // Environments, or anything unexpected: defer to generic lowering.
             _ => lower_node(&n, cx),
@@ -8544,20 +8681,20 @@ fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>) -> Ir {
 /// body sits one column past the `{` ([`Ir::align`]), so a multi-line body (a
 /// nested block environment) hangs at its own start column — its `\end{…}` under
 /// its `\begin{…}` — instead of at the `{`. A single-line body is unaffected.
-fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+fn lower_math_group(node: &SyntaxNode, cx: LowerCtx<'_>, spacing: MathSpacing) -> Ir {
     let inner = node
         .children_with_tokens()
         .filter(|el| !matches!(el.kind(), SyntaxKind::L_BRACE | SyntaxKind::R_BRACE));
     Ir::concat([
         Ir::verbatim("{"),
-        Ir::align(1, lower_math_seq(inner, cx, false)),
+        Ir::align(1, lower_math_seq(inner, cx, spacing, false)),
         Ir::verbatim("}"),
     ])
 }
 
 /// Lower a signature-proven math argument while retaining its authored brace or
 /// bracket delimiters. Only the body enters recursive math lowering.
-fn lower_math_argument_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+fn lower_math_argument_group(node: &SyntaxNode, cx: LowerCtx<'_>, spacing: MathSpacing) -> Ir {
     let (open_kind, close_kind, open, close) = match node.kind() {
         SyntaxKind::GROUP => (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, "{", "}"),
         SyntaxKind::OPTIONAL => (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET, "[", "]"),
@@ -8568,7 +8705,7 @@ fn lower_math_argument_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     );
     Ir::concat([
         Ir::verbatim(open),
-        Ir::align(1, lower_math_seq(inner, cx, false)),
+        Ir::align(1, lower_math_seq(inner, cx, spacing, false)),
         Ir::verbatim(close),
     ])
 }
@@ -8588,7 +8725,7 @@ fn lower_math_argument_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// that flat opening width — so a multi-line body (a nested block environment)
 /// hangs at its own start column, its `\end{…}` under its `\begin{…}` rather than
 /// under the `\left`. A single-line body is unaffected.
-fn lower_left_right(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+fn lower_left_right(node: &SyntaxNode, cx: LowerCtx<'_>, spacing: MathSpacing) -> Ir {
     let mut parts: Vec<Ir> = Vec::new();
     // The flat width of the opening run (`\left(`, `\left\langle`, …): every
     // delimiter token seen before the body.
@@ -8604,7 +8741,7 @@ fn lower_left_right(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                         open_width + 1,
                         Ir::concat([
                             Ir::verbatim(" "),
-                            lower_math_body(&n, cx),
+                            lower_math_seq(n.children_with_tokens(), cx, spacing, false),
                             Ir::verbatim(" "),
                         ]),
                     ));
@@ -8630,7 +8767,7 @@ fn math_body_is_empty(node: &SyntaxNode) -> bool {
 
 /// Lower a `SCRIPTED` atom: the base then its `^`/`_` scripts, all tight (the
 /// trivia the parser kept inside the node for losslessness is dropped here).
-fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>, spacing: MathSpacing) -> Ir {
     Ir::concat(
         strip_virtual_dtx_framing(node.children_with_tokens(), cx)
             .into_iter()
@@ -8641,7 +8778,7 @@ fn lower_scripted(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 {
                     Some(lower_script(&n, cx))
                 }
-                other => Some(lower_math_element(other, cx)),
+                other => Some(lower_math_element(other, cx, spacing)),
             }),
     )
 }
@@ -8661,7 +8798,7 @@ fn lower_script(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 {
                     Some(Ir::verbatim(t.text()))
                 }
-                other => Some(lower_math_element(other, cx)),
+                other => Some(lower_math_element(other, cx, MathSpacing::Script)),
             }),
     )
 }

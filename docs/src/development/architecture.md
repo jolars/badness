@@ -1254,13 +1254,20 @@ redefinition shadows the curated built-in with `Unknown` domains and restores
 whole-command preservation.
 
 Math lowering consumes the shared virtual-atom view rather than parser token
-boundaries. Its policy places one space around `Bin` and `Rel` atoms, preserves
-compound relation spellings such as `<=`, and treats a binary atom without a
-left operand as unary. Other classes are operands for this stage; in particular,
-unicode-math classifies ordinary `/` as `Ord`, so it remains tight. Delimiter
-depth and unary-after-opener detection use the classifier's separate delimiter
-role, not parallel string tables. The ellipsis and mismatched-delimiter lints
-consume the same facts but apply their own policies.
+boundaries. In direct math content and signature-proven `Math` slots, its policy
+places one space around `Bin` and `Rel` atoms, preserves compound relation
+spellings such as `<=`, and treats a binary atom without a left operand as
+unary. Subscript and superscript content instead keeps punctuation operators
+compact throughout its nested math subtree (`i=1` and `n+1`) while retaining
+spaces around control-word operators (`x \in A` and `x \leq y`). Authored gaps
+at delimiter edges collapse away, so function application reads `\Gamma(x)`.
+Other classes are operands for this stage; in particular, unicode-math
+classifies ordinary `/` as `Ord`. The formatter preserves a fully glued slash
+(`a/b`) but symmetrizes a gap on either side (`a/ b` or `a /b`) to `a / b` in
+both policies. Delimiter depth and unary-after-opener detection use the
+classifier's separate delimiter role, not parallel string tables. The ellipsis
+and mismatched-delimiter lints consume the same facts but apply their own
+policies.
 
 ### Conditionals
 

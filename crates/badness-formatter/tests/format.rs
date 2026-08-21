@@ -945,12 +945,20 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_collapse_spaces", WrapMode::Preserve, 80),
     ("math_trim_delims", WrapMode::Preserve, 80),
     ("math_tight_scripts", WrapMode::Preserve, 80),
-    // A single space is placed around every binary/relation virtual atom,
+    // A single space is placed around every top-level binary/relation virtual atom,
     // including generated Unicode and command classes. A unary `+`/`-` with no
-    // left operand stays glued (`-x`, `x=-b`, `2^{-5}`), ordinary `/` is tight,
-    // and group bodies are normalized too (`x^{a+b}` -> `x^{a + b}`). Scientific
-    // notation (`1e-5`) is deliberately not special-cased.
+    // left operand stays glued (`-x`, `x=-b`, `2^{-5}`). A fully glued `/` stays
+    // tight, while a gap on either side is made symmetric. Script-size punctuation
+    // stays tight throughout, including nested known-math command arguments.
+    // Control-word operators retain readable spacing (`a \in A`), while function
+    // application glues to its opener (`\Gamma(x)`). Scientific notation (`1e-5`)
+    // is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
+    // Curated argument domains are positional: only known `Math` slots recurse
+    // through math spacing, while `Text`, `Unknown`, and slots shadowed by a
+    // scanned redefinition remain exactly as authored.
+    ("math_argument_domains", WrapMode::Preserve, 80),
+    ("math_argument_redefinition", WrapMode::Preserve, 80),
     // The layout engine keeps single-token script braces verbatim; it never
     // strips them (that is the `redundant-script-braces` lint autofix's job).
     ("math_keep_single_token_braces", WrapMode::Preserve, 80),

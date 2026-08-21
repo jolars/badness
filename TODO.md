@@ -88,12 +88,14 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
    accounting, and mismatched-delimiter rule share the classifier but retain
    their own policies. Unknown commands fall back to `Ord`.
 
-4. [ ] **One spacing policy.** Finish resolving the script-argument versus
+4. [x] **One spacing policy.** Finish resolving the script-argument versus
    command-argument inconsistency (§ *Formatter*, issue #42's examples): retain
-   the classifier-established tight ordinary `/`, suppress operator spacing
-   inside script-size content, and keep one space around top-level binary and
-   relation atoms. Apply it only to direct math content and known `Math` slots;
-   preserve `Text` and `Unknown` arguments. Add mixed-domain structural tests.
+   fully glued ordinary `/` while symmetrizing an authored gap to one space on
+   both sides, keep punctuation operators compact but control-word operators
+   readable inside script-size content, and keep one space around top-level
+   binary and relation atoms. Apply it only to direct math content and known
+   `Math` slots; preserve `Text` and `Unknown` arguments. Add mixed-domain
+   structural tests.
    `task typeset:check` is an extra regression oracle, not the proof of safety.
 
 5. [ ] **Record the licenses.** State the narrow math-whitespace license in
@@ -306,18 +308,13 @@ become an opt-in, but overflow is honest), and no math rendering engine.
   `tests/typeset/` case pinning the space-token claim before it lands, since the
   ratchet cannot see the difference either way.
 
-- [ ] **Math operator spacing is inconsistent between script args and command
-  args** (surfaced by issue #42's examples). A braced script argument is lowered
-  through the math seq path and gets operator spacing (`\sum_{i=1}^m` ->
-  `\sum_{i = 1}^m`, `\Big \}^{1/2}` -> `\}^{1 / 2}`), while a command argument in
-  math mode (`\frac{1}{n^{m+1}}`) is left untouched — the two should agree.
-  Related conventions question: `/` (and arguably `*`) is conventionally set
-  tight (`1/2`, per Knuth), and script-size content is conventionally tight
-  overall, so the likely resolution is tight `/` everywhere and no operator
-  spacing inside `^`/`_` arguments — decide, then make both paths agree.
-  *Staged as step 3 of the math roadmap; the mode-asymmetry fix (step 2) is
-  what lets both paths agree structurally rather than by patching the
-  verbatim arm.*
+- [x] **Math operator spacing is inconsistent between script args and command
+  args** (surfaced by issue #42's examples). Direct math and known `Math` slots
+  now share one sequencer: fully glued `/` remains tight, a gap on either side
+  becomes one space on both sides, top-level binary and relation atoms receive
+  one surrounding space, and script-size subtrees keep punctuation operators
+  compact while spacing control-word operators. `Text`, `Unknown`, unmatched,
+  and shadowed argument slots retain the preservation fallback.
 
 - [x] **Opaque-group layout non-determinism (the last Tier-1 read) is retired.**
   Under `Reflow` a brace group is width-driven (`lower_opaque_group`): flat when

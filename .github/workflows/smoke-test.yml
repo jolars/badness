@@ -40,6 +40,13 @@ jobs:
         posquit0/Awesome-CV
         stacks/stacks-project
         vEnhance/napkin
+        OpenLogicProject/OpenLogic
+        OpenIntroStat/openintro-statistics
+        VictorEijkhout/tex-by-topic
+        mit-pdos/xv6-riscv-book
+        UniMath/SymmetryBook
+        AllenDowney/ThinkStats2
+        AllenDowney/ThinkBayes2
       # Known non-actionable failures to suppress from issue filing. Each entry
       # is `repo|path|type`; the path is repo-relative (as `git ls-files`
       # prints it). Only the *named* failure type is suppressed — if the same

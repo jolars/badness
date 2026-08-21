@@ -1230,14 +1230,17 @@ an explicit `--wrap reflow` is exactly as safe as any other mode. A fully
 margined, line-owning documentation environment is lowered as virtual LaTeX: its
 `DOC_MARGIN` tokens remain in the CST, the formatter omits them while laying out
 the environment, then applies `% ` to each generated content line and `%` to an
-empty line. Guards, `macrocode`, protected bodies, mixed-margin regions, and
-nodes that do not own their closing line refuse this path. Other relayout arms
-refuse a node whose subtree carries a `.dtx` margin or guard, because reflowing
-one can drop the `%` margin and on an unmargined line a `^^A` doc comment
-re-lexes as content. A residual margin-escape detector backs that up: when a
-probe-gated reflow would commit content outside the margin, the paragraph
-re-lowers on the byte-faithful preserve path. Never re-introduce a file-kind
-wrap default to paper over a layout bug; fix the gate.
+empty line. Such an environment composes as a self-margin-owning block inside a
+documentation paragraph, so prose before and after it continues through the
+ordinary margin-aware reflow without acquiring a second prefix. Guards,
+`macrocode`, protected bodies, mixed-margin regions, and nodes that do not own
+their closing line refuse this path. Other relayout arms refuse a node whose
+subtree carries a `.dtx` margin or guard, because reflowing one can drop the `%`
+margin and on an unmargined line a `^^A` doc comment re-lexes as content. A
+residual margin-escape detector backs that up: when a probe-gated reflow would
+commit content outside the margin, the paragraph re-lowers on the byte-faithful
+preserve path. Never re-introduce a file-kind wrap default to paper over a
+layout bug; fix the gate.
 
 ### Optional arguments, tables, and math spacing
 

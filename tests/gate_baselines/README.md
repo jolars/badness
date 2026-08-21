@@ -152,6 +152,19 @@ output moved in 59 files across all four corpora and every hunk is one of the
 two shapes: a `{`-glued `%` re-joining its opener (a *join*: `\title{\n  %` →
 `\title{%`, the bulk of it), or a `{%}` splitting into `{%` / `}`.
 
+Re-recorded once more after **virtual `.dtx` documentation environments became
+self-margin-owning blocks inside `DtxProse`**. Prose before, between, and after
+such regions now reflows under the canonical `% ` margin instead of forcing the
+whole mixed paragraph onto the preserve path. Across latex3, latex2e, and pgf,
+the `all` sets lost 159 entries (82 `comment-change`, 64 `content-change`, and
+13 `idempotency`) and the `trivia` sets lost 76 (64 `content-change` and 12
+`non-fixed-point`), with no newly failing file. Latex2e's `lthooks.dtx` changed
+classification from `content-change` to `non-fixed-point`: the baseline binary
+reproduces that same pass-one/pass-two divergence on the identical perturbed
+input, but the earlier content failure had masked it. The resulting all/trivia
+counts are 15/19 for latex3, 13/22 for latex2e, and 15/15 for pgf; latexindent
+is byte-unchanged at 145/145.
+
 **No re-record** was needed for the **opaque-group width-driven layout** (the
 retirement of the last Tier-1 `spans_multiple_lines` read): all eight sets are
 byte-unchanged — no additions, no resolutions. Getting there took three

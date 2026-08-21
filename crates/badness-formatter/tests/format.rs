@@ -1708,6 +1708,10 @@ const DTX_REFLOW_FIXTURES: &[(&str, usize, WidthBound)] = &[
     // (an out-of-region expl3 run): the prose rewraps under `% ` while each
     // chunk commits raw behind its byte-exact `%    ` frame lead.
     ("dtx_reflow_expl3_doc_run", 50, WidthBound::Enforced),
+    // Fully margin-owned virtual environments compose with prose on either side;
+    // each environment owns its generated margins while the surrounding prose
+    // resumes the ordinary `DtxProse` fill.
+    ("dtx_reflow_virtual_regions", 50, WidthBound::Enforced),
     // A `function` environment's xparse `v` name argument is a same-line VERB
     // capture, so its preceding optional must not break. The ordinary `axis`
     // optional can expand with synthesized doc margins, and `\documentclass`

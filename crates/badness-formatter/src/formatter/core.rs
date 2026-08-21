@@ -1550,13 +1550,12 @@ fn margin_floats_into_paragraph(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
 /// paragraph is pure running prose ([`dtx_paragraph_reflows`]) the bare prose is
 /// reflowed to the line width via [`reflow_elements`] in [`ReflowKind::DtxProse`]
 /// mode, which drops each line's `%` margin and re-emits a canonical `% ` margin
-/// on every reflowed line (see [`Ir::margin_prefix`]). When it instead contains or
-/// sits inside an environment (a `% \begin{itemize}` list, a `macrocode` block, a
-/// `macro`/`environment` doc block) it is lowered *preserve-style* so frame margins
-/// and item lines round-trip byte-for-byte. One narrow mixed shape is split: a
-/// complete virtual documentation environment followed by an independently safe
-/// prose tail. The environment keeps its structural layout, while the tail reflows
-/// under the canonical margin.
+/// on every reflowed line (see [`Ir::margin_prefix`]). A complete virtual
+/// documentation environment may participate as a self-margin-owning block, so
+/// prose on either side keeps reflowing; other paragraphs that contain or sit
+/// inside an environment (a `macrocode` block or a `macro`/`environment` doc block)
+/// are lowered *preserve-style* so frame margins and item lines round-trip
+/// byte-for-byte.
 ///
 /// [`dtx_paragraph_reflows`] is a cheap up-front gate; the exact one is the reflow
 /// itself. A forced-break block whose interior lines ride their own margins is
@@ -1573,8 +1572,6 @@ fn margin_floats_into_paragraph(margin: &SyntaxToken, cx: LowerCtx<'_>) -> bool 
 fn lower_dtx_doc_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     if dtx_doc_paragraph_reflows_safely(node, cx) {
         reflow_elements(node.children_with_tokens(), cx, ReflowKind::DtxProse)
-    } else if let Some(ir) = lower_dtx_region_then_prose(node, cx) {
-        ir
     } else {
         // Margin frames still normalize, but nested inline constructs stay
         // opaque: a width break inside one would create an unmargined line.
@@ -1584,54 +1581,6 @@ fn lower_dtx_doc_paragraph(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         };
         Ir::concat(lower_element_stream(node.children_with_tokens(), preserve))
     }
-}
-
-/// Split the parser's mixed paragraph shape where a complete virtual documentation
-/// environment is followed by ordinary margined prose. The environment must be the
-/// paragraph's first content and end on its own physical line; the remainder must
-/// pass the same exact margin-safety probe as any other `.dtx` prose run. This keeps
-/// authored frame layout opaque while still canonicalizing `%  Text` to `% Text`.
-fn lower_dtx_region_then_prose(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Ir> {
-    let elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
-    let region = elements
-        .iter()
-        .position(|element| !is_collapsible_trivia_element(element))?;
-    let SyntaxElement::Node(region_node) = &elements[region] else {
-        return None;
-    };
-    if !dtx_doc_region(region_node, cx) {
-        return None;
-    }
-
-    let mut tail_start = region + 1;
-    let mut boundary_newlines = 0;
-    while let Some(SyntaxElement::Token(token)) = elements.get(tail_start) {
-        if !is_collapsible_trivia(token.kind()) {
-            break;
-        }
-        boundary_newlines += token.text().matches('\n').count();
-        tail_start += 1;
-    }
-    let tail = elements.get(tail_start..)?;
-    if boundary_newlines == 0 || tail.is_empty() || !dtx_run_reflows_safely(tail, cx) {
-        return None;
-    }
-
-    let preserve = LowerCtx {
-        preserve_dtx_nested_layout: true,
-        ..cx
-    };
-    let head = Ir::concat(lower_element_stream(
-        elements[..=region].iter().cloned(),
-        preserve,
-    ));
-    let separator = if boundary_newlines >= 2 {
-        Ir::empty_line()
-    } else {
-        Ir::hard_line()
-    };
-    let tail = reflow_elements(tail.iter().cloned(), cx, ReflowKind::DtxProse);
-    Some(Ir::concat([head, separator, tail]))
 }
 
 /// Whether a `.dtx` documentation paragraph may be reflowed: it is unstructured
@@ -1644,7 +1593,7 @@ fn lower_dtx_region_then_prose(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Ir
 /// so both go through here, memoized per node, and always under the *probing*
 /// context so the two callers cannot disagree.
 fn dtx_doc_paragraph_reflows_safely(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
-    if !dtx_paragraph_reflows(node) || !dtx_paragraph_starts_margined(node) {
+    if !dtx_paragraph_reflows(node, cx) || !dtx_paragraph_starts_margined(node) {
         return false;
     }
     if let Some(&answer) = cx.dtx_reflow_cache.borrow().get(node) {
@@ -1675,18 +1624,24 @@ fn dtx_doc_paragraph_reflows_safely(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool
     answer
 }
 
-/// Whether a `.dtx` documentation paragraph is pure running prose safe to reflow:
-/// it neither contains an `ENVIRONMENT` (a margin-framed list/`macrocode`/doc block
-/// whose frame margins must stay column-0) nor sits inside one (its body lines,
-/// e.g. `\item`s, must keep their authored breaks). Anything structured is left on
-/// the byte-faithful preserve path.
-fn dtx_paragraph_reflows(node: &SyntaxNode) -> bool {
+/// Whether a `.dtx` documentation paragraph has only structures that can reflow
+/// under its canonical margin. A direct, fully margin-owned environment composes
+/// as a self-owning block; an environment hidden inside another child, an unsafe
+/// direct environment, or an enclosing environment keeps the paragraph on the
+/// byte-faithful preserve path.
+fn dtx_paragraph_reflows(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     !node
-        .descendants()
-        .any(|d| d.kind() == SyntaxKind::ENVIRONMENT)
-        && !node
-            .ancestors()
-            .any(|a| a.kind() == SyntaxKind::ENVIRONMENT)
+        .ancestors()
+        .any(|ancestor| ancestor.kind() == SyntaxKind::ENVIRONMENT)
+        && node.children().all(|child| {
+            if child.kind() == SyntaxKind::ENVIRONMENT {
+                dtx_doc_region(&child, cx)
+            } else {
+                !child
+                    .descendants()
+                    .any(|descendant| descendant.kind() == SyntaxKind::ENVIRONMENT)
+            }
+        })
 }
 
 /// Greedily reflow a stream of inline elements to the line width, the shared core
@@ -2477,12 +2432,18 @@ fn reflow_elements_checked(
                     continue;
                 }
                 if ir.contains_forced_break() {
+                    // A virtual documentation environment already owns every
+                    // physical margin through its `Ir::doc_margin` wrapper. It is
+                    // therefore a complete segment in `DtxProse`: surrounding
+                    // prose may keep reflowing, but the accumulator must neither
+                    // add another `% ` nor record the block as a margin escape.
+                    let owns_dtx_margin =
+                        margin.is_some() && dtx_doc_region(child, cx);
                     // A margin-framed `macrocode` chunk opening its own margined
                     // source line, reachable only through a reflowing expl3 run
-                    // ([`dtx_run_reflows_safely`]; the paragraph gate admits no
-                    // environment): committed raw behind its byte-exact source
-                    // frame lead, never the canonical `% ` — docstrip matches the
-                    // `%    \begin{macrocode}` line literally.
+                    // ([`dtx_run_reflows_safely`]): committed raw behind its
+                    // byte-exact source frame lead, never the canonical `% ` —
+                    // docstrip matches the `%    \begin{macrocode}` line literally.
                     let frame_lead = (margin.is_some()
                         && line_margined
                         && !line_has_content
@@ -2516,6 +2477,9 @@ fn reflow_elements_checked(
                     } else if let Some(lead) = frame_lead {
                         b.end_line();
                         b.push_segment(Ir::concat([lead, ir]));
+                    } else if owns_dtx_margin {
+                        b.end_line();
+                        b.push_segment(ir);
                     } else if margin.is_some() && line_margined && block_rides_own_margins(child) {
                         // A block amid `.dtx` doc prose whose interior lines all
                         // carry their own column-0 margins, opening on a margined

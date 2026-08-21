@@ -1,19 +1,6 @@
-./l3kernel/l3box.dtx	trivia	content-change
-./l3kernel/l3coffins.dtx	trivia	non-fixed-point
-./l3kernel/l3doc.dtx	trivia	content-change
-./l3kernel/l3fp-extended.dtx	trivia	content-change
-./l3kernel/l3fp.dtx	trivia	content-change
-./l3kernel/l3kernel-functions.dtx	trivia	content-change
-./l3kernel/l3seq.dtx	trivia	content-change
-./l3kernel/l3str-convert.dtx	trivia	content-change
 ./l3kernel/testfiles-backend/support/driver.tex	format-error	format-error
-./l3leftovers/cs-input.dtx	trivia	content-change
-./l3leftovers/l3precom.dtx	trivia	content-change
-./l3leftovers/tl-act.dtx	trivia	content-change
 ./l3packages/xparse/xparse-2018-04-12.sty	trivia	non-fixed-point
 ./l3packages/xparse/xparse-generic.tex	trivia	non-fixed-point
-./l3trial/l3doc/examples/testing.dtx	trivia	content-change
-./l3trial/l3ldb/l3ldbparse.dtx	trivia	non-fixed-point
 ./support/docstrip.tex	format-error	format-error
 ./texmf/tex/latex/base/doc-2016-02-15.sty	format-error	format-error
 ./texmf/tex/latex/base/doc-2021-06-01.sty	format-error	format-error
@@ -28,6 +15,5 @@
 ./xpackages/xinitials/xinitials-test.tex	format-error	format-error
 ./xpackages/xor/xo-balance.tex	format-error	format-error
 ./xpackages/xor/xo-here.dtx	trivia	non-fixed-point
-./xpackages/xor/xo-or.dtx	trivia	non-fixed-point
 ./xpackages/xor/xo-page.dtx	format-error	format-error
 ./xpackages/xor/xo-pfloat.tex	format-error	format-error

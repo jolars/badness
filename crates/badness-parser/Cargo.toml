@@ -36,6 +36,7 @@ serde_json = "1.0.151"
 
 [dev-dependencies]
 insta = "1.47.2"
+proptest = "1.11.0"
 # Test-only: the reparse corpus sweep is ~6.3k files of seeded edits. A
 # dev-dependency is invisible to consumers and to the wasm build, so this does
 # not touch the crate's wasm-clean contract.

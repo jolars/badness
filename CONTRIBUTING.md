@@ -30,19 +30,26 @@ available task. The most common ones are below, but every task maps to a plain
 
 ## Building and testing
 
-  | Task         | Equivalent                                                 | What it does                                             |
-  | ------------ | ---------------------------------------------------------- | -------------------------------------------------------- |
-  | `task build` | `cargo build`                                              | Dev build.                                               |
-  | `task test`  | `cargo test`                                               | Run the whole test suite.                                |
-  | `task fmt`   | `cargo fmt`                                                | Format the code.                                         |
-  | `task lint`  | `cargo clippy --all-targets --all-features -- -D warnings` | Clippy, warnings as errors.                              |
-  | `task check` |                                                            | Everything CI runs: `fmt-check`, `lint`, `test`, `wasm`. |
+  | Task                     | Equivalent                                                 | What it does                                             |
+  | ------------------------ | ---------------------------------------------------------- | -------------------------------------------------------- |
+  | `task build`             | `cargo build`                                              | Dev build.                                               |
+  | `task test`              | `cargo test`                                               | Run the whole test suite.                                |
+  | `task parser-properties` |                                                            | Run parser losslessness properties at nightly depth.     |
+  | `task fmt`               | `cargo fmt`                                                | Format the code.                                         |
+  | `task lint`              | `cargo clippy --all-targets --all-features -- -D warnings` | Clippy, warnings as errors.                              |
+  | `task check`             |                                                            | Everything CI runs: `fmt-check`, `lint`, `test`, `wasm`. |
 
 Run `task check` before opening a pull request; it mirrors CI exactly.
 
 Badness uses [insta](https://insta.rs/) for snapshot tests. When a change
 deliberately alters formatter or parser output, refresh snapshots with
 `task snapshots` and review the diff before committing.
+
+The ordinary test suite runs 256 cases for each parser losslessness property.
+`task parser-properties` raises that to 4,096 cases, matching the scheduled
+nightly job. When proptest finds a counterexample, reduce it and preserve it as
+a readable regression test; the suite deliberately does not persist opaque seed
+files.
 
 Performance is first-class. Benchmark before optimizing, and never regress
 losslessness for speed.

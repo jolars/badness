@@ -488,13 +488,9 @@ sources below are missing.
   it is not urgent. `tests/scaling.rs` tolerates the residue at a 3.4x bound;
   tighten it to 3.0x when this lands.
 
-- [ ] **Fuzz/property losslessness harness — the one missing oracle layer.**
-  Everything today is curated corpus + snapshots; nothing exercises
-  `PARSER_STEP_LIMIT` or the recovery paths with arbitrary bytes, and
-  `reconstruct(text) == text` over random input is a perfect fuzz target
-  (`proptest` or `cargo-fuzz`). While in the tests: split `tests/parser.rs`
-  (1,744 lines, 157 tests) by area — math, verbatim, comments, conditionals,
-  aliases.
+- [ ] **Split `tests/parser.rs` by area.** It is now 2,923 lines and 230 tests;
+  separate math, verbatim, comments, conditionals, and aliases into focused
+  integration-test targets.
 
 - [ ] **`build.rs` renders positional same-typed bool lists** in the
   generated constructor calls (`command(&[…], None, false, false, false)`;

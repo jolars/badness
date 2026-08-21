@@ -681,6 +681,14 @@ the tree. The recovery anchors are `\end{…}`, `\begin`, a blank line, `}`, `$`
 `&`, and `\\`. The parser always makes progress and never loops on unexpected
 input.
 
+The losslessness property suite complements the curated corpus and texlab
+differential oracle. It checks arbitrary valid UTF-8 and recursively generated,
+syntax-heavy malformed input through both the LaTeX and BibTeX parsers. LaTeX
+cases run as documents, packages, `.dtx` sources, and with fixed declarations.
+The sole assertion is byte-for-byte reconstruction; malformed input is not
+expected to parse without diagnostics. Ordinary tests run 256 cases per
+property, while `task parser-properties` and the scheduled CI job run 4,096.
+
 ### Incrementality
 
 Salsa provides the first level of incrementality across files and queries.

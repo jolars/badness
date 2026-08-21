@@ -55,11 +55,10 @@ use badness_parser::syntax::SyntaxNode;
 
 /// A seeded linear congruential generator (MMIX constants).
 ///
-/// Hand-rolled rather than a dependency: the parser crate is wasm-clean and
-/// publishable, and a dev-dependency on a PRNG for one test is not worth the
-/// supply-chain surface. Determinism is the point — every failure prints its seed,
-/// so a reproducer is a one-line change, and the corpus sweep's recorded splice
-/// counts are a ratchet only because the same seed draws the same edits.
+/// This generator remains separate from proptest because the edit stream is a
+/// stable test protocol. Every failure prints its seed, so a reproducer is a
+/// one-line change, and the corpus sweep's recorded splice counts are a ratchet
+/// only because the same seed draws the same edits across dependency versions.
 pub struct Lcg(pub u64);
 
 impl Lcg {

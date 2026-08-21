@@ -19,6 +19,13 @@ tasks:
     cmds:
       - cargo test --workspace
 
+  parser-properties:
+    desc: Run parser losslessness properties at nightly depth
+    env:
+      BADNESS_PROPERTY_CASES: 4096
+    cmds:
+      - cargo test -p badness-parser --test property_losslessness
+
   fmt:
     desc: Format the code
     cmds:

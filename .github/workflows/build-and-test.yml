@@ -55,6 +55,25 @@ jobs:
       - name: Run formatter feature tests
         run: cargo test -p badness-formatter --features schema --verbose
 
+  parser-properties:
+    if: github.event_name == 'schedule'
+    name: Parser Properties
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: parser-properties
+
+      - name: Run parser losslessness properties
+        env:
+          BADNESS_PROPERTY_CASES: 4096
+        run: cargo test -p badness-parser --test property_losslessness
+
   wasm:
     if: github.event_name != 'schedule'
     name: Wasm Build

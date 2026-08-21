@@ -715,9 +715,9 @@ into prose now costs 0.71 ms end to end, and a line typed inside an `lstlisting`
 \~40 µs against a \~26 ms full parse — roughly 700x, and the ratio grows with
 the file, since both leaf tiers are `O(depth)` where a parse is `O(file)`. It
 arrives in phases, tracked in `TODO.md` § Incremental reparse — the token and
-protected-body tiers are live, the first conservative region slice handles
-multi-token edits in inert top-level prose, and an edit no tier claims still
-costs a full parse.
+protected-body tiers are live, delimiter-bearing math fragments cover local
+shape changes, the first conservative region slice handles multi-token edits in
+inert top-level prose, and an edit no tier claims still costs a full parse.
 
 Those numbers are held by `benches/reparse.rs` (`task bench:gate`), where every
 case declares the tier it must reach as well as the speed it claims: a floor
@@ -743,9 +743,11 @@ relex is a single token of the same kind joining its neighbours the same way,
 and splices with rowan's `SyntaxToken::replace_with` — every green node off the
 leaf-to-root path is shared, so the cost is `O(depth)`, not `O(file)`. The
 protected-body tier makes the same splice from a different proof (below). The
-region tier re-runs the *ordinary* parser over a substring and splices the
-resulting children under `ROOT`, using neighbour-sized boundary parses purely as
-proofs that the substring is decoupled from its context, then discarding them.
+math tier reparses the outermost enclosing delimiter-bearing math node and
+splices that node. The region tier re-runs the *ordinary* parser over a
+substring and splices the resulting children under `ROOT`, using neighbour-sized
+boundary parses purely as proofs that the substring is decoupled from its
+context, then discarding them.
 
 **What the token tier has to prove, and how.** A parse is a function of exactly
 two things: the token vector and the `ParseCtx`. Fix both and the grammar is
@@ -767,13 +769,20 @@ carrying a verdict, of which 35 are kind-gated to a control sequence and so can
 never see a spliced leaf at all. The remaining handful are the real reads: the
 `;` that ends a picture-body statement, the lone `*` of a starred variant, the
 math script slicing, the expl3 argument slots, and the environment-name
-assembly. Each is neutralized either by a text guard or by a position ban. In
-particular, the token tier declines every math `WORD`, because script adjacency
-outside the leaf can change its CST boundary.
+assembly. Each is neutralized either by a text guard or by a position ban. Math
+`WORD`s need one extra proof: the CST may hold several adjacent `WORD` leaves
+cut from one lexer token by per-scalar script binding. The tier reconstructs
+that coalesced word, relexes it as one `WORD`, probes only its outer neighbours,
+and checks the edited leaf's structural role. A direct `SCRIPTED`, `SUBSCRIPT`,
+or `SUPERSCRIPT` word must remain exactly one Unicode scalar; an unscripted
+prefix or remainder may change length. A moved boundary declines to the math
+tier.
 
-Refusals are free, so they are generous. A `.dtx` parse is declined outright. So
-are line terminators, environment names, definition bodies, and a join probe
-against an oversized neighbour.
+Refusals are free, so they are generous. Line terminators, environment names,
+definition bodies, and a join probe against an oversized neighbour are refused.
+`.dtx` is not refused wholesale: a fragment must expose enough of each docstrip
+state bit for an isolated relex to disagree, and the source-scanning survey pins
+one counterexample per bit.
 
 **What the protected-body tier has to prove instead.** An edit inside an
 `lstlisting`, a `\verb`, or a `\url` is the same one-leaf splice, but the token
@@ -802,12 +811,30 @@ Newlines are allowed here, unlike on the token tier. That is the point — insid
 a raw body a line break restructures nothing, because the grammar sees one
 opaque token either way, and pressing Enter in a listing is the workload.
 
-`.dtx` stays refused on both tiers, and the whole-node relex does not lift it.
-The docstrip mode lexes by line and by column 0, but the deeper problem is that
-`implicit_expl` is derived from a scan of the *entire input*: an isolated
-fragment can be lexed under a regime the file never had, and can pass the
-faithfulness check anyway when the difference does not happen to show in those
-bytes. Faithfulness is evidence about the fragment, not about the file.
+For `.dtx`, the fragment relex receives the base parse's full-file
+`implicit_expl` bit. It still has to reproduce the concrete margin, macrocode,
+and lexer-mode tokens around the capture; an edit that changes the full-file
+signal is refused before relexing. Faithfulness is evidence about the fragment,
+not permission to infer missing file state.
+
+**The math tier.** A shape-changing edit cannot splice `SCRIPTED` or `MATH`
+alone: neither carries the delimiter that establishes math mode. The tier takes
+the outermost enclosing `INLINE_MATH`, `DISPLAY_MATH`, or math `ENVIRONMENT`,
+including all enclosing math gates an inner edit could invalidate. An isolated
+faithfulness parse under the base `ParseCtx` must first reproduce the old node.
+The edit may touch only state-neutral math surface syntax; control sequences,
+comments, environment names, definition-sensitive positions, `@`/`:` mode
+ambiguity, and `.dtx` decline. The edited parse must yield one same-kind node
+spanning every fragment byte, and a one-token right-boundary probe proves local
+recovery cannot consume an unchanged suffix. Bases whose diagnostics are not in
+source order also decline, because a local splice cannot reproduce a global
+recovery-stack reorder.
+
+The replacement parse supplies diagnostics inside the fragment; prefix
+diagnostics are retained and suffix diagnostics shifted. The direct benchmark
+pins partition-preserving edits to `Token` and an `x^23_i` boundary move to
+`Math`. On the 730 KB benchmark document the measured math splice is about 10 µs
+against a 26 ms full parse, over 2,500x faster.
 
 So none of the parser's left-to-right state is checkpointed: not the lexer's
 (`at_letter`, `expl_syntax`, `short_verbs`, `macrocode`, brace depth), not the

@@ -120,12 +120,15 @@ it builds itself. That is the only way to observe which `ReparseTier` answered â
 through the salsa layer the tier is computed and dropped, and the reparse side
 channel may not grow an accessor for it.
 
-Twelve cases: four documents by three sites. `word` (a letter typed into prose)
-must reach the token tier, `verbatim` (a line typed into an injected
-`lstlisting`) the protected-body tier, and `decline` must reach neither. The
-declining case types a backslash at the *same offset* as the word case, so the
-pair isolates the guard rather than confounding it with position, and it prices
-the full guard cascade rather than bailing on the first check.
+Twenty-two cases: five for each of four documents, plus two region cases on the
+small document. `word` (a letter typed into prose) and `math-word` (a
+partition-preserving letter typed into math) must reach the token tier;
+`verbatim` (a line typed into an injected `lstlisting`) must reach the
+protected-body tier; `math-shape` (an edit that moves a scripted-word boundary)
+must reach the math tier; and `decline` must reach none. The declining case
+types a backslash at the *same offset* as the word case, so the pair isolates
+the guard rather than confounding it with position, and it prices the full guard
+cascade rather than bailing on the first check.
 
 ```bash
 task bench:reparse

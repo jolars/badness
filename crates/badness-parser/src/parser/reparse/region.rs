@@ -209,7 +209,7 @@ fn reparse_paragraph_seam(base: &ReparseBase<'_>, edit: &Edit, new_text: &str) -
     finish(green, errors, ReparseTier::Region, base, new_text)
 }
 
-fn replaced_errors(
+pub(super) fn replaced_errors(
     errors: &[SyntaxError],
     old_range: rowan::TextRange,
     replacement: &[SyntaxError],

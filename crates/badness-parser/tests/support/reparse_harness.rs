@@ -180,6 +180,7 @@ pub struct Tally {
     pub spliced: usize,
     pub token: usize,
     pub verbatim: usize,
+    pub math: usize,
     pub region: usize,
 }
 
@@ -197,6 +198,10 @@ impl Tally {
                 self.spliced += 1;
                 self.verbatim += 1;
             }
+            Some(ReparseTier::Math) => {
+                self.spliced += 1;
+                self.math += 1;
+            }
             Some(ReparseTier::Region) => {
                 self.spliced += 1;
                 self.region += 1;
@@ -209,6 +214,7 @@ impl Tally {
         self.spliced += other.spliced;
         self.token += other.token;
         self.verbatim += other.verbatim;
+        self.math += other.math;
         self.region += other.region;
     }
 

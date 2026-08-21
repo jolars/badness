@@ -365,6 +365,78 @@ fn the_harness_reaches_the_reparse_entry_point() {
     assert_eq!(result.tier, ReparseTier::Token);
 }
 
+fn reparse_once(text: &str, edit: &Edit) -> Option<Reparsed> {
+    let declared = ResolvedDeclarations::default();
+    let (parse, ctx) = parse_with_declarations_resolved(text, config(), &declared);
+    let base =
+        ReparseBase::from_parts(text, &parse.green, &parse.errors, &ctx, config(), &declared);
+    reparse(&base, edit, &edit.apply(text))
+}
+
+#[test]
+fn math_word_edits_use_the_cheapest_proved_tier() {
+    let cases = [
+        ("$alphabet$\n", 4..4, "z"),
+        ("$abc_i$\n", 2..2, "z"),
+        ("$abc_i$\n", 3..4, "z"),
+        ("$x^23_i$\n", 3..4, "α"),
+        ("$\\text{text_i}$\n", 8..8, "z"),
+    ];
+
+    for (text, range, insert) in cases {
+        let edit = Edit {
+            range,
+            insert: insert.to_owned(),
+        };
+        let result = reparse_once(text, &edit)
+            .unwrap_or_else(|| panic!("expected math word splice for {text:?}"));
+        assert_eq!(result.tier, ReparseTier::Token, "case {text:?}");
+        assert_result_matches(
+            &result,
+            &edit.apply(text),
+            &ResolvedDeclarations::default(),
+            config(),
+            0,
+            text,
+            &edit,
+        );
+    }
+}
+
+#[test]
+fn partition_changing_edits_reparse_the_delimited_math_fragment() {
+    let cases = [
+        ("before $x^23_i$ after\n", "3", "z"),
+        ("before \\[x^23_i\\] after\n", "3", "z"),
+        (
+            "before\n\\begin{align}\nx^23_i &= y\n\\end{align}\nafter\n",
+            "3",
+            "z",
+        ),
+    ];
+
+    for (text, needle, insert) in cases {
+        let at = text.find(needle).expect("fixture") + needle.len();
+        let edit = Edit {
+            range: at..at,
+            insert: insert.to_owned(),
+        };
+        let new_text = edit.apply(text);
+        let result = reparse_once(text, &edit)
+            .unwrap_or_else(|| panic!("expected math fragment splice for {text:?}"));
+        assert_eq!(result.tier, ReparseTier::Math, "case {text:?}");
+        assert_result_matches(
+            &result,
+            &new_text,
+            &ResolvedDeclarations::default(),
+            config(),
+            0,
+            text,
+            &edit,
+        );
+    }
+}
+
 /// The harness's own checker must be able to fail.
 ///
 /// `assert_result_matches` never runs while no tier splices, so nothing else here

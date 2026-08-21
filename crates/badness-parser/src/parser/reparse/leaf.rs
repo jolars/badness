@@ -31,9 +31,9 @@ use super::Edit;
 /// What the leaf's surroundings say about which text reads can reach it.
 #[derive(Clone, Copy)]
 pub(super) struct Context {
-    /// The leaf sits in a math body, where script adjacency can split a `WORD`.
-    /// Exact rather than approximate: every math body — `$…$`,
-    /// `\[…\]`, `\left…\right`, and a math environment's — opens a `MATH` node.
+    /// The leaf sits under an explicit `MATH` body, where script adjacency can
+    /// split a `WORD`. Positional math arguments need no semantic lookup here:
+    /// the token tier recognizes their actual `SCRIPTED`/adjacent-word shape.
     pub(super) in_math: bool,
 }
 
@@ -81,12 +81,6 @@ pub(super) fn context_admits(leaf: &SyntaxToken, relex_from: &SyntaxToken) -> Op
             _ => {}
         }
     }
-    if !in_math {
-        in_math = leaf.parent_ancestors().any(|node| {
-            crate::semantic::argument_domain(&node) == crate::semantic::ArgumentDomain::Math
-        });
-    }
-
     let mut prev = relex_from.prev_token();
     while let Some(token) = prev {
         if token.kind() == SyntaxKind::NEWLINE {
@@ -339,15 +333,15 @@ mod tests {
         ("&& super::is_def_prefix_command(&t.text)", ControlSequence),
         (
             "let end = self.tokens[idx].text.len();",
-            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
+            Guarded("math WORD slicing, guarded by the token tier's structural proof"),
         ),
         (
             "let last = self.tokens[idx].text[start..end]",
-            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
+            Guarded("math WORD slicing, guarded by the token tier's structural proof"),
         ),
         (
             "let text = &self.tokens[idx].text;",
-            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
+            Guarded("math WORD slicing, guarded by the token tier's structural proof"),
         ),
         ("&& self.tokens[i].text == END_CMD", ControlSequence),
         (".map(|t| t.text.as_str())", Accessor),

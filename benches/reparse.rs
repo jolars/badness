@@ -50,6 +50,8 @@
 //!                              reparse    full parse    speedup   tier
 //!   small.tex/word              1.70 us      32.76 us      19.3x   Token
 //!   small.tex/verbatim          3.47 us      35.44 us      10.2x   Verbatim
+//!   small.tex/math-word         1.85 us      71.20 us      38.5x   Token
+//!   small.tex/math-shape       14.18 us      71.20 us       5.0x   Math
 //!   small.tex/decline           1.66 us      33.41 us          —   declined
 //!   cv.tex/word                 3.15 us     120.99 us      38.4x   Token
 //!   cv.tex/verbatim             4.45 us     121.33 us      27.3x   Verbatim
@@ -238,6 +240,13 @@ macrocode chunk so the benchmark times a documented dtx word splice.
 const DTX_FLOOR_WORD: f64 = 3.8;
 const REGION_FLOOR_WORDS: f64 = 14.5;
 const REGION_FLOOR_SEAM: f64 = 10.5;
+/// `(document, partition-preserving floor, shape-changing floor)`.
+const MATH_FLOORS: [(&str, f64, f64); 4] = [
+    ("small.tex", 36.0, 3.8),
+    ("cv.tex", 120.0, 13.0),
+    ("masters_dissertation.tex", 950.0, 220.0),
+    ("phd_dissertation.tex", 12_200.0, 2_390.0),
+];
 
 struct Case {
     id: String,
@@ -251,6 +260,8 @@ struct Case {
 #[derive(Clone, Copy)]
 enum CaseEdit {
     Site,
+    MathWord,
+    MathShape,
     RegionWords,
     RegionSeam,
 }
@@ -288,6 +299,28 @@ fn cases() -> Vec<Case> {
             config: config(),
             expect: Expect::declines(),
         });
+        for (name, edit, tier) in [
+            ("math-word", CaseEdit::MathWord, ReparseTier::Token),
+            ("math-shape", CaseEdit::MathShape, ReparseTier::Math),
+        ] {
+            let floors = MATH_FLOORS
+                .iter()
+                .find(|(candidate, _, _)| *candidate == document.name)
+                .expect("every benchmark document has math floors");
+            let floor = match edit {
+                CaseEdit::MathWord => floors.1,
+                CaseEdit::MathShape => floors.2,
+                _ => unreachable!(),
+            };
+            cases.push(Case {
+                id: format!("{}/{name}", document.name),
+                document: document.name,
+                site: Site::Word,
+                edit,
+                config: config(),
+                expect: Expect::splices(tier).min_speedup(floor),
+            });
+        }
     }
     cases.push(Case {
         id: format!("{}/{}", DTX_DOCUMENT, Site::Word.name()),
@@ -326,6 +359,39 @@ fn prepare_case(text: &str, case: &Case) -> (String, Edit, &'static str, usize) 
             };
             (prepared, edit, case.site.name(), at)
         }
+        CaseEdit::MathWord | CaseEdit::MathShape => {
+            const MATH: &str = "Benchmark math $alphabet + x^23_i$.\n\n";
+            let mut prepared = String::with_capacity(text.len() + MATH.len());
+            prepared.push_str(MATH);
+            prepared.push_str(text);
+            match case.edit {
+                CaseEdit::MathWord => {
+                    let at = MATH.find("alphabet").expect("fixture") + 3;
+                    (
+                        prepared,
+                        Edit {
+                            range: at..at,
+                            insert: "z".to_owned(),
+                        },
+                        "math-word",
+                        at,
+                    )
+                }
+                CaseEdit::MathShape => {
+                    let at = MATH.find('3').expect("fixture") + 1;
+                    (
+                        prepared,
+                        Edit {
+                            range: at..at,
+                            insert: "z".to_owned(),
+                        },
+                        "math-shape",
+                        at,
+                    )
+                }
+                _ => unreachable!(),
+            }
+        }
         CaseEdit::RegionWords | CaseEdit::RegionSeam => {
             const FIRST: &str = "First benchmark paragraph.\n\n";
             const SECOND: &str = "alpha beta gamma delta.\n\n";
@@ -361,7 +427,7 @@ fn prepare_case(text: &str, case: &Case) -> (String, Edit, &'static str, usize) 
                         at,
                     )
                 }
-                CaseEdit::Site => unreachable!(),
+                CaseEdit::Site | CaseEdit::MathWord | CaseEdit::MathShape => unreachable!(),
             }
         }
     }

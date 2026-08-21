@@ -26,14 +26,18 @@
 //! - the protected-body tier splices the same way, but proves it differently: a raw
 //!   capture cannot be relexed alone, so it relexes the leaf's whole enclosing node
 //!   with its delimiters and requires that to reproduce the tree's own tokens;
+//! - the math tier reparses the outermost enclosing delimiter-bearing math node,
+//!   after the token tier declines a change to the virtual-atom partition;
 //! - the region tier re-runs the *ordinary* parser over a substring and splices the
 //!   resulting children under `ROOT`, using neighbour-sized boundary parses purely
 //!   as proofs that the substring is decoupled from its context.
 //!
 //! This avoids checkpointing lexer state, prescan indices, or forward shape-gate
-//! scans. The region tier declines edits whose effects may escape the fragment.
+//! scans. The math and region tiers decline edits whose effects may escape their
+//! fragments.
 
 mod leaf;
+mod math;
 mod protected;
 mod region;
 mod token;
@@ -60,6 +64,9 @@ pub enum ReparseTier {
     /// A protected body (`VERBATIM_BODY`, `VERB`) was relexed with its enclosing
     /// node's delimiters and spliced in place.
     Verbatim,
+    /// A delimiter-bearing inline, display, or environment math fragment was
+    /// reparsed and spliced in place.
+    Math,
     /// A run of top-level children was reparsed and spliced under `ROOT`.
     Region,
 }
@@ -202,6 +209,7 @@ pub fn reparse_edits(base: &ReparseBase<'_>, edits: &[Edit], new_text: &str) -> 
 fn reparse_one(base: &ReparseBase<'_>, edit: &Edit, new_text: &str) -> Option<Reparsed> {
     token::reparse_token(base, edit, new_text)
         .or_else(|| protected::reparse_protected(base, edit, new_text))
+        .or_else(|| math::reparse_math(base, edit, new_text))
         .or_else(|| region::reparse_region(base, edit, new_text))
 }
 
@@ -422,7 +430,8 @@ mod tests {
     #[test]
     fn tiers_order_cheapest_first() {
         assert!(ReparseTier::Token < ReparseTier::Verbatim);
-        assert!(ReparseTier::Verbatim < ReparseTier::Region);
+        assert!(ReparseTier::Verbatim < ReparseTier::Math);
+        assert!(ReparseTier::Math < ReparseTier::Region);
     }
 
     #[test]

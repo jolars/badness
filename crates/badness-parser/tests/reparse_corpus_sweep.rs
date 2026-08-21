@@ -34,7 +34,7 @@
 //! workload silently changing *tier*, which no floor can catch because declining is
 //! always sound.
 //!
-//! # Why these five drivers
+//! # Why these seven drivers
 //!
 //! Each is a workload with a tier it should reach, not a random shape:
 //!
@@ -46,6 +46,9 @@
 //! - `protected-typing` — a caret inside a `VERBATIM_BODY` or a `VERB`, the
 //!   protected-body tier's workload, on bodies the corpus wrote rather than ones a
 //!   test invented.
+//! - `math-word-typing` / `math-shape-typing` — edits in real math words that
+//!   respectively preserve the virtual-atom partition or move its scripted base,
+//!   pinning both the cheap token proof and the delimiter-bearing math tier.
 //! - `hazard-single` / `hazard-chain` — the correctness workhorses. The alphabet is
 //!   deliberately most of what a tier must *refuse*, so the rate is low by
 //!   construction and the value is in the refusals being right.
@@ -90,6 +93,8 @@ const DRIVERS: &[(&str, usize)] = &[
     ("word-typing", 20),
     ("word-deleting", 20),
     ("protected-typing", 5),
+    ("math-word-typing", 20),
+    ("math-shape-typing", 1),
     ("hazard-single", 9),
     ("hazard-chain", 1),
 ];
@@ -183,8 +188,8 @@ fn sweep_corpus(corpus: &str, dir: &Path) -> FileCells {
     for (cell, (driver, _)) in cells.iter().zip(DRIVERS) {
         let t = &cell.tally;
         println!(
-            "sweep\t{corpus}\t{driver}\tspliced={}/{}\ttoken={}\tverbatim={}\tregion={}\tfiles={}",
-            t.spliced, t.attempted, t.token, t.verbatim, t.region, cell.files,
+            "sweep\t{corpus}\t{driver}\tspliced={}/{}\ttoken={}\tverbatim={}\tmath={}\tregion={}\tfiles={}",
+            t.spliced, t.attempted, t.token, t.verbatim, t.math, t.region, cell.files,
         );
     }
     cells
@@ -221,10 +226,49 @@ fn sweep_file(rel: &str, text: &str) -> FileCells {
         &protected_sites(&base, seed),
         false,
     );
-    hazard_driver(&mut cells[3], rel, text, &base, seed);
-    chain_driver(&mut cells[4], rel, text, &base, seed);
+    typing_driver(
+        &mut cells[3],
+        rel,
+        text,
+        config,
+        &math_word_sites(&base, seed),
+        false,
+    );
+    math_shape_driver(
+        &mut cells[4],
+        rel,
+        text,
+        config,
+        &math_shape_sites(&base, seed),
+    );
+    hazard_driver(&mut cells[5], rel, text, &base, seed);
+    chain_driver(&mut cells[6], rel, text, &base, seed);
 
     cells
+}
+
+/// Type after a one-atom math `WORD`, advancing the caret after every edit. Each
+/// new character becomes the scripted base and therefore changes the partition,
+/// which is the delimiter-bearing tier's representative workload.
+fn math_shape_driver(cell: &mut Cell, rel: &str, text: &str, config: LexConfig, sites: &[usize]) {
+    if sites.is_empty() {
+        return;
+    }
+    cell.files += 1;
+    for (n, &at) in sites.iter().enumerate() {
+        let mut current = text.to_string();
+        let mut caret = at;
+        for (k, ch) in "typed".chars().take(KEYSTROKES).enumerate() {
+            let edit = Edit {
+                range: caret..caret,
+                insert: ch.to_string(),
+            };
+            let base = Base::with_config(current.clone(), config);
+            base.check(&edit, (n * KEYSTROKES + k) as u64, rel, &mut cell.tally);
+            current = edit.apply(&current);
+            caret += ch.len_utf8();
+        }
+    }
 }
 
 /// How the CLI would parse this file, by extension.
@@ -340,6 +384,67 @@ fn word_sites(base: &Base, seed: u64) -> Vec<usize> {
         .map(|token| usize::from(token.text_range().start()) + 1)
         .collect();
     pick(candidates, seed)
+}
+
+/// Interior sites in unscripted math `WORD` leaves. These exercise the cheap
+/// coalesced-word proof without moving an existing virtual-atom boundary.
+fn math_word_sites(base: &Base, seed: u64) -> Vec<usize> {
+    let candidates = leaves(base)
+        .filter(|token| {
+            token.kind() == SyntaxKind::WORD
+                && token.text().len() >= 3
+                && token
+                    .text()
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+                && is_in_delimited_math(token)
+                && !is_one_atom_word(token)
+        })
+        .map(|token| usize::from(token.text_range().start()) + 1)
+        .collect();
+    pick(candidates, seed)
+}
+
+/// The end of a one-scalar scripted base or bare script argument. Typing there
+/// changes math's partition and must reach the delimiter-bearing tier.
+fn math_shape_sites(base: &Base, seed: u64) -> Vec<usize> {
+    let candidates = leaves(base)
+        .filter(|token| {
+            token.kind() == SyntaxKind::WORD
+                && token.text().chars().count() == 1
+                && is_in_delimited_math(token)
+                && is_scripted_base(token)
+        })
+        .map(|token| usize::from(token.text_range().end()))
+        .collect();
+    pick(candidates, seed)
+}
+
+fn is_in_delimited_math(token: &SyntaxToken) -> bool {
+    token.parent_ancestors().any(|node| {
+        matches!(
+            node.kind(),
+            SyntaxKind::INLINE_MATH | SyntaxKind::DISPLAY_MATH
+        ) || (node.kind() == SyntaxKind::ENVIRONMENT
+            && node
+                .children()
+                .any(|child| child.kind() == SyntaxKind::MATH))
+    })
+}
+
+fn is_one_atom_word(token: &SyntaxToken) -> bool {
+    token.parent().is_some_and(|parent| {
+        matches!(
+            parent.kind(),
+            SyntaxKind::SCRIPTED | SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT
+        )
+    })
+}
+
+fn is_scripted_base(token: &SyntaxToken) -> bool {
+    token
+        .parent()
+        .is_some_and(|parent| parent.kind() == SyntaxKind::SCRIPTED)
 }
 
 /// Offsets inside a raw capture: a `VERBATIM_BODY` or an attached/self-delimited

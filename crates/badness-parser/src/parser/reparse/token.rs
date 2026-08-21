@@ -3,7 +3,9 @@
 //! # What it does
 //!
 //! An edit that lands strictly inside a single `WORD` / `WHITESPACE` / `COMMENT`
-//! leaf changes that leaf's *text* and nothing else. Rowan's
+//! leaf changes that leaf's *text* and nothing else. A math `WORD` may be several
+//! adjacent CST leaves sliced from one lexer token, so that path reconstructs and
+//! relexes the coalesced word before splicing one leaf. Rowan's
 //! [`SyntaxToken::replace_with`] rebuilds only the leaf-to-root spine and shares
 //! every green node off it, so the splice is `O(depth)` rather than `O(file)`.
 //! Diagnostics keep their prefix, shift their suffix, and refuse anything that
@@ -26,8 +28,8 @@
 //!
 //! Each is a guard below.
 //!
-//! **(1) The kind sequence.** [`lex_with`] over the new leaf text alone must yield
-//! exactly one token of the leaf's own kind, and the two join probes must show it
+//! **(1) The kind sequence.** [`lex_with`] over ordinary new leaf text alone must
+//! yield exactly one token of the leaf's own kind, and the two join probes must show it
 //! still separates from its neighbours. The isolated relex is faithful because the
 //! lexer's modes cannot be entered or left by a token of these three kinds: every
 //! mode is armed by a control word, a brace, or a `\begin{…}` name — and a leaf
@@ -52,22 +54,24 @@
 //! whole set. A new one appears as a failing test, not as a silent divergence.
 //!
 //! Both live in [`super::leaf`], because they are the same question for any tier
-//! that splices one leaf.
+//! that splices one leaf. Math then adds a structural proof: a leaf directly under
+//! `SCRIPTED`, `SUBSCRIPT`, or `SUPERSCRIPT` must remain one Unicode scalar, while
+//! an unscripted prefix or remainder may change length.
 //!
 //! # What it refuses, and why that is free
 //!
 //! Every guard returns [`None`] and the caller full-parses, so the cost of being
 //! wrong about a guard's *necessity* is speed. The deliberate refusals worth
 //! knowing about: any edit carrying a line terminator, a leaf whose neighbour is
-//! too large to probe cheaply, and any math word whose boundary may be changed by
-//! adjacent script syntax.
+//! too large to probe cheaply, and a math edit that changes an existing
+//! virtual-atom boundary (which the delimiter-bearing tier gets next).
 
 use rowan::{GreenToken, NodeOrToken, TextRange, TextSize};
 
 use crate::parser::lexer::lex_with;
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::leaf::{context_admits, shifted_errors, text_reads_are_inert};
+use super::leaf::{Context, context_admits, shifted_errors, text_reads_are_inert};
 use super::{Edit, ReparseBase, ReparseTier, Reparsed, finish};
 
 /// How much neighbour text a join probe will relex.
@@ -155,26 +159,131 @@ fn try_leaf(
         return None;
     }
 
-    if !text_reads_are_inert(leaf.kind(), old, &new_leaf, ctx) {
-        return None;
-    }
+    if leaf.kind() == SyntaxKind::WORD && word_needs_math_proof(leaf, ctx) {
+        // Preserve the non-math text-read guards (`*`, statement `;`, and the
+        // backslash lookahead), then prove math's additional per-scalar slicing.
+        if !text_reads_are_inert(leaf.kind(), old, &new_leaf, Context { in_math: false })
+            || !math_word_relexes(base, leaf, &new_leaf)
+            || !math_partition_is_stable(leaf, &new_leaf)
+        {
+            return None;
+        }
+    } else {
+        if !text_reads_are_inert(leaf.kind(), old, &new_leaf, ctx) {
+            return None;
+        }
 
-    // The isolated relex, under the base's own context and flavor — a `\newcommand`
-    // the definition scan found must lex the fragment the way it lexed the tree.
-    let relexed = lex_with(&new_leaf, base.ctx, base.config);
-    if relexed.len() != 1 || relexed[0].kind != leaf.kind() {
-        return None;
-    }
+        // The isolated relex, under the base's own context and flavor — a
+        // `\newcommand` the definition scan found must lex the fragment the way it
+        // lexed the tree.
+        let relexed = lex_with(&new_leaf, base.ctx, base.config);
+        if relexed.len() != 1 || relexed[0].kind != leaf.kind() {
+            return None;
+        }
 
-    if !joins(base, leaf.prev_token().as_ref(), &new_leaf, Side::Before)
-        || !joins(base, leaf.next_token().as_ref(), &new_leaf, Side::After)
-    {
-        return None;
+        if !joins(base, leaf.prev_token().as_ref(), &new_leaf, Side::Before)
+            || !joins(base, leaf.next_token().as_ref(), &new_leaf, Side::After)
+        {
+            return None;
+        }
     }
 
     let errors = shifted_errors(base.errors, leaf.text_range(), edit)?;
     let green = leaf.replace_with(GreenToken::new(leaf.kind().into(), &new_leaf));
     finish(green, errors, ReparseTier::Token, base, new_text)
+}
+
+/// Whether the CST shows that this word participates in math's per-scalar
+/// slicing. Explicit math carries a `MATH` ancestor. Positional math arguments
+/// outside explicit delimiters expose the same fact structurally: the leaf is a
+/// scripted base/argument, or abuts another `WORD` leaf split from its lexer
+/// token. An unscripted, unsplit positional-math word needs only the ordinary
+/// token proof because changing its nonempty text cannot move a CST boundary.
+fn word_needs_math_proof(leaf: &SyntaxToken, ctx: Context) -> bool {
+    ctx.in_math
+        || leaf.parent().is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                SyntaxKind::SCRIPTED | SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT
+            )
+        })
+        || leaf.prev_token().is_some_and(|previous| {
+            previous.kind() == SyntaxKind::WORD
+                && previous.text_range().end() == leaf.text_range().start()
+        })
+        || leaf.next_token().is_some_and(|next| {
+            next.kind() == SyntaxKind::WORD && leaf.text_range().end() == next.text_range().start()
+        })
+}
+
+/// Reconstruct the lexer `WORD` that math parsing sliced into CST leaves and
+/// prove the edited spelling is still exactly one `WORD` with unchanged outer
+/// joins.
+fn math_word_relexes(base: &ReparseBase<'_>, leaf: &SyntaxToken, new_leaf: &str) -> bool {
+    let mut first = leaf.clone();
+    while let Some(previous) = first.prev_token().filter(|token| {
+        token.kind() == SyntaxKind::WORD && token.text_range().end() == first.text_range().start()
+    }) {
+        first = previous;
+    }
+
+    let mut last = leaf.clone();
+    while let Some(next) = last.next_token().filter(|token| {
+        token.kind() == SyntaxKind::WORD && last.text_range().end() == token.text_range().start()
+    }) {
+        last = next;
+    }
+
+    let start = usize::from(first.text_range().start());
+    let end = usize::from(last.text_range().end());
+    if end
+        .checked_sub(start)
+        .is_none_or(|len| len > MAX_PROBE_BYTES)
+    {
+        return false;
+    }
+
+    let mut combined = String::with_capacity(end - start + new_leaf.len());
+    let mut cursor = first.clone();
+    loop {
+        if cursor == *leaf {
+            combined.push_str(new_leaf);
+        } else {
+            combined.push_str(cursor.text());
+        }
+        if cursor == last {
+            break;
+        }
+        let Some(next) = cursor.next_token() else {
+            return false;
+        };
+        cursor = next;
+    }
+
+    let relexed = lex_with(&combined, base.ctx, base.config);
+    if relexed.len() != 1 || relexed[0].kind != SyntaxKind::WORD || relexed[0].text != combined {
+        return false;
+    }
+
+    joins(base, first.prev_token().as_ref(), &combined, Side::Before)
+        && joins(base, last.next_token().as_ref(), &combined, Side::After)
+}
+
+/// Whether replacing this CST leaf preserves math's virtual-atom partition.
+///
+/// A `WORD` directly under `SCRIPTED` is a one-scalar base; one directly under a
+/// sub/superscript is a one-scalar bare argument. Every other `WORD` leaf is an
+/// unscripted remainder or prefix, whose length may change without moving a CST
+/// boundary. The fragment tier handles edits that add or remove a scalar at one
+/// of the one-atom leaves.
+fn math_partition_is_stable(leaf: &SyntaxToken, new_leaf: &str) -> bool {
+    let one_atom = leaf.parent().is_some_and(|parent| {
+        matches!(
+            parent.kind(),
+            SyntaxKind::SCRIPTED | SyntaxKind::SUBSCRIPT | SyntaxKind::SUPERSCRIPT
+        )
+    });
+    !one_atom || (leaf.text().chars().count() == 1 && new_leaf.chars().count() == 1)
 }
 
 /// Which side of the leaf a join probe is testing.
@@ -403,14 +512,41 @@ mod tests {
         assert_refuses("\\documentclass{ltxdoc}\n", edit(16..16, "z"));
     }
 
-    /// In math every word may be cut into operator or script-boundary atoms, so
-    /// its text and adjacency are structural. Refuse even an ordinary letter edit;
-    /// the shared driver will try a wider tier or a full parse.
+    /// Math words use the specialized coalesced-word and partition proof.
     #[test]
-    fn refuses_every_math_word() {
-        assert_refuses("$ab$\n", edit(2..2, "c"));
-        assert_refuses("$a b$\n", edit(3..3, "+"));
-        assert_refuses("\\begin{align}\n  a b\n\\end{align}\n", edit(17..17, "+"));
+    fn splices_partition_preserving_math_words() {
+        assert_splices("$ab$\n", edit(2..2, "c"));
+        assert_splices("$a b$\n", edit(3..3, "+"));
+        assert_splices("\\begin{align}\n  a b\n\\end{align}\n", edit(17..17, "+"));
+        assert_splices("$abc_i$\n", edit(2..2, "z"));
+        assert_splices("$abc_i$\n", edit(3..4, "α"));
+        assert_splices("$x^23_i$\n", edit(3..4, "α"));
+
+        // Positional math arguments have no delimiter-bearing ancestor for the
+        // fragment tier, so their partition-preserving fast path matters too.
+        let text = "\\frac{abc_i}{n}\n";
+        assert_splices(text, edit_at(text, "abc", 1, "z"));
+    }
+
+    #[test]
+    fn token_tier_refuses_a_changed_math_partition() {
+        let text = "$x^23_i$\n";
+        with_base(text, |base| {
+            let e = edit(4..4, "z");
+            assert!(reparse_token(base, &e, &e.apply(text)).is_none());
+            let out = reparse(base, &e, &e.apply(text)).expect("math tier should splice");
+            assert_eq!(out.tier, ReparseTier::Math);
+        });
+
+        // A positional math argument cannot yet prove a self-contained math
+        // fragment, so a boundary move safely falls through to a full parse.
+        let text = "\\frac{x^23_i}{n}\n";
+        assert_refuses(text, edit_at(text, "3", 1, "z"));
+
+        // Introducing the first script changes the isolated relex from one WORD
+        // to multiple token kinds, so the ordinary proof declines too.
+        let text = "\\frac{abc}{n}\n";
+        assert_refuses(text, edit_at(text, "b", 1, "_"));
     }
 
     /// A `;` ends a picture-body statement, so gaining or losing one restructures

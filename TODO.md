@@ -106,17 +106,12 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
    argument-space tokens. Keep the hover-preview choice as an open roadmap
    decision; do not turn `AGENTS.md` into its decision log.
 
-6. [ ] **Math fragment reparse tier** *(later, perf-driven)*. `e6131b6` made
-   `word_reads_are_inert` decline every math `WORD`, so math-heavy documents
-   full-parse on most in-formula keystrokes. First attempt a cheap specialized
-   leaf proof: reconstruct the coalesced word, relex it, and compare the
-   virtual-atom partition plus adjacent script structure. A shape-changing
-   fragment tier must target a delimiter-bearing `INLINE_MATH`, `DISPLAY_MATH`,
-   or math `ENVIRONMENT`; `SCRIPTED` and `MATH` do not carry the delimiters that
-   establish mode. Any smaller target needs an explicit fixed-math fragment
-   parser and a locality proof. Keep the full tier protocol: direct-reparse
-   benchmark asserting the tier, speedup floor, release full-parse comparison,
-   and seeded corpus baseline with exact per-tier tallies.
+6. [x] **Math fragment reparse tier.** Partition-preserving math-word edits use
+   the token tier's coalesced-word and virtual-atom proof. Shape changes reparse
+   the outermost delimiter-bearing `INLINE_MATH`, `DISPLAY_MATH`, or math
+   `ENVIRONMENT`, keeping every affected enclosing math gate inside the proof.
+   The direct benchmark pins both tiers and their speedup floors; the seeded
+   corpus baseline records exact `math=` tallies.
 
 Non-goals, reaffirmed: no arithmetic-precedence trees, no atom classes in the
 CST, no lexer math state, no default-math inference for unknown command

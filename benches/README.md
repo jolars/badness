@@ -1,13 +1,14 @@
 # Benchmarking and profiling
 
-Four complementary tools, measuring different things:
+Five complementary tools, measuring different things:
 
-  | Tool                                            | What it measures                                  | Includes startup floor?       |
-  | ----------------------------------------------- | ------------------------------------------------- | ----------------------------- |
-  | `benches/compare_format.sh` (`task bench`)      | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
-  | `benches/formatting.rs` (`task bench:micro`)    | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
-  | `benches/keystroke.rs` (`task bench:keystroke`) | what one editor keystroke costs through salsa     | **no** (library entry points) |
-  | `benches/reparse.rs` (`task bench:reparse`)     | what one incremental reparse costs, per tier      | **no** (library entry points) |
+  | Tool                                              | What it measures                                  | Includes startup floor?       |
+  | ------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+  | `benches/compare_format.sh` (`task bench`)        | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
+  | `benches/formatting.rs` (`task bench:micro`)      | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
+  | `benches/keystroke.rs` (`task bench:keystroke`)   | what one editor keystroke costs through salsa     | **no** (library entry points) |
+  | `benches/reparse.rs` (`task bench:reparse`)       | what one incremental reparse costs, per tier      | **no** (library entry points) |
+  | `benches/lsp_memory.rs` (`task bench:lsp-memory`) | live heap retained across LSP history             | **no** (in-process server)    |
 
 The CLI script answers "how fast is the `badness` binary"; the formatting bench
 answers "where does the per-byte work go, with no process startup in the way."
@@ -20,12 +21,19 @@ edit*. The keystroke bench times the whole composition (`didChange` splice →
 is the only place the tier a scenario reaches is observable. Both have their own
 sections below, and both carry a **gate** (`task bench:gate`).
 
+The memory harness answers a third question: whether a long-running language
+server retains *history* after arriving at the same current project state. It
+uses a counting system allocator around the real in-process LSP server, so its
+live-byte figure excludes allocator pages that are free but have not been
+returned to the operating system.
+
 ## The gates
 
 ```bash
 task bench:gate              # both gates
 task bench:reparse-gate      # tiers, speedup floors, bail budget
 task bench:keystroke-gate    # the write phase
+task bench:lsp-memory-gate   # live heap after paired LSP histories
 ```
 
 Each case declares what it claims and the gate checks it, printing every check
@@ -77,6 +85,9 @@ task bench:keystroke
 
 # Incremental reparse, per tier
 task bench:reparse
+
+# Compare retained heap after equivalent LSP end states
+task bench:lsp-memory
 
 # Check both against their declared contracts (exits non-zero on a violation)
 task bench:gate
@@ -164,6 +175,38 @@ idle machine** when the difference you are chasing is under \~10%:
 BADNESS_BENCH_DOC=phd_dissertation.tex cargo bench --bench keystroke
 BADNESS_BENCH_OUTPUT_JSON=/tmp/head.json cargo bench --bench keystroke
 ```
+
+## The LSP memory harness
+
+`benches/lsp_memory.rs` runs the public `lsp::serve` entry point over an
+in-memory protocol connection and compares two pairs of sessions:
+
+- **query log:** real text changes followed by diagnostics and hover requests,
+  versus the same protocol traffic with unchanged text;
+- **project generations:** opening the same synthetic `.tex`/`.sty`/`.bib`
+  project one directory at a time, versus seeding the entire tree before opening
+  the same documents.
+
+Each pair ends with byte-identical open buffers and the same project membership.
+The difference in current live allocations is therefore retained history, not
+the cost of the final project. Peak allocation is reported for context but never
+gated. The default gate permits 1 MiB of query-history excess and the larger of
+1 MiB or 10% of the one-shot project for progressive discovery. It is local-only
+because it drives threaded LSP histories; it is not a shared-runner CI gate.
+
+```bash
+task bench:lsp-memory
+task bench:lsp-memory-gate
+
+BADNESS_MEMORY_SCENARIO=query-log \
+BADNESS_MEMORY_QUERY_GENERATIONS=1000 \
+BADNESS_MEMORY_OUTPUT_JSON=/tmp/badness-memory.json \
+  cargo bench --bench lsp_memory
+```
+
+`BADNESS_MEMORY_SCENARIO` accepts `all`, `query-log`, or `project`.
+`BADNESS_MEMORY_PROJECT_GENERATIONS` overrides the default 48-directory project,
+and `BADNESS_MEMORY_ASSERT=1` enables the gates.
 
 ## Profiling
 

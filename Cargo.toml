@@ -144,6 +144,10 @@ harness = false
 name = "reparse"
 harness = false
 
+[[bench]]
+name = "lsp_memory"
+harness = false
+
 [profile.release]
 strip = "symbols"
 

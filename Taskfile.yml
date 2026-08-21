@@ -191,6 +191,18 @@ tasks:
     cmds:
       - cargo bench --bench keystroke
 
+  bench:lsp-memory:
+    desc: Reproduce retained LSP heap across query and project generations
+    cmds:
+      - cargo bench --bench lsp_memory
+
+  bench:lsp-memory-gate:
+    desc: Gate retained LSP heap against the paired-history controls
+    env:
+      BADNESS_MEMORY_ASSERT: "1"
+    cmds:
+      - cargo bench --bench lsp_memory
+
   bench:gate:
     desc: Run both incremental benchmark gates (reparse tiers + keystroke write phase)
     cmds:

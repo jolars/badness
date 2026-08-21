@@ -23,8 +23,8 @@ use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
-    ArgKind, ArgumentDomain, ContentKind, SignatureDb, Signatures, expl3, match_arg_slot,
-    scan_definitions,
+    ArgKind, ArgumentDomain, ContentKind, DelimiterRole, MathClass, SignatureDb, Signatures, expl3,
+    match_arg_slot, math_atoms, scan_definitions,
 };
 use crate::syntax::{
     SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
@@ -8126,250 +8126,61 @@ struct MathPiece {
     bracket_delta: i32,
 }
 
-/// Delimiter control words (the `\` stripped) that open/close a bracketed
-/// subexpression, alongside the bare `(`/`[` characters and the escaped braces
-/// `\{`/`\}`. Bare `|` is deliberately absent: its open and close forms are the
-/// same character, so it cannot be depth-counted statically.
-const OPEN_DELIMITER_COMMANDS: &[&str] = &[
-    "lbrace", "langle", "lvert", "lVert", "lfloor", "lceil", "lgroup", "lbrack",
-];
-const CLOSE_DELIMITER_COMMANDS: &[&str] = &[
-    "rbrace", "rangle", "rvert", "rVert", "rfloor", "rceil", "rgroup", "rbrack",
-];
-
-/// Net bracket-nesting change of a math atom's surface text: bare `(`/`[` open
-/// and `)`/`]` close, as do the escaped braces `\{`/`\}` and the named delimiter
-/// commands (`\lbrace`, `\langle`, `\lvert`, …). A stray delimiter can ride
-/// inside a node atom too (a bare script binds the whole following `WORD`, so the
-/// `)` of `f(x, y_i)` glues into the `y_i)` script, and the `\}` of
-/// `\Big \}^{1/2}` rides inside the `SCRIPTED` node), so scan the atom's full
-/// source text, consuming control sequences so an unrelated control symbol
-/// (`\\[2ex]`'s `\\`) is never miscounted. A mixed `\left\{ … \right.` pair
-/// leaves a positive residue, which only *suppresses* later breaks —
-/// conservative in the direction that matters.
-fn bracket_delta(el: &SyntaxElement) -> i32 {
-    let text = match el {
-        SyntaxElement::Token(t) => t.text().to_string(),
-        SyntaxElement::Node(n) => n.text().to_string(),
-    };
-    let mut acc = 0;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '(' | '[' => acc += 1,
-            ')' | ']' => acc -= 1,
-            '\\' => match chars.peek() {
-                Some(c2) if c2.is_ascii_alphabetic() => {
-                    let mut name = String::new();
-                    while let Some(&c3) = chars.peek() {
-                        if !c3.is_ascii_alphabetic() {
-                            break;
-                        }
-                        name.push(c3);
-                        chars.next();
-                    }
-                    if OPEN_DELIMITER_COMMANDS.contains(&name.as_str()) {
-                        acc += 1;
-                    } else if CLOSE_DELIMITER_COMMANDS.contains(&name.as_str()) {
-                        acc -= 1;
-                    }
-                }
-                Some(&c2) => {
-                    chars.next();
-                    match c2 {
-                        '{' => acc += 1,
-                        '}' => acc -= 1,
-                        _ => {}
-                    }
-                }
-                None => {}
-            },
-            _ => {}
-        }
-    }
-    acc
+struct MathSurfaceAtom {
+    ir: Ir,
+    class: MathClass,
+    delimiter: Option<DelimiterRole>,
 }
 
-/// Relation control words (the `\` stripped) that anchor alignment / break a long
-/// display equation. Curated, growing like the signature DB; anything absent is a
-/// plain operand.
-const MATH_RELATION_COMMANDS: &[&str] = &[
-    "le",
-    "leq",
-    "ge",
-    "geq",
-    "ne",
-    "neq",
-    "equiv",
-    "approx",
-    "approxeq",
-    "sim",
-    "simeq",
-    "cong",
-    "propto",
-    "asymp",
-    "doteq",
-    "models",
-    "vdash",
-    "dashv",
-    "perp",
-    "parallel",
-    "mid",
-    "in",
-    "ni",
-    "notin",
-    "subset",
-    "subseteq",
-    "subsetneq",
-    "supset",
-    "supseteq",
-    "supsetneq",
-    "sqsubseteq",
-    "sqsupseteq",
-    "prec",
-    "preceq",
-    "succ",
-    "succeq",
-    "ll",
-    "gg",
-    "lll",
-    "ggg",
-    "to",
-    "rightarrow",
-    "longrightarrow",
-    "Rightarrow",
-    "Longrightarrow",
-    "implies",
-    "impliedby",
-    "iff",
-    "mapsto",
-    "longmapsto",
-    "leftarrow",
-    "Leftarrow",
-    "gets",
-    "leftrightarrow",
-    "Leftrightarrow",
-    "Longleftrightarrow",
-    "hookrightarrow",
-    "hookleftarrow",
-    "triangleq",
-    // The mathtools/kernel colon-relation family (`\coloneq` is the modern
-    // kernel spelling of `:=`; issue #42 anchored on the wrong relation
-    // because it was missing).
-    "coloneq",
-    "Coloneq",
-    "coloneqq",
-    "Coloneqq",
-    "eqcolon",
-    "Eqcolon",
-    "eqqcolon",
-    "Eqqcolon",
-    "colonapprox",
-    "Colonapprox",
-    "colonsim",
-    "Colonsim",
-    "lesssim",
-    "gtrsim",
-];
-
-/// Binary-operator control words (the `\` stripped) a long display equation may
-/// break before. Curated; see [`MATH_RELATION_COMMANDS`].
-const MATH_BINARY_COMMANDS: &[&str] = &[
-    "pm",
-    "mp",
-    "times",
-    "div",
-    "cdot",
-    "ast",
-    "star",
-    "circ",
-    "bullet",
-    "cup",
-    "cap",
-    "uplus",
-    "sqcup",
-    "sqcap",
-    "vee",
-    "wedge",
-    "lor",
-    "land",
-    "oplus",
-    "ominus",
-    "otimes",
-    "oslash",
-    "odot",
-    "setminus",
-    "amalg",
-    "diamond",
-    "wr",
-    "dagger",
-    "ddagger",
-    "bigtriangleup",
-    "bigtriangledown",
-    "triangleleft",
-    "triangleright",
-];
-
-/// Classify a bare operator token by its literal text. The parser splits math
-/// `WORD`s at operator boundaries, so an operator like
-/// `+` or a coalesced relation like `<=` arrives as its own token here.
-fn classify_math_op_text(text: &str) -> MathRole {
-    // A coalesced relation run (`=`, `<=`, `>=`, `==`, `<`, `>`, …): every char
-    // is a comparison char.
-    if !text.is_empty() && text.chars().all(|c| matches!(c, '=' | '<' | '>')) {
-        return MathRole::Relation;
-    }
-    match text {
-        "+" | "-" | "*" | "/" => MathRole::Binary,
-        _ => MathRole::Operand,
-    }
-}
-
-/// Whether a math atom *ends* with an opening delimiter (a bare `(`/`[`, the
-/// escaped brace `\{`, or a named open-delimiter command such as `\langle`), so
-/// the immediately following `+`/`-` reads as a unary sign rather than a binary
-/// operator (`(-1)`, `[-x]`, `\{-y\}`). Mirrors the delimiter set
-/// [`bracket_delta`] recognizes, but tracks only the *trailing* delimiter: the
-/// sign is unary only when it directly abuts an opener (`f(-1)`), not when an
-/// operand sits between (`(x-1)`, where `-` stays binary). A `\left(…\right)`
-/// pair is balanced and does not end open, so its interior sign is handled by the
-/// recursive lowering of the `LEFT_RIGHT` node instead.
-fn ends_with_open_delimiter(el: &SyntaxElement) -> bool {
-    let text = match el {
-        SyntaxElement::Token(t) => t.text().to_string(),
-        SyntaxElement::Node(n) => n.text().to_string(),
+/// Lower one CST element into the semantic atoms that its source surface
+/// contains. Structural nodes stay indivisible; a coalesced `WORD` is sliced at
+/// Unicode scalar boundaries. Consecutive relation scalars remain one surface
+/// atom so authored compound spellings such as `<=` are not separated.
+fn lower_math_atoms(el: SyntaxElement, cx: LowerCtx<'_>) -> Vec<MathSurfaceAtom> {
+    let atoms: Vec<_> = math_atoms(&el).collect();
+    let SyntaxElement::Token(token) = &el else {
+        let atom = atoms
+            .into_iter()
+            .next()
+            .expect("a structural math element has one semantic atom");
+        return vec![MathSurfaceAtom {
+            ir: lower_math_element(el, cx),
+            class: atom.class,
+            delimiter: atom.delimiter,
+        }];
     };
-    // `open` tracks whether the most recent significant token was an opener; an
-    // operand char or a closer clears it, so only a trailing opener survives.
-    let mut open = false;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '(' | '[' => open = true,
-            ')' | ']' => open = false,
-            c if c.is_whitespace() => {}
-            '\\' => match chars.peek() {
-                Some(c2) if c2.is_ascii_alphabetic() => {
-                    let mut name = String::new();
-                    while let Some(&c3) = chars.peek() {
-                        if !c3.is_ascii_alphabetic() {
-                            break;
-                        }
-                        name.push(c3);
-                        chars.next();
-                    }
-                    open = OPEN_DELIMITER_COMMANDS.contains(&name.as_str());
-                }
-                Some(&c2) => {
-                    chars.next();
-                    open = c2 == '{';
-                }
-                None => open = false,
-            },
-            _ => open = false,
-        }
+    if token.kind() != SyntaxKind::WORD {
+        let atom = atoms
+            .into_iter()
+            .next()
+            .expect("a math token has one semantic atom");
+        return vec![MathSurfaceAtom {
+            ir: lower_math_element(el, cx),
+            class: atom.class,
+            delimiter: atom.delimiter,
+        }];
     }
-    open
+
+    let token_start = token.text_range().start();
+    let mut surface: Vec<MathSurfaceAtom> = Vec::with_capacity(atoms.len());
+    for atom in atoms {
+        let start = usize::from(atom.range.start() - token_start);
+        let end = usize::from(atom.range.end() - token_start);
+        let text = &token.text()[start..end];
+        if atom.class == MathClass::Rel
+            && let Some(previous) = surface.last_mut()
+            && previous.class == MathClass::Rel
+        {
+            previous.ir = Ir::concat([previous.ir.clone(), Ir::verbatim(text)]);
+            continue;
+        }
+        surface.push(MathSurfaceAtom {
+            ir: Ir::verbatim(text),
+            class: atom.class,
+            delimiter: atom.delimiter,
+        });
+    }
+    surface
 }
 
 /// The [`MathRole`] of a top-level math atom. `prev` is the effective role of the
@@ -8378,19 +8189,10 @@ fn ends_with_open_delimiter(el: &SyntaxElement) -> bool {
 /// atom, one after a relation/binary, or one directly after an opener (`(-1)`) —
 /// is unary, so it glues to its operand and is *not* a break point, degrading to
 /// an [`MathRole::Operand`].
-fn math_atom_role(el: &SyntaxElement, prev: MathRole, prev_opener: bool) -> MathRole {
-    let raw = match el {
-        SyntaxElement::Token(t) => classify_math_op_text(t.text()),
-        SyntaxElement::Node(n) if n.kind() == SyntaxKind::COMMAND => crate::ast::command_name(n)
-            .map_or(MathRole::Operand, |name| {
-                if MATH_RELATION_COMMANDS.contains(&name.as_str()) {
-                    MathRole::Relation
-                } else if MATH_BINARY_COMMANDS.contains(&name.as_str()) {
-                    MathRole::Binary
-                } else {
-                    MathRole::Operand
-                }
-            }),
+fn math_atom_role(class: MathClass, prev: MathRole, prev_opener: bool) -> MathRole {
+    let raw = match class {
+        MathClass::Bin => MathRole::Binary,
+        MathClass::Rel => MathRole::Relation,
         _ => MathRole::Operand,
     };
     if raw == MathRole::Binary && (prev != MathRole::Operand || prev_opener) {
@@ -8427,17 +8229,23 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK => return None,
             other => {
-                let role = math_atom_role(&other, prev_role, prev_opener);
-                prev_role = role;
-                prev_opener = ends_with_open_delimiter(&other);
-                let delta = bracket_delta(&other);
-                pieces.push(MathPiece {
-                    ir: lower_math_element(other, cx),
-                    role,
-                    space_before: pending_space,
-                    bracket_delta: delta,
-                });
-                pending_space = false;
+                for atom in lower_math_atoms(other, cx) {
+                    let role = math_atom_role(atom.class, prev_role, prev_opener);
+                    prev_role = role;
+                    prev_opener = atom.delimiter == Some(DelimiterRole::Open);
+                    let bracket_delta = match atom.delimiter {
+                        Some(DelimiterRole::Open) => 1,
+                        Some(DelimiterRole::Close) => -1,
+                        Some(DelimiterRole::Fence) | None => 0,
+                    };
+                    pieces.push(MathPiece {
+                        ir: atom.ir,
+                        role,
+                        space_before: pending_space,
+                        bracket_delta,
+                    });
+                    pending_space = false;
+                }
             }
         }
     }
@@ -8671,7 +8479,6 @@ fn lower_math_seq(
                 pending_break = true;
             }
             other => {
-                let role = math_atom_role(&other, prev_role, prev_opener);
                 // A top-level `\\` (a `LINE_BREAK` node) ends its line: emit it, then
                 // force a hard break before the next atom. This is how a row stack
                 // (`\[ a \\ b \]`, or an aligned body that fell back off the grid)
@@ -8681,26 +8488,29 @@ fn lower_math_seq(
                     &other,
                     SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK
                 );
-                if !started {
-                    // no separator before the first atom
-                } else if pending_break || pending_newline {
-                    out.push(Ir::hard_line());
-                } else if role != MathRole::Operand
-                    || prev_role != MathRole::Operand
-                    || pending_space
-                {
-                    // Space around a binary/relation operator (either side), or a
-                    // collapsed authored gap between operands.
-                    out.push(Ir::verbatim(" "));
+                for atom in lower_math_atoms(other, cx) {
+                    let role = math_atom_role(atom.class, prev_role, prev_opener);
+                    if !started {
+                        // no separator before the first atom
+                    } else if pending_break || pending_newline {
+                        out.push(Ir::hard_line());
+                    } else if role != MathRole::Operand
+                        || prev_role != MathRole::Operand
+                        || pending_space
+                    {
+                        // Space around a binary/relation operator (either side), or a
+                        // collapsed authored gap between operands.
+                        out.push(Ir::verbatim(" "));
+                    }
+                    prev_opener = atom.delimiter == Some(DelimiterRole::Open);
+                    out.push(atom.ir);
+                    started = true;
+                    pending_space = false;
+                    pending_newline = false;
+                    pending_comment_own_line = false;
+                    pending_break = is_line_break;
+                    prev_role = role;
                 }
-                prev_opener = ends_with_open_delimiter(&other);
-                out.push(lower_math_element(other, cx));
-                started = true;
-                pending_space = false;
-                pending_newline = false;
-                pending_comment_own_line = false;
-                pending_break = is_line_break;
-                prev_role = role;
             }
         }
     }

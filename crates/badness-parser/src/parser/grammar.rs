@@ -1353,7 +1353,7 @@ impl<'t> Parser<'t> {
 
     /// Tick the stuck-loop guard, called from every lookahead primitive. Resets
     /// the budget whenever the cursor has advanced since the last tick (real
-    /// progress — via `bump` or the math-split fast path, both of which move
+    /// progress — via `bump` or the math-word slicing path, both of which move
     /// `pos`), so the surviving count is the number of *consecutive* peeks with no
     /// token consumed. Exceeding [`PARSER_STEP_LIMIT`] means the parser is wedged
     /// in a non-advancing loop; abort loudly rather than hang. This can only fire
@@ -2591,16 +2591,18 @@ impl<'t> Parser<'t> {
     /// event in front of it — the event-stream analog of rust-analyzer's
     /// `precede`, done locally without touching the event layer.
     fn math_scripted(&mut self) {
-        // The lexer keeps catcode-12 characters in coarse `WORD` runs. Math needs
-        // a finer view for operator atoms and, when a script follows, for TeX's
-        // one-token base. Emit byte slices without changing the lexer: ordinary
-        // unscripted runs stay compact, while `a+2*1^5` and `a,b^2` expose only
-        // their final character as the scripted base.
+        // The lexer keeps ordinary characters in coarse `WORD` runs. Preserve an
+        // unscripted run as one CST token. When a script follows, expose only the
+        // final Unicode scalar as TeX's one-token base without changing the lexer.
         if self.kind() == Some(SyntaxKind::WORD) {
             let idx = self.pos;
-            let end = self.text().len();
-            self.pos += 1; // `math_word_fragment` emits slices for the whole token.
-            self.math_word_fragment(idx, 0, end);
+            self.pos += 1;
+            if self.at_script() {
+                let end = self.tokens[idx].text.len();
+                self.math_word_fragment(idx, 0, end);
+            } else {
+                self.events.push(Event::Tok(idx));
+            }
             return;
         }
         let checkpoint = self.events.len();
@@ -2608,51 +2610,38 @@ impl<'t> Parser<'t> {
         self.math_scripts(checkpoint);
     }
 
-    /// Emit one unconsumed byte range of a lexer `WORD` as math atoms. Operator
-    /// boundaries are always exposed. If a script follows, the final Unicode
-    /// scalar is isolated as its base; TeX tokenizes an ordinary input character
-    /// separately even though the lossless lexer coalesces such characters.
+    /// Emit one unconsumed byte range of a lexer `WORD`. If a script follows, the
+    /// final Unicode scalar is isolated as its base; TeX tokenizes an ordinary
+    /// input character separately even though the lossless lexer coalesces such
+    /// characters.
     ///
     /// A fragment can be the remainder of a bare script argument (`x^23_i` leaves
     /// `3` after the `2`). In that case `self.pos` already points beyond the lexer
     /// token, so a following script correctly binds to the fragment's final atom.
     fn math_word_fragment(&mut self, idx: usize, start: usize, end: usize) {
         debug_assert!(start < end, "math WORD fragment must be non-empty");
-        let text = &self.tokens[idx].text[start..end];
-        let mut pieces: Vec<(usize, usize)> = split_math_word(text)
-            .unwrap_or_else(|| vec![(0, text.len())])
-            .into_iter()
-            .map(|(piece_start, piece_end)| (start + piece_start, start + piece_end))
-            .collect();
-
-        if self.at_script() {
-            let (piece_start, piece_end) = pieces.pop().expect("a non-empty WORD has a piece");
-            let last = self.tokens[idx].text[piece_start..piece_end]
-                .char_indices()
-                .next_back()
-                .map(|(offset, _)| piece_start + offset)
-                .expect("a WORD piece is non-empty");
-            if piece_start < last {
-                pieces.push((piece_start, last));
-            }
-            pieces.push((last, piece_end));
+        if !self.at_script() {
+            self.events.push(Event::SubTok { idx, start, end });
+            return;
         }
 
-        let (last, lead) = pieces
-            .split_last()
-            .expect("a non-empty WORD fragment has a final piece");
-        for &(piece_start, piece_end) in lead {
+        let last = self.tokens[idx].text[start..end]
+            .char_indices()
+            .next_back()
+            .map(|(offset, _)| start + offset)
+            .expect("a WORD fragment is non-empty");
+        if start < last {
             self.events.push(Event::SubTok {
                 idx,
-                start: piece_start,
-                end: piece_end,
+                start,
+                end: last,
             });
         }
         let checkpoint = self.events.len();
         self.events.push(Event::SubTok {
             idx,
-            start: last.0,
-            end: last.1,
+            start: last,
+            end,
         });
         self.math_scripts(checkpoint);
     }
@@ -4007,53 +3996,6 @@ impl<'t> Parser<'t> {
         self.close();
         Some(name.trim().to_owned())
     }
-}
-
-/// Split a math `WORD`'s text at operator boundaries into `[start, end)` byte
-/// ranges covering the whole text, or `None` when it holds no operator (a single
-/// operand run needs no split). Operators are catcode-12 "other" characters that
-/// glue into `WORD` (`a+2*1`); isolating them lets the math-aware parser and
-/// formatter treat them as atoms (spacing, line breaks) without a catcode-carrying
-/// lexer. The rule:
-///
-/// - `+ - * /`: each is its own single-char piece (so `2*-1` → `2`,`*`,`-`,`1`,
-///   letting the formatter read a leading `-`/`+` as unary).
-/// - `= < >`: a maximal run coalesces into one piece (`<=`, `>=`, `==` stay
-///   together), but never merges with an adjacent sign (`=-` → `=`,`-`).
-/// - anything else: a maximal operand run.
-///
-/// The pieces concatenate back to the input, preserving losslessness.
-pub(crate) fn split_math_word(text: &str) -> Option<Vec<(usize, usize)>> {
-    #[derive(PartialEq, Clone, Copy)]
-    enum Cls {
-        Operand,
-        /// `+ - * /`: always its own single-char piece.
-        Sign,
-        /// `= < >`: coalescing relation run.
-        Rel,
-    }
-    let classify = |c: char| match c {
-        '+' | '-' | '*' | '/' => Cls::Sign,
-        '=' | '<' | '>' => Cls::Rel,
-        _ => Cls::Operand,
-    };
-    let mut pieces = Vec::new();
-    let mut start = 0;
-    let mut prev: Option<Cls> = None;
-    for (i, c) in text.char_indices() {
-        let cls = classify(c);
-        // Break before this char when the class changed, or when either side is a
-        // sign (each sign stands alone). A same-class run (operand/operand or
-        // rel/rel) coalesces.
-        let boundary = prev.is_some_and(|p| p != cls || cls == Cls::Sign);
-        if boundary {
-            pieces.push((start, i));
-            start = i;
-        }
-        prev = Some(cls);
-    }
-    pieces.push((start, text.len()));
-    (pieces.len() >= 2).then_some(pieces)
 }
 
 /// Read the environment name from a `\begin{…}` at `begin_pos` without consuming.

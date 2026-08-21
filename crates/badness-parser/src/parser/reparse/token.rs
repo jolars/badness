@@ -59,8 +59,8 @@
 //! Every guard returns [`None`] and the caller full-parses, so the cost of being
 //! wrong about a guard's *necessity* is speed. The deliberate refusals worth
 //! knowing about: any edit carrying a line terminator, a leaf whose neighbour is
-//! too large to probe cheaply, and anything in math whose word splits into
-//! operator atoms.
+//! too large to probe cheaply, and any math word whose boundary may be changed by
+//! adjacent script syntax.
 
 use rowan::{GreenToken, NodeOrToken, TextRange, TextSize};
 

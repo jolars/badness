@@ -31,8 +31,8 @@ use super::Edit;
 /// What the leaf's surroundings say about which text reads can reach it.
 #[derive(Clone, Copy)]
 pub(super) struct Context {
-    /// The leaf sits in a math body, where `math_atom` splits a `WORD` into
-    /// operator atoms. Exact rather than approximate: every math body — `$…$`,
+    /// The leaf sits in a math body, where script adjacency can split a `WORD`.
+    /// Exact rather than approximate: every math body — `$…$`,
     /// `\[…\]`, `\left…\right`, and a math environment's — opens a `MATH` node.
     pub(super) in_math: bool,
 }
@@ -181,7 +181,7 @@ pub(super) fn text_reads_are_inert(kind: SyntaxKind, old: &str, new: &str, ctx: 
     }
 }
 
-/// [`text_reads_are_inert`] for a `WORD`, which the grammar branches on in four
+/// [`text_reads_are_inert`] for a `WORD`, which the grammar branches on in three
 /// places.
 fn word_reads_are_inert(old: &str, new: &str, ctx: Context) -> bool {
     // `parse_block`'s statement run loop: a top-level `;`-carrying `WORD` ends a
@@ -196,8 +196,8 @@ fn word_reads_are_inert(old: &str, new: &str, ctx: Context) -> bool {
         return false;
     }
 
-    // Math parsing can split any `WORD`: operators become sibling atoms, and a
-    // script next to the token isolates a one-character base or argument. A leaf
+    // Math parsing can split any `WORD`: a script next to the token isolates a
+    // one-character base or argument. A leaf
     // splice cannot prove that those boundaries remain unchanged from the leaf
     // text alone because script adjacency lives outside it. Decline every math
     // `WORD`; the shared reparse oracle routes the edit to a wider tier or a full
@@ -338,15 +338,11 @@ mod tests {
         ),
         ("&& super::is_def_prefix_command(&t.text)", ControlSequence),
         (
-            "let end = self.text().len();",
+            "let end = self.tokens[idx].text.len();",
             Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
         ),
         (
-            "let text = &self.tokens[idx].text[start..end];",
-            Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
-        ),
-        (
-            "let last = self.tokens[idx].text[piece_start..piece_end]",
+            "let last = self.tokens[idx].text[start..end]",
             Guarded("math WORD slicing, gated on `Context::in_math` and on `WORD`"),
         ),
         (

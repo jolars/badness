@@ -15,8 +15,8 @@
 //! - **Math.** `\ldots` (baseline, for lists like `a_1, \ldots, a_n`) and
 //!   `\cdots` (centered, for `a_1 + \cdots + a_n`) are *not* interchangeable; the
 //!   right one depends on the neighboring atoms. We guess from the adjacent
-//!   characters — an operator/relation neighbor (`+ - * / = < >`) picks `\cdots`,
-//!   otherwise `\ldots` — and mark the fix `Unsafe`, since the guess can be wrong
+//!   semantic atoms — a binary/relation neighbor picks `\cdots`, otherwise
+//!   `\ldots` — and mark the fix `Unsafe`, since the guess can be wrong
 //!   and the choice changes the typeset output. `--fix` leaves it alone;
 //!   `--unsafe-fixes` and the editor code action apply it.
 //!
@@ -32,6 +32,7 @@
 use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
+use crate::semantic::{MathAtomInfo, MathClass, math_atoms, math_char_info};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
 use super::{Example, Rule, RuleContext};
@@ -172,18 +173,14 @@ impl Rule for Ellipsis {
 /// baseline `\ldots`. A heuristic — hence the `Unsafe` fix.
 fn math_command(tok: &SyntaxToken, text: &str, run_start: usize, run_end: usize) -> &'static str {
     let before = if run_start > 0 {
-        text[..run_start].chars().next_back()
+        text[..run_start].chars().next_back().map(math_char_info)
     } else {
-        neighbor_char(tok.prev_token(), SyntaxToken::prev_token, |t| {
-            t.chars().next_back()
-        })
+        neighbor_atom(tok.prev_token(), SyntaxToken::prev_token, true)
     };
     let after = if run_end < text.len() {
-        text[run_end..].chars().next()
+        text[run_end..].chars().next().map(math_char_info)
     } else {
-        neighbor_char(tok.next_token(), SyntaxToken::next_token, |t| {
-            t.chars().next()
-        })
+        neighbor_atom(tok.next_token(), SyntaxToken::next_token, false)
     };
     if is_operator(before) || is_operator(after) {
         "\\cdots"
@@ -192,29 +189,40 @@ fn math_command(tok: &SyntaxToken, text: &str, run_start: usize, run_end: usize)
     }
 }
 
-/// Walk `step` from `first`, skipping whitespace/newline/comment trivia, and read
-/// a boundary character off the first content token with `pick`.
-fn neighbor_char(
+/// Walk `step` from `first`, skipping trivia, and classify the boundary atom of
+/// the first content token.
+fn neighbor_atom(
     first: Option<SyntaxToken>,
     step: fn(&SyntaxToken) -> Option<SyntaxToken>,
-    pick: fn(&str) -> Option<char>,
-) -> Option<char> {
+    last: bool,
+) -> Option<MathAtomInfo> {
     let mut cur = first;
     while let Some(tok) = cur {
         match tok.kind() {
             SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT => {
                 cur = step(&tok);
             }
-            _ => return pick(tok.text()),
+            _ => {
+                let element = SyntaxElement::Token(tok);
+                let atom = if last {
+                    math_atoms(&element).last()
+                } else {
+                    math_atoms(&element).next()
+                }?;
+                return Some(MathAtomInfo {
+                    class: atom.class,
+                    delimiter: atom.delimiter,
+                });
+            }
         }
     }
     None
 }
 
-/// Whether `c` is a binary operator or relation character that reads as a
+/// Whether an atom is a binary operator or relation that reads as a
 /// centered-dots (`\cdots`) context.
-fn is_operator(c: Option<char>) -> bool {
-    matches!(c, Some('+' | '-' | '*' | '/' | '=' | '<' | '>'))
+fn is_operator(atom: Option<MathAtomInfo>) -> bool {
+    atom.is_some_and(|atom| matches!(atom.class, MathClass::Bin | MathClass::Rel))
 }
 
 #[cfg(test)]
@@ -295,6 +303,22 @@ mod tests {
             apply_fixes(src, std::slice::from_ref(fix), true).output,
             "$a + \\cdots + b$\n"
         );
+    }
+
+    #[test]
+    fn generated_unicode_and_command_operators_pick_cdots() {
+        for src in ["$a⊕...⊕b$\n", "$a \\boxplus ... \\boxplus b$\n"] {
+            let out = findings(src);
+            assert_eq!(out.len(), 1, "source: {src:?}; got: {out:?}");
+            assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "\\cdots");
+        }
+    }
+
+    #[test]
+    fn ordinary_slash_neighbor_defaults_to_ldots() {
+        let out = findings("$a/.../b$\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].fix.as_ref().unwrap().edits[0].content, "\\ldots");
     }
 
     #[test]

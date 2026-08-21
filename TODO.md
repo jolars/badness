@@ -72,7 +72,7 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
    only slots known to be `Math`. Budget the snapshots and grammar extraction
    as the one intended CST-shape change.
 
-3. [ ] **Atom classification as semantic data.** Replace the formatter's
+3. [x] **Atom classification as semantic data.** Replace the formatter's
    `MATH_RELATION_COMMANDS`/`MATH_BINARY_COMMANDS` and the linter's parallel
    command sets with one semantic query. Generate the baseline from a pinned
    unicode-math revision—roughly 2,400 symbols and commands—with a sync/check
@@ -88,14 +88,13 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
    accounting, and mismatched-delimiter rule share the classifier but retain
    their own policies. Unknown commands fall back to `Ord`.
 
-4. [ ] **One spacing policy.** Once positional modes and atom classification
-   exist, resolve the script-argument versus command-argument inconsistency
-   (§ *Formatter*, issue #42's examples) once: tight ordinary `/`, no operator
-   spacing inside script-size content, and one space around top-level binary
-   and relation atoms. Apply it only to direct math content and known `Math`
-   slots; preserve `Text` and `Unknown` arguments. Add mixed-domain structural
-   tests. `task typeset:check` is an extra regression oracle, not the proof of
-   safety.
+4. [ ] **One spacing policy.** Finish resolving the script-argument versus
+   command-argument inconsistency (§ *Formatter*, issue #42's examples): retain
+   the classifier-established tight ordinary `/`, suppress operator spacing
+   inside script-size content, and keep one space around top-level binary and
+   relation atoms. Apply it only to direct math content and known `Math` slots;
+   preserve `Text` and `Unknown` arguments. Add mixed-domain structural tests.
+   `task typeset:check` is an extra regression oracle, not the proof of safety.
 
 5. [ ] **Record the licenses.** State the narrow math-whitespace license in
    `docs/src/development/architecture.md`: it covers ordinary catcode-10

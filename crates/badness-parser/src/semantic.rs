@@ -11,6 +11,7 @@ pub mod define;
 pub mod doc;
 pub mod expl3;
 pub mod label;
+pub mod math;
 pub mod mode;
 pub mod outline;
 pub mod pkgmeta;
@@ -23,6 +24,10 @@ pub use doc::{DocAssociation, DocKind, doc_associations};
 pub use label::{
     CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelId, LabelRef,
     RefCommand, RefId,
+};
+pub use math::{
+    DelimiterRole, MathAtom, MathAtomInfo, MathAtoms, MathClass, NAMED_MATH_OPERATORS, math_atoms,
+    math_char_info, math_command_info,
 };
 pub use mode::{Mode, ModeIndex, argument_domain};
 pub use outline::{LabelContext, OutlineItem, OutlineSymbol, label_context, outline};

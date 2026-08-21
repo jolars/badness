@@ -159,6 +159,11 @@ fn math_scripts_bind_to_exact_word_atoms() {
 }
 
 #[test]
+fn unscripted_math_words_remain_coalesced() {
+    insta::assert_snapshot!(tree(r"$a+2<=b≤c$"));
+}
+
+#[test]
 fn left_right_pair() {
     // `\left( … \right)`: the `\left`/`\right` and their delimiter tokens are
     // direct children, the enclosed atoms wrapped in a `MATH` body.

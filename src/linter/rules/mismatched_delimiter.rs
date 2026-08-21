@@ -12,13 +12,14 @@
 //! closing it), never a mere opener/closer mismatch. That catches genuine
 //! copy-paste slips like `\left) … \right(` with near-zero false positives.
 //!
-//! Reads only the static glyph text the lexer has already isolated into a single
-//! token (AGENTS.md decision #1); no math meaning is resolved.
+//! Reads only the shared static math classification; no package or macro meaning
+//! is resolved.
 
 use std::path::PathBuf;
 
 use rowan::NodeOrToken;
 
+use crate::semantic::{DelimiterRole, math_atoms};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use crate::linter::diagnostic::{Diagnostic, Severity};
@@ -29,18 +30,6 @@ const EXAMPLES: &[Example] = &[Example {
     caption: "A `\\left`/`\\right` pair whose glyphs point the wrong way:",
     source: "$\\left) x \\right($\n",
 }];
-
-/// Glyphs that conventionally open a delimited pair.
-const OPENERS: &[&str] = &[
-    "(", "[", "\\{", "\\lbrace", "\\lbrack", "\\langle", "\\lceil", "\\lfloor", "\\lgroup",
-    "\\lvert", "\\lVert",
-];
-
-/// Glyphs that conventionally close a delimited pair.
-const CLOSERS: &[&str] = &[
-    ")", "]", "\\}", "\\rbrace", "\\rbrack", "\\rangle", "\\rceil", "\\rfloor", "\\rgroup",
-    "\\rvert", "\\rVert",
-];
 
 pub struct MismatchedDelimiter;
 
@@ -82,7 +71,7 @@ impl Rule for MismatchedDelimiter {
             return;
         };
 
-        if CLOSERS.contains(&open.text()) {
+        if delimiter_role(&open) == Some(DelimiterRole::Close) {
             sink.push(orientation_diag(
                 self,
                 &open,
@@ -92,7 +81,7 @@ impl Rule for MismatchedDelimiter {
                 ),
             ));
         }
-        if OPENERS.contains(&close.text()) {
+        if delimiter_role(&close) == Some(DelimiterRole::Open) {
             sink.push(orientation_diag(
                 self,
                 &close,
@@ -103,6 +92,12 @@ impl Rule for MismatchedDelimiter {
             ));
         }
     }
+}
+
+fn delimiter_role(token: &SyntaxToken) -> Option<DelimiterRole> {
+    math_atoms(&SyntaxElement::Token(token.clone()))
+        .next()
+        .and_then(|atom| atom.delimiter)
 }
 
 fn orientation_diag(
@@ -214,6 +209,12 @@ mod tests {
     #[test]
     fn flags_both_ends_when_both_reversed() {
         let out = findings("$\\left) a \\right( $\n");
+        assert_eq!(out.len(), 2, "got: {out:?}");
+    }
+
+    #[test]
+    fn generated_unicode_delimiters_are_oriented() {
+        let out = findings("$\\left⟩ a \\right⟨$\n");
         assert_eq!(out.len(), 2, "got: {out:?}");
     }
 

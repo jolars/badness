@@ -156,7 +156,7 @@ pub enum ConvergenceError {
 /// `config` — the "whitespace-only formatter" oracle's view of content
 /// (comments, `.dtx` margins, and guards are trivia here; see
 /// `tests/format.rs`). Comparing concatenated *text* rather than token
-/// boundaries tolerates the math operator split re-grouping a catcode-12 run.
+/// boundaries tolerates math whitespace re-grouping a coalesced `WORD` run.
 pub fn nontrivia_content(text: &str, config: impl Into<LexConfig>) -> String {
     node_nontrivia_content(&parse_with_flavor(text, config).syntax())
 }

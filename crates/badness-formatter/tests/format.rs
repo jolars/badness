@@ -172,9 +172,8 @@ const CLEAN_CASES: &[&str] = &[
     // multi-char braced script, a group base, and display math — the lowering must
     // keep all invariants (idempotent, clean, lossless).
     r"$x^{2} + a_i^{n+1} + {a+b}^2$",
-    // Operators glued into a `WORD` are split into atoms and spaced (`a+2*1^5` ->
-    // `a + 2 * 1^5`), unary signs stay tight (`-x`, `x=-b`), and the split must
-    // stay idempotent, clean, and lossless.
+    // Operators inside a coalesced `WORD` are classified as virtual atoms and
+    // spaced (`a+2*1^5` -> `a + 2 * 1^5`); unary signs stay tight (`-x`, `x=-b`).
     r"$a+2*1^5$ and $x=-b$ and $-x+1$ and $2*-1$ and $a<=b$",
     r"\[ x ^ 2 \quad y_\alpha \]",
     // `\left … \right` matched pairs: nested, scripted, and a control-word
@@ -946,20 +945,19 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_collapse_spaces", WrapMode::Preserve, 80),
     ("math_trim_delims", WrapMode::Preserve, 80),
     ("math_tight_scripts", WrapMode::Preserve, 80),
-    // A single space is placed around every binary/relation operator (the parser
-    // splits a `WORD` glued around `+ - * / = < >` into atoms; command operators
-    // like `\cdot` join them via the role model). A unary `+`/`-` with no left
-    // operand stays glued (`-x`, `x=-b`, `2^{-5}`), scripts stay tight, and group
-    // bodies are normalized too (`x^{a+b}` -> `x^{a + b}`). Scientific notation
-    // (`1e-5`) is deliberately not special-cased.
+    // A single space is placed around every binary/relation virtual atom,
+    // including generated Unicode and command classes. A unary `+`/`-` with no
+    // left operand stays glued (`-x`, `x=-b`, `2^{-5}`), ordinary `/` is tight,
+    // and group bodies are normalized too (`x^{a+b}` -> `x^{a + b}`). Scientific
+    // notation (`1e-5`) is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
     // The layout engine keeps single-token script braces verbatim; it never
     // strips them (that is the `redundant-script-braces` lint autofix's job).
     ("math_keep_single_token_braces", WrapMode::Preserve, 80),
     // Braces around a script argument are likewise kept when an operator follows
-    // (`a_{p} / a_{p - 2}`, `\mathcal{A}_{+} / …`): operator spacing still applies,
-    // but the braces stay — a raw strip here would re-glue (`a_p/a_q` re-lexes as
-    // `_{p/a}`), which is why even the lint autofix withholds it.
+    // (`a_{p}/a_{p - 2}`, `\mathcal{A}_{+}/…`): the braces stay, since a raw
+    // strip here would re-glue (`a_p/a_q` re-lexes as `_{p/a}`), which is why even
+    // the lint autofix withholds it.
     ("math_keep_braces_before_operator", WrapMode::Preserve, 80),
     ("math_keep_multichar_braces", WrapMode::Preserve, 80),
     ("math_comment_breaks", WrapMode::Preserve, 80),

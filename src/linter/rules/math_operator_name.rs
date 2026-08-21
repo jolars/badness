@@ -40,13 +40,13 @@
 //! editor code action apply it — the same classification as the sibling
 //! `times-variable` rule.
 //!
-//! The operator table lives here, not in `data/signatures.json`: "this bare name
-//! should have been an operator" is a lint judgment, not the structural
-//! arity/verbatim fact the signature DB carries (AGENTS.md core decision #2).
+//! The operator vocabulary comes from the shared static math classifier, not
+//! `data/signatures.json`: it is a math-class fact, not structural arity data.
 
 use std::path::PathBuf;
 
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
+use crate::semantic::NAMED_MATH_OPERATORS;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxToken};
 
 use super::{Example, Rule, RuleContext};
@@ -60,15 +60,6 @@ const EXAMPLES: &[Example] = &[
         caption: "It fires through the glued `f(x)` form too:",
         source: "The limit $lim(x)$ diverges.\n",
     },
-];
-
-/// The LaTeX/amsmath log-like function operators. Each is defined as an upright
-/// `\mathop`; written bare it degrades to italic variables. Sorted longest-first
-/// is unnecessary — [`match_operator_prefix`] picks the longest match explicitly.
-const OPERATORS: &[&str] = &[
-    "arccos", "arcsin", "arctan", "arg", "cos", "cosh", "cot", "coth", "csc", "deg", "det", "dim",
-    "exp", "gcd", "hom", "inf", "ker", "lg", "lim", "liminf", "limsup", "ln", "log", "max", "min",
-    "Pr", "sec", "sin", "sinh", "sup", "tan", "tanh",
 ];
 
 pub struct MathOperatorName;
@@ -237,7 +228,7 @@ fn flank_char(mut el: Option<SyntaxElement>, next: bool) -> Option<char> {
 /// a function name (`since`, `cosine`) out of scope.
 fn match_operator_prefix(text: &str) -> Option<&'static str> {
     let bytes = text.as_bytes();
-    OPERATORS
+    NAMED_MATH_OPERATORS
         .iter()
         .copied()
         .filter(|op| {

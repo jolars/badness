@@ -127,10 +127,10 @@ comparison, not a byte target.
 
 - New parser features need corpus and snapshot coverage with explicit
   losslessness assertions.
-- Regenerate mechanical data with `task cwl:sync`, `task pkg-names:sync`, or
-  `task bib-fields:sync`, as appropriate; do not edit generated artifacts by
-  hand. `signatures.json`, `colors.json`, and `tikz_libraries.json` are curated
-  data and may be edited directly.
+- Regenerate mechanical data with `task cwl:sync`, `task pkg-names:sync`,
+  `task bib-fields:sync`, or `task math-symbols:sync`, as appropriate; do not
+  edit generated artifacts by hand. `signatures.json`, `colors.json`, and
+  `tikz_libraries.json` are curated data and may be edited directly.
 - When parser behavior changes, update tests, snapshots, losslessness checks,
   these operational instructions when needed, and the parser rationale in
   `docs/src/development/architecture.md`.

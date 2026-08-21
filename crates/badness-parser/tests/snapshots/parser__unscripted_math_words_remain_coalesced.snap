@@ -1,0 +1,11 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(r\"$a+2<=b≤c$\")"
+---
+ROOT@0..12
+  PARAGRAPH@0..12
+    INLINE_MATH@0..12
+      DOLLAR@0..1 "$"
+      MATH@1..11
+        WORD@1..11 "a+2<=b≤c"
+      DOLLAR@11..12 "$"

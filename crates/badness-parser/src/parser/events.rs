@@ -14,11 +14,10 @@ pub(crate) enum Event {
     /// Attach the token at this index in the token stream.
     Tok(usize),
     /// Attach a `WORD` sub-token: the `start..end` byte slice of the token at
-    /// `idx`. Math parsing uses these slices both to isolate operators (`a+2*1`)
-    /// and to recover TeX's one-token script boundaries from the lexer's coarser
-    /// `WORD` runs (`a,b^2` and `x^2;`). Losslessness is preserved because the
-    /// slices emitted for one token cover its full byte range contiguously (see
-    /// [`super::grammar`]).
+    /// `idx`. Math parsing uses these slices to recover TeX's one-token script
+    /// boundaries from the lexer's coarser `WORD` runs (`a,b^2` and `x^2;`).
+    /// Losslessness is preserved because the slices emitted for one token cover
+    /// its full byte range contiguously (see [`super::grammar`]).
     SubTok {
         idx: usize,
         start: usize,

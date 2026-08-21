@@ -98,7 +98,7 @@ effective domain. Stages 2–4 are ordered; stage 1 items are independent.
    structural tests.
    `task typeset:check` is an extra regression oracle, not the proof of safety.
 
-5. [ ] **Record the licenses.** State the narrow math-whitespace license in
+5. [x] **Record the licenses.** State the narrow math-whitespace license in
    `docs/src/development/architecture.md`: it covers ordinary catcode-10
    whitespace delivered directly to a math list, not text islands, arbitrary
    macro argument token lists, code, keys, comments, or explicit spacing
@@ -1151,9 +1151,10 @@ sources below are missing.
   in the VS Code extension—breaks the thin-client principle and is VS
   Code-only; (c) server-side SVG via a Rust math renderer (ReX or similar) as
   a data-URI image in hover markdown—editor-agnostic, but ships a math layout
-  engine, which is typesetting in all but name (pressure on the AGENTS.md
-  non-goal). Lean (a) for now; whichever way, record the decision in
-  AGENTS.md. *The math roadmap (step 5) settles this as (a).*
+  engine, which is typesetting in all but name. Lean (a) for now, but leave the
+  choice open until implementation constraints justify closing it; record the
+  eventual rationale in the architecture documentation rather than turning
+  `AGENTS.md` into a decision log.
 
 ### Code actions
 

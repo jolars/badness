@@ -1253,6 +1253,16 @@ authored. Formatter signature precedence still applies, so a scanned
 redefinition shadows the curated built-in with `Unknown` domains and restores
 whole-command preservation.
 
+The license for normalizing math whitespace is correspondingly narrow. It covers
+ordinary catcode-10 whitespace delivered directly to a math list, where TeX
+discards it. Math ancestry alone grants no such license: whitespace inside text
+islands or arbitrary macro argument token lists can be preserved, inspected, or
+replayed in a non-math mode. Code, keys, comments, and explicit spacing commands
+are likewise outside the license. The formatter therefore crosses a command
+boundary only for a signature-proven `Math` slot; every other argument retains
+its authored whitespace. `tests/typeset/math_whitespace.tex` exercises both a
+macro that preserves argument spaces and one that branches on them.
+
 Math lowering consumes the shared virtual-atom view rather than parser token
 boundaries. In direct math content and signature-proven `Math` slots, its policy
 places one space around `Bin` and `Rel` atoms, preserves compound relation
@@ -1610,10 +1620,11 @@ merely tolerated.
 Two oracles sit outside the fast test suite. We run
 [texlab](https://github.com/latex-lsp/texlab)'s parser as a differential parse
 oracle over a corpus, skeletonizing both trees and comparing; it is a reference
-we measure against, not one we match. And because the CST cannot see the one
-risk `ContentKind::Keyval` takes, where a space token is trivia to the CST and
-content to TeX, `task typeset:check` compiles fixtures before and after
-formatting and diffs the typeset output.
+we measure against, not one we match. The CST also cannot prove that changing a
+space leaves TeX's output alone: a key-value license can materialize a space
+token, while an over-broad math license can rewrite one captured by a macro.
+`task typeset:check` therefore compiles fixtures before and after formatting and
+diffs the typeset output.
 
 ## Technology choices
 

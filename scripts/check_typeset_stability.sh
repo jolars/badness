@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Manual gate: prove that formatting a document does not change what it typesets.
 #
-# Most invariants (losslessness, whitespace-only, trivia convergence) are checked
-# against the CST, which by construction cannot see the one risk the keyval
-# optional-argument layout takes: breaking a `[…]` at a comma the author glued
-# emits a *space token* TeX will see. A space is trivia to the CST and content to
-# TeX. Only a real compile can tell the difference.
+# Most invariants (losslessness, whitespace-only, trivia convergence) are
+# checked against the CST, which by construction cannot prove that changing
+# whitespace leaves TeX's output alone. A keyval break can materialize a space
+# token, while math ancestry can hide a space captured and inspected by a macro.
+# A space is trivia to the CST but may be content to TeX. Only a real compile can
+# tell the difference.
 #
 # So: compile each input, format it, compile again, and diff the extracted text.
-# Any difference is a formatter bug — most likely a `ContentKind::Keyval` flag set
-# on an argument that is actually typeset (see `formatter.md`, § Optional-argument
-# layout).
+# Any difference is a formatter bug—most likely an over-broad content license
+# applied to whitespace that TeX observes.
 #
 # Needs a TeX installation, so it never runs in CI. Run it when touching keyval
-# signature data or the optional-argument lowering.
+# or math signatures and their lowering rules.
 #
 # Usage: check_typeset_stability.sh [file.tex...]   (default: tests/typeset/*.tex)
 # Env:   BADNESS=/path/to/badness   (default: target/release/badness)

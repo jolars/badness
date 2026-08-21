@@ -1,0 +1,28 @@
+% Ordinary spaces delivered directly to a math list are insignificant, but
+% math ancestry does not make spaces inside arbitrary macro arguments safe to
+% rewrite. The direct formula below ensures formatting changes this fixture;
+% the two macros make an accidental argument rewrite visible in the PDF diff.
+\documentclass{article}
+
+\def\preserveargument#1{\hbox{left#1right}}
+\def\blankargument{ }
+\def\inspectargument#1{%
+  \def\candidateargument{#1}%
+  \ifx\candidateargument\blankargument
+    \hbox{space preserved}%
+  \else
+    \hbox{space lost}%
+  \fi
+}
+
+\begin{document}
+
+Direct math whitespace may normalize: $a+ b=c /d$.
+
+Argument whitespace may be replayed in text mode:
+$\preserveargument{ alpha beta }$.
+
+Argument whitespace may control expansion:
+$\inspectargument{ }$.
+
+\end{document}

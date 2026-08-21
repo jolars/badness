@@ -3499,7 +3499,8 @@ impl<'t> Parser<'t> {
                                 while let Some(entry) = pending.pop() {
                                     envs = entry.envs_at_push;
                                     if !entry.settled {
-                                        debug_assert_eq!(live.pop(), Some(pending.len()));
+                                        let live_entry = live.pop();
+                                        debug_assert_eq!(live_entry, Some(pending.len()));
                                         verdicts.insert(entry.opener, None);
                                     }
                                     if peek_begin_name(self.tokens, entry.opener).as_deref()

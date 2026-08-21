@@ -1,6 +1,6 @@
 ---
 name: bench
-description: Use when the user wants to (re)run the formatter/linter speed benchmark or refresh the docs benchmark page — "run the benchmark", "task bench", "update the benchmark numbers", "refresh benchmarks". Regenerates the committed JSON artifact that feeds docs/src/reference/benchmarks.md, then fact-checks that page against the code.
+description: Use when the user wants to (re)run the formatter/linter speed benchmark, compare LSP memory with texlab, or refresh the docs benchmark page — "run the benchmark", "task bench", "task bench:memory", "memory vs texlab", "update the benchmark numbers", "refresh benchmarks". Regenerates the requested committed JSON artifact that feeds docs/src/reference/benchmarks.md, then fact-checks that page against the code.
 ---
 
 # bench
@@ -19,8 +19,8 @@ overfull lines greedily but does not reflow, so it moves far less text than
 milliseconds are real latencies but are machine- and run-dependent, and a
 cross-tool difference is not a claim that one tool is faster at the same job.
 
-The benchmark is **regenerated manually** by this skill. It is never run at
-mdbook-build time or in CI — the docs page only renders the committed JSON.
+The benchmarks are **regenerated manually** by this skill. They are never run at
+mdbook-build time or in CI—the docs page only renders the committed JSON.
 
 ## Steps
 
@@ -31,11 +31,14 @@ mdbook-build time or in CI — the docs page only renders the committed JSON.
    task bench:download
    ```
 
-2. **Run the benchmark.** This builds the release binary and rewrites the
-   committed artifact `benches/benchmark_results.json`:
+2. **Run the requested benchmark.** The speed task rewrites
+   `benches/benchmark_results.json`; the Linux-only memory task runs three fresh
+   Badness and TexLab language-server sessions and rewrites
+   `benches/memory_results.json`:
 
    ```sh
    task bench
+   task bench:memory
    ```
 
    Best results need `tex-fmt`, `latexindent`, `lacheck`, `chktex`, `hyperfine`,
@@ -43,6 +46,10 @@ mdbook-build time or in CI — the docs page only renders the committed JSON.
    loop and min/max become `null`). Tools absent from `PATH` are skipped;
    documents `badness` cannot format yet (parser diagnostics) are skipped with a
    note. `lacheck` and `chktex` are shipped with TeX Live.
+
+   The memory task requires `texlab`, Python, and readable `/proc/smaps_rollup`.
+   It fails on a protocol error, server exit, or 60-second settle timeout rather
+   than committing a partial comparison.
 
 3. **Fact-check the docs page** `docs/src/reference/benchmarks.md`. The numbers
    render automatically from the JSON via the `doc-utils` preprocessor, but the
@@ -79,6 +86,12 @@ mdbook-build time or in CI — the docs page only renders the committed JSON.
      run-dependent, and a cross-tool difference is not a same-job speed verdict
      (the tools do different work). Don't reintroduce "quality gate"-style meta
      commentary.
+   - The **memory comparison** starts `badness lsp` and `texlab run` three fresh
+     times each against the complete pinned thesis workspace. It opens the five
+     paths declared by `compare_lsp_memory.sh`, runs diagnostics plus document
+     symbols and meaningful hovers, samples whole-process-tree RSS/PSS at 150 ms,
+     and records baseline/settled/peak after CPU-based quiescence. It is an
+     editor-session cost comparison, not a feature-equivalence claim.
 
 4. **Sanity-check rendering** (optional but recommended):
 
@@ -102,5 +115,8 @@ mdbook-build time or in CI — the docs page only renders the committed JSON.
   from the book root at build time and substitutes the `{{ benchmark-results }}`,
   `{{ benchmark-meta }}`, `{{ lint-benchmark-results }}`, and
   `{{ lint-benchmark-meta }}` markers in `docs/src/reference/benchmarks.md`.
+- `benches/compare_lsp_memory.sh --out benches/memory_results.json` drives the
+  external sessions through `benches/lsp_memory_compare.py`; `memory.rs` in the
+  docs preprocessor renders its setup and result markers.
 - The companion in-process micro-bench / flamegraph workflow lives in
   `benches/README.md` and is **out of scope** for this skill.

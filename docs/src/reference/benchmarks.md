@@ -111,3 +111,42 @@ folder benchmark—they would have no counterpart to measure against.
 ### Results
 
 {{ lint-benchmark-results }}
+
+## Language-server memory
+
+### How memory is measured
+
+This comparison measures the resident cost of an ordinary editor session—not
+retained Rust allocations inside one implementation. The harness starts three
+fresh processes each of `badness lsp` and `texlab run` against the complete,
+pinned [`kks32/phd-thesis-template`] workspace. It opens the same five documents
+in each session, obtains diagnostics using the server's advertised pull or push
+model, and requests document symbols and a hover at a real control word in every
+open document.
+
+On Linux, the harness samples the complete descendant process tree every 150 ms
+from `/proc`. **RSS** is the resident memory commonly reported by process
+monitors; it counts shared pages once in every process. **PSS** divides shared
+pages among the processes that map them, which better estimates how much
+physical memory the session occupies. The baseline is recorded after
+initialization settles, the settled value after the editor workload settles, and
+the peak is the largest sample at any time. A phase is settled after five
+seconds below 5% of one CPU core and fails after 60 seconds. The table reports
+the median of three fresh runs; the JSON artifact retains every raw run.
+
+The servers do not provide identical features or analysis, so this compares the
+user-visible cost rather than efficiency at the same work. Resident memory also
+depends on the operating system, allocator, and tool versions; read the absolute
+figures together with the setup below.
+
+Regenerate this section with `task bench:memory`. The committed
+`benches/memory_results.json` artifact is only read while building the site—the
+benchmark never runs in CI or during an mdBook build.
+
+### Setup
+
+{{ memory-benchmark-meta }}
+
+### Results
+
+{{ memory-benchmark-results }}

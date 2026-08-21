@@ -115,6 +115,17 @@ tasks:
     cmds:
       - ./benches/compare_format.sh --out benches/benchmark_results.json
 
+  bench:memory:
+    desc: Compare whole-process-tree LSP memory vs texlab (writes benches/memory_results.json for the docs page)
+    cmds:
+      - ./benches/compare_lsp_memory.sh --out benches/memory_results.json
+
+  bench:memory-test:
+    desc: Test the external memory harness and docs renderer
+    cmds:
+      - python3 -m unittest benches/test_lsp_memory_compare.py
+      - cargo test --manifest-path docs/doc-utils/Cargo.toml
+
   bench:download:
     desc: Fetch the real-world LaTeX corpus for the formatter benchmark
     cmds:

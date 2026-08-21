@@ -1,6 +1,7 @@
 //! Preprocessor for the docs, plus shared post-build helpers (see [`postbuild`]).
 
 pub mod postbuild;
+mod memory;
 
 use mdbook_preprocessor::book::Book;
 use mdbook_preprocessor::errors::Result;
@@ -44,6 +45,7 @@ impl Preprocessor for GuideHelper {
     fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
         insert_version(&mut book);
         insert_benchmarks(&mut book);
+        memory::insert(&mut book, &project_root());
         insert_changelog(&mut book);
         Ok(book)
     }

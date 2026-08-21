@@ -39,6 +39,20 @@ PROJECT_SRC="$DOCS_DIR/project"
 BADNESS="$REPO_ROOT/target/release/badness"
 HYPERFINE_MIN_RUNS=3
 PROJECT_ITERS=5
+PROJECT_TEX_FILES=(
+    thesis.tex
+    thesis-info.tex
+    Preamble/preamble.tex
+    Abstract/abstract.tex
+    Acknowledgement/acknowledgement.tex
+    Dedication/dedication.tex
+    Declaration/declaration.tex
+    Chapter1/chapter1.tex
+    Chapter2/chapter2.tex
+    Chapter3/chapter3.tex
+    Appendix1/appendix1.tex
+    Appendix2/appendix2.tex
+)
 
 JSON_OUT="benches/benchmark_results.json"
 
@@ -262,9 +276,16 @@ done
 
 if [ -z "${BADNESS_BENCH_INPUT:-}" ] && [ -d "$PROJECT_SRC" ]; then
     PROJECT_STAGE=$(mktemp -d)
-    # The source holds only .tex fragments (download.sh fetches nothing else), so
-    # a plain recursive copy stages the tree, preserving its subdirectory layout.
-    cp -r "$PROJECT_SRC/." "$PROJECT_STAGE/"
+    # The fetched source is also the complete LSP workspace. Stage the formatter
+    # corpus explicitly so added project assets—and the generated glyph map—do
+    # not change this existing speed comparison.
+    for relative in "${PROJECT_TEX_FILES[@]}"; do
+        [ -f "$PROJECT_SRC/$relative" ] || {
+            echo "error: project corpus is missing $relative; run task bench:download" >&2
+            exit 1
+        }
+        install -D "$PROJECT_SRC/$relative" "$PROJECT_STAGE/$relative"
+    done
 
     proj_bytes=0; proj_lines=0; proj_files=0; proj_excluded=0
     while IFS= read -r f; do

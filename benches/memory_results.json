@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-21T21:23:52Z",
+  "host": {
+    "hostname": "terra",
+    "os": "Linux x86_64",
+    "cpu": "AMD Ryzen 9 7900 12-Core Processor",
+    "memory_gb": 61.9
+  },
+  "versions": {
+    "badness": "0.17.0",
+    "texlab": "5.26.0"
+  },
+  "corpus": {
+    "repository": "https://github.com/kks32/phd-thesis-template",
+    "tag": "v2.4",
+    "commit": "3ce347686d75747f69d9e736acd46a9393a1b332",
+    "source_files": 16,
+    "source_bytes": 279004
+  },
+  "session": {
+    "runs_per_server": 3,
+    "sample_interval_seconds": 0.15,
+    "quiet_seconds": 5.0,
+    "settle_timeout_seconds": 60.0,
+    "open_files": [
+      "thesis.tex",
+      "Chapter1/chapter1.tex",
+      "Chapter2/chapter2.tex",
+      "Preamble/preamble.tex",
+      "Chapter3/chapter3.tex"
+    ],
+    "open_bytes": 37773,
+    "operations": [
+      "diagnostics",
+      "document symbols",
+      "hover"
+    ]
+  },
+  "servers": [
+    {
+      "key": "badness",
+      "label": "Badness",
+      "command": [
+        "badness",
+        "lsp"
+      ],
+      "summary": {
+        "baseline_rss_mb": 9.3,
+        "baseline_pss_mb": 7.4,
+        "settled_rss_mb": 14.7,
+        "settled_pss_mb": 12.8,
+        "peak_rss_mb": 14.7,
+        "peak_pss_mb": 12.8,
+        "settled_seconds": 6.0,
+        "relative_to_badness": 1.0
+      },
+      "runs": [
+        {
+          "run": 1,
+          "milestones": {
+            "baseline": {
+              "rss_mb": 9.3,
+              "pss_mb": 7.4,
+              "processes": 1
+            },
+            "settled": {
+              "rss_mb": 14.7,
+              "pss_mb": 12.8,
+              "processes": 1
+            },
+            "peak": {
+              "rss_mb": 14.7,
+              "pss_mb": 12.8
+            }
+          },
+          "init_seconds": 0.02,
+          "diagnostic_mode": "pull",
+          "baseline_seconds": 4.97,
+          "settled_seconds": 5.98,
+          "diagnostic_requests": 5,
+          "diagnostics_published": 0,
+          "samples": 40
+        },
+        {
+          "run": 2,
+          "milestones": {
+            "baseline": {
+              "rss_mb": 9.1,
+              "pss_mb": 7.2,
+              "processes": 1
+            },
+            "settled": {
+              "rss_mb": 14.6,
+              "pss_mb": 12.7,
+              "processes": 1
+            },
+            "peak": {
+              "rss_mb": 14.6,
+              "pss_mb": 12.7
+            }
+          },
+          "init_seconds": 0.0,
+          "diagnostic_mode": "pull",
+          "baseline_seconds": 4.95,
+          "settled_seconds": 5.96,
+          "diagnostic_requests": 5,
+          "diagnostics_published": 0,
+          "samples": 40
+        },
+        {
+          "run": 3,
+          "milestones": {
+            "baseline": {
+              "rss_mb": 9.3,
+              "pss_mb": 7.4,
+              "processes": 1
+            },
+            "settled": {
+              "rss_mb": 14.7,
+              "pss_mb": 12.8,
+              "processes": 1
+            },
+            "peak": {
+              "rss_mb": 14.7,
+              "pss_mb": 12.8
+            }
+          },
+          "init_seconds": 0.0,
+          "diagnostic_mode": "pull",
+          "baseline_seconds": 4.95,
+          "settled_seconds": 5.96,
+          "diagnostic_requests": 5,
+          "diagnostics_published": 0,
+          "samples": 40
+        }
+      ]
+    },
+    {
+      "key": "texlab",
+      "label": "TexLab",
+      "command": [
+        "texlab",
+        "run"
+      ],
+      "summary": {
+        "baseline_rss_mb": 22.6,
+        "baseline_pss_mb": 20.7,
+        "settled_rss_mb": 89.4,
+        "settled_pss_mb": 87.6,
+        "peak_rss_mb": 89.4,
+        "peak_pss_mb": 87.6,
+        "settled_seconds": 6.0,
+        "relative_to_badness": 6.08
+      },
+      "runs": [
+        {
+          "run": 1,
+          "milestones": {
+            "baseline": {
+              "rss_mb": 22.6,
+              "pss_mb": 20.7,
+              "processes": 1
+            },
+            "settled": {
+              "rss_mb": 89.4,
+              "pss_mb": 87.6,
+              "processes": 1
+            },
+            "peak": {
+              "rss_mb": 89.4,
+              "pss_mb": 87.6
+            }
+          },
+          "init_seconds": 0.0,
+          "diagnostic_mode": "push",
+          "baseline_seconds": 4.95,
+          "settled_seconds": 6.04,
+          "diagnostic_requests": 0,
+          "diagnostics_published": 56,
+          "samples": 40
+        },
+        {
+          "run": 2,
+          "milestones": {
+            "baseline": {
+              "rss_mb": 22.5,
+              "pss_mb": 20.7,
+              "processes": 1
+            },
+            "settled": {
+              "rss_mb": 89.3,
+              "pss_mb": 87.4,
+              "processes": 1
+            },
+            "peak": {
+              "rss_mb": 89.3,
+              "pss_mb": 87.4
+            }
+          },
+          "init_seconds": 0.0,
+          "diagnostic_mode": "push",
+          "baseline_seconds": 4.95,
+          "settled_seconds": 6.04,
+          "diagnostic_requests": 0,
+          "diagnostics_published": 56,
+          "samples": 40
+        },
+        {
+          "run": 3,
+          "milestones": {
+            "baseline": {
+              "rss_mb": 22.9,
+              "pss_mb": 21.1,
+              "processes": 1
+            },
+            "settled": {
+              "rss_mb": 89.5,
+              "pss_mb": 87.6,
+              "processes": 1
+            },
+            "peak": {
+              "rss_mb": 89.5,
+              "pss_mb": 87.6
+            }
+          },
+          "init_seconds": 0.0,
+          "diagnostic_mode": "push",
+          "baseline_seconds": 4.95,
+          "settled_seconds": 6.04,
+          "diagnostic_requests": 0,
+          "diagnostics_published": 56,
+          "samples": 40
+        }
+      ]
+    }
+  ]
+}

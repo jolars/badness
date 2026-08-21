@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use crossbeam_channel::{Receiver, Sender, select, unbounded};
+use crossbeam_channel::{Receiver, Sender, never, select, unbounded};
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
     DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument,
@@ -1180,6 +1180,27 @@ fn spawn_ipc_listener(
     Some(IpcHandle { listener, thread })
 }
 
+/// Build the inverse-search channel, or a receiver that can never become ready.
+///
+/// A disconnected receiver is always ready in `select!`; leaving one installed
+/// when the client cannot show documents—or when binding the listener fails—
+/// turns the main loop into a busy spin. `never()` preserves the disabled arm's
+/// intended behavior without a dummy sender that could obscure listener failure.
+fn ipc_channel(
+    enabled: bool,
+    settings: &EditorSettings,
+    roots: Vec<PathBuf>,
+) -> (Option<IpcHandle>, Receiver<IpcMessage>) {
+    if !enabled {
+        return (None, never());
+    }
+    let (ipc_tx, ipc_rx) = unbounded();
+    match spawn_ipc_listener(settings, roots, ipc_tx) {
+        Some(ipc) => (Some(ipc), ipc_rx),
+        None => (None, never()),
+    }
+}
+
 /// The blocking message loop. Owns [`GlobalState`]; spawns the worker thread and
 /// the read pool, then shuttles messages between the client and the workers.
 /// `encoding` is the position encoding [`serve`] negotiated (and advertised) at
@@ -1220,16 +1241,11 @@ fn main_loop(
     // Inverse search, gated on the one client capability it needs. A client that
     // cannot `window/showDocument` never binds a socket, which is also why the
     // default test client is unaffected by any of this.
-    let (ipc_tx, ipc_rx) = unbounded::<IpcMessage>();
-    let ipc = client_show_document_support(&init_params)
-        .then(|| {
-            spawn_ipc_listener(
-                &state.editor_settings,
-                workspace_roots(&init_params),
-                ipc_tx,
-            )
-        })
-        .flatten();
+    let (ipc, ipc_rx) = ipc_channel(
+        client_show_document_support(&init_params),
+        &state.editor_settings,
+        workspace_roots(&init_params),
+    );
 
     let read_pool = TaskPool::new("badness-lsp-read", read_pool_size());
     let (job_tx, job_rx) = unbounded::<WorkerJob>();
@@ -7145,6 +7161,15 @@ mod tests {
 
     fn uri(s: &str) -> Uri {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn disabled_ipc_receiver_stays_pending() {
+        let (_ipc, rx) = ipc_channel(false, &EditorSettings::default(), Vec::new());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        ));
     }
 
     #[test]

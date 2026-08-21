@@ -7,6 +7,8 @@
 //! (arity, verbatim-ness, sectioning) are layered on top in [`semantic`],
 //! never inside the grammar.
 
+#![deny(clippy::debug_assert_with_mut_call)]
+
 pub mod ast;
 pub mod bib;
 pub mod declarations;

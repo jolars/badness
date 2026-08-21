@@ -42,45 +42,39 @@ fetch phd_dissertation.tex     tests/phd_dissertation/source/phd_dissertation.te
 
 # --- Multi-file project corpus (folder / whole-project benchmark) -------------
 #
-# A real, pinned multi-file LaTeX thesis (kks32/phd-thesis-template): a main
-# `thesis.tex` that `\input`s per-chapter/appendix/front-matter fragments. This
-# is the corpus for the recursive folder benchmark (badness vs tex-fmt only —
-# latexindent has no recursive directory mode). Only the `.tex` fragments are
-# fetched, and `compare_format.sh` benchmarks a clean temp copy of them, so the
-# two tools walk an identical `.tex`-only file set (`badness format` is
-# `.tex`-only, tex-fmt would otherwise also touch `.bib`/`.cls`). The generated
-# 175 kB `Classes/glyphtounicode.tex` glyph map is intentionally skipped: it is a
-# machine-written table, not representative document prose.
+# A real, pinned multi-file LaTeX thesis (kks32/phd-thesis-template). The full
+# checkout is the workspace for the external LSP memory benchmark, including
+# its class, style, bibliography, and image assets. `compare_format.sh` stages
+# its own explicit `.tex` subset so expanding this checkout cannot silently
+# change the formatter speed corpus.
 
-PROJECT_REF="v2.4"  # https://github.com/kks32/phd-thesis-template
-PROJECT_RAW="https://raw.githubusercontent.com/kks32/phd-thesis-template/${PROJECT_REF}"
+PROJECT_REPOSITORY="https://github.com/kks32/phd-thesis-template.git"
+PROJECT_REF="v2.4"
+PROJECT_COMMIT="3ce347686d75747f69d9e736acd46a9393a1b332"
 PROJECT_DIR="project"
 
 echo
-echo "Downloading project corpus (phd-thesis-template @ ${PROJECT_REF})..."
+echo "Downloading project corpus (phd-thesis-template @ ${PROJECT_REF}, ${PROJECT_COMMIT})..."
 echo
 
-fetch_project() {
-    local path="$1"
-    echo "📄 ${PROJECT_DIR}/${path}"
-    curl -sSL --create-dirs -o "${PROJECT_DIR}/${path}" "${PROJECT_RAW}/${path}"
-}
+PROJECT_TMP=$(mktemp -d)
+trap 'rm -rf "$PROJECT_TMP"' EXIT
+git init --quiet "$PROJECT_TMP/checkout"
+git -C "$PROJECT_TMP/checkout" remote add origin "$PROJECT_REPOSITORY"
+git -C "$PROJECT_TMP/checkout" fetch --quiet --depth 1 origin \
+    "refs/tags/${PROJECT_REF}:refs/tags/${PROJECT_REF}"
+ACTUAL_COMMIT=$(git -C "$PROJECT_TMP/checkout" rev-parse "${PROJECT_REF}^{commit}")
+if [ "$ACTUAL_COMMIT" != "$PROJECT_COMMIT" ]; then
+    echo "error: ${PROJECT_REF} resolved to ${ACTUAL_COMMIT}, expected ${PROJECT_COMMIT}" >&2
+    exit 1
+fi
+git -C "$PROJECT_TMP/checkout" checkout --quiet --detach "$PROJECT_COMMIT"
 
-for f in \
-    thesis.tex \
-    thesis-info.tex \
-    Preamble/preamble.tex \
-    Abstract/abstract.tex \
-    Acknowledgement/acknowledgement.tex \
-    Dedication/dedication.tex \
-    Declaration/declaration.tex \
-    Chapter1/chapter1.tex \
-    Chapter2/chapter2.tex \
-    Chapter3/chapter3.tex \
-    Appendix1/appendix1.tex \
-    Appendix2/appendix2.tex; do
-    fetch_project "$f"
-done
+mkdir "$PROJECT_TMP/staged"
+git -C "$PROJECT_TMP/checkout" archive "$PROJECT_COMMIT" | tar -x -C "$PROJECT_TMP/staged"
+printf '%s\n' "$PROJECT_COMMIT" > "$PROJECT_TMP/staged/.benchmark-commit"
+rm -rf -- "$DOCS_DIR/$PROJECT_DIR"
+mv "$PROJECT_TMP/staged" "$DOCS_DIR/$PROJECT_DIR"
 
 echo
 echo "✅ Done. File sizes:"

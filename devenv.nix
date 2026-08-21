@@ -16,6 +16,7 @@
     pkgs.go-task
     pkgs.hyperfine
     pkgs.tex-fmt
+    pkgs.texlab
     pkgs.cargo-show-asm
     pkgs.wasm-pack
     pkgs.mdbook

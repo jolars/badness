@@ -1004,6 +1004,25 @@ fn environment_mismatch_recovers() {
 }
 
 #[test]
+fn nested_environment_mismatch_inside_group_recovers_losslessly() {
+    // The environment gate unwinds both batched openers at `\end{a}` before it
+    // reaches the group's `}`. The live-entry stack must advance in release
+    // builds too; keeping that mutation inside a debug assertion left stale
+    // indices behind and made the closing brace panic instead of recovering.
+    let source = r"{\begin{a}\begin{b}\end{a}}";
+    let parsed = parse(source);
+    assert_eq!(parsed.syntax().to_string(), source);
+    assert!(
+        parsed
+            .errors
+            .iter()
+            .any(|error| error.message.contains("unclosed environment `b`")),
+        "mismatch recovery should report the unwound inner environment: {:?}",
+        parsed.errors
+    );
+}
+
+#[test]
 fn unmatched_closing_brace() {
     insta::assert_snapshot!(tree("a } b"));
 }

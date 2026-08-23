@@ -363,6 +363,7 @@ fn format_root(
         preserve_dtx_nested_layout: false,
         in_dtx_doc_region: false,
         in_alignment_cell: false,
+        absorbed_control_newline: None,
         is_dtx: root
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -774,6 +775,11 @@ struct LowerCtx<'a> {
     /// attachment nests them inside a command; blank lines and structural block
     /// breaks remain forced and make the grid decline.
     in_alignment_cell: bool,
+    /// The exact trailing `\\<newline>` control symbol whose newline is supplied
+    /// by an enclosing block's closing frame. Keeping the token's backslash here
+    /// while letting the existing structural [`Ir::hard_line`] spell its newline
+    /// prevents a second, blank line before the closer (issue #141).
+    absorbed_control_newline: Option<TextRange>,
     /// Whether the document carries any `.dtx` documentation margin at all — the
     /// cheap short-circuit for the no-`.dtx` majority, so gates that would
     /// otherwise walk back to the start of a physical line
@@ -795,6 +801,23 @@ impl<'a> LowerCtx<'a> {
             self.wrap,
             WrapMode::Reflow | WrapMode::Stable | WrapMode::Sentence | WrapMode::Semantic
         )
+    }
+
+    /// Mark a body-final `\\<newline>` for absorption into its closing frame.
+    /// If this body has no such token, preserve an outer body's marker while
+    /// recursively lowering its children.
+    fn absorbing_trailing_control_newline(self, body: &[SyntaxElement]) -> Self {
+        let Some(token) = trailing_control_newline(body) else {
+            return self;
+        };
+        Self {
+            absorbed_control_newline: Some(token.text_range()),
+            ..self
+        }
+    }
+
+    fn absorbs_control_newline(self, token: &SyntaxToken) -> bool {
+        self.absorbed_control_newline == Some(token.text_range())
     }
 
     /// Whether the document has any expl3 region at all — the cheap short-circuit
@@ -2277,7 +2300,9 @@ fn reflow_elements_checked(
                 if !before.is_empty() {
                     b.push_atom_piece(Ir::verbatim(before), before);
                 }
-                b.end_line();
+                if !cx.absorbs_control_newline(token) {
+                    b.end_line();
+                }
                 line_all_commands = true;
                 line_has_content = false;
             }
@@ -4321,6 +4346,12 @@ fn lower_loose_token(token: &SyntaxToken, cx: LowerCtx<'_>) -> Ir {
     }
     if matches!(token.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD) {
         Ir::column_zero(token.text())
+    } else if cx.absorbs_control_newline(token) {
+        let before = token
+            .text()
+            .strip_suffix('\n')
+            .expect("absorbed control symbol must end in a newline");
+        Ir::verbatim(before)
     } else {
         Ir::verbatim(token.text())
     }
@@ -4499,6 +4530,30 @@ struct EnvParts {
     /// first body token. At present this is the parenthesized size tuple of the
     /// standard `picture` environment.
     body_header_token: Option<SyntaxToken>,
+}
+
+/// The body-final `\\<newline>` control symbol, ignoring only indentation on
+/// the closer's line. The newline is part of this non-trivia token, not a
+/// separate [`SyntaxKind::NEWLINE`], so an environment that unconditionally
+/// adds its own closing break would otherwise create a blank paragraph.
+fn trailing_control_newline(body: &[SyntaxElement]) -> Option<SyntaxToken> {
+    let first = body.first()?.text_range().start();
+    let last = body.last()?;
+    let mut token = match last {
+        SyntaxElement::Node(node) => node.last_token(),
+        SyntaxElement::Token(token) => Some(token.clone()),
+    }?;
+
+    loop {
+        if token.text_range().start() < first {
+            return None;
+        }
+        match token.kind() {
+            SyntaxKind::WHITESPACE => token = token.prev_token()?,
+            SyntaxKind::CONTROL_SYMBOL if token.text().ends_with('\n') => return Some(token),
+            _ => return None,
+        }
+    }
 }
 
 fn split_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> EnvParts {
@@ -4685,12 +4740,13 @@ fn lower_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         tail_len,
         body_header_token,
     } = split_environment(node, cx);
+    let body_cx = cx.absorbing_trailing_control_newline(&body);
     let body = lower_env_body(
         body,
         tail_len,
         lifted.is_some(),
         body_header_token.as_ref(),
-        cx,
+        body_cx,
     );
     // Trim the body's own edge breaks (the indenter re-supplies them), but if the
     // author left a blank line touching `\begin`/`\end`, preserve it as a single
@@ -5092,7 +5148,8 @@ fn lower_margin_framed_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .map(|f| Ir::concat(lower_element_stream(f.into_iter(), cx)))
         .filter(|ir| !matches!(ir, Ir::Nil));
 
-    let body = lower_env_body(body, tail_len, lifted.is_some(), None, cx);
+    let body_cx = cx.absorbing_trailing_control_newline(&body);
+    let body = lower_env_body(body, tail_len, lifted.is_some(), None, body_cx);
     let (lead_blank, body) = peel_leading_break(body);
     let (trail_blank, body) = peel_trailing_break(body);
     let lead = if lead_blank {
@@ -5485,7 +5542,8 @@ fn lower_list_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body_header_token: _,
     } = split_environment(node, cx);
 
-    let Some(body) = lower_list_body(&body, cx, lifted.as_ref()) else {
+    let body_cx = cx.absorbing_trailing_control_newline(&body);
+    let Some(body) = lower_list_body(&body, body_cx, lifted.as_ref()) else {
         return lower_environment(node, cx);
     };
     Ir::concat([
@@ -5991,10 +6049,15 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         body_header_token: _,
     } = split_environment(node, cx);
 
+    let body_cx = cx.absorbing_trailing_control_newline(&body);
     let soften_nested_newlines = cx.in_dtx_doc_region && !is_math_env(node, cx);
-    let Some(items) =
-        build_alignment_grid(&body, cx, false, soften_nested_newlines, lifted.as_ref())
-    else {
+    let Some(items) = build_alignment_grid(
+        &body,
+        body_cx,
+        false,
+        soften_nested_newlines,
+        lifted.as_ref(),
+    ) else {
         return lower_environment(node, cx);
     };
     if !items.iter().any(|item| matches!(item, GridItem::Row(_))) {
@@ -6042,6 +6105,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         tail_len: _,
         body_header_token: _,
     } = split_environment(node, cx);
+    let body_cx = cx.absorbing_trailing_control_newline(&body_elements);
 
     let Some(math_node) = body_elements
         .iter()
@@ -6060,7 +6124,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         .any(|e| matches!(e.kind(), SyntaxKind::AMPERSAND | SyntaxKind::LINE_BREAK));
 
     let body = if is_grid {
-        match build_alignment_grid(&body_elements, cx, true, false, lifted.as_ref()) {
+        match build_alignment_grid(&body_elements, body_cx, true, false, lifted.as_ref()) {
             Some(items) if items.iter().any(|item| matches!(item, GridItem::Row(_))) => {
                 let aligns = column_alignments(node, cx).unwrap_or_default();
                 render_alignment_rows(&items, &aligns)
@@ -6098,7 +6162,7 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             // rather than framing an empty indented line.
             return Ir::concat([leading, begin, Ir::hard_line(), end]);
         }
-        trim_trailing_break(lower_display_formula_elements(&elements, cx))
+        trim_trailing_break(lower_display_formula_elements(&elements, body_cx))
     };
 
     Ir::concat([
@@ -8167,11 +8231,12 @@ fn lower_display_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                     .children_with_tokens()
                     .filter(|e| !is_lifted_comment(e, lifted.as_ref()))
                     .collect();
+                let body_cx = cx.absorbing_trailing_control_newline(&elements);
                 body_empty = elements.iter().all(|e| {
                     e.as_token()
                         .is_some_and(|t| is_collapsible_trivia(t.kind()))
                 });
-                body = trim_trailing_break(lower_display_formula_elements(&elements, cx));
+                body = trim_trailing_break(lower_display_formula_elements(&elements, body_cx));
                 seen_body = true;
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {}
@@ -8828,7 +8893,7 @@ fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>, spacing: MathSpacing)
             // Environments, or anything unexpected: defer to generic lowering.
             _ => lower_node(&n, cx),
         },
-        SyntaxElement::Token(t) => Ir::verbatim(t.text()),
+        SyntaxElement::Token(t) => lower_loose_token(&t, cx),
     }
 }
 

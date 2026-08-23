@@ -1989,6 +1989,16 @@ const MATH_WRAP_FIXTURES: &[(&str, WrapMode, MathWrap, usize)] = &[
         MathWrap::Auto,
         80,
     ),
+    // Issue #141: a final `\\<newline>` is one control-symbol token whose
+    // embedded newline already separates the body from its closer. Math grids
+    // may absorb that break into their closing frame and still align; generic
+    // environments and display math must not add a second, blank line.
+    (
+        "issue_141_trailing_control_newline",
+        WrapMode::Preserve,
+        MathWrap::Preserve,
+        80,
+    ),
 ];
 
 #[test]
@@ -2762,6 +2772,24 @@ fn env_alias_survives_formatting() {
         respaced.contains("a & = & b"),
         "trivia in the body must not matter"
     );
+}
+
+#[test]
+fn trailing_control_newline_reuses_environment_frame_under_reflow() {
+    for (input, expected) in [
+        (
+            "\\begin{center}\ntext\\\n\\end{center}\n",
+            "\\begin{center}\n  text\\\n\\end{center}\n",
+        ),
+        (
+            "\\begin{center}\r\ntext\\\r\n\\end{center}\r\n",
+            "\\begin{center}\r\n  text\\\r\n\\end{center}\r\n",
+        ),
+    ] {
+        let once = format(input).expect("formats");
+        assert_eq!(once, expected);
+        assert_eq!(format(&once).expect("reformats"), once);
+    }
 }
 
 #[test]

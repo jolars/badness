@@ -571,6 +571,18 @@ impl UnitScan<'_, '_> {
         // bound (an alias closer, the frame) is applied here: a closer past it
         // is one the walk would not reach, and the head stays greedy.
         let close = self.p.matching_brace(open)?;
+        // Replay must not cross a lexer-mode boundary: after an
+        // `\ExplSyntaxOff`, structural gates inside the group no longer have
+        // the expl3-region answers under which this unit was scanned. Let the
+        // ordinary walk own malformed recovery instead.
+        if self
+            .p
+            .expl_toggles
+            .iter()
+            .any(|&(idx, _)| open < idx && idx < close)
+        {
+            return None;
+        }
         (close < self.bound).then_some(close + 1)
     }
 }

@@ -625,12 +625,12 @@ replays exactly the scanned plan, so the gate mirrors the walk by construction.
 scan aborts to greed with no diagnostic wherever it cannot mirror the walk: an
 in-math head (an `N` slot would swallow the enclosing math's closer), a docstrip
 guard or doc margin mid-unit, a candidate the walk would make a node of, an
-unreachable closer, a paragraph separator. A blank-line gap inside a brace group
-instead commits the consumed prefix, the sanctioned partial commit. The trigger
-keys on token shape alone — a colon-carrying control word can only have lexed
-inside a region — which also covers the implicit `.dtx` regions the toggle index
-cannot see, and the formatter's positional toggle gate stays the formatter's
-alone.
+unreachable closer, a group that crosses an expl3 lexer-mode toggle, or a
+paragraph separator. A blank-line gap inside a brace group instead commits the
+consumed prefix, the sanctioned partial commit. The trigger keys on token shape
+alone — a colon-carrying control word can only have lexed inside a region —
+which also covers the implicit `.dtx` regions the toggle index cannot see, and
+the formatter's positional toggle gate stays the formatter's alone.
 
 The scan resolves its group slots through a shared matching-brace table rather
 than a rescan per slot, for the reason the shape gates run in batches: nested

@@ -96,6 +96,15 @@ fn malformed_environments_stay_inside_an_expl3_group() {
     assert_eq!(parsed.syntax().to_string(), input, "losslessness");
 }
 
+/// Reduced by the property harness: a lone control-symbol introducer at EOF
+/// must not make expl3 group replay consume past the scanned group span.
+#[test]
+fn trailing_backslash_stays_inside_an_expl3_group() {
+    let input = "\\ExplSyntaxOn\\tl_set:Nn \\l_tmpa_tl {{}\\ExplSyntaxOff$\\begin{fuzzverb}$\\ifx\\foo\\bar \\begin{itemize}#\\end{align}\\else #\\fi}\\";
+    let parsed = parse_with_flavor(input, LexConfig::from(LatexFlavor::Document));
+    assert_eq!(parsed.syntax().to_string(), input, "losslessness");
+}
+
 #[test]
 fn roundtrip_dtx_units() {
     // Realistic `.dtx` surface shapes: a meta-comment header, a guarded driver

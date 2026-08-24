@@ -41,7 +41,7 @@ pub fn check_document(
         .map(|err| Diagnostic::from_parse(path.to_path_buf(), err))
         .collect();
     let root = SyntaxNode::new_root(parsed.green);
-    let model = SemanticModel::build(&root);
+    let model = SemanticModel::build_with_declarations(&root, declared);
     diagnostics.extend(lint_document(path, &root, &model, None, None, None));
     diagnostics
 }
@@ -58,7 +58,7 @@ pub fn check_document_fixable(
 ) -> Vec<Diagnostic> {
     let parsed = parse_with_declarations(text, config, declared);
     let root = SyntaxNode::new_root(parsed.green);
-    let model = SemanticModel::build(&root);
+    let model = SemanticModel::build_with_declarations(&root, declared);
     lint_with(fixable_registry(), path, &root, &model, None, None, None)
 }
 

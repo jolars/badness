@@ -3985,6 +3985,55 @@ fn lsp_watched_config_change_reseeds_declarations() {
 }
 
 #[test]
+fn lsp_declared_reference_command_drives_diagnostics_completion_and_definition() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("main.tex");
+    let doc = "\\documentclass{article}\n\\begin{document}\n\\label{first}\n\\eqrefs{first}\n\\end{document}\n";
+    std::fs::write(&path, doc).unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&path);
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(
+        rule_codes(&diags)
+            .iter()
+            .any(|code| code == "unreferenced-label"),
+        "the undeclared command should not count as a reference, got {:?}",
+        diags.diagnostics
+    );
+
+    let config_path = dir.path().join("badness.toml");
+    std::fs::write(&config_path, "[commands.eqrefs]\nlike = 'cref'\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&config_path), FileChangeType::CREATED)],
+    );
+
+    let diags = recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes
+            .iter()
+            .any(|code| matches!(code.as_str(), "unreferenced-label" | "undefined-ref"))
+    });
+    assert!(
+        !rule_codes(&diags)
+            .iter()
+            .any(|code| matches!(code.as_str(), "unreferenced-label" | "undefined-ref")),
+        "declared references should resolve, got {:?}",
+        diags.diagnostics
+    );
+
+    let items = complete(&client, 2, &uri, Position::new(3, 11));
+    assert!(labels(&items).contains(&"first"), "{items:?}");
+
+    let locations = definition(&client, 3, &uri, Position::new(3, 10));
+    assert_eq!(locations.len(), 1, "{locations:?}");
+    assert_eq!(locations[0].range.start, Position::new(2, 0));
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_a_request_is_answered_under_its_own_workspace_declarations() {
     // The declarations ride a project-wide *singleton* salsa input, so a session
     // holding two workspaces overwrites it as attention crosses between them. A

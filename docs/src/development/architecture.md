@@ -166,11 +166,11 @@ safety](#reflow-is-safe-by-construction).
 only consumer; the library API takes a resolved `FormatStyle`. Sections are
 `[format]` (`line-width`, `indent-width`, `wrap`, `math-wrap`, `lang`,
 `no-break-abbreviations`), `[lint]` (`select`, `ignore`), `[build]` (`aux-dir`),
-and the [declaration](#declarations) map `[environments.<name>]`. Excludes
-follow Ruff: `exclude` replaces the built-in default, `extend-exclude` adds to
-it. `wrap` is an `Option` so the LSP can tell "unset" from "set" when merging
-editor settings over project config, not because the fallback depends on the
-file.
+and the [declaration](#declarations) maps `[commands.<name>]` and
+`[environments.<name>]`. Excludes follow Ruff: `exclude` replaces the built-in
+default, `extend-exclude` adds to it. `wrap` is an `Option` so the LSP can tell
+"unset" from "set" when merging editor settings over project config, not because
+the fallback depends on the file.
 
 TEXMF discovery is deliberately not a section here. Where a TeX installation
 lives is machine state rather than project data, so it arrives through editor
@@ -178,8 +178,27 @@ settings.
 
 ### Declarations
 
-Most config only affects behavior after parsing. Declarations are the exception:
-they feed the parser directly.
+Most config only affects behavior after parsing. Environment declarations are
+the exception: they feed the parser directly. Command declarations remain in the
+semantic layer.
+
+`[commands.<name>]` lets a project classify a custom command as a reference or
+citation family without expanding its definition. The `like` target determines
+whether a reference accepts one key (`eqref`) or a comma-separated list
+(`cref`), and whether a citation has `nocite`'s wildcard behavior:
+
+```toml
+[commands.eqrefs]
+like = "cref"
+
+[commands.mycite]
+like = "parencite"
+```
+
+This first command-declaration vocabulary is deliberately semantic-only. It does
+not declare arity, attach arguments, or lend formatter layout behavior. The
+alias is consumed by label/citation analysis and completion; the parser sees the
+same token stream and produces the same tree with or without it.
 
 `[environments.<name>]` lets a project describe constructs that source text
 alone cannot reliably reveal (issue #109). Typical examples are alias delimiters
@@ -211,11 +230,12 @@ parser receives a `ResolvedDeclarations` value, not a full `SignatureDb`, so it
 can only see explicit, hand-authored declarations. That keeps parser behavior
 independent from ambient package scope and scanned runtime data.
 
-Implementation-wise, declarations are seeded into `ParseCtx` on the first pass.
-They live in `badness-parser` so every consumer (CLI, LSP, dprint plugin, wasm)
-can use the same model. In incremental mode, they are carried through a single
-high-durability salsa input (`incremental::DeclarationsInput`), so changing
-`badness.toml` invalidates parse results, while normal text edits do not.
+Implementation-wise, the environment subset is seeded into `ParseCtx` on the
+first pass, while semantic-model construction reads the command subset. The
+shared types live in `badness-parser` so every consumer can use the same model.
+In incremental mode, both are carried through one high-durability salsa input
+(`incremental::DeclarationsInput`), so changing `badness.toml` invalidates the
+dependent parse and semantic results, while normal text edits do not.
 
 In the LSP, declarations are republished in the request dispatcher (not ad hoc
 inside handlers). This avoids stale cross-workspace state when the active file
@@ -226,14 +246,15 @@ force pairing**. Shape gates still decide whether a match is structurally valid.
 So a wrong declaration degrades to ordinary syntax instead of corrupting the
 tree.
 
-`like` is the main mechanism: copy a curated built-in entry of the same kind.
-Resolution is against curated built-ins only (`builtin()`), never CWL or scanned
-definitions. Unknown `like` targets are config errors.
+`like` is the main mechanism. Environment declarations copy a curated built-in
+entry; command declarations copy only a curated ref/cite command's semantic
+family. Resolution is against curated built-ins only (`builtin()`), never CWL or
+scanned definitions. Unknown `like` targets are config errors.
 
 `like` also stays category-local. Cross-category relationships (for example,
 command spellings that stand in for environment delimiters) use explicit keys
-such as `begin`/`end`. Where `like` is not enough, arity is expressed with
-xparse argspec (`args = "o m m"`).
+such as `begin`/`end`. Declarations do not currently expose command or
+environment argspec.
 
 The schema is keyed by **category, then name**. This keeps merging predictable
 and avoids category-wide switches that could collide with real construct names.

@@ -124,7 +124,7 @@ impl Rule for HardCodedReference {
         // and an `\item[…]` label (`\item[Part 3.]`) is a description-list caption —
         // none is a hard-coded cross-reference into this document, so the number
         // there is not ours to track with a `\label`.
-        if super::in_key_argument(word) || in_environment_title(word) || in_item_label(word) {
+        if super::in_key_argument(word, ctx) || in_environment_title(word) || in_item_label(word) {
             return;
         }
         // A `.` in math is not sentence punctuation, and a reference word there is

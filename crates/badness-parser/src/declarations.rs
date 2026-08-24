@@ -1,12 +1,13 @@
-//! Project declarations for constructs the parser cannot infer from source.
+//! Project declarations for constructs syntax or semantics cannot infer from
+//! source without macro expansion.
 //!
 //! Declarations supplement the aliases found by [`crate::semantic::define`].
 //! They can describe environments defined in another file or through constructs
 //! the definition scanner does not recognize.
 //!
-//! A declaration names a spelling, not a pairing. Shape gates still decide
-//! whether the source supports a construct, so invalid declarations degrade to
-//! generic syntax rather than forcing a tree shape.
+//! Environment declarations name spellings, not pairings: shape gates still
+//! decide whether the source supports a construct. Command declarations are
+//! semantic-only ref/cite aliases and never affect tree shape.
 //!
 //! The schema follows three rules:
 //!
@@ -26,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::parser::lexer::is_control_word_name;
+use crate::semantic::builder::{is_cite_command, ref_command};
 use crate::semantic::signature::{EnvironmentSig, SignatureDb, builtin};
 
 /// A control-word name as written in a declaration, stored **without** the
@@ -121,6 +123,18 @@ impl EnvironmentDecl {
 /// name the field's type without restating the key type.
 pub type EnvironmentDecls = BTreeMap<SmolStr, EnvironmentDecl>;
 
+/// One `[commands.<name>]` entry: the built-in reference or citation command
+/// whose semantic behavior the project command copies.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct CommandDecl {
+    /// The built-in reference or citation command whose key behavior is copied.
+    pub like: Option<SmolStr>,
+}
+
+/// The name-keyed `[commands]` declaration map.
+pub type CommandDecls = BTreeMap<SmolStr, CommandDecl>;
+
 /// Every declaration a project makes, as authored — unresolved and unvalidated.
 ///
 /// `BTreeMap` rather than `HashMap` so iteration order is deterministic:
@@ -129,6 +143,8 @@ pub type EnvironmentDecls = BTreeMap<SmolStr, EnvironmentDecl>;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Declarations {
+    /// The `[commands.<name>]` semantic aliases.
+    pub commands: CommandDecls,
     /// The `[environments.<name>]` entries.
     pub environments: EnvironmentDecls,
 }
@@ -137,19 +153,17 @@ impl Declarations {
     /// Whether the project declares nothing at all — the overwhelmingly common
     /// case, and the one the parse must not pay anything for.
     pub fn is_empty(&self) -> bool {
-        self.environments.is_empty()
+        self.commands.is_empty() && self.environments.is_empty()
     }
 
     /// Check every rule and project the declarations into a
     /// [`ResolvedDeclarations`]: an environment signature per `like`, and the
     /// delimiter spellings as opener and closer alias entries.
     ///
-    /// Internally a [`SignatureDb`], because that is already the shape holding
-    /// exactly these three maps: the declared tier folds into a document's scope
-    /// with the existing [`SignatureDb::merge_from`], and the `ParseCtx` seed
-    /// reads it the same way it already reads the per-file scan's — no new
-    /// plumbing, and `[commands.*]` slots in later without changing the
-    /// signature of this function.
+    /// Environment behavior and delimiter aliases resolve into a [`SignatureDb`]
+    /// so they fold into the existing scope machinery. Command aliases stay in a
+    /// separate deterministic map because they must not become parser or
+    /// formatter signatures.
     ///
     /// **Every failure is an error, never a silent no-op.** A declaration that
     /// quietly does nothing is the worst outcome available here: the user sees
@@ -170,6 +184,40 @@ impl Declarations {
     /// two errors, on the reasoning that a half-declared pair could never pair.
     pub fn resolve(&self) -> Result<ResolvedDeclarations, DeclarationError> {
         let mut db = SignatureDb::default();
+        let mut commands = BTreeMap::new();
+
+        for (name, entry) in &self.commands {
+            let error = |kind| DeclarationError {
+                key: dotted_key(["commands", name]),
+                kind,
+            };
+            if !is_control_word_name(name) {
+                return Err(error(DeclarationErrorKind::InvalidCommandName {
+                    name: SmolStr::new(name),
+                }));
+            }
+            if builtin().command(name).is_some() {
+                return Err(error(DeclarationErrorKind::BuiltinCommandName {
+                    name: SmolStr::new(name),
+                }));
+            }
+            let target = entry
+                .like
+                .as_ref()
+                .ok_or_else(|| error(DeclarationErrorKind::EmptyCommandEntry))?;
+            if builtin().command(target).is_none()
+                || (ref_command(target).is_none() && !is_cite_command(target))
+            {
+                return Err(DeclarationError {
+                    key: dotted_key(["commands", name, "like"]),
+                    kind: DeclarationErrorKind::UnknownCommandLikeTarget {
+                        target: target.clone(),
+                    },
+                });
+            }
+            commands.insert(name.clone(), target.clone());
+        }
+
         // Which entry already claimed a spelling, so a second claim is an error
         // rather than a last-writer-wins surprise.
         let mut claimed: BTreeMap<SmolStr, SmolStr> = BTreeMap::new();
@@ -290,36 +338,46 @@ impl Declarations {
                 }
             }
         }
-        Ok(ResolvedDeclarations(db))
+        Ok(ResolvedDeclarations { db, commands })
     }
 }
 
 /// A project's declarations, checked and projected into signature data by
 /// [`Declarations::resolve`].
 ///
-/// A newtype over [`SignatureDb`] rather than the bare database, and the
-/// distinction is load-bearing at exactly one boundary: this is the only
-/// signature data the *parser* accepts. A value of this type can only have come
-/// from a declaration block, so `parse_with_declarations` cannot be handed a
-/// document's merged scope — which would make the tree a function of package
-/// scans and scanned definitions, the thing `AGENTS.md` decision #8 holds the
-/// line on. Keeping the invariant in the type rather than in review is the same
-/// move the formatter's `Gap` makes for trivia.
+/// The environment signature tier plus semantic-only command aliases. This is
+/// the only signature data the parser accepts: a value can only come from a
+/// declaration block, so `parse_with_declarations` cannot be handed a document's
+/// merged package/definition scope. The parser reads only `db`; semantic-model
+/// construction reads `commands`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ResolvedDeclarations(SignatureDb);
+pub struct ResolvedDeclarations {
+    db: SignatureDb,
+    commands: BTreeMap<SmolStr, SmolStr>,
+}
 
 impl ResolvedDeclarations {
     /// The declared tier as signature data, for merging into a document's scope
     /// (where it is the top tier: a declaration is the user explicitly
     /// correcting an inference).
     pub fn as_db(&self) -> &SignatureDb {
-        &self.0
+        &self.db
+    }
+
+    /// The built-in semantic target of a declared command alias.
+    pub fn command_like(&self, name: &str) -> Option<&str> {
+        self.commands.get(name).map(SmolStr::as_str)
+    }
+
+    /// The declared command names, in deterministic order.
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.commands.keys().map(SmolStr::as_str)
     }
 
     /// Whether nothing was declared — the common case, and the one that must
     /// cost the parse nothing.
     pub fn is_empty(&self) -> bool {
-        self.0 == SignatureDb::default()
+        self.db == SignatureDb::default() && self.commands.is_empty()
     }
 }
 
@@ -340,6 +398,14 @@ pub struct DeclarationError {
 /// `AGENTS.md` decision #12 or its architecture section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclarationErrorKind {
+    /// A `[commands.<name>]` entry without its required `like` target.
+    EmptyCommandEntry,
+    /// A command map key that could never lex as one control word.
+    InvalidCommandName { name: SmolStr },
+    /// A declaration attempted to reclassify a curated built-in command.
+    BuiltinCommandName { name: SmolStr },
+    /// `like` did not name a curated reference or citation command.
+    UnknownCommandLikeTarget { target: SmolStr },
     /// An entry with no keys at all. Nothing to reject it on rule grounds, and
     /// nothing for it to do either — which is the outcome this module exists to
     /// avoid.
@@ -433,6 +499,22 @@ impl fmt::Display for DeclarationError {
 impl fmt::Display for DeclarationErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::EmptyCommandEntry => write!(
+                f,
+                "declares nothing; add `like` naming a reference or citation command"
+            ),
+            Self::InvalidCommandName { name } => write!(
+                f,
+                "`{name}` is not a control-word name; command names may contain letters, `@`, `_`, or `:`"
+            ),
+            Self::BuiltinCommandName { name } => write!(
+                f,
+                "`\\{name}` is already a curated LaTeX command; command declarations may only name project commands"
+            ),
+            Self::UnknownCommandLikeTarget { target } => write!(
+                f,
+                "unknown reference or citation command `{target}`; `like` must name a curated ref/cite command"
+            ),
             Self::EmptyEntry => write!(
                 f,
                 "declares nothing; add `like` to say what the environment behaves like, or \
@@ -504,6 +586,13 @@ mod tests {
     fn empty_declarations_are_the_default() {
         assert!(Declarations::default().is_empty());
         assert!(from_json("{}").is_empty());
+    }
+
+    #[test]
+    fn a_command_may_declare_a_reference_family() {
+        let decls = from_json(r#"{"commands": {"eqrefs": {"like": "cref"}}}"#);
+        assert_eq!(decls.commands["eqrefs"].like.as_deref(), Some("cref"));
+        assert!(!decls.is_empty());
     }
 
     #[test]
@@ -580,6 +669,11 @@ mod tests {
         let err = serde_json::from_str::<Declarations>(r#"{"enviroments": {}}"#)
             .expect_err("unknown section is rejected");
         assert!(err.to_string().contains("enviroments"), "{err}");
+
+        let err =
+            serde_json::from_str::<Declarations>(r#"{"commands": {"eqrefs": {"liek": "cref"}}}"#)
+                .expect_err("unknown command field is rejected");
+        assert!(err.to_string().contains("liek"), "{err}");
     }
 
     /// The wire spellings are public API (module docs), so a field rename must
@@ -587,9 +681,11 @@ mod tests {
     #[test]
     fn wire_spellings_are_pinned() {
         let decls = from_json(
-            r#"{"environments": {"myenv": {"like": "align", "begin": ["\\b"], "end": ["\\e"]}}}"#,
+            r#"{"commands": {"eqrefs": {"like": "cref"}},
+                "environments": {"myenv": {"like": "align", "begin": ["\\b"], "end": ["\\e"]}}}"#,
         );
         let json = serde_json::to_value(&decls).expect("serializes");
+        assert_eq!(json["commands"]["eqrefs"]["like"], "cref");
         let entry = &json["environments"]["myenv"];
         assert_eq!(entry["like"], "align");
         assert_eq!(entry["begin"][0], "b");
@@ -618,6 +714,69 @@ mod tests {
     #[test]
     fn nothing_declared_resolves_to_nothing() {
         assert!(from_json("{}").resolve().expect("resolves").is_empty());
+    }
+
+    #[test]
+    fn command_families_resolve_with_target_behavior() {
+        let declared = from_json(
+            r#"{"commands": {
+                 "one": {"like": "eqref"},
+                 "many": {"like": "cref"},
+                 "sources": {"like": "parencite"},
+                 "everything": {"like": "nocite"}
+               }}"#,
+        )
+        .resolve()
+        .expect("resolves");
+
+        assert_eq!(declared.command_like("one"), Some("eqref"));
+        assert_eq!(declared.command_like("many"), Some("cref"));
+        assert_eq!(declared.command_like("sources"), Some("parencite"));
+        assert_eq!(declared.command_like("everything"), Some("nocite"));
+        assert!(
+            declared.as_db().command("many").is_none(),
+            "semantic aliases must not become formatter/parser signatures"
+        );
+        assert_eq!(
+            declared.command_names().collect::<Vec<_>>(),
+            vec!["everything", "many", "one", "sources"]
+        );
+    }
+
+    #[test]
+    fn invalid_command_declarations_are_rejected() {
+        for (json, key) in [
+            (r#"{"commands": {"empty": {}}}"#, "commands.empty"),
+            (
+                r#"{"commands": {"wrapper": {"like": "emph"}}}"#,
+                "commands.wrapper.like",
+            ),
+            (
+                r#"{"commands": {"bad-name": {"like": "ref"}}}"#,
+                "commands.bad-name",
+            ),
+            (
+                r#"{"commands": {"section": {"like": "ref"}}}"#,
+                "commands.section",
+            ),
+        ] {
+            let err = resolve_err(json);
+            assert_eq!(err.key, key, "{err}");
+        }
+    }
+
+    #[test]
+    fn command_declarations_do_not_change_the_parse_tree() {
+        use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
+
+        let src = "\\eqrefs{a,b}\n";
+        let declared = from_json(r#"{"commands": {"eqrefs": {"like": "cref"}}}"#)
+            .resolve()
+            .expect("resolves");
+        assert_eq!(
+            parse_with_declarations(src, LatexFlavor::Document, &declared).green,
+            parse_with_flavor(src, LatexFlavor::Document).green
+        );
     }
 
     /// `like` copies the curated entry wholesale, so every behavior flag —

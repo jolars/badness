@@ -3799,7 +3799,7 @@ fn fallback_diagnostics(
                 });
             }
             let root = parsed.syntax();
-            let model = SemanticModel::build(&root);
+            let model = SemanticModel::build_with_declarations(&root, declared);
             for d in lint_document(path, &root, &model, None, None, None) {
                 if rules.is_active(d.rule) {
                     diags.push(lint_to_lsp(&idx, d, true, path));
@@ -3973,7 +3973,7 @@ fn fallback_lint_findings(
         | FileKind::Ins => {
             let parsed = parse_with_declarations(text, kind.lex_config(), declared);
             let root = parsed.syntax();
-            let model = SemanticModel::build(&root);
+            let model = SemanticModel::build_with_declarations(&root, declared);
             lint_document(path, &root, &model, None, None, None)
         }
         FileKind::Bib => {
@@ -3984,6 +3984,18 @@ fn fallback_lint_findings(
         }
     };
     retain_active(findings, rules)
+}
+
+/// Parse and analyze a captured LaTeX buffer under the snapshot's declarations.
+/// Read-job fallbacks use this when the cached file is absent or stale, so they
+/// cannot silently lose configured ref/cite aliases.
+fn fallback_tex_model(snapshot: &Analysis, path: &Path, text: &str) -> (SyntaxNode, SemanticModel) {
+    let declared = snapshot.declarations();
+    let root = SyntaxNode::new_root(
+        parse_with_declarations(text, file_kind_or_tex(path).lex_config(), declared).green,
+    );
+    let model = SemanticModel::build_with_declarations(&root, declared);
+    (root, model)
 }
 
 /// Drop findings whose rule the config deselected (parse diagnostics always
@@ -5038,7 +5050,11 @@ fn compute_tex_completion(
             && snapshot.text_is_current(file, text)
         {
             let root = snapshot.parsed_tree(file);
-            let ctx = crate::completion::classify_context(&root, offset);
+            let ctx = crate::completion::classify_context_with_declarations(
+                &root,
+                offset,
+                snapshot.declarations(),
+            );
             return match ctx {
                 // Citations are not prefix-filtered server-side: the full namespace is
                 // returned and the client filters by `filterText` (key + title +
@@ -5055,14 +5071,17 @@ fn compute_tex_completion(
                     // The merged scope folds in loaded local packages' macros.
                     snapshot.scope_signatures(file),
                     snapshot.semantic_model(file),
+                    snapshot.declarations(),
                     uri,
                     texmf,
                 )),
             };
         }
-        reparse_tex_completion(text, offset, uri, path, texmf)
+        reparse_tex_completion(text, offset, uri, path, texmf, snapshot.declarations())
     }))
-    .unwrap_or_else(|_| reparse_tex_completion(text, offset, uri, path, texmf));
+    .unwrap_or_else(|_| {
+        reparse_tex_completion(text, offset, uri, path, texmf, snapshot.declarations())
+    });
 
     match resolved {
         TexCompletion::Items(items) => items,
@@ -5094,9 +5113,12 @@ fn reparse_tex_completion(
     uri: &Uri,
     path: &Path,
     texmf: &TexmfConfig,
+    declared: &ResolvedDeclarations,
 ) -> TexCompletion {
-    let root = SyntaxNode::new_root(parse(text).green);
-    let ctx = crate::completion::classify_context(&root, offset);
+    let root = SyntaxNode::new_root(
+        parse_with_declarations(text, file_kind_or_tex(path).lex_config(), declared).green,
+    );
+    let ctx = crate::completion::classify_context_with_declarations(&root, offset, declared);
     match ctx {
         CompletionContext::CitationKey { .. } => TexCompletion::Cite {
             lint_path: path.to_path_buf(),
@@ -5107,8 +5129,10 @@ fn reparse_tex_completion(
         },
         _ => {
             let sigs = crate::semantic::scan_definitions(&root);
-            let model = SemanticModel::build(&root);
-            TexCompletion::Items(build_completion_items(&ctx, &sigs, &model, uri, texmf))
+            let model = SemanticModel::build_with_declarations(&root, declared);
+            TexCompletion::Items(build_completion_items(
+                &ctx, &sigs, &model, declared, uri, texmf,
+            ))
         }
     }
 }
@@ -5535,8 +5559,7 @@ fn compute_goto_definition(
                 snapshot.file_path(file).to_path_buf(),
             ),
             _ => {
-                let root = SyntaxNode::new_root(parse(text).green);
-                let model = SemanticModel::build(&root);
+                let (root, model) = fallback_tex_model(snapshot, path, text);
                 let target = reference_under_cursor(&model, offset);
                 (root, target, path.to_path_buf())
             }
@@ -5691,8 +5714,7 @@ fn compute_references(
                 snapshot.file_path(file).to_path_buf(),
             ),
             _ => {
-                let root = SyntaxNode::new_root(parse(text).green);
-                let model = SemanticModel::build(&root);
+                let (root, model) = fallback_tex_model(snapshot, path, text);
                 let target = references_target_under_cursor(&model, offset);
                 (root, target, path.to_path_buf())
             }
@@ -6039,8 +6061,8 @@ fn compute_document_highlight(
                 collect(&snapshot.parsed_tree(file), snapshot.semantic_model(file))
             }
             _ => {
-                let root = SyntaxNode::new_root(parse(text).green);
-                collect(&root, &SemanticModel::build(&root))
+                let (root, model) = fallback_tex_model(snapshot, path, text);
+                collect(&root, &model)
             }
         }
     }));
@@ -6070,8 +6092,7 @@ fn compute_prepare_rename(
                 rename_target_under_cursor(snapshot.semantic_model(file), offset),
             ),
             _ => {
-                let root = SyntaxNode::new_root(parse(text).green);
-                let model = SemanticModel::build(&root);
+                let (root, model) = fallback_tex_model(snapshot, path, text);
                 let target = rename_target_under_cursor(&model, offset);
                 (root, target)
             }
@@ -6175,8 +6196,7 @@ fn compute_rename(
                 snapshot.file_path(file).to_path_buf(),
             ),
             _ => {
-                let root = SyntaxNode::new_root(parse(text).green);
-                let model = SemanticModel::build(&root);
+                let (root, model) = fallback_tex_model(snapshot, path, text);
                 let target = rename_target_under_cursor(&model, offset);
                 (root, target, path.to_path_buf())
             }
@@ -6695,6 +6715,7 @@ fn build_completion_items(
     ctx: &CompletionContext,
     sigs: &SignatureDb,
     model: &SemanticModel,
+    declared: &ResolvedDeclarations,
     uri: &Uri,
     texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
@@ -6711,7 +6732,7 @@ fn build_completion_items(
             // The document path keys the scope-first signature lookup that
             // `completionItem/resolve` repeats; unsaved buffers have none.
             let file = uri_to_fs_path(uri);
-            crate::completion::candidates(ctx, sigs, model)
+            crate::completion::candidates_with_declarations(ctx, sigs, model, declared)
                 .into_iter()
                 .map(|candidate| candidate_to_item(candidate, file.as_deref()))
                 .collect()

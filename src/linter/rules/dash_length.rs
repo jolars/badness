@@ -123,7 +123,7 @@ impl Rule for DashLength {
         // spec or an opaque identifier, never a typeset range. Monospace text
         // (`\texttt{03-02}`) sets the hyphen literally, with no en-dash ligature.
         if super::in_rule_span_argument(tok)
-            || super::in_key_argument(tok)
+            || super::in_key_argument(tok, ctx)
             || super::in_typewriter_argument(tok)
         {
             return;

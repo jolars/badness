@@ -18,6 +18,7 @@
 use rowan::{TextSize, TokenAtOffset};
 
 use crate::ast::command_name;
+use crate::declarations::ResolvedDeclarations;
 use crate::semantic::SemanticModel;
 use crate::semantic::builder::{is_cite_command, is_glossary_ref_command, ref_command};
 use crate::semantic::signature::{
@@ -145,6 +146,15 @@ pub struct CompletionCandidate {
 
 /// Classify what the cursor at byte `offset` is positioned to complete.
 pub fn classify_context(root: &SyntaxNode, offset: usize) -> CompletionContext {
+    classify_context_with_declarations(root, offset, &ResolvedDeclarations::default())
+}
+
+/// Classify completion while honoring declared ref/cite command aliases.
+pub fn classify_context_with_declarations(
+    root: &SyntaxNode,
+    offset: usize,
+    declared: &ResolvedDeclarations,
+) -> CompletionContext {
     let offset = TextSize::new(offset.min(u32::MAX as usize) as u32);
     let (left, right) = match root.token_at_offset(offset) {
         TokenAtOffset::None => return CompletionContext::None,
@@ -161,7 +171,7 @@ pub fn classify_context(root: &SyntaxNode, offset: usize) -> CompletionContext {
 
     // Inside a brace group: either adjacent token's parent is the group.
     for tok in [left.as_ref(), right.as_ref()].into_iter().flatten() {
-        if let Some(ctx) = group_context(tok, offset) {
+        if let Some(ctx) = group_context(tok, offset, declared) {
             return ctx;
         }
     }
@@ -199,7 +209,11 @@ fn command_name_context(token: &SyntaxToken, offset: TextSize) -> Option<Complet
 
 /// A group context when `token` sits inside a `NAME_GROUP` (environment name) or
 /// a command's `GROUP` argument (label key or file path).
-fn group_context(token: &SyntaxToken, offset: TextSize) -> Option<CompletionContext> {
+fn group_context(
+    token: &SyntaxToken,
+    offset: TextSize,
+    declared: &ResolvedDeclarations,
+) -> Option<CompletionContext> {
     let group = enclosing_group(token)?;
     let parent = group.parent()?;
     match (group.kind(), parent.kind()) {
@@ -212,7 +226,7 @@ fn group_context(token: &SyntaxToken, offset: TextSize) -> Option<CompletionCont
         (SyntaxKind::GROUP, SyntaxKind::COMMAND) => {
             let name = command_name(&parent)?;
             let index = group_index(&parent, &group)?;
-            command_arg_context(&name, index, &group, offset)
+            command_arg_context(&name, index, &group, offset, declared)
         }
         _ => None,
     }
@@ -224,8 +238,10 @@ fn command_arg_context(
     index: usize,
     group: &SyntaxNode,
     offset: TextSize,
+    declared: &ResolvedDeclarations,
 ) -> Option<CompletionContext> {
-    if ref_command(name).is_some() && index == 0 {
+    let semantic_name = declared.command_like(name).unwrap_or(name);
+    if ref_command(semantic_name).is_some() && index == 0 {
         // A `\cref{a,b|}` completes the key after the last comma.
         let inner = group_prefix(group, offset);
         let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
@@ -233,7 +249,7 @@ fn command_arg_context(
             prefix: prefix.to_string(),
         });
     }
-    if is_cite_command(name) && index == 0 {
+    if is_cite_command(semantic_name) && index == 0 {
         // A `\cite{a,b|}` completes the key after the last comma, like `\cref`.
         let inner = group_prefix(group, offset);
         let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
@@ -411,8 +427,20 @@ pub fn candidates(
     user_sigs: &SignatureDb,
     model: &SemanticModel,
 ) -> Vec<CompletionCandidate> {
+    candidates_with_declarations(context, user_sigs, model, &ResolvedDeclarations::default())
+}
+
+/// Build candidates while including project-declared command names.
+pub fn candidates_with_declarations(
+    context: &CompletionContext,
+    user_sigs: &SignatureDb,
+    model: &SemanticModel,
+    declared: &ResolvedDeclarations,
+) -> Vec<CompletionCandidate> {
     match context {
-        CompletionContext::CommandName { prefix } => command_candidates(user_sigs, prefix),
+        CompletionContext::CommandName { prefix } => {
+            command_candidates(user_sigs, declared, prefix)
+        }
         CompletionContext::EnvironmentName { prefix, closing } => {
             environment_candidates(user_sigs, prefix, *closing)
         }
@@ -519,11 +547,16 @@ fn color_name_candidates(model: &SemanticModel, prefix: &str) -> Vec<CompletionC
 /// All command names (built-in ∪ scanned ∪ bulk CWL), prefix-filtered, deduped,
 /// sorted. The CWL tier widens coverage to the long tail of package commands; the
 /// trailing `dedup` collapses any name shared with the built-in/scanned sets.
-fn command_candidates(user_sigs: &SignatureDb, prefix: &str) -> Vec<CompletionCandidate> {
+fn command_candidates(
+    user_sigs: &SignatureDb,
+    declared: &ResolvedDeclarations,
+    prefix: &str,
+) -> Vec<CompletionCandidate> {
     let mut names = union_names(
         builtin()
             .command_names()
             .chain(user_sigs.command_names())
+            .chain(declared.command_names())
             .chain(cwl().command_names()),
         prefix,
     );
@@ -609,11 +642,19 @@ fn union_names<'a>(names: impl Iterator<Item = &'a str>, prefix: &str) -> Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::declarations::Declarations;
     use crate::parser::parse;
     use crate::semantic::scan_definitions;
 
     fn root(src: &str) -> SyntaxNode {
         SyntaxNode::new_root(parse(src).green)
+    }
+
+    fn declared(toml_src: &str) -> ResolvedDeclarations {
+        toml::from_str::<Declarations>(toml_src)
+            .expect("declarations deserialize")
+            .resolve()
+            .expect("declarations resolve")
     }
 
     /// Byte offset just past `needle` in `src`.
@@ -664,6 +705,32 @@ mod tests {
         let got = labels(src, at(src, "\n\\se"));
         assert!(got.contains(&"sefoo".to_string()), "{got:?}");
         assert!(got.contains(&"section".to_string()), "{got:?}");
+    }
+
+    #[test]
+    fn declared_command_is_completed_and_classifies_its_key_argument() {
+        let declarations = declared("[commands.eqrefs]\nlike = 'cref'\n");
+
+        let src = "\\eqr\n";
+        let ctx = classify_context_with_declarations(&root(src), at(src, "\\eqr"), &declarations);
+        let labels: Vec<_> = candidates_with_declarations(
+            &ctx,
+            &SignatureDb::default(),
+            &SemanticModel::default(),
+            &declarations,
+        )
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect();
+        assert!(labels.contains(&"eqrefs".to_string()), "{labels:?}");
+
+        let src = "\\eqrefs{first,sec}";
+        assert_eq!(
+            classify_context_with_declarations(&root(src), at(src, "first,sec"), &declarations,),
+            CompletionContext::LabelRef {
+                prefix: "sec".to_string(),
+            }
+        );
     }
 
     #[test]

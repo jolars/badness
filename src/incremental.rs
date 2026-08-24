@@ -488,7 +488,7 @@ pub fn semantic_model(db: &dyn IncrementalDb, file: SourceFile) -> SemanticModel
         kind: QueryKind::SemanticModel,
         file: Some(file),
     });
-    SemanticModel::build(&parsed_tree_root(db, file))
+    SemanticModel::build_with_declarations(&parsed_tree_root(db, file), declarations_of(db))
 }
 
 /// The file's scanned user-definition signatures — `\newcommand`,

@@ -256,3 +256,82 @@ fn fix_honors_declared_environments() {
         "`\\dots` must not be spliced into a protected body"
     );
 }
+
+#[test]
+fn lint_honors_declared_reference_commands() {
+    let dir = repo_dir();
+    let doc = "\\documentclass{article}\n\\begin{document}\n\\label{a}\\label{b}\\eqrefs{a,b}\n\\end{document}\n";
+    std::fs::write(dir.path().join("doc.tex"), doc).unwrap();
+
+    let blind = lint(dir.path(), &["--output=json", "doc.tex"], None);
+    let blind_json: serde_json::Value =
+        serde_json::from_slice(&blind.stdout).expect("stdout is JSON");
+    assert_eq!(
+        blind_json
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter(|finding| finding["rule"] == "unreferenced-label")
+            .count(),
+        2,
+        "{}",
+        String::from_utf8_lossy(&blind.stdout)
+    );
+
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[commands.eqrefs]\nlike = 'cref'\n",
+    )
+    .unwrap();
+    let declared = lint(dir.path(), &["--output=json", "doc.tex"], None);
+    assert!(
+        declared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&declared.stdout)
+    );
+    assert_eq!(String::from_utf8(declared.stdout).unwrap().trim(), "[]");
+}
+
+#[test]
+fn lint_honors_declared_citation_commands() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("doc.tex"),
+        "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\begin{document}\n\\projectcite{missing}\n\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{present, title = {Present}}\n",
+    )
+    .unwrap();
+
+    let blind = lint(dir.path(), &["--output=json", "doc.tex", "refs.bib"], None);
+    let blind_json: serde_json::Value =
+        serde_json::from_slice(&blind.stdout).expect("stdout is JSON");
+    assert!(
+        blind_json
+            .as_array()
+            .expect("array")
+            .iter()
+            .all(|finding| finding["rule"] != "undefined-citation")
+    );
+
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[commands.projectcite]\nlike = 'parencite'\n",
+    )
+    .unwrap();
+    let declared = lint(dir.path(), &["--output=json", "doc.tex", "refs.bib"], None);
+    let declared_json: serde_json::Value =
+        serde_json::from_slice(&declared.stdout).expect("stdout is JSON");
+    assert!(
+        declared_json
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|finding| finding["rule"] == "undefined-citation"),
+        "{}",
+        String::from_utf8_lossy(&declared.stdout)
+    );
+}

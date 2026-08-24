@@ -458,6 +458,34 @@ fn unchanged_declarations_do_not_reparse() {
 }
 
 #[test]
+fn command_declarations_rebuild_the_semantic_model() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(
+        Path::new("main.tex"),
+        "\\label{a}\\label{b}\\eqrefs{a,b}\n".to_owned(),
+    );
+    assert!(db.semantic_model(file).refs().is_empty());
+
+    db.clear_query_log();
+    assert!(db.set_declarations(declared("[commands.eqrefs]\nlike = 'cref'\n")));
+    let model = db.semantic_model(file);
+    assert_eq!(
+        model
+            .refs()
+            .iter()
+            .map(|reference| reference.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
+    assert!(model.labels().iter().all(|label| label.referenced));
+    assert!(
+        db.query_log()
+            .iter()
+            .any(|entry| entry.kind == QueryKind::SemanticModel)
+    );
+}
+
+#[test]
 fn declarations_are_the_top_tier_of_the_signature_scope() {
     let mut db = IncrementalDatabase::default();
     // The file defines `mycode` itself, one-argument and non-verbatim; the

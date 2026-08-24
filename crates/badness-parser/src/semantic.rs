@@ -37,7 +37,9 @@ pub use signature::{
     Signatures, match_arg_slot, match_arg_slot_index, match_verbatim_arg_slot,
 };
 
+use crate::declarations::ResolvedDeclarations;
 use crate::syntax::SyntaxNode;
+use rowan::TextRange;
 
 /// A file's label definitions and reference uses.
 ///
@@ -73,6 +75,11 @@ impl SemanticModel {
         builder::build(root)
     }
 
+    /// Build the model under a project's declared ref/cite command aliases.
+    pub fn build_with_declarations(root: &SyntaxNode, declared: &ResolvedDeclarations) -> Self {
+        builder::build_with_declarations(root, declared)
+    }
+
     pub fn labels(&self) -> &[LabelDef] {
         &self.labels
     }
@@ -88,6 +95,17 @@ impl SemanticModel {
     /// The citation uses (`\cite`/`\parencite`/… keys) in this file.
     pub fn citations(&self) -> &[CitationRef] {
         &self.citations
+    }
+
+    /// Whether `range` is a command collected as a reference or citation use.
+    /// This also recognizes project-declared aliases, whose spelling is absent
+    /// from the built-in family tables.
+    pub fn is_reference_or_citation_range(&self, range: TextRange) -> bool {
+        self.refs.iter().any(|reference| reference.range == range)
+            || self
+                .citations
+                .iter()
+                .any(|citation| citation.range == range)
     }
 
     /// The glossary/acronym key definitions (`\newglossaryentry`/`\newacronym`/…)
@@ -156,10 +174,19 @@ impl SemanticModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::declarations::Declarations;
     use crate::parser::parse;
 
     fn model_of(src: &str) -> SemanticModel {
         SemanticModel::build(&SyntaxNode::new_root(parse(src).green))
+    }
+
+    fn declared_model(src: &str, json: &str) -> SemanticModel {
+        let declared = serde_json::from_str::<Declarations>(json)
+            .expect("declarations deserialize")
+            .resolve()
+            .expect("declarations resolve");
+        SemanticModel::build_with_declarations(&SyntaxNode::new_root(parse(src).green), &declared)
     }
 
     #[test]
@@ -225,6 +252,50 @@ mod tests {
         // All split keys share the single command range.
         let range = model.refs()[0].range;
         assert!(model.refs().iter().all(|r| r.range == range));
+    }
+
+    #[test]
+    fn declared_reference_inherits_target_key_cardinality() {
+        let model = declared_model(
+            "\\label{a}\\label{b}\\one{a,b}\\many{a,b}\n",
+            r#"{"commands": {
+                 "one": {"like": "eqref"},
+                 "many": {"like": "cref"}
+               }}"#,
+        );
+        let names: Vec<_> = model.refs().iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a,b", "a", "b"]);
+        assert_eq!(model.refs()[0].command, RefCommand::EqRef);
+        assert!(
+            model.refs()[1..]
+                .iter()
+                .all(|reference| reference.command == RefCommand::Cref)
+        );
+        assert!(model.labels().iter().all(|label| label.referenced));
+    }
+
+    #[test]
+    fn declared_citation_and_nocite_aliases_are_collected() {
+        let model = declared_model(
+            "\\sources{one,two}\\everything{*}\n",
+            r#"{"commands": {
+                 "sources": {"like": "parencite"},
+                 "everything": {"like": "nocite"}
+               }}"#,
+        );
+        let names: Vec<_> = model
+            .citations()
+            .iter()
+            .map(|citation| citation.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["one", "two"]);
+        assert!(
+            model
+                .citations()
+                .iter()
+                .all(|citation| citation.command == "sources")
+        );
+        assert!(model.has_wildcard_nocite());
     }
 
     #[test]

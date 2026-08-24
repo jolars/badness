@@ -98,7 +98,7 @@ impl Rule for TimesVariable {
         };
         // A key argument (`\label{fig:3x3}`, `\ref`, `\cite`, …) holds an opaque
         // identifier — the `x` there is part of a key, never a cross.
-        if super::in_key_argument(tok) {
+        if super::in_key_argument(tok, ctx) {
             return;
         }
         let base = usize::from(tok.text_range().start());

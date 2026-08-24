@@ -11,6 +11,7 @@ use smol_str::SmolStr;
 use rowan::{TextRange, TextSize};
 
 use crate::ast::{command_name, first_group_range, nth_group_inner};
+use crate::declarations::ResolvedDeclarations;
 use crate::semantic::SemanticModel;
 use crate::semantic::label::{
     CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelRef,
@@ -20,6 +21,14 @@ use crate::semantic::pkgmeta;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 pub fn build(root: &SyntaxNode) -> SemanticModel {
+    build_with_declarations(root, &ResolvedDeclarations::default())
+}
+
+/// Build the semantic model while honoring project-declared ref/cite aliases.
+pub fn build_with_declarations(
+    root: &SyntaxNode,
+    declared: &ResolvedDeclarations,
+) -> SemanticModel {
     let mut model = SemanticModel::default();
 
     for command in root
@@ -29,6 +38,7 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
         let Some(name) = command_name(&command) else {
             continue;
         };
+        let semantic_name = declared.command_like(&name).unwrap_or(&name);
 
         if name == "label" {
             // A nested-macro key (`\label{\foo}`) or a parameter-template key
@@ -45,7 +55,7 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                     });
                 }
             }
-        } else if let Some(kind) = ref_command(&name)
+        } else if let Some(kind) = ref_command(semantic_name)
             && let Some((inner_range, inner)) = nth_group_inner(&command, 0)
         {
             for (key, key_range) in key_spans(&inner, inner_range, kind.is_key_list()) {
@@ -86,12 +96,12 @@ pub fn build(root: &SyntaxNode) -> SemanticModel {
                     });
                 }
             }
-        } else if is_cite_command(&name)
+        } else if is_cite_command(semantic_name)
             && let Some((inner_range, inner)) = nth_group_inner(&command, 0)
         {
             // `\nocite{*}` is a wildcard pulling in every entry — recorded as a flag,
             // not a key, so it suppresses `undefined-citation` rather than being one.
-            if name == "nocite" && inner.trim() == "*" {
+            if semantic_name == "nocite" && inner.trim() == "*" {
                 model.nocite_all = true;
             } else {
                 // Cite commands always take a comma-separated key list.

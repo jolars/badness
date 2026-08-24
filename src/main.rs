@@ -639,7 +639,7 @@ fn analyze_source(
                 .collect();
             let green = parsed.green;
             let root = SyntaxNode::new_root(green.clone());
-            let model = SemanticModel::build(&root);
+            let model = SemanticModel::build_with_declarations(&root, declared);
             let facts = FileFacts {
                 path: path.to_path_buf(),
                 include_edges: collect_include_edge_keys(&root, path.parent()),

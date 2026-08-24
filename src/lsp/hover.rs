@@ -71,8 +71,12 @@ pub(crate) fn compute_hover(
             // completion's `reparse_tex_completion`. Cross-file `\cite` resolution
             // still runs against the snapshot's project resolvers, keyed by `path`.
             _ => {
-                let root = SyntaxNode::new_root(parse(text).green);
-                let model = SemanticModel::build(&root);
+                let declared = snapshot.declarations();
+                let root = SyntaxNode::new_root(
+                    parse_with_declarations(text, file_kind_or_tex(path).lex_config(), declared)
+                        .green,
+                );
+                let model = SemanticModel::build_with_declarations(&root, declared);
                 let scanned = crate::semantic::scan_definitions(&root);
                 build_hover(snapshot, &root, &model, &scanned, path, offset, &idx, build)
             }

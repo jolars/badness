@@ -157,26 +157,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### Issues
 
-- [ ] **Config knob for user-declared ref/cite command families (grew out of
-  issue #104).** The #104 example still draws `unreferenced-label` on every
-  label referenced only through a custom wrapper (`\eqrefs{thm:eq1,thm:eq4}`
-  expanding to `\eqref` calls): the semantic builder's ref-family name set
-  (`semantic::builder::ref_command`) is fixed, and seeing through the wrapper
-  would take macro expansion, which is out of scope — badness is not a TeX
-  interpreter. A `badness.toml` knob declaring extra ref-family (and
-  cite-family) command names — the analog of the shipped
-  `[environments.<name>] like = …` declaration — would let a project name its
-  wrappers; the declared names feed the builder's name sets (semantic layer
-  only, never argument attachment, so parser text-purity is untouched). Needs
-  plumbing: config does not currently flow into `SemanticModel::build`, and the
-  shared name sets also serve completion and the LSP, which should honor the
-  same declarations. **Land it as `[commands.eqrefs] like = "eqref"`** on the
-  declarations mechanism (`docs/src/development/architecture.md` §
-  *Declarations*) rather than as a bespoke list-of-names knob. Note the
-  architecture documentation already describes `[commands.<name>]` as if it
-  exists; only `[environments.<name>]` is implemented, and closing that gap is
-  this item.
-
 - [ ] **Prose `dash-length` FPs on index-pair and term names.** `0-1 law`,
   `1-2 plane`, `1-1 function` (22 of 25 findings in the cam-notes sweep) use an
   intentional hyphen. These are `Unsafe`-gated, so `--fix` withholds them and

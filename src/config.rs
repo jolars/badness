@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::declarations::{DeclarationError, Declarations, EnvironmentDecls, ResolvedDeclarations};
+use crate::declarations::{
+    CommandDecls, DeclarationError, Declarations, EnvironmentDecls, ResolvedDeclarations,
+};
 use crate::formatter::{FormatStyle, LineEnding, MathWrap, WrapMode};
 
 pub const CONFIG_FILE_NAME: &str = "badness.toml";
@@ -75,6 +77,10 @@ pub struct Config {
     pub lint: LintConfig,
     #[serde(default)]
     pub build: BuildConfig,
+    /// Project-defined reference and citation command families. Unlike
+    /// environment declarations, these affect semantic analysis only.
+    #[serde(default)]
+    pub commands: CommandDecls,
     /// The `[environments.<name>]` declaration map: what a user-defined
     /// environment behaves like, and which command spellings stand in for its
     /// delimiters (`\bea`/`\eea`).
@@ -118,6 +124,7 @@ impl Config {
     /// `Config` in sight.
     pub fn declarations(&self) -> Declarations {
         Declarations {
+            commands: self.commands.clone(),
             environments: self.environments.clone(),
         }
     }
@@ -1343,6 +1350,13 @@ mod tests {
         let config = parse("[environments.myenv]\nlike = \"align\"\n").expect("parse");
         let decls = config.declarations();
         assert_eq!(decls.environments["myenv"].like.as_deref(), Some("align"));
+    }
+
+    #[test]
+    fn parses_a_declared_reference_command() {
+        let config = parse("[commands.eqrefs]\nlike = \"cref\"\n").expect("parse");
+        let decls = config.declarations();
+        assert_eq!(decls.commands["eqrefs"].like.as_deref(), Some("cref"));
     }
 
     /// TOML literal strings are what spares users `"\\bea"`, and the leading

@@ -418,6 +418,53 @@ forward search resolves the wrong PDF. Set `root` for that layout.
 root = "main.tex"
 ```
 
+## `[commands]`
+
+Declares project commands whose first braced argument contains label or citation
+keys. This covers wrappers that Badness cannot recognize without macro
+expansion, which remains deliberately out of scope.
+
+Entries are keyed by the command name without its leading backslash:
+
+```toml
+# A comma-separated list of label keys.
+[commands.eqrefs]
+like = "cref"
+
+# A comma-separated list of bibliography keys.
+[commands.projectcite]
+like = "parencite"
+```
+
+The `like` target must be a curated reference or citation command. It determines
+the key behavior: `ref`/`eqref` accept one label, `cref` and its list-valued
+siblings split on commas, citation commands split on commas, and `nocite`
+preserves the special `*` wildcard.
+
+Command declarations affect linting, label/citation navigation, rename, and key
+completion. They do not expand the macro, declare its arity, change argument
+attachment, or lend formatter layout. Use the command whose observable key
+behavior matches the wrapper: an `eqrefs` command that accepts several labels is
+`like = "cref"`, even if its implementation calls `\eqref` once per key.
+
+Anything that would silently do nothing is a configuration error: an empty
+entry, an invalid control-word name, an unknown or non-ref/cite `like` target,
+or an attempt to reclassify a curated built-in command.
+
+### Command `like`
+
+The curated reference or citation command whose key behavior this project
+command copies.
+
+**Type**: string
+
+**Example**:
+
+```toml
+[commands.eqrefs]
+like = "cref"
+```
+
 ## `[environments]`
 
 Declares environments Badness cannot recognize from the file alone: one that

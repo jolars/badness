@@ -338,7 +338,9 @@ fall into the following categories:
   diagnostic.
 - **Char constants.** After a numeric-context primitive from a closed curated
   set, a backtick opens TeX's char-constant notation, so ``\char`$`` can never
-  open math.
+  open math. The escaped form also stays data when it occupies a whole alignment
+  cell (`` `\X& ``), a local shape that covers templates such as `\char#`
+  without inferring macro expansion.
 - **Signatures.** `\newcommand` and xparse signatures are extracted into the
   semantic database, never executed.
 - **Environment aliases.** A command whose replacement body is exactly

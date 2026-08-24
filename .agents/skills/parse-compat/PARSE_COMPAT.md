@@ -6,8 +6,8 @@ This is a **soft gauge, not a quality gate.** It projects badness's generic CST 
 
 - **Corpus:** corpus (`tests/corpus/*.tex`)
 - **Skeleton similarity:** 64.4%  _(Dice coefficient over skeleton lines)_
-- **File concordance:** 16.7%  (8/48 files identical after projection)
-- **Intentional deviations:** 40  ·  **Unexplained divergences:** 0
+- **File concordance:** 16.3%  (8/49 files identical after projection)
+- **Intentional deviations:** 41  ·  **Unexplained divergences:** 0
 - **Skipped:** 1 (badness could not parse cleanly)
 - **texlab parse errors:** 4 (badness-clean inputs texlab flagged — see the gate, `parse_oracle.rs`)
 
@@ -18,6 +18,7 @@ Listed in `tests/parse_compat_allowlist.toml`. These diverge from texlab on purp
 | File | Skeleton similarity | Reason |
 |---|---|---|
 | `accents.tex` | 70.0% | Control-symbol accents (`\\\"{o}`, `\\'{e}`) keep their `{…}` group a sibling because greedy attachment fires on control *words*, not control symbols; texlab nests the group as the accent's argument. Same deviation as edge.tex. |
+| `alignment_char_constant.tex` | 66.7% | A backtick escaped character that occupies a whole alignment cell (`` `\\X& ``) is data: the alignment template supplies it to `\\char#`. Badness captures that bounded source shape as a char constant, while texlab opens display math at `\\[` and errors on the later `\\]`. Badness is the faithful reading (smoke-test issue #144); the file is also on the parse_oracle exception list. |
 | `braceless_end.tex` | 44.6% | The `\\begin`/`\\end` shape gate (smoke-test issue #60, same family as the `$` and `[` gates): a `\\begin`/`\\end` with no name-shaped `{…}` after it (`\\let\\end\\@@end`, `\\long\\def\\@gobble@nv#1\\end#2{…}`, `\\end{#1}`, `\\end{\\reserved@a}`) is the bare TeX primitive or macro data, kept as a plain command — no environment, no diagnostic. texlab reads every `\\end` as an environment closer and manufactures `(env)` nodes and errors from the macro code. badness's reading keeps the parse clean. |
 | `bracket_data.tex` | 33.0% | The text-mode `[` shape gate (smoke-test issue #60, same family as the `$` gate): a `[` whose `]` is unreachable before an unbalanced `}`, a `\\begin`/`\\end` outside a definition body, or a paragraph break is macro-code data (`\\@ifnextchar [\\@xmpar\\@ympar`), kept as a plain token — no OPTIONAL, no diagnostic. texlab attaches the bracket optimistically and lets it swallow the rest of the group; it also nests `\\def` signatures, which badness keeps flat (edge.tex family). badness's reading keeps the parse clean. |
 | `char_constant.tex` | 36.4% | TeX char-constant backtick notation (smoke-test issues #60, #71): after a numeric-context primitive (`\\char`/`\\catcode` code-tables, `\\number` and friends), a backtick makes the next character data, so `` \\char`$ ``/`` \\char`} `` lex as one plain WORD and the escaped `` \\number`\\[ ``/`` \\number`\\] `` never open display math — the char-code table's `\\relax[ … ]` pairs across rows. texlab has no char-constant model: it opens math at the `$`/`\\[` and reads the `}` as unmatched. badness's reading keeps the parse clean; the file is also on the parse_oracle exception list. |

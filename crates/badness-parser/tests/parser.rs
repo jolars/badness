@@ -1935,6 +1935,17 @@ fn char_constant_escaped_bracket_is_not_a_math_delimiter() {
 }
 
 #[test]
+fn alignment_cell_char_constant_escaped_bracket_is_not_a_math_delimiter() {
+    // A macro-driven alignment can supply the character constant to `\char`
+    // through its first cell. The local `` `\X& `` shape still proves that the
+    // escaped character is data, so `\[`/`\]` must not pair as display math.
+    // Without the immediate `&`, the same spelling remains live math.
+    insta::assert_snapshot!(tree(
+        "\\halign{\\char#&code\\cr\n`\\[&\"405B\\cr\n`\\]&\"505D\\cr\n}\nthen `\\[x\\]"
+    ));
+}
+
+#[test]
 fn expl3_region_begin_end_is_plain_macro_code() {
     // Inside an expl3 region, token lists pass `\begin`/`\end` around as data
     // (l3prefixes.tex builds a longtable across two token-list bodies, issue

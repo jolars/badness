@@ -27,10 +27,11 @@ const TEXLAB_KNOWN_DIVERGENT: &[&str] = &[
     // doc's `\MakeShortVerb{\|}` short verbs: `|}|` and `|\begin{document}|` are
     // opaque VERB spans for badness (issue #57), unmatched braces for texlab.
     "doc_shortverb.tex",
-    // TeX char-constant backtick notation (issue #60): `` \char`$ ``/`` \char`} ``
-    // are plain data for badness, an unclosed math opener and an unmatched brace
-    // for texlab.
+    // TeX char-constant backtick notation (issues #60 and #144): direct numeric
+    // operands and whole alignment cells such as `` `\[& `` are plain data for
+    // badness, but texlab reads their `$`/`\[`/`\]` as math delimiters.
     "char_constant.tex",
+    "alignment_char_constant.tex",
     // A `$` in `\def` parameter text delimits an argument; it does not open math.
     // Badness models that TeX syntax, while texlab lets the apparent math span
     // swallow the replacement body and following definition (issue #129).

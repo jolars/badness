@@ -903,7 +903,11 @@ impl<'a> Lexer<'a> {
     /// The escaped single-character form (`` \number`\[ ``) is captured the same
     /// way, backtick plus the whole control symbol: a `\[`/`\]` there is the
     /// *character* `[`/`]`, not a math delimiter (encguide.tex's char-code table,
-    /// issue #71).
+    /// issue #71). The same reading is statically certain when the escaped form
+    /// occupies a whole alignment cell (`` `\X& ``): the alignment template can
+    /// supply that cell to `\char#`, as in TeX by Topic's character-code tables
+    /// (issue #144). Requiring the immediate `&` keeps this local shape from
+    /// claiming an ordinary backtick before live `\[…\]` math.
     ///
     /// A *bare* `{`/`}` is the exception, and only at brace depth 0. Inside a group
     /// the brace has already been claimed as structure by whichever balanced-text
@@ -916,9 +920,7 @@ impl<'a> Lexer<'a> {
     /// unaffected: a control symbol is never a group delimiter, so it stays data at
     /// any depth (issue #71).
     fn try_char_constant(&mut self) -> bool {
-        if self.pending != Some(Pending::CharConstant) {
-            return false;
-        }
+        let numeric_context = self.pending == Some(Pending::CharConstant);
         let rest = self.rest();
         let Some(after) = rest.strip_prefix('`') else {
             return false;
@@ -943,6 +945,10 @@ impl<'a> Lexer<'a> {
         } else {
             1 + c.len_utf8()
         };
+        let alignment_cell = self.pending.is_none() && c == '\\' && rest[len..].starts_with('&');
+        if !numeric_context && !alignment_cell {
+            return false;
+        }
         self.push(SyntaxKind::WORD, &rest[..len]);
         self.consume(len);
         true

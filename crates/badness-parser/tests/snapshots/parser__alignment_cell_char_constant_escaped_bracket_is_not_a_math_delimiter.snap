@@ -1,0 +1,40 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(\"\\\\halign{\\\\char#&code\\\\cr\\n`\\\\[&\\\"405B\\\\cr\\n`\\\\]&\\\"505D\\\\cr\\n}\\nthen `\\\\[x\\\\]\")"
+---
+ROOT@0..62
+  PARAGRAPH@0..62
+    COMMAND@0..50
+      CONTROL_WORD@0..7 "\\halign"
+      GROUP@7..50
+        L_BRACE@7..8 "{"
+        COMMAND@8..13
+          CONTROL_WORD@8..13 "\\char"
+        HASH@13..14 "#"
+        AMPERSAND@14..15 "&"
+        WORD@15..19 "code"
+        COMMAND@19..22
+          CONTROL_WORD@19..22 "\\cr"
+        NEWLINE@22..23 "\n"
+        WORD@23..26 "`\\["
+        AMPERSAND@26..27 "&"
+        WORD@27..32 "\"405B"
+        COMMAND@32..35
+          CONTROL_WORD@32..35 "\\cr"
+        NEWLINE@35..36 "\n"
+        WORD@36..39 "`\\]"
+        AMPERSAND@39..40 "&"
+        WORD@40..45 "\"505D"
+        COMMAND@45..48
+          CONTROL_WORD@45..48 "\\cr"
+        NEWLINE@48..49 "\n"
+        R_BRACE@49..50 "}"
+    NEWLINE@50..51 "\n"
+    WORD@51..55 "then"
+    WHITESPACE@55..56 " "
+    WORD@56..57 "`"
+    DISPLAY_MATH@57..62
+      CONTROL_SYMBOL@57..59 "\\["
+      MATH@59..60
+        WORD@59..60 "x"
+      CONTROL_SYMBOL@60..62 "\\]"

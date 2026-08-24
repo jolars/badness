@@ -130,11 +130,13 @@ one diverging:
 - `\iffalse…\fi` (`conditionals.tex`): badness reads the body as generic
   commands (no TeX evaluation, a non-goal); texlab's conditional handling drops
   `\section`'s group.
-- Char-constant backtick notation (`char_constant.tex`, smoke-test issue #60):
-  after a `\char`/`\catcode`-family primitive, a backtick makes the next
-  character data, so `` \char`$ ``/`` \char`} `` lex as one plain `WORD` and
-  never open math or close a group. texlab has no char-constant model and
-  errors on both; the file is also on the parse_oracle exception list.
+- Char-constant backtick notation (`char_constant.tex` and
+  `alignment_char_constant.tex`, smoke-test issues #60 and #144): after a
+  `\char`/`\catcode`-family primitive, or in the bounded whole-alignment-cell
+  shape `` `\X& ``, a backtick makes the next character data. These spans lex
+  as one plain `WORD` and never open math or close a group. texlab has no
+  char-constant model and errors on them; both files are also on the
+  parse_oracle exception list.
 - expl3-region `\begin`/`\end` (`expl3_region_env_tokens.tex`, smoke-test
   issue #60): an expl3 region is code, and token lists pass `\begin`/`\end`
   around as data (l3prefixes.tex builds a longtable across two

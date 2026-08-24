@@ -48,11 +48,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [ ] **Long collapsed cite list overflow.** A `collapse` arg folds to one line
-  even when the key list exceeds the width; it never breaks *at commas* (one
-  key per line) as a fallback. Needs the token-list content kind to break on
-  its own separators rather than the paragraph fill.
-
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
   `ContentKind::Keyval` on a *mandatory* group is now consumed
   (`lower_segmented_group`; fixture `keyval_group_splits_entries`), so the setters

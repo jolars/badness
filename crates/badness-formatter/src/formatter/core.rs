@@ -2409,6 +2409,30 @@ fn reflow_elements_checked(
                 line_all_commands = true;
                 line_has_content = false;
             }
+            // An inline citation list participates in the surrounding paragraph
+            // fill at its top-level commas, just as an inline prose argument
+            // participates at its inter-word gaps. Keeping the entries at this
+            // altitude lets the first key share the preceding prose line and the
+            // closing brace share the final key's line with following prose.
+            SyntaxElement::Node(child)
+                if matches!(cx.wrap, WrapMode::Reflow | WrapMode::Stable)
+                    && margin.is_none()
+                    && !after_block
+                    && child.kind() == SyntaxKind::COMMAND
+                    && command_is_inline(child, cx)
+                    && let Some(atoms) = inline_token_list_atoms(child, cx) =>
+            {
+                for (index, atom) in atoms.into_iter().enumerate() {
+                    if index > 0 {
+                        b.flush_atom();
+                    }
+                    b.push_atom_piece(atom, "");
+                }
+                line_has_content = true;
+                line_all_commands = false;
+                idx += 1;
+                continue;
+            }
             SyntaxElement::Node(child) => {
                 let ir = lower_node(child, cx);
                 // A block-level command — sectioning (`\part` … `\subparagraph`) or
@@ -7448,7 +7472,7 @@ fn segment_delimited_body(
     open_kind: SyntaxKind,
     close_kind: SyntaxKind,
     cx: LowerCtx<'_>,
-    keyval: bool,
+    split_glued_commas: bool,
 ) -> Option<GroupSegments> {
     let mut open = Ir::Nil;
     let mut close = Ir::Nil;
@@ -7498,7 +7522,7 @@ fn segment_delimited_body(
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::WORD && depth == 0 => {
-                splits += push_entry_word(t.text(), keyval, &mut parts, entry_open);
+                splits += push_entry_word(t.text(), split_glued_commas, &mut parts, entry_open);
                 // A word ending in `,` closes its entry and opens an empty one.
                 open_entry = t.text().ends_with(',');
                 entry_open = !open_entry;
@@ -7555,10 +7579,16 @@ fn segment_delimited_body(
 /// has already emitted content for the entry this word continues. A glued comma
 /// uses `Line`, not `SoftLine`: the broken spelling necessarily reparses its
 /// newline as a space gap, so using the same flat spelling before and after the
-/// break keeps width decisions at a fixed point (issue #121). The keyval proof is
-/// what licenses introducing that otherwise-significant flat space.
-fn push_entry_word(text: &str, keyval: bool, parts: &mut Vec<Ir>, entry_open: bool) -> usize {
-    if !keyval || !text.contains(',') {
+/// break keeps width decisions at a fixed point (issue #121). The caller's
+/// whitespace-insensitivity proof (`Keyval` or `TokenList`) is what licenses
+/// introducing that otherwise-significant flat space.
+fn push_entry_word(
+    text: &str,
+    split_glued_commas: bool,
+    parts: &mut Vec<Ir>,
+    entry_open: bool,
+) -> usize {
+    if !split_glued_commas || !text.contains(',') {
         parts.push(Ir::verbatim(text));
         return 0;
     }
@@ -7882,6 +7912,82 @@ fn is_collapsible_trivia_element(element: &SyntaxElement) -> bool {
     matches!(element, SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()))
 }
 
+/// Split an inline command's token-list argument into paragraph-fill atoms.
+/// Everything before the first entry (the command head and any optional arguments)
+/// stays on that atom; everything after the final entry (the closing delimiter and
+/// any attached suffix) stays on the last. Returns `None` when there is no useful
+/// top-level comma split or the body carries a preserved predicate that forbids
+/// segmentation.
+fn inline_token_list_atoms(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<Ir>> {
+    let sig = command_name(node).and_then(|name| cx.signatures.command(&name))?;
+    let mut slot = 0usize;
+    let mut found = false;
+    let mut atoms: Vec<Vec<Ir>> = vec![Vec::new()];
+
+    for element in alignment_cell_elements(node.children_with_tokens(), cx) {
+        match element {
+            SyntaxElement::Node(group)
+                if matches!(group.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+            {
+                let is_bracket = group.kind() == SyntaxKind::OPTIONAL;
+                let (open_kind, close_kind, kind) = if is_bracket {
+                    (
+                        SyntaxKind::L_BRACKET,
+                        SyntaxKind::R_BRACKET,
+                        ArgKind::Bracket,
+                    )
+                } else {
+                    (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, ArgKind::Brace)
+                };
+                let spec = match_arg_slot(&sig.args, &mut slot, kind);
+                if spec.is_some_and(|spec| spec.content == ContentKind::TokenList) {
+                    let GroupSegments {
+                        open,
+                        mut parts,
+                        close,
+                        splits,
+                    } = segment_delimited_body(&group, open_kind, close_kind, cx, true)?;
+                    if splits == 0 {
+                        return None;
+                    }
+                    let _ = peel_padding(&mut parts, Edge::Leading);
+                    let _ = peel_padding(&mut parts, Edge::Trailing);
+                    atoms.last_mut().unwrap().push(open);
+                    for part in parts {
+                        if matches!(part, Ir::Line | Ir::SoftLine) {
+                            atoms.push(Vec::new());
+                        } else {
+                            atoms.last_mut().unwrap().push(part);
+                        }
+                    }
+                    atoms.last_mut().unwrap().push(close);
+                    found = true;
+                } else {
+                    atoms.last_mut().unwrap().push(lower_node(&group, cx));
+                }
+            }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
+                if token.text().starts_with('{') {
+                    match_verbatim_arg_slot(&sig.args, &mut slot);
+                }
+                atoms
+                    .last_mut()
+                    .unwrap()
+                    .push(lower_loose_token(&token, cx));
+            }
+            SyntaxElement::Node(child) => atoms.last_mut().unwrap().push(lower_node(&child, cx)),
+            SyntaxElement::Token(token) => {
+                atoms
+                    .last_mut()
+                    .unwrap()
+                    .push(lower_loose_token(&token, cx));
+            }
+        }
+    }
+
+    found.then(|| atoms.into_iter().map(Ir::concat).collect())
+}
+
 /// Lower a `COMMAND` whose signature marks an argument's content kind (see
 /// [`command_has_managed_arg`], which gates this path). Each attached `{…}`/`[…]`
 /// group is matched to its signature slot — kind-aware, so an omitted optional does
@@ -7943,9 +8049,9 @@ fn lower_command_with_math_spacing(
                         out.push(lower_prose_group(&child, open, close, cx));
                     }
                     Some(ContentKind::TokenList) => {
-                        // A collapsible token list (e.g. a `\citep` key list): fold a
-                        // multi-line authored form to one line, falling back to the
-                        // generic block form when the body is not safely collapsible.
+                        // Outside a paragraph fill, keep a token list as one inline
+                        // atom. The paragraph path exposes its top-level entries as
+                        // fill atoms before reaching this lowering.
                         out.push(
                             collapse_arg_group(&child, open, close, cx)
                                 .unwrap_or_else(|| lower_node(&child, cx)),
@@ -8091,13 +8197,11 @@ fn body_ends_with_comment(node: &SyntaxNode, close: SyntaxKind) -> bool {
     false
 }
 
-/// Lower a signature-marked *collapsible* argument group (see [`ContentKind::TokenList`])
-/// as a single inline atom: interior newlines collapse to spaces, so a citation list
-/// written across lines (`\citep{\n  a,\n  b\n}`) formats identically to its one-line
-/// form (`\citep{a, b}`) — an incidental source line break inside such an argument
-/// must not change the output (determinism). Unlike [`lower_prose_group`], the keys
-/// are *not* reflowed to the width; they stay together on one line (a token list, not
-/// prose).
+/// Collapse a signature-marked [`ContentKind::TokenList`] to a single inline atom.
+/// This is the fallback outside paragraph reflow and for lists that cannot expose
+/// safe comma boundaries there. Interior newlines collapse to spaces, so a citation
+/// list written across lines (`\citep{\n  a,\n  b\n}`) formats identically to its
+/// one-line form (`\citep{a, b}`).
 ///
 /// Returns `None` — the caller falls back to the generic form ([`lower_node`]) — when
 /// the group is *not* safely collapsible: it holds a blank-line paragraph break, a `%`

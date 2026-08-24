@@ -75,9 +75,11 @@ pub enum ContentKind {
     /// A comma-separated token list whose interior whitespace is *insignificant*,
     /// so the formatter may collapse a multi-line authored form to a single line
     /// (a `\citep`/`\cite` key list). Unlike [`Prose`](ContentKind::Prose), the
-    /// content is *not* reflowed to the width: the keys stay together as one atom;
-    /// only incidental source line breaks inside the braces are normalized away,
-    /// so `\citep{\n a,\n b\n}` formats identically to `\citep{a, b}` (determinism).
+    /// content participates in the surrounding paragraph fill only at its
+    /// top-level commas, so an over-width citation can wrap between keys without
+    /// splitting a key or detaching its delimiters. Incidental source line breaks
+    /// are normalized away, so `\citep{\n a,\n b\n}` formats identically to
+    /// `\citep{a, b}` (determinism).
     TokenList,
     /// A `key=value` list consumed by a keyval-family processor — keyval, xkeyval,
     /// pgfkeys, l3keys, or LaTeX's own option-list scanner — every one of which
@@ -94,9 +96,8 @@ pub enum ContentKind {
     /// set on an argument whose content is typeset — hold it to the same curated
     /// standard as the math-env routing.
     ///
-    /// Weaker than [`TokenList`](ContentKind::TokenList) about *where* the content
-    /// may go (a keyval list expands one key per line at the width rather than
-    /// staying one atom), stronger about what may be inserted between entries.
+    /// Unlike [`TokenList`](ContentKind::TokenList), which flows inline with its
+    /// surrounding paragraph, a keyval list expands as its own delimited group.
     Keyval,
 }
 

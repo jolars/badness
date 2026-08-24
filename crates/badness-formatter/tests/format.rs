@@ -823,13 +823,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // (`latexindent`'s `commands/figureValign-mod*`). Both bite only when the
     // whole body reflows to one line; any second line already forces the group.
     ("reflow_prose_arg_comment_edges", WrapMode::Reflow, 80),
-    // A signature-marked collapsible token list (`\citep` and the cite family, via
-    // the DB's `collapse` arg flag): a key list written across lines folds to one
-    // line, and the `inline`-flagged command flows into the paragraph fill as an
-    // atom instead of being kept on its own line — so the multi-line and one-line
-    // authored forms format identically (determinism). The interior is collapsed,
-    // never reflowed (the keys stay together). A `%` comment inside the list is not
-    // safely collapsible, so it keeps the indented block form.
+    // A signature-marked token list (`\citep` and the cite family) joins the
+    // paragraph fill at its top-level commas: short and author-broken forms
+    // collapse identically, while a long list wraps between keys without exploding
+    // the command's delimiters onto separate lines. A `%` comment inside the list
+    // is not safely segmentable, so it keeps the indented block form.
     ("reflow_cite_collapses_and_flows", WrapMode::Reflow, 80),
     ("reflow_cite_comment_keeps_block", WrapMode::Reflow, 80),
     // The cross-reference family (`\ref`, `\eqref`, `\cref`, `\nameref`, …) is
@@ -2383,6 +2381,36 @@ fn cite_key_list_layout_is_deterministic() {
         from_one, from_multi,
         "cite key-list layout must not depend on the authored source line breaks"
     );
+
+    let long_spaced = "See \\citep{anderson2020longitudinal, bernstein2021comparative, chen2022replication} for details.\n";
+    let long_glued = "See \\citep{anderson2020longitudinal,bernstein2021comparative,chen2022replication} for details.\n";
+    let from_spaced = format(long_spaced).expect("spaced long list formats");
+    let from_glued = format(long_glued).expect("glued long list formats");
+    assert_eq!(
+        from_spaced, from_glued,
+        "insignificant whitespace at cite separators must not steer wrapping"
+    );
+    assert!(
+        from_spaced
+            .lines()
+            .all(|line| line.chars().count() <= FormatStyle::default().line_width),
+        "a segmentable cite list must not overflow the configured width"
+    );
+    assert_format_invariants(long_spaced);
+    assert_format_invariants(long_glued);
+
+    let stable = FormatStyle {
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    let stable_out = format_with_style(long_glued, stable).expect("stable long list formats");
+    assert!(
+        stable_out
+            .lines()
+            .all(|line| line.chars().count() <= stable.line_width),
+        "stable wrapping must also repair a segmentable cite overflow"
+    );
+    assert_format_invariants_with_style(long_glued, stable);
 }
 
 /// A multi-line brace group whose opener is glued to its first body token
